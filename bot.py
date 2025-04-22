@@ -39,7 +39,7 @@ MODEL_FILE          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
 
 # ─── CONFIG & LOGGING ─────────────────────────────────────────────────────────
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[ logging.StreamHandler(sys.stdout) ]
 )
@@ -117,7 +117,7 @@ ENTRY_START_OFFSET       = timedelta(minutes=15)
 ENTRY_END_OFFSET         = timedelta(minutes=30)
 
 REGIME_LOOKBACK          = 20
-REGIME_ATR_THRESHOLD     = 0.04
+REGIME_ATR_THRESHOLD     = 3.0
 
 MODEL_PATH               = MODEL_FILE
 RF_ESTIMATORS            = 225
@@ -144,8 +144,8 @@ api_semaphore            = asyncio.Semaphore(4)
 def load_global_signal_performance(min_trades=10, threshold=0.4):
     path = TRADE_LOG_FILE
     if not os.path.exists(path):
-        logger.warning("[MetaLearn] {TRADE_LOG_FILE} not found. Skipping signal filtering.")
-        return {}
+        logger.info("[MetaLearn] no history - allowing all signals")
+        return None
 
     df = pd.read_csv(path)
     df = df.dropna(subset=["exit_price", "entry_price", "signal_tags"])
@@ -169,7 +169,7 @@ def load_global_signal_performance(min_trades=10, threshold=0.4):
         win_rates[tag] = round(win_rate, 3)
 
     filtered = {tag: wr for tag, wr in win_rates.items() if wr >= threshold}
-    logger.info(f"[MetaLearn] Keeping signals: {list(filtered.keys())}")
+    logger.info(f"[MetaLearn] Keeping signals: {list(filtered.keys()) or 'none (will allow all)'}")
     return filtered
 
 # ─── TRADE LOGGER ─────────────────────────────────────────────────────────────#
@@ -264,7 +264,8 @@ def check_halt_flag():
 def check_market_regime():
     df = fetch_data("SPY", period=f"{REGIME_LOOKBACK}d", interval="1d")
     atr_val = ta.atr(df['High'], df['Low'], df['Close'], length=REGIME_LOOKBACK).iloc[-1]
-    return atr_val <= REGIME_ATR_THRESHOLD
+    vol = df['Close'].pct_change().std()
+    return (atr_val <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
 
 def too_correlated(sym):
     if not os.path.exists(TRADE_LOG_FILE):
@@ -458,12 +459,13 @@ class SignalManager:
         for fn in signal_fns:
             try:
                 s, w, label = fn(df)
-                if label not in allowed_signals:
+                # if we have a filter AND this label isn't in it, skip
+                if allowed_signals is not None and label not in allowed_signals:
                     continue  # drop underperformers
                 if s in [0, 1]:
                     adjusted_weight = weight_map.get(label, w)
                     signals.append((s, adjusted_weight, label))
-            except:
+            except Exception:
                 continue
 
         if not signals:
@@ -563,6 +565,10 @@ signal_manager = SignalManager()
 
 def trade_logic(sym, balance, model):
     logger.info(f"[TRADE LOGIC] {sym} – balance={balance:.2f}")
+
+    logger.debug(f"[{sym}] halt={check_halt_flag()}, hours={within_market_hours()}, loss={check_daily_loss()}")
+    logger.debug(f"[{sym}] regime={check_market_regime()}, pos_count={len(api.list_positions())}, corr={too_correlated(sym)}")
+
 
     if check_halt_flag() or not within_market_hours() or check_daily_loss():
         return
