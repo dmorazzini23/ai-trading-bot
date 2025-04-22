@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import csv
 import re
@@ -18,7 +19,29 @@ from bs4 import BeautifulSoup
 from alpaca_trade_api.rest import REST
 from sklearn.ensemble import RandomForestClassifier
 from dotenv import load_dotenv
+
 load_dotenv(dotenv_path=".env")
+
+# ─── PATH CONFIGURATION ───────────────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+def abspath(fname: str) -> str:
+    return os.path.join(BASE_DIR, fname)
+
+TICKERS_FILE        = abspath("tickers.csv")
+TRADE_LOG_FILE      = abspath("trades.csv")
+SIGNAL_WEIGHTS_FILE = abspath("signal_weights.csv")
+EQUITY_FILE         = abspath("last_equity.txt")
+PEAK_EQUITY_FILE    = abspath("peak_equity.txt")
+HALT_FLAG_FILE      = abspath("halt.flag")
+MODEL_FILE          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
+
+# ─── CONFIG & LOGGING ─────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[ logging.StreamHandler(sys.stdout) ]
+)
+logger = logging.getLogger(__name__)
 
 # === STRATEGY MODE CONFIGURATION =============================================
 class BotMode:
@@ -65,10 +88,6 @@ BOT_MODE = os.getenv("BOT_MODE", "balanced")
 mode = BotMode(BOT_MODE)
 params = mode.apply()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-logger.info(f"[MODE] Running in {BOT_MODE.upper()} mode with parameters: {params}")
-
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
 ALPACA_API_KEY           = os.getenv("APCA_API_KEY_ID")
 ALPACA_SECRET_KEY        = os.getenv("APCA_API_SECRET_KEY")
@@ -98,7 +117,7 @@ ENTRY_END_OFFSET         = timedelta(minutes=30)
 REGIME_LOOKBACK          = 20
 REGIME_ATR_THRESHOLD     = 0.04
 
-MODEL_PATH               = os.getenv("MODEL_PATH", "trained_model.pkl")
+MODEL_PATH               = MODEL_FILE
 RF_ESTIMATORS            = 225
 RF_MAX_DEPTH             = 5
 ATR_LENGTH               = 12
@@ -107,7 +126,7 @@ CONFIRMATION_COUNT       = params["CONFIRMATION_COUNT"]
 KELLY_FRACTION           = params["KELLY_FRACTION"]
 CAPITAL_CAP              = params["CAPITAL_CAP"]
 
-HALT_FLAG_PATH           = os.getenv("HALT_FLAG_PATH", "halt.flag")
+HALT_FLAG_PATH           = HALT_FLAG_FILE
 
 # ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 api = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=ALPACA_BASE_URL)
@@ -121,9 +140,9 @@ api_semaphore            = asyncio.Semaphore(4)
 
 # ─── META-LEARNING SIGNAL DROPPER ───
 def load_global_signal_performance(min_trades=10, threshold=0.4):
-    path = "trades.csv"
+    path = TRADE_LOG_FILE
     if not os.path.exists(path):
-        logger.warning("[MetaLearn] trades.csv not found. Skipping signal filtering.")
+        logger.warning("[MetaLearn] {TRADE_LOG_FILE} not found. Skipping signal filtering.")
         return {}
 
     df = pd.read_csv(path)
@@ -151,14 +170,9 @@ def load_global_signal_performance(min_trades=10, threshold=0.4):
     logger.info(f"[MetaLearn] Keeping signals: {list(filtered.keys())}")
     return filtered
 
-# ─── LOGGING SETUP ────────────────────────────────────────────────────────────
-logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
 # ─── TRADE LOGGER ─────────────────────────────────────────────────────────────
 class TradeLogger:
-    def __init__(self, path="trades.csv"):
+    def __init__(self, path=TRADE_LOG_FILE):
         self.path = path
         if not os.path.exists(self.path):
             with open(self.path, "w", newline="") as f:
@@ -239,9 +253,9 @@ def check_market_regime():
     return atr_val <= REGIME_ATR_THRESHOLD
 
 def too_correlated(sym):
-    if not os.path.exists("trades.csv"):
+    if not os.path.exists(TRADE_LOG_FILE):
         return False
-    df_tr = pd.read_csv("trades.csv")
+    df_tr = pd.read_csv(TRADE_LOG_FILE)
     open_syms = list(df_tr[df_tr.exit_time == ""]['symbol'].unique()) + [sym]
     returns = {}
     for s in open_syms:
@@ -391,7 +405,7 @@ class SignalManager:
             return -1, 0.0, 'vsa'
 
     def load_signal_weights(self):
-        path = "signal_weights.csv"
+        path = SIGNAL_WEIGHTS_FILE
         if not os.path.exists(path):
             return {}
         df = pd.read_csv(path)
@@ -437,7 +451,7 @@ class SignalManager:
 # ─── ORDER EXECUTION & POSITION SIZING ────────────────────────────────────────
 def fractional_kelly_size(balance, price, atr, win_prob, payoff_ratio=1.5, base_frac=KELLY_FRACTION):
     # Adaptive Kelly scaling based on drawdown
-    peak_file = "peak_equity.txt"
+    peak_file = "PEAK_EQUITY_FILE"
     current_equity = balance
 
     # Load peak equity from file
@@ -614,7 +628,7 @@ def trade_logic(sym, balance, model):
 # ─── RUNNER & SCHEDULER ──────────────────────────────────────────────────────
 def run_all_trades(model):
     if check_halt_flag():
-        logger.info("Trading halted via halt.flag.")
+        logger.info("Trading halted via HALT_FLAG_FILE.")
         return
     try:
         acct = api.get_account()
@@ -624,7 +638,7 @@ def run_all_trades(model):
         return
 
     # Load last balance from file
-    equity_file = "last_equity.txt"
+    equity_file = EQUITY_FILE
     if os.path.exists(equity_file):
         with open(equity_file, "r") as f:
             last_cash = float(f.read().strip())
@@ -645,8 +659,8 @@ def run_all_trades(model):
 
     # Run trades as normal
     here     = os.path.dirname(__file__)
-    csv_path = os.path.join(here, "tickers.csv")
-    tickers  = load_tickers(csv_path)
+    csv_path = os.path.join(here, TICKERS_FILE)
+    tickers  = load_tickers(TICKERS_FILE)
     
     with multiprocessing.Pool(min(len(tickers), 4)) as p:
         for sym in tickers:
@@ -669,12 +683,12 @@ def load_model(path=MODEL_PATH):
 
 # ─── META-LEARNING WEIGHT UPDATER ────────────────────────────────────────────
 def update_signal_weights():
-    TRADE_LOG = "trades.csv"
-    WEIGHT_LOG = "signal_weights.csv"
+    TRADE_LOG = TRADE_LOG_FILE
+    WEIGHT_LOG = SIGNAL_WEIGHTS_FILE
     ALPHA = 0.2  # EMA smoothing factor
 
     if not os.path.exists(TRADE_LOG):
-        logger.warning("No trades.csv found for weight update.")
+        logger.warning("No TRADE_LOG_FILE found for weight update.")
         return
 
     df = pd.read_csv(TRADE_LOG)
