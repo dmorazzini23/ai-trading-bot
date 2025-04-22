@@ -724,8 +724,13 @@ def start_healthcheck():
 
 # ─── MAIN LOOP ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    threading.Thread(target=start_healthcheck, daemon=True).start()  # <– start Flask healthcheck
-    multiprocessing.set_start_method('spawn')
+    import multiprocessing as _mp
+    _mp.set_start_method('spawn')
+
+    # Only the parent kicks off the health‐check thread
+    if _mp.current_process().name == "MainProcess":
+        threading.Thread(target=start_healthcheck, daemon=True).start()
+
     model = load_model()
     logger.info("🚀 AI Trading Bot is live!")
 
@@ -737,18 +742,3 @@ if __name__ == "__main__":
         schedule.run_pending()
         time.sleep(30)
 
-# ─── HEALTHCHECK SERVER ──────────────────────────────────────────────────────
-from flask import Flask
-from threading import Thread
-
-app = Flask(__name__)
-
-@app.route('/health')
-def health():
-    return "OK", 200
-
-def run_health_server():
-    app.run(host="0.0.0.0", port=8080)
-
-# Start Flask server in separate thread
-Thread(target=run_health_server, daemon=True).start()
