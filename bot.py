@@ -6,6 +6,7 @@ import joblib
 import asyncio
 import yfinance as yf
 import pandas as pd
+setattr(np, "NaN", np.nan)
 import pandas_ta as ta
 import numpy as np
 import requests
