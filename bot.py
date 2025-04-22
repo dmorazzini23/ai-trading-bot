@@ -1,4 +1,5 @@
 import os
+import fcntl
 import sys
 import time
 import csv
@@ -14,6 +15,7 @@ import requests
 import schedule
 import logging
 import multiprocessing
+from functools import wraps
 from datetime import datetime, date, timedelta, time as dt_time
 from bs4 import BeautifulSoup
 from alpaca_trade_api.rest import REST
@@ -170,41 +172,53 @@ def load_global_signal_performance(min_trades=10, threshold=0.4):
     logger.info(f"[MetaLearn] Keeping signals: {list(filtered.keys())}")
     return filtered
 
-# ─── TRADE LOGGER ─────────────────────────────────────────────────────────────
+# ─── TRADE LOGGER ─────────────────────────────────────────────────────────────#
 class TradeLogger:
     def __init__(self, path=TRADE_LOG_FILE):
         self.path = path
+        # create file with header if it doesn’t exist
         if not os.path.exists(self.path):
             with open(self.path, "w", newline="") as f:
+                # lock even the header‐write to be safe
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                 csv.writer(f).writerow([
                     "symbol", "entry_time", "entry_price",
                     "exit_time", "exit_price", "qty", "side",
                     "strategy", "classification", "signal_tags"
                 ])
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def log_entry(self, symbol, price, qty, side, strategy, signal_tags=None):
         now = datetime.utcnow().isoformat()
-        tag_str = signal_tags if signal_tags else ""
+        tag_str = signal_tags or ""
         with open(self.path, "a", newline="") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             csv.writer(f).writerow([symbol, now, price, "", "", qty, side, strategy, "", tag_str])
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def log_exit(self, symbol, exit_price):
-        rows = list(csv.reader(open(self.path)))
-        header, data = rows[0], rows[1:]
-        for row in data:
-            if row[0] == symbol and row[3] == "":
-                entry_time = datetime.fromisoformat(row[1])
-                exit_time  = datetime.utcnow()
-                days = (exit_time - entry_time).days
-                cls = "day_trade" if days == 0 else "swing_trade" if days < 5 else "long_trade"
-                row[3], row[4], row[8] = exit_time.isoformat(), exit_price, cls
-                break
-        with open(self.path, "w", newline="") as f:
+        # we need to read+rewrite the whole file under lock
+        # so open r+ (read/write) and lock it
+        with open(self.path, "r+", newline="") as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            rows = list(csv.reader(f))
+            header, data = rows[0], rows[1:]
+            for row in data:
+                if row[0] == symbol and row[3] == "":
+                    entry_time = datetime.fromisoformat(row[1])
+                    exit_time  = datetime.utcnow()
+                    days = (exit_time - entry_time).days
+                    cls = "day_trade" if days == 0 else "swing_trade" if days < 5 else "long_trade"
+                    row[3], row[4], row[8] = exit_time.isoformat(), exit_price, cls
+                    break
+            # rewind and truncate before writing back
+            f.seek(0)
+            f.truncate()
             writer = csv.writer(f)
             writer.writerow(header)
             writer.writerows(data)
-
-trade_logger = TradeLogger()
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+trade_logger = TradeLogger(path=TRADE_LOG_FILE)
 
 # ─── UTILITY FUNCTIONS ────────────────────────────────────────────────────────
 def load_tickers(path):
@@ -266,6 +280,22 @@ def too_correlated(sym):
     avg_corr = mat.corr().where(~np.eye(len(open_syms), dtype=bool)).abs().values.mean()
     return avg_corr > CORRELATION_THRESHOLD
 
+def retry(times: int = 3, delay: float = 1.0):
+    def deco(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            for i in range(times):
+                try:
+                    return fn(*args, **kwargs)
+                except Exception as e:
+                    logger.warning(f"[retry] {fn.__name__} failed ({e}), retry {i+1}/{times}")
+                    time.sleep(delay * (2 ** i))
+            logger.error(f"[retry] {fn.__name__} failed after {times} attempts.")
+            return None
+        return wrapper
+    return deco
+
+@retry(times=3, delay=0.5)
 def fetch_data(ticker, period='3y', interval='1d'):
     df = yf.download(ticker, period=period, interval=interval,
                      auto_adjust=True, progress=False)
@@ -314,7 +344,6 @@ def fetch_sentiment(ticker):
         return max(min(score, 0.5), -0.5)
     except:
         return 0.0
-
 
 # ─── SIGNAL MANAGER ───────────────────────────────────────────────────────────
 class SignalManager:
@@ -756,7 +785,10 @@ if __name__ == "__main__":
     schedule.every(1).minutes.do(lambda: run_all_trades(model))
     schedule.every(6).hours.do(update_signal_weights)
 
-    while True:
+while True:
+    try:
         schedule.run_pending()
-        time.sleep(30)
+    except Exception as e:
+        logger.exception(f"Scheduler loop error: {e}")
+    time.sleep(30)
 
