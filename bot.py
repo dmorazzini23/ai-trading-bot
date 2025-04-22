@@ -644,7 +644,10 @@ def run_all_trades(model):
         f.write(str(current_cash))
 
     # Run trades as normal
-    tickers = load_tickers("C:/Users/dmora/OneDrive/Documents/tickers.csv")
+    here     = os.path.dirname(__file__)
+    csv_path = os.path.join(here, "tickers.csv")
+    tickers  = load_tickers(csv_path)
+    
     with multiprocessing.Pool(min(len(tickers), 4)) as p:
         for sym in tickers:
             p.apply_async(trade_logic, (sym, current_cash, model))
