@@ -9,4 +9,3 @@ schedule
 beautifulsoup4
 requests
 python-dotenv
-pip freeze > requirements.txt

@@ -2,13 +2,13 @@ import os
 import time
 import csv
 import re
+import numpy as np
+setattr(np, "NaN", np.nan)
 import joblib
 import asyncio
 import yfinance as yf
 import pandas as pd
 import pandas_ta as ta
-import numpy as np
-setattr(np, "NaN", np.nan)
 import requests
 import schedule
 import logging
