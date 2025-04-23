@@ -18,7 +18,7 @@ import multiprocessing
 from functools import wraps
 from datetime import datetime, date, timedelta, time as dt_time
 from bs4 import BeautifulSoup
-from alpaca_trade_api.rest import REST
+from alpaca_trade_api.rest import REST, APIError
 from sklearn.ensemble import RandomForestClassifier
 from dotenv import load_dotenv
 
@@ -157,60 +157,46 @@ def load_global_signal_performance(min_trades=10, threshold=0.4):
     for _, row in df.iterrows():
         tags = row["signal_tags"].split("+")
         for tag in tags:
-            if tag not in results:
-                results[tag] = []
-            results[tag].append(row["pnl"])
+            results.setdefault(tag, []).append(row["pnl"])
 
-    win_rates = {}
-    for tag, pnl_list in results.items():
-        if len(pnl_list) < min_trades:
-            continue
-        win_rate = np.mean([1 if p > 0 else 0 for p in pnl_list])
-        win_rates[tag] = round(win_rate, 3)
-
-    filtered = {tag: wr for tag, wr in win_rates.items() if wr >= threshold}
-    logger.info(f"[MetaLearn] Keeping signals: {list(filtered.keys()) or 'none (will allow all)'}")
+    win_rates = { tag: round(np.mean([1 if p>0 else 0 for p in pnls]),3)
+                  for tag,pnls in results.items() if len(pnls)>=min_trades }
+    filtered = {tag:wr for tag,wr in win_rates.items() if wr>=threshold}
+    logger.info(f"[MetaLearn] Keeping signals: {list(filtered.keys()) or 'none'}")
     return filtered
 
 # ─── TRADE LOGGER ─────────────────────────────────────────────────────────────#
 class TradeLogger:
     def __init__(self, path=TRADE_LOG_FILE):
         self.path = path
-        # create file with header if it doesn’t exist
         if not os.path.exists(self.path):
-            # use portalocker.Lock in 'w' mode to both create + lock
             with portalocker.Lock(self.path, 'w', timeout=1) as f:
                 csv.writer(f).writerow([
-                    "symbol", "entry_time", "entry_price",
-                    "exit_time", "exit_price", "qty", "side",
-                    "strategy", "classification", "signal_tags"
+                    "symbol","entry_time","entry_price",
+                    "exit_time","exit_price","qty","side",
+                    "strategy","classification","signal_tags"
                 ])
 
     def log_entry(self, symbol, price, qty, side, strategy, signal_tags=None):
         now = datetime.utcnow().isoformat()
         tag_str = signal_tags or ""
-        # append a row under lock
         with portalocker.Lock(self.path, 'a', timeout=1) as f:
-            csv.writer(f).writerow([symbol, now, price, "", "", qty, side, strategy, "", tag_str])
+            csv.writer(f).writerow([symbol, now, price, "","", qty, side, strategy, "", tag_str])
 
     def log_exit(self, symbol, exit_price):
-        # read+rewrite whole file under lock
-        # open in r+ so we can rewrite in place
         with portalocker.Lock(self.path, 'r+', timeout=1) as f:
             rows = list(csv.reader(f))
             header, data = rows[0], rows[1:]
             for row in data:
-                if row[0] == symbol and row[3] == "":
+                if row[0]==symbol and row[3]=="":
                     entry_time = datetime.fromisoformat(row[1])
                     exit_time  = datetime.utcnow()
-                    days = (exit_time - entry_time).days
-                    cls = "day_trade" if days == 0 else "swing_trade" if days < 5 else "long_trade"
-                    row[3], row[4], row[8] = exit_time.isoformat(), exit_price, cls
+                    days = (exit_time-entry_time).days
+                    cls  = "day_trade" if days==0 else "swing_trade" if days<5 else "long_trade"
+                    row[3],row[4],row[8] = exit_time.isoformat(), exit_price, cls
                     break
-            # rewind & truncate then write back
-            f.seek(0)
-            f.truncate()
-            writer = csv.writer(f)
+            f.seek(0); f.truncate()
+            writer=csv.writer(f)
             writer.writerow(header)
             writer.writerows(data)
 
@@ -218,11 +204,11 @@ trade_logger = TradeLogger(path=TRADE_LOG_FILE)
 
 # ─── UTILITY FUNCTIONS ────────────────────────────────────────────────────────
 def load_tickers(path):
-    tickers = []
-    with open(path, newline="") as f:
-        reader = csv.reader(f); next(reader)
+    tickers=[]
+    with open(path,newline="") as f:
+        reader=csv.reader(f); next(reader)
         for row in reader:
-            t = row[0].strip().upper()
+            t=row[0].strip().upper()
             if t and t not in tickers:
                 tickers.append(t)
     return tickers
@@ -476,44 +462,52 @@ class SignalManager:
         return final_sig, conf, label
 
 # ─── ORDER EXECUTION & POSITION SIZING ────────────────────────────────────────
+
 def fractional_kelly_size(balance, price, atr, win_prob, payoff_ratio=1.5, base_frac=KELLY_FRACTION):
-    # Adaptive Kelly scaling based on drawdown
-    peak_file = "PEAK_EQUITY_FILE"
-    current_equity = balance
+    peak_file = PEAK_EQUITY_FILE
 
-    # Load peak equity from file
-    if os.path.exists(peak_file):
-        with open(peak_file, "r") as f:
-            peak_equity = float(f.read().strip())
+    # ensure the file exists (with initial value = current balance)
+    if not os.path.exists(peak_file):
+        with portalocker.Lock(peak_file, 'w', timeout=1) as f:
+            f.write(str(balance))
+        peak_equity = balance
     else:
-        peak_equity = current_equity
+        # read & optionally update peak under the same lock
+        with portalocker.Lock(peak_file, 'r+', timeout=1) as f:
+            content = f.read().strip()
+            peak_equity = float(content) if content else balance
 
-    # Update peak if needed
-    if current_equity > peak_equity:
-        peak_equity = current_equity
-        with open(peak_file, "w") as f:
-            f.write(str(peak_equity))
+            if balance > peak_equity:
+                peak_equity = balance
+                f.seek(0)
+                f.truncate()
+                f.write(str(peak_equity))
 
-    drawdown = (peak_equity - current_equity) / peak_equity
+    drawdown = (peak_equity - balance) / peak_equity
 
     # Adjust Kelly fraction based on drawdown
     if drawdown > 0.10:
-        frac = 0.3  # cut risk aggressively
+        frac = 0.3
     elif drawdown > 0.05:
-        frac = 0.45  # reduce modestly
+        frac = 0.45
     else:
-        frac = base_frac  # standard
+        frac = base_frac
 
+    # standard Kelly
     edge = win_prob - (1 - win_prob) / payoff_ratio
     kelly = max(edge / payoff_ratio, 0) * frac
     dr = kelly * balance
     if atr <= 0:
         return 1
+
     raw = dr / atr
     cap = (balance * CAPITAL_CAP) / price
     return max(int(min(raw, cap, MAX_POSITION_SIZE)), 1)
 
-def submit_order(ticker, qty, side, order_type=ORDER_TYPE):
+
+def submit_order(ticker, qty, side, order_type_override=None):
+    order_type = order_type_override or ORDER_TYPE
+
     for attempt in range(3):
         try:
             expected_price = None
@@ -523,26 +517,39 @@ def submit_order(ticker, qty, side, order_type=ORDER_TYPE):
                 spread = (ask - bid) if ask and bid else 0
                 limit_price = (bid + 0.25 * spread) if side == 'buy' else (ask - 0.25 * spread)
                 expected_price = round(limit_price, 2)
-                api.submit_order(symbol=ticker, qty=qty, side=side,
-                                 type='limit', limit_price=expected_price,
-                                 time_in_force='gtc')
+                api.submit_order(
+                    symbol=ticker, qty=qty, side=side,
+                    type='limit', limit_price=expected_price,
+                    time_in_force='gtc'
+                )
             else:
                 quote = api.get_latest_quote(ticker)
                 expected_price = quote.askprice if side == 'buy' else quote.bidprice
-                api.submit_order(symbol=ticker, qty=qty, side=side,
-                                 type='market', time_in_force='gtc')
+                api.submit_order(
+                    symbol=ticker, qty=qty, side=side,
+                    type='market', time_in_force='gtc'
+                )
 
-            # Log expected price for slippage tracking
-            logger.info(f"[SLIPPAGE] {ticker} expected price: {expected_price} side: {side} qty: {qty}")
+            logger.info(f"[SLIPPAGE] {ticker} expected={expected_price} side={side} qty={qty}")
             return True
-        except Exception as e:
+
+        except APIError as e:
+            # only catch Alpaca api errors for retryable conditions
             m = re.search(r"requested: (\d+), available: (\d+)", str(e))
             if m and int(m.group(2)) > 0:
                 qq = int(m.group(2))
                 api.submit_order(symbol=ticker, qty=qq, side=side,
                                  type=order_type, time_in_force='gtc')
                 return True
+            logger.warning(f"[submit_order] Alpaca APIError on attempt {attempt+1}: {e}")
             time.sleep(2 ** attempt)
+
+        except Exception:
+            # truly unexpected—log full stack and bail
+            logger.exception("Unexpected error in submit_order")
+            return False
+
+    logger.error(f"[submit_order] Failed after 3 attempts for {ticker}")
     return False
 
 def update_trailing_stop(ticker, price, qty, atr, factor=TRAILING_FACTOR):
@@ -682,10 +689,6 @@ def run_all_trades(model):
         KELLY_FRACTION = 0.7
     else:
         KELLY_FRACTION = 0.6
-
-    # Update the stored equity for next run
-    with open(EQUITY_FILE, "w") as f:
-        f.write(str(current_cash))
 
     # Run trades as normal
     with open (EQUITY_FILE, "w") as f:
