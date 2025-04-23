@@ -9,3 +9,5 @@ schedule
 beautifulsoup4
 requests
 python-dotenv
+portalocker
+lxml

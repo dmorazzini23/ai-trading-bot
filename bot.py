@@ -1,8 +1,8 @@
 import os
-import fcntl
 import sys
 import time
 import csv
+import portalocker
 import re
 import numpy as np
 setattr(np, "NaN", np.nan)
@@ -178,29 +178,25 @@ class TradeLogger:
         self.path = path
         # create file with header if it doesn’t exist
         if not os.path.exists(self.path):
-            with open(self.path, "w", newline="") as f:
-                # lock even the header‐write to be safe
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            # use portalocker.Lock in 'w' mode to both create + lock
+            with portalocker.Lock(self.path, 'w', timeout=1) as f:
                 csv.writer(f).writerow([
                     "symbol", "entry_time", "entry_price",
                     "exit_time", "exit_price", "qty", "side",
                     "strategy", "classification", "signal_tags"
                 ])
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def log_entry(self, symbol, price, qty, side, strategy, signal_tags=None):
         now = datetime.utcnow().isoformat()
         tag_str = signal_tags or ""
-        with open(self.path, "a", newline="") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        # append a row under lock
+        with portalocker.Lock(self.path, 'a', timeout=1) as f:
             csv.writer(f).writerow([symbol, now, price, "", "", qty, side, strategy, "", tag_str])
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def log_exit(self, symbol, exit_price):
-        # we need to read+rewrite the whole file under lock
-        # so open r+ (read/write) and lock it
-        with open(self.path, "r+", newline="") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        # read+rewrite whole file under lock
+        # open in r+ so we can rewrite in place
+        with portalocker.Lock(self.path, 'r+', timeout=1) as f:
             rows = list(csv.reader(f))
             header, data = rows[0], rows[1:]
             for row in data:
@@ -211,13 +207,13 @@ class TradeLogger:
                     cls = "day_trade" if days == 0 else "swing_trade" if days < 5 else "long_trade"
                     row[3], row[4], row[8] = exit_time.isoformat(), exit_price, cls
                     break
-            # rewind and truncate before writing back
+            # rewind & truncate then write back
             f.seek(0)
             f.truncate()
             writer = csv.writer(f)
             writer.writerow(header)
             writer.writerows(data)
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
 trade_logger = TradeLogger(path=TRADE_LOG_FILE)
 
 # ─── UTILITY FUNCTIONS ────────────────────────────────────────────────────────
