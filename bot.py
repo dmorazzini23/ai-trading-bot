@@ -664,14 +664,13 @@ def run_all_trades(model):
     try:
         acct = api.get_account()
         current_cash = float(acct.cash)
-    except:
+    except Exception:
         logger.error("Failed to retrieve account balance.")
         return
 
     # Load last balance from file
-    equity_file = EQUITY_FILE
-    if os.path.exists(equity_file):
-        with open(equity_file, "r") as f:
+    if os.path.exists(EQUITY_FILE):
+        with open(EQUITY_FILE, "r") as f:
             last_cash = float(f.read().strip())
     else:
         last_cash = current_cash
@@ -685,19 +684,20 @@ def run_all_trades(model):
         KELLY_FRACTION = 0.6
 
     # Update the stored equity for next run
-    with open(equity_file, "w") as f:
+    with open(EQUITY_FILE, "w") as f:
         f.write(str(current_cash))
 
     # Run trades as normal
-    here     = os.path.dirname(__file__)
-    csv_path = os.path.join(here, TICKERS_FILE)
-    tickers  = load_tickers(TICKERS_FILE)
-    
-    with multiprocessing.Pool(min(len(tickers), 4)) as p:
+    with open (EQUITY_FILE, "w") as f:
+        f.write(str(current_cash))
+
+    tickers = load_tickers(TICKERS_FILE)
+    pool_size = min(len(tickers), 4)
+    with multiprocessing.Pool(pool_size) as pool:
         for sym in tickers:
-            p.apply_async(trade_logic, (sym, current_cash, model))
-        p.close()
-        p.join()
+            pool.apply_async(trade_logic, (sym, current_cash, model))
+        pool.close()
+        pool.join()
 
 # ─── LOAD MODEL ──────────────────────────────────────────────────────────────
 def load_model(path=MODEL_PATH):
