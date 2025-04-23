@@ -787,10 +787,9 @@ if __name__ == "__main__":
     schedule.every(1).minutes.do(lambda: run_all_trades(model))
     schedule.every(6).hours.do(update_signal_weights)
 
-while True:
-    try:
-        schedule.run_pending()
-    except Exception as e:
-        logger.exception(f"Scheduler loop error: {e}")
-    time.sleep(30)
-
+    while True:
+        try:
+            schedule.run_pending()
+        except Exception as e:
+            logger.exception(f"Scheduler loop error: {e}")
+        time.sleep(30)
