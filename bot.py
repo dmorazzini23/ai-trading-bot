@@ -286,7 +286,7 @@ def check_market_regime() -> bool:
     Market regime is OK if SPY ATR is below threshold OR volatility is low.
     Handles edge cases like NaNs, short data, and failed ATR calculations.
     """
-    df = fetch_data("SPY", period=f"{REGIME_LOOKBACK + 5}d", interval="1d")  # fetch extra
+    df = fetch_data("SPY", period="1mo", interval="1d")
 
     if df is None or df.empty:
         logger.warning("[check_market_regime] No SPY data – failing regime check")
