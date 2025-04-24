@@ -234,13 +234,6 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
         logger.exception(f"[load_tickers] Failed to read {path}: {e}")
     return tickers
 
-def within_market_hours() -> bool:
-    """Return True if current time is within the entry window."""
-    now = now_pacific().time()
-    start = (datetime.combine(date.today(), MARKET_OPEN) + ENTRY_START_OFFSET).time()
-    end   = (datetime.combine(date.today(), MARKET_CLOSE) - ENTRY_END_OFFSET).time()
-    return start <= now <= end
-
 def check_daily_loss() -> bool:
     """Return True if cash drawdown from start of day exceeds limit."""
     global daily_loss, day_start_equity
