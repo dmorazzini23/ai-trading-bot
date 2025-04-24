@@ -351,7 +351,7 @@ def too_correlated(sym: str) -> bool:
     return avg_corr > CORRELATION_THRESHOLD
 
 @retry(times=3, delay=0.5)
-def fetch_data(ticker: str, period: str = "3y", interval: str = "1d") -> pd.DataFrame:
+def fetch_data(symbol: str, period: str = "1d", interval: str = "1m"):
     """Download OHLCV for ticker, fill forward/back, and return."""
     df = yf.download(ticker, period=period, interval=interval,
                      auto_adjust=True, progress=False)
