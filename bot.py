@@ -843,8 +843,7 @@ def trade_logic(sym: str, balance: float, model) -> None:
 # ─── RUNNER & SCHEDULER ──────────────────────────────────────────────────────
 def run_all_trades(model):
     """
-    Kick off one pass over all tickers in parallel, 
-    applying dynamic Kelly scaling on cash inflows.
+    Kick off one pass over all tickers in parallel.
     """
     if check_halt_flag():
         logger.info("Trading halted via HALT_FLAG_FILE.")
@@ -877,6 +876,10 @@ def run_all_trades(model):
 
     # Parallelize over tickers
     tickers = load_tickers(TICKERS_FILE)
+    if not tickers:
+        logger.error("❌ No tickers loaded; please check tickers.csv")
+        return
+
     pool_size = min(len(tickers), 4)
     with multiprocessing.Pool(pool_size) as pool:
         for sym in tickers:
