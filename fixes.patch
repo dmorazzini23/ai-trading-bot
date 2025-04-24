@@ -1,0 +1,79 @@
+diff --git a/bot.py b/bot.py
+--- a/bot.py
++++ b/bot.py
+@@ -22,6 +22,10 @@ ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+ NEWS_API_KEY        = os.getenv("NEWS_API_KEY")
+ TRAILING_FACTOR     = params["TRAILING_FACTOR"]
+ TAKE_PROFIT_FACTOR  = params["TAKE_PROFIT_FACTOR"]
++import sys
++if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
++    logger.error("❌ Missing Alpaca API credentials; please check .env")
++    sys.exit(1)
+
+ SCALING_FACTOR        = 0.5
+ SECONDARY_TRAIL_FACTOR = 1.0
+@@ -30,6 +34,10 @@ ENTRY_END_OFFSET      = timedelta(minutes=30)
+ import schedule
+ import logging
+ import multiprocessing
++import pytz
++
++PACIFIC = pytz.timezone("US/Pacific")
++
++def now_pacific() -> datetime:
++    return datetime.now(PACIFIC)
+
+ def within_market_hours() -> bool:
+-    now = now_pacific().time()
+-    start = (datetime.combine(date.today(), MARKET_OPEN) + ENTRY_START_OFFSET).time()
+-    end   = (datetime.combine(date.today(), MARKET_CLOSE) - ENTRY_END_OFFSET).time()
+-    return start <= now <= end
++    now   = now_pacific()
++    start = datetime.combine(now.date(), MARKET_OPEN, PACIFIC) + ENTRY_START_OFFSET
++    end   = datetime.combine(now.date(), MARKET_CLOSE, PACIFIC) - ENTRY_END_OFFSET
++    return start <= now <= end
+
+@@ -85,7 +94,7 @@ @retry(times=3, delay=0.5)
+ def check_market_regime() -> bool:
+     """ Market regime is OK if SPY ATR is below threshold OR volatility is low.
+         Handles edge cases like NaNs, short data, and failed ATR calculations.
+-    df = fetch_data("SPY", period=f"{REGIME_LOOKBACK + 5}d", interval="1d")  # fetch extra
++    df = fetch_data("SPY", period="1mo", interval="1d")                    # fetch extra
+     if df is None or df.empty:
+         logger.warning("[check_market_regime] No SPY data – failing regime check")
+         return False
+
+@@ -120,7 +129,7 @@ def trade_logic(sym: str, balance: float, model) -> None:
+     # 3) FETCH & VOLUME
+-    df = fetch_data(sym)
++    df = fetch_data(sym, period="1d", interval="1m")
+     if df.empty:
+         logger.info(f"[SKIP] No data for {sym}")
+         return
+
+@@ -134,7 +143,7 @@ def trade_logic(sym: str, balance: float, model) -> None:
+     # 4) ENTRY WINDOW
+-    now_dt = datetime.now()
++    now_dt = now_pacific()
+     start   = (datetime.combine(now_dt.date(), MARKET_OPEN) + ENTRY_START_OFFSET).time()
+     end     = (datetime.combine(now_dt.date(), MARKET_CLOSE) - ENTRY_END_OFFSET).time()
+     if not (start <= now_dt.time() <= end):
+@@ -240,7 +249,11 @@ def check_halt_flag() -> bool:
+ def check_halt_flag() -> bool:
+     """Return True if a halt file is present on disk."""
+-    return os.path.exists(HALT_FLAG_PATH)
++    if not os.path.exists(HALT_FLAG_PATH):
++        return False
++    age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(HALT_FLAG_PATH))
++    # only treat a flag as valid if modified within the last hour
++    return age < timedelta(hours=1)
+
+@@ -320,6 +333,9 @@ def run_all_trades(model):
+     tickers = load_tickers(TICKERS_FILE)
++    if not tickers:
++        logger.error("❌ No tickers loaded; please check tickers.csv")
++        return
+     pool_size = min(len(tickers), 4)
+     with multiprocessing.Pool(pool_size) as pool:
+         for sym in tickers:
+             pool.apply_async(trade_logic, (sym, current_cash, model))
