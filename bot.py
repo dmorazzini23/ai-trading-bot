@@ -301,7 +301,7 @@ def check_market_regime() -> bool:
         return False
 
     vol = df["Close"].pct_change().std()
-    logger.debug(f"[check_market_regime] ATR: {atr_val:.4f}, Volatility: {vol:.4f}")
+    logger.debug(f"[check_market_regime] SPY data shape after dropna: {df.shape}")
     return (atr_val <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
 
 def too_correlated(sym: str) -> bool:
