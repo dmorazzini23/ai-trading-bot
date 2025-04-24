@@ -25,6 +25,7 @@ from dotenv import load_dotenv
 from flask import Flask
 import threading
 
+# ─── TIMEZONE & MARKET-HOURS HELPERS ──────────────────────────────────────────
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
 def now_pacific() -> datetime:
@@ -32,17 +33,19 @@ def now_pacific() -> datetime:
     return datetime.now(PACIFIC)
 
 def within_market_hours() -> bool:
+    """
+    Return True if current time is within the entry window,
+    using US/Pacific.
+    """
     now = now_pacific()
-    start = (datetime.combine(now.date(), MARKET_OPEN, PACIFIC)
-             + ENTRY_START_OFFSET).time()
-    end   = (datetime.combine(now.date(), MARKET_CLOSE, PACIFIC)
-             - ENTRY_END_OFFSET).time()
-    return start <= now.time() <= end
+    start = datetime.combine(now.date(), MARKET_OPEN, PACIFIC) + ENTRY_START_OFFSET
+    end   = datetime.combine(now.date(), MARKET_CLOSE, PACIFIC) - ENTRY_END_OFFSET
+    return start <= now <= end
 
 def retry(times: int = 3, delay: float = 1.0):
     """
     Decorator to retry a function on exception up to `times` times,
-    with exponential back‐off starting at `delay` seconds.
+    with exponential back-off starting at `delay` seconds.
     """
     def deco(fn):
         @wraps(fn)
@@ -58,9 +61,17 @@ def retry(times: int = 3, delay: float = 1.0):
         return wrapper
     return deco
 
-# Load environment variables
+# ─── LOAD ENV VARS & ASSERT KEYS ─────────────────────────────────────────────
 dotenv_path = os.getenv("DOTENV_PATH", ".env")
 load_dotenv(dotenv_path=dotenv_path)
+
+ALPACA_API_KEY    = os.getenv("APCA_API_KEY_ID")
+ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
+ALPACA_BASE_URL   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+
+if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+    logging.error("❌ Missing Alpaca API credentials; please check .env")
+    sys.exit(1)
 
 # ─── PATH CONFIGURATION ───────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -72,7 +83,7 @@ TRADE_LOG_FILE      = abspath("trades.csv")
 SIGNAL_WEIGHTS_FILE = abspath("signal_weights.csv")
 EQUITY_FILE         = abspath("last_equity.txt")
 PEAK_EQUITY_FILE    = abspath("peak_equity.txt")
-HALT_FLAG_FILE      = abspath("halt.flag")
+HALT_FLAG_PATH      = abspath("halt.flag")
 MODEL_FILE          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
 
 # ─── CONFIG & LOGGING ─────────────────────────────────────────────────────────
@@ -103,47 +114,29 @@ class BotMode:
                     "TAKE_PROFIT_FACTOR": 1.8, "DAILY_LOSS_LIMIT": 0.07,
                     "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.8}
 
-    def apply(self):
-        return self.params
-
 BOT_MODE = os.getenv("BOT_MODE", "balanced")
 mode = BotMode(BOT_MODE)
 params = mode.apply()
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
-ALPACA_API_KEY    = os.getenv("ALPACA_API_KEY")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-
-import sys
-if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-    logger.error("❌ Missing Alpaca API credentials; please check .env")
-    sys.exit(1)
-
-ALPACA_BASE_URL          = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 NEWS_API_KEY             = os.getenv("NEWS_API_KEY")
-
 TRAILING_FACTOR          = params["TRAILING_FACTOR"]
 TAKE_PROFIT_FACTOR       = params["TAKE_PROFIT_FACTOR"]
 SCALING_FACTOR           = 0.5
 SECONDARY_TRAIL_FACTOR   = 1.0
-
 ORDER_TYPE               = 'market'
 LIMIT_ORDER_SLIPPAGE     = float(os.getenv("LIMIT_ORDER_SLIPPAGE", 0.005))
-
 MAX_POSITION_SIZE        = 1000
 DAILY_LOSS_LIMIT         = params["DAILY_LOSS_LIMIT"]
 MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD    = 0.8
-
 MARKET_OPEN              = dt_time(6, 30)
 MARKET_CLOSE             = dt_time(13, 0)
 VOLUME_THRESHOLD         = 500_000
 ENTRY_START_OFFSET       = timedelta(minutes=15)
 ENTRY_END_OFFSET         = timedelta(minutes=30)
-
 REGIME_LOOKBACK          = 14
 REGIME_ATR_THRESHOLD     = 3.0
-
 MODEL_PATH               = MODEL_FILE
 RF_ESTIMATORS            = 225
 RF_MAX_DEPTH             = 5
@@ -152,8 +145,6 @@ CONF_THRESHOLD           = params["CONF_THRESHOLD"]
 CONFIRMATION_COUNT       = params["CONFIRMATION_COUNT"]
 KELLY_FRACTION           = params["KELLY_FRACTION"]
 CAPITAL_CAP              = params["CAPITAL_CAP"]
-
-HALT_FLAG_PATH           = HALT_FLAG_FILE
 
 # ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 api = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=ALPACA_BASE_URL)
@@ -277,17 +268,18 @@ def too_many_positions() -> bool:
         return False
 
 def check_halt_flag() -> bool:
-    """Return True if a halt file is present on disk."""
-    return os.path.exists(HALT_FLAG_PATH)
+    """Return True only if halt.flag exists and is <1h old."""
+    if not os.path.exists(HALT_FLAG_PATH):
+        return False
+    age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(HALT_FLAG_PATH))
+    return age < timedelta(hours=1)
 
 @retry(times=3, delay=0.5)
 def check_market_regime() -> bool:
     """
     Market regime is OK if SPY ATR is below threshold OR volatility is low.
-    Handles edge cases like NaNs, short data, and failed ATR calculations.
     """
     df = fetch_data("SPY", period="1mo", interval="1d")
-
     if df is None or df.empty:
         logger.warning("[check_market_regime] No SPY data – failing regime check")
         return False
@@ -353,7 +345,7 @@ def too_correlated(sym: str) -> bool:
 @retry(times=3, delay=0.5)
 def fetch_data(symbol: str, period: str = "1d", interval: str = "1m"):
     """Download OHLCV for ticker, fill forward/back, and return."""
-    df = yf.download(ticker, period=period, interval=interval,
+    df = yf.download(symbol, period=period, interval=interval,
                      auto_adjust=True, progress=False)
     df.reset_index(inplace=True)
     df.ffill().bfill(inplace=True)
@@ -737,15 +729,16 @@ def trade_logic(sym: str, balance: float, model) -> None:
 
     # 3) FETCH & VOLUME
     df = fetch_data(sym, period="1d", interval="1m")
+    if df is None or df.empty:
         logger.info(f"[SKIP] No data for {sym}")
         return
     avg_vol = df["Volume"].tail(20).mean()
     if avg_vol < VOLUME_THRESHOLD:
-        logger.info(f"[SKIP] {sym} 20-bar avg volume too low ({avg_vol:.0f} < {VOLUME_THRESHOLD})")
+        logger.info(f"[SKIP] {sym} volume too low ({avg_vol:.0f} < {VOLUME_THRESHOLD})")
         return
 
     # 4) ENTRY WINDOW
-    now_dt = datetime.now()
+    now_dt = now_pacific()
     start = (datetime.combine(now_dt.date(), MARKET_OPEN) + ENTRY_START_OFFSET).time()
     end   = (datetime.combine(now_dt.date(), MARKET_CLOSE) - ENTRY_END_OFFSET).time()
     if not (start <= now_dt.time() <= end):
