@@ -281,18 +281,23 @@ def check_market_regime() -> bool:
     Uses a retry decorator to handle transient download errors.
     """
     df = fetch_data("SPY", period=f"{REGIME_LOOKBACK}d", interval="1d")
-    if df is None or df.empty:
-        logger.warning("[check_market_regime] no SPY data – failing regime check")
+    if df is None or df.empty or len(df) < REGIME_LOOKBACK + 1:
+        logger.warning("[check_market_regime] Insufficient SPY data – failing regime check")
         return False
 
-    # compute ATR
-    atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=REGIME_LOOKBACK)
-    if atr_series is None or atr_series.empty or pd.isna(atr_series.iloc[-1]):
-        logger.warning("[check_market_regime] ATR calculation failed – failing regime check")
+    try:
+        df.dropna(inplace=True)
+        atr_series = ta.atr(high=df["High"], low=df["Low"], close=df["Close"], length=REGIME_LOOKBACK)
+        if atr_series is None or atr_series.empty or pd.isna(atr_series.iloc[-1]):
+            logger.warning("[check_market_regime] ATR returned NaNs – failing regime check")
+            return False
+    except Exception as e:
+        logger.warning(f"[check_market_regime] ATR error: {e}")
         return False
 
     atr_val = atr_series.iloc[-1]
     vol     = df["Close"].pct_change().std()
+    logger.debug(f"[check_market_regime] ATR: {atr_val:.4f}, Volatility: {vol:.4f}")
     return (atr_val <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
 
 def too_correlated(sym: str) -> bool:
