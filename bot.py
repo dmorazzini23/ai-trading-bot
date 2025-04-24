@@ -111,8 +111,14 @@ mode = BotMode(BOT_MODE)
 params = mode.apply()
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
-ALPACA_API_KEY           = os.getenv("APCA_API_KEY_ID")
-ALPACA_SECRET_KEY        = os.getenv("APCA_API_SECRET_KEY")
+ALPACA_API_KEY    = os.getenv("ALPACA_API_KEY")
+ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
+
+import sys
+if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+    logger.error("❌ Missing Alpaca API credentials; please check .env")
+    sys.exit(1)
+
 ALPACA_BASE_URL          = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 NEWS_API_KEY             = os.getenv("NEWS_API_KEY")
 
