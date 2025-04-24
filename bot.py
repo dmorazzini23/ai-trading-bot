@@ -135,7 +135,7 @@ VOLUME_THRESHOLD         = 500_000
 ENTRY_START_OFFSET       = timedelta(minutes=15)
 ENTRY_END_OFFSET         = timedelta(minutes=30)
 
-REGIME_LOOKBACK          = 20
+REGIME_LOOKBACK          = 14
 REGIME_ATR_THRESHOLD     = 3.0
 
 MODEL_PATH               = MODEL_FILE
@@ -277,26 +277,30 @@ def check_halt_flag() -> bool:
 @retry(times=3, delay=0.5)
 def check_market_regime() -> bool:
     """
-    Regime is OK if SPY ATR is below threshold OR volatility is low.
-    Uses a retry decorator to handle transient download errors.
+    Market regime is OK if SPY ATR is below threshold OR volatility is low.
+    Handles edge cases like NaNs, short data, and failed ATR calculations.
     """
-    df = fetch_data("SPY", period=f"{REGIME_LOOKBACK}d", interval="1d")
-    if df is None or df.empty or len(df) < REGIME_LOOKBACK + 1:
-        logger.warning("[check_market_regime] Insufficient SPY data – failing regime check")
+    df = fetch_data("SPY", period=f"{REGIME_LOOKBACK + 5}d", interval="1d")  # fetch a little extra
+    if df is None or df.empty:
+        logger.warning("[check_market_regime] No SPY data – failing regime check")
+        return False
+
+    df.dropna(inplace=True)
+    if len(df) < REGIME_LOOKBACK:
+        logger.warning(f"[check_market_regime] Not enough SPY rows after cleaning: {len(df)} – need {REGIME_LOOKBACK}")
         return False
 
     try:
-        df.dropna(inplace=True)
         atr_series = ta.atr(high=df["High"], low=df["Low"], close=df["Close"], length=REGIME_LOOKBACK)
-        if atr_series is None or atr_series.empty or pd.isna(atr_series.iloc[-1]):
-            logger.warning("[check_market_regime] ATR returned NaNs – failing regime check")
+        atr_val = atr_series.iloc[-1]
+        if pd.isna(atr_val):
+            logger.warning("[check_market_regime] ATR value is NaN – failing regime check")
             return False
     except Exception as e:
-        logger.warning(f"[check_market_regime] ATR error: {e}")
+        logger.warning(f"[check_market_regime] ATR calc failed: {e}")
         return False
 
-    atr_val = atr_series.iloc[-1]
-    vol     = df["Close"].pct_change().std()
+    vol = df["Close"].pct_change().std()
     logger.debug(f"[check_market_regime] ATR: {atr_val:.4f}, Volatility: {vol:.4f}")
     return (atr_val <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
 
