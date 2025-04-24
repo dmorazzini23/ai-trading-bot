@@ -286,6 +286,8 @@ def check_market_regime() -> bool:
         logger.warning("[check_market_regime] No SPY data – failing regime check")
         return False
 
+    logger.debug(f"[check_market_regime] SPY dataframe columns: {df.columns.tolist()}")
+
     # Ensure required columns exist
     for col in ["High", "Low", "Close"]:
         if col not in df.columns:
