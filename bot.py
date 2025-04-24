@@ -17,12 +17,27 @@ import logging
 import multiprocessing
 from functools import wraps
 from datetime import datetime, date, timedelta, time as dt_time
+from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 from alpaca_trade_api.rest import REST, APIError
 from sklearn.ensemble import RandomForestClassifier
 from dotenv import load_dotenv
 from flask import Flask
 import threading
+
+PACIFIC = ZoneInfo("America/Los Angeles")
+
+def now_pacific() -> datetime:
+    """Get current time in US/Pacific"""
+    return datetime.now(PACIFIC)
+
+def within_market_hours() -> bool:
+    now = now_pacific()
+    start = (datetime.combine(now.date(), MARKET_OPEN, PACIFIC)
+             + ENTRY_START_OFFSET).time()
+    end   = (datetime.combine(now.date(), MARKET_CLOSE, PACIFIC)
+             - ENTRY_END_OFFSET).time()
+    return start <= now.time() <= end
 
 def retry(times: int = 3, delay: float = 1.0):
     """
@@ -115,7 +130,7 @@ MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD    = 0.8
 
 MARKET_OPEN              = dt_time(6, 30)
-MARKET_CLOSE             = dt_time(16, 0)
+MARKET_CLOSE             = dt_time(13, 0)
 VOLUME_THRESHOLD         = 500_000
 ENTRY_START_OFFSET       = timedelta(minutes=15)
 ENTRY_END_OFFSET         = timedelta(minutes=30)
@@ -224,7 +239,7 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
 
 def within_market_hours() -> bool:
     """Return True if current time is within the entry window."""
-    now = datetime.now().time()
+    now = now_pacific().time()
     start = (datetime.combine(date.today(), MARKET_OPEN) + ENTRY_START_OFFSET).time()
     end   = (datetime.combine(date.today(), MARKET_CLOSE) - ENTRY_END_OFFSET).time()
     return start <= now <= end
@@ -654,7 +669,7 @@ def trade_logic(sym: str, balance: float, model) -> None:
         logger.info(f"[SKIP] HALT_FLAG present, skipping trades for {sym}")
         return
     if not within_market_hours():
-        now = datetime.now().time()
+        now = now_pacific().time()
         logger.info(f"[SKIP] Outside market hours for {sym} – now={now}")
         return
     if check_daily_loss():
