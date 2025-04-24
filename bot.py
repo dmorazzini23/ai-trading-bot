@@ -281,7 +281,17 @@ def check_market_regime() -> bool:
     Uses a retry decorator to handle transient download errors.
     """
     df = fetch_data("SPY", period=f"{REGIME_LOOKBACK}d", interval="1d")
-    atr_val = ta.atr(df["High"], df["Low"], df["Close"], length=REGIME_LOOKBACK).iloc[-1]
+    if df is None or df.empty:
+        logger.warning("[check_market_regime] no SPY data – failing regime check")
+        return False
+
+    # compute ATR
+    atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=REGIME_LOOKBACK)
+    if atr_series is None or atr_series.empty or pd.isna(atr_series.iloc[-1]):
+        logger.warning("[check_market_regime] ATR calculation failed – failing regime check")
+        return False
+
+    atr_val = atr_series.iloc[-1]
     vol     = df["Close"].pct_change().std()
     return (atr_val <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
 
@@ -443,9 +453,17 @@ class SignalManager:
         """
         try:
             df = fetch_data("SPY", period=f"{REGIME_LOOKBACK}d", interval="1d")
-            atr_val = ta.atr(df['High'], df['Low'], df['Close'], length=REGIME_LOOKBACK).iloc[-1]
-            signal = 1 if atr_val < self.regime_volatility_threshold else 0
+            if df is None or df.empty:
+                return -1, 0.0, 'regime'
+
+            atr_series = ta.atr(df['High'], df['Low'], df['Close'], length=REGIME_LOOKBACK)
+            if atr_series is None or atr_series.empty or pd.isna(atr_series.iloc[-1]):
+                return -1, 0.0, 'regime'
+
+            atr_val = atr_series.iloc[-1]
+            signal  = 1 if atr_val < self.regime_volatility_threshold else 0
             return signal, 0.6, 'regime'
+
         except Exception:
             logger.exception("Error in signal_regime")
             return -1, 0.0, 'regime'
