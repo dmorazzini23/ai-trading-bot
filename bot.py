@@ -280,18 +280,30 @@ def check_market_regime() -> bool:
     Market regime is OK if SPY ATR is below threshold OR volatility is low.
     Handles edge cases like NaNs, short data, and failed ATR calculations.
     """
-    df = fetch_data("SPY", period=f"{REGIME_LOOKBACK + 5}d", interval="1d")  # fetch a little extra
+    df = fetch_data("SPY", period=f"{REGIME_LOOKBACK + 5}d", interval="1d")  # fetch extra
+
     if df is None or df.empty:
         logger.warning("[check_market_regime] No SPY data – failing regime check")
         return False
 
-    df.dropna(inplace=True)
+    # Ensure required columns exist
+    for col in ["High", "Low", "Close"]:
+        if col not in df.columns:
+            logger.warning(f"[check_market_regime] Missing column '{col}' in SPY data")
+            return False
+
+    df.dropna(subset=["High", "Low", "Close"], inplace=True)
+
     if len(df) < REGIME_LOOKBACK:
         logger.warning(f"[check_market_regime] Not enough SPY rows after cleaning: {len(df)} – need {REGIME_LOOKBACK}")
         return False
 
     try:
         atr_series = ta.atr(high=df["High"], low=df["Low"], close=df["Close"], length=REGIME_LOOKBACK)
+        if atr_series is None or atr_series.empty:
+            logger.warning("[check_market_regime] ATR series is None or empty")
+            return False
+
         atr_val = atr_series.iloc[-1]
         if pd.isna(atr_val):
             logger.warning("[check_market_regime] ATR value is NaN – failing regime check")
@@ -301,7 +313,8 @@ def check_market_regime() -> bool:
         return False
 
     vol = df["Close"].pct_change().std()
-    logger.debug(f"[check_market_regime] SPY data shape after dropna: {df.shape}")
+    logger.debug(f"[check_market_regime] SPY data shape: {df.shape}, ATR: {atr_val:.4f}, Volatility: {vol:.4f}")
+
     return (atr_val <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
 
 def too_correlated(sym: str) -> bool:
