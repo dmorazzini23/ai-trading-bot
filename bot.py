@@ -736,8 +736,7 @@ def trade_logic(sym: str, balance: float, model) -> None:
         return
 
     # 3) FETCH & VOLUME
-    df = fetch_data(sym)
-    if df.empty:
+    df = fetch_data(sym, period="1d", interval="1m")
         logger.info(f"[SKIP] No data for {sym}")
         return
     avg_vol = df["Volume"].tail(20).mean()
