@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from flask import Flask
 import threading
 
-PACIFIC = ZoneInfo("America/Los Angeles")
+PACIFIC = ZoneInfo("America/Los_Angeles")
 
 def now_pacific() -> datetime:
     """Get current time in US/Pacific"""
