@@ -272,31 +272,20 @@ def check_halt_flag() -> bool:
 
 @retry(times=3, delay=0.5)
 def check_market_regime() -> bool:
-    """
-    Market regime is OK if SPY ATR is below threshold OR volatility is low.
-    """
     df = fetch_data("SPY", period="1mo", interval="1d")
     if df is None or df.empty:
         logger.warning("[check_market_regime] No SPY data – failing regime check")
         return False
 
-    # ─── Flatten MultiIndex columns (yfinance returns ('High','SPY'), etc.) ────
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [
-            level1 if level1 else level0
-            for level0, level1 in df.columns
-        ]
-
     logger.debug(f"[check_market_regime] SPY dataframe columns: {df.columns.tolist()}")
 
-    # Ensure required columns exist
+    # now these really *are* in df.columns
     for col in ["High", "Low", "Close"]:
         if col not in df.columns:
             logger.warning(f"[check_market_regime] Missing column '{col}' in SPY data")
             return False
 
     df.dropna(subset=["High", "Low", "Close"], inplace=True)
-
     if len(df) < REGIME_LOOKBACK:
         logger.warning(
             f"[check_market_regime] Not enough SPY rows after cleaning: "
@@ -305,16 +294,8 @@ def check_market_regime() -> bool:
         return False
 
     try:
-        atr_series = ta.atr(
-            high=df["High"],
-            low =df["Low"],
-            close=df["Close"],
-            length=REGIME_LOOKBACK
-        )
-        if atr_series is None or atr_series.empty:
-            logger.warning("[check_market_regime] ATR series is None or empty")
-            return False
-
+        atr_series = ta.atr(high=df["High"], low=df["Low"],
+                            close=df["Close"], length=REGIME_LOOKBACK)
         atr_val = atr_series.iloc[-1]
         if pd.isna(atr_val):
             logger.warning("[check_market_regime] ATR value is NaN – failing regime check")
@@ -324,13 +305,11 @@ def check_market_regime() -> bool:
         return False
 
     vol = df["Close"].pct_change().std()
-    logger.debug(
-        f"[check_market_regime] SPY data shape: {df.shape}, "
-        f"ATR: {atr_val:.4f}, Volatility: {vol:.4f}"
-    )
+    logger.debug(f"[check_market_regime] SPY data shape: {df.shape}, "
+                 f"ATR: {atr_val:.4f}, Volatility: {vol:.4f}")
 
     return (atr_val <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
-
+    
 def too_correlated(sym: str) -> bool:
     """
     Computes average pairwise correlation among open positions + this symbol.
@@ -356,14 +335,13 @@ def too_correlated(sym: str) -> bool:
     avg_corr = corr_matrix.where(~np.eye(len(open_syms), dtype=bool)).stack().mean()
     return avg_corr > CORRELATION_THRESHOLD
 
-@retry(times=3, delay=0.5)
 def fetch_data(symbol: str, period: str = "1d", interval: str = "1m"):
     df = yf.download(symbol, period=period, interval=interval,
                      auto_adjust=True, progress=False)
 
-    # ─── flatten any MultiIndex columns ─────────────────────────────
+    # ─── flatten any MultiIndex columns ─────────────────────────────────────
     if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
-        # drop the second level (ticker) so you get ["Open","High","Low","Close","Volume",…]
+        # keep only the first level (the actual column name: Open, High, etc.)
         df.columns = df.columns.get_level_values(0)
 
     df.reset_index(inplace=True)
