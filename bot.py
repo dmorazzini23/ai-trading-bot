@@ -33,6 +33,45 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# === STRATEGY MODE CONFIGURATION =============================================
+class BotMode:
+    def __init__(self, mode="balanced"):
+        self.mode = mode.lower()
+        self.params = self.set_parameters()
+
+    def set_parameters(self):
+        if self.mode == "conservative":
+            return {"KELLY_FRACTION": 0.3, "CONF_THRESHOLD": 0.8, "CONFIRMATION_COUNT": 3,
+                    "TAKE_PROFIT_FACTOR": 1.2, "DAILY_LOSS_LIMIT": 0.05,
+                    "CAPITAL_CAP": 0.05, "TRAILING_FACTOR": 1.5}
+        elif self.mode == "aggressive":
+            return {"KELLY_FRACTION": 0.75, "CONF_THRESHOLD": 0.6, "CONFIRMATION_COUNT": 1,
+                    "TAKE_PROFIT_FACTOR": 2.2, "DAILY_LOSS_LIMIT": 0.1,
+                    "CAPITAL_CAP": 0.1, "TRAILING_FACTOR": 2.0}
+        else:  # balanced
+            return {"KELLY_FRACTION": 0.6, "CONF_THRESHOLD": 0.65, "CONFIRMATION_COUNT": 2,
+                    "TAKE_PROFIT_FACTOR": 1.8, "DAILY_LOSS_LIMIT": 0.07,
+                    "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.8}
+    def get_config(self):
+        """Return the parameters for the current mode."""
+        return self.params
+
+BOT_MODE = os.getenv("BOT_MODE", "balanced")
+mode = BotMode(BOT_MODE)
+params = mode.get_config()
+
+# ─── LOAD ENV VARS & ASSERT KEYS ─────────────────────────────────────────────
+dotenv_path = os.getenv("DOTENV_PATH", ".env")
+load_dotenv(dotenv_path=dotenv_path)
+
+ALPACA_API_KEY    = os.getenv("APCA_API_KEY_ID")
+ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
+ALPACA_BASE_URL   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+
+if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+    logger.error("❌ Missing Alpaca API credentials; please check .env")
+    sys.exit(1)
+
 # ─── TIMEZONE & MARKET-HOURS HELPERS ──────────────────────────────────────────
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
@@ -69,18 +108,6 @@ def retry(times: int = 3, delay: float = 1.0):
         return wrapper
     return deco
 
-# ─── LOAD ENV VARS & ASSERT KEYS ─────────────────────────────────────────────
-dotenv_path = os.getenv("DOTENV_PATH", ".env")
-load_dotenv(dotenv_path=dotenv_path)
-
-ALPACA_API_KEY    = os.getenv("APCA_API_KEY_ID")
-ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
-ALPACA_BASE_URL   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-
-if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-    logger.error("❌ Missing Alpaca API credentials; please check .env")
-    sys.exit(1)
-
 # ─── PATH CONFIGURATION ───────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 def abspath(fname: str) -> str:
@@ -93,33 +120,6 @@ EQUITY_FILE         = abspath("last_equity.txt")
 PEAK_EQUITY_FILE    = abspath("peak_equity.txt")
 HALT_FLAG_PATH      = abspath("halt.flag")
 MODEL_FILE          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
-
-# === STRATEGY MODE CONFIGURATION =============================================
-class BotMode:
-    def __init__(self, mode="balanced"):
-        self.mode = mode.lower()
-        self.params = self.set_parameters()
-
-    def set_parameters(self):
-        if self.mode == "conservative":
-            return {"KELLY_FRACTION": 0.3, "CONF_THRESHOLD": 0.8, "CONFIRMATION_COUNT": 3,
-                    "TAKE_PROFIT_FACTOR": 1.2, "DAILY_LOSS_LIMIT": 0.05,
-                    "CAPITAL_CAP": 0.05, "TRAILING_FACTOR": 1.5}
-        elif self.mode == "aggressive":
-            return {"KELLY_FRACTION": 0.75, "CONF_THRESHOLD": 0.6, "CONFIRMATION_COUNT": 1,
-                    "TAKE_PROFIT_FACTOR": 2.2, "DAILY_LOSS_LIMIT": 0.1,
-                    "CAPITAL_CAP": 0.1, "TRAILING_FACTOR": 2.0}
-        else:  # balanced
-            return {"KELLY_FRACTION": 0.6, "CONF_THRESHOLD": 0.65, "CONFIRMATION_COUNT": 2,
-                    "TAKE_PROFIT_FACTOR": 1.8, "DAILY_LOSS_LIMIT": 0.07,
-                    "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.8}
-    def apply(self):
-        """Return the parameters for the current mode."""
-        return self.params
-
-BOT_MODE = os.getenv("BOT_MODE", "balanced")
-mode = BotMode(BOT_MODE)
-params = mode.apply()
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
 NEWS_API_KEY             = os.getenv("NEWS_API_KEY")
@@ -280,6 +280,13 @@ def check_market_regime() -> bool:
         logger.warning("[check_market_regime] No SPY data – failing regime check")
         return False
 
+    # ─── Flatten MultiIndex columns (yfinance returns ('High','SPY'), etc.) ────
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [
+            level1 if level1 else level0
+            for level0, level1 in df.columns
+        ]
+
     logger.debug(f"[check_market_regime] SPY dataframe columns: {df.columns.tolist()}")
 
     # Ensure required columns exist
@@ -291,11 +298,19 @@ def check_market_regime() -> bool:
     df.dropna(subset=["High", "Low", "Close"], inplace=True)
 
     if len(df) < REGIME_LOOKBACK:
-        logger.warning(f"[check_market_regime] Not enough SPY rows after cleaning: {len(df)} – need {REGIME_LOOKBACK}")
+        logger.warning(
+            f"[check_market_regime] Not enough SPY rows after cleaning: "
+            f"{len(df)} – need {REGIME_LOOKBACK}"
+        )
         return False
 
     try:
-        atr_series = ta.atr(high=df["High"], low=df["Low"], close=df["Close"], length=REGIME_LOOKBACK)
+        atr_series = ta.atr(
+            high=df["High"],
+            low =df["Low"],
+            close=df["Close"],
+            length=REGIME_LOOKBACK
+        )
         if atr_series is None or atr_series.empty:
             logger.warning("[check_market_regime] ATR series is None or empty")
             return False
@@ -309,7 +324,10 @@ def check_market_regime() -> bool:
         return False
 
     vol = df["Close"].pct_change().std()
-    logger.debug(f"[check_market_regime] SPY data shape: {df.shape}, ATR: {atr_val:.4f}, Volatility: {vol:.4f}")
+    logger.debug(
+        f"[check_market_regime] SPY data shape: {df.shape}, "
+        f"ATR: {atr_val:.4f}, Volatility: {vol:.4f}"
+    )
 
     return (atr_val <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
 
