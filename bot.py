@@ -358,9 +358,14 @@ def too_correlated(sym: str) -> bool:
 
 @retry(times=3, delay=0.5)
 def fetch_data(symbol: str, period: str = "1d", interval: str = "1m"):
-    """Download OHLCV for ticker, fill forward/back, and return."""
     df = yf.download(symbol, period=period, interval=interval,
                      auto_adjust=True, progress=False)
+
+    # ─── flatten any MultiIndex columns ─────────────────────────────
+    if isinstance(df.columns, pd.MultiIndex):
+        # drop the second level (ticker) so you get ["Open","High","Low","Close","Volume",…]
+        df.columns = df.columns.get_level_values(0)
+
     df.reset_index(inplace=True)
     df.ffill().bfill(inplace=True)
     return df
