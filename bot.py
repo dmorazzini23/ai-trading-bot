@@ -116,7 +116,7 @@ class BotMode:
 
 BOT_MODE = os.getenv("BOT_MODE", "balanced")
 mode = BotMode(BOT_MODE)
-params = mode.apply()
+params = mode.params
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
 NEWS_API_KEY             = os.getenv("NEWS_API_KEY")
