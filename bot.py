@@ -25,6 +25,14 @@ from dotenv import load_dotenv
 from flask import Flask
 import threading
 
+# ─── CONFIG & LOGGING ─────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+
 # ─── TIMEZONE & MARKET-HOURS HELPERS ──────────────────────────────────────────
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
@@ -70,7 +78,7 @@ ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
 ALPACA_BASE_URL   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
 if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-    logging.error("❌ Missing Alpaca API credentials; please check .env")
+    logger.error("❌ Missing Alpaca API credentials; please check .env")
     sys.exit(1)
 
 # ─── PATH CONFIGURATION ───────────────────────────────────────────────────────
@@ -85,14 +93,6 @@ EQUITY_FILE         = abspath("last_equity.txt")
 PEAK_EQUITY_FILE    = abspath("peak_equity.txt")
 HALT_FLAG_PATH      = abspath("halt.flag")
 MODEL_FILE          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
-
-# ─── CONFIG & LOGGING ─────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger(__name__)
 
 # === STRATEGY MODE CONFIGURATION =============================================
 class BotMode:
@@ -113,10 +113,13 @@ class BotMode:
             return {"KELLY_FRACTION": 0.6, "CONF_THRESHOLD": 0.65, "CONFIRMATION_COUNT": 2,
                     "TAKE_PROFIT_FACTOR": 1.8, "DAILY_LOSS_LIMIT": 0.07,
                     "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.8}
+    def apply(self):
+        """Return the parameters for the current mode."""
+        return self.params
 
 BOT_MODE = os.getenv("BOT_MODE", "balanced")
 mode = BotMode(BOT_MODE)
-params = mode.params
+params = mode.apply()
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
 NEWS_API_KEY             = os.getenv("NEWS_API_KEY")
