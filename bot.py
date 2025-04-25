@@ -362,7 +362,7 @@ def fetch_data(symbol: str, period: str = "1d", interval: str = "1m"):
                      auto_adjust=True, progress=False)
 
     # ─── flatten any MultiIndex columns ─────────────────────────────
-    if isinstance(df.columns, pd.MultiIndex):
+    if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
         # drop the second level (ticker) so you get ["Open","High","Low","Close","Volume",…]
         df.columns = df.columns.get_level_values(0)
 
