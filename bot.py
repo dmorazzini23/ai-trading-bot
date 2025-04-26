@@ -13,14 +13,9 @@ from functools import wraps, lru_cache
 from typing import Optional, Tuple
 from dataclasses import dataclass, field
 
-# ─── STRUCTURED LOGGING & RETRIES & RATE LIMITING ────────────────────────────
+# ─── STRUCTURED LOGGING, RETRIES & RATE LIMITING ────────────────────────────
 import structlog
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-)
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from ratelimit import limits, sleep_and_retry
 
 # ─── THIRD-PARTY LIBRARIES ────────────────────────────────────────────────────
@@ -38,22 +33,247 @@ from sklearn.ensemble import RandomForestClassifier
 import joblib
 from dotenv import load_dotenv
 
-# ─── CONFIG & LOGGING ─────────────────────────────────────────────────────────
+# ─── STRUCTLOG CONFIG & “TYPED” EXCEPTIONS ──────────────────────────────────
 structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
 logger = structlog.get_logger()
 
-# ─── TYPED EXCEPTIONS ─────────────────────────────────────────────────────────
-class DataFetchError(Exception):
-    """Raised when fetch_data fails irrecoverably."""
-    pass
+class DataFetchError(Exception):   pass
+class RateLimitError(Exception):   pass
+class OrderSubmissionError(Exception): pass
 
-class RateLimitError(Exception):
-    """Raised when we hit an external service rate limit."""
-    pass
+# ─── 0) DATA FETCHER WITH CACHING & VOLUME GUARD ─────────────────────────────
+class DataFetcher:
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def get_daily_df(symbol: str) -> Optional[pd.DataFrame]:
+        df = fetch_data(symbol, period="5d", interval="1d")
+        if df is None or df.empty:
+            logger.info(f"[SKIP] No daily data for {symbol}")
+            return None
+        avg_vol = df["Volume"].mean()
+        if avg_vol < VOLUME_THRESHOLD:
+            logger.info(f"[SKIP] {symbol} daily volume too low ({avg_vol:.0f} < {VOLUME_THRESHOLD})")
+            return None
+        return df
 
-class OrderSubmissionError(Exception):
-    """Raised when submit_order repeatedly fails."""
-    pass
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def get_minute_df(symbol: str) -> Optional[pd.DataFrame]:
+        df = fetch_data(symbol, period="1d", interval="1m")
+        if df is None or df.empty:
+            logger.info(f"[SKIP] No minute data for {symbol}")
+            return None
+        return df
+
+# ─── SIGNAL MANAGER ───────────────────────────────────────────────────────────
+class SignalManager:
+    def __init__(self):
+        self.momentum_lookback = 5
+        self.mean_rev_lookback = 20
+        self.mean_rev_zscore_threshold = 1.5
+        self.regime_volatility_threshold = REGIME_ATR_THRESHOLD
+
+    def signal_momentum(self, df):
+        """
+        Momentum signal: +1 if recent pct change >0, 0 if <0
+        """
+        try:
+            df['momentum'] = df['Close'].pct_change(self.momentum_lookback)
+            val = df['momentum'].iloc[-1]
+            signal = 1 if val > 0 else 0 if val < 0 else -1
+            weight = min(abs(val) * 10, 1.0)
+            return signal, weight, 'momentum'
+        except Exception:
+            logger.exception("Error in signal_momentum")
+            return -1, 0.0, 'momentum'
+
+    def signal_mean_reversion(self, df):
+        """
+        Mean reversion based on rolling z‐score of price
+        """
+        try:
+            ma = df['Close'].rolling(self.mean_rev_lookback).mean()
+            sd = df['Close'].rolling(self.mean_rev_lookback).std()
+            df['zscore'] = (df['Close'] - ma) / sd
+            val = df['zscore'].iloc[-1]
+            signal = 0 if val > self.mean_rev_zscore_threshold else 1 if val < -self.mean_rev_zscore_threshold else -1
+            weight = min(abs(val) / 3, 1.0)
+            return signal, weight, 'mean_reversion'
+        except Exception:
+            logger.exception("Error in signal_mean_reversion")
+            return -1, 0.0, 'mean_reversion'
+
+    def signal_ml(self, df, model):
+        """
+        ML‐based signal using model.predict_proba
+        """
+        try:
+            feats = ['rsi', 'sma_50', 'sma_200', 'macd', 'macds', 'atr']
+            X = df[feats].dropna()
+            if X.empty:
+                return -1, 0.0, 'ml'
+            probs = model.predict_proba(X)
+            pred = int(probs[-1].argmax())
+            conf = float(probs[-1].max())
+            return pred, conf, 'ml'
+        except Exception:
+            logger.exception("Error in signal_ml")
+            return -1, 0.0, 'ml'
+
+    def signal_sentiment(self, ticker):
+        """
+        Simple sentiment heuristic from headlines
+        """
+        try:
+            val = fetch_sentiment(ticker)
+            signal = 1 if val > 0 else 0 if val < 0 else -1
+            weight = min(abs(val), 0.2)
+            return signal, weight, 'sentiment'
+        except Exception:
+            logger.exception("Error in signal_sentiment")
+            return -1, 0.0, 'sentiment'
+
+    def signal_regime(self):
+        """
+        Regime filter: SPY ATR low → bullish
+        """
+        try:
+            df = fetch_data("SPY", period=f"{REGIME_LOOKBACK}d", interval="1d")
+            if df is None or df.empty:
+                return -1, 0.0, 'regime'
+
+            atr_series = ta.atr(df['High'], df['Low'], df['Close'], length=REGIME_LOOKBACK)
+            if atr_series is None or atr_series.empty or pd.isna(atr_series.iloc[-1]):
+                return -1, 0.0, 'regime'
+
+            atr_val = atr_series.iloc[-1]
+            signal  = 1 if atr_val < self.regime_volatility_threshold else 0
+            return signal, 0.6, 'regime'
+
+        except Exception:
+            logger.exception("Error in signal_regime")
+            return -1, 0.0, 'regime'
+
+    def signal_stochrsi(self, df):
+        """
+        StochRSI signal: oversold/overbought thresholds
+        """
+        try:
+            val = df['stochrsi'].iloc[-1]
+            signal = 1 if val < 0.2 else 0 if val > 0.8 else -1
+            return signal, 0.3, 'stochrsi'
+        except Exception:
+            logger.exception("Error in signal_stochrsi")
+            return -1, 0.0, 'stochrsi'
+
+    def signal_obv(self, df):
+        """
+        OBV trend signal
+        """
+        try:
+            obv = ta.obv(df['Close'], df['Volume'])
+            slope = np.polyfit(range(5), obv.tail(5), 1)[0]
+            signal = 1 if slope > 0 else 0 if slope < 0 else -1
+            weight = min(abs(slope) / 1e6, 1.0)
+            return signal, weight, 'obv'
+        except Exception:
+            logger.exception("Error in signal_obv")
+            return -1, 0.0, 'obv'
+
+    def signal_vsa(self, df):
+        """
+        Volume Spread Analysis signal
+        """
+        try:
+            body = abs(df['Close'] - df['Open'])
+            vsa = df['Volume'] * body
+            score = vsa.iloc[-1]
+            avg = vsa.rolling(20).mean().iloc[-1]
+            signal = 1 if df['Close'].iloc[-1] > df['Open'].iloc[-1] else 0 if df['Close'].iloc[-1] < df['Open'].iloc[-1] else -1
+            weight = min(score / avg, 1.0)
+            return signal, weight, 'vsa'
+        except Exception:
+            logger.exception("Error in signal_vsa")
+            return -1, 0.0, 'vsa'
+
+    def load_signal_weights(self):
+        """
+        Load overriden signal weights from CSV
+        """
+        if not os.path.exists(SIGNAL_WEIGHTS_FILE):
+            return {}
+        df = pd.read_csv(SIGNAL_WEIGHTS_FILE)
+        return {row['signal']: row['weight'] for _, row in df.iterrows()}
+
+    def evaluate(self, df, ticker, model):
+        """
+        Combine all signals into a final decision
+        """
+        signals = []
+        allowed = load_global_signal_performance()
+        fns = [
+            self.signal_momentum,
+            self.signal_mean_reversion,
+            lambda d: self.signal_ml(d, model),
+            lambda d: self.signal_sentiment(ticker),
+            lambda d: self.signal_regime(),
+            self.signal_stochrsi,
+            self.signal_obv,
+            self.signal_vsa
+        ]
+        weights = self.load_signal_weights()
+
+        for fn in fns:
+            try:
+                s, w, lab = fn(df)
+                if allowed and lab not in allowed:
+                    continue
+                if s in [0, 1]:
+                    signals.append((s, weights.get(lab, w), lab))
+            except Exception:
+                continue
+
+        if not signals:
+            return -1, 0.0, 'no_signal'
+
+        score = sum((1 if s == 1 else -1) * w for s, w, _ in signals)
+        conf = min(abs(score), 1.0)
+        final = 1 if score > 0.5 else 0 if score < -0.5 else -1
+        label = '+'.join(lbl for _, _, lbl in signals)
+        logger.info(f"[SignalManager] {ticker} | final={final} score={score:.2f} | components: {signals}")
+        return final, conf, label
+
+# ─── TRADE LOGGER ─────────────────────────────────────────────────────────────
+class TradeLogger:
+    def __init__(self, path=TRADE_LOG_FILE):
+        self.path = path
+        if not os.path.exists(path):
+            with portalocker.Lock(path, 'w', timeout=1) as f:
+                csv.writer(f).writerow([
+                    "symbol","entry_time","entry_price",
+                    "exit_time","exit_price","qty","side",
+                    "strategy","classification","signal_tags"
+                ])
+
+    def log_entry(self, symbol, price, qty, side, strategy, signal_tags=""):
+        now = datetime.utcnow().isoformat()
+        with portalocker.Lock(self.path, 'a', timeout=1) as f:
+            csv.writer(f).writerow([symbol, now, price, "","", qty, side, strategy, "", signal_tags])
+
+    def log_exit(self, symbol, exit_price):
+        with portalocker.Lock(self.path, 'r+', timeout=1) as f:
+            rows = list(csv.reader(f)); header, data = rows[0], rows[1:]
+            for row in data:
+                if row[0]==symbol and row[3]=="":
+                    entry_t = datetime.fromisoformat(row[1])
+                    days = (datetime.utcnow()-entry_t).days
+                    cls = "day_trade" if days==0 else "swing_trade" if days<5 else "long_trade"
+                    row[3],row[4],row[8] = datetime.utcnow().isoformat(), exit_price, cls
+                    break
+            f.seek(0); f.truncate()
+            w = csv.writer(f); w.writerow(header); w.writerows(data)
+
+trade_logger = TradeLogger()
     
 # ─── BOT CONTEXT ─────────────────────────────────────────────────────────────
 from dataclasses import dataclass, field
@@ -95,7 +315,6 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
-
 @sleep_and_retry
 @limits(calls=60, period=60)
 @retry(
@@ -201,7 +420,6 @@ def submit_order(ctx: BotContext, ticker: str, qty: int, side: str,
             )
 
 # ─── REFACTORED SUB-FUNCTIONS ─────────────────────────────────────────────────
-
 def pre_trade_checks(ctx: BotContext, symbol: str, balance: float) -> bool:
     if check_halt_flag(): 
         logger.info(f"[SKIP] HALT_FLAG – {symbol}"); return False
@@ -388,13 +606,6 @@ CAPITAL_CAP              = params["CAPITAL_CAP"]
 
 # ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 api = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=ALPACA_BASE_URL)
-confirmation_count       = {}
-trailing_extremes        = {}
-take_profit_targets      = {}
-daily_loss               = 0.0
-day_start_equity         = None
-data_cache               = {}
-api_semaphore            = asyncio.Semaphore(4)
 
 # ─── HEALTHCHECK APP ──────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -425,40 +636,7 @@ def load_global_signal_performance(min_trades=10, threshold=0.4):
     logger.info(f"[MetaLearn] Keeping signals: {list(filtered.keys()) or 'none'}")
     return filtered
 
-# ─── TRADE LOGGER ─────────────────────────────────────────────────────────────
-class TradeLogger:
-    def __init__(self, path=TRADE_LOG_FILE):
-        self.path = path
-        if not os.path.exists(path):
-            with portalocker.Lock(path, 'w', timeout=1) as f:
-                csv.writer(f).writerow([
-                    "symbol","entry_time","entry_price",
-                    "exit_time","exit_price","qty","side",
-                    "strategy","classification","signal_tags"
-                ])
-
-    def log_entry(self, symbol, price, qty, side, strategy, signal_tags=""):
-        now = datetime.utcnow().isoformat()
-        with portalocker.Lock(self.path, 'a', timeout=1) as f:
-            csv.writer(f).writerow([symbol, now, price, "","", qty, side, strategy, "", signal_tags])
-
-    def log_exit(self, symbol, exit_price):
-        with portalocker.Lock(self.path, 'r+', timeout=1) as f:
-            rows = list(csv.reader(f)); header, data = rows[0], rows[1:]
-            for row in data:
-                if row[0]==symbol and row[3]=="":
-                    entry_t = datetime.fromisoformat(row[1])
-                    days = (datetime.utcnow()-entry_t).days
-                    cls = "day_trade" if days==0 else "swing_trade" if days<5 else "long_trade"
-                    row[3],row[4],row[8] = datetime.utcnow().isoformat(), exit_price, cls
-                    break
-            f.seek(0); f.truncate()
-            w = csv.writer(f); w.writerow(header); w.writerows(data)
-
-trade_logger = TradeLogger()
-
 # ─── UTILITY FUNCTIONS ────────────────────────────────────────────────────────
-
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
     """Load and return a deduplicated, uppercase list of tickers from CSV."""
     tickers = []
@@ -572,246 +750,115 @@ def too_correlated(sym: str) -> bool:
     avg_corr = corr_matrix.where(~np.eye(len(open_syms), dtype=bool)).stack().mean()
     return avg_corr > CORRELATION_THRESHOLD
 
-def fetch_data(symbol: str, period: str = "1d", interval: str = "1m"):
-    df = yf.download(symbol, period=period, interval=interval,
-                     auto_adjust=True, progress=False)
+# ─── TYPED EXCEPTIONS ─────────────────────────────────────────────────────────
+class DataFetchError(Exception):
+    """Raised when fetch_data fails irrecoverably."""
+    pass
 
-    # ─── flatten any MultiIndex columns ─────────────────────────────────────
+# ─── WRAPPED I/O CALLS ────────────────────────────────────────────────────────
+@sleep_and_retry
+@limits(calls=60, period=60)
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+    retry=retry_if_exception_type((requests.RequestException, DataFetchError))
+)
+def fetch_data(
+    ctx: BotContext,
+    symbol: str,
+    period: str = "1d",
+    interval: str = "1m"
+) -> pd.DataFrame:
+    with ctx.sem:
+        df = yf.download(
+            symbol,
+            period=period,
+            interval=interval,
+            auto_adjust=True,
+            progress=False
+        )
+
+    if df is None or df.empty:
+        raise DataFetchError(f"No data for {symbol}")
+
+    # flatten MultiIndex
     if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
-        # keep only the first level (the actual column name: Open, High, etc.)
         df.columns = df.columns.get_level_values(0)
 
     df.reset_index(inplace=True)
     df.ffill().bfill(inplace=True)
     return df
 
-def get_sec_headlines(ticker: str) -> str:
-    """Scrape recent 8-K filings descriptions from SEC Edgar."""
-    url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={ticker}&type=8-K&count=5"
-    try:
-        r = requests.get(url, headers={"User-Agent": "AI Trading Bot"})
-        r.raise_for_status()
-        soup = BeautifulSoup(r.content, "lxml")
-        texts = []
-        for a in soup.find_all("a"):
-            if "8-K" in a.text:
-                tr = a.find_parent("tr")
-                if tr:
-                    tds = tr.find_all("td")
-                    if len(tds) > 3:
-                        texts.append(tds[-1].get_text(strip=True))
-        return " ".join(texts)
-    except Exception:
-        logger.exception(f"[get_sec_headlines] Failed for {ticker}")
-        return ""
 
-def fetch_sentiment(ticker: str) -> float:
-    """
-    Simple sentiment proxy via NewsAPI: +0.3 for “beat”, –0.3 for “miss”, etc.
-    Clamped to [–0.5, +0.5].
-    """
-    try:
+@sleep_and_retry
+@limits(calls=30, period=60)
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type(requests.RequestException)
+)
+def get_sec_headlines(
+    ctx: BotContext,
+    ticker: str
+) -> str:
+    with ctx.sem:
+        r = requests.get(
+            f"https://www.sec.gov/cgi-bin/browse-edgar"
+            f"?action=getcompany&CIK={ticker}&type=8-K&count=5",
+            headers={"User-Agent": "AI Trading Bot"}
+        )
+        r.raise_for_status()
+
+    soup = BeautifulSoup(r.content, "lxml")
+    texts = []
+    for a in soup.find_all("a"):
+        if "8-K" in a.text:
+            tr = a.find_parent("tr")
+            if tr:
+                tds = tr.find_all("td")
+                if len(tds) > 3:
+                    texts.append(tds[-1].get_text(strip=True))
+
+    return " ".join(texts)
+
+
+@sleep_and_retry
+@limits(calls=30, period=60)
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type(requests.RequestException)
+)
+def fetch_sentiment(
+    ctx: BotContext,
+    ticker: str
+) -> float:
+    with ctx.sem:
         url = (
             f"https://newsapi.org/v2/everything?"
-            f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5&apiKey={NEWS_API_KEY}"
+            f"q={ticker}&sortBy=publishedAt&language=en"
+            f"&pageSize=5&apiKey={NEWS_API_KEY}"
         )
         resp = requests.get(url)
         resp.raise_for_status()
-        articles = resp.json().get("articles", [])
-        text = " ".join(a["title"] + " " + a.get("description", "") for a in articles).lower()
 
-        score = 0.0
-        for word, delta in [("beat", .3), ("strong", .3), ("record", .3)]:
-            if word in text: score += delta
-        for word, delta in [("miss", -.3), ("weak", -.3), ("recall", -.3)]:
-            if word in text: score += delta
-        for word, delta in [("upgrade", .2), ("buy rating", .2)]:
-            if word in text: score += delta
-        for word, delta in [("downgrade", -.2), ("sell rating", -.2)]:
-            if word in text: score += delta
+    articles = resp.json().get("articles", [])
+    text = " ".join(
+        a["title"] + " " + a.get("description", "")
+        for a in articles
+    ).lower()
 
-        return max(min(score, 0.5), -0.5)
-    except Exception:
-        logger.exception(f"[fetch_sentiment] Failed for {ticker}")
-        return 0.0
+    score = 0.0
+    for word, delta in [("beat", .3), ("strong", .3), ("record", .3)]:
+        if word in text: score += delta
+    for word, delta in [("miss", -.3), ("weak", -.3), ("recall", -.3)]:
+        if word in text: score += delta
+    for word, delta in [("upgrade", .2), ("buy rating", .2)]:
+        if word in text: score += delta
+    for word, delta in [("downgrade", -.2), ("sell rating", -.2)]:
+        if word in text: score += delta
 
-# ─── SIGNAL MANAGER ───────────────────────────────────────────────────────────
-class SignalManager:
-    def __init__(self):
-        self.momentum_lookback = 5
-        self.mean_rev_lookback = 20
-        self.mean_rev_zscore_threshold = 1.5
-        self.regime_volatility_threshold = REGIME_ATR_THRESHOLD
-
-    def signal_momentum(self, df):
-        """
-        Momentum signal: +1 if recent pct change >0, 0 if <0
-        """
-        try:
-            df['momentum'] = df['Close'].pct_change(self.momentum_lookback)
-            val = df['momentum'].iloc[-1]
-            signal = 1 if val > 0 else 0 if val < 0 else -1
-            weight = min(abs(val) * 10, 1.0)
-            return signal, weight, 'momentum'
-        except Exception:
-            logger.exception("Error in signal_momentum")
-            return -1, 0.0, 'momentum'
-
-    def signal_mean_reversion(self, df):
-        """
-        Mean reversion based on rolling z‐score of price
-        """
-        try:
-            ma = df['Close'].rolling(self.mean_rev_lookback).mean()
-            sd = df['Close'].rolling(self.mean_rev_lookback).std()
-            df['zscore'] = (df['Close'] - ma) / sd
-            val = df['zscore'].iloc[-1]
-            signal = 0 if val > self.mean_rev_zscore_threshold else 1 if val < -self.mean_rev_zscore_threshold else -1
-            weight = min(abs(val) / 3, 1.0)
-            return signal, weight, 'mean_reversion'
-        except Exception:
-            logger.exception("Error in signal_mean_reversion")
-            return -1, 0.0, 'mean_reversion'
-
-    def signal_ml(self, df, model):
-        """
-        ML‐based signal using model.predict_proba
-        """
-        try:
-            feats = ['rsi', 'sma_50', 'sma_200', 'macd', 'macds', 'atr']
-            X = df[feats].dropna()
-            if X.empty:
-                return -1, 0.0, 'ml'
-            probs = model.predict_proba(X)
-            pred = int(probs[-1].argmax())
-            conf = float(probs[-1].max())
-            return pred, conf, 'ml'
-        except Exception:
-            logger.exception("Error in signal_ml")
-            return -1, 0.0, 'ml'
-
-    def signal_sentiment(self, ticker):
-        """
-        Simple sentiment heuristic from headlines
-        """
-        try:
-            val = fetch_sentiment(ticker)
-            signal = 1 if val > 0 else 0 if val < 0 else -1
-            weight = min(abs(val), 0.2)
-            return signal, weight, 'sentiment'
-        except Exception:
-            logger.exception("Error in signal_sentiment")
-            return -1, 0.0, 'sentiment'
-
-    def signal_regime(self):
-        """
-        Regime filter: SPY ATR low → bullish
-        """
-        try:
-            df = fetch_data("SPY", period=f"{REGIME_LOOKBACK}d", interval="1d")
-            if df is None or df.empty:
-                return -1, 0.0, 'regime'
-
-            atr_series = ta.atr(df['High'], df['Low'], df['Close'], length=REGIME_LOOKBACK)
-            if atr_series is None or atr_series.empty or pd.isna(atr_series.iloc[-1]):
-                return -1, 0.0, 'regime'
-
-            atr_val = atr_series.iloc[-1]
-            signal  = 1 if atr_val < self.regime_volatility_threshold else 0
-            return signal, 0.6, 'regime'
-
-        except Exception:
-            logger.exception("Error in signal_regime")
-            return -1, 0.0, 'regime'
-
-    def signal_stochrsi(self, df):
-        """
-        StochRSI signal: oversold/overbought thresholds
-        """
-        try:
-            val = df['stochrsi'].iloc[-1]
-            signal = 1 if val < 0.2 else 0 if val > 0.8 else -1
-            return signal, 0.3, 'stochrsi'
-        except Exception:
-            logger.exception("Error in signal_stochrsi")
-            return -1, 0.0, 'stochrsi'
-
-    def signal_obv(self, df):
-        """
-        OBV trend signal
-        """
-        try:
-            obv = ta.obv(df['Close'], df['Volume'])
-            slope = np.polyfit(range(5), obv.tail(5), 1)[0]
-            signal = 1 if slope > 0 else 0 if slope < 0 else -1
-            weight = min(abs(slope) / 1e6, 1.0)
-            return signal, weight, 'obv'
-        except Exception:
-            logger.exception("Error in signal_obv")
-            return -1, 0.0, 'obv'
-
-    def signal_vsa(self, df):
-        """
-        Volume Spread Analysis signal
-        """
-        try:
-            body = abs(df['Close'] - df['Open'])
-            vsa = df['Volume'] * body
-            score = vsa.iloc[-1]
-            avg = vsa.rolling(20).mean().iloc[-1]
-            signal = 1 if df['Close'].iloc[-1] > df['Open'].iloc[-1] else 0 if df['Close'].iloc[-1] < df['Open'].iloc[-1] else -1
-            weight = min(score / avg, 1.0)
-            return signal, weight, 'vsa'
-        except Exception:
-            logger.exception("Error in signal_vsa")
-            return -1, 0.0, 'vsa'
-
-    def load_signal_weights(self):
-        """
-        Load overriden signal weights from CSV
-        """
-        if not os.path.exists(SIGNAL_WEIGHTS_FILE):
-            return {}
-        df = pd.read_csv(SIGNAL_WEIGHTS_FILE)
-        return {row['signal']: row['weight'] for _, row in df.iterrows()}
-
-    def evaluate(self, df, ticker, model):
-        """
-        Combine all signals into a final decision
-        """
-        signals = []
-        allowed = load_global_signal_performance()
-        fns = [
-            self.signal_momentum,
-            self.signal_mean_reversion,
-            lambda d: self.signal_ml(d, model),
-            lambda d: self.signal_sentiment(ticker),
-            lambda d: self.signal_regime(),
-            self.signal_stochrsi,
-            self.signal_obv,
-            self.signal_vsa
-        ]
-        weights = self.load_signal_weights()
-
-        for fn in fns:
-            try:
-                s, w, lab = fn(df)
-                if allowed and lab not in allowed:
-                    continue
-                if s in [0, 1]:
-                    signals.append((s, weights.get(lab, w), lab))
-            except Exception:
-                continue
-
-        if not signals:
-            return -1, 0.0, 'no_signal'
-
-        score = sum((1 if s == 1 else -1) * w for s, w, _ in signals)
-        conf = min(abs(score), 1.0)
-        final = 1 if score > 0.5 else 0 if score < -0.5 else -1
-        label = '+'.join(lbl for _, _, lbl in signals)
-        logger.info(f"[SignalManager] {ticker} | final={final} score={score:.2f} | components: {signals}")
-        return final, conf, label
+    return max(min(score, 0.5), -0.5)
 
 # ─── ORDER EXECUTION & POSITION SIZING ────────────────────────────────────────
 def fractional_kelly_size(balance, price, atr, win_prob,
@@ -858,60 +905,71 @@ def fractional_kelly_size(balance, price, atr, win_prob,
     size = int(min(raw_pos, cap_pos, MAX_POSITION_SIZE))
     return max(size, 1)
 
-
-def submit_order(ticker: str, qty: int, side: str,
-                 order_type_override: str = None) -> bool:
-    """
-    Place a limit or market order, retrying up to 3x on known API errors.
-    Logs full exception on unexpected failures.
-    """
+@sleep_and_retry
+@limits(calls=200, period=60)
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+    retry=retry_if_exception_type(APIError)
+)
+def submit_order(
+    ctx: BotContext,
+    ticker: str,
+    qty: int,
+    side: str,
+    order_type_override: str = None
+) -> bool:
     order_type = order_type_override or ORDER_TYPE
-
-    for attempt in range(1, 4):
-        try:
-            expected_price = None
-            if order_type == 'limit':
-                quote = api.get_latest_quote(ticker)
+    try:
+        with ctx.sem:
+            if order_type == "limit":
+                quote = ctx.api.get_latest_quote(ticker)
                 bid, ask = quote.bidprice, quote.askprice
-                spread = (ask - bid) if ask and bid else 0
-                limit_price = (bid + 0.25 * spread) if side == 'buy' else (ask - 0.25 * spread)
-                expected_price = round(limit_price, 2)
-                api.submit_order(
-                    symbol=ticker, qty=qty, side=side,
-                    type='limit', limit_price=expected_price,
-                    time_in_force='gtc'
+                spread = (ask - bid) if (ask and bid) else 0
+                limit_price = (bid + 0.25 * spread) if side == "buy" else (ask - 0.25 * spread)
+                ctx.api.submit_order(
+                    symbol=ticker,
+                    qty=qty,
+                    side=side,
+                    type="limit",
+                    limit_price=round(limit_price, 2),
+                    time_in_force="gtc",
                 )
+                expected = round(limit_price, 2)
             else:
-                quote = api.get_latest_quote(ticker)
-                expected_price = quote.askprice if side == 'buy' else quote.bidprice
-                api.submit_order(
-                    symbol=ticker, qty=qty, side=side,
-                    type='market', time_in_force='gtc'
+                quote = ctx.api.get_latest_quote(ticker)
+                expected = quote.askprice if side == "buy" else quote.bidprice
+                ctx.api.submit_order(
+                    symbol=ticker,
+                    qty=qty,
+                    side=side,
+                    type="market",
+                    time_in_force="gtc",
                 )
 
-            logger.info(f"[SLIPPAGE] {ticker} expected={expected_price} side={side} qty={qty}")
+        logger.info(f"[SLIPPAGE] {ticker} expected={expected} side={side} qty={qty}")
+        return True
+
+    except APIError as e:
+        # handle “requested vs available” case
+        m = re.search(r"requested: (\d+), available: (\d+)", str(e))
+        if m and int(m.group(2)) > 0:
+            available = int(m.group(2))
+            ctx.api.submit_order(
+                symbol=ticker,
+                qty=available,
+                side=side,
+                type=order_type,
+                time_in_force="gtc",
+            )
             return True
 
-        except APIError as e:
-            # on "requested vs available" retry with available size
-            m = re.search(r"requested: (\d+), available: (\d+)", str(e))
-            if m and int(m.group(2)) > 0:
-                available = int(m.group(2))
-                api.submit_order(
-                    symbol=ticker, qty=available, side=side,
-                    type=order_type, time_in_force='gtc'
-                )
-                return True
-            logger.warning(f"[submit_order] Alpaca APIError (attempt {attempt}): {e}")
-            time.sleep(2 ** (attempt - 1))
+        logger.warning(f"[submit_order] APIError: {e}")
+        raise  # let Tenacity catch & retry
 
-        except Exception:
-            logger.exception("Unexpected error in submit_order")
-            return False
-
-    logger.error(f"[submit_order] Failed after 3 attempts for {ticker}")
-    return False
-
+    except Exception as e:
+        logger.exception(f"[submit_order] unexpected error for {ticker}")
+        return False
 
 def update_trailing_stop(ticker: str, price: float, qty: int,
                          atr: float, factor: float = TRAILING_FACTOR) -> str:
@@ -931,31 +989,6 @@ def update_trailing_stop(ticker: str, price: float, qty: int,
             return "exit_short"
 
     return "hold"
-
-
-# ─── 0) DATA FETCHER WITH CACHING & VOLUME GUARD ─────────────────────────────
-class DataFetcher:
-    @staticmethod
-    @lru_cache(maxsize=None)
-    def get_daily_df(symbol: str) -> Optional[pd.DataFrame]:
-        df = fetch_data(symbol, period="5d", interval="1d")
-        if df is None or df.empty:
-            logger.info(f"[SKIP] No daily data for {symbol}")
-            return None
-        avg_vol = df["Volume"].mean()
-        if avg_vol < VOLUME_THRESHOLD:
-            logger.info(f"[SKIP] {symbol} daily volume too low ({avg_vol:.0f} < {VOLUME_THRESHOLD})")
-            return None
-        return df
-
-    @staticmethod
-    @lru_cache(maxsize=None)
-    def get_minute_df(symbol: str) -> Optional[pd.DataFrame]:
-        df = fetch_data(symbol, period="1d", interval="1m")
-        if df is None or df.empty:
-            logger.info(f"[SKIP] No minute data for {symbol}")
-            return None
-        return df
 
 # ─── 1–3) PRE-TRADE CHECKS ────────────────────────────────────────────────────
 def pre_trade_checks(symbol: str, balance: float) -> bool:
@@ -1232,7 +1265,6 @@ def update_signal_weights():
     logger.info(f"[MetaLearn] Updated weights for {len(merged)} signals.")
 
 # ─── MAIN LOOP ───────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     # Ensure child processes use 'spawn' (safe on Linux & macOS)
     multiprocessing.set_start_method('spawn', force=True)
