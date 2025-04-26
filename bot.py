@@ -54,6 +54,221 @@ class RateLimitError(Exception):
 class OrderSubmissionError(Exception):
     """Raised when submit_order repeatedly fails."""
     pass
+    
+# ─── BOT CONTEXT ─────────────────────────────────────────────────────────────
+from dataclasses import dataclass, field
+
+@dataclass
+class BotContext:
+    api: REST
+    data_fetcher: DataFetcher
+    signal_manager: SignalManager
+    trade_logger: TradeLogger
+    sem: asyncio.Semaphore
+    volume_threshold: int
+    entry_start_offset: timedelta
+    entry_end_offset: timedelta
+    market_open: dt_time
+    market_close: dt_time
+    regime_lookback: int
+    regime_atr_threshold: float
+    daily_loss_limit: float
+    confirmation_count: dict = field(default_factory=dict)
+    trailing_extremes: dict   = field(default_factory=dict)
+    take_profit_targets: dict = field(default_factory=dict)
+
+# instantiate once, at module level
+ctx = BotContext(
+    api=api,
+    data_fetcher=DataFetcher,
+    signal_manager=signal_manager,
+    trade_logger=trade_logger,
+    sem=asyncio.Semaphore(4),
+    volume_threshold=VOLUME_THRESHOLD,
+    entry_start_offset=ENTRY_START_OFFSET,
+    entry_end_offset=ENTRY_END_OFFSET,
+    market_open=MARKET_OPEN,
+    market_close=MARKET_CLOSE,
+    regime_lookback=REGIME_LOOKBACK,
+    regime_atr_threshold=REGIME_ATR_THRESHOLD,
+    daily_loss_limit=DAILY_LOSS_LIMIT,
+)
+
+# ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
+
+@sleep_and_retry
+@limits(calls=60, period=60)
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+    retry=retry_if_exception_type((requests.RequestException, DataFetchError))
+)
+def fetch_data(ctx: BotContext, symbol: str, period: str = "1d", interval: str = "1m") -> pd.DataFrame:
+    with ctx.sem:
+        df = yf.download(symbol, period=period, interval=interval,
+                         auto_adjust=True, progress=False)
+    if df is None or df.empty:
+        raise DataFetchError(f"No data for {symbol}")
+    # flatten MultiIndex, reset_index, ffill/bfill...
+    if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
+        df.columns = df.columns.get_level_values(0)
+    df.reset_index(inplace=True)
+    df.ffill().bfill(inplace=True)
+    return df
+
+@sleep_and_retry
+@limits(calls=30, period=60)
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type(requests.RequestException)
+)
+def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
+    with ctx.sem:
+        r = requests.get(
+            f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
+            f"&CIK={ticker}&type=8-K&count=5",
+            headers={"User-Agent": "AI Trading Bot"}
+        )
+        r.raise_for_status()
+    soup = BeautifulSoup(r.content, "lxml")
+    texts = []
+    for a in soup.find_all("a"):
+        if "8-K" in a.text:
+            tr = a.find_parent("tr")
+            if tr:
+                tds = tr.find_all("td")
+                if len(tds) > 3:
+                    texts.append(tds[-1].get_text(strip=True))
+    return " ".join(texts)
+
+@sleep_and_retry
+@limits(calls=30, period=60)
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type(requests.RequestException)
+)
+def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
+    with ctx.sem:
+        url = (
+            f"https://newsapi.org/v2/everything?"
+            f"q={ticker}&sortBy=publishedAt&language=en"
+            f"&pageSize=5&apiKey={NEWS_API_KEY}"
+        )
+        resp = requests.get(url)
+        resp.raise_for_status()
+    articles = resp.json().get("articles", [])
+    text = " ".join(a["title"] + " " + a.get("description","") for a in articles).lower()
+    score = 0.0
+    for word, delta in [("beat", .3), ("strong", .3), ("record", .3)]:
+        if word in text: score += delta
+    for word, delta in [("miss", -.3), ("weak", -.3), ("recall", -.3)]:
+        if word in text: score += delta
+    for word, delta in [("upgrade", .2), ("buy rating", .2)]:
+        if word in text: score += delta
+    for word, delta in [("downgrade", -.2), ("sell rating", -.2)]:
+        if word in text: score += delta
+    return max(min(score, 0.5), -0.5)
+
+@sleep_and_retry
+@limits(calls=200, period=60)
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+    retry=retry_if_exception_type(APIError)
+)
+def submit_order(ctx: BotContext, ticker: str, qty: int, side: str,
+                 order_type_override: str = None) -> None:
+    order_type = order_type_override or ORDER_TYPE
+    with ctx.sem:
+        if order_type == 'limit':
+            quote = ctx.api.get_latest_quote(ticker)
+            bid, ask = quote.bidprice, quote.askprice
+            spread = (ask - bid) if ask and bid else 0
+            limit_price = (bid + 0.25*spread) if side=='buy' else (ask - 0.25*spread)
+            ctx.api.submit_order(
+                symbol=ticker, qty=qty, side=side,
+                type='limit', limit_price=round(limit_price,2),
+                time_in_force='gtc'
+            )
+        else:
+            quote = ctx.api.get_latest_quote(ticker)
+            price = quote.askprice if side=='buy' else quote.bidprice
+            ctx.api.submit_order(
+                symbol=ticker, qty=qty, side=side,
+                type='market', time_in_force='gtc'
+            )
+
+# ─── REFACTORED SUB-FUNCTIONS ─────────────────────────────────────────────────
+
+def pre_trade_checks(ctx: BotContext, symbol: str, balance: float) -> bool:
+    if check_halt_flag(): 
+        logger.info(f"[SKIP] HALT_FLAG – {symbol}"); return False
+    if not within_market_hours(): 
+        logger.info(f"[SKIP] Market closed – {symbol}"); return False
+    # daily loss uses ctx.api under the hood
+    if check_daily_loss(): 
+        logger.info(f"[SKIP] daily loss – {symbol}"); return False
+    if not check_market_regime(): 
+        logger.info(f"[SKIP] regime – {symbol}"); return False
+    if too_many_positions(): 
+        logger.info(f"[SKIP] max positions – {symbol}"); return False
+    if too_correlated(symbol): 
+        logger.info(f"[SKIP] correlation – {symbol}"); return False
+    # volume
+    if ctx.data_fetcher.get_daily_df(symbol) is None:
+        return False
+    return True
+
+def is_within_entry_window(ctx: BotContext) -> bool:
+    now = now_pacific()
+    start = (datetime.combine(now.date(), ctx.market_open) + ctx.entry_start_offset).time()
+    end   = (datetime.combine(now.date(), ctx.market_close) - ctx.entry_end_offset).time()
+    if not (start <= now.time() <= end):
+        logger.info(f"[SKIP] entry window – now={now.time()}"); return False
+    return True
+
+def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int,float,str]:
+    sig, conf, strat = ctx.signal_manager.evaluate(df, symbol, model)
+    if sig == -1 or conf < CONF_THRESHOLD:
+        logger.info(f"[SKIP] {symbol} no/low signal (sig={sig},conf={conf:.2f})")
+        return -1, 0.0, ""
+    return sig, conf, strat
+
+def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
+    logger.info(f"[TRADE_LOGIC] {symbol} balance={balance:.2f}")
+    if not pre_trade_checks(ctx, symbol, balance):
+        return
+    if not is_within_entry_window(ctx):
+        return
+
+    df_min = ctx.data_fetcher.get_minute_df(symbol)
+    if df_min is None:
+        return
+
+    df_ind = prepare_indicators(df_min)  # unchanged
+    sig, conf, strat = signal_and_confirm(ctx, symbol, df_ind, model)
+    if sig == -1:
+        return
+
+    price = df_ind["Close"].iloc[-1]
+    atr   = df_ind["atr"].iloc[-1]
+    try:
+        pos = int(ctx.api.get_position(symbol).qty)
+    except Exception:
+        pos = 0
+
+    # take-profit scaling
+    tp = ctx.take_profit_targets.get(symbol)
+    if pos and tp and ((pos>0 and price>=tp) or (pos<0 and price<=tp)):
+        exit_qty = int(abs(pos)*SCALING_FACTOR)
+        side = "sell" if pos>0 else "buy"
+        submit_order(ctx, symbol, exit_qty, side)
+        ctx.trade_logger.log_exit(symbol, price)
+        ctx.trailing_extremes[symbol] = price
+        ctx.take_profit_targets.pop(symbol, None)
+        return
 
 # === STRATEGY MODE CONFIGURATION =============================================
 class BotMode:
