@@ -580,7 +580,11 @@ CAPITAL_CAP              = params["CAPITAL_CAP"]
 # ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 api = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=ALPACA_BASE_URL)
 
-# instantiate once, at module level
+data_fetcher   = DataFetcher()
+signal_manager = SignalManager()
+trade_logger   = TradeLogger()
+semaphore      = asyncio.Semaphore(4)
+
 ctx = BotContext(
     api=api,
     data_fetcher=DataFetcher(),
