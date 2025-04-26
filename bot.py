@@ -135,7 +135,7 @@ MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD    = 0.8
 MARKET_OPEN              = dt_time(0, 0)
 MARKET_CLOSE             = dt_time(23, 59)
-VOLUME_THRESHOLD         = 0
+VOLUME_THRESHOLD         = 10_000
 ENTRY_START_OFFSET       = timedelta(minutes=15)
 ENTRY_END_OFFSET         = timedelta(minutes=30)
 REGIME_LOOKBACK          = 14
@@ -725,15 +725,19 @@ def trade_logic(sym: str, balance: float, model) -> None:
         return
 
     # 3) FETCH & VOLUME
+    df_daily = fetch_data(sym, period="5d", interval="1d")
+    if df_daily is None or df_daily.empty:
+        logger.info(f"[SKIP] No daily data for {sym}")
+        return
+    avg_daily_vol = df_daily["Volume"].mean()
+    logger.debug(f"{sym} avg_daily_vol={avg_daily_vol:.0f}, threshold={VOLUME_THRESHOLD}")
+    if avg_daily_vol < VOLUME_THRESHOLD:
+        logger.info(f"[SKIP] {sym} daily volume too low ({avg_daily_vol:.0f} < {VOLUME_THRESHOLD})")
+        return
+
     df = fetch_data(sym, period="1d", interval="1m")
     if df is None or df.empty:
-        logger.info(f"[SKIP] No data for {sym}")
-        return
-    avg_vol = df["Volume"].tail(20).mean()
-    logger.debug(f"{sym} avg_vol={avg_vol:.0f}, threshold={VOLUME_THRESHOLD}")
-    
-    if avg_vol <= VOLUME_THRESHOLD:
-        logger.info(f"[SKIP] {sym} volume too low ({avg_vol:.0f} ≤ {VOLUME_THRESHOLD})")
+        logger.info(f"[SKIP] No minute data for {sym}")
         return
 
     # 4) ENTRY WINDOW
