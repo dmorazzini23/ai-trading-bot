@@ -480,7 +480,7 @@ def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
         ctx.take_profit_targets.pop(symbol, None)
         return
 
-# === STRATEGY MODE CONFIGURATION =============================================
+# ─── STRATEGY MODE CONFIGURATION ─────────────────────────────────────────────
 class BotMode:
     def __init__(self, mode="balanced"):
         self.mode = mode.lower()
