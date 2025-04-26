@@ -9,7 +9,7 @@ import asyncio
 import multiprocessing
 from datetime import datetime, date, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
-from functools import wraps, lru_cache
+from functools import lru_cache
 from typing import Optional, Tuple
 from dataclasses import dataclass, field
 
@@ -43,11 +43,47 @@ class DataFetchError(Exception):   pass
 class RateLimitError(Exception):   pass
 class OrderSubmissionError(Exception): pass
 
+# ─── BOT CONTEXT ─────────────────────────────────────────────────────────────
+@dataclass
+class BotContext:
+    api: REST
+    data_fetcher: DataFetcher
+    signal_manager: SignalManager
+    trade_logger: TradeLogger
+    sem: asyncio.Semaphore
+    volume_threshold: int
+    entry_start_offset: timedelta
+    entry_end_offset: timedelta
+    market_open: dt_time
+    market_close: dt_time
+    regime_lookback: int
+    regime_atr_threshold: float
+    daily_loss_limit: float
+    confirmation_count: dict = field(default_factory=dict)
+    trailing_extremes: dict   = field(default_factory=dict)
+    take_profit_targets: dict = field(default_factory=dict)
+
+# instantiate once, at module level
+ctx = BotContext(
+    api=api,
+    data_fetcher=DataFetcher(),
+    signal_manager=signal_manager,
+    trade_logger=trade_logger,
+    sem=asyncio.Semaphore(4),
+    volume_threshold=VOLUME_THRESHOLD,
+    entry_start_offset=ENTRY_START_OFFSET,
+    entry_end_offset=ENTRY_END_OFFSET,
+    market_open=MARKET_OPEN,
+    market_close=MARKET_CLOSE,
+    regime_lookback=REGIME_LOOKBACK,
+    regime_atr_threshold=REGIME_ATR_THRESHOLD,
+    daily_loss_limit=DAILY_LOSS_LIMIT,
+)
+
 # ─── 0) DATA FETCHER WITH CACHING & VOLUME GUARD ─────────────────────────────
 class DataFetcher:
-    @staticmethod
     @lru_cache(maxsize=None)
-    def get_daily_df(ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
+    def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         """
         Wrap fetch_data and swallow DataFetchError into a None.
         """
@@ -57,9 +93,8 @@ class DataFetcher:
             logger.info(f"[SKIP] No daily data for {symbol}")
             return None
 
-    @staticmethod
     @lru_cache(maxsize=None)
-    def get_minute_df(ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
+    def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         try:
             return fetch_data(ctx, symbol, period="1d", interval="1m")
         except DataFetchError:
@@ -275,45 +310,6 @@ class TradeLogger:
             w = csv.writer(f); w.writerow(header); w.writerows(data)
 
 trade_logger = TradeLogger()
-    
-# ─── BOT CONTEXT ─────────────────────────────────────────────────────────────
-from dataclasses import dataclass, field
-
-@dataclass
-class BotContext:
-    api: REST
-    data_fetcher: DataFetcher
-    signal_manager: SignalManager
-    trade_logger: TradeLogger
-    sem: asyncio.Semaphore
-    volume_threshold: int
-    entry_start_offset: timedelta
-    entry_end_offset: timedelta
-    market_open: dt_time
-    market_close: dt_time
-    regime_lookback: int
-    regime_atr_threshold: float
-    daily_loss_limit: float
-    confirmation_count: dict = field(default_factory=dict)
-    trailing_extremes: dict   = field(default_factory=dict)
-    take_profit_targets: dict = field(default_factory=dict)
-
-# instantiate once, at module level
-ctx = BotContext(
-    api=api,
-    data_fetcher=DataFetcher(),
-    signal_manager=signal_manager,
-    trade_logger=trade_logger,
-    sem=asyncio.Semaphore(4),
-    volume_threshold=VOLUME_THRESHOLD,
-    entry_start_offset=ENTRY_START_OFFSET,
-    entry_end_offset=ENTRY_END_OFFSET,
-    market_open=MARKET_OPEN,
-    market_close=MARKET_CLOSE,
-    regime_lookback=REGIME_LOOKBACK,
-    regime_atr_threshold=REGIME_ATR_THRESHOLD,
-    daily_loss_limit=DAILY_LOSS_LIMIT,
-)
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
 @sleep_and_retry
@@ -422,30 +418,44 @@ def submit_order(ctx: BotContext, ticker: str, qty: int, side: str,
 
 # ─── REFACTORED SUB-FUNCTIONS ─────────────────────────────────────────────────
 def pre_trade_checks(ctx: BotContext, symbol: str, balance: float) -> bool:
+    # 1) HALT / HOURS / DAILY-LOSS
     if check_halt_flag(): 
-        logger.info(f"[SKIP] HALT_FLAG – {symbol}"); return False
-    if not within_market_hours(): 
-        logger.info(f"[SKIP] Market closed – {symbol}"); return False
-    # daily loss uses ctx.api under the hood
-    if check_daily_loss(): 
-        logger.info(f"[SKIP] daily loss – {symbol}"); return False
-    if not check_market_regime(): 
-        logger.info(f"[SKIP] regime – {symbol}"); return False
-    if too_many_positions(): 
-        logger.info(f"[SKIP] max positions – {symbol}"); return False
-    if too_correlated(symbol): 
-        logger.info(f"[SKIP] correlation – {symbol}"); return False
-    # volume
-    if ctx.data_fetcher.get_daily_df(symbol) is None:
+        logger.info(f"[SKIP] HALT_FLAG – {symbol}")
         return False
-    return True
+
+    if not within_market_hours(): 
+        logger.info(f"[SKIP] Market closed – {symbol}")
+        return False
+
+    if check_daily_loss():
+        logger.info(f"[SKIP] Daily-loss limit – {symbol}")
+        return False
+
+    # 2) REGIME / POSITIONS / CORRELATION
+    if not check_market_regime():
+        logger.info(f"[SKIP] Market regime – {symbol}")
+        return False
+
+    if too_many_positions():
+        logger.info(f"[SKIP] Max positions – {symbol}")
+        return False
+
+    if too_correlated(symbol):
+        logger.info(f"[SKIP] Correlation – {symbol}")
+        return False
+
+    # 3) VOLUME GUARD (5d)
+    return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
 
 def is_within_entry_window(ctx: BotContext) -> bool:
     now = now_pacific()
     start = (datetime.combine(now.date(), ctx.market_open) + ctx.entry_start_offset).time()
     end   = (datetime.combine(now.date(), ctx.market_close) - ctx.entry_end_offset).time()
+
     if not (start <= now.time() <= end):
-        logger.info(f"[SKIP] entry window – now={now.time()}"); return False
+        logger.info(f"[SKIP] entry window ({start}–{end}), now={now.time()}")
+        return False
+
     return True
 
 def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int,float,str]:
@@ -546,23 +556,6 @@ def within_market_hours() -> bool:
     return start <= now <= end
 
 def retry(times: int = 3, delay: float = 1.0):
-    """
-    Decorator to retry a function on exception up to `times` times,
-    with exponential back-off starting at `delay` seconds.
-    """
-    def deco(fn):
-        @wraps(fn)
-        def wrapper(*args, **kwargs):
-            for attempt in range(1, times + 1):
-                try:
-                    return fn(*args, **kwargs)
-                except Exception as e:
-                    logger.warning(f"[retry:{fn.__name__}] attempt {attempt}/{times} failed: {e}")
-                    time.sleep(delay * (2 ** (attempt - 1)))
-            logger.error(f"[retry:{fn.__name__}] failed after {times} attempts")
-            return None
-        return wrapper
-    return deco
 
 # ─── PATH CONFIGURATION ───────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
