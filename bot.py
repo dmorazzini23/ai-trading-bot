@@ -40,8 +40,6 @@ structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
 logger = structlog.get_logger()
 
 class DataFetchError(Exception):   pass
-class RateLimitError(Exception):   pass
-class OrderSubmissionError(Exception): pass
 
 # ─── BOT CONTEXT ─────────────────────────────────────────────────────────────
 @dataclass
@@ -555,8 +553,6 @@ def within_market_hours() -> bool:
     end   = datetime.combine(now.date(), MARKET_CLOSE, PACIFIC) - ENTRY_END_OFFSET
     return start <= now <= end
 
-def retry(times: int = 3, delay: float = 1.0):
-
 # ─── PATH CONFIGURATION ───────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 def abspath(fname: str) -> str:
@@ -874,43 +870,6 @@ def update_trailing_stop(ticker: str, price: float, qty: int,
 
     return "hold"
 
-# ─── 1–3) PRE-TRADE CHECKS ────────────────────────────────────────────────────
-def pre_trade_checks(symbol: str, balance: float) -> bool:
-    # 1) HALT / HOURS / DAILY-LOSS
-    if check_halt_flag():
-        logger.info(f"[SKIP] HALT_FLAG present, skipping {symbol}")
-        return False
-    if not within_market_hours():
-        logger.info(f"[SKIP] Outside market hours for {symbol}")
-        return False
-    if check_daily_loss():
-        logger.info(f"[SKIP] Daily loss limit reached for {symbol}")
-        return False
-
-    # 2) REGIME / POSITIONS / CORRELATION
-    if not check_market_regime():
-        logger.info(f"[SKIP] Market regime failed for {symbol}")
-        return False
-    if too_many_positions():
-        logger.info(f"[SKIP] Portfolio full – cannot open {symbol}")
-        return False
-    if too_correlated(symbol):
-        logger.info(f"[SKIP] Correlation threshold exceeded – skipping {symbol}")
-        return False
-
-    # 3) VOLUME GUARD (5d)
-    return DataFetcher.get_daily_df(symbol) is not None
-
-# ─── 4) ENTRY WINDOW ─────────────────────────────────────────────────────────
-def is_within_entry_window() -> bool:
-    now = now_pacific()
-    start = (datetime.combine(now.date(), MARKET_OPEN) + ENTRY_START_OFFSET).time()
-    end   = (datetime.combine(now.date(), MARKET_CLOSE) - ENTRY_END_OFFSET).time()
-    if not (start <= now.time() <= end):
-        logger.info(f"[SKIP] Outside entry window ({start}–{end}), now={now.time()}")
-        return False
-    return True
-
 # ─── 5) INDICATOR PREPARATION ─────────────────────────────────────────────────
 def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
@@ -936,107 +895,6 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
         "ichimoku_base","ichimoku_conv","stochrsi"
     ], inplace=True)
     return df
-
-# ─── 6) SIGNAL & CONFIRMATION ────────────────────────────────────────────────
-def signal_and_confirm(symbol: str, df: pd.DataFrame, model) -> Tuple[int, float, str]:
-    sig, conf, tag = signal_manager.evaluate(df, symbol, model)
-    if sig == -1 or conf < CONF_THRESHOLD:
-        logger.info(f"[SKIP] {symbol} no/low signal (sig={sig}, conf={conf:.2f})")
-        return -1, 0.0, ""
-    return sig, conf, tag
-
-# ─── TRADE LOGIC ─────────────────────────────────────────────────────────────
-signal_manager = SignalManager()
-
-def trade_logic(sym: str, balance: float, model) -> None:
-    logger.info(f"[TRADE LOGIC] {sym} – balance={balance:.2f}")
-
-    # Steps 1–3
-    if not pre_trade_checks(sym, balance):
-        return
-
-    # Step 4
-    if not is_within_entry_window():
-        return
-
-    # Steps 5 & 6
-    df_min = DataFetcher.get_minute_df(sym)
-    if df_min is None:
-        return
-    df_ind, sig = prepare_indicators(df_min), None
-    sig, conf, strat = signal_and_confirm(sym, df_ind, model)
-    if sig == -1:
-        return
-    
-    # 5) SIGNAL + CONFIRMATION
-    sig, conf, strat = signal_manager.evaluate(df, sym, model)
-    if sig == -1 or conf < CONF_THRESHOLD:
-        logger.info(f"[SKIP] {sym} got no/low signal (sig={sig}, conf={conf:.2f})")
-        return
-
-    price = df["Close"].iloc[-1]
-    atr   = df["atr"].iloc[-1]
-    try:
-        pos = int(api.get_position(sym).qty)
-    except Exception:
-        pos = 0
-
-    # 6) TAKE-PROFIT SCALING EXIT
-    tp = take_profit_targets.get(sym)
-    if pos != 0 and tp and ((pos > 0 and price >= tp) or (pos < 0 and price <= tp)):
-        exit_qty = int(abs(pos) * SCALING_FACTOR)
-        side = "sell" if pos > 0 else "buy"
-        if submit_order(sym, exit_qty, side):
-            trade_logger.log_exit(sym, price)
-        trailing_extremes[sym] = price
-        take_profit_targets.pop(sym, None)
-        return
-
-    # 7) VWAP & ICHIMOKU FILTERS
-    if sig == 1 and price < df["vwap"].iloc[-1]:
-        logger.info(f"[SKIP] {sym} bullish but price below VWAP")
-        return
-    if sig == 0 and price > df["vwap"].iloc[-1]:
-        logger.info(f"[SKIP] {sym} bearish but price above VWAP")
-        return
-    if sig == 1 and price < df["ichimoku_base"].iloc[-1]:
-        logger.info(f"[SKIP] {sym} bullish but below Ichimoku base")
-        return
-    if sig == 0 and price > df["ichimoku_base"].iloc[-1]:
-        logger.info(f"[SKIP] {sym} bearish but above Ichimoku base")
-        return
-
-    # 8) CONFIRMATION COUNT
-    prev = confirmation_count.get(sym, {"action": None, "count": 0})
-    if prev["action"] != sig:
-        confirmation_count[sym] = {"action": sig, "count": 1}
-        logger.info(f"[WAIT] {sym} first confirmation sig={sig}")
-        return
-    confirmation_count[sym]["count"] += 1
-    if confirmation_count[sym]["count"] < CONFIRMATION_COUNT:
-        logger.info(f"[WAIT] {sym} confirmation {confirmation_count[sym]['count']}/{CONFIRMATION_COUNT}")
-        return
-
-    # 9) POSITION REVERSAL / ENTRY
-    qty = fractional_kelly_size(balance, price, atr, conf)
-    side = "buy" if sig == 1 else "sell"
-    order_qty = qty + abs(pos)  # flatten and flip
-    logger.info(f"[ORDER] {sym} side={side} qty={order_qty} price={price:.2f}")
-    if submit_order(sym, order_qty, side):
-        trade_logger.log_entry(sym, price, qty, side, strat, signal_tags=strat)
-        take_profit_targets[sym] = price + (TAKE_PROFIT_FACTOR * atr * (1 if sig == 1 else -1))
-        trailing_extremes[sym] = price
-
-    # 10) TRAILING-STOP EXIT
-    if pos != 0:
-        factor = SECONDARY_TRAIL_FACTOR if tp else TRAILING_FACTOR
-        action = update_trailing_stop(sym, price, pos, atr, factor)
-        if action == "exit_long" and pos > 0:
-            if submit_order(sym, pos, "sell"):
-                trade_logger.log_exit(sym, price)
-        elif action == "exit_short" and pos < 0:
-            if submit_order(sym, abs(pos), "buy"):
-                trade_logger.log_exit(sym, price)
 
 # ─── RUNNER & SCHEDULER ──────────────────────────────────────────────────────
 def run_all_trades(model):
