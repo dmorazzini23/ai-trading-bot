@@ -61,23 +61,6 @@ class BotContext:
     trailing_extremes: dict   = field(default_factory=dict)
     take_profit_targets: dict = field(default_factory=dict)
 
-# instantiate once, at module level
-ctx = BotContext(
-    api=api,
-    data_fetcher=DataFetcher(),
-    signal_manager=signal_manager,
-    trade_logger=trade_logger,
-    sem=asyncio.Semaphore(4),
-    volume_threshold=VOLUME_THRESHOLD,
-    entry_start_offset=ENTRY_START_OFFSET,
-    entry_end_offset=ENTRY_END_OFFSET,
-    market_open=MARKET_OPEN,
-    market_close=MARKET_CLOSE,
-    regime_lookback=REGIME_LOOKBACK,
-    regime_atr_threshold=REGIME_ATR_THRESHOLD,
-    daily_loss_limit=DAILY_LOSS_LIMIT,
-)
-
 # ─── 0) DATA FETCHER WITH CACHING & VOLUME GUARD ─────────────────────────────
 class DataFetcher:
     @lru_cache(maxsize=None)
@@ -596,6 +579,23 @@ CAPITAL_CAP              = params["CAPITAL_CAP"]
 
 # ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 api = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=ALPACA_BASE_URL)
+
+# instantiate once, at module level
+ctx = BotContext(
+    api=api,
+    data_fetcher=DataFetcher(),
+    signal_manager=signal_manager,
+    trade_logger=trade_logger,
+    sem=asyncio.Semaphore(4),
+    volume_threshold=VOLUME_THRESHOLD,
+    entry_start_offset=ENTRY_START_OFFSET,
+    entry_end_offset=ENTRY_END_OFFSET,
+    market_open=MARKET_OPEN,
+    market_close=MARKET_CLOSE,
+    regime_lookback=REGIME_LOOKBACK,
+    regime_atr_threshold=REGIME_ATR_THRESHOLD,
+    daily_loss_limit=DAILY_LOSS_LIMIT,
+)
 
 # ─── HEALTHCHECK APP ──────────────────────────────────────────────────────────
 app = Flask(__name__)
