@@ -139,7 +139,7 @@ VOLUME_THRESHOLD         = 500_000
 ENTRY_START_OFFSET       = timedelta(minutes=15)
 ENTRY_END_OFFSET         = timedelta(minutes=30)
 REGIME_LOOKBACK          = 14
-REGIME_ATR_THRESHOLD     = 3.0
+REGIME_ATR_THRESHOLD     = 20.0
 MODEL_PATH               = MODEL_FILE
 RF_ESTIMATORS            = 225
 RF_MAX_DEPTH             = 5
