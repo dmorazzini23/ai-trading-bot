@@ -135,7 +135,7 @@ MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD    = 0.8
 MARKET_OPEN              = dt_time(0, 0)
 MARKET_CLOSE             = dt_time(23, 59)
-VOLUME_THRESHOLD         = 100_000
+VOLUME_THRESHOLD         = 50_000
 ENTRY_START_OFFSET       = timedelta(minutes=15)
 ENTRY_END_OFFSET         = timedelta(minutes=30)
 REGIME_LOOKBACK          = 14
@@ -747,6 +747,7 @@ def trade_logic(sym: str, balance: float, model) -> None:
     df.reset_index(drop=True, inplace=True)
     
     df["vwap"]    = ta.vwap(high=df["High"], low=df["Low"], close=df["Close"], volume=df["Volume"])
+    logger.debug(f"{sym} VWAP head:\n{df['vwap'].tail()}")
     
     df["sma_50"]  = ta.sma(df["Close"], length=50)
     df["sma_200"] = ta.sma(df["Close"], length=200)
