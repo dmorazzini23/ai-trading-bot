@@ -133,8 +133,8 @@ MAX_POSITION_SIZE        = 1000
 DAILY_LOSS_LIMIT         = params["DAILY_LOSS_LIMIT"]
 MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD    = 0.8
-MARKET_OPEN              = dt_time(6, 30)
-MARKET_CLOSE             = dt_time(13, 0)
+MARKET_OPEN              = dt_time(0, 0)
+MARKET_CLOSE             = dt_time(23, 59)
 VOLUME_THRESHOLD         = 500_000
 ENTRY_START_OFFSET       = timedelta(minutes=15)
 ENTRY_END_OFFSET         = timedelta(minutes=30)
