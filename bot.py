@@ -135,7 +135,7 @@ MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD    = 0.8
 MARKET_OPEN              = dt_time(0, 0)
 MARKET_CLOSE             = dt_time(23, 59)
-VOLUME_THRESHOLD         = 50_000
+VOLUME_THRESHOLD         = 0
 ENTRY_START_OFFSET       = timedelta(minutes=15)
 ENTRY_END_OFFSET         = timedelta(minutes=30)
 REGIME_LOOKBACK          = 14
