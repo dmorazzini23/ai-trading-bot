@@ -135,7 +135,7 @@ MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD    = 0.8
 MARKET_OPEN              = dt_time(0, 0)
 MARKET_CLOSE             = dt_time(23, 59)
-VOLUME_THRESHOLD         = 500_000
+VOLUME_THRESHOLD         = 100_000
 ENTRY_START_OFFSET       = timedelta(minutes=15)
 ENTRY_END_OFFSET         = timedelta(minutes=30)
 REGIME_LOOKBACK          = 14
@@ -743,13 +743,17 @@ def trade_logic(sym: str, balance: float, model) -> None:
         return
 
     # ─── Indicators ───────────────────────────────────────────────────────────
+    df.sort_values("Date", inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    
+    df["vwap"]    = ta.vwap(high=df["High"], low=df["Low"], close=df["Close"], volume=df["Volume"])
+    
     df["sma_50"]  = ta.sma(df["Close"], length=50)
     df["sma_200"] = ta.sma(df["Close"], length=200)
     df["rsi"]     = ta.rsi(df["Close"], length=14)
     macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
     df["macd"], df["macds"] = macd["MACD_12_26_9"], macd["MACDs_12_26_9"]
     df["atr"]     = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
-    df["vwap"]    = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
     ichimoku      = ta.ichimoku(df["High"], df["Low"], df["Close"])
     df["ichimoku_base"] = ichimoku["ISA_9"]
     df["ichimoku_conv"] = ichimoku["ISB_26"]
