@@ -697,7 +697,8 @@ def update_trailing_stop(ticker: str, price: float, qty: int,
 
     return "hold"
 
-# ─── DATA FETCHER WITH CACHING & VOLUME GUARD ────────────────────────────────
+
+# ─── 0) DATA FETCHER WITH CACHING & VOLUME GUARD ─────────────────────────────
 class DataFetcher:
     @staticmethod
     @lru_cache(maxsize=None)
@@ -706,10 +707,9 @@ class DataFetcher:
         if df is None or df.empty:
             logger.info(f"[SKIP] No daily data for {symbol}")
             return None
-        avg_daily_vol = df["Volume"].mean()
-        logger.debug(f"{symbol} avg_daily_vol={avg_daily_vol:.0f}, threshold={VOLUME_THRESHOLD}")
-        if avg_daily_vol < VOLUME_THRESHOLD:
-            logger.info(f"[SKIP] {symbol} daily volume too low ({avg_daily_vol:.0f} < {VOLUME_THRESHOLD})")
+        avg_vol = df["Volume"].mean()
+        if avg_vol < VOLUME_THRESHOLD:
+            logger.info(f"[SKIP] {symbol} daily volume too low ({avg_vol:.0f} < {VOLUME_THRESHOLD})")
             return None
         return df
 
@@ -722,40 +722,14 @@ class DataFetcher:
             return None
         return df
 
-# ─── DATA FETCHER WITH VOLUME GUARD ──────────────────────────────────────────
-class DataFetcher:
-    @staticmethod
-    @lru_cache(maxsize=None)
-    def get_daily_df(symbol: str) -> Optional[pd.DataFrame]:
-        df = fetch_data(symbol, period="5d", interval="1d")
-        if df is None or df.empty:
-            logger.info(f"[SKIP] No daily data for {symbol}")
-            return None
-        avg_daily_vol = df["Volume"].mean()
-        logger.debug(f"{symbol} avg_daily_vol={avg_daily_vol:.0f}, threshold={VOLUME_THRESHOLD}")
-        if avg_daily_vol < VOLUME_THRESHOLD:
-            logger.info(f"[SKIP] {symbol} daily volume too low ({avg_daily_vol:.0f} < {VOLUME_THRESHOLD})")
-            return None
-        return df
-
-    @staticmethod
-    @lru_cache(maxsize=None)
-    def get_minute_df(symbol: str) -> Optional[pd.DataFrame]:
-        df = fetch_data(symbol, period="1d", interval="1m")
-        if df is None or df.empty:
-            logger.info(f"[SKIP] No minute data for {symbol}")
-            return None
-        return df
-
-# ─── PRE-TRADE CHECKS (1, 2 & 3) ──────────────────────────────────────────────
+# ─── 1–3) PRE-TRADE CHECKS ────────────────────────────────────────────────────
 def pre_trade_checks(symbol: str, balance: float) -> bool:
     # 1) HALT / HOURS / DAILY-LOSS
     if check_halt_flag():
-        logger.info(f"[SKIP] HALT_FLAG present, skipping trades for {symbol}")
+        logger.info(f"[SKIP] HALT_FLAG present, skipping {symbol}")
         return False
     if not within_market_hours():
-        now = now_pacific().time()
-        logger.info(f"[SKIP] Outside market hours for {symbol} – now={now}")
+        logger.info(f"[SKIP] Outside market hours for {symbol}")
         return False
     if check_daily_loss():
         logger.info(f"[SKIP] Daily loss limit reached for {symbol}")
@@ -763,67 +737,85 @@ def pre_trade_checks(symbol: str, balance: float) -> bool:
 
     # 2) REGIME / POSITIONS / CORRELATION
     if not check_market_regime():
-        logger.info(f"[SKIP] Market regime check failed for {symbol}")
+        logger.info(f"[SKIP] Market regime failed for {symbol}")
         return False
     if too_many_positions():
-        logger.info(f"[SKIP] Portfolio full ({MAX_PORTFOLIO_POSITIONS} positions) – cannot open {symbol}")
+        logger.info(f"[SKIP] Portfolio full – cannot open {symbol}")
         return False
     if too_correlated(symbol):
         logger.info(f"[SKIP] Correlation threshold exceeded – skipping {symbol}")
         return False
 
-    # 3) FETCH & VOLUME (5d)
-    if DataFetcher.get_daily_df(symbol) is None:
-        return False
+    # 3) VOLUME GUARD (5d)
+    return DataFetcher.get_daily_df(symbol) is not None
 
+# ─── 4) ENTRY WINDOW ─────────────────────────────────────────────────────────
+def is_within_entry_window() -> bool:
+    now = now_pacific()
+    start = (datetime.combine(now.date(), MARKET_OPEN) + ENTRY_START_OFFSET).time()
+    end   = (datetime.combine(now.date(), MARKET_CLOSE) - ENTRY_END_OFFSET).time()
+    if not (start <= now.time() <= end):
+        logger.info(f"[SKIP] Outside entry window ({start}–{end}), now={now.time()}")
+        return False
     return True
+
+# ─── 5) INDICATOR PREPARATION ─────────────────────────────────────────────────
+def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df.sort_values("Date", inplace=True)
+    df.reset_index(drop=True, inplace=True)
+
+    df["vwap"]    = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
+    df["sma_50"]  = ta.sma(df["Close"], length=50)
+    df["sma_200"] = ta.sma(df["Close"], length=200)
+    df["rsi"]     = ta.rsi(df["Close"], length=14)
+    macd          = ta.macd(df["Close"], fast=12, slow=26, signal=9)
+    df["macd"], df["macds"] = macd["MACD_12_26_9"], macd["MACDs_12_26_9"]
+    df["atr"]     = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
+
+    ich           = ta.ichimoku(df["High"], df["Low"], df["Close"])
+    df["ichimoku_base"], df["ichimoku_conv"] = ich["ISA_9"], ich["ISB_26"]
+    df["stochrsi"] = ta.stochrsi(df["Close"])["STOCHRSIk_14_14_3_3"]
+
+    df.ffill().bfill(inplace=True)
+    df.dropna(subset=[
+        "vwap","sma_50","sma_200","rsi",
+        "macd","macds","atr",
+        "ichimoku_base","ichimoku_conv","stochrsi"
+    ], inplace=True)
+    return df
+
+# ─── 6) SIGNAL & CONFIRMATION ────────────────────────────────────────────────
+def signal_and_confirm(symbol: str, df: pd.DataFrame, model) -> Tuple[int, float, str]:
+    sig, conf, tag = signal_manager.evaluate(df, symbol, model)
+    if sig == -1 or conf < CONF_THRESHOLD:
+        logger.info(f"[SKIP] {symbol} no/low signal (sig={sig}, conf={conf:.2f})")
+        return -1, 0.0, ""
+    return sig, conf, tag
 
 # ─── TRADE LOGIC ─────────────────────────────────────────────────────────────
 signal_manager = SignalManager()
 
 def trade_logic(sym: str, balance: float, model) -> None:
-    logger.info(f"[TRADE LOGIC] {sym} – starting check – balance={balance:.2f}")
+    logger.info(f"[TRADE LOGIC] {sym} – balance={balance:.2f}")
 
-    # steps 1–3
+    # Steps 1–3
     if not pre_trade_checks(sym, balance):
         return
 
-    # 4) ENTRY WINDOW
-    now_dt = now_pacific()
-    start = (datetime.combine(now_dt.date(), MARKET_OPEN) + ENTRY_START_OFFSET).time()
-    end   = (datetime.combine(now_dt.date(), MARKET_CLOSE) - ENTRY_END_OFFSET).time()
-    if not (start <= now_dt.time() <= end):
-        logger.info(f"[SKIP] {sym} outside entry window ({start}–{end}), now={now_dt.time()}")
+    # Step 4
+    if not is_within_entry_window():
         return
 
-    # 5) FETCH 1-min DATA
-    df = DataFetcher.get_minute_df(sym)
-    if df is None:
+    # Steps 5 & 6
+    df_min = DataFetcher.get_minute_df(sym)
+    if df_min is None:
         return
-
-    # ─── Indicators ───────────────────────────────────────────────────────────
-    df.sort_values("Date", inplace=True)
-    df.reset_index(drop=True, inplace=True)
+    df_ind, sig = prepare_indicators(df_min), None
+    sig, conf, strat = signal_and_confirm(sym, df_ind, model)
+    if sig == -1:
+        return
     
-    df["vwap"]    = ta.vwap(high=df["High"], low=df["Low"], close=df["Close"], volume=df["Volume"])
-    logger.debug(f"{sym} VWAP head:\n{df['vwap'].tail()}")
-    
-    df["sma_50"]  = ta.sma(df["Close"], length=50)
-    df["sma_200"] = ta.sma(df["Close"], length=200)
-    df["rsi"]     = ta.rsi(df["Close"], length=14)
-    macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
-    df["macd"], df["macds"] = macd["MACD_12_26_9"], macd["MACDs_12_26_9"]
-    df["atr"]     = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
-    ichimoku      = ta.ichimoku(df["High"], df["Low"], df["Close"])
-    df["ichimoku_base"] = ichimoku["ISA_9"]
-    df["ichimoku_conv"] = ichimoku["ISB_26"]
-    df["stochrsi"]      = ta.stochrsi(df["Close"])["STOCHRSIk_14_14_3_3"]
-    df.ffill().bfill(inplace=True)
-    df.dropna(subset=[
-        "sma_50","sma_200","rsi","macd","macds","atr",
-        "vwap","ichimoku_base","ichimoku_conv","stochrsi"
-    ], inplace=True)
-
     # 5) SIGNAL + CONFIRMATION
     sig, conf, strat = signal_manager.evaluate(df, sym, model)
     if sig == -1 or conf < CONF_THRESHOLD:
