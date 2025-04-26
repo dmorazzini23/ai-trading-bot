@@ -7,10 +7,21 @@ import re
 import threading
 import asyncio
 import multiprocessing
-import logging
 from datetime import datetime, date, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
 from functools import wraps, lru_cache
+from typing import Optional, Tuple
+from dataclasses import dataclass, field
+
+# ─── STRUCTURED LOGGING & RETRIES & RATE LIMITING ────────────────────────────
+import structlog
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
+from ratelimit import limits, sleep_and_retry
 
 # ─── THIRD-PARTY LIBRARIES ────────────────────────────────────────────────────
 import numpy as np
@@ -27,16 +38,22 @@ from sklearn.ensemble import RandomForestClassifier
 import joblib
 from dotenv import load_dotenv
 
-# ─── TYPE ANNOTATIONS ─────────────────────────────────────────────────────────
-from typing import Optional, Tuple
-
 # ─── CONFIG & LOGGING ─────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-logger = logging.getLogger(__name__)
+structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
+logger = structlog.get_logger()
+
+# ─── TYPED EXCEPTIONS ─────────────────────────────────────────────────────────
+class DataFetchError(Exception):
+    """Raised when fetch_data fails irrecoverably."""
+    pass
+
+class RateLimitError(Exception):
+    """Raised when we hit an external service rate limit."""
+    pass
+
+class OrderSubmissionError(Exception):
+    """Raised when submit_order repeatedly fails."""
+    pass
 
 # === STRATEGY MODE CONFIGURATION =============================================
 class BotMode:
