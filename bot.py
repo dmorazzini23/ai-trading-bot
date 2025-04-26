@@ -1,31 +1,34 @@
+# ─── STANDARD LIBRARIES ─────────────────────────────────────────────────────
 import os
 import sys
 import time
 import csv
-import portalocker
 import re
-import numpy as np
-setattr(np, "NaN", np.nan)
-import joblib
+import threading
 import asyncio
-import yfinance as yf
+import multiprocessing
+import logging
+from datetime import datetime, date, time as dt_time, timedelta
+from zoneinfo import ZoneInfo
+from functools import wraps, lru_cache
+
+# ─── THIRD-PARTY LIBRARIES ────────────────────────────────────────────────────
+import numpy as np
 import pandas as pd
 import pandas_ta as ta
+import yfinance as yf
 import requests
-import schedule
-import logging
-import multiprocessing
-from functools import lru_cache
-from typing import Optional
-from functools import wraps
-from datetime import datetime, date, timedelta, time as dt_time
-from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
+from flask import Flask
+import schedule
+import portalocker
 from alpaca_trade_api.rest import REST, APIError
 from sklearn.ensemble import RandomForestClassifier
+import joblib
 from dotenv import load_dotenv
-from flask import Flask
-import threading
+
+# ─── TYPE ANNOTATIONS ─────────────────────────────────────────────────────────
+from typing import Optional, Tuple
 
 # ─── CONFIG & LOGGING ─────────────────────────────────────────────────────────
 logging.basicConfig(
