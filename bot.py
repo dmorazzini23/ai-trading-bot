@@ -457,7 +457,7 @@ def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
     if df_min is None:
         return
 
-    df_ind = prepare_indicators(df_min)  # unchanged
+    df_ind = prepare_indicators(df_min)
     sig, conf, strat = signal_and_confirm(ctx, symbol, df_ind, model)
     if sig == -1:
         return
@@ -688,7 +688,6 @@ def check_market_regime() -> bool:
 
     logger.debug(f"[check_market_regime] SPY dataframe columns: {df.columns.tolist()}")
 
-    # now these really *are* in df.columns
     for col in ["High", "Low", "Close"]:
         if col not in df.columns:
             logger.warning(f"[check_market_regime] Missing column '{col}' in SPY data")
