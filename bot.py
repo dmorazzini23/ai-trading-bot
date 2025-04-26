@@ -730,8 +730,10 @@ def trade_logic(sym: str, balance: float, model) -> None:
         logger.info(f"[SKIP] No data for {sym}")
         return
     avg_vol = df["Volume"].tail(20).mean()
-    if avg_vol < VOLUME_THRESHOLD:
-        logger.info(f"[SKIP] {sym} volume too low ({avg_vol:.0f} < {VOLUME_THRESHOLD})")
+    logger.debug(f"{sym} avg_vol={avg_vol:.0f}, threshold={VOLUME_THRESHOLD}")
+    
+    if avg_vol <= VOLUME_THRESHOLD:
+        logger.info(f"[SKIP] {sym} volume too low ({avg_vol:.0f} ≤ {VOLUME_THRESHOLD})")
         return
 
     # 4) ENTRY WINDOW
