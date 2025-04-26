@@ -15,7 +15,9 @@ from dataclasses import dataclass, field
 
 # ─── STRUCTURED LOGGING, RETRIES & RATE LIMITING ────────────────────────────
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import (
+    retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+)
 from ratelimit import limits, sleep_and_retry
 
 # ─── THIRD-PARTY LIBRARIES ────────────────────────────────────────────────────
@@ -45,25 +47,24 @@ class OrderSubmissionError(Exception): pass
 class DataFetcher:
     @staticmethod
     @lru_cache(maxsize=None)
-    def get_daily_df(symbol: str) -> Optional[pd.DataFrame]:
-        df = fetch_data(symbol, period="5d", interval="1d")
-        if df is None or df.empty:
+    def get_daily_df(ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
+        """
+        Wrap fetch_data and swallow DataFetchError into a None.
+        """
+        try:
+            return fetch_data(ctx, symbol, period="5d", interval="1d")
+        except DataFetchError:
             logger.info(f"[SKIP] No daily data for {symbol}")
             return None
-        avg_vol = df["Volume"].mean()
-        if avg_vol < VOLUME_THRESHOLD:
-            logger.info(f"[SKIP] {symbol} daily volume too low ({avg_vol:.0f} < {VOLUME_THRESHOLD})")
-            return None
-        return df
 
     @staticmethod
     @lru_cache(maxsize=None)
-    def get_minute_df(symbol: str) -> Optional[pd.DataFrame]:
-        df = fetch_data(symbol, period="1d", interval="1m")
-        if df is None or df.empty:
+    def get_minute_df(ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
+        try:
+            return fetch_data(ctx, symbol, period="1d", interval="1m")
+        except DataFetchError:
             logger.info(f"[SKIP] No minute data for {symbol}")
             return None
-        return df
 
 # ─── SIGNAL MANAGER ───────────────────────────────────────────────────────────
 class SignalManager:
@@ -300,7 +301,7 @@ class BotContext:
 # instantiate once, at module level
 ctx = BotContext(
     api=api,
-    data_fetcher=DataFetcher,
+    data_fetcher=DataFetcher(),
     signal_manager=signal_manager,
     trade_logger=trade_logger,
     sem=asyncio.Semaphore(4),
@@ -749,116 +750,6 @@ def too_correlated(sym: str) -> bool:
     # exclude diagonal
     avg_corr = corr_matrix.where(~np.eye(len(open_syms), dtype=bool)).stack().mean()
     return avg_corr > CORRELATION_THRESHOLD
-
-# ─── TYPED EXCEPTIONS ─────────────────────────────────────────────────────────
-class DataFetchError(Exception):
-    """Raised when fetch_data fails irrecoverably."""
-    pass
-
-# ─── WRAPPED I/O CALLS ────────────────────────────────────────────────────────
-@sleep_and_retry
-@limits(calls=60, period=60)
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    retry=retry_if_exception_type((requests.RequestException, DataFetchError))
-)
-def fetch_data(
-    ctx: BotContext,
-    symbol: str,
-    period: str = "1d",
-    interval: str = "1m"
-) -> pd.DataFrame:
-    with ctx.sem:
-        df = yf.download(
-            symbol,
-            period=period,
-            interval=interval,
-            auto_adjust=True,
-            progress=False
-        )
-
-    if df is None or df.empty:
-        raise DataFetchError(f"No data for {symbol}")
-
-    # flatten MultiIndex
-    if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
-        df.columns = df.columns.get_level_values(0)
-
-    df.reset_index(inplace=True)
-    df.ffill().bfill(inplace=True)
-    return df
-
-
-@sleep_and_retry
-@limits(calls=30, period=60)
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type(requests.RequestException)
-)
-def get_sec_headlines(
-    ctx: BotContext,
-    ticker: str
-) -> str:
-    with ctx.sem:
-        r = requests.get(
-            f"https://www.sec.gov/cgi-bin/browse-edgar"
-            f"?action=getcompany&CIK={ticker}&type=8-K&count=5",
-            headers={"User-Agent": "AI Trading Bot"}
-        )
-        r.raise_for_status()
-
-    soup = BeautifulSoup(r.content, "lxml")
-    texts = []
-    for a in soup.find_all("a"):
-        if "8-K" in a.text:
-            tr = a.find_parent("tr")
-            if tr:
-                tds = tr.find_all("td")
-                if len(tds) > 3:
-                    texts.append(tds[-1].get_text(strip=True))
-
-    return " ".join(texts)
-
-
-@sleep_and_retry
-@limits(calls=30, period=60)
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type(requests.RequestException)
-)
-def fetch_sentiment(
-    ctx: BotContext,
-    ticker: str
-) -> float:
-    with ctx.sem:
-        url = (
-            f"https://newsapi.org/v2/everything?"
-            f"q={ticker}&sortBy=publishedAt&language=en"
-            f"&pageSize=5&apiKey={NEWS_API_KEY}"
-        )
-        resp = requests.get(url)
-        resp.raise_for_status()
-
-    articles = resp.json().get("articles", [])
-    text = " ".join(
-        a["title"] + " " + a.get("description", "")
-        for a in articles
-    ).lower()
-
-    score = 0.0
-    for word, delta in [("beat", .3), ("strong", .3), ("record", .3)]:
-        if word in text: score += delta
-    for word, delta in [("miss", -.3), ("weak", -.3), ("recall", -.3)]:
-        if word in text: score += delta
-    for word, delta in [("upgrade", .2), ("buy rating", .2)]:
-        if word in text: score += delta
-    for word, delta in [("downgrade", -.2), ("sell rating", -.2)]:
-        if word in text: score += delta
-
-    return max(min(score, 0.5), -0.5)
 
 # ─── ORDER EXECUTION & POSITION SIZING ────────────────────────────────────────
 def fractional_kelly_size(balance, price, atr, win_prob,
