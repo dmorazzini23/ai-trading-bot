@@ -15,6 +15,8 @@ import requests
 import schedule
 import logging
 import multiprocessing
+from functools import lru_cache
+from typing import Optional
 from functools import wraps
 from datetime import datetime, date, timedelta, time as dt_time
 from zoneinfo import ZoneInfo
@@ -695,49 +697,95 @@ def update_trailing_stop(ticker: str, price: float, qty: int,
 
     return "hold"
 
+# ─── DATA FETCHER WITH CACHING & VOLUME GUARD ────────────────────────────────
+class DataFetcher:
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def get_daily_df(symbol: str) -> Optional[pd.DataFrame]:
+        df = fetch_data(symbol, period="5d", interval="1d")
+        if df is None or df.empty:
+            logger.info(f"[SKIP] No daily data for {symbol}")
+            return None
+        avg_daily_vol = df["Volume"].mean()
+        logger.debug(f"{symbol} avg_daily_vol={avg_daily_vol:.0f}, threshold={VOLUME_THRESHOLD}")
+        if avg_daily_vol < VOLUME_THRESHOLD:
+            logger.info(f"[SKIP] {symbol} daily volume too low ({avg_daily_vol:.0f} < {VOLUME_THRESHOLD})")
+            return None
+        return df
+
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def get_minute_df(symbol: str) -> Optional[pd.DataFrame]:
+        df = fetch_data(symbol, period="1d", interval="1m")
+        if df is None or df.empty:
+            logger.info(f"[SKIP] No minute data for {symbol}")
+            return None
+        return df
+
+# ─── DATA FETCHER WITH VOLUME GUARD ──────────────────────────────────────────
+class DataFetcher:
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def get_daily_df(symbol: str) -> Optional[pd.DataFrame]:
+        df = fetch_data(symbol, period="5d", interval="1d")
+        if df is None or df.empty:
+            logger.info(f"[SKIP] No daily data for {symbol}")
+            return None
+        avg_daily_vol = df["Volume"].mean()
+        logger.debug(f"{symbol} avg_daily_vol={avg_daily_vol:.0f}, threshold={VOLUME_THRESHOLD}")
+        if avg_daily_vol < VOLUME_THRESHOLD:
+            logger.info(f"[SKIP] {symbol} daily volume too low ({avg_daily_vol:.0f} < {VOLUME_THRESHOLD})")
+            return None
+        return df
+
+    @staticmethod
+    @lru_cache(maxsize=None)
+    def get_minute_df(symbol: str) -> Optional[pd.DataFrame]:
+        df = fetch_data(symbol, period="1d", interval="1m")
+        if df is None or df.empty:
+            logger.info(f"[SKIP] No minute data for {symbol}")
+            return None
+        return df
+
+# ─── PRE-TRADE CHECKS (1, 2 & 3) ──────────────────────────────────────────────
+def pre_trade_checks(symbol: str, balance: float) -> bool:
+    # 1) HALT / HOURS / DAILY-LOSS
+    if check_halt_flag():
+        logger.info(f"[SKIP] HALT_FLAG present, skipping trades for {symbol}")
+        return False
+    if not within_market_hours():
+        now = now_pacific().time()
+        logger.info(f"[SKIP] Outside market hours for {symbol} – now={now}")
+        return False
+    if check_daily_loss():
+        logger.info(f"[SKIP] Daily loss limit reached for {symbol}")
+        return False
+
+    # 2) REGIME / POSITIONS / CORRELATION
+    if not check_market_regime():
+        logger.info(f"[SKIP] Market regime check failed for {symbol}")
+        return False
+    if too_many_positions():
+        logger.info(f"[SKIP] Portfolio full ({MAX_PORTFOLIO_POSITIONS} positions) – cannot open {symbol}")
+        return False
+    if too_correlated(symbol):
+        logger.info(f"[SKIP] Correlation threshold exceeded – skipping {symbol}")
+        return False
+
+    # 3) FETCH & VOLUME (5d)
+    if DataFetcher.get_daily_df(symbol) is None:
+        return False
+
+    return True
+
 # ─── TRADE LOGIC ─────────────────────────────────────────────────────────────
 signal_manager = SignalManager()
 
 def trade_logic(sym: str, balance: float, model) -> None:
     logger.info(f"[TRADE LOGIC] {sym} – starting check – balance={balance:.2f}")
 
-    # 1) HALT / HOURS / DAILY-LOSS
-    if check_halt_flag():
-        logger.info(f"[SKIP] HALT_FLAG present, skipping trades for {sym}")
-        return
-    if not within_market_hours():
-        now = now_pacific().time()
-        logger.info(f"[SKIP] Outside market hours for {sym} – now={now}")
-        return
-    if check_daily_loss():
-        logger.info(f"[SKIP] Daily loss limit reached for {sym}")
-        return
-
-    # 2) REGIME / POSITIONS / CORRELATION
-    if not check_market_regime():
-        logger.info(f"[SKIP] Market regime check failed for {sym}")
-        return
-    if too_many_positions():
-        logger.info(f"[SKIP] Portfolio full ({MAX_PORTFOLIO_POSITIONS} positions) – cannot open {sym}")
-        return
-    if too_correlated(sym):
-        logger.info(f"[SKIP] Correlation threshold exceeded – skipping {sym}")
-        return
-
-    # 3) FETCH & VOLUME
-    df_daily = fetch_data(sym, period="5d", interval="1d")
-    if df_daily is None or df_daily.empty:
-        logger.info(f"[SKIP] No daily data for {sym}")
-        return
-    avg_daily_vol = df_daily["Volume"].mean()
-    logger.debug(f"{sym} avg_daily_vol={avg_daily_vol:.0f}, threshold={VOLUME_THRESHOLD}")
-    if avg_daily_vol < VOLUME_THRESHOLD:
-        logger.info(f"[SKIP] {sym} daily volume too low ({avg_daily_vol:.0f} < {VOLUME_THRESHOLD})")
-        return
-
-    df = fetch_data(sym, period="1d", interval="1m")
-    if df is None or df.empty:
-        logger.info(f"[SKIP] No minute data for {sym}")
+    # steps 1–3
+    if not pre_trade_checks(sym, balance):
         return
 
     # 4) ENTRY WINDOW
@@ -746,6 +794,11 @@ def trade_logic(sym: str, balance: float, model) -> None:
     end   = (datetime.combine(now_dt.date(), MARKET_CLOSE) - ENTRY_END_OFFSET).time()
     if not (start <= now_dt.time() <= end):
         logger.info(f"[SKIP] {sym} outside entry window ({start}–{end}), now={now_dt.time()}")
+        return
+
+    # 5) FETCH 1-min DATA
+    df = DataFetcher.get_minute_df(sym)
+    if df is None:
         return
 
     # ─── Indicators ───────────────────────────────────────────────────────────
