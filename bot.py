@@ -449,9 +449,25 @@ def pre_trade_checks(ctx: BotContext, symbol: str, balance: float) -> bool:
         logger.info(f"[SKIP] Market closed – {symbol}")
         return False
 
-    if check_daily_loss():
-        logger.info(f"[SKIP] Daily-loss limit – {symbol}")
+    def check_daily_loss() -> bool:
+    """Return True if cash drawdown from start of day exceeds limit."""
+    global daily_loss, day_start_equity
+    try:
+        cash = float(api.get_account().cash)
+    except Exception:
+        logger.warning("[check_daily_loss] Could not fetch account cash")
         return False
+
+    today = date.today()
+    if day_start_equity is None or day_start_equity[0] != today:
+        day_start_equity = (today, cash)
+        daily_loss = 0.0
+        daily_drawdown.set(0.0)
+        return False
+
+    loss = (day_start_equity[1] - cash) / day_start_equity[1]
+    daily_drawdown.set(loss)            # ← update the gauge here
+    return loss >= DAILY_LOSS_LIMIT
 
     # 2) REGIME / POSITIONS / CORRELATION
     if not check_market_regime():
@@ -972,7 +988,7 @@ def submit_order(
         logger.warning(f"[submit_order] APIError: {e}")
         raise  # let Tenacity catch & retry
 
-    except Exception
+    except Exception:
         order_failures.inc()
         logger.exception(f"[submit_order] unexpected error for {ticker}")
         raise
