@@ -446,39 +446,106 @@ def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) ->
         return -1, 0.0, ""
     return sig, conf, strat
 
-def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
-    logger.info(f"[TRADE_LOGIC] {symbol} balance={balance:.2f}")
-    if not pre_trade_checks(ctx, symbol, balance):
-        return
-    if not is_within_entry_window(ctx):
-        return
+# ─── 1) ENTRY CHECK ───────────────────────────────────────────────────────────
+def should_enter(ctx: BotContext, symbol: str, balance: float) -> bool:
+    """All the pre‐trade gates: halts, hours, regime, correlation, volume…"""
+    return (
+        pre_trade_checks(ctx, symbol, balance)
+        and is_within_entry_window(ctx)
+    )
 
-    df_min = ctx.data_fetcher.get_minute_df(symbol)
-    if df_min is None:
-        return
-
-    df_ind = prepare_indicators(df_min)
-    sig, conf, strat = signal_and_confirm(ctx, symbol, df_ind, model)
-    if sig == -1:
-        return
-
-    price = df_ind["Close"].iloc[-1]
-    atr   = df_ind["atr"].iloc[-1]
+# ─── 2) EXIT DECIDER ─────────────────────────────────────────────────────────
+def should_exit(ctx: BotContext, symbol: str, price: float) -> Tuple[bool, int, str]:
+    """
+    Returns (exit?, qty, reason).  
+    Checks first for take‐profit scaling, then trailing‐stop.
+    """
     try:
         pos = int(ctx.api.get_position(symbol).qty)
     except Exception:
         pos = 0
 
-    # take-profit scaling
+    # 2a) take-profit
     tp = ctx.take_profit_targets.get(symbol)
-    if pos and tp and ((pos>0 and price>=tp) or (pos<0 and price<=tp)):
-        exit_qty = int(abs(pos)*SCALING_FACTOR)
-        side = "sell" if pos>0 else "buy"
-        submit_order(ctx, symbol, exit_qty, side)
-        ctx.trade_logger.log_exit(symbol, price)
-        ctx.trailing_extremes[symbol] = price
-        ctx.take_profit_targets.pop(symbol, None)
+    if pos and tp and ((pos > 0 and price >= tp) or (pos < 0 and price <= tp)):
+        qty = int(abs(pos) * SCALING_FACTOR)
+        return True, qty, "take_profit"
+
+    # 2b) trailing stop
+    action = update_trailing_stop(symbol, price, pos)
+    if action == "exit_long" and pos > 0:
+        return True, pos, "trailing_stop"
+    if action == "exit_short" and pos < 0:
+        return True, abs(pos), "trailing_stop"
+
+    return False, 0, ""
+
+def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
+    """Fire market exit and log it."""
+    submit_order(ctx, symbol, qty, "sell" if qty>0 else "buy")
+    ctx.trade_logger.log_exit(symbol, ctx.data_fetcher.get_minute_df(ctx, symbol)["Close"].iloc[-1])
+    # clear profit target so we don't re-exit
+    ctx.take_profit_targets.pop(symbol, None)
+
+# ─── 3) ENTRY SIZER & EXECUTOR ────────────────────────────────────────────────
+def calculate_entry_size(
+    ctx: BotContext,
+    symbol: str,
+    price: float,
+    atr: float,
+    win_prob: float,
+) -> int:
+    """Wrap your Kelly sizing plus any portfolio caps."""
+    return fractional_kelly_size(
+        balance=float(ctx.api.get_account().cash),
+        price=price,
+        atr=atr,
+        win_prob=win_prob,
+    )
+
+def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
+    """Submit the order, log entry, and set up a take‐profit target."""
+    submit_order(ctx, symbol, qty, side)
+    ctx.trade_logger.log_entry(symbol, 
+                               price=ctx.data_fetcher.get_minute_df(ctx, symbol)["Close"].iloc[-1],
+                               qty=qty,
+                               side=side,
+                               strategy="",  # you can pass strat here
+                               signal_tags="")
+    # schedule the take-profit at a fixed factor
+    price = ctx.data_fetcher.get_minute_df(ctx, symbol)["Close"].iloc[-1]
+    ctx.take_profit_targets[symbol] = price + (TAKE_PROFIT_FACTOR * atr * (1 if side=="buy" else -1))
+
+# ─── NEW, COMPOSED trade_logic ───────────────────────────────────────────────
+def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
+    # 1) Entry gating
+    if not should_enter(ctx, symbol, balance):
         return
+
+    # 2) Fetch & signal
+    df = prepare_indicators(ctx.data_fetcher.get_minute_df(ctx, symbol) or pd.DataFrame())
+    sig, conf, strat = signal_and_confirm(ctx, symbol, df, model)
+    if sig == -1:
+        return
+
+    price, atr = df["Close"].iloc[-1], df["atr"].iloc[-1]
+
+    # 3) Exit
+    do_exit, qty, reason = should_exit(ctx, symbol, price)
+    if do_exit:
+        execute_exit(ctx, symbol, qty)
+        return
+
+    # 4) Entry
+    size = calculate_entry_size(ctx, symbol, price, atr, conf)
+    if size > 0:
+        side = "buy" if sig == 1 else "sell"
+        # add current pos so we flatten+flip
+        try:
+            pos = int(ctx.api.get_position(symbol).qty)
+        except Exception:
+            pos = 0
+        execute_entry(ctx, symbol, size + abs(pos), side)
 
 # ─── STRATEGY MODE CONFIGURATION ─────────────────────────────────────────────
 class BotMode:
@@ -942,7 +1009,7 @@ def run_all_trades(model):
     pool_size = min(len(tickers), 4)
     with multiprocessing.Pool(pool_size) as pool:
         for sym in tickers:
-            pool.apply_async(trade_logic, (sym, current_cash, model))
+            pool.apply_async(trade_logic, (ctx, sym, current_cash, model))
         pool.close()
         pool.join()
 
