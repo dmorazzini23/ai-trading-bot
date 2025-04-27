@@ -37,6 +37,7 @@ import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 
 RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
+
 # ─── A. ENVIRONMENT, SENTRY & LOGGING ────────────────────────────────────────
 load_dotenv()
 sentry_sdk.init(
