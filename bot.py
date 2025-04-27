@@ -15,11 +15,12 @@ from dataclasses import dataclass, field
 
 # ─── STRUCTURED LOGGING, RETRIES & RATE LIMITING ────────────────────────────
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type
 from ratelimit import limits, sleep_and_retry
 
 # ─── THIRD-PARTY LIBRARIES ────────────────────────────────────────────────────
 import numpy as np
+np.NaN = np.nan
 import pandas as pd
 import pandas_ta as ta
 import yfinance as yf
@@ -488,7 +489,7 @@ def within_market_hours() -> bool:
     end   = datetime.combine(now.date(), MARKET_CLOSE, PACIFIC) - ENTRY_END_OFFSET
     return start <= now <= end
 
-@retry(times=3, delay=0.5)
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))
 def check_market_regime() -> bool:
     df = fetch_data(ctx, "SPY", period="1mo", interval="1d")
     if df is None or df.empty:
