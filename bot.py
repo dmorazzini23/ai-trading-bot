@@ -37,6 +37,9 @@ from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 
+day_start_equit = None
+daily_loss      = 0.0
+
 # ─── STRUCTLOG CONFIG & “TYPED” EXCEPTIONS ──────────────────────────────────
 structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
 logger = structlog.get_logger()
@@ -55,26 +58,6 @@ sentry_sdk.init(
 orders_total   = Counter('bot_orders_total',   'Total orders sent')
 order_failures = Counter('bot_order_failures', 'Order submission failures')
 daily_drawdown = Gauge('bot_daily_drawdown',   'Current daily drawdown fraction')
-
-# ─── BOT CONTEXT ─────────────────────────────────────────────────────────────
-@dataclass
-class BotContext:
-    api: REST
-    data_fetcher: DataFetcher
-    signal_manager: SignalManager
-    trade_logger: TradeLogger
-    sem: asyncio.Semaphore
-    volume_threshold: int
-    entry_start_offset: timedelta
-    entry_end_offset: timedelta
-    market_open: dt_time
-    market_close: dt_time
-    regime_lookback: int
-    regime_atr_threshold: float
-    daily_loss_limit: float
-    confirmation_count: dict = field(default_factory=dict)
-    trailing_extremes: dict   = field(default_factory=dict)
-    take_profit_targets: dict = field(default_factory=dict)
 
 # ─── 0) DATA FETCHER WITH CACHING & VOLUME GUARD ─────────────────────────────
 class DataFetcher:
@@ -306,6 +289,26 @@ class TradeLogger:
             w = csv.writer(f); w.writerow(header); w.writerows(data)
 
 trade_logger = TradeLogger()
+
+# ─── BOT CONTEXT ─────────────────────────────────────────────────────────────
+@dataclass
+class BotContext:
+    api: REST
+    data_fetcher: DataFetcher
+    signal_manager: SignalManager
+    trade_logger: TradeLogger
+    sem: asyncio.Semaphore
+    volume_threshold: int
+    entry_start_offset: timedelta
+    entry_end_offset: timedelta
+    market_open: dt_time
+    market_close: dt_time
+    regime_lookback: int
+    regime_atr_threshold: float
+    daily_loss_limit: float
+    confirmation_count: dict = field(default_factory=dict)
+    trailing_extremes: dict   = field(default_factory=dict)
+    take_profit_targets: dict = field(default_factory=dict)
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
 @sleep_and_retry
@@ -1122,25 +1125,34 @@ def update_signal_weights():
 
 # ─── MAIN LOOP ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    # Ensure safe multiprocessing on all platforms
     multiprocessing.set_start_method('spawn', force=True)
 
-    # — Prometheus & Healthcheck —
+    # A. Start Prometheus metrics server
     start_http_server(8000)
+    logger.info("Prometheus metrics server started on port 8000")
+
+    # B. Start HTTP healthcheck endpoint
     threading.Thread(target=start_healthcheck, daemon=True).start()
     logger.info("Healthcheck endpoint running on port 8080")
 
-    # — Daily summary job —
+    # C. Schedule end-of-day summary job
     def daily_summary():
-        # TODO: compute & notify
+        # TODO: load trades.csv → compute PnL, drawdown, win rate → post to Slack/email
         pass
-    schedule.every().day.at("17:30").do(daily_summary)
 
-    # — Model & scheduler —
+    schedule.every().day.at("17:30").do(daily_summary)
+    logger.info("Scheduled daily summary at 17:30")
+
+    # D. Load model and schedule trading tasks
     model = load_model()
     logger.info("🚀 AI Trading Bot is live!")
+
     schedule.every(1).minutes.do(lambda: run_all_trades(model))
     schedule.every(6).hours.do(update_signal_weights)
+    logger.info("Scheduled run_all_trades every 1 minute and update_signal_weights every 6 hours")
 
+    # E. Main scheduler loop
     while True:
         try:
             schedule.run_pending()
