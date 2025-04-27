@@ -36,6 +36,7 @@ from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 
+RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
 # ─── A. ENVIRONMENT, SENTRY & LOGGING ────────────────────────────────────────
 load_dotenv()
 sentry_sdk.init(
@@ -865,8 +866,10 @@ if __name__ == "__main__":
     logger.info("Prometheus metrics server started on port 8000")
 
     # Healthcheck endpoint
-    threading.Thread(target=start_healthcheck, daemon=True).start()
-    logger.info("Healthcheck endpoint running on port 8080")
+        # Healthcheck endpoint (only if RUN_HEALTH is true)
+    if RUN_HEALTH:
+        threading.Thread(target=start_healthcheck, daemon=True).start()
+        logger.info("Healthcheck endpoint running on port 8080")
 
     # End-of-day summary
     def daily_summary():
