@@ -449,25 +449,9 @@ def pre_trade_checks(ctx: BotContext, symbol: str, balance: float) -> bool:
         logger.info(f"[SKIP] Market closed – {symbol}")
         return False
 
-    def check_daily_loss() -> bool:
-    """Return True if cash drawdown from start of day exceeds limit."""
-    global daily_loss, day_start_equity
-    try:
-        cash = float(api.get_account().cash)
-    except Exception:
-        logger.warning("[check_daily_loss] Could not fetch account cash")
+    if check_daily_loss():               
+        logger.info(f"[SKIP] Daily-loss limit – {symbol}")
         return False
-
-    today = date.today()
-    if day_start_equity is None or day_start_equity[0] != today:
-        day_start_equity = (today, cash)
-        daily_loss = 0.0
-        daily_drawdown.set(0.0)
-        return False
-
-    loss = (day_start_equity[1] - cash) / day_start_equity[1]
-    daily_drawdown.set(loss)            # ← update the gauge here
-    return loss >= DAILY_LOSS_LIMIT
 
     # 2) REGIME / POSITIONS / CORRELATION
     if not check_market_regime():
@@ -725,20 +709,6 @@ ctx = BotContext(
     daily_loss_limit=DAILY_LOSS_LIMIT,
 )
 
-    # 1) Start Prometheus metrics server on port 8000
-    start_http_server(8000)
-
-    # 2) Start HTTP healthcheck endpoint in background
-    threading.Thread(target=start_healthcheck, daemon=True).start()
-    logger.info("Healthcheck endpoint running on port 8080")
-
-    # 3) Schedule end-of-day summary (fill in the function body below)
-    def daily_summary():
-        # TODO: load trades.csv → compute PnL, drawdown, win rate → post to Slack/email
-        pass
-
-    schedule.every().day.at("17:30").do(daily_summary)
-
 # ─── HEALTHCHECK APP ──────────────────────────────────────────────────────────
 app = Flask(__name__)
 @app.route("/health")
@@ -797,9 +767,11 @@ def check_daily_loss() -> bool:
     if day_start_equity is None or day_start_equity[0] != today:
         day_start_equity = (today, cash)
         daily_loss = 0.0
+        daily_drawdown.set(0.0)
         return False
 
     loss = (day_start_equity[1] - cash) / day_start_equity[1]
+    daily_drawdown.set(loss)            # ← update the gauge here
     return loss >= DAILY_LOSS_LIMIT
 
 def too_many_positions() -> bool:
