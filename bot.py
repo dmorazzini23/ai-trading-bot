@@ -35,7 +35,7 @@ from sklearn.ensemble import RandomForestClassifier
 import joblib
 from dotenv import load_dotenv
 import sentry_sdk
-from prometheus_client import start_http_server, Counter, Guage
+from prometheus_client import start_http_server, Counter, Gauge
 
 # ─── STRUCTLOG CONFIG & “TYPED” EXCEPTIONS ──────────────────────────────────
 structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
@@ -50,6 +50,11 @@ sentry_sdk.init(
     traces_sample_rate=0.1,
     environment=os.getenv("BOT_MODE", "live"),
 )
+
+# ─── C. PROMETHEUS METRICS ───────────────────────────────────────────────────
+orders_total   = Counter('bot_orders_total',   'Total orders sent')
+order_failures = Counter('bot_order_failures', 'Order submission failures')
+daily_drawdown = Gauge('bot_daily_drawdown',   'Current daily drawdown fraction')
 
 # ─── BOT CONTEXT ─────────────────────────────────────────────────────────────
 @dataclass
@@ -1016,11 +1021,6 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
         "ichimoku_base","ichimoku_conv","stochrsi"
     ], inplace=True)
     return df
-
-# ─── C. PROMETHEUS METRICS ───────────────────────────────────────────────────
-orders_total   = Counter('bot_orders_total',   'Total orders sent')
-order_failures = Counter('bot_order_failures', 'Order submission failures')
-daily_drawdown = Gauge('bot_daily_drawdown',   'Current daily drawdown fraction')
 
 # ─── RUNNER & SCHEDULER ──────────────────────────────────────────────────────
 def run_all_trades(model):
