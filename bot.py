@@ -49,7 +49,7 @@ order_failures = Counter('bot_order_failures', 'Order submission failures')
 daily_drawdown = Gauge('bot_daily_drawdown',   'Current daily drawdown fraction')
 
 # ─── 2) GLOBAL CONSTANTS & CONFIGURATION ────────────────────────────────────────
-day_start_equity: Optional[Tuple[date, flota]] = None
+day_start_equity: Optional[Tuple[date, float]] = None
 daily_loss      = 0.0
 
 # ─── PATH CONFIGURATION ───────────────────────────────────────────────────────
