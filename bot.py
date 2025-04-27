@@ -864,7 +864,8 @@ if __name__ == "__main__":
     # Prometheus metrics
     start_http_server(8000)
     logger.info("Prometheus metrics server started on port 8000")
-        # Healthcheck endpoint (only if RUN_HEALTH is true)
+    
+    # Healthcheck endpoint (only if RUN_HEALTH is true)
     if RUN_HEALTH:
         threading.Thread(target=start_healthcheck, daemon=True).start()
         logger.info("Healthcheck endpoint running on port 8080")
