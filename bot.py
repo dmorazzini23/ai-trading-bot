@@ -37,7 +37,7 @@ from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 
-day_start_equit = None
+day_start_equity = None
 daily_loss      = 0.0
 
 # ─── STRUCTLOG CONFIG & “TYPED” EXCEPTIONS ──────────────────────────────────
