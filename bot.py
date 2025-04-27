@@ -15,9 +15,7 @@ from dataclasses import dataclass, field
 
 # ─── STRUCTURED LOGGING, RETRIES & RATE LIMITING ────────────────────────────
 import structlog
-from tenacity import (
-    retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-)
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from ratelimit import limits, sleep_and_retry
 
 # ─── THIRD-PARTY LIBRARIES ────────────────────────────────────────────────────
@@ -37,10 +35,6 @@ from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 
-# ─── 2) GLOBAL CONSTANTS & CONFIGURATION ────────────────────────────────────────
-day_start_equity = None
-daily_loss      = 0.0
-
 # ─── A. SENTRY ERROR TRACKING ──────────────────────────────────
 load_dotenv()
 sentry_sdk.init(
@@ -54,11 +48,9 @@ orders_total   = Counter('bot_orders_total',   'Total orders sent')
 order_failures = Counter('bot_order_failures', 'Order submission failures')
 daily_drawdown = Gauge('bot_daily_drawdown',   'Current daily drawdown fraction')
 
-# ─── STRUCTLOG CONFIG & “TYPED” EXCEPTIONS ──────────────────────────────────
-structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
-logger = structlog.get_logger()
-
-class DataFetchError(Exception):   pass
+# ─── 2) GLOBAL CONSTANTS & CONFIGURATION ────────────────────────────────────────
+day_start_equity: Optional[Tuple[date, flota]] = None
+daily_loss      = 0.0
 
 # ─── PATH CONFIGURATION ───────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -71,7 +63,34 @@ SIGNAL_WEIGHTS_FILE = abspath("signal_weights.csv")
 EQUITY_FILE         = abspath("last_equity.txt")
 PEAK_EQUITY_FILE    = abspath("peak_equity.txt")
 HALT_FLAG_PATH      = abspath("halt.flag")
-MODEL_FILE          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
+MODEL_PATH          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
+
+# ─── STRATEGY MODE CONFIGURATION ─────────────────────────────────────────────
+class BotMode:
+    def __init__(self, mode="balanced"):
+        self.mode = mode.lower()
+        self.params = self.set_parameters()
+
+    def set_parameters(self):
+        if self.mode == "conservative":
+            return {"KELLY_FRACTION": 0.3, "CONF_THRESHOLD": 0.8, "CONFIRMATION_COUNT": 3,
+                    "TAKE_PROFIT_FACTOR": 1.2, "DAILY_LOSS_LIMIT": 0.05,
+                    "CAPITAL_CAP": 0.05, "TRAILING_FACTOR": 1.5}
+        elif self.mode == "aggressive":
+            return {"KELLY_FRACTION": 0.75, "CONF_THRESHOLD": 0.6, "CONFIRMATION_COUNT": 1,
+                    "TAKE_PROFIT_FACTOR": 2.2, "DAILY_LOSS_LIMIT": 0.1,
+                    "CAPITAL_CAP": 0.1, "TRAILING_FACTOR": 2.0}
+        else:  # balanced
+            return {"KELLY_FRACTION": 0.6, "CONF_THRESHOLD": 0.65, "CONFIRMATION_COUNT": 2,
+                    "TAKE_PROFIT_FACTOR": 1.8, "DAILY_LOSS_LIMIT": 0.07,
+                    "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.8}
+    def get_config(self):
+        """Return the parameters for the current mode."""
+        return self.params
+
+BOT_MODE = os.getenv("BOT_MODE", "balanced")
+mode = BotMode(BOT_MODE)
+params = mode.get_config()
 
 # ─── CONFIGURATION ────────────────────────────────────────────────────────────
 NEWS_API_KEY             = os.getenv("NEWS_API_KEY")
@@ -92,14 +111,52 @@ ENTRY_START_OFFSET       = timedelta(minutes=15)
 ENTRY_END_OFFSET         = timedelta(minutes=30)
 REGIME_LOOKBACK          = 14
 REGIME_ATR_THRESHOLD     = 20.0
-MODEL_PATH               = MODEL_FILE
 RF_ESTIMATORS            = 225
 RF_MAX_DEPTH             = 5
 ATR_LENGTH               = 12
 CONF_THRESHOLD           = params["CONF_THRESHOLD"]
-CONFIRMATION_COUNT       = params["CONFIRMATION_COUNT"]
+CONFIRMATION_COUNT       = int(params.get("CONFIRMATION_COUNT",1))
 KELLY_FRACTION           = params["KELLY_FRACTION"]
 CAPITAL_CAP              = params["CAPITAL_CAP"]
+PACIFIC                  = ZoneInfo("America/Los_Angeles")
+
+# ─── LOAD ENV VARS & ASSERT KEYS ─────────────────────────────────────────────
+dotenv_path = os.getenv("DOTENV_PATH", ".env")
+load_dotenv(dotenv_path=dotenv_path)
+
+ALPACA_API_KEY    = os.getenv("APCA_API_KEY_ID")
+ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
+ALPACA_BASE_URL   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+
+if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+    logger.error("❌ Missing Alpaca API credentials; please check .env")
+    sys.exit(1)
+
+# ─── STRUCTLOG CONFIG & “TYPED” EXCEPTIONS ──────────────────────────────────
+structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
+logger = structlog.get_logger()
+
+class DataFetchError(Exception):   pass
+
+# ─── BOT CONTEXT ─────────────────────────────────────────────────────────────
+@dataclass
+class BotContext:
+    api: REST
+    data_fetcher: "DataFetcher"
+    signal_manager: "SignalManager"
+    trade_logger: "TradeLogger"
+    sem: asyncio.Semaphore
+    volume_threshold: int
+    entry_start_offset: timedelta
+    entry_end_offset: timedelta
+    market_open: dt_time
+    market_close: dt_time
+    regime_lookback: int
+    regime_atr_threshold: float
+    daily_loss_limit: float
+    confirmation_count: dict = field(default_factory=dict)
+    trailing_extremes: dict   = field(default_factory=dict)
+    take_profit_targets: dict = field(default_factory=dict)
 
 # ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 api = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=ALPACA_BASE_URL)
@@ -124,26 +181,6 @@ ctx = BotContext(
     regime_atr_threshold=REGIME_ATR_THRESHOLD,
     daily_loss_limit=DAILY_LOSS_LIMIT,
 )
-
-# ─── BOT CONTEXT ─────────────────────────────────────────────────────────────
-@dataclass
-class BotContext:
-    api: REST
-    data_fetcher: "DataFetcher"
-    signal_manager: "SignalManager"
-    trade_logger: "TradeLogger"
-    sem: asyncio.Semaphore
-    volume_threshold: int
-    entry_start_offset: timedelta
-    entry_end_offset: timedelta
-    market_open: dt_time
-    market_close: dt_time
-    regime_lookback: int
-    regime_atr_threshold: float
-    daily_loss_limit: float
-    confirmation_count: dict = field(default_factory=dict)
-    trailing_extremes: dict   = field(default_factory=dict)
-    take_profit_targets: dict = field(default_factory=dict)
 
 # ─── 0) DATA FETCHER WITH CACHING & VOLUME GUARD ─────────────────────────────
 class DataFetcher:
@@ -376,6 +413,8 @@ class SignalManager:
         logger.info(f"[SignalManager] {ticker} | final={final} score={score:.2f} | components: {signals}")
         return final, conf, label
 
+signal_manager = SignalManager()
+
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
 @sleep_and_retry
 @limits(calls=60, period=60)
@@ -568,6 +607,43 @@ def too_correlated(sym: str) -> bool:
     # exclude diagonal
     avg_corr = corr_matrix.where(~np.eye(len(open_syms), dtype=bool)).stack().mean()
     return avg_corr > CORRELATION_THRESHOLD
+
+def now_pacific() -> datetime:
+    """Get current time in US/Pacific"""
+    return datetime.now(PACIFIC)
+
+def is_within_entry_window(ctx: BotContext) -> bool:
+    now = now_pacific()
+    start = (datetime.combine(now.date(), ctx.market_open) + ctx.entry_start_offset).time()
+    end   = (datetime.combine(now.date(), ctx.market_close) - ctx.entry_end_offset).time()
+
+    if not (start <= now.time() <= end):
+        logger.info(f"[SKIP] entry window ({start}–{end}), now={now.time()}")
+        return False
+
+    return True
+
+def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int,float,str]:
+    sig, conf, strat = ctx.signal_manager.evaluate(df, symbol, model)
+    if sig == -1 or conf < CONF_THRESHOLD:
+        logger.info(f"[SKIP] {symbol} no/low signal (sig={sig},conf={conf:.2f})")
+        return -1, 0.0, ""
+    return sig, conf, strat
+
+def calculate_entry_size(
+    ctx: BotContext,
+    symbol: str,
+    price: float,
+    atr: float,
+    win_prob: float,
+) -> int:
+    """Wrap your Kelly sizing plus any portfolio caps."""
+    return fractional_kelly_size(
+        balance=float(ctx.api.get_account().cash),
+        price=price,
+        atr=atr,
+        win_prob=win_prob,
+    )
 
 def submit_order(
     ctx: BotContext,
@@ -976,86 +1052,6 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
     except Exception as e:
         logger.exception(f"[load_tickers] Failed to read {path}: {e}")
     return tickers
-
-def is_within_entry_window(ctx: BotContext) -> bool:
-    now = now_pacific()
-    start = (datetime.combine(now.date(), ctx.market_open) + ctx.entry_start_offset).time()
-    end   = (datetime.combine(now.date(), ctx.market_close) - ctx.entry_end_offset).time()
-
-    if not (start <= now.time() <= end):
-        logger.info(f"[SKIP] entry window ({start}–{end}), now={now.time()}")
-        return False
-
-    return True
-
-def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int,float,str]:
-    sig, conf, strat = ctx.signal_manager.evaluate(df, symbol, model)
-    if sig == -1 or conf < CONF_THRESHOLD:
-        logger.info(f"[SKIP] {symbol} no/low signal (sig={sig},conf={conf:.2f})")
-        return -1, 0.0, ""
-    return sig, conf, strat
-
-# ─── 3) ENTRY SIZER & EXECUTOR ────────────────────────────────────────────────
-def calculate_entry_size(
-    ctx: BotContext,
-    symbol: str,
-    price: float,
-    atr: float,
-    win_prob: float,
-) -> int:
-    """Wrap your Kelly sizing plus any portfolio caps."""
-    return fractional_kelly_size(
-        balance=float(ctx.api.get_account().cash),
-        price=price,
-        atr=atr,
-        win_prob=win_prob,
-    )
-
-# ─── STRATEGY MODE CONFIGURATION ─────────────────────────────────────────────
-class BotMode:
-    def __init__(self, mode="balanced"):
-        self.mode = mode.lower()
-        self.params = self.set_parameters()
-
-    def set_parameters(self):
-        if self.mode == "conservative":
-            return {"KELLY_FRACTION": 0.3, "CONF_THRESHOLD": 0.8, "CONFIRMATION_COUNT": 3,
-                    "TAKE_PROFIT_FACTOR": 1.2, "DAILY_LOSS_LIMIT": 0.05,
-                    "CAPITAL_CAP": 0.05, "TRAILING_FACTOR": 1.5}
-        elif self.mode == "aggressive":
-            return {"KELLY_FRACTION": 0.75, "CONF_THRESHOLD": 0.6, "CONFIRMATION_COUNT": 1,
-                    "TAKE_PROFIT_FACTOR": 2.2, "DAILY_LOSS_LIMIT": 0.1,
-                    "CAPITAL_CAP": 0.1, "TRAILING_FACTOR": 2.0}
-        else:  # balanced
-            return {"KELLY_FRACTION": 0.6, "CONF_THRESHOLD": 0.65, "CONFIRMATION_COUNT": 2,
-                    "TAKE_PROFIT_FACTOR": 1.8, "DAILY_LOSS_LIMIT": 0.07,
-                    "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.8}
-    def get_config(self):
-        """Return the parameters for the current mode."""
-        return self.params
-
-BOT_MODE = os.getenv("BOT_MODE", "balanced")
-mode = BotMode(BOT_MODE)
-params = mode.get_config()
-
-# ─── LOAD ENV VARS & ASSERT KEYS ─────────────────────────────────────────────
-dotenv_path = os.getenv("DOTENV_PATH", ".env")
-load_dotenv(dotenv_path=dotenv_path)
-
-ALPACA_API_KEY    = os.getenv("APCA_API_KEY_ID")
-ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
-ALPACA_BASE_URL   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-
-if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-    logger.error("❌ Missing Alpaca API credentials; please check .env")
-    sys.exit(1)
-
-# ─── TIMEZONE & MARKET-HOURS HELPERS ──────────────────────────────────────────
-PACIFIC = ZoneInfo("America/Los_Angeles")
-
-def now_pacific() -> datetime:
-    """Get current time in US/Pacific"""
-    return datetime.now(PACIFIC)
 
 # ─── HEALTHCHECK APP ──────────────────────────────────────────────────────────
 app = Flask(__name__)
