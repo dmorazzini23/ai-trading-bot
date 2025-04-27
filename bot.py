@@ -385,27 +385,53 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
     retry=retry_if_exception_type(APIError)
 )
-def submit_order(ctx: BotContext, ticker: str, qty: int, side: str,
-                 order_type_override: str = None) -> None:
+
+def submit_order(
+    ctx: BotContext,
+    ticker: str,
+    qty: int,
+    side: str,
+    order_type_override: str = None
+) -> bool:
+    # 1) Count every attempt
+    orders_total.inc()
+
     order_type = order_type_override or ORDER_TYPE
-    with ctx.sem:
-        if order_type == 'limit':
-            quote = ctx.api.get_latest_quote(ticker)
-            bid, ask = quote.bidprice, quote.askprice
-            spread = (ask - bid) if ask and bid else 0
-            limit_price = (bid + 0.25*spread) if side=='buy' else (ask - 0.25*spread)
-            ctx.api.submit_order(
-                symbol=ticker, qty=qty, side=side,
-                type='limit', limit_price=round(limit_price,2),
-                time_in_force='gtc'
-            )
-        else:
-            quote = ctx.api.get_latest_quote(ticker)
-            price = quote.askprice if side=='buy' else quote.bidprice
-            ctx.api.submit_order(
-                symbol=ticker, qty=qty, side=side,
-                type='market', time_in_force='gtc'
-            )
+    try:
+        with ctx.sem:
+            if order_type == 'limit':
+                quote = ctx.api.get_latest_quote(ticker)
+                bid, ask = quote.bidprice, quote.askprice
+                spread = (ask - bid) if ask and bid else 0
+                limit_price = (bid + 0.25 * spread) if side == 'buy' else (ask - 0.25 * spread)
+                ctx.api.submit_order(
+                    symbol=ticker,
+                    qty=qty,
+                    side=side,
+                    type='limit',
+                    limit_price=round(limit_price, 2),
+                    time_in_force='gtc'
+                )
+                expected = round(limit_price, 2)
+            else:
+                quote = ctx.api.get_latest_quote(ticker)
+                expected = quote.askprice if side == 'buy' else quote.bidprice
+                ctx.api.submit_order(
+                    symbol=ticker,
+                    qty=qty,
+                    side=side,
+                    type='market',
+                    time_in_force='gtc'
+                )
+
+        logger.info(f"[SLIPPAGE] {ticker} expected={expected} side={side} qty={qty}")
+        return True
+
+    except Exception:
+        # 2) Count any failure
+        order_failures.inc()
+        logger.exception(f"[submit_order] unexpected error for {ticker}")
+        raise  # re-raise so Sentry captures it
 
 # ─── REFACTORED SUB-FUNCTIONS ─────────────────────────────────────────────────
 def pre_trade_checks(ctx: BotContext, symbol: str, balance: float) -> bool:
@@ -678,6 +704,20 @@ ctx = BotContext(
     daily_loss_limit=DAILY_LOSS_LIMIT,
 )
 
+    # 1) Start Prometheus metrics server on port 8000
+    start_http_server(8000)
+
+    # 2) Start HTTP healthcheck endpoint in background
+    threading.Thread(target=start_healthcheck, daemon=True).start()
+    logger.info("Healthcheck endpoint running on port 8080")
+
+    # 3) Schedule end-of-day summary (fill in the function body below)
+    def daily_summary():
+        # TODO: load trades.csv → compute PnL, drawdown, win rate → post to Slack/email
+        pass
+
+    schedule.every().day.at("17:30").do(daily_summary)
+
 # ─── HEALTHCHECK APP ──────────────────────────────────────────────────────────
 app = Flask(__name__)
 @app.route("/health")
@@ -927,9 +967,10 @@ def submit_order(
         logger.warning(f"[submit_order] APIError: {e}")
         raise  # let Tenacity catch & retry
 
-    except Exception as e:
+    except Exception
+        order_failures.inc()
         logger.exception(f"[submit_order] unexpected error for {ticker}")
-        return False
+        raise
 
 def update_trailing_stop(ticker: str, price: float, qty: int,
                          atr: float, factor: float = TRAILING_FACTOR) -> str:
@@ -975,6 +1016,11 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
         "ichimoku_base","ichimoku_conv","stochrsi"
     ], inplace=True)
     return df
+
+# ─── C. PROMETHEUS METRICS ───────────────────────────────────────────────────
+orders_total   = Counter('bot_orders_total',   'Total orders sent')
+order_failures = Counter('bot_order_failures', 'Order submission failures')
+daily_drawdown = Gauge('bot_daily_drawdown',   'Current daily drawdown fraction')
 
 # ─── RUNNER & SCHEDULER ──────────────────────────────────────────────────────
 def run_all_trades(model):
@@ -1088,22 +1134,25 @@ def update_signal_weights():
 
 # ─── MAIN LOOP ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    # Ensure child processes use 'spawn' (safe on Linux & macOS)
     multiprocessing.set_start_method('spawn', force=True)
 
-    # Start HTTP healthcheck endpoint in background
+    # — Prometheus & Healthcheck —
+    start_http_server(8000)
     threading.Thread(target=start_healthcheck, daemon=True).start()
     logger.info("Healthcheck endpoint running on port 8080")
 
-    # Load or train the model
+    # — Daily summary job —
+    def daily_summary():
+        # TODO: compute & notify
+        pass
+    schedule.every().day.at("17:30").do(daily_summary)
+
+    # — Model & scheduler —
     model = load_model()
     logger.info("🚀 AI Trading Bot is live!")
-
-    # Schedule recurring tasks
     schedule.every(1).minutes.do(lambda: run_all_trades(model))
     schedule.every(6).hours.do(update_signal_weights)
 
-    # Main scheduler loop
     while True:
         try:
             schedule.run_pending()
