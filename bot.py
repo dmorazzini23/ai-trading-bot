@@ -34,12 +34,22 @@ from alpaca_trade_api.rest import REST, APIError
 from sklearn.ensemble import RandomForestClassifier
 import joblib
 from dotenv import load_dotenv
+import sentry_sdk
+from prometheus_client import start_http_server, Counter, Guage
 
 # ─── STRUCTLOG CONFIG & “TYPED” EXCEPTIONS ──────────────────────────────────
 structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
 logger = structlog.get_logger()
 
 class DataFetchError(Exception):   pass
+
+# ─── A. SENTRY ERROR TRACKING ──────────────────────────────────
+load_dotenv()
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN"),
+    traces_sample_rate=0.1,
+    environment=os.getenv("BOT_MODE", "live"),
+)
 
 # ─── BOT CONTEXT ─────────────────────────────────────────────────────────────
 @dataclass
