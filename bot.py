@@ -830,6 +830,7 @@ def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
         )
 
 def run_all_trades(model):
+    logger.info(f"🔄 run_all_trades fired at {datetime.utcnow().isoformat()}")
     if check_halt_flag():
         logger.info("Trading halted via HALT_FLAG_FILE.")
         return
