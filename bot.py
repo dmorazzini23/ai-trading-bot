@@ -5,7 +5,6 @@ import time
 import csv
 import re
 import threading
-import asyncio
 import multiprocessing
 from datetime import datetime, date, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
@@ -35,6 +34,13 @@ import joblib
 from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
+
+# for check_daily_loss()
+day_start_equity: Optional[Tuple[date, float]] = None
+daily_loss: float = 0.0
+
+# for update_trailing_stop()
+trailing_extremes: dict[str, float] = {}
 
 # ─── A. ENVIRONMENT, SENTRY & LOGGING ────────────────────────────────────────
 load_dotenv()
@@ -360,7 +366,7 @@ class SignalManager:
 data_fetcher   = DataFetcher()
 signal_manager = SignalManager()
 trade_logger   = TradeLogger()
-semaphore      = asyncio.Semaphore(4)
+semaphore      = threading.Semaphore(4)
 api            = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=ALPACA_BASE_URL)
 
 ctx = BotContext(
@@ -551,9 +557,14 @@ def is_within_entry_window(ctx: BotContext) -> bool:
     return True
 
 # ─── SIZING & EXECUTION ───────────────────────────────────────────────────────
-def fractional_kelly_size(balance, price, atr, win_prob,
-                           payoff_ratio: float = 1.5,
-                           base_frac: float = KELLY_FRACTION) -> int:
+def fractional_kelly_size(
+    balance: float,
+    price: float,
+    atr: float,
+    win_prob: float,
+    payoff_ratio: float = 1.5
+) -> int:
+    # ensure peak equity file exists & update peak if new high
     if not os.path.exists(PEAK_EQUITY_FILE):
         with portalocker.Lock(PEAK_EQUITY_FILE, 'w', timeout=1) as f:
             f.write(str(balance))
@@ -563,63 +574,95 @@ def fractional_kelly_size(balance, price, atr, win_prob,
             content = f.read().strip()
             peak_equity = float(content) if content else balance
             if balance > peak_equity:
-                f.seek(0); f.truncate(); f.write(str(balance))
+                f.seek(0)
+                f.truncate()
+                f.write(str(balance))
                 peak_equity = balance
+
+    # compute drawdown and choose fraction dynamically
     drawdown = (peak_equity - balance) / peak_equity
     if drawdown > 0.10:
         frac = 0.3
     elif drawdown > 0.05:
         frac = 0.45
     else:
-        frac = base_frac
+        frac = KELLY_FRACTION  # read the up-to-date global
+
+    # Kelly calculation
     edge = win_prob - (1 - win_prob) / payoff_ratio
     kelly = max(edge / payoff_ratio, 0) * frac
-    dr = kelly * balance
+
+    # dollars to risk
+    dollars_to_risk = kelly * balance
     if atr <= 0:
         return 1
-    raw_pos = dr / atr
+
+    # position sizing capped by ATR, capital cap, and max size
+    raw_pos = dollars_to_risk / atr
     cap_pos = (balance * CAPITAL_CAP) / price
     size = int(min(raw_pos, cap_pos, MAX_POSITION_SIZE))
+
     return max(size, 1)
 
 def submit_order(
-    ctx: BotContext, ticker: str, qty: int, side: str,
+    ctx: BotContext,
+    ticker: str,
+    qty: int,
+    side: str,
     order_type_override: str = None
 ) -> bool:
     orders_total.inc()
     order_type = order_type_override or ORDER_TYPE
+
     try:
         with ctx.sem:
+            # fetch the latest quote via SDK v2
+            quote = ctx.api.get_last_quote(ticker)
+
             if order_type == "limit":
-                quote = ctx.api.get_latest_quote(ticker)
                 bid, ask = quote.bidprice, quote.askprice
                 spread = (ask - bid) if (ask and bid) else 0
                 limit_price = (bid + 0.25 * spread) if side == "buy" else (ask - 0.25 * spread)
                 ctx.api.submit_order(
-                    symbol=ticker, qty=qty, side=side,
-                    type="limit", limit_price=round(limit_price,2), time_in_force="gtc"
+                    symbol=ticker,
+                    qty=qty,
+                    side=side,
+                    type="limit",
+                    limit_price=round(limit_price, 2),
+                    time_in_force="gtc"
                 )
-                expected = round(limit_price,2)
+                expected = round(limit_price, 2)
             else:
-                quote = ctx.api.get_latest_quote(ticker)
-                expected = quote.askprice if side=="buy" else quote.bidprice
+                # for market orders, use the quote to log expected fill
+                expected = quote.askprice if side == "buy" else quote.bidprice
                 ctx.api.submit_order(
-                    symbol=ticker, qty=qty, side=side,
-                    type="market", time_in_force="gtc"
+                    symbol=ticker,
+                    qty=qty,
+                    side=side,
+                    type="market",
+                    time_in_force="gtc"
                 )
+
         logger.info(f"[SLIPPAGE] {ticker} expected={expected} side={side} qty={qty}")
         return True
+
     except APIError as e:
+        # if requested size exceeds available, submit what we can
         m = re.search(r"requested: (\d+), available: (\d+)", str(e))
         if m and int(m.group(2)) > 0:
             available = int(m.group(2))
             ctx.api.submit_order(
-                symbol=ticker, qty=available, side=side,
-                type=order_type, time_in_force="gtc"
+                symbol=ticker,
+                qty=available,
+                side=side,
+                type=order_type,
+                time_in_force="gtc"
             )
             return True
+
         logger.warning(f"[submit_order] APIError: {e}")
         raise
+
     except Exception:
         order_failures.inc()
         logger.exception(f"[submit_order] unexpected error for {ticker}")
@@ -646,14 +689,30 @@ def calculate_entry_size(
     )
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
+    # submit the order
     submit_order(ctx, symbol, qty, side)
+
+    # get the latest price from minute data
+    df_min = ctx.data_fetcher.get_minute_df(ctx, symbol)
+    price = df_min["Close"].iloc[-1]
+
+    # log the trade entry
     ctx.trade_logger.log_entry(
-        symbol,
-        price=ctx.data_fetcher.get_minute_df(ctx, symbol)["Close"].iloc[-1],
-        qty=qty, side=side, strategy="", signal_tags=""
+        symbol=symbol,
+        price=price,
+        qty=qty,
+        side=side,
+        strategy="",
+        signal_tags=""
     )
-    price = ctx.data_fetcher.get_minute_df(ctx, symbol)["Close"].iloc[-1]
-    ctx.take_profit_targets[symbol] = price + (TAKE_PROFIT_FACTOR * (price - price/price) * (1 if side=="buy" else -1))
+
+    # set take-profit target: X% above (or below) entry price
+    if side == "buy":
+        tp = price * (1 + TAKE_PROFIT_FACTOR)
+    else:
+        tp = price * (1 - TAKE_PROFIT_FACTOR)
+
+    ctx.take_profit_targets[symbol] = tp
 
 def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
     submit_order(ctx, symbol, qty, "sell" if qty>0 else "buy")
@@ -711,24 +770,46 @@ def should_exit(ctx: BotContext, symbol: str, price: float) -> Tuple[bool,int,st
     return False, 0, ""
 
 def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
+    # only proceed if all pre‐trade checks pass
     if not should_enter(ctx, symbol, balance):
         return
-    df = prepare_indicators(ctx.data_fetcher.get_minute_df(ctx, symbol) or pd.DataFrame())
+
+    # fetch minute data and bail out if missing
+    raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
+    if raw is None or raw.empty:
+        logger.info(f"[SKIP] no minute data for {symbol}")
+        return
+
+    # prepare indicators on valid data
+    df = prepare_indicators(raw)
+
+    # get and confirm signal
     sig, conf, _ = signal_and_confirm(ctx, symbol, df, model)
     if sig == -1:
         return
+
     price, atr = df["Close"].iloc[-1], df["atr"].iloc[-1]
+
+    # check for exit conditions first
     do_exit, qty, _ = should_exit(ctx, symbol, price)
     if do_exit:
         execute_exit(ctx, symbol, qty)
         return
+
+    # size the new entry
     size = calculate_entry_size(ctx, symbol, price, atr, conf)
     if size > 0:
         try:
             pos = int(ctx.api.get_position(symbol).qty)
         except Exception:
             pos = 0
-        execute_entry(ctx, symbol, size + abs(pos), "buy" if sig==1 else "sell")
+        # submit entry order
+        execute_entry(
+            ctx,
+            symbol,
+            size + abs(pos),
+            "buy" if sig == 1 else "sell"
+        )
 
 def run_all_trades(model):
     if check_halt_flag():
@@ -811,24 +892,37 @@ def load_global_signal_performance(min_trades=10, threshold=0.4):
 
 def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+
+    # ensure our timestamp column is named "Date"
+    if df.index.name:
+        df = df.reset_index().rename(columns={df.index.name: "Date"})
+    else:
+        df = df.reset_index().rename(columns={"index": "Date"})
     df.sort_values("Date", inplace=True)
+
     df.reset_index(drop=True, inplace=True)
     df["vwap"]    = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
     df["sma_50"]  = ta.sma(df["Close"], length=50)
     df["sma_200"] = ta.sma(df["Close"], length=200)
     df["rsi"]     = ta.rsi(df["Close"], length=14)
-    macd          = ta.macd(df["Close"], fast=12, slow=26, signal=9)
+
+    macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
     df["macd"], df["macds"] = macd["MACD_12_26_9"], macd["MACDs_12_26_9"]
+
     df["atr"]     = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
+
     ich = ta.ichimoku(df["High"], df["Low"], df["Close"])
     df["ichimoku_base"], df["ichimoku_conv"] = ich["ISA_9"], ich["ISB_26"]
+
     df["stochrsi"] = ta.stochrsi(df["Close"])["STOCHRSIk_14_14_3_3"]
+
     df.ffill().bfill(inplace=True)
     df.dropna(subset=[
-        "vwap","sma_50","sma_200","rsi",
-        "macd","macds","atr",
-        "ichimoku_base","ichimoku_conv","stochrsi"
+        "vwap", "sma_50", "sma_200", "rsi",
+        "macd", "macds", "atr",
+        "ichimoku_base", "ichimoku_conv", "stochrsi"
     ], inplace=True)
+
     return df
 
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
