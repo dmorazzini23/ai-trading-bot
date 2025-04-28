@@ -72,7 +72,7 @@ MODEL_PATH          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
 
 # ─── STRATEGY MODE CONFIGURATION ─────────────────────────────────────────────
 class BotMode:
-    def __init__(self, mode="balanced"):
+    def __init__(self, mode: str = "balanced") -> None:
         self.mode = mode.lower()
         self.params = self.set_parameters()
 
@@ -161,15 +161,15 @@ class BotContext:
     regime_atr_threshold: float
     daily_loss_limit: float
     kelly_fraction: float
-    confirmation_count: dict = field(default_factory=dict)
-    trailing_extremes: dict   = field(default_factory=dict)
-    take_profit_targets: dict = field(default_factory=dict)
+    confirmation_count: Dict[str, int] = field(default_factory=dict)
+    trailing_extremes: Dict[str, float] = field(default_factory=dict)
+    take_profit_targets: Dict[str, float] = field(default_factory=dict)
 
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
-    def __init__(self):
-        self._daily_cache  : dict[str, Optional[pd.DataFrame]] = {}
-        self._minute_cache : dict[str, Optional[pd.DataFrame]] = {}
+    def __init__(self) -> None:
+        self._daily_cache  : Dict[str, Optional[pd.DataFrame]] = {}
+        self._minute_cache : Dict[str, Optional[pd.DataFrame]] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         if symbol not in self._daily_cache:
@@ -192,7 +192,7 @@ class DataFetcher:
         return self._minute_cache[symbol]
 
 class TradeLogger:
-    def __init__(self, path: str = TRADE_LOG_FILE):
+    def __init__(self, path: str = TRADE_LOG_FILE) -> None:
         self.path = path
         if not os.path.exists(path):
             with portalocker.Lock(path, 'w', timeout=1) as f:
@@ -225,7 +225,7 @@ class TradeLogger:
             w.writerow(header); w.writerows(data)
 
 class SignalManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self.momentum_lookback = 5
         self.mean_rev_lookback = 20
         self.mean_rev_zscore_threshold = 1.5
@@ -242,7 +242,7 @@ class SignalManager:
             logger.exception("Error in signal_momentum")
             return -1, 0.0, 'momentum'
 
-    # ... other signals unchanged ...
+    # (all other signal_... methods here unchanged)
 
     def load_signal_weights(self) -> Dict[str, float]:
         if not os.path.exists(SIGNAL_WEIGHTS_FILE):
@@ -310,7 +310,6 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
-# TODO: test rate-limits & retries in a real run
 @sleep_and_retry
 @limits(calls=60, period=60)
 @retry(
@@ -320,8 +319,7 @@ ctx = BotContext(
 )
 def fetch_data(ctx: BotContext, symbol: str, period: str="1d", interval: str="1m") -> pd.DataFrame:
     with ctx.sem:
-        df = yf.download(symbol, period=period, interval=interval,
-                         auto_adjust=True, progress=False)
+        df = yf.download(symbol, period=period, interval=interval, auto_adjust=True, progress=False)
     if df is None or df.empty:
         raise DataFetchError(f"No data for {symbol}")
     if hasattr(df.columns, "nlevels") and df.columns.nlevels>1:
