@@ -150,7 +150,7 @@ class BotContext:
     data_fetcher: "DataFetcher"
     signal_manager: "SignalManager"
     trade_logger: "TradeLogger"
-    sem: asyncio.Semaphore
+    sem: Semaphore
     volume_threshold: int
     entry_start_offset: timedelta
     entry_end_offset: timedelta
