@@ -13,6 +13,12 @@ from typing import Optional, Tuple
 from dataclasses import dataclass, field
 from threading import Semaphore
 
+import logging
+logging.basicConfig(
+    format="%(message)s",
+    level=logging.INFO,
+)
+
 # ─── STRUCTURED LOGGING, RETRIES & RATE LIMITING ────────────────────────────
 import structlog
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type
