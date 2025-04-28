@@ -7,10 +7,9 @@ import re
 import multiprocessing
 from datetime import datetime, date, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
-from functools import lru_cache
 from typing import Optional, Tuple
 from dataclasses import dataclass, field
-from threading import Semaphore
+from threading import Semaphore, Thread
 
 import logging
 logging.basicConfig(
@@ -290,7 +289,7 @@ class SignalManager:
 
         except Exception:
             logger.exception("Error in signal_sentiment")
-            return -1, 0.0, 'sentiment
+            return -1, 0.0, 'sentiment'
 
     def signal_regime(self, ctx: BotContext) -> Tuple[int, float, str]:
         """
@@ -410,7 +409,7 @@ class SignalManager:
 data_fetcher   = DataFetcher()
 signal_manager = SignalManager()
 trade_logger   = TradeLogger()
-semaphore      = threading.Semaphore(4)
+semaphore      = Semaphore(4)
 api            = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=ALPACA_BASE_URL)
 
 ctx = BotContext(
@@ -1023,15 +1022,15 @@ if __name__ == "__main__":
     
     # Healthcheck endpoint (only if RUN_HEALTH is true)
     if RUN_HEALTH:
-        threading.Thread(target=start_healthcheck, daemon=True).start()
+        Thread(target=start_healthcheck, daemon=True).start()
         logger.info("Healthcheck endpoint running on port 8080")
 
     # End-of-day summary
     def daily_summary():
         # TODO: load trades.csv → compute PnL, drawdown, win rate → post to Slack/email
         pass
-    schedule.every().day.at("0:30").do(daily_summary)
-    logger.info("Scheduled daily summary at 17:30")
+    schedule.every().day.at("00:30").do(daily_summary)
+    logger.info("Scheduled daily summary at 00:30 UTC (17:30 PT)")
 
     # Load model & schedule jobs
     model = load_model()
