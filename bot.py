@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from functools import lru_cache
 from typing import Optional, Tuple
 from dataclasses import dataclass, field
+from threading import Semaphore
 
 # ─── STRUCTURED LOGGING, RETRIES & RATE LIMITING ────────────────────────────
 import structlog
@@ -766,7 +767,7 @@ def pre_trade_checks(ctx: BotContext, symbol: str, balance: float) -> bool:
 def should_enter(ctx: BotContext, symbol: str, balance: float) -> bool:
     return pre_trade_checks(ctx, symbol, balance) and is_within_entry_window(ctx)
 
-def should_exit(ctx: BotContext, symbol: str, price: float) -> Tuple[bool,int,str]:
+def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple[bool,int,str]:
     try:
         pos = int(ctx.api.get_position(symbol).qty)
     except Exception:
@@ -803,7 +804,7 @@ def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
     price, atr = df["Close"].iloc[-1], df["atr"].iloc[-1]
 
     # check for exit conditions first
-    do_exit, qty, _ = should_exit(ctx, symbol, price)
+    do_exit, qty, _ = should_exit(ctx, symbol, price, atr)
     if do_exit:
         execute_exit(ctx, symbol, qty)
         return
