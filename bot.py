@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 from typing import Optional, Tuple
 from dataclasses import dataclass, field
 from threading import Semaphore, Thread
-from multiprocessing import Pool
 
 import logging
 logging.basicConfig(
@@ -42,7 +41,6 @@ from prometheus_client import start_http_server, Counter, Gauge
 
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
-daily_loss: float = 0.0
 
 # ─── A. ENVIRONMENT, SENTRY & LOGGING ────────────────────────────────────────
 load_dotenv()
@@ -462,7 +460,8 @@ def fetch_data(ctx: BotContext, symbol: str, period: str = "1d", interval: str =
     if hasattr(df.columns, "nlevels") and df.columns.nlevels > 1:
         df.columns = df.columns.get_level_values(0)
     df.reset_index(inplace=True)
-    df.ffill().bfill(inplace=True)
+    df.ffill(inplace=True)
+    df.bfill(inplace=True)
     return df
 
 @sleep_and_retry
@@ -529,7 +528,6 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     retry=retry_if_exception_type(APIError)
 )
 def check_daily_loss() -> bool:
-    global daily_loss, day_start_equity
     try:
         cash = float(api.get_account().cash)
     except Exception:
@@ -922,13 +920,14 @@ def run_all_trades(model):
     pairs    = [(sym, current_cash) for sym in tickers]
     pool_size = min(len(pairs), 4)
 
-    with Pool(
+    multiprocessing.set_start_method('spawn', force=True)
+    with multiprocessing.Pool(
         processes=pool_size,
         initializer=init_globals,
         initargs=(ctx, model)
     ) as pool:
         pool.map(trade_logic_worker, pairs)
-
+        
 # ─── UTILITIES ────────────────────────────────────────────────────────────────
 def load_model(path: str = MODEL_PATH):
     if os.path.exists(path):
@@ -1004,7 +1003,8 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     df["stochrsi"] = ta.stochrsi(df["Close"])["STOCHRSIk_14_14_3_3"]
 
-    df.ffill().bfill(inplace=True)
+    df.ffill(inplace=True)
+    df.bfill(inplace=True)
     df.dropna(subset=[
         "vwap", "sma_50", "sma_200", "rsi",
         "macd", "macds", "atr",
