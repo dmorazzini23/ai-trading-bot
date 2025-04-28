@@ -4,7 +4,6 @@ import sys
 import time
 import csv
 import re
-import threading
 import multiprocessing
 from datetime import datetime, date, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
@@ -26,7 +25,6 @@ from ratelimit import limits, sleep_and_retry
 
 # ─── THIRD-PARTY LIBRARIES ────────────────────────────────────────────────────
 import numpy as np
-np.NaN = np.nan
 import pandas as pd
 import pandas_ta as ta
 import yfinance as yf
@@ -170,21 +168,30 @@ class BotContext:
 
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
-    @lru_cache(maxsize=None)
-    def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        try:
-            return fetch_data(ctx, symbol, period="5d", interval="1d")
-        except DataFetchError:
-            logger.info(f"[SKIP] No daily data for {symbol}")
-            return None
+    def __init__(self):
+        # caches keyed by symbol
+        self._daily_cache  : dict[str, Optional[pd.DataFrame]] = {}
+        self._minute_cache : dict[str, Optional[pd.DataFrame]] = {}
 
-    @lru_cache(maxsize=None)
+    def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
+        if symbol not in self._daily_cache:
+            try:
+                df = fetch_data(ctx, symbol, period="5d", interval="1d")
+            except DataFetchError:
+                logger.info(f"[SKIP] No daily data for {symbol}")
+                df = None
+            self._daily_cache[symbol] = df
+        return self._daily_cache[symbol]
+
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        try:
-            return fetch_data(ctx, symbol, period="1d", interval="1m")
-        except DataFetchError:
-            logger.info(f"[SKIP] No minute data for {symbol}")
-            return None
+        if symbol not in self._minute_cache:
+            try:
+                df = fetch_data(ctx, symbol, period="1d", interval="1m")
+            except DataFetchError:
+                logger.info(f"[SKIP] No minute data for {symbol}")
+                df = None
+            self._minute_cache[symbol] = df
+        return self._minute_cache[symbol]
 
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE):
@@ -268,27 +275,45 @@ class SignalManager:
             logger.exception("Error in signal_ml")
             return -1, 0.0, 'ml'
 
-    def signal_sentiment(self, ticker):
+    def signal_sentiment(self, ctx: BotContext, ticker: str) -> Tuple[int, float, str]:
+        """
+        Returns (signal, weight, 'sentiment'):
+          • signal = sign of sentiment score
+          • weight = clipped abs(score) <= 0.2
+        """
         try:
-            val = fetch_sentiment(ticker)
-            signal = 1 if val > 0 else 0 if val < 0 else -1
+            # fetch the latest sentiment via your wrapper
+            val = fetch_sentiment(ctx, ticker)
+            sig = 1 if val > 0 else 0 if val < 0 else -1
             weight = min(abs(val), 0.2)
-            return signal, weight, 'sentiment'
+            return sig, weight, 'sentiment'
+
         except Exception:
             logger.exception("Error in signal_sentiment")
-            return -1, 0.0, 'sentiment'
+            return -1, 0.0, 'sentiment
 
-    def signal_regime(self):
+    def signal_regime(self, ctx: BotContext) -> Tuple[int, float, str]:
+        """
+        Returns (signal, weight, 'regime'):
+          • signal = 1 if volatility < threshold else 0
+          • weight hard-coded to 0.6
+        """
         try:
-            df = fetch_data("SPY", period=f"{REGIME_LOOKBACK}d", interval="1d")
+            # pull in SPY daily for regime check
+            df = fetch_data(ctx, "SPY", period=f"{ctx.regime_lookback}d", interval="1d")
             if df is None or df.empty:
                 return -1, 0.0, 'regime'
-            atr_series = ta.atr(df['High'], df['Low'], df['Close'], length=REGIME_LOOKBACK)
-            if atr_series is None or atr_series.empty or pd.isna(atr_series.iloc[-1]):
-                return -1, 0.0, 'regime'
+
+            # compute ATR over the lookback window
+            atr_series = ta.atr(df['High'], df['Low'], df['Close'], length=ctx.regime_lookback)
             atr_val = atr_series.iloc[-1]
-            signal  = 1 if atr_val < self.regime_volatility_threshold else 0
-            return signal, 0.6, 'regime'
+            if pd.isna(atr_val):
+                return -1, 0.0, 'regime'
+
+            # 1 = “low volatility” (go), 0 = “high volatility” (stop)
+            sig = 1 if atr_val < ctx.regime_atr_threshold else 0
+            return sig, 0.6, 'regime'
+
         except Exception:
             logger.exception("Error in signal_regime")
             return -1, 0.0, 'regime'
@@ -334,35 +359,50 @@ class SignalManager:
         df = pd.read_csv(SIGNAL_WEIGHTS_FILE)
         return {row['signal']: row['weight'] for _, row in df.iterrows()}
 
-    def evaluate(self, df, ticker, model):
+   def evaluate(
+        self,
+        ctx: BotContext,
+        df: pd.DataFrame,
+        ticker: str,
+        model
+    ) -> Tuple[int, float, str]:
         signals = []
         allowed = load_global_signal_performance()
+        weights = self.load_signal_weights()
+
+        # Pass ctx into the two wrappers that need it
         fns = [
             self.signal_momentum,
             self.signal_mean_reversion,
             lambda d: self.signal_ml(d, model),
-            lambda d: self.signal_sentiment(ticker),
-            lambda d: self.signal_regime(),
+            lambda d: self.signal_sentiment(ctx, ticker),
+            lambda d: self.signal_regime(ctx),
             self.signal_stochrsi,
             self.signal_obv,
-            self.signal_vsa
+            self.signal_vsa,
         ]
-        weights = self.load_signal_weights()
+
         for fn in fns:
             try:
                 s, w, lab = fn(df)
+                # skip signals not in your allowed set (if any)
                 if allowed and lab not in allowed:
                     continue
-                if s in [0, 1]:
+                # only keep buy (1) or sell (0)
+                if s in (0, 1):
                     signals.append((s, weights.get(lab, w), lab))
             except Exception:
                 continue
+
         if not signals:
             return -1, 0.0, 'no_signal'
+
+        # aggregate into a final vote + confidence
         score = sum((1 if s == 1 else -1) * w for s, w, _ in signals)
-        conf = min(abs(score), 1.0)
-        final = 1 if score > 0.5 else 0 if score < -0.5 else -1
+        conf  = min(abs(score), 1.0)
+        final = 1 if score >  0.5 else 0 if score < -0.5 else -1
         label = '+'.join(lbl for _, _, lbl in signals)
+
         logger.info(f"[SignalManager] {ticker} | final={final} score={score:.2f} | components: {signals}")
         return final, conf, label
 
@@ -675,28 +715,6 @@ def submit_order(
         logger.exception(f"[submit_order] unexpected error for {ticker}")
         raise
 
-    except APIError as e:
-        # if requested size exceeds available, submit what we can
-        m = re.search(r"requested: (\d+), available: (\d+)", str(e))
-        if m and int(m.group(2)) > 0:
-            available = int(m.group(2))
-            ctx.api.submit_order(
-                symbol=ticker,
-                qty=available,
-                side=side,
-                type=order_type,
-                time_in_force="gtc"
-            )
-            return True
-
-        logger.warning(f"[submit_order] APIError: {e}")
-        raise
-
-    except Exception:
-        order_failures.inc()
-        logger.exception(f"[submit_order] unexpected error for {ticker}")
-        raise
-
 def update_trailing_stop(
     ctx: BotContext,
     ticker: str,
@@ -767,7 +785,7 @@ def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
 
 # ─── SIGNAL & TRADE LOGIC ────────────────────────────────────────────────────
 def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int,float,str]:
-    sig, conf, strat = ctx.signal_manager.evaluate(df, symbol, model)
+    sig, conf, strat = ctx.signal_manager.evaluate(ctx, df, symbol, model)
     if sig == -1 or conf < CONF_THRESHOLD:
         logger.info(f"[SKIP] {symbol} no/low signal (sig={sig},conf={conf:.2f})")
         return -1, 0.0, ""
@@ -1012,7 +1030,7 @@ if __name__ == "__main__":
     def daily_summary():
         # TODO: load trades.csv → compute PnL, drawdown, win rate → post to Slack/email
         pass
-    schedule.every().day.at("17:30").do(daily_summary)
+    schedule.every().day.at("0:30").do(daily_summary)
     logger.info("Scheduled daily summary at 17:30")
 
     # Load model & schedule jobs
