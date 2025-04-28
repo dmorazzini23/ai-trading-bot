@@ -1,7 +1,6 @@
 # ─── STANDARD LIBRARIES ─────────────────────────────────────────────────────
 import os
 import sys
-import time
 import csv
 import re
 import multiprocessing
@@ -351,13 +350,13 @@ class SignalManager:
             logger.exception("Error in signal_vsa")
             return -1, 0.0, 'vsa'
 
-    def load_signal_weights(self):
+    def load_signal_weights(self) -> dict[str, float]:
         if not os.path.exists(SIGNAL_WEIGHTS_FILE):
             return {}
         df = pd.read_csv(SIGNAL_WEIGHTS_FILE)
         return {row['signal']: row['weight'] for _, row in df.iterrows()}
 
-   def evaluate(
+    def evaluate(
         self,
         ctx: BotContext,
         df: pd.DataFrame,
@@ -365,16 +364,15 @@ class SignalManager:
         model
     ) -> Tuple[int, float, str]:
         signals = []
-        allowed = load_global_signal_performance()
+        allowed_tags = set(load_global_signal_performance() or [])
         weights = self.load_signal_weights()
 
-        # Pass ctx into the two wrappers that need it
         fns = [
             self.signal_momentum,
             self.signal_mean_reversion,
-            lambda d: self.signal_ml(d, model),
-            lambda d: self.signal_sentiment(ctx, ticker),
-            lambda d: self.signal_regime(ctx),
+            partial(self.signal_ml, model=model),
+            partial(self.signal_sentiment, ctx, ticker),
+            partial(self.signal_regime, ctx),
             self.signal_stochrsi,
             self.signal_obv,
             self.signal_vsa,
@@ -382,20 +380,17 @@ class SignalManager:
 
         for fn in fns:
             try:
-                s, w, lab = fn(df)
-                # skip signals not in your allowed set (if any)
-                if allowed and lab not in allowed:
+                s, w, label = fn(df)
+                if allowed_tags and label not in allowed_tags:
                     continue
-                # only keep buy (1) or sell (0)
                 if s in (0, 1):
-                    signals.append((s, weights.get(lab, w), lab))
+                    signals.append((s, weights.get(label, w), label))
             except Exception:
                 continue
 
         if not signals:
             return -1, 0.0, 'no_signal'
 
-        # aggregate into a final vote + confidence
         score = sum((1 if s == 1 else -1) * w for s, w, _ in signals)
         conf  = min(abs(score), 1.0)
         final = 1 if score >  0.5 else 0 if score < -0.5 else -1
@@ -403,7 +398,7 @@ class SignalManager:
 
         logger.info(f"[SignalManager] {ticker} | final={final} score={score:.2f} | components: {signals}")
         return final, conf, label
-
+        
 # ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 data_fetcher   = DataFetcher()
 signal_manager = SignalManager()
@@ -439,8 +434,10 @@ def init_globals(ctx_arg, model_arg):
 
 def trade_logic_worker(symbol_and_cash):
     """
-    Unpickle‐safe wrapper: only symbol (str) and cash (float) get pickled.
+    Unpickle-safe wrapper: only symbol (str) and cash (float) get pickled.
     """
+    if GLOBAL_CTX is None or GLOBAL_MODEL is None:
+        raise RuntimeError("Worker globals not initialized")
     symbol, cash = symbol_and_cash
     trade_logic(GLOBAL_CTX, symbol, cash, GLOBAL_MODEL)
     
@@ -528,17 +525,20 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     retry=retry_if_exception_type(APIError)
 )
 def check_daily_loss() -> bool:
+    global day_start_equity
     try:
         cash = float(api.get_account().cash)
     except Exception:
         logger.warning("[check_daily_loss] Could not fetch account cash")
         return False
+
     today = date.today()
+    # initialize or reset on a new day
     if day_start_equity is None or day_start_equity[0] != today:
         day_start_equity = (today, cash)
-        daily_loss = 0.0
         daily_drawdown.set(0.0)
         return False
+
     loss = (day_start_equity[1] - cash) / day_start_equity[1]
     daily_drawdown.set(loss)
     return loss >= DAILY_LOSS_LIMIT
@@ -917,10 +917,9 @@ def run_all_trades(model):
         logger.error("❌ No tickers loaded; please check tickers.csv")
         return
 
-    pairs    = [(sym, current_cash) for sym in tickers]
+    pairs     = [(sym, current_cash) for sym in tickers]
     pool_size = min(len(pairs), 4)
 
-    multiprocessing.set_start_method('spawn', force=True)
     with multiprocessing.Pool(
         processes=pool_size,
         initializer=init_globals,
