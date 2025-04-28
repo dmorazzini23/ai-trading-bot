@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from typing import Optional, Tuple
 from dataclasses import dataclass, field
 from threading import Semaphore, Thread
+from multiprocessing import Pool
 
 import logging
 logging.basicConfig(
@@ -428,6 +429,23 @@ ctx = BotContext(
     daily_loss_limit=DAILY_LOSS_LIMIT,
 )
 
+# 1) module‐level slots for ctx and model
+GLOBAL_CTX   = None
+GLOBAL_MODEL = None
+
+def init_globals(ctx_arg, model_arg):
+    """Initialize the globals in each worker process."""
+    global GLOBAL_CTX, GLOBAL_MODEL
+    GLOBAL_CTX   = ctx_arg
+    GLOBAL_MODEL = model_arg
+
+def trade_logic_worker(symbol_and_cash):
+    """
+    Unpickle‐safe wrapper: only symbol (str) and cash (float) get pickled.
+    """
+    symbol, cash = symbol_and_cash
+    trade_logic(GLOBAL_CTX, symbol, cash, GLOBAL_MODEL)
+    
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
 @sleep_and_retry
 @limits(calls=60, period=60)
@@ -876,31 +894,39 @@ def run_all_trades(model):
     if check_halt_flag():
         logger.info("Trading halted via HALT_FLAG_FILE.")
         return
+
     try:
         acct = api.get_account()
         current_cash = float(acct.cash)
     except Exception:
         logger.error("Failed to retrieve account balance.")
         return
+
+    # read/write equity file as before…
     if os.path.exists(EQUITY_FILE):
         with open(EQUITY_FILE, "r") as f:
             last_cash = float(f.read().strip())
     else:
         last_cash = current_cash
+
     global KELLY_FRACTION
     KELLY_FRACTION = 0.7 if current_cash > last_cash * 1.03 else params["KELLY_FRACTION"]
     with open(EQUITY_FILE, "w") as f:
         f.write(str(current_cash))
+
+    # initialize globals for the worker processes
+    init_globals(ctx, model)
+
     tickers = load_tickers(TICKERS_FILE)
     if not tickers:
         logger.error("❌ No tickers loaded; please check tickers.csv")
         return
-    pool_size = min(len(tickers), 4)
-    with multiprocessing.Pool(pool_size) as pool:
-        for sym in tickers:
-            pool.apply_async(trade_logic, (ctx, sym, current_cash, model))
-        pool.close()
-        pool.join()
+
+    # map only simple tuples → safe to pickle
+    pairs = [(sym, current_cash) for sym in tickers]
+    pool_size = min(len(pairs), 4)
+    with Pool(processes=pool_size) as pool:
+        pool.map(trade_logic_worker, pairs)
 
 # ─── UTILITIES ────────────────────────────────────────────────────────────────
 def load_model(path: str = MODEL_PATH):
