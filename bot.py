@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from typing import Optional, Tuple
 from dataclasses import dataclass, field
 from threading import Semaphore, Thread
+from functools import partial
 
 import logging
 logging.basicConfig(
@@ -147,9 +148,9 @@ class DataFetchError(Exception):
 @dataclass
 class BotContext:
     api: REST
-    data_fetcher: "DataFetcher"
-    signal_manager: "SignalManager"
-    trade_logger: "TradeLogger"
+    data_fetcher: DataFetcher
+    signal_manager: SignalManager
+    trade_logger: TradeLogger
     sem: Semaphore
     volume_threshold: int
     entry_start_offset: timedelta
@@ -159,6 +160,7 @@ class BotContext:
     regime_lookback: int
     regime_atr_threshold: float
     daily_loss_limit: float
+    kelly_fraction: float
     confirmation_count: dict = field(default_factory=dict)
     trailing_extremes: dict   = field(default_factory=dict)
     take_profit_targets: dict = field(default_factory=dict)
@@ -411,7 +413,7 @@ ctx = BotContext(
     data_fetcher=data_fetcher,
     signal_manager=signal_manager,
     trade_logger=trade_logger,
-    sem=semaphore,
+    sem=Semaphore(4),
     volume_threshold=VOLUME_THRESHOLD,
     entry_start_offset=ENTRY_START_OFFSET,
     entry_end_offset=ENTRY_END_OFFSET,
@@ -420,6 +422,7 @@ ctx = BotContext(
     regime_lookback=REGIME_LOOKBACK,
     regime_atr_threshold=REGIME_ATR_THRESHOLD,
     daily_loss_limit=DAILY_LOSS_LIMIT,
+    kelly_fraction=KELLY_FRACTION
 )
 
 # 1) module‐level slots for ctx and model
@@ -617,6 +620,7 @@ def is_within_entry_window(ctx: BotContext) -> bool:
 
 # ─── SIZING & EXECUTION ───────────────────────────────────────────────────────
 def fractional_kelly_size(
+    ctx: BotContext,
     balance: float,
     price: float,
     atr: float,
@@ -645,7 +649,8 @@ def fractional_kelly_size(
     elif drawdown > 0.05:
         frac = 0.45
     else:
-        frac = KELLY_FRACTION  # read the up-to-date global
+        # use the dynamic fraction stored on ctx
+        frac = ctx.kelly_fraction
 
     # Kelly calculation
     edge = win_prob - (1 - win_prob) / payoff_ratio
@@ -760,8 +765,11 @@ def calculate_entry_size(
     ctx: BotContext, symbol: str, price: float, atr: float, win_prob: float
 ) -> int:
     return fractional_kelly_size(
+        ctx,
         balance=float(ctx.api.get_account().cash),
-        price=price, atr=atr, win_prob=win_prob
+        price=price,
+        atr=atr,
+        win_prob=win_prob
     )
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
@@ -887,8 +895,9 @@ def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
             "buy" if sig == 1 else "sell"
         )
 
-def run_all_trades(model):
+def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.utcnow().isoformat()}")
+
     if check_halt_flag():
         logger.info("Trading halted via HALT_FLAG_FILE.")
         return
@@ -900,15 +909,14 @@ def run_all_trades(model):
         logger.error("Failed to retrieve account balance.")
         return
 
-    # read/write equity file…
+    # update ctx.kelly_fraction instead of global
     if os.path.exists(EQUITY_FILE):
         with open(EQUITY_FILE, "r") as f:
             last_cash = float(f.read().strip())
     else:
         last_cash = current_cash
 
-    global KELLY_FRACTION
-    KELLY_FRACTION = 0.7 if current_cash > last_cash * 1.03 else params["KELLY_FRACTION"]
+    ctx.kelly_fraction = 0.7 if current_cash > last_cash * 1.03 else params["KELLY_FRACTION"]
     with open(EQUITY_FILE, "w") as f:
         f.write(str(current_cash))
 
@@ -917,15 +925,28 @@ def run_all_trades(model):
         logger.error("❌ No tickers loaded; please check tickers.csv")
         return
 
-    pairs     = [(sym, current_cash) for sym in tickers]
-    pool_size = min(len(pairs), 4)
+    # hand off to a thread pool to avoid any pickling of ctx/model
+    max_workers = min(len(tickers), 4)
+    with ThreadPoolExecutor(max_workers=max_workers) as execr:
+        futures = {
+            execr.submit(_safe_trade, ctx, sym, current_cash, model): sym
+            for sym in tickers
+        }
+        for fut in as_completed(futures):
+            sym = futures[fut]
+            try:
+                fut.result()
+            except Exception as e:
+                logger.exception(f"[Worker] error processing {sym}: {e}")
 
-    with multiprocessing.Pool(
-        processes=pool_size,
-        initializer=init_globals,
-        initargs=(ctx, model)
-    ) as pool:
-        pool.map(trade_logic_worker, pairs)
+def _safe_trade(
+    ctx: BotContext, symbol: str, balance: float, model
+) -> None:
+    """Wrap trade_logic in a catcher so one symbol failure doesn't halt the pool."""
+    try:
+        trade_logic(ctx, symbol, balance, model)
+    except Exception:
+        logger.exception(f"[trade_logic] unhandled exception for {symbol}")
         
 # ─── UTILITIES ────────────────────────────────────────────────────────────────
 def load_model(path: str = MODEL_PATH):
