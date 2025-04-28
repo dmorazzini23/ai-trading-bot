@@ -902,7 +902,7 @@ def run_all_trades(model):
         logger.error("Failed to retrieve account balance.")
         return
 
-    # read/write equity file as before…
+    # read/write equity file…
     if os.path.exists(EQUITY_FILE):
         with open(EQUITY_FILE, "r") as f:
             last_cash = float(f.read().strip())
@@ -914,18 +914,19 @@ def run_all_trades(model):
     with open(EQUITY_FILE, "w") as f:
         f.write(str(current_cash))
 
-    # initialize globals for the worker processes
-    init_globals(ctx, model)
-
     tickers = load_tickers(TICKERS_FILE)
     if not tickers:
         logger.error("❌ No tickers loaded; please check tickers.csv")
         return
 
-    # map only simple tuples → safe to pickle
-    pairs = [(sym, current_cash) for sym in tickers]
+    pairs    = [(sym, current_cash) for sym in tickers]
     pool_size = min(len(pairs), 4)
-    with Pool(processes=pool_size) as pool:
+
+    with Pool(
+        processes=pool_size,
+        initializer=init_globals,
+        initargs=(ctx, model)
+    ) as pool:
         pool.map(trade_logic_worker, pairs)
 
 # ─── UTILITIES ────────────────────────────────────────────────────────────────
