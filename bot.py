@@ -5,6 +5,7 @@ import time
 import csv
 import re
 import threading
+import asyncio
 import multiprocessing
 from datetime import datetime, date, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
@@ -38,9 +39,6 @@ from prometheus_client import start_http_server, Counter, Gauge
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
 daily_loss: float = 0.0
-
-# for update_trailing_stop()
-trailing_extremes: dict[str, float] = {}
 
 # ─── A. ENVIRONMENT, SENTRY & LOGGING ────────────────────────────────────────
 load_dotenv()
@@ -668,16 +666,30 @@ def submit_order(
         logger.exception(f"[submit_order] unexpected error for {ticker}")
         raise
 
-def update_trailing_stop(ticker: str, price: float, qty: int,
-                         atr: float, factor: float = TRAILING_FACTOR) -> str:
+def update_trailing_stop(
+    ctx: BotContext,
+    ticker: str,
+    price: float,
+    qty: int,
+    atr: float,
+    factor: float = TRAILING_FACTOR
+) -> str:
+    te = ctx.trailing_extremes
+
     if qty > 0:
-        trailing_extremes[ticker] = max(trailing_extremes.get(ticker, price), price)
-        if price < trailing_extremes[ticker] - factor * atr:
+        # record new high for a long position
+        te[ticker] = max(te.get(ticker, price), price)
+        # exit if price has fallen below the trailing stop
+        if price < te[ticker] - factor * atr:
             return "exit_long"
+
     elif qty < 0:
-        trailing_extremes[ticker] = min(trailing_extremes.get(ticker, price), price)
-        if price > trailing_extremes[ticker] + factor * atr:
+        # record new low for a short position
+        te[ticker] = min(te.get(ticker, price), price)
+        # exit if price has risen above the trailing stop
+        if price > te[ticker] + factor * atr:
             return "exit_short"
+
     return "hold"
 
 def calculate_entry_size(
@@ -762,7 +774,7 @@ def should_exit(ctx: BotContext, symbol: str, price: float) -> Tuple[bool,int,st
     tp = ctx.take_profit_targets.get(symbol)
     if pos and tp and ((pos>0 and price>=tp) or (pos<0 and price<=tp)):
         return True, int(abs(pos)*SCALING_FACTOR), "take_profit"
-    action = update_trailing_stop(symbol, price, pos)
+    action = update_trailing_stop(ctx, symbol, price, pos, atr)
     if action=="exit_long" and pos>0:
         return True, pos, "trailing_stop"
     if action=="exit_short" and pos<0:
