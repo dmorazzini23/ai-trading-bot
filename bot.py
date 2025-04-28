@@ -5,7 +5,6 @@ import time
 import csv
 import re
 import threading
-import asyncio
 import multiprocessing
 from datetime import datetime, date, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
