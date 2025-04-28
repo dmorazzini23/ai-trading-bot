@@ -148,9 +148,9 @@ class DataFetchError(Exception):
 @dataclass
 class BotContext:
     api: REST
-    data_fetcher: DataFetcher
-    signal_manager: SignalManager
-    trade_logger: TradeLogger
+    data_fetcher: 'DataFetcher'
+    signal_manager: 'SignalManager'
+    trade_logger: 'TradeLogger'
     sem: Semaphore
     volume_threshold: int
     entry_start_offset: timedelta
@@ -242,7 +242,92 @@ class SignalManager:
             logger.exception("Error in signal_momentum")
             return -1, 0.0, 'momentum'
 
-    # (all other signal_... methods here unchanged)
+    def signal_mean_reversion(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+        try:
+            ma = df['Close'].rolling(self.mean_rev_lookback).mean()
+            sd = df['Close'].rolling(self.mean_rev_lookback).std()
+            df['zscore'] = (df['Close'] - ma) / sd
+            val = df['zscore'].iloc[-1]
+            signal = (0 if val > self.mean_rev_zscore_threshold
+                      else 1 if val < -self.mean_rev_zscore_threshold
+                      else -1)
+            weight = min(abs(val)/3, 1.0)
+            return signal, weight, 'mean_reversion'
+        except Exception:
+            logger.exception("Error in signal_mean_reversion")
+            return -1, 0.0, 'mean_reversion'
+
+    def signal_ml(self, df: pd.DataFrame, model) -> Tuple[int, float, str]:
+        try:
+            feats = ['rsi','sma_50','sma_200','macd','macds','atr']
+            X = df[feats].dropna()
+            if X.empty:
+                return -1, 0.0, 'ml'
+            probs = model.predict_proba(X)
+            pred = int(probs[-1].argmax())
+            conf = float(probs[-1].max())
+            return pred, conf, 'ml'
+        except Exception:
+            logger.exception("Error in signal_ml")
+            return -1, 0.0, 'ml'
+
+    def signal_sentiment(self, ctx: BotContext, ticker: str) -> Tuple[int, float, str]:
+        try:
+            val = fetch_sentiment(ctx, ticker)
+            sig = 1 if val > 0 else 0 if val < 0 else -1
+            weight = min(abs(val), 0.2)
+            return sig, weight, 'sentiment'
+        except Exception:
+            logger.exception("Error in signal_sentiment")
+            return -1, 0.0, 'sentiment'
+
+    def signal_regime(self, ctx: BotContext) -> Tuple[int, float, str]:
+        try:
+            df = fetch_data(ctx, "SPY", period=f"{ctx.regime_lookback}d", interval="1d")
+            if df is None or df.empty:
+                return -1, 0.0, 'regime'
+            atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=ctx.regime_lookback)
+            atr_val = atr_series.iloc[-1]
+            if pd.isna(atr_val):
+                return -1, 0.0, 'regime'
+            sig = 1 if atr_val < ctx.regime_atr_threshold else 0
+            return sig, 0.6, 'regime'
+        except Exception:
+            logger.exception("Error in signal_regime")
+            return -1, 0.0, 'regime'
+
+    def signal_stochrsi(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+        try:
+            val = df['stochrsi'].iloc[-1]
+            signal = 1 if val < 0.2 else 0 if val > 0.8 else -1
+            return signal, 0.3, 'stochrsi'
+        except Exception:
+            logger.exception("Error in signal_stochrsi")
+            return -1, 0.0, 'stochrsi'
+
+    def signal_obv(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+        try:
+            obv = ta.obv(df['Close'], df['Volume'])
+            slope = np.polyfit(range(5), obv.tail(5), 1)[0]
+            signal = 1 if slope>0 else 0 if slope<0 else -1
+            weight = min(abs(slope)/1e6, 1.0)
+            return signal, weight, 'obv'
+        except Exception:
+            logger.exception("Error in signal_obv")
+            return -1, 0.0, 'obv'
+
+    def signal_vsa(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+        try:
+            body = abs(df['Close'] - df['Open'])
+            vsa = df['Volume'] * body
+            score = vsa.iloc[-1]
+            avg   = vsa.rolling(20).mean().iloc[-1]
+            signal = 1 if df['Close'].iloc[-1]>df['Open'].iloc[-1] else 0 if df['Close'].iloc[-1]<df['Open'].iloc[-1] else -1
+            weight = min(score/avg, 1.0)
+            return signal, weight, 'vsa'
+        except Exception:
+            logger.exception("Error in signal_vsa")
+            return -1, 0.0, 'vsa'
 
     def load_signal_weights(self) -> Dict[str, float]:
         if not os.path.exists(SIGNAL_WEIGHTS_FILE):
@@ -298,207 +383,6 @@ ctx = BotContext(
     signal_manager=signal_manager,
     trade_logger=trade_logger,
     sem=Semaphore(4),
-    volume_threshold=VOLUME_THRESHOLD,
-    entry_start_offset=ENTRY_START_OFFSET,
-    entry_end_offset=ENTRY_END_OFFSET,
-    market_open=MARKET_OPEN,
-    market_close=MARKET_CLOSE,
-    regime_lookback=REGIME_LOOKBACK,
-    regime_atr_threshold=REGIME_ATR_THRESHOLD,
-    daily_loss_limit=DAILY_LOSS_LIMIT,
-    kelly_fraction=params["KELLY_FRACTION"],
-)
-
-# ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
-@sleep_and_retry
-@limits(calls=60, period=60)
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    retry=retry_if_exception_type((requests.RequestException, DataFetchError))
-)
-def fetch_data(ctx: BotContext, symbol: str, period: str="1d", interval: str="1m") -> pd.DataFrame:
-    with ctx.sem:
-        df = yf.download(symbol, period=period, interval=interval, auto_adjust=True, progress=False)
-    if df is None or df.empty:
-        raise DataFetchError(f"No data for {symbol}")
-    if hasattr(df.columns, "nlevels") and df.columns.nlevels>1:
-        df.columns = df.columns.get_level_values(0)
-    df.reset_index(inplace=True)
-    df.ffill(inplace=True)
-    df.bfill(inplace=True)
-    return df
-
-    def signal_mean_reversion(self, df: pd.DataFrame) -> Tuple[int, float, str]:
-        try:
-            ma = df['Close'].rolling(self.mean_rev_lookback).mean()
-            sd = df['Close'].rolling(self.mean_rev_lookback).std()
-            df['zscore'] = (df['Close'] - ma) / sd
-            val = df['zscore'].iloc[-1]
-            signal = (0 if val > self.mean_rev_zscore_threshold
-                      else 1 if val < -self.mean_rev_zscore_threshold
-                      else -1)
-            weight = min(abs(val)/3, 1.0)
-            return signal, weight, 'mean_reversion'
-        except Exception:
-            logger.exception("Error in signal_mean_reversion")
-            return -1, 0.0, 'mean_reversion'
-
-    def signal_ml(self, df: pd.DataFrame, model) -> Tuple[int, float, str]:
-        try:
-            feats = ['rsi','sma_50','sma_200','macd','macds','atr']
-            X = df[feats].dropna()
-            if X.empty:
-                return -1, 0.0, 'ml'
-            probs = model.predict_proba(X)
-            pred = int(probs[-1].argmax())
-            conf = float(probs[-1].max())
-            return pred, conf, 'ml'
-        except Exception:
-            logger.exception("Error in signal_ml")
-            return -1, 0.0, 'ml'
-
-    def signal_sentiment(self, ctx: "BotContext", ticker: str) -> Tuple[int, float, str]:
-        try:
-            val = fetch_sentiment(ctx, ticker)
-            sig = 1 if val > 0 else 0 if val < 0 else -1
-            weight = min(abs(val), 0.2)
-            return sig, weight, 'sentiment'
-        except Exception:
-            logger.exception("Error in signal_sentiment")
-            return -1, 0.0, 'sentiment'
-
-    def signal_regime(self, ctx: "BotContext") -> Tuple[int, float, str]:
-        try:
-            df = fetch_data(ctx, "SPY", period=f"{ctx.regime_lookback}d", interval="1d")
-            if df is None or df.empty:
-                return -1, 0.0, 'regime'
-            atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=ctx.regime_lookback)
-            atr_val = atr_series.iloc[-1]
-            if pd.isna(atr_val):
-                return -1, 0.0, 'regime'
-            sig = 1 if atr_val < ctx.regime_atr_threshold else 0
-            return sig, 0.6, 'regime'
-        except Exception:
-            logger.exception("Error in signal_regime")
-            return -1, 0.0, 'regime'
-
-    def signal_stochrsi(self, df: pd.DataFrame) -> Tuple[int, float, str]:
-        try:
-            val = df['stochrsi'].iloc[-1]
-            signal = 1 if val < 0.2 else 0 if val > 0.8 else -1
-            return signal, 0.3, 'stochrsi'
-        except Exception:
-            logger.exception("Error in signal_stochrsi")
-            return -1, 0.0, 'stochrsi'
-
-    def signal_obv(self, df: pd.DataFrame) -> Tuple[int, float, str]:
-        try:
-            obv = ta.obv(df['Close'], df['Volume'])
-            slope = np.polyfit(range(5), obv.tail(5), 1)[0]
-            signal = 1 if slope>0 else 0 if slope<0 else -1
-            weight = min(abs(slope)/1e6, 1.0)
-            return signal, weight, 'obv'
-        except Exception:
-            logger.exception("Error in signal_obv")
-            return -1, 0.0, 'obv'
-
-    def signal_vsa(self, df: pd.DataFrame) -> Tuple[int, float, str]:
-        try:
-            body = abs(df['Close'] - df['Open'])
-            vsa = df['Volume'] * body
-            score = vsa.iloc[-1]
-            avg   = vsa.rolling(20).mean().iloc[-1]
-            signal = 1 if df['Close'].iloc[-1]>df['Open'].iloc[-1] else 0 if df['Close'].iloc[-1]<df['Open'].iloc[-1] else -1
-            weight = min(score/avg, 1.0)
-            return signal, weight, 'vsa'
-        except Exception:
-            logger.exception("Error in signal_vsa")
-            return -1, 0.0, 'vsa'
-
-    def load_signal_weights(self) -> dict[str, float]:
-        if not os.path.exists(SIGNAL_WEIGHTS_FILE):
-            return {}
-        df = pd.read_csv(SIGNAL_WEIGHTS_FILE)
-        return {row['signal']: row['weight'] for _, row in df.iterrows()}
-
-    def evaluate(
-        self,
-        ctx: "BotContext",
-        df: pd.DataFrame,
-        ticker: str,
-        model
-    ) -> Tuple[int, float, str]:
-        signals = []
-        allowed = set(load_global_signal_performance() or [])
-        weights = self.load_signal_weights()
-
-        fns = [
-            self.signal_momentum,
-            self.signal_mean_reversion,
-            lambda d: self.signal_ml(d, model),
-            lambda d: self.signal_sentiment(ctx, ticker),
-            lambda d: self.signal_regime(ctx),
-            self.signal_stochrsi,
-            self.signal_obv,
-            self.signal_vsa,
-        ]
-
-        for fn in fns:
-            try:
-                s, w, lab = fn(df)
-                if allowed and lab not in allowed:
-                    continue
-                if s in (0, 1):
-                    signals.append((s, weights.get(lab, w), lab))
-            except Exception:
-                continue
-
-        if not signals:
-            return -1, 0.0, 'no_signal'
-
-        score = sum((1 if s==1 else -1)*w for s, w, _ in signals)
-        conf  = min(abs(score), 1.0)
-        final = 1 if score>0.5 else 0 if score< -0.5 else -1
-        label = '+'.join(lbl for _,_,lbl in signals)
-
-        logger.info(f"[SignalManager] {ticker} | final={final} score={score:.2f} | components: {signals}")
-        return final, conf, label
-
-# ─── BOT CONTEXT ─────────────────────────────────────────────────────────────
-@dataclass
-class BotContext:
-    api: REST
-    data_fetcher: "DataFetcher"
-    signal_manager: "SignalManager"
-    trade_logger: "TradeLogger"
-    sem: Semaphore
-    volume_threshold: int
-    entry_start_offset: timedelta
-    entry_end_offset: timedelta
-    market_open: dt_time
-    market_close: dt_time
-    regime_lookback: int
-    regime_atr_threshold: float
-    daily_loss_limit: float
-    kelly_fraction: float
-    confirmation_count: dict = field(default_factory=dict)
-    trailing_extremes: dict   = field(default_factory=dict)
-    take_profit_targets: dict = field(default_factory=dict)
-
-# ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
-data_fetcher   = DataFetcher()
-signal_manager = SignalManager()
-trade_logger   = TradeLogger()
-semaphore      = Semaphore(4)
-api            = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=ALPACA_BASE_URL)
-
-ctx = BotContext(
-    api=api,
-    data_fetcher=data_fetcher,
-    signal_manager=signal_manager,
-    trade_logger=trade_logger,
-    sem=semaphore,
     volume_threshold=VOLUME_THRESHOLD,
     entry_start_offset=ENTRY_START_OFFSET,
     entry_end_offset=ENTRY_END_OFFSET,
@@ -611,11 +495,13 @@ def check_daily_loss() -> bool:
     daily_drawdown.set(loss)
     return loss>=DAILY_LOSS_LIMIT
 
+
 def check_halt_flag() -> bool:
     if not os.path.exists(HALT_FLAG_PATH):
         return False
     age = datetime.now()-datetime.fromtimestamp(os.path.getmtime(HALT_FLAG_PATH))
     return age<timedelta(hours=1)
+
 
 def within_market_hours() -> bool:
     now = now_pacific()
