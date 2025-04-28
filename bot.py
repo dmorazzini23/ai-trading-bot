@@ -620,8 +620,11 @@ def submit_order(
 
     try:
         with ctx.sem:
-            # fetch the latest quote via SDK v2
-            quote = ctx.api.get_last_quote(ticker)
+            # fetch the latest quote (handle both v1 & v2 SDKs)
+            try:
+                quote = ctx.api.get_last_quote(ticker)
+            except AttributeError:
+                quote = ctx.api.get_latest_quote(ticker)
 
             if order_type == "limit":
                 bid, ask = quote.bidprice, quote.askprice
@@ -649,6 +652,28 @@ def submit_order(
 
         logger.info(f"[SLIPPAGE] {ticker} expected={expected} side={side} qty={qty}")
         return True
+
+    except APIError as e:
+        # handle “requested vs available” case
+        m = re.search(r"requested: (\d+), available: (\d+)", str(e))
+        if m and int(m.group(2)) > 0:
+            available = int(m.group(2))
+            ctx.api.submit_order(
+                symbol=ticker,
+                qty=available,
+                side=side,
+                type=order_type,
+                time_in_force="gtc"
+            )
+            return True
+
+        logger.warning(f"[submit_order] APIError: {e}")
+        raise
+
+    except Exception:
+        order_failures.inc()
+        logger.exception(f"[submit_order] unexpected error for {ticker}")
+        raise
 
     except APIError as e:
         # if requested size exceeds available, submit what we can
