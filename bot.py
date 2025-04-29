@@ -403,21 +403,20 @@ ctx = BotContext(
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
     retry=retry_if_exception_type((requests.RequestException, DataFetchError))
 )
-def fetch_data(ctx: BotContext, symbol: str, period: str="1d", interval: str="1m") -> pd.DataFrame:
-    with ctx.sem:
-        df = yf.download(symbol, period=period, interval=interval, auto_adjust=True, progress=False)
-    if df is None or df.empty:
-        raise DataFetchError(f"No data for {symbol}")
-    if hasattr(df.columns, "nlevels") and df.columns.nlevels>1:
-        df.columns = df.columns.get_level_values(0)
-        # — ensure datetime index for pandas_ta VWAP, etc.
-        df["Date"] = pd.to_datetime(df["Date"])
-        df.set_index("Date", inplace=True)
-        # drop any rows missing High/Low/Close before TA
-        df.dropna(subset=["High","Low","Close"], inplace=True)
-    df.reset_index(inplace=True)
-    df.ffill(inplace=True)
-    df.bfill(inplace=True)
+def fetch_data(ctx, symbol, period="1mo", interval="1d") -> pd.DataFrame:
+    
+    df = yf.download(symbol, period=period, interval=interval, progress=False)
+
+    df = df.copy()
+    if df.index.name:
+        df = df.reset_index().rename(columns={df.index.name: "Date"})
+    else:
+        df = df.reset_index().rename(columns={"index": "Date"})
+    df["Date"] = pd.to_datetime(df["Date"])
+    df.set_index("Date", inplace=True)
+
+    df.dropna(subset=["High","Low","Close"], inplace=True)
+
     return df
 
 @sleep_and_retry
