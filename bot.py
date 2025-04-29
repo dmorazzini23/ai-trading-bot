@@ -377,36 +377,16 @@ ctx = BotContext(
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
     retry=retry_if_exception_type((requests.RequestException, DataFetchError))
 )
-def fetch_data(ctx, symbol, period="1mo", interval="1d") -> pd.DataFrame:
-    df = yf.download(symbol, period=period, interval=interval, progress=False)
+def fetch_data(ctx, symbols, period="1y", interval="1d"):
+    df = yf.download(symbols, period=period, interval=interval, progress=False)
 
-    # reset whatever index → “Date”
-    df = df.copy()
-    if df.index.name:
-        df = df.reset_index().rename(columns={df.index.name: "Date"})
-    else:
-        df = df.reset_index().rename(columns={"index": "Date"})
-    df["Date"] = pd.to_datetime(df["Date"])
-    df.set_index("Date", inplace=True)
-
-    log.info(f"fetch_data raw columns: {df.columns.tolist()}")
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.droplevel(1)
-        log.info(f"after collapsing MultiIndex, columns: {df.columns.tolist()}")
-
-    # drop any duplicate column names (e.g. double "Close")
-    df = df.loc[:, ~df.columns.duplicated()]
-
-    missing = [c for c in ("High","Low","Close") if c not in df.columns]
-    if missing:
-        log.error(f"fetch_data: missing required columns {missing}, got {df.columns.tolist()}")
-        raise KeyError(f"Missing data columns: {missing}")
-
-    df.dropna(subset=["High","Low","Close"], inplace=True)
-
-    # — new: drop tzinfo so we never mix tz-aware with tz-naive indexes —
-    if df.index.tzinfo is not None:
+    # drop any timezone so concat won’t complain
+    if getattr(df.index, "tz", None):
         df.index = df.index.tz_localize(None)
+
+    # flatten MultiIndex columns (e.g. ('Close','AAPL') → 'Close_AAPL')
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [f"{lvl0}_{lvl1}" for lvl0, lvl1 in df.columns]
 
     return df
     
