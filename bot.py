@@ -52,7 +52,7 @@ sentry_sdk.init(
 )
 structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
 logger = structlog.get_logger()
-log = logger
+log = logging.getLogger(__name__)
 
 # ─── C. PROMETHEUS METRICS ───────────────────────────────────────────────────
 orders_total   = Counter('bot_orders_total',   'Total orders sent')
@@ -402,9 +402,16 @@ ctx = BotContext(
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    retry=retry_if_exception_type((requests.RequestException, DataFetchError))
+    retry=retry_if_exception_type((requests.RequestException, KeyError))
 )
 def fetch_data(ctx, symbol, period="1mo", interval="1d") -> pd.DataFrame:
+    # ── clear yfinance internal cache to avoid ghost columns
+    try:
+        import yfinance.shared as _yf_shared
+        _yf_shared._DFS.clear()
+    except ImportError:
+        pass
+
     # 1. pull raw
     df = yf.download(symbol, period=period, interval=interval, progress=False)
 
@@ -420,11 +427,15 @@ def fetch_data(ctx, symbol, period="1mo", interval="1d") -> pd.DataFrame:
     # 3. debug: what really arrived?
     log.info(f"fetch_data raw columns: {df.columns.tolist()}")
 
-    # 4. if it came back as a MultiIndex (e.g. yfinance sometimes),
-    #    drop the ticker‐level so we keep the field names
+    # 4. if it came back as a MultiIndex, drop the ticker‐level
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.droplevel(1)
         log.info(f"after collapsing MultiIndex, columns: {df.columns.tolist()}")
+
+    # 4b. drop duplicate columns
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+        log.info(f"after deduplication, columns: {df.columns.tolist()}")
 
     # 5. guard before dropna
     missing = [c for c in ("High", "Low", "Close") if c not in df.columns]
@@ -965,6 +976,16 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df.sort_values("Date", inplace=True)
     df["Date"] = pd.to_datetime(df["Date"])
     df.set_index("Date", inplace=True)
+
+    # ── ensure TZ-naive index
+    if df.index.tz is not None:
+        df.index = df.index.tz_convert(None)
+
+    # ── drop duplicate columns if any
+    if df.columns.duplicated().any():
+        df = df.loc[:, ~df.columns.duplicated()]
+
+    # drop pre-TA missing
     df.dropna(subset=["High", "Low", "Close"], inplace=True)
 
     # core indicators
@@ -974,14 +995,17 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["rsi"]     = ta.rsi(df["Close"], length=14)
     macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
     df["macd"], df["macds"] = macd["MACD_12_26_9"], macd["MACDs_12_26_9"]
-    df["atr"]     = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
+    df["atr"]     = ta.atr(df["High"], df["Low"], df["Close"], length=12)
 
-    # unpack Ichimoku tuple rather than indexing by string
-    ich_conv, ich_base, ich_span_a, ich_span_b = ta.ichimoku(
-        high=df["High"], low=df["Low"], close=df["Close"]
-    )
-    df["ichimoku_base"] = ich_base
-    df["ichimoku_conv"] = ich_conv
+    # robust Ichimoku unpack
+    ich = ta.ichimoku(df["High"], df["Low"], df["Close"])
+    if isinstance(ich, tuple) and len(ich) >= 2:
+        conv, base = ich[0], ich[1]
+    else:
+        base = ich.get("ISA_9", ich.iloc[:,0])
+        conv = ich.get("ISB_26", ich.iloc[:,1])
+    df["ichimoku_base"] = base
+    df["ichimoku_conv"] = conv
 
     stoch = ta.stochrsi(df["Close"])
     df["stochrsi"] = stoch["STOCHRSIk_14_14_3_3"]
