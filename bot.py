@@ -24,6 +24,7 @@ from ratelimit import limits, sleep_and_retry
 # ─── THIRD-PARTY LIBRARIES ────────────────────────────────────────────────────
 import numpy as np
 import pandas as pd
+from numpy import nan as npNaN
 import pandas_ta as ta
 import yfinance as yf
 import requests
@@ -409,6 +410,11 @@ def fetch_data(ctx: BotContext, symbol: str, period: str="1d", interval: str="1m
         raise DataFetchError(f"No data for {symbol}")
     if hasattr(df.columns, "nlevels") and df.columns.nlevels>1:
         df.columns = df.columns.get_level_values(0)
+        # — ensure datetime index for pandas_ta VWAP, etc.
+        df["Date"] = pd.to_datetime(df["Date"])
+        df.set_index("Date", inplace=True)
+        # drop any rows missing High/Low/Close before TA
+        df.dropna(subset=["High","Low","Close"], inplace=True)
     df.reset_index(inplace=True)
     df.ffill(inplace=True)
     df.bfill(inplace=True)
@@ -873,7 +879,11 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df = df.reset_index().rename(columns={"index":"Date"})
     df.sort_values("Date",inplace=True)
-    df.reset_index(drop=True,inplace=True)
+    # — ensure datetime index for pandas_ta VWAP, etc.
+    df["Date"] = pd.to_datetime(df["Date"])
+    df.set_index("Date", inplace=True)
+    # drop any rows missing High/Low/Close before TA
+    df.dropna(subset=["High","Low","Close"], inplace=True)
 
     df["vwap"]    = ta.vwap(df["High"],df["Low"],df["Close"],df["Volume"])
     df["sma_50"]  = ta.sma(df["Close"],length=50)
@@ -893,6 +903,8 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
         "macd","macds","atr",
         "ichimoku_base","ichimoku_conv","stochrsi"
     ],inplace=True)
+
+    df.reset_index(drop=True, inplace=True)
 
     return df
 

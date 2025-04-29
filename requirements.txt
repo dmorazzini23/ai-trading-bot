@@ -1,7 +1,6 @@
 structlog>=21.5.0
 tenacity>=8.2.0
 ratelimit>=2.2.1
-numpy>=1.22.0
 pandas>=1.4.0
 pandas_ta>=0.3.14b0
 yfinance>=0.2.4
@@ -16,4 +15,3 @@ joblib>=1.2.0
 python-dotenv>=0.21.0
 sentry-sdk>=1.7.0
 prometheus-client>=0.14.1
-python>=3.9
