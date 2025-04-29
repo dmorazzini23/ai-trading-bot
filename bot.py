@@ -421,27 +421,18 @@ def fetch_data(ctx, symbol, period="1mo", interval="1d") -> pd.DataFrame:
     log.info(f"fetch_data raw columns: {df.columns.tolist()}")
 
     # 4. if it came back as a MultiIndex (e.g. yfinance sometimes),
-    #    drop the top level:
+    #    collapse to the first level (the field names)
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.droplevel(0)
-        log.info(f"after droplevel, columns: {df.columns.tolist()}")
+        df.columns = df.columns.get_level_values(0)
+        log.info(f"after collapsing MultiIndex, columns: {df.columns.tolist()}")
 
-    # 5. if your provider now prefixes with the ticker, rename back:
-    df.rename(columns={
-        f"{symbol} High": "High",
-        f"{symbol} Low":  "Low",
-        f"{symbol} Close":"Close",
-        # etc…
-    }, inplace=True)
-    log.info(f"after rename, columns: {df.columns.tolist()}")
-
-    # 6. guard before dropna
+    # 5. guard before dropna
     missing = [c for c in ("High","Low","Close") if c not in df.columns]
     if missing:
         log.error(f"fetch_data: missing required columns {missing}, got {df.columns.tolist()}")
         raise KeyError(f"Missing data columns: {missing}")
 
-    # 7. now safe to drop
+    # 6. now safe to drop
     df.dropna(subset=["High","Low","Close"], inplace=True)
 
     return df
