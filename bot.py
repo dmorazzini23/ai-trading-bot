@@ -516,19 +516,27 @@ def within_market_hours() -> bool:
     end   = datetime.combine(now.date(),MARKET_CLOSE,PACIFIC)-ENTRY_END_OFFSET
     return start<=now<=end
 
+_warned_missing_spy_columns = False
+
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))
 def check_market_regime() -> bool:
+    global _warned_missing_spy_columns
+
     df = fetch_data(ctx, "SPY", period="1mo", interval="1d")
     if df is None or df.empty:
         logger.warning("[check_market_regime] No SPY data – failing regime check")
         return False
 
-    # guard columns
-    for col in ["High", "Low", "Close"]:
-        if col not in df.columns:
-            logger.warning(f"[check_market_regime] Missing column '{col}' in SPY data")
-            return False
+    # check for all required columns at once
+    missing = [c for c in ("High", "Low", "Close") if c not in df.columns]
+    if missing:
+        if not _warned_missing_spy_columns:
+            cols = ", ".join(missing)
+            logger.warning(f"[check_market_regime] Missing column(s) {cols} in SPY data – skipping regime checks")
+            _warned_missing_spy_columns = True
+        return False
 
+    # clean up and ensure enough history
     df.dropna(subset=["High", "Low", "Close"], inplace=True)
     if len(df) < REGIME_LOOKBACK:
         logger.warning(
@@ -536,18 +544,19 @@ def check_market_regime() -> bool:
         )
         return False
 
+    # compute ATR
     try:
-        atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=REGIME_LOOKBACK)
-        atr_val = atr_series.iloc[-1]
-        if pd.isna(atr_val):
+        atr = ta.atr(df["High"], df["Low"], df["Close"], length=REGIME_LOOKBACK).iloc[-1]
+        if pd.isna(atr):
             logger.warning("[check_market_regime] ATR value is NaN – failing regime check")
             return False
     except Exception as e:
         logger.warning(f"[check_market_regime] ATR calc failed: {e}")
         return False
 
+    # volatility check
     vol = df["Close"].pct_change().std()
-    return (atr_val <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
+    return (atr <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
 
 def too_many_positions() -> bool:
     try:
