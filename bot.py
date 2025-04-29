@@ -233,7 +233,7 @@ class SignalManager:
         self.mean_rev_zscore_threshold = 1.5
         self.regime_volatility_threshold = REGIME_ATR_THRESHOLD
 
-     def signal_momentum(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+    def signal_momentum(self, df: pd.DataFrame) -> Tuple[int, float, str]:
         if df is None or len(df) <= self.momentum_lookback:
             return -1, 0.0, 'momentum'
         try:
