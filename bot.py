@@ -617,16 +617,34 @@ def too_correlated(sym: str) -> bool:
     if not os.path.exists(TRADE_LOG_FILE):
         return False
     df = pd.read_csv(TRADE_LOG_FILE)
-    open_syms = df.loc[df.exit_time=="","symbol"].unique().tolist()+[sym]
-    rets={}
+    open_syms = df.loc[df.exit_time == "", "symbol"].unique().tolist() + [sym]
+    rets = {}
     for s in open_syms:
-        d = fetch_data(ctx,s,period="3mo",interval="1d")
-        rets[s] = d["Close"].pct_change().dropna()
+        d = fetch_data(ctx, s, period="3mo", interval="1d")
+        if d is None or d.empty:
+            # skip symbols without data
+            continue
+        series = d["Close"].pct_change().dropna()
+        if len(series) > 0:
+            rets[s] = series
+
+    # need at least two symbols with data to compute correlation
+    if len(rets) < 2:
+        return False
+
+    # find the minimum length across return series
     min_len = min(len(r) for r in rets.values())
-    mat = pd.DataFrame({s:rets[s].tail(min_len) for s in open_syms})
-    corr_matrix=mat.corr().abs()
-    avg_corr = corr_matrix.where(~np.eye(len(open_syms),dtype=bool)).stack().mean()
-    return avg_corr>CORRELATION_THRESHOLD
+    if min_len < 1:
+        return False
+
+    # filter series by min_len and build DataFrame with explicit index
+    good_syms = [s for s, r in rets.items() if len(r) >= min_len]
+    idx = rets[good_syms[0]].tail(min_len).index
+    mat = pd.DataFrame({s: rets[s].tail(min_len).values for s in good_syms}, index=idx)
+    corr_matrix = mat.corr().abs()
+    # compute average off-diagonal correlation
+    avg_corr = corr_matrix.where(~np.eye(len(good_syms), dtype=bool)).stack().mean()
+    return avg_corr > CORRELATION_THRESHOLD
 
 def now_pacific() -> datetime:
     return datetime.now(PACIFIC)
@@ -939,38 +957,44 @@ def load_global_signal_performance(min_trades=10,threshold=0.4):
 
 def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+    # reset index to Date column
     if df.index.name:
-        df = df.reset_index().rename(columns={df.index.name:"Date"})
+        df = df.reset_index().rename(columns={df.index.name: "Date"})
     else:
-        df = df.reset_index().rename(columns={"index":"Date"})
-    df.sort_values("Date",inplace=True)
-    # — ensure datetime index for pandas_ta VWAP, etc.
+        df = df.reset_index().rename(columns={"index": "Date"})
+    df.sort_values("Date", inplace=True)
     df["Date"] = pd.to_datetime(df["Date"])
     df.set_index("Date", inplace=True)
-    # drop any rows missing High/Low/Close before TA
-    df.dropna(subset=["High","Low","Close"], inplace=True)
+    df.dropna(subset=["High", "Low", "Close"], inplace=True)
 
-    df["vwap"]    = ta.vwap(df["High"],df["Low"],df["Close"],df["Volume"])
-    df["sma_50"]  = ta.sma(df["Close"],length=50)
-    df["sma_200"] = ta.sma(df["Close"],length=200)
-    df["rsi"]     = ta.rsi(df["Close"],length=14)
-    macd = ta.macd(df["Close"],fast=12,slow=26,signal=9)
-    df["macd"],df["macds"] = macd["MACD_12_26_9"],macd["MACDs_12_26_9"]
-    df["atr"]     = ta.atr(df["High"],df["Low"],df["Close"],length=ATR_LENGTH)
-    ich = ta.ichimoku(df["High"],df["Low"],df["Close"])
-    df["ichimoku_base"],df["ichimoku_conv"] = ich["ISA_9"],ich["ISB_26"]
-    df["stochrsi"] = ta.stochrsi(df["Close"])["STOCHRSIk_14_14_3_3"]
+    # core indicators
+    df["vwap"]    = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
+    df["sma_50"]  = ta.sma(df["Close"], length=50)
+    df["sma_200"] = ta.sma(df["Close"], length=200)
+    df["rsi"]     = ta.rsi(df["Close"], length=14)
+    macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
+    df["macd"], df["macds"] = macd["MACD_12_26_9"], macd["MACDs_12_26_9"]
+    df["atr"]     = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
 
+    # unpack Ichimoku tuple rather than indexing by string
+    ich_conv, ich_base, ich_span_a, ich_span_b = ta.ichimoku(
+        high=df["High"], low=df["Low"], close=df["Close"]
+    )
+    df["ichimoku_base"] = ich_base
+    df["ichimoku_conv"] = ich_conv
+
+    stoch = ta.stochrsi(df["Close"])
+    df["stochrsi"] = stoch["STOCHRSIk_14_14_3_3"]
+
+    # fill and clean
     df.ffill(inplace=True)
     df.bfill(inplace=True)
     df.dropna(subset=[
         "vwap","sma_50","sma_200","rsi",
         "macd","macds","atr",
         "ichimoku_base","ichimoku_conv","stochrsi"
-    ],inplace=True)
-
+    ], inplace=True)
     df.reset_index(drop=True, inplace=True)
-
     return df
 
 def load_tickers(path: str=TICKERS_FILE) -> list[str]:
