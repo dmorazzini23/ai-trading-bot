@@ -421,22 +421,22 @@ def fetch_data(ctx, symbol, period="1mo", interval="1d") -> pd.DataFrame:
     log.info(f"fetch_data raw columns: {df.columns.tolist()}")
 
     # 4. if it came back as a MultiIndex (e.g. yfinance sometimes),
-    #    collapse to the first level (the field names)
+    #    drop the ticker‐level so we keep the field names
     if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+        df.columns = df.columns.droplevel(1)
         log.info(f"after collapsing MultiIndex, columns: {df.columns.tolist()}")
 
     # 5. guard before dropna
-    missing = [c for c in ("High","Low","Close") if c not in df.columns]
+    missing = [c for c in ("High", "Low", "Close") if c not in df.columns]
     if missing:
         log.error(f"fetch_data: missing required columns {missing}, got {df.columns.tolist()}")
         raise KeyError(f"Missing data columns: {missing}")
 
     # 6. now safe to drop
-    df.dropna(subset=["High","Low","Close"], inplace=True)
+    df.dropna(subset=["High", "Low", "Close"], inplace=True)
 
     return df
-
+    
 @sleep_and_retry
 @limits(calls=30, period=60)
 @retry(
