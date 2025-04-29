@@ -474,54 +474,43 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
         log.warning(f"get_sec_headlines({ticker}) found no 8-K entries")
     return " ".join(texts)
 
-@sleep_and_retry
-@limits(calls=30, period=60)
+@limits(calls=60, period=60)
 @retry(
     stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type(requests.RequestException)
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+    retry=retry_if_exception_type((requests.RequestException, DataFetchError))
 )
-def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
-    with ctx.sem:
-        url = (
-            f"https://newsapi.org/v2/everything?"
-            f"q={ticker}&sortBy=publishedAt&language=en"
-            f"&pageSize=5&apiKey={NEWS_API_KEY}"
-        )
-        resp = requests.get(url)
+def fetch_sentiment(ctx, ticker) -> float:
+    """
+    Fetches news sentiment for `ticker` via NewsAPI.
+    Returns a float in [-1.0, +1.0], or 0.0 on rate-limit (429).
+    """
+    url = f"https://newsapi.org/v2/everything?q={ticker}&sortBy=publishedAt&language=en&pageSize=5&apiKey={NEWSAPI_KEY}"
+    resp = requests.get(url, timeout=10)
+
+    try:
         resp.raise_for_status()
+    except requests.exceptions.HTTPError:
+        # treat 429 rate-limit as neutral sentiment
+        if resp.status_code == 429:
+            log.warning(f"fetch_sentiment({ticker}) rate-limited → returning neutral 0.0")
+            return 0.0
+        # re-raise any other HTTP error
+        raise
 
-    data = resp.json()
-    articles = data.get("articles", [])
-    log.info(f"fetch_sentiment({ticker}) ── articles returned: {len(articles)}")
+    payload = resp.json()
+    articles = payload.get("articles", [])
+    if not articles:
+        return 0.0
 
-    # 3) guard that each article has a title
-    text_parts = []
-    for a in articles:
-        title = a.get("title")
-        desc  = a.get("description", "")
-        if not title:
-            log.warning("article without title, skipping")
-            continue
-        text_parts.append(title + " " + desc)
+    # simple average of sentiment scores across headlines+descriptions
+    scores = []
+    for art in articles:
+        text = (art.get("title") or "") + ". " + (art.get("description") or "")
+        if text.strip():
+            scores.append(predict_text_sentiment(text))  # your existing NLP scorer
 
-    text = " ".join(text_parts).lower()
-    log.debug(f"combined text: {text[:200]}…")  # first 200 chars
-
-    # compute score
-    score = 0.0
-    for word,delta in [("beat",.3),("strong",.3),("record",.3)]:
-        if word in text: score += delta
-    for word,delta in [("miss",-.3),("weak",-.3),("recall",-.3)]:
-        if word in text: score += delta
-    for word,delta in [("upgrade",.2),("buy rating",.2)]:
-        if word in text: score += delta
-    for word,delta in [("downgrade",-.2),("sell rating",-.2)]:
-        if word in text: score += delta
-
-    bounded = max(min(score, 0.5), -0.5)
-    log.info(f"fetch_sentiment({ticker}) → {bounded:.2f}")
-    return bounded
+    return float(sum(scores) / len(scores)) if scores else 0.0
 
 # ─── CHECKS & GUARDS ─────────────────────────────────────────────────────────
 @sleep_and_retry
