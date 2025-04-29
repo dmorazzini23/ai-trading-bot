@@ -791,6 +791,7 @@ def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple
     return False,0,""
 
 def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
+    logger.info(f"→ trade_logic start for {symbol}")
     if not should_enter(ctx, symbol, balance):
         return
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
@@ -838,6 +839,7 @@ def run_all_trades(model) -> None:
         f.write(str(current_cash))
 
     tickers = load_tickers(TICKERS_FILE)
+    logger.info(f"✅ Loaded tickers: {tickers}")
     if not tickers:
         logger.error("❌ No tickers loaded; please check tickers.csv")
         return
