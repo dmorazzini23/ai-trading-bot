@@ -3,7 +3,7 @@ import os
 import csv
 import re
 import time
-from datetime import datetime, date, time as dt_time, timedelta
+from datetime import datetime, date, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Dict, List
 from dataclasses import dataclass, field
@@ -302,7 +302,7 @@ class SignalManager:
             logger.exception("Error in signal_regime")
             return -1, 0.0, 'regime'
 
-    def signal_stochrsi(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+   def signal_stochrsi(self, df: pd.DataFrame) -> Tuple[int, float, str]:
         try:
             if 'stochrsi' not in df or df['stochrsi'].empty:
                 return -1, 0.0, 'stochrsi'
@@ -313,15 +313,15 @@ class SignalManager:
             logger.exception("Error in signal_stochrsi")
             return -1, 0.0, 'stochrsi'
 
-    def signal_obv(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+   def signal_obv(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+        # — new: need at least two rows to compute OBV safely —
+        if len(df) < 2:
+            return -1, 0.0, 'obv'
         try:
             obv = ta.obv(df['Close'], df['Volume'])
-            last5 = obv.tail(5)
-            if len(last5) < 2:
-                return -1, 0.0, 'obv'
-            slope = np.polyfit(range(len(last5)), last5, 1)[0]
+            slope = np.polyfit(range(5), obv.tail(5), 1)[0]
             signal = 1 if slope > 0 else 0 if slope < 0 else -1
-            weight = min(abs(slope)/1e6, 1.0)
+            weight = min(abs(slope) / 1e6, 1.0)
             return signal, weight, 'obv'
         except Exception:
             logger.exception("Error in signal_obv")
@@ -426,9 +426,9 @@ def fetch_data(ctx, symbol, period="1mo", interval="1d") -> pd.DataFrame:
     # reset whatever index → “Date”
     df = df.copy()
     if df.index.name:
-        df = df.reset_index().rename(columns={df.index.name:"Date"})
+        df = df.reset_index().rename(columns={df.index.name: "Date"})
     else:
-        df = df.reset_index().rename(columns={"index":"Date"})
+        df = df.reset_index().rename(columns={"index": "Date"})
     df["Date"] = pd.to_datetime(df["Date"])
     df.set_index("Date", inplace=True)
 
@@ -446,6 +446,11 @@ def fetch_data(ctx, symbol, period="1mo", interval="1d") -> pd.DataFrame:
         raise KeyError(f"Missing data columns: {missing}")
 
     df.dropna(subset=["High","Low","Close"], inplace=True)
+
+    # — new: drop tzinfo so we never mix tz-aware with tz-naive indexes —
+    if df.index.tzinfo is not None:
+        df.index = df.index.tz_localize(None)
+
     return df
     
 @sleep_and_retry
@@ -864,7 +869,7 @@ def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
         execute_entry(ctx, symbol, size+abs(pos), "buy" if sig==1 else "sell")
 
 def run_all_trades(model) -> None:
-    logger.info(f"🔄 run_all_trades fired at {datetime.utcnow().isoformat()}")
+    logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
     if check_halt_flag():
         logger.info("Trading halted via HALT_FLAG_FILE.")
         return
