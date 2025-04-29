@@ -404,9 +404,10 @@ ctx = BotContext(
     retry=retry_if_exception_type((requests.RequestException, DataFetchError))
 )
 def fetch_data(ctx, symbol, period="1mo", interval="1d") -> pd.DataFrame:
-    
+    # 1. pull raw
     df = yf.download(symbol, period=period, interval=interval, progress=False)
 
+    # 2. reset whatever index → “Date”
     df = df.copy()
     if df.index.name:
         df = df.reset_index().rename(columns={df.index.name: "Date"})
@@ -415,6 +416,31 @@ def fetch_data(ctx, symbol, period="1mo", interval="1d") -> pd.DataFrame:
     df["Date"] = pd.to_datetime(df["Date"])
     df.set_index("Date", inplace=True)
 
+    # 3. debug: what really arrived?
+    log.info(f"fetch_data raw columns: {df.columns.tolist()}")
+
+    # 4. if it came back as a MultiIndex (e.g. yfinance sometimes),
+    #    drop the top level:
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.droplevel(0)
+        log.info(f"after droplevel, columns: {df.columns.tolist()}")
+
+    # 5. if your provider now prefixes with the ticker, rename back:
+    df.rename(columns={
+        f"{symbol} High": "High",
+        f"{symbol} Low":  "Low",
+        f"{symbol} Close":"Close",
+        # etc…
+    }, inplace=True)
+    log.info(f"after rename, columns: {df.columns.tolist()}")
+
+    # 6. guard before dropna
+    missing = [c for c in ("High","Low","Close") if c not in df.columns]
+    if missing:
+        log.error(f"fetch_data: missing required columns {missing}, got {df.columns.tolist()}")
+        raise KeyError(f"Missing data columns: {missing}")
+
+    # 7. now safe to drop
     df.dropna(subset=["High","Low","Close"], inplace=True)
 
     return df
@@ -434,15 +460,31 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
             headers={"User-Agent":"AI Trading Bot"}
         )
         r.raise_for_status()
+
     soup = BeautifulSoup(r.content, "lxml")
-    texts=[]
+
+    # 1) debug: how many <tr> rows did we find?
+    rows = soup.find_all("tr")
+    log.info(f"get_sec_headlines({ticker}) ── total <tr> rows: {len(rows)}")
+
+    texts = []
     for a in soup.find_all("a"):
         if "8-K" in a.text:
             tr = a.find_parent("tr")
-            if tr:
-                tds = tr.find_all("td")
-                if len(tds)>3:
-                    texts.append(tds[-1].get_text(strip=True))
+            if not tr:
+                log.warning("found an <a> with '8-K' but no parent <tr>")
+                continue
+
+            tds = tr.find_all("td")
+            # 2) guard: make sure the cell we want exists
+            if len(tds) < 4:
+                log.warning(f"unexpected <td> count {len(tds)} in row, skipping")
+                continue
+
+            texts.append(tds[-1].get_text(strip=True))
+
+    if not texts:
+        log.warning(f"get_sec_headlines({ticker}) found no 8-K entries")
     return " ".join(texts)
 
 @sleep_and_retry
@@ -461,18 +503,38 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
         )
         resp = requests.get(url)
         resp.raise_for_status()
-    articles = resp.json().get("articles", [])
-    text = " ".join(a["title"]+" "+a.get("description","") for a in articles).lower()
-    score=0.0
+
+    data = resp.json()
+    articles = data.get("articles", [])
+    log.info(f"fetch_sentiment({ticker}) ── articles returned: {len(articles)}")
+
+    # 3) guard that each article has a title
+    text_parts = []
+    for a in articles:
+        title = a.get("title")
+        desc  = a.get("description", "")
+        if not title:
+            log.warning("article without title, skipping")
+            continue
+        text_parts.append(title + " " + desc)
+
+    text = " ".join(text_parts).lower()
+    log.debug(f"combined text: {text[:200]}…")  # first 200 chars
+
+    # compute score
+    score = 0.0
     for word,delta in [("beat",.3),("strong",.3),("record",.3)]:
-        if word in text: score+=delta
+        if word in text: score += delta
     for word,delta in [("miss",-.3),("weak",-.3),("recall",-.3)]:
-        if word in text: score+=delta
+        if word in text: score += delta
     for word,delta in [("upgrade",.2),("buy rating",.2)]:
-        if word in text: score+=delta
+        if word in text: score += delta
     for word,delta in [("downgrade",-.2),("sell rating",-.2)]:
-        if word in text: score+=delta
-    return max(min(score,0.5),-0.5)
+        if word in text: score += delta
+
+    bounded = max(min(score, 0.5), -0.5)
+    log.info(f"fetch_sentiment({ticker}) → {bounded:.2f}")
+    return bounded
 
 # ─── CHECKS & GUARDS ─────────────────────────────────────────────────────────
 @sleep_and_retry
@@ -484,21 +546,26 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
 )
 def check_daily_loss() -> bool:
     global day_start_equity
+
     try:
-        cash = float(api.get_account().cash)
-    except Exception:
-        logger.warning("[check_daily_loss] Could not fetch account cash")
+        acct = api.get_account()
+        cash = float(acct.cash)
+        log.debug(f"account cash: {cash}")
+    except Exception as e:
+        log.warning(f"[check_daily_loss] could not fetch account cash: {e!r}")
         return False
 
     today = date.today()
-    if day_start_equity is None or day_start_equity[0]!=today:
-        day_start_equity = (today,cash)
+    if day_start_equity is None or day_start_equity[0] != today:
+        day_start_equity = (today, cash)
         daily_drawdown.set(0.0)
+        log.info(f"reset day_start_equity to {cash} on {today}")
         return False
 
-    loss = (day_start_equity[1]-cash)/day_start_equity[1]
+    loss = (day_start_equity[1] - cash) / day_start_equity[1]
     daily_drawdown.set(loss)
-    return loss>=DAILY_LOSS_LIMIT
+    log.info(f"daily drawdown is {loss:.2%}")
+    return loss >= DAILY_LOSS_LIMIT
 
 
 def check_halt_flag() -> bool:
