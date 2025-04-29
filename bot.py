@@ -236,6 +236,8 @@ class SignalManager:
     def signal_momentum(self, df: pd.DataFrame) -> Tuple[int, float, str]:
         try:
             df['momentum'] = df['Close'].pct_change(self.momentum_lookback)
+            if 'momentum' not in df or df['momentum'].empty:
+                return -1, 0.0, 'momentum'
             val = df['momentum'].iloc[-1]
             signal = 1 if val > 0 else 0 if val < 0 else -1
             weight = min(abs(val) * 10, 1.0)
@@ -249,6 +251,8 @@ class SignalManager:
             ma = df['Close'].rolling(self.mean_rev_lookback).mean()
             sd = df['Close'].rolling(self.mean_rev_lookback).std()
             df['zscore'] = (df['Close'] - ma) / sd
+            if 'zscore' not in df or df['zscore'].empty:
+                return -1, 0.0, 'mean_reversion'
             val = df['zscore'].iloc[-1]
             signal = (0 if val > self.mean_rev_zscore_threshold
                       else 1 if val < -self.mean_rev_zscore_threshold
@@ -300,6 +304,8 @@ class SignalManager:
 
     def signal_stochrsi(self, df: pd.DataFrame) -> Tuple[int, float, str]:
         try:
+            if 'stochrsi' not in df or df['stochrsi'].empty:
+                return -1, 0.0, 'stochrsi'
             val = df['stochrsi'].iloc[-1]
             signal = 1 if val < 0.2 else 0 if val > 0.8 else -1
             return signal, 0.3, 'stochrsi'
@@ -310,8 +316,11 @@ class SignalManager:
     def signal_obv(self, df: pd.DataFrame) -> Tuple[int, float, str]:
         try:
             obv = ta.obv(df['Close'], df['Volume'])
-            slope = np.polyfit(range(5), obv.tail(5), 1)[0]
-            signal = 1 if slope>0 else 0 if slope<0 else -1
+            last5 = obv.tail(5)
+            if len(last5) < 2:
+                return -1, 0.0, 'obv'
+            slope = np.polyfit(range(len(last5)), last5, 1)[0]
+            signal = 1 if slope > 0 else 0 if slope < 0 else -1
             weight = min(abs(slope)/1e6, 1.0)
             return signal, weight, 'obv'
         except Exception:
@@ -322,10 +331,17 @@ class SignalManager:
         try:
             body = abs(df['Close'] - df['Open'])
             vsa = df['Volume'] * body
+            if vsa.empty:
+                return -1, 0.0, 'vsa'
             score = vsa.iloc[-1]
-            avg   = vsa.rolling(20).mean().iloc[-1]
-            signal = 1 if df['Close'].iloc[-1]>df['Open'].iloc[-1] else 0 if df['Close'].iloc[-1]<df['Open'].iloc[-1] else -1
-            weight = min(score/avg, 1.0)
+            avg_series = vsa.rolling(20).mean()
+            avg = avg_series.iloc[-1] if not avg_series.empty else np.nan
+            if df['Close'].empty or df['Open'].empty:
+                return -1, 0.0, 'vsa'
+            signal = 1 if df['Close'].iloc[-1] > df['Open'].iloc[-1] \
+                     else 0 if df['Close'].iloc[-1] < df['Open'].iloc[-1] \
+                     else -1
+            weight = min(score/avg, 1.0) if avg and not np.isnan(avg) else 0.0
             return signal, weight, 'vsa'
         except Exception:
             logger.exception("Error in signal_vsa")
@@ -485,17 +501,19 @@ def fetch_sentiment(ctx, ticker) -> float:
     Fetches news sentiment for `ticker` via NewsAPI.
     Returns a float in [-1.0, +1.0], or 0.0 on rate-limit (429).
     """
-    url = f"https://newsapi.org/v2/everything?q={ticker}&sortBy=publishedAt&language=en&pageSize=5&apiKey={NEWSAPI_KEY}"
+    url = (
+        f"https://newsapi.org/v2/everything?"
+        f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
+        f"&apiKey={NEWS_API_KEY}"
+    )
     resp = requests.get(url, timeout=10)
 
     try:
         resp.raise_for_status()
     except requests.exceptions.HTTPError:
-        # treat 429 rate-limit as neutral sentiment
         if resp.status_code == 429:
             log.warning(f"fetch_sentiment({ticker}) rate-limited → returning neutral 0.0")
             return 0.0
-        # re-raise any other HTTP error
         raise
 
     payload = resp.json()
@@ -503,12 +521,11 @@ def fetch_sentiment(ctx, ticker) -> float:
     if not articles:
         return 0.0
 
-    # simple average of sentiment scores across headlines+descriptions
     scores = []
     for art in articles:
         text = (art.get("title") or "") + ". " + (art.get("description") or "")
         if text.strip():
-            scores.append(predict_text_sentiment(text))  # your existing NLP scorer
+            scores.append(predict_text_sentiment(text))
 
     return float(sum(scores) / len(scores)) if scores else 0.0
 
