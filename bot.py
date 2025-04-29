@@ -233,7 +233,9 @@ class SignalManager:
         self.mean_rev_zscore_threshold = 1.5
         self.regime_volatility_threshold = REGIME_ATR_THRESHOLD
 
-    def signal_momentum(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+     def signal_momentum(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+        if df is None or len(df) <= self.momentum_lookback:
+            return -1, 0.0, 'momentum'
         try:
             df['momentum'] = df['Close'].pct_change(self.momentum_lookback)
             val = df['momentum'].iloc[-1]
@@ -245,6 +247,8 @@ class SignalManager:
             return -1, 0.0, 'momentum'
 
     def signal_mean_reversion(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+        if df is None or len(df) < self.mean_rev_lookback:
+            return -1, 0.0, 'mean_reversion'
         try:
             ma = df['Close'].rolling(self.mean_rev_lookback).mean()
             sd = df['Close'].rolling(self.mean_rev_lookback).std()
@@ -259,46 +263,9 @@ class SignalManager:
             logger.exception("Error in signal_mean_reversion")
             return -1, 0.0, 'mean_reversion'
 
-    def signal_ml(self, df: pd.DataFrame, model) -> Tuple[int, float, str]:
-        try:
-            feats = ['rsi','sma_50','sma_200','macd','macds','atr']
-            X = df[feats].dropna()
-            if X.empty:
-                return -1, 0.0, 'ml'
-            probs = model.predict_proba(X)
-            pred = int(probs[-1].argmax())
-            conf = float(probs[-1].max())
-            return pred, conf, 'ml'
-        except Exception:
-            logger.exception("Error in signal_ml")
-            return -1, 0.0, 'ml'
-
-    def signal_sentiment(self, ctx: BotContext, ticker: str) -> Tuple[int, float, str]:
-        try:
-            val = fetch_sentiment(ctx, ticker)
-            sig = 1 if val > 0 else 0 if val < 0 else -1
-            weight = min(abs(val), 0.2)
-            return sig, weight, 'sentiment'
-        except Exception:
-            logger.exception("Error in signal_sentiment")
-            return -1, 0.0, 'sentiment'
-
-    def signal_regime(self, ctx: BotContext) -> Tuple[int, float, str]:
-        try:
-            df = fetch_data(ctx, "SPY", period=f"{ctx.regime_lookback}d", interval="1d")
-            if df is None or df.empty:
-                return -1, 0.0, 'regime'
-            atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=ctx.regime_lookback)
-            atr_val = atr_series.iloc[-1]
-            if pd.isna(atr_val):
-                return -1, 0.0, 'regime'
-            sig = 1 if atr_val < ctx.regime_atr_threshold else 0
-            return sig, 0.6, 'regime'
-        except Exception:
-            logger.exception("Error in signal_regime")
-            return -1, 0.0, 'regime'
-
     def signal_stochrsi(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+        if df is None or 'stochrsi' not in df or df['stochrsi'].dropna().empty:
+            return -1, 0.0, 'stochrsi'
         try:
             val = df['stochrsi'].iloc[-1]
             signal = 1 if val < 0.2 else 0 if val > 0.8 else -1
@@ -308,8 +275,12 @@ class SignalManager:
             return -1, 0.0, 'stochrsi'
 
     def signal_obv(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+        if df is None or len(df) < 6:
+            return -1, 0.0, 'obv'
         try:
             obv = ta.obv(df['Close'], df['Volume'])
+            if len(obv) < 5:
+                return -1, 0.0, 'obv'
             slope = np.polyfit(range(5), obv.tail(5), 1)[0]
             signal = 1 if slope > 0 else 0 if slope < 0 else -1
             weight = min(abs(slope)/1e6, 1.0)
@@ -319,6 +290,8 @@ class SignalManager:
             return -1, 0.0, 'obv'
 
     def signal_vsa(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+        if df is None or len(df) < 20:
+            return -1, 0.0, 'vsa'
         try:
             body = abs(df['Close'] - df['Open'])
             vsa = df['Volume'] * body
