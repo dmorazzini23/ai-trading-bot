@@ -583,20 +583,26 @@ def within_market_hours() -> bool:
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))
 def check_market_regime() -> bool:
-    df = fetch_data(ctx,"SPY",period="1mo",interval="1d")
+    df = fetch_data(ctx, "SPY", period="1mo", interval="1d")
     if df is None or df.empty:
         logger.warning("[check_market_regime] No SPY data – failing regime check")
         return False
-    for col in ["High","Low","Close"]:
+
+    # guard columns
+    for col in ["High", "Low", "Close"]:
         if col not in df.columns:
             logger.warning(f"[check_market_regime] Missing column '{col}' in SPY data")
             return False
-    df.dropna(subset=["High","Low","Close"],inplace=True)
-    if len(df)<REGIME_LOOKBACK:
-        logger.warning(f"[check_market_regime] Not enough SPY rows after cleaning: {len(df)} – need {REGIME_LOOKBACK}")
+
+    df.dropna(subset=["High", "Low", "Close"], inplace=True)
+    if len(df) < REGIME_LOOKBACK:
+        logger.warning(
+            f"[check_market_regime] Not enough SPY rows after cleaning: {len(df)} – need {REGIME_LOOKBACK}"
+        )
         return False
+
     try:
-        atr_series = ta.atr(df["High"],df["Low"],df["Close"],length=REGIME_LOOKBACK)
+        atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=REGIME_LOOKBACK)
         atr_val = atr_series.iloc[-1]
         if pd.isna(atr_val):
             logger.warning("[check_market_regime] ATR value is NaN – failing regime check")
@@ -604,8 +610,9 @@ def check_market_regime() -> bool:
     except Exception as e:
         logger.warning(f"[check_market_regime] ATR calc failed: {e}")
         return False
+
     vol = df["Close"].pct_change().std()
-    return (atr_val<=REGIME_ATR_THRESHOLD) or (vol<=0.015)
+    return (atr_val <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
 
 def too_many_positions() -> bool:
     try:
