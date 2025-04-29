@@ -52,6 +52,7 @@ sentry_sdk.init(
 )
 structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
 logger = structlog.get_logger()
+log = logger
 
 # ─── C. PROMETHEUS METRICS ───────────────────────────────────────────────────
 orders_total   = Counter('bot_orders_total',   'Total orders sent')
