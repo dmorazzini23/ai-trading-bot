@@ -952,17 +952,17 @@ def load_global_signal_performance(min_trades=10,threshold=0.4):
 
 def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    # reset index → Date column
+    # --- normalize index → Date column
     if df.index.name:
-        df = df.reset_index().rename(columns={df.index.name:"Date"})
+        df = df.reset_index().rename(columns={df.index.name: "Date"})
     else:
-        df = df.reset_index().rename(columns={"index":"Date"})
+        df = df.reset_index().rename(columns={"index": "Date"})
     df.sort_values("Date", inplace=True)
     df["Date"] = pd.to_datetime(df["Date"])
     df.set_index("Date", inplace=True)
     df.dropna(subset=["High","Low","Close"], inplace=True)
 
-    # core indicators
+    # --- core indicators
     df["vwap"]    = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
     df["sma_50"]  = ta.sma(df["Close"], length=50)
     df["sma_200"] = ta.sma(df["Close"], length=200)
@@ -971,22 +971,26 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df["macd"], df["macds"] = macd["MACD_12_26_9"], macd["MACDs_12_26_9"]
     df["atr"]     = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
 
-    # Ichimoku may return a DataFrame or a tuple
+    # --- Ichimoku: always coerce to two Series
     ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
-    if isinstance(ich, tuple) and len(ich)>=2:
-        conv = ich[0]
-        base = ich[1]
+    # if tuple-like unpack; else DataFrame
+    if isinstance(ich, tuple):
+        conv_raw, base_raw = ich[0], ich[1]
     else:
-        # DataFrame: first column is conversion line, second is base line
-        conv = ich.iloc[:, 0]
-        base = ich.iloc[:, 1]
+        conv_raw, base_raw = ich.iloc[:, 0], ich.iloc[:, 1]
+
+    # if those pieces are still DataFrames, pick their first column
+    conv = conv_raw.iloc[:,0] if isinstance(conv_raw, pd.DataFrame) else conv_raw
+    base = base_raw.iloc[:,0] if isinstance(base_raw, pd.DataFrame) else base_raw
+
     df["ichimoku_conv"] = conv
     df["ichimoku_base"] = base
 
+    # --- stochastic RSI
     stoch = ta.stochrsi(df["Close"])
     df["stochrsi"] = stoch["STOCHRSIk_14_14_3_3"]
 
-    # fill and clean
+    # --- clean up
     df.ffill(inplace=True)
     df.bfill(inplace=True)
     df.dropna(subset=[
@@ -994,7 +998,6 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
         "macd","macds","atr",
         "ichimoku_conv","ichimoku_base","stochrsi"
     ], inplace=True)
-
     df.reset_index(drop=True, inplace=True)
     return df
     
