@@ -189,20 +189,22 @@ class DataFetcher:
         return self._daily_cache[symbol]
 
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-    if symbol not in self._minute_cache:
-        try:
-            df = fetch_data(ctx, symbol, period="1d", interval="1m")
-        except DataFetchError:
-            logger.warning(f"[get_minute_df] direct {symbol} failed; retrying singleton")
+        if symbol not in self._minute_cache:
             try:
-                # break out of any batching by passing a single‐element list
-                df = yf.download([symbol], period="1d", interval="1m", progress=False)
-                df.index = df.index.tz_localize(None)
-            except Exception as e:
-                logger.warning(f"[get_minute_df] singleton fetch failed for {symbol}: {e}")
-                df = None
-        self._minute_cache[symbol] = df
-    return self._minute_cache[symbol]
+                df = fetch_data(ctx, symbol, period="1d", interval="1m")
+            except DataFetchError:
+                logger.warning(f"[get_minute_df] direct {symbol} failed; retrying singleton")
+                try:
+                    # break out of any batching by passing a single‐element list
+                    df = yf.download([symbol], period="1d", interval="1m", progress=False)
+                    df.index = df.index.tz_localize(None)
+                except Exception as e:
+                    logger.warning(f"[get_minute_df] singleton fetch failed for {symbol}: {e}")
+                    df = None
+            self._minute_cache[symbol] = df
+        return self._minute_cache[symbol]
+
+
 
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
