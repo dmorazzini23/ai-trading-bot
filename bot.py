@@ -389,7 +389,7 @@ ctx = BotContext(
 def fetch_data(ctx, symbols, period="1y", interval="1d"):
     try:
         df = yf.download(symbols, period=period, interval=interval, progress=False)
-    except YFRateLimitError as e:
+    except YfRateLimitError as e:
         logger.warning(f"[fetch_data] rate limited on {symbols}: {e}")
         # raise DataFetchError so tenacity will retry
         raise DataFetchError(f"yfinance rate limit: {e}")
