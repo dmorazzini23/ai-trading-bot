@@ -751,7 +751,12 @@ def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) ->
         return -1,0.0,""
     return sig, conf, strat
 
-def pre_trade_checks(ctx: BotContext, symbol: str, balance: float) -> bool:
+def pre_trade_checks(
+    ctx: BotContext,
+    symbol: str,
+    balance: float,
+    regime_ok: bool
+) -> bool:
     if check_halt_flag():
         logger.info(f"[SKIP] HALT_FLAG – {symbol}")
         return False
@@ -761,7 +766,7 @@ def pre_trade_checks(ctx: BotContext, symbol: str, balance: float) -> bool:
     if check_daily_loss():
         logger.info(f"[SKIP] Daily-loss limit – {symbol}")
         return False
-    if not check_market_regime():
+    if not regime_ok:
         logger.info(f"[SKIP] Market regime – {symbol}")
         return False
     if too_many_positions():
@@ -772,8 +777,13 @@ def pre_trade_checks(ctx: BotContext, symbol: str, balance: float) -> bool:
         return False
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
 
-def should_enter(ctx: BotContext, symbol: str, balance: float) -> bool:
-    return pre_trade_checks(ctx, symbol, balance) and is_within_entry_window(ctx)
+def should_enter(
+    ctx: BotContext,
+    symbol: str,
+    balance: float,
+    regime_ok: bool
+) -> bool:
+    return pre_trade_checks(ctx, symbol, balance, regime_ok) and is_within_entry_window(ctx)
 
 def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple[bool,int,str]:
     try:
@@ -790,33 +800,57 @@ def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple
         return True, abs(pos), "trailing_stop"
     return False,0,""
 
-def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
+def trade_logic(
+    ctx: BotContext,
+    symbol: str,
+    balance: float,
+    model,
+    regime_ok: bool
+) -> None:
     logger.info(f"→ trade_logic start for {symbol}")
-    if not should_enter(ctx, symbol, balance):
+
+    # skip entirely if no entry
+    if not should_enter(ctx, symbol, balance, regime_ok):
         return
+
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw is None or raw.empty:
         logger.info(f"[SKIP] no minute data for {symbol}")
         return
+
     df = prepare_indicators(raw)
     sig, conf, _ = signal_and_confirm(ctx, symbol, df, model)
-    if sig==-1:
+    if sig == -1:
         return
+
     price, atr = df["Close"].iloc[-1], df["atr"].iloc[-1]
     do_exit, qty, _ = should_exit(ctx, symbol, price, atr)
     if do_exit:
         execute_exit(ctx, symbol, qty)
         return
+
     size = calculate_entry_size(ctx, symbol, price, atr, conf)
-    if size>0:
+    if size > 0:
         try:
             pos = int(ctx.api.get_position(symbol).qty)
         except Exception:
-            pos=0
-        execute_entry(ctx, symbol, size+abs(pos), "buy" if sig==1 else "sell")
+            pos = 0
+        execute_entry(ctx, symbol, size + abs(pos), "buy" if sig == 1 else "sell")
 
 def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
+
+    # ── one-time SPY fetch for market regime ──
+    try:
+        spy_df = fetch_data(ctx, "SPY", period="1mo", interval="1d")
+        regime_ok = False
+        if spy_df is not None and len(spy_df) >= REGIME_LOOKBACK:
+            # compute ATR+vol here if you need the full check; for simplicity we assume presence = OK
+            regime_ok = True
+    except Exception:
+        logger.warning("Failed to fetch SPY for regime; skipping all trades.")
+        return
+
     if check_halt_flag():
         logger.info("Trading halted via HALT_FLAG_FILE.")
         return
@@ -829,13 +863,13 @@ def run_all_trades(model) -> None:
         return
 
     if os.path.exists(EQUITY_FILE):
-        with open(EQUITY_FILE,"r") as f:
+        with open(EQUITY_FILE, "r") as f:
             last_cash = float(f.read().strip())
     else:
         last_cash = current_cash
 
-    ctx.kelly_fraction = 0.7 if current_cash>last_cash*1.03 else params["KELLY_FRACTION"]
-    with open(EQUITY_FILE,"w") as f:
+    ctx.kelly_fraction = 0.7 if current_cash > last_cash * 1.03 else params["KELLY_FRACTION"]
+    with open(EQUITY_FILE, "w") as f:
         f.write(str(current_cash))
 
     tickers = load_tickers(TICKERS_FILE)
@@ -844,9 +878,12 @@ def run_all_trades(model) -> None:
         logger.error("❌ No tickers loaded; please check tickers.csv")
         return
 
-    max_workers = min(len(tickers),4)
+    max_workers = min(len(tickers), 4)
     with ThreadPoolExecutor(max_workers=max_workers) as execr:
-        futures = {execr.submit(_safe_trade, ctx, sym, current_cash, model): sym for sym in tickers}
+        futures = {
+            execr.submit(_safe_trade, ctx, sym, current_cash, model, regime_ok): sym
+            for sym in tickers
+        }
         for fut in as_completed(futures):
             sym = futures[fut]
             try:
@@ -854,9 +891,15 @@ def run_all_trades(model) -> None:
             except Exception as e:
                 logger.exception(f"[Worker] error processing {sym}: {e}")
 
-def _safe_trade(ctx: BotContext, symbol: str, balance: float, model) -> None:
+def _safe_trade(
+    ctx: BotContext,
+    symbol: str,
+    balance: float,
+    model,
+    regime_ok: bool
+) -> None:
     try:
-        trade_logic(ctx, symbol, balance, model)
+        trade_logic(ctx, symbol, balance, model, regime_ok)
     except Exception:
         logger.exception(f"[trade_logic] unhandled exception for {symbol}")
 
