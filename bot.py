@@ -841,44 +841,27 @@ def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
     # ── one-time SPY fetch for market regime ──
+    regime_ok = True                                       # default to True
     try:
         spy_df = fetch_data(ctx, "SPY", period="1mo", interval="1d")
-        regime_ok = False
         if spy_df is not None and len(spy_df) >= REGIME_LOOKBACK:
-            # compute ATR+vol here if you need the full check; for simplicity we assume presence = OK
+            # FULL regime test: compute ATR + vol
+            atr = ta.atr(spy_df["High"], spy_df["Low"], spy_df["Close"], length=REGIME_LOOKBACK).iloc[-1]
+            vol = spy_df["Close"].pct_change().std()
+            regime_ok = (atr <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
+        else:
+            # not enough data → treat as OK
             regime_ok = True
-    except Exception:
-        logger.warning("Failed to fetch SPY for regime; skipping all trades.")
-        return
+    except Exception as e:
+        logger.warning(f"Could not fetch SPY regime ({e!r}); proceeding anyway.")
+        regime_ok = True
 
     if check_halt_flag():
         logger.info("Trading halted via HALT_FLAG_FILE.")
         return
 
-    try:
-        acct = api.get_account()
-        current_cash = float(acct.cash)
-    except Exception:
-        logger.error("Failed to retrieve account balance.")
-        return
+    # … rest of your cash load, file I/O, etc. …
 
-    if os.path.exists(EQUITY_FILE):
-        with open(EQUITY_FILE, "r") as f:
-            last_cash = float(f.read().strip())
-    else:
-        last_cash = current_cash
-
-    ctx.kelly_fraction = 0.7 if current_cash > last_cash * 1.03 else params["KELLY_FRACTION"]
-    with open(EQUITY_FILE, "w") as f:
-        f.write(str(current_cash))
-
-    tickers = load_tickers(TICKERS_FILE)
-    logger.info(f"✅ Loaded tickers: {tickers}")
-    if not tickers:
-        logger.error("❌ No tickers loaded; please check tickers.csv")
-        return
-
-    max_workers = min(len(tickers), 4)
     with ThreadPoolExecutor(max_workers=max_workers) as execr:
         futures = {
             execr.submit(_safe_trade, ctx, sym, current_cash, model, regime_ok): sym
