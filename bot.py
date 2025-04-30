@@ -389,18 +389,16 @@ def fetch_data(ctx, symbols, period="1y", interval="1d"):
     try:
         df = yf.download(symbols, period=period, interval=interval, progress=False)
     except Exception as e:
-        # Treat any "rate limited" message as a DataFetchError for retry logic
         if "Rate limited" in str(e):
             logger.warning(f"[fetch_data] rate limited on {symbols}: {e}")
             raise DataFetchError(f"yfinance rate limit: {e}")
-        # Otherwise, re-raise
         raise
 
-    # Drop any timezone so concat won’t complain
+    # drop any timezone so concat won’t complain
     if getattr(df.index, "tz", None):
         df.index = df.index.tz_localize(None)
 
-    # Flatten MultiIndex columns (e.g. ('Close','AAPL') → 'Close_AAPL')
+    # flatten MultiIndex columns (e.g. ('Close','AAPL') → 'Close_AAPL')
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [f"{lvl0}_{lvl1}" for lvl0, lvl1 in df.columns]
 
