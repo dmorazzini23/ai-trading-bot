@@ -389,9 +389,12 @@ def fetch_data(ctx, symbols, period="1y", interval="1d"):
     try:
         df = yf.download(symbols, period=period, interval=interval, progress=False)
     except Exception as e:
-        if "Rate limited" in str(e):
-            logger.warning(f"[fetch_data] rate limited on {symbols}: {e}")
-            raise DataFetchError(f"yfinance rate limit: {e}")
+        msg = str(e)
+        if "Rate limited" in msg or "No objects to concatenate" in msg:
+            logger.warning(f"[fetch_data] yfinance error on {symbols}: {e}")
+            # wrap in DataFetchError so tenacity will retry
+            raise DataFetchError(f"yfinance error: {e}")
+        # any other error, just bubble
         raise
 
     # drop any timezone so concat won’t complain
