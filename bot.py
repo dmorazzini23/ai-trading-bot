@@ -391,16 +391,18 @@ ctx = BotContext(
 def fetch_data(ctx, symbols, period="1y", interval="1d"):
     try:
         df = yf.download(symbols, period=period, interval=interval, progress=False)
-    except YFRateLimitError as e:
-        logger.warning(f"[fetch_data] rate limited on {symbols}: {e}")
-        # wrap and re-raise so tenacity will retry
-        raise DataFetchError(f"yfinance rate limit: {e}")
+    except Exception as e:
+        msg = str(e)
+        if "Rate limited" in msg or "No objects to concatenate" in msg:
+            logger.warning(f"[fetch_data] yfinance error on {symbols}: {e}")
+            raise DataFetchError(f"yfinance error: {e}")
+        raise
 
     # drop any timezone so concat won’t complain
     if getattr(df.index, "tz", None):
         df.index = df.index.tz_localize(None)
 
-    # flatten MultiIndex columns (e.g. ('Close','AAPL') → 'Close_AAPL')
+    # flatten MultiIndex columns
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [f"{lvl0}_{lvl1}" for lvl0, lvl1 in df.columns]
 
