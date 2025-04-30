@@ -27,6 +27,7 @@ import pandas as pd
 from numpy import nan as npNaN
 import pandas_ta as ta
 import yfinance as yf
+from yfinance.shared import YFRateLimitError
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask
@@ -188,8 +189,16 @@ class DataFetcher:
             try:
                 df = fetch_data(ctx, symbol, period="1d", interval="1m")
             except DataFetchError:
-                logger.info(f"[SKIP] No minute data for {symbol}")
-                df = None
+                logger.warning(f"[get_minute_df] direct {symbol} failed; retrying singleton")
+                try:
+                    # break out of any batching by passing a single‐element list
+                    df = yf.download([symbol], period="1d", interval="1m", progress=False)
+                    # drop tz so everything remains consistent
+                    if getattr(df.index, "tz", None):
+                        df.index = df.index.tz_localize(None)
+                except Exception as e:
+                    logger.warning(f"[get_minute_df] singleton fetch failed for {symbol}: {e}")
+                    df = None
             self._minute_cache[symbol] = df
         return self._minute_cache[symbol]
 
@@ -378,7 +387,12 @@ ctx = BotContext(
     retry=retry_if_exception_type((requests.RequestException, DataFetchError))
 )
 def fetch_data(ctx, symbols, period="1y", interval="1d"):
-    df = yf.download(symbols, period=period, interval=interval, progress=False)
+    try:
+        df = yf.download(symbols, period=period, interval=interval, progress=False)
+    except YFRateLimitError as e:
+        logger.warning(f"[fetch_data] rate limited on {symbols}: {e}")
+        # raise DataFetchError so tenacity will retry
+        raise DataFetchError(f"yfinance rate limit: {e}")
 
     # drop any timezone so concat won’t complain
     if getattr(df.index, "tz", None):
@@ -389,7 +403,7 @@ def fetch_data(ctx, symbols, period="1y", interval="1d"):
         df.columns = [f"{lvl0}_{lvl1}" for lvl0, lvl1 in df.columns]
 
     return df
-    
+
 @sleep_and_retry
 @limits(calls=30, period=60)
 @retry(
