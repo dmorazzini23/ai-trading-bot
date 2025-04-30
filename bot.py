@@ -39,6 +39,11 @@ from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 
+try:
+    from yfinance.shared import YFRateLimitError
+except ImportError:
+    from yfinance._shared import YFRateLimitError
+
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
 
@@ -376,11 +381,6 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
-try:
-    from yfinance.shared import YFRateLimitError
-except ImportError:
-    from yfinance._shared import YFRateLimitError
-    
 @sleep_and_retry
 @limits(calls=60, period=60)
 @retry(
