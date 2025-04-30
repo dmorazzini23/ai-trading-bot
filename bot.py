@@ -184,20 +184,20 @@ class DataFetcher:
         return self._daily_cache[symbol]
 
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        if symbol not in self._minute_cache:
+    if symbol not in self._minute_cache:
+        try:
+            df = fetch_data(ctx, symbol, period="1d", interval="1m")
+        except DataFetchError:
+            logger.warning(f"[get_minute_df] direct {symbol} failed; retrying singleton")
             try:
-                df = fetch_data(ctx, symbol, period="1d", interval="1m")
-            except DataFetchError:
-                logger.warning(f"[get_minute_df] direct {symbol} failed; retrying singleton")
-                try:
-                    # break out of any batching by passing a single‐element list
-                    df = yf.download([symbol], period="1d", interval="1m", progress=False)
-                    df.index = df.index.tz_localize(None)
-                except Exception as e:
-                    logger.warning(f"[get_minute_df] singleton fetch failed for {symbol}: {e}")
-                    df = None
-            self._minute_cache[symbol] = df
-        return self._minute_cache[symbol]
+                # break out of any batching by passing a single‐element list
+                df = yf.download([symbol], period="1d", interval="1m", progress=False)
+                df.index = df.index.tz_localize(None)
+            except Exception as e:
+                logger.warning(f"[get_minute_df] singleton fetch failed for {symbol}: {e}")
+                df = None
+        self._minute_cache[symbol] = df
+    return self._minute_cache[symbol]
 
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
@@ -376,6 +376,11 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
+try:
+    from yfinance.shared import YFRateLimitError
+except ImportError:
+    from yfinance._shared import YFRateLimitError
+    
 @sleep_and_retry
 @limits(calls=60, period=60)
 @retry(
@@ -386,14 +391,10 @@ ctx = BotContext(
 def fetch_data(ctx, symbols, period="1y", interval="1d"):
     try:
         df = yf.download(symbols, period=period, interval=interval, progress=False)
-    except Exception as e:
-        msg = str(e)
-        if "Rate limited" in msg or "No objects to concatenate" in msg:
-            logger.warning(f"[fetch_data] yfinance error on {symbols}: {e}")
-            # wrap in DataFetchError so tenacity will retry
-            raise DataFetchError(f"yfinance error: {e}")
-        # any other error, just bubble
-        raise
+    except YFRateLimitError as e:
+        logger.warning(f"[fetch_data] rate limited on {symbols}: {e}")
+        # wrap and re-raise so tenacity will retry
+        raise DataFetchError(f"yfinance rate limit: {e}")
 
     # drop any timezone so concat won’t complain
     if getattr(df.index, "tz", None):
