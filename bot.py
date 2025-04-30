@@ -18,8 +18,6 @@ logging.basicConfig(
 
 # ─── STRUCTURED LOGGING, RETRIES & RATE LIMITING ────────────────────────────
 import structlog
-from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type
-from ratelimit import limits, sleep_and_retry
 
 # ─── THIRD-PARTY LIBRARIES ────────────────────────────────────────────────────
 import numpy as np
@@ -55,6 +53,9 @@ else:
     class YFRateLimitError(Exception):
         """Fallback for yfinance rate-limit errors."""
         pass
+
+from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type
+from ratelimit import limits, sleep_and_retry
 
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
