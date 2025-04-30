@@ -39,10 +39,21 @@ from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 
-try:
-    from yfinance.shared import YFRateLimitError
-except ImportError:
-    from yfinance._shared import YFRateLimitError
+for _mod in (
+    "yfinance.shared",
+    "yfinance._shared",
+    "yfinance.base",   # older releases
+    "yfinance.utils",  # some versions
+):
+    try:
+        YFRateLimitError = __import__(_mod, fromlist=["YFRateLimitError"]).YFRateLimitError
+        break
+    except (ImportError, AttributeError):
+        continue
+else:
+    class YFRateLimitError(Exception):
+        """Fallback for yfinance rate-limit errors."""
+        pass
 
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
