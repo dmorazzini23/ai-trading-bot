@@ -1073,10 +1073,13 @@ def health() -> str:
     return "OK", 200
 
 def start_healthcheck() -> None:
+    # allow overriding via ENV so you don’t have to re-deploy to pick a new port
+    port = int(os.getenv("HEALTHCHECK_PORT", "8080"))
     try:
-        app.run(host="0.0.0.0", port=8080)
-    except Exception:
-        logger.exception("Healthcheck server failed")
+        app.run(host="0.0.0.0", port=port)
+    except OSError as e:
+        # catch “Address already in use” and just skip spinning up Flask
+        logger.warning(f"Healthcheck port {port} in use: {e}. Skipping health-endpoint.")
 
 if __name__ == "__main__":
     start_http_server(8000)
