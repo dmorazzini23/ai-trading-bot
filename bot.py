@@ -42,8 +42,8 @@ from prometheus_client import start_http_server, Counter, Gauge
 for _mod in (
     "yfinance.shared",
     "yfinance._shared",
-    "yfinance.base",   # older releases
-    "yfinance.utils",  # some versions
+    "yfinance.base",
+    "yfinance.utils",
 ):
     try:
         YFRateLimitError = __import__(_mod, fromlist=["YFRateLimitError"]).YFRateLimitError
@@ -51,6 +51,7 @@ for _mod in (
     except (ImportError, AttributeError):
         continue
 else:
+    # fallback if we still can’t find it
     class YFRateLimitError(Exception):
         """Fallback for yfinance rate-limit errors."""
         pass
