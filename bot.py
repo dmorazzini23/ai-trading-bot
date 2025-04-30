@@ -27,7 +27,6 @@ import pandas as pd
 from numpy import nan as npNaN
 import pandas_ta as ta
 import yfinance as yf
-from yfinance.shared import YFRateLimitError
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask
@@ -389,10 +388,13 @@ ctx = BotContext(
 def fetch_data(ctx, symbols, period="1y", interval="1d"):
     try:
         df = yf.download(symbols, period=period, interval=interval, progress=False)
-    except YfRateLimitError as e:
-        logger.warning(f"[fetch_data] rate limited on {symbols}: {e}")
-        # raise DataFetchError so tenacity will retry
-        raise DataFetchError(f"yfinance rate limit: {e}")
+    except Exception as e:
+        # catch yfinance rate-limit errors by message
+        if "Rate limited" in str(e):
+            logger.warning(f"[fetch_data] rate limited on {symbols}: {e}")
+            raise DataFetchError(f"yfinance rate limit: {e}")
+        # re-raise anything else
+        raise
 
     # drop any timezone so concat won’t complain
     if getattr(df.index, "tz", None):
