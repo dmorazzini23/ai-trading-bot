@@ -192,9 +192,7 @@ class DataFetcher:
                 try:
                     # break out of any batching by passing a single‐element list
                     df = yf.download([symbol], period="1d", interval="1m", progress=False)
-                    # drop tz so everything remains consistent
-                    if getattr(df.index, "tz", None):
-                        df.index = df.index.tz_localize(None)
+                    df.index = df.index.tz_localize(None)
                 except Exception as e:
                     logger.warning(f"[get_minute_df] singleton fetch failed for {symbol}: {e}")
                     df = None
