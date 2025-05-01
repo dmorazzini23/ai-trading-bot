@@ -121,6 +121,28 @@ class BotMode:
     def get_config(self) -> Dict[str, float]:
         return self.params
 
+    def _download_batch(self,
+                        symbols: list[str],
+                        period: str,
+                        interval: str,
+                       ) -> pd.DataFrame | None:
+        """
+        Single‐point download of up to N symbols.
+        Handles empty‐DF and rate‐limit warnings.
+        """
+        try:
+            df = yff.fetch(symbols, period=period, interval=interval)
+            if df is not None and df.empty:
+                logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
+                return None
+            # drop timezone info if present
+            if df is not None and getattr(df.index, "tz", None):
+                df.index = df.index.tz_localize(None)
+            return df
+        except YFRateLimitError as e:
+            logger.warning(f"[_download_batch] rate-limited on {symbols}: {e}")
+            return None
+
 BOT_MODE = os.getenv("BOT_MODE", "balanced")
 mode     = BotMode(BOT_MODE)
 params   = mode.get_config()
@@ -482,9 +504,9 @@ def fetch_data(self, symbols, period, interval):
     dfs = []
     # chunk into groups of 3
     for batch in chunked(symbols, 3):
-        df = self._download_batch(batch, period, interval)
+        df = ctx._download_batch(batch, period, interval)
         if df is not None:
-            dfs.append(df)
+            out = pd.concat([out, df], axis=1)
         # sleep a little between batches
         time.sleep(random.uniform(2, 5))
     return pd.concat(dfs, axis=1) if dfs else None
