@@ -204,8 +204,8 @@ class YFinanceFetcher:
         self._timestamps.append(now)
 
     @retry(
-        stop=stop_after_attempt(8),
-        wait=wait_exponential(multiplier=5, min=5, max=600) + wait_random(5, 20),
+        stop=stop_after_attempt(6),
+        wait=wait_exponential(multiplier=60, min=60, max=900) + wait_random(5, 30),
         retry=retry_if_exception_type(YFRateLimitError)
     )
     def _download_batch(self, symbols: list[str], period: str, interval: str) -> pd.DataFrame:
@@ -247,6 +247,7 @@ class DataFetcher:
     def __init__(self) -> None:
         self._daily_cache: Dict[str, Optional[pd.DataFrame]] = {}
         self._minute_cache: Dict[str, Optional[pd.DataFrame]] = {}
+        self._minute_timestamps : Dict[str, datetime] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         if symbol not in self._daily_cache:
@@ -266,32 +267,39 @@ class DataFetcher:
         return self._daily_cache[symbol]
 
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        if symbol not in self._minute_cache:
+        # if we fetched this < 1 min ago, just return it
+        last = self._minute_timestamps.get(symbol)
+        if last and last > datetime.utcnow() - timedelta(minutes=1):
+            return self._minute_cache.get(symbol)
+
+        # otherwise go fetch
+        try:
+            df = yff.fetch(symbol, period="1d", interval="1m")
+            if df is not None and df.empty:
+                logger.warning(f"[YFF] fetched empty DataFrame for {symbol}")
+                df = None
+        except YFRateLimitError as e:
+            logger.warning(f"[get_minute_df] rate‐limited on {symbol}, retrying singleton: {e}")
             try:
-                df = yff.fetch(symbol, period="1d", interval="1m")
+                df = yff.fetch([symbol], period="1d", interval="1m")
                 if df is not None and df.empty:
                     logger.warning(f"[YFF] fetched empty DataFrame for {symbol}")
                     df = None
-            except YFRateLimitError as e:
-                logger.warning(f"[get_minute_df] rate-limited on {symbol}, retrying singleton: {e}")
-                try:
-                    # break out of any batching by fetching single-symbol
-                    df = yff.fetch([symbol], period="1d", interval="1m")
-                    if df is not None and df.empty:
-                        logger.warning(f"[YFF] fetched empty DataFrame for {symbol}")
-                        df = None
-                    elif df is not None and getattr(df.index, "tz", None):
-                        df.index = df.index.tz_localize(None)
-                except Exception as e2:
-                    logger.warning(f"[get_minute_df] singleton fetch failed for {symbol}: {e2}")
-                    df = None
-            except Exception as e:
-                logger.warning(f"[get_minute_df] fetch failed for {symbol}: {e}")
+                elif df is not None and getattr(df.index, "tz", None):
+                    df.index = df.index.tz_localize(None)
+            except Exception as e2:
+                logger.warning(f"[get_minute_df] singleton fetch failed for {symbol}: {e2}")
                 df = None
+        except Exception as e:
+            logger.warning(f"[get_minute_df] fetch failed for {symbol}: {e}")
+            df = None
 
-            self._minute_cache[symbol] = df
-        return self._minute_cache[symbol]
-        
+        # cache the result *and* the timestamp
+        self._minute_cache[symbol]      = df
+        self._minute_timestamps[symbol] = datetime.utcnow()
+
+        return df
+       
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
         self.path = path
@@ -469,12 +477,16 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
-def fetch_data(ctx, symbols, period="1y", interval="1d") -> pd.DataFrame:
-    try:
-        return yff.fetch(symbols, period=period, interval=interval)
-    except YFRateLimitError as e:
-        raise DataFetchError(f"yfinance rate limit or no‐data: {e}")
-
+def fetch_data(self, symbols, period, interval):
+    dfs = []
+    # chunk into groups of 3
+    for batch in chunked(symbols, 3):
+        df = self._download_batch(batch, period, interval)
+        if df is not None:
+            dfs.append(df)
+        # sleep a little between batches
+        time.sleep(random.uniform(2, 5))
+    return pd.concat(dfs, axis=1) if dfs else None
 
 @sleep_and_retry
 @limits(calls=30, period=60)
@@ -969,7 +981,7 @@ def run_all_trades(model) -> None:
         logger.error("❌ No tickers loaded; please check tickers.csv")
         return
 
-    max_workers = min(len(tickers), 4)
+    max_workers = min(len(tickers), 2)
     with ThreadPoolExecutor(max_workers=max_workers) as execr:
         futures = {
             execr.submit(_safe_trade, ctx, sym, current_cash, model, regime_ok): sym
