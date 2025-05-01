@@ -21,8 +21,8 @@ import structlog
 
 # ─── THIRD-PARTY LIBRARIES ────────────────────────────────────────────────────
 import numpy as np
-if not hasattr(_np, "NaN"):
-    _np.NaN = _np.nan
+if not hasattr(np, "NaN"):
+    np.NaN = np.nan
 import pandas as pd
 from numpy import NaN as npNaN
 import pandas_ta as ta
