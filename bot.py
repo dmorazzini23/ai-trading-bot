@@ -218,8 +218,9 @@ class YFinanceFetcher:
             msg = str(e).lower()
             if "no objects to concatenate" in msg:
                 logger.warning(f"[YFF] no data to concatenate for {symbols}: {e}")
-                raise YFRateLimitError(e)
+                raise YFRateLimitError() from e
             raise
+
         if getattr(df.index, "tz", None):
             df.index = df.index.tz_localize(None)
         return df
