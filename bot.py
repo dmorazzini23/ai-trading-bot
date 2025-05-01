@@ -187,7 +187,7 @@ class BotContext:
     take_profit_targets: Dict[str, float] = field(default_factory=dict)
 
 class YFinanceFetcher:
-    def __init__(self, calls_per_minute: int = 60, batch_size: int = 5):
+    def __init__(self, calls_per_minute: int = 60, batch_size: int = 2):
         self.max_calls   = calls_per_minute
         self.batch_size  = batch_size
         self._timestamps = deque()
@@ -252,6 +252,9 @@ class DataFetcher:
         if symbol not in self._daily_cache:
             try:
                 df = yff.fetch(symbol, period="5d", interval="1d")
+                if df is not None and df.empty:
+                    logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
+                    return None
             except YFRateLimitError as e:
                 logger.info(f"[SKIP] No daily data for {symbol} (rate‐limited): {e}")
                 df = None
@@ -265,11 +268,17 @@ class DataFetcher:
         if symbol not in self._minute_cache:
             try:
                 df = yff.fetch(symbol, period="1d", interval="1m")
+                 if df is not None and df.empty:
+                    logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
+                    return None
             except YFRateLimitError as e:
                 logger.warning(f"[get_minute_df] rate‐limited on {symbol}, retrying singleton: {e}")
                 try:
                     # break out of any batching by fetching single-symbol
                     df = yff.fetch([symbol], period="1d", interval="1m")
+                    if df is not None and df.empty:
+                        logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
+                        return None
                     if getattr(df.index, "tz", None):
                         df.index = df.index.tz_localize(None)
                 except Exception as e2:
