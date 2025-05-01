@@ -204,8 +204,8 @@ class YFinanceFetcher:
         self._timestamps.append(now)
 
     @retry(
-        stop=stop_after_attempt(10),
-        wait=wait_exponential(multiplier=2.0, min=2, max=300),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=2.0, min=2, max=120),
         retry=retry_if_exception_type(YFRateLimitError)
     )
     def _download_batch(self, symbols: list[str], period: str, interval: str) -> pd.DataFrame:
@@ -240,7 +240,7 @@ class YFinanceFetcher:
             return df  # upstream will treat empty as “no minute data”
 
 # instantiate a singleton
-yff = YFinanceFetcher(calls_per_minute=20, batch_size=2)
+yff = YFinanceFetcher(calls_per_minute=15, batch_size=2)
 
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
