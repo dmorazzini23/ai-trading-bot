@@ -58,6 +58,8 @@ from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, wa
 from ratelimit import limits, sleep_and_retry
 from collections import deque
 from more_itertools import chunked
+from yahoo_finance_fetcher import yff, YFRateLimitError
+from logging import getLogger
 
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
