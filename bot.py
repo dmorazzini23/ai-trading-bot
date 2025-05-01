@@ -205,7 +205,7 @@ class YFinanceFetcher:
 
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=0.5, min=0.5, max=5),
+        wait=wait_exponential(multiplier=1.0, min=1, max=60),
         retry=retry_if_exception_type(YFRateLimitError)
     )
     def _download_batch(self, symbols: list[str], period: str, interval: str) -> pd.DataFrame:
@@ -234,13 +234,13 @@ class YFinanceFetcher:
             dfs.append(self._download_batch(batch, period, interval))
         if not dfs:
             return pd.DataFrame()
-        df = dfs[0] if len(dfs) == 1 else pd.concat(dfs, axis=1, sort=True)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = [f"{lvl0}_{lvl1}" for lvl0, lvl1 in df.columns]
-        return df
+        df = pd.concat(dfs, axis=1, sort=True)
+        if df.empty:
+            logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
+            return df  # upstream will treat empty as “no minute data”
 
 # instantiate a singleton
-yff = YFinanceFetcher(calls_per_minute=60, batch_size=5)
+yff = YFinanceFetcher(calls_per_minute=40, batch_size=3)
 
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
