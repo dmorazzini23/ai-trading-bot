@@ -245,16 +245,16 @@ yff = YFinanceFetcher(calls_per_minute=5, batch_size=6)
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
     def __init__(self) -> None:
-        self._daily_cache  : Dict[str, Optional[pd.DataFrame]] = {}
-        self._minute_cache : Dict[str, Optional[pd.DataFrame]] = {}
+        self._daily_cache: Dict[str, Optional[pd.DataFrame]] = {}
+        self._minute_cache: Dict[str, Optional[pd.DataFrame]] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         if symbol not in self._daily_cache:
             try:
                 df = yff.fetch(symbol, period="5d", interval="1d")
                 if df is not None and df.empty:
-                    logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
-                    return None
+                    logger.warning(f"[YFF] fetched empty DataFrame for {symbol}")
+                    df = None
             except YFRateLimitError as e:
                 logger.info(f"[SKIP] No daily data for {symbol} (rate‐limited): {e}")
                 df = None
@@ -268,18 +268,18 @@ class DataFetcher:
         if symbol not in self._minute_cache:
             try:
                 df = yff.fetch(symbol, period="1d", interval="1m")
-                 if df is not None and df.empty:
-                    logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
-                    return None
+                if df is not None and df.empty:
+                    logger.warning(f"[YFF] fetched empty DataFrame for {symbol}")
+                    df = None
             except YFRateLimitError as e:
                 logger.warning(f"[get_minute_df] rate‐limited on {symbol}, retrying singleton: {e}")
                 try:
                     # break out of any batching by fetching single-symbol
                     df = yff.fetch([symbol], period="1d", interval="1m")
                     if df is not None and df.empty:
-                        logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
-                        return None
-                    if getattr(df.index, "tz", None):
+                        logger.warning(f"[YFF] fetched empty DataFrame for {symbol}")
+                        df = None
+                    if df is not None and getattr(df.index, "tz", None):
                         df.index = df.index.tz_localize(None)
                 except Exception as e2:
                     logger.warning(f"[get_minute_df] singleton fetch failed for {symbol}: {e2}")
