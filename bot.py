@@ -21,8 +21,10 @@ import structlog
 
 # ─── THIRD-PARTY LIBRARIES ────────────────────────────────────────────────────
 import numpy as np
+if not hasattr(_np, "NaN"):
+    _np.NaN = _np.nan
 import pandas as pd
-from numpy import nan as npNaN
+from numpy import NaN as npNaN
 import pandas_ta as ta
 import yfinance as yf
 import requests
