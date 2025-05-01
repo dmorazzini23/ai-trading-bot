@@ -54,7 +54,7 @@ else:
         """Fallback for yfinance rate-limit errors."""
         pass
 
-from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, wait_random, retry_if_exception_type
 from ratelimit import limits, sleep_and_retry
 from collections import deque
 
@@ -204,8 +204,8 @@ class YFinanceFetcher:
         self._timestamps.append(now)
 
     @retry(
-        stop=stop_after_attempt(6),
-        wait=wait_exponential(multiplier=5.0, min=5, max=300),
+        stop=stop_after_attempt(8),
+        wait=(wait_exponential(multiplier=10.0, min=10, max=300), + wait_random(1, 5))
         retry=retry_if_exception_type(YFRateLimitError)
     )
     def _download_batch(self, symbols: list[str], period: str, interval: str) -> pd.DataFrame:
@@ -240,7 +240,7 @@ class YFinanceFetcher:
             return df  # upstream will treat empty as “no minute data”
 
 # instantiate a singleton
-yff = YFinanceFetcher(calls_per_minute=8, batch_size=10)
+yff = YFinanceFetcher(calls_per_minute=5, batch_size=6)
 
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
