@@ -205,7 +205,7 @@ class YFinanceFetcher:
 
     @retry(
         stop=stop_after_attempt(8),
-        wait=wait_exponential(multiplier=2, min=2, max=300) + wait_random(1, 10),
+        wait=wait_exponential(multiplier=10, min=10, max=300) + wait_random(1, 5),
         retry=retry_if_exception_type(YFRateLimitError)
     )
     def _download_batch(self, symbols: list[str], period: str, interval: str) -> pd.DataFrame:
