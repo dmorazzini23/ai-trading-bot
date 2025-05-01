@@ -57,6 +57,7 @@ else:
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, wait_random, retry_if_exception_type
 from ratelimit import limits, sleep_and_retry
 from collections import deque
+from more_itertools import chunked
 
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
