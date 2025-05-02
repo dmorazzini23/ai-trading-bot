@@ -646,7 +646,7 @@ _warned_missing_spy_columns = False
 def check_market_regime() -> bool:
     global _warned_missing_spy_columns
 
-    df = fetch_data(ctx, "SPY", period="1mo", interval="1d")
+    df = fetch_data(ctx, ["SPY"], period="1mo", interval="1d")
     if df is None or df.empty:
         logger.warning("[check_market_regime] No SPY data – failing regime check")
         return False
@@ -696,7 +696,7 @@ def too_correlated(sym: str) -> bool:
     open_syms = df.loc[df.exit_time == "", "symbol"].unique().tolist() + [sym]
     rets = {}
     for s in open_syms:
-        d = fetch_data(ctx, s, period="3mo", interval="1d")
+        d = fetch_data(ctx, [s], period="3mo", interval="1d")
         if d is None or d.empty:
             # skip symbols without data
             continue
@@ -967,7 +967,7 @@ def run_all_trades(model) -> None:
     # ── one-time SPY fetch for market regime ──
     regime_ok = True                                       # default to True
     try:
-        spy_df = fetch_data(ctx, "SPY", period="1mo", interval="1d")
+        spy_df = fetch_data(ctx, ["SPY"], period="1mo", interval="1d")
         if spy_df is not None and len(spy_df) >= REGIME_LOOKBACK:
             # FULL regime test: compute ATR + vol
             atr = ta.atr(spy_df["High"], spy_df["Low"], spy_df["Close"], length=REGIME_LOOKBACK).iloc[-1]
