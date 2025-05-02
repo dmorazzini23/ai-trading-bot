@@ -268,59 +268,46 @@ class DataFetcher:
         self._minute_timestamps : Dict[str, datetime] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        """Fetch the last ~1-month of daily bars via Alpaca, falling back to yfinance on SIP errors."""
-        if symbol not in self._daily_cache:
+        """
+        Return a cached DataFrame if present; otherwise try Alpaca,
+        then fall back to whatever’s already in `_daily_cache` (i.e. our yfinance bulk fetch).
+        """
+        # if bulk-fetched via yfinance, it'll already be in the cache
+        if symbol in self._daily_cache:
+            return self._daily_cache[symbol]
+
+        # otherwise try Alpaca one-off (e.g. newly-added ticker)
+        try:
+            today = datetime.now(timezone.utc).date()
+            start = (today - timedelta(days=30)).isoformat()
+            end   = today.isoformat()
+            bars  = ctx.api.get_bars(symbol, TimeFrame.Day, start, end, limit=None)
+
+            if hasattr(bars, "df"):
+                df = bars.df
+            else:
+                df = pd.DataFrame([{
+                    "Open": b.o, "High": b.h, "Low": b.l,
+                    "Close": b.c, "Volume": b.v
+                } for b in bars])
+
+            if df.empty:
+                logger.warning(f"[Alpaca] no daily bars for {symbol}")
+                df = None
+            else:
+                df = df.rename(columns={
+                    "open":"Open","high":"High",
+                    "low":"Low","close":"Close",
+                    "volume":"Volume"
+                })
+                df.index = pd.to_datetime(df.index).tz_localize(None)
+
+        except Exception as e:
+            logger.info(f"[Alpaca] failed for {symbol}: {e}; no fallback available")
             df = None
-            # 1) Try Alpaca first
-            try:
-                today = datetime.now(timezone.utc).date()
-                start = (today - timedelta(days=30)).isoformat()
-                end   = today.isoformat()
-                bars = ctx.api.get_bars(symbol, TimeFrame.Day, start, end, limit=None)
 
-                if hasattr(bars, "df"):
-                    df = bars.df
-                else:
-                    df = pd.DataFrame([{
-                        "Open": b.o, "High": b.h, "Low": b.l,
-                        "Close": b.c, "Volume": b.v
-                    } for b in bars])
-
-                if df.empty:
-                    logger.warning(f"[Alpaca] no daily bars for {symbol}")
-                    df = None
-                else:
-                    df = df.rename(columns={
-                        "open":"Open","high":"High",
-                        "low":"Low","close":"Close",
-                        "volume":"Volume"
-                    })
-                    df.index = pd.to_datetime(df.index).tz_localize(None)
-
-            except Exception as e:
-                msg = str(e).lower()
-                # fallback on SIP‐permission or any other error
-                logger.info(f"[Alpaca→YFF] failed for {symbol}: {e}; falling back to yfinance")
-                yf_df = yff.fetch([symbol], period="1mo", interval="1d")
-                if not yf_df.empty:
-                    # yff.fetch returns a multi‐level column index (field, symbol)
-                    try:
-                        df = yf_df.xs(symbol, axis=1, level=1).copy()
-                    except Exception:
-                        # if single-indexed
-                        df = yf_df.copy()
-                    df.index.name = None
-                    df = df.rename(columns={
-                        "Open":"Open","High":"High","Low":"Low",
-                        "Close":"Close","Volume":"Volume"
-                    })
-                    df.index = pd.to_datetime(df.index).tz_localize(None)
-                else:
-                    df = None
-
-            self._daily_cache[symbol] = df
-
-        return self._daily_cache[symbol]
+        self._daily_cache[symbol] = df
+        return df
          
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         """Fetch the last 2 calendar days of 1-minute bars via Alpaca."""
@@ -1025,60 +1012,33 @@ def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
     # ── one-time SPY fetch for market regime ──
-    regime_ok = True                                       # default to True
-    try:
-        spy_df = fetch_data(ctx, ["SPY"], period="1mo", interval="1d")
-        if spy_df is not None and len(spy_df) >= REGIME_LOOKBACK:
-            # FULL regime test: compute ATR + vol
-            atr = ta.atr(spy_df["High"], spy_df["Low"], spy_df["Close"], length=REGIME_LOOKBACK).iloc[-1]
-            vol = spy_df["Close"].pct_change().std()
-            regime_ok = (atr <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
-        else:
-            # not enough data → treat as OK
-            regime_ok = True
-    except Exception as e:
-        logger.warning(f"Could not fetch SPY regime ({e!r}); proceeding anyway.")
-        regime_ok = True
-
-    if check_halt_flag():
-        logger.info("Trading halted via HALT_FLAG_FILE.")
-        return
-        
-    try:
-        acct = api.get_account()
-        current_cash = float(acct.cash)
-    except Exception:
-        logger.error("Failed to retrieve account balance.")
-        return
-
-    if os.path.exists(EQUITY_FILE):
-        with open(EQUITY_FILE, "r") as f:
-            last_cash = float(f.read().strip())
-    else:
-        last_cash = current_cash
-
-    ctx.kelly_fraction = 0.7 if current_cash > last_cash * 1.03 else params["KELLY_FRACTION"]
-    with open(EQUITY_FILE, "w") as f:
-        f.write(str(current_cash))
-
+    …
     tickers = load_tickers(TICKERS_FILE)
     logger.info(f"✅ Loaded tickers: {tickers}")
     if not tickers:
         logger.error("❌ No tickers loaded; please check tickers.csv")
         return
 
-    max_workers = min(len(tickers), 2)
-    with ThreadPoolExecutor(max_workers=max_workers) as execr:
-        futures = {
-            execr.submit(_safe_trade, ctx, sym, current_cash, model, regime_ok): sym
-            for sym in tickers
-        }
-        for fut in as_completed(futures):
-            sym = futures[fut]
-            try:
-                fut.result()
-            except Exception as e:
-                logger.exception(f"[Worker] error processing {sym}: {e}")
+    # ── BULK yfinance FALLBACK ──
+    try:
+        yf_daily = yff.fetch(tickers, period="1mo", interval="1d")
+        if not yf_daily.empty:
+            for sym in tickers:
+                try:
+                    # try MultiIndex (field, symbol)
+                    df = yf_daily.xs(sym, axis=1, level=1).copy()
+                except Exception:
+                    # fallback to single‐index
+                    df = yf_daily.copy()
+                df = df.rename(columns={
+                    "Open": "Open", "High": "High",
+                    "Low": "Low",   "Close": "Close",
+                    "Volume": "Volume"
+                })
+                df.index = pd.to_datetime(df.index).tz_localize(None)
+                data_fetcher._daily_cache[sym] = df
+    except Exception as e:
+        logger.warning(f"[Bulk YFF] failed to prefetch daily bars: {e}")
 
 def _safe_trade(
     ctx: BotContext,
