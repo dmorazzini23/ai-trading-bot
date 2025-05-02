@@ -5,7 +5,7 @@ import re
 import time, random
 from datetime import datetime, date, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple, Dict, List, Any
 from dataclasses import dataclass, field
 from threading import Semaphore, Thread
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -40,8 +40,6 @@ import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 
 # provide a stub for text-sentiment prediction
-from typing import Any
-
 def predict_text_sentiment(text: str) -> float:
     # TODO: integrate real sentiment model
     return 0.0
@@ -165,7 +163,7 @@ PACIFIC                  = ZoneInfo("America/Los_Angeles")
 # ─── ASSERT ALPACA KEYS ───────────────────────────────────────────────────────
 ALPACA_API_KEY    = os.getenv("APCA_API_KEY_ID")
 ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
-ALPACA_BASE_URL   = os.getenv("APCA_BASE_URL", "https://paper-api.alpaca.markets")
+ALPACA_BASE_URL   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
 def ensure_alpaca_credentials() -> None:
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
@@ -240,6 +238,7 @@ class YFinanceFetcher:
         syms   = symbols if isinstance(symbols, (list, tuple)) else [symbols]
         chunks = [syms[i:i+self.batch_size] for i in range(0, len(syms), self.batch_size)]
         dfs    = []
+
         for batch in chunks:
             self._throttle()
             try:
@@ -251,12 +250,12 @@ class YFinanceFetcher:
                 logger.warning(f"[YFF] fetched empty DataFrame for {batch}, skipping.")
                 continue
             dfs.append(batch_df)
-        if not dfs:
-            # return an empty DF with no columns so upstream treats it as “no data”
-            return pd.DataFrame()
-        df = pd.concat(dfs, axis=1, sort=True)
-        return df
 
+        if not dfs:
+            # no successful batches → upstream treats as “no data”
+            return pd.DataFrame()
+
+        return pd.concat(dfs, axis=1, sort=True)
 
 # instantiate a singleton
 yff = YFinanceFetcher(calls_per_minute=5, batch_size=6)
@@ -313,7 +312,6 @@ class DataFetcher:
 
         self._minute_cache[symbol]      = df
         self._minute_timestamps[symbol] = datetime.utcnow()
-
         return df
 
 class TradeLogger:
@@ -355,15 +353,6 @@ class SignalManager:
         self.mean_rev_lookback = 20
         self.mean_rev_zscore_threshold = 1.5
         self.regime_volatility_threshold = REGIME_ATR_THRESHOLD
-
-    def signal_ml(self, df: pd.DataFrame, model) -> Tuple[int, float, str]:
-        return -1, 0.0, 'ml'
-
-    def signal_sentiment(self, ctx: BotContext, ticker: str) -> Tuple[int, float, str]:
-        return -1, 0.0, 'sentiment'
-
-    def signal_regime(self, ctx: BotContext) -> Tuple[int, float, str]:
-        return -1, 0.0, 'regime'
 
     def signal_momentum(self, df: pd.DataFrame) -> Tuple[int, float, str]:
         if df is None or len(df) <= self.momentum_lookback:
