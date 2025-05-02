@@ -268,11 +268,13 @@ class DataFetcher:
         self._minute_timestamps : Dict[str, datetime] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        """Fetch the last ~20 calendar days (≈14 trading days) of daily bars via Alpaca."""
+        """Fetch the last ~1-month of daily bars via Alpaca, falling back to yfinance on SIP errors."""
         if symbol not in self._daily_cache:
+            df = None
+            # 1) Try Alpaca first
             try:
                 today = datetime.now(timezone.utc).date()
-                start = (today - timedelta(days=20)).isoformat()
+                start = (today - timedelta(days=30)).isoformat()
                 end   = today.isoformat()
                 bars = ctx.api.get_bars(symbol, TimeFrame.Day, start, end, limit=None)
 
@@ -289,20 +291,37 @@ class DataFetcher:
                     df = None
                 else:
                     df = df.rename(columns={
-                        "open":"Open", "high":"High",
-                        "low":"Low",   "close":"Close",
+                        "open":"Open","high":"High",
+                        "low":"Low","close":"Close",
                         "volume":"Volume"
                     })
                     df.index = pd.to_datetime(df.index).tz_localize(None)
 
             except Exception as e:
-                logger.info(f"[SKIP] No daily data for {symbol}: {e}")
-                df = None
+                msg = str(e).lower()
+                # fallback on SIP‐permission or any other error
+                logger.info(f"[Alpaca→YFF] failed for {symbol}: {e}; falling back to yfinance")
+                yf_df = yff.fetch([symbol], period="1mo", interval="1d")
+                if not yf_df.empty:
+                    # yff.fetch returns a multi‐level column index (field, symbol)
+                    try:
+                        df = yf_df.xs(symbol, axis=1, level=1).copy()
+                    except Exception:
+                        # if single-indexed
+                        df = yf_df.copy()
+                    df.index.name = None
+                    df = df.rename(columns={
+                        "Open":"Open","High":"High","Low":"Low",
+                        "Close":"Close","Volume":"Volume"
+                    })
+                    df.index = pd.to_datetime(df.index).tz_localize(None)
+                else:
+                    df = None
 
             self._daily_cache[symbol] = df
 
         return self._daily_cache[symbol]
-
+         
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         """Fetch the last 2 calendar days of 1-minute bars via Alpaca."""
         last = self._minute_timestamps.get(symbol)
