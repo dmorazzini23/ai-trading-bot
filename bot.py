@@ -348,6 +348,15 @@ class SignalManager:
         self.mean_rev_zscore_threshold = 1.5
         self.regime_volatility_threshold = REGIME_ATR_THRESHOLD
 
+    def signal_ml(self, df: pd.DataFrame, model) -> Tuple[int, float, str]:
+        return -1, 0.0, 'ml'
+
+    def signal_sentiment(self, ctx: BotContext, ticker: str) -> Tuple[int, float, str]:
+        return -1, 0.0, 'sentiment'
+
+    def signal_regime(self, ctx: BotContext) -> Tuple[int, float, str]:
+        return -1, 0.0, 'regime'
+
     def signal_momentum(self, df: pd.DataFrame) -> Tuple[int, float, str]:
         if df is None or len(df) <= self.momentum_lookback:
             return -1, 0.0, 'momentum'
@@ -506,7 +515,7 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
-def fetch_data(ctx: BotContext, symbols: List[str], period: str, interval: str) -> Optional[pd.DataFrame]:
+def fetch_data(ctx, symbols, period, interval):
     dfs: List[pd.DataFrame] = []
     for batch in chunked(symbols, 3):
         df = yff.fetch(batch, period=period, interval=interval)
