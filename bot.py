@@ -32,7 +32,7 @@ from bs4 import BeautifulSoup
 from flask import Flask
 import schedule
 import portalocker
-from alpaca_trade_api.rest import REST, APIError
+from alpaca_trade_api.rest import REST, APIError, TimeFrame
 from sklearn.ensemble import RandomForestClassifier
 import joblib
 from dotenv import load_dotenv
@@ -268,15 +268,24 @@ class DataFetcher:
         self._minute_timestamps : Dict[str, datetime] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
+        """Fetch the last 5 trading days of daily bars via Alpaca."""
         if symbol not in self._daily_cache:
             try:
-                df = yff.fetch(symbol, period="5d", interval="1d")
-                if df is not None and df.empty:
-                    logger.warning(f"[YFF] fetched empty DataFrame for {symbol}")
+                bars = ctx.api.get_bars(symbol, TimeFrame.Day, limit=5)
+                if hasattr(bars, "df"):
+                    df = bars.df
+                else:
+                    df = pd.DataFrame([{
+                        "Open": b.o, "High": b.h, "Low": b.l, "Close": b.c, "Volume": b.v
+                    } for b in bars])
+                if df.empty:
+                    logger.warning(f"[Alpaca] no daily bars for {symbol}")
                     df = None
-            except YFRateLimitError as e:
-                logger.info(f"[SKIP] No daily data for {symbol} (rate-limited): {e}")
-                df = None
+                else:
+                    df = df.rename(columns={
+                        "open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"
+                    })
+                    df.index = pd.to_datetime(df.index).tz_localize(None)
             except Exception as e:
                 logger.info(f"[SKIP] No daily data for {symbol}: {e}")
                 df = None
@@ -285,35 +294,35 @@ class DataFetcher:
         return self._daily_cache[symbol]
 
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
+        """Fetch the last full trading day of 1-minute bars via Alpaca."""
         last = self._minute_timestamps.get(symbol)
         if last and last > datetime.utcnow() - timedelta(minutes=1):
             return self._minute_cache.get(symbol)
 
         try:
-            df = yff.fetch(symbol, period="1d", interval="1m")
-            if df is not None and df.empty:
-                logger.warning(f"[YFF] fetched empty DataFrame for {symbol}")
+            bars = ctx.api.get_bars(symbol, TimeFrame.Minute, limit=390)
+            if hasattr(bars, "df"):
+                df = bars.df
+            else:
+                df = pd.DataFrame([{
+                    "Open": b.o, "High": b.h, "Low": b.l, "Close": b.c, "Volume": b.v
+                } for b in bars])
+            if df.empty:
+                logger.warning(f"[Alpaca] no minute bars for {symbol}")
                 df = None
-        except YFRateLimitError as e:
-            logger.warning(f"[get_minute_df] rate‐limited on {symbol}, retrying singleton: {e}")
-            try:
-                df = yff.fetch([symbol], period="1d", interval="1m")
-                if df is not None and df.empty:
-                    logger.warning(f"[YFF] fetched empty DataFrame for {symbol}")
-                    df = None
-                elif df is not None and getattr(df.index, "tz", None):
-                    df.index = df.index.tz_localize(None)
-            except Exception as e2:
-                logger.warning(f"[get_minute_df] singleton fetch failed for {symbol}: {e2}")
-                df = None
+            else:
+                df = df.rename(columns={
+                    "open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"
+                })
+                df.index = pd.to_datetime(df.index).tz_localize(None)
         except Exception as e:
-            logger.warning(f"[get_minute_df] fetch failed for {symbol}: {e}")
+            logger.warning(f"[get_minute_df] failed for {symbol}: {e}")
             df = None
 
         self._minute_cache[symbol]      = df
         self._minute_timestamps[symbol] = datetime.utcnow()
         return df
-
+        
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
         self.path = path
@@ -513,12 +522,29 @@ ctx = BotContext(
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
 def fetch_data(ctx, symbols, period, interval):
+    """Fallback for small bulk requests via Alpaca barset if needed."""
     dfs: List[pd.DataFrame] = []
-    for batch in chunked(symbols, 3):
-        df = yff.fetch(batch, period=period, interval=interval)
-        if df is not None and not df.empty:
-            dfs.append(df)
-        time.sleep(random.uniform(2, 5))
+    tf = TimeFrame.Day if interval.endswith("d") else TimeFrame.Minute
+    limit = 5 if tf == TimeFrame.Day else 390
+
+    for sym in symbols:
+        try:
+            bars = ctx.api.get_bars(sym, tf, limit=limit)
+            if hasattr(bars, "df"):
+                df = bars.df
+            else:
+                df = pd.DataFrame([{
+                    "Open": b.o, "High": b.h, "Low": b.l, "Close": b.c, "Volume": b.v
+                } for b in bars])
+            if not df.empty:
+                df = df.rename(columns={
+                    "open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"
+                })
+                df.index = pd.to_datetime(df.index).tz_localize(None)
+                dfs.append(df)
+        except Exception:
+            continue
+
     if not dfs:
         return None
     return pd.concat(dfs, axis=1, sort=True)
