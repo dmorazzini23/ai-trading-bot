@@ -242,13 +242,21 @@ class YFinanceFetcher:
         dfs    = []
         for batch in chunks:
             self._throttle()
-            dfs.append(self._download_batch(batch, period, interval))
+            try:
+                batch_df = self._download_batch(batch, period, interval)
+            except YFRateLimitError as e:
+                logger.warning(f"[YFF] rate‐limited on batch {batch}, skipping: {e}")
+                continue
+            if batch_df is None or batch_df.empty:
+                logger.warning(f"[YFF] fetched empty DataFrame for {batch}, skipping.")
+                continue
+            dfs.append(batch_df)
         if not dfs:
+            # return an empty DF with no columns so upstream treats it as “no data”
             return pd.DataFrame()
         df = pd.concat(dfs, axis=1, sort=True)
-        if df.empty:
-            logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
-            return df  # upstream will treat empty as “no minute data”
+        return df
+
 
 # instantiate a singleton
 yff = YFinanceFetcher(calls_per_minute=5, batch_size=6)
