@@ -39,6 +39,13 @@ from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 
+# provide a stub for text-sentiment prediction
+from typing import Any
+
+def predict_text_sentiment(text: str) -> float:
+    # TODO: integrate real sentiment model
+    return 0.0
+
 for _mod in (
     "yfinance.shared",
     "yfinance._shared",
@@ -124,28 +131,6 @@ class BotMode:
     def get_config(self) -> Dict[str, float]:
         return self.params
 
-    def _download_batch(self,
-                        symbols: list[str],
-                        period: str,
-                        interval: str,
-                       ) -> pd.DataFrame | None:
-        """
-        Single‐point download of up to N symbols.
-        Handles empty‐DF and rate‐limit warnings.
-        """
-        try:
-            df = yff.fetch(symbols, period=period, interval=interval)
-            if df is not None and df.empty:
-                logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
-                return None
-            # drop timezone info if present
-            if df is not None and getattr(df.index, "tz", None):
-                df.index = df.index.tz_localize(None)
-            return df
-        except YFRateLimitError as e:
-            logger.warning(f"[_download_batch] rate-limited on {symbols}: {e}")
-            return None
-
 BOT_MODE = os.getenv("BOT_MODE", "balanced")
 mode     = BotMode(BOT_MODE)
 params   = mode.get_config()
@@ -180,7 +165,7 @@ PACIFIC                  = ZoneInfo("America/Los_Angeles")
 # ─── ASSERT ALPACA KEYS ───────────────────────────────────────────────────────
 ALPACA_API_KEY    = os.getenv("APCA_API_KEY_ID")
 ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
-ALPACA_BASE_URL   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+ALPACA_BASE_URL   = os.getenv("APCA_BASE_URL", "https://paper-api.alpaca.markets")
 
 def ensure_alpaca_credentials() -> None:
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
@@ -293,12 +278,10 @@ class DataFetcher:
         return self._daily_cache[symbol]
 
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        # if we fetched this < 1 min ago, just return it
         last = self._minute_timestamps.get(symbol)
         if last and last > datetime.utcnow() - timedelta(minutes=1):
             return self._minute_cache.get(symbol)
 
-        # otherwise go fetch
         try:
             df = yff.fetch(symbol, period="1d", interval="1m")
             if df is not None and df.empty:
@@ -320,12 +303,11 @@ class DataFetcher:
             logger.warning(f"[get_minute_df] fetch failed for {symbol}: {e}")
             df = None
 
-        # cache the result *and* the timestamp
         self._minute_cache[symbol]      = df
         self._minute_timestamps[symbol] = datetime.utcnow()
 
         return df
-       
+
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
         self.path = path
@@ -437,13 +419,34 @@ class SignalManager:
             logger.exception("Error in signal_vsa")
             return -1, 0.0, 'vsa'
 
+    def signal_ml(self, df: pd.DataFrame, model: Any) -> Tuple[int, float, str]:
+        try:
+            feat = ['rsi','macd','atr','vwap','sma_50','sma_200']
+            X = df[feat].iloc[-1].values.reshape(1,-1)
+            pred = model.predict(X)[0]
+            proba = model.predict_proba(X)[0][pred]
+            sig = 1 if pred == 1 else 0
+            return sig, proba, 'ml'
+        except Exception:
+            return -1, 0.0, 'ml'
+
+    def signal_sentiment(self, ctx: BotContext, ticker: str) -> Tuple[int, float, str]:
+        score = fetch_sentiment(ctx, ticker)
+        sig = 1 if score > 0 else 0 if score < 0 else -1
+        return sig, abs(score), 'sentiment'
+
+    def signal_regime(self, ctx: BotContext) -> Tuple[int, float, str]:
+        ok = check_market_regime()
+        sig = 1 if ok else 0
+        return sig, 1.0, 'regime'
+
     def load_signal_weights(self) -> Dict[str, float]:
         if not os.path.exists(SIGNAL_WEIGHTS_FILE):
             return {}
         df = pd.read_csv(SIGNAL_WEIGHTS_FILE)
         return {row['signal']: row['weight'] for _, row in df.iterrows()}
 
-    def evaluate(self, ctx: BotContext, df: pd.DataFrame, ticker: str, model) -> Tuple[int, float, str]:
+    def evaluate(self, ctx: BotContext, df: pd.DataFrame, ticker: str, model: Any) -> Tuple[int, float, str]:
         signals: List[Tuple[int, float, str]] = []
         allowed_tags = set(load_global_signal_performance() or [])
         weights = self.load_signal_weights()
@@ -451,7 +454,7 @@ class SignalManager:
         fns = [
             self.signal_momentum,
             self.signal_mean_reversion,
-            lambda d: self.signal_ml(d, model),
+            self.signal_ml,
             lambda d: self.signal_sentiment(ctx, ticker),
             lambda d: self.signal_regime(ctx),
             self.signal_stochrsi,
@@ -461,7 +464,7 @@ class SignalManager:
 
         for fn in fns:
             try:
-                s, w, lab = fn(df)
+                s, w, lab = fn(df, model) if fn == self.signal_ml else fn(df)
                 if allowed_tags and lab not in allowed_tags:
                     continue
                 if s in (0, 1):
@@ -503,11 +506,11 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
-def fetch_data(ctx, self, symbols, period, interval):
+def fetch_data(ctx: BotContext, symbols: List[str], period: str, interval: str) -> Optional[pd.DataFrame]:
     dfs: List[pd.DataFrame] = []
     for batch in chunked(symbols, 3):
         df = yff.fetch(batch, period=period, interval=interval)
-        if df is not None and df.empty:
+        if df is not None and not df.empty:
             dfs.append(df)
         time.sleep(random.uniform(2, 5))
     if not dfs:
@@ -531,8 +534,6 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
         r.raise_for_status()
 
     soup = BeautifulSoup(r.content, "lxml")
-
-    # 1) debug: how many <tr> rows did we find?
     rows = soup.find_all("tr")
     log.info(f"get_sec_headlines({ticker}) ── total <tr> rows: {len(rows)}")
 
@@ -545,7 +546,6 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
                 continue
 
             tds = tr.find_all("td")
-            # 2) guard: make sure the cell we want exists
             if len(tds) < 4:
                 log.warning(f"unexpected <td> count {len(tds)} in row, skipping")
                 continue
@@ -562,11 +562,7 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
     retry=retry_if_exception_type((requests.RequestException, DataFetchError))
 )
-def fetch_sentiment(ctx, ticker) -> float:
-    """
-    Fetches news sentiment for `ticker` via NewsAPI.
-    Returns a float in [-1.0, +1.0], or 0.0 on rate-limit (429).
-    """
+def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     url = (
         f"https://newsapi.org/v2/everything?"
         f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
@@ -626,19 +622,20 @@ def check_daily_loss() -> bool:
     log.info(f"daily drawdown is {loss:.2%}")
     return loss >= DAILY_LOSS_LIMIT
 
-
 def check_halt_flag() -> bool:
     if not os.path.exists(HALT_FLAG_PATH):
         return False
-    age = datetime.now()-datetime.fromtimestamp(os.path.getmtime(HALT_FLAG_PATH))
-    return age<timedelta(hours=1)
+    age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(HALT_FLAG_PATH))
+    return age < timedelta(hours=1)
 
+def now_pacific() -> datetime:
+    return datetime.now(PACIFIC)
 
 def within_market_hours() -> bool:
     now = now_pacific()
-    start = datetime.combine(now.date(),MARKET_OPEN,PACIFIC)+ENTRY_START_OFFSET
-    end   = datetime.combine(now.date(),MARKET_CLOSE,PACIFIC)-ENTRY_END_OFFSET
-    return start<=now<=end
+    start = datetime.combine(now.date(), MARKET_OPEN, PACIFIC) + ENTRY_START_OFFSET
+    end   = datetime.combine(now.date(), MARKET_CLOSE, PACIFIC) - ENTRY_END_OFFSET
+    return start <= now <= end
 
 _warned_missing_spy_columns = False
 
@@ -651,7 +648,6 @@ def check_market_regime() -> bool:
         logger.warning("[check_market_regime] No SPY data – failing regime check")
         return False
 
-    # check for all required columns at once
     missing = [c for c in ("High", "Low", "Close") if c not in df.columns]
     if missing:
         if not _warned_missing_spy_columns:
@@ -660,7 +656,6 @@ def check_market_regime() -> bool:
             _warned_missing_spy_columns = True
         return False
 
-    # clean up and ensure enough history
     df.dropna(subset=["High", "Low", "Close"], inplace=True)
     if len(df) < REGIME_LOOKBACK:
         logger.warning(
@@ -668,7 +663,6 @@ def check_market_regime() -> bool:
         )
         return False
 
-    # compute ATR
     try:
         atr = ta.atr(df["High"], df["Low"], df["Close"], length=REGIME_LOOKBACK).iloc[-1]
         if pd.isna(atr):
@@ -678,13 +672,12 @@ def check_market_regime() -> bool:
         logger.warning(f"[check_market_regime] ATR calc failed: {e}")
         return False
 
-    # volatility check
     vol = df["Close"].pct_change().std()
     return (atr <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
 
 def too_many_positions() -> bool:
     try:
-        return len(api.list_positions())>=MAX_PORTFOLIO_POSITIONS
+        return len(api.list_positions()) >= MAX_PORTFOLIO_POSITIONS
     except Exception:
         logger.warning("[too_many_positions] Could not fetch positions")
         return False
@@ -698,32 +691,26 @@ def too_correlated(sym: str) -> bool:
     for s in open_syms:
         d = fetch_data(ctx, [s], period="3mo", interval="1d")
         if d is None or d.empty:
-            # skip symbols without data
             continue
         series = d["Close"].pct_change().dropna()
         if len(series) > 0:
             rets[s] = series
 
-    # need at least two symbols with data to compute correlation
     if len(rets) < 2:
         return False
 
-    # find the minimum length across return series
     min_len = min(len(r) for r in rets.values())
     if min_len < 1:
         return False
 
-    # filter series by min_len and build DataFrame with explicit index
     good_syms = [s for s, r in rets.items() if len(r) >= min_len]
     idx = rets[good_syms[0]].tail(min_len).index
     mat = pd.DataFrame({s: rets[s].tail(min_len).values for s in good_syms}, index=idx)
     corr_matrix = mat.corr().abs()
-    # compute average off-diagonal correlation
     avg_corr = corr_matrix.where(~np.eye(len(good_syms), dtype=bool)).stack().mean()
     return avg_corr > CORRELATION_THRESHOLD
 
-def now_pacific() -> datetime:
-    return datetime.now(PACIFIC)
+# ─── SIZING & EXECUTION ───────────────────────────────────────────────────────
 
 def is_within_entry_window(ctx: BotContext) -> bool:
     now = now_pacific()
