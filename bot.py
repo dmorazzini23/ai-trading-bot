@@ -503,16 +503,16 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
-def fetch_data(self, symbols, period, interval):
-    dfs = []
-    # chunk into groups of 3
+def fetch_data(ctx, self, symbols, period, interval):
+    dfs: List[pd.DataFrame] = []
     for batch in chunked(symbols, 3):
-        df = ctx._download_batch(batch, period, interval)
-        if df is not None:
-            out = pd.concat([out, df], axis=1)
-        # sleep a little between batches
+        df = yff.fetch(batch, period=period, interval=interval)
+        if df is not None and df.empty:
+            dfs.append(df)
         time.sleep(random.uniform(2, 5))
-    return pd.concat(dfs, axis=1) if dfs else None
+    if not dfs:
+        return None
+    return pd.concat(dfs, axis=1, sort=True)
 
 @sleep_and_retry
 @limits(calls=30, period=60)
