@@ -268,53 +268,71 @@ class DataFetcher:
         self._minute_timestamps : Dict[str, datetime] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        """Fetch the last 5 trading days of daily bars via Alpaca."""
+        """Fetch the last ~20 calendar days (≈14 trading days) of daily bars via Alpaca."""
         if symbol not in self._daily_cache:
             try:
-                bars = ctx.api.get_bars(symbol, TimeFrame.Day, limit=5)
+                today = datetime.now(timezone.utc).date()
+                start = (today - timedelta(days=20)).isoformat()
+                end   = today.isoformat()
+                bars = ctx.api.get_bars(symbol, TimeFrame.Day, start, end, limit=None)
+
                 if hasattr(bars, "df"):
                     df = bars.df
                 else:
                     df = pd.DataFrame([{
-                        "Open": b.o, "High": b.h, "Low": b.l, "Close": b.c, "Volume": b.v
+                        "Open": b.o, "High": b.h, "Low": b.l,
+                        "Close": b.c, "Volume": b.v
                     } for b in bars])
+
                 if df.empty:
                     logger.warning(f"[Alpaca] no daily bars for {symbol}")
                     df = None
                 else:
                     df = df.rename(columns={
-                        "open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"
+                        "open":"Open", "high":"High",
+                        "low":"Low",   "close":"Close",
+                        "volume":"Volume"
                     })
                     df.index = pd.to_datetime(df.index).tz_localize(None)
+
             except Exception as e:
                 logger.info(f"[SKIP] No daily data for {symbol}: {e}")
                 df = None
 
             self._daily_cache[symbol] = df
+
         return self._daily_cache[symbol]
 
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        """Fetch the last full trading day of 1-minute bars via Alpaca."""
+        """Fetch the last 2 calendar days of 1-minute bars via Alpaca."""
         last = self._minute_timestamps.get(symbol)
         if last and last > datetime.utcnow() - timedelta(minutes=1):
             return self._minute_cache.get(symbol)
 
         try:
-            bars = ctx.api.get_bars(symbol, TimeFrame.Minute, limit=390)
+            end = datetime.now(timezone.utc).isoformat()
+            start = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+            bars = ctx.api.get_bars(symbol, TimeFrame.Minute, start, end, limit=None)
+
             if hasattr(bars, "df"):
                 df = bars.df
             else:
                 df = pd.DataFrame([{
-                    "Open": b.o, "High": b.h, "Low": b.l, "Close": b.c, "Volume": b.v
+                    "Open": b.o, "High": b.h, "Low": b.l,
+                    "Close": b.c, "Volume": b.v
                 } for b in bars])
+
             if df.empty:
                 logger.warning(f"[Alpaca] no minute bars for {symbol}")
                 df = None
             else:
                 df = df.rename(columns={
-                    "open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"
+                    "open":"Open", "high":"High",
+                    "low":"Low",   "close":"Close",
+                    "volume":"Volume"
                 })
                 df.index = pd.to_datetime(df.index).tz_localize(None)
+
         except Exception as e:
             logger.warning(f"[get_minute_df] failed for {symbol}: {e}")
             df = None
@@ -743,7 +761,6 @@ def too_correlated(sym: str) -> bool:
     return avg_corr > CORRELATION_THRESHOLD
 
 # ─── SIZING & EXECUTION ───────────────────────────────────────────────────────
-
 def is_within_entry_window(ctx: BotContext) -> bool:
     now = now_pacific()
     start = (datetime.combine(now.date(),ctx.market_open)+ctx.entry_start_offset).time()
@@ -952,7 +969,7 @@ def trade_logic(
 ) -> None:
     logger.info(f"→ trade_logic start for {symbol}")
 
-    # skip entirely if no entry
+    # skip entirely if no entry window or pre-trade guard fails
     if not should_enter(ctx, symbol, balance, regime_ok):
         return
 
@@ -962,6 +979,11 @@ def trade_logic(
         return
 
     df = prepare_indicators(raw)
+    # **NEW**: guard against empty indicator-DF
+    if df is None or df.empty:
+        logger.info(f"[SKIP] not enough indicator data for {symbol}")
+        return
+
     sig, conf, _ = signal_and_confirm(ctx, symbol, df, model)
     if sig == -1:
         return
