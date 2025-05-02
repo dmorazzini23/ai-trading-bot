@@ -1012,7 +1012,18 @@ def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
     # ── one-time SPY fetch for market regime ──
-    …
+    spy_df = fetch_data(ctx, ["SPY"], period="1mo", interval="1d")
+    if spy_df is not None and len(spy_df) >= REGIME_LOOKBACK:
+        atr = ta.atr(
+            spy_df["High"], spy_df["Low"], spy_df["Close"],
+            length=REGIME_LOOKBACK
+        ).iloc[-1]
+        vol = spy_df["Close"].pct_change().std()
+        regime_ok = (atr <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
+    else:
+        regime_ok = True
+
+    # ── load tickers ──
     tickers = load_tickers(TICKERS_FILE)
     logger.info(f"✅ Loaded tickers: {tickers}")
     if not tickers:
@@ -1023,22 +1034,32 @@ def run_all_trades(model) -> None:
     try:
         yf_daily = yff.fetch(tickers, period="1mo", interval="1d")
         if not yf_daily.empty:
-            for sym in tickers:
-                try:
-                    # try MultiIndex (field, symbol)
+            # MultiIndex? (fields × symbols)
+            if yf_daily.columns.nlevels == 2:
+                for sym in tickers:
                     df = yf_daily.xs(sym, axis=1, level=1).copy()
-                except Exception:
-                    # fallback to single‐index
-                    df = yf_daily.copy()
-                df = df.rename(columns={
-                    "Open": "Open", "High": "High",
-                    "Low": "Low",   "Close": "Close",
-                    "Volume": "Volume"
-                })
+                    df.index = pd.to_datetime(df.index).tz_localize(None)
+                    data_fetcher._daily_cache[sym] = df
+            else:
+                # Single‐symbol fallback
+                single_sym = tickers[0]
+                df = yf_daily.copy()
                 df.index = pd.to_datetime(df.index).tz_localize(None)
-                data_fetcher._daily_cache[sym] = df
+                data_fetcher._daily_cache[single_sym] = df
     except Exception as e:
         logger.warning(f"[Bulk YFF] failed to prefetch daily bars: {e}")
+
+    # ── rest of your original logic ──
+    if check_halt_flag():
+        logger.info("Trading halted via HALT_FLAG_FILE.")
+        return
+
+    try:
+        acct = api.get_account()
+        current_cash = float(acct.cash)
+    except Exception:
+        logger.error("Failed to retrieve account balance.")
+        return
 
 def _safe_trade(
     ctx: BotContext,
