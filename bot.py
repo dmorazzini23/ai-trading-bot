@@ -656,37 +656,30 @@ _warned_missing_spy_columns = False
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))
 def check_market_regime() -> bool:
-    global _warned_missing_spy_columns
-
-    df = fetch_data(ctx, ["SPY"], period="1mo", interval="1d")
+    # grab the pre-seeded SPY daily bars from the Alpaca cache
+    df = data_fetcher._daily_cache.get("SPY")
     if df is None or df.empty:
-        logger.warning("[check_market_regime] No SPY data – failing regime check")
+        logger.warning("[check_market_regime] No SPY cache data – failing regime check")
         return False
 
-    missing = [c for c in ("High", "Low", "Close") if c not in df.columns]
-    if missing:
-        if not _warned_missing_spy_columns:
-            cols = ", ".join(missing)
-            logger.warning(f"[check_market_regime] Missing column(s) {cols} in SPY data – skipping regime checks")
-            _warned_missing_spy_columns = True
-        return False
-
-    df.dropna(subset=["High", "Low", "Close"], inplace=True)
+    # make sure we have enough bars
     if len(df) < REGIME_LOOKBACK:
         logger.warning(
-            f"[check_market_regime] Not enough SPY rows after cleaning: {len(df)} – need {REGIME_LOOKBACK}"
+            f"[check_market_regime] Not enough SPY rows: {len(df)} – need {REGIME_LOOKBACK}"
         )
         return False
 
+    # calculate ATR
     try:
         atr = ta.atr(df["High"], df["Low"], df["Close"], length=REGIME_LOOKBACK).iloc[-1]
         if pd.isna(atr):
-            logger.warning("[check_market_regime] ATR value is NaN – failing regime check")
+            logger.warning("[check_market_regime] ATR is NaN – failing regime check")
             return False
     except Exception as e:
         logger.warning(f"[check_market_regime] ATR calc failed: {e}")
         return False
 
+    # calculate vol
     vol = df["Close"].pct_change().std()
     return (atr <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
 
