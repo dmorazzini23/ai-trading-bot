@@ -491,6 +491,35 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
+def prefetch_daily_with_alpaca(symbols: List[str]):
+    """
+    Pull the last 30 days of daily bars for all symbols in one go
+    and seed data_fetcher._daily_cache.
+    """
+    start = (date.today() - timedelta(days=30)).isoformat()
+    end   = date.today().isoformat()
+
+    bars = api.get_bars(
+        symbols,
+        TimeFrame.Day,
+        start=start,
+        end=end,
+        limit=1000
+    ).df
+
+    for sym, df_sym in bars.groupby("symbol"):
+        df_sym = df_sym.rename(columns={
+            "t": "Date",
+            "o": "Open",
+            "h": "High",
+            "l": "Low",
+            "c": "Close",
+            "v": "Volume"
+        })
+        df_sym = df_sym.set_index("Date")
+        df_sym.index = pd.to_datetime(df_sym.index).tz_localize(None)
+        data_fetcher._daily_cache[sym] = df_sym
+        
 def fetch_data(ctx, symbols, period, interval):
     """Fallback for small bulk requests via Alpaca barset if needed."""
     dfs: List[pd.DataFrame] = []
