@@ -1029,9 +1029,9 @@ def run_all_trades(model) -> None:
 
     # Now loop through each ticker and execute your minute‐bar logic:
     for symbol in tickers:
-    executor.submit(
+        executor.submit(
         _safe_trade, ctx, symbol, current_cash, model, check_market_regime()
-    )
+        )
 
 def _safe_trade(
     ctx: BotContext,
