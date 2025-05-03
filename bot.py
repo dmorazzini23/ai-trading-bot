@@ -249,8 +249,13 @@ class YFinanceFetcher:
             logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
         return df
 
+# ─── YFINANCE FETCHER ────────────────────────────────────────────────────────
 # instantiate a singleton
 yff = YFinanceFetcher(calls_per_minute=5, batch_size=6)
+
+# ─── BULK PREFETCH GUARD ─────────────────────────────────────────────────────
+# only prefetch once per calendar day
+_last_yf_prefetch_date: Optional[date] = None
 
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
