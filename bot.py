@@ -493,24 +493,23 @@ ctx = BotContext(
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
 def prefetch_daily_with_alpaca(symbols: List[str]):
     """
-    Pull the last 30 days of daily bars for SPY + all symbols in one go
-    and seed data_fetcher._daily_cache. If both Alpaca and yfinance fail
-    for SPY, inject a flat dummy series so regime checks pass.
+    Pull the last 30 days of daily bars for SPY + all symbols at once and 
+    seed data_fetcher._daily_cache.  If Alpaca fails, fallback to one yfinance
+    fetch of the entire list; if any symbol is still empty, insert a flat dummy.
     """
-    # 1) bulk fetch via Alpaca (SPY first)
     all_syms = ["SPY"] + [s for s in symbols if s != "SPY"]
     start = (date.today() - timedelta(days=30)).isoformat()
     end   = date.today().isoformat()
 
+    # 1) bulk fetch via Alpaca
     try:
         bars = api.get_bars(all_syms, TimeFrame.Day,
                             start=start, end=end, limit=1000).df
         for sym, df_sym in bars.groupby("symbol"):
             df = (
-                df_sym
-                .rename(columns={
+                df_sym.rename(columns={
                     "t": "Date", "o": "Open", "h": "High",
-                    "l": "Low", "c": "Close","v": "Volume"
+                    "l": "Low", "c": "Close", "v": "Volume"
                 })
                 .set_index("Date")
             )
@@ -520,27 +519,40 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
     except Exception as e:
         logger.warning(f"[prefetch] Alpaca bulk fetch failed: {e!r}")
 
-    # 2) ensure SPY is non-empty
-    spy = data_fetcher._daily_cache.get("SPY")
-    if spy is None or spy.empty:
-        # try yfinance once
+    # 2) fallback: one yfinance fetch for ALL symbols
+    missing = [s for s in all_syms
+               if s not in data_fetcher._daily_cache
+               or data_fetcher._daily_cache[s] is None
+               or data_fetcher._daily_cache[s].empty]
+    if missing:
         try:
-            df_spy = yff.fetch("SPY", period="1mo", interval="1d")
-            if df_spy.empty:
-                raise ValueError("yfinance returned empty")
-            df_spy.index = pd.to_datetime(df_spy.index).tz_localize(None)
-            data_fetcher._daily_cache["SPY"] = df_spy
-            logger.info("⚠️  Fallback: fetched SPY via yfinance")
+            df_all = yff.fetch(missing, period="1mo", interval="1d")
+            # yff.fetch on multiple symbols returns a MultiIndex columns:
+            # e.g. ('Open','AAPL'), ('Close','AAPL'), …
+            if not df_all.empty:
+                for sym in missing:
+                    # extract each symbol’s slice
+                    try:
+                        sym_df = df_all.loc[:, (slice(None), sym)]
+                        sym_df.columns = sym_df.columns.droplevel(1)
+                        data_fetcher._daily_cache[sym] = sym_df
+                        logger.info(f"⚠️  Fallback: fetched {sym} via yfinance")
+                    except KeyError:
+                        pass
         except Exception as e:
-            logger.error(f"[prefetch] SPY fallback failed: {e!r}")
-            # final dummy: flat price series → ATR=0, vol=0
+            logger.warning(f"[prefetch] yfinance batch failed: {e!r}")
+
+    # 3) any tickers still missing? inject dummy flat series
+    for sym in all_syms:
+        df = data_fetcher._daily_cache.get(sym)
+        if df is None or df.empty:
             dates = pd.date_range(start=start, end=end, freq="D")
             dummy = pd.DataFrame(index=dates)
             for col in ("Open","High","Low","Close"):
                 dummy[col] = 1.0
             dummy["Volume"] = 0
-            data_fetcher._daily_cache["SPY"] = dummy
-            logger.warning("🔶 Dummy SPY inserted to satisfy regime check")
+            data_fetcher._daily_cache[sym] = dummy
+            logger.warning(f"🔶 Dummy {sym} inserted to satisfy regime & data checks")
         
 def fetch_data(ctx, symbols, period, interval):
     """Fallback for small bulk requests via Alpaca barset if needed."""
