@@ -997,7 +997,7 @@ def trade_logic(
 def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
-    tickers = TICKERS
+    tickers = load_tickers(TICKERS_FILE)
     if not tickers:
         logger.error("❌ No tickers loaded; skipping run_all_trades")
         return
