@@ -519,33 +519,27 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
     except Exception as e:
         logger.warning(f"[prefetch] Alpaca bulk fetch failed: {e!r}")
 
-    # 2) fallback: fetch missing symbols in small batches via your YFF
-    missing = [s for s in all_syms
-               if s not in data_fetcher._daily_cache
-                  or not data_fetcher._daily_cache[s]
-              ]
+    # 2) fallback: fetch missing symbols one by one via your YFF
+    missing = [
+        s for s in all_syms
+        if s not in data_fetcher._daily_cache
+           or not isinstance(data_fetcher._daily_cache[s], pd.DataFrame)
+           or data_fetcher._daily_cache[s].empty
+    ]
 
-    batch_size = 5
-    for i in range(0, len(missing), batch_size):
-        batch = missing[i:i+batch_size]
-        # this will sleep & retry on YFRateLimitError
-        df_batch = yff.fetch(batch, period="1mo", interval="1d")
-        if df_batch.empty:
-            logger.warning(f"[prefetch] yff.fetch returned no data for {batch}")
-            continue
-
-        # unpack the MultiIndex into per-symbol DataFrames
-        for sym in batch:
-            try:
-                sym_df = df_batch.loc[:, (slice(None), sym)].droplevel(1, axis=1)
-                data_fetcher._daily_cache[sym] = sym_df
-                logger.info(f"⚠️  Fallback: fetched {sym} via yfinance")
-            except KeyError:
-                # still missing: will get a dummy below
-                pass
-
-        # give Yahoo a second to breathe
-        time.sleep(1)
+    for sym in missing:
+        # this will sleep & retry internally on YFRateLimitError
+        df_sym = yff.fetch([sym], period="1mo", interval="1d")
+        if df_sym.empty:
+            logger.warning(f"[prefetch] yff.fetch returned no data for {sym}")
+        else:
+            # if it's a 1-col MultiIndex, drop the outer level
+            if isinstance(df_sym.columns, pd.MultiIndex):
+                df_sym = df_sym.droplevel(1, axis=1)
+            data_fetcher._daily_cache[sym] = df_sym
+            logger.info(f"⚠️  Fallback: fetched {sym} via yfinance")
+        # space out your calls so you never exceed 5/min
+        time.sleep(12)
 
     # 3) any tickers still missing? inject dummy flat series
     for sym in all_syms:
