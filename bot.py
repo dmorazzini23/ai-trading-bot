@@ -939,6 +939,12 @@ def trade_logic(
 def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
+    tickers = load_tickers(TICKERS_FILE)
+    logger.info(f"✅ Loaded tickers: {tickers}")
+    if not tickers:
+        logger.error("❌ No tickers loaded; skipping run_all_trades")
+        return
+
     global _last_yf_prefetch_date
     today = date.today()
     if _last_yf_prefetch_date != today:
