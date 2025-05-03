@@ -493,32 +493,49 @@ ctx = BotContext(
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
 def prefetch_daily_with_alpaca(symbols: List[str]):
     """
-    Pull the last 30 days of daily bars for all symbols in one go
+    Pull the last 30 days of daily bars for SPY + all symbols in one go
     and seed data_fetcher._daily_cache.
     """
+    # ensure SPY is included first
+    all_syms = ["SPY"] + [s for s in symbols if s != "SPY"]
+    
     start = (date.today() - timedelta(days=30)).isoformat()
     end   = date.today().isoformat()
 
     bars = api.get_bars(
-        symbols,
+        all_syms,
         TimeFrame.Day,
         start=start,
         end=end,
         limit=1000
     ).df
 
+    # alpaca returns a ‘symbol’ column
     for sym, df_sym in bars.groupby("symbol"):
-        df_sym = df_sym.rename(columns={
-            "t": "Date",
-            "o": "Open",
-            "h": "High",
-            "l": "Low",
-            "c": "Close",
-            "v": "Volume"
-        })
-        df_sym = df_sym.set_index("Date")
+        df_sym = (
+            df_sym
+            .rename(columns={
+                "t": "Date",
+                "o": "Open",
+                "h": "High",
+                "l": "Low",
+                "c": "Close",
+                "v": "Volume"
+            })
+            .set_index("Date")
+        )
         df_sym.index = pd.to_datetime(df_sym.index).tz_localize(None)
         data_fetcher._daily_cache[sym] = df_sym
+
+    # sanity-check: if SPY still missing (e.g. zero bars), fall back to yff
+    if "SPY" not in data_fetcher._daily_cache or data_fetcher._daily_cache["SPY"] is None:
+        try:
+            df_spy = yff.fetch("SPY", period="1mo", interval="1d")
+            df_spy.index = pd.to_datetime(df_spy.index).tz_localize(None)
+            data_fetcher._daily_cache["SPY"] = df_spy
+            logger.info("⚠️  Fallback: fetched SPY via yfinance")
+        except Exception as e:
+            logger.warning(f"[prefetch_daily_with_alpaca] SPY fallback fetch failed: {e}")
         
 def fetch_data(ctx, symbols, period, interval):
     """Fallback for small bulk requests via Alpaca barset if needed."""
