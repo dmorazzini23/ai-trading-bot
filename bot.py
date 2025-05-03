@@ -519,28 +519,28 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
     except Exception as e:
         logger.warning(f"[prefetch] Alpaca bulk fetch failed: {e!r}")
 
-    # 2) fallback: one yfinance fetch for ALL symbols
+    # 2) fallback: one single yfinance download for ALL missing symbols
     missing = [s for s in all_syms
                if s not in data_fetcher._daily_cache
                or data_fetcher._daily_cache[s] is None
                or data_fetcher._daily_cache[s].empty]
     if missing:
         try:
-            df_all = yff.fetch(missing, period="1mo", interval="1d")
-            # yff.fetch on multiple symbols returns a MultiIndex columns:
-            # e.g. ('Open','AAPL'), ('Close','AAPL'), …
+            # Direct yfinance download bypasses our chunking logic
+            df_all = yf.download(missing, period="1mo", interval="1d", progress=False)
             if not df_all.empty:
+                # df_all has MultiIndex columns: (field, symbol)
                 for sym in missing:
-                    # extract each symbol’s slice
                     try:
-                        sym_df = df_all.loc[:, (slice(None), sym)]
-                        sym_df.columns = sym_df.columns.droplevel(1)
+                        sym_df = df_all.loc[:, (slice(None), sym)].droplevel(1, axis=1)
                         data_fetcher._daily_cache[sym] = sym_df
                         logger.info(f"⚠️  Fallback: fetched {sym} via yfinance")
                     except KeyError:
+                        # symbol not in the download, will inject dummy later
                         pass
         except Exception as e:
             logger.warning(f"[prefetch] yfinance batch failed: {e!r}")
+
 
     # 3) any tickers still missing? inject dummy flat series
     for sym in all_syms:
