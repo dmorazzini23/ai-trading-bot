@@ -38,6 +38,9 @@ import joblib
 from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
+import sqlite3
+
+executor = ThreadPoolExecutor(max_workers=4)
 
 def predict_text_sentiment(text: str) -> float:
     return 0.0
@@ -217,19 +220,19 @@ class YFinanceFetcher:
     def _download_batch(self, symbols: list[str], period: str, interval: str) -> pd.DataFrame:
         try:
             df = yf.download(symbols, period=period, interval=interval, progress=False)
-        except YFRateLimitError as e:
-            logger.warning(f"[YFF] rate‐limited on batch {symbols}: {e}")
+        except sqlite3.OperationalError as e:
+            # translate sqlite errors into a retryable YFRateLimitError
+            logger.warning(f"[YFF] sqlite OperationalError on {symbols}: {e!r}, retrying...")
+            raise YFRateLimitError() from e
+        except YFRateLimitError:
+            logger.warning(f"[YFF] rate-limited on batch {symbols}")
             raise
         except Exception as e:
             msg = str(e).lower()
             if "no objects to concatenate" in msg:
-                logger.warning(f"[YFF] no data to concatenate for {symbols}: {e}")
+                logger.warning(f"[YFF] no data to concatenate for {symbols}: {e!r}")
                 raise YFRateLimitError() from e
             raise
-
-        if getattr(df.index, "tz", None):
-            df.index = df.index.tz_localize(None)
-        return df
 
     def fetch(self, symbols, period="1y", interval="1d") -> pd.DataFrame:
         syms   = symbols if isinstance(symbols, (list, tuple)) else [symbols]
@@ -279,7 +282,7 @@ class DataFetcher:
          
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         last = self._minute_timestamps.get(symbol)
-        if last and last > datetime.utcnow() - timedelta(minutes=1):
+        if last and last > datetime.now(timezone.utc) - timedelta(minutes=1):
             return self._minute_cache.get(symbol)
         try:
             df = yff.fetch(symbol, period="1d", interval="1m")
@@ -290,7 +293,7 @@ class DataFetcher:
         except Exception:
             df = None
         self._minute_cache[symbol]      = df
-        self._minute_timestamps[symbol] = datetime.utcnow()
+        self._minute_timestamps[symbol] = datetime.now(timezone.utc)
         return df 
         
 class TradeLogger:
@@ -305,7 +308,7 @@ class TradeLogger:
                 ])
 
     def log_entry(self, symbol: str, price: float, qty: int, side: str, strategy: str, signal_tags: str="") -> None:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         with portalocker.Lock(self.path, 'a', timeout=1) as f:
             csv.writer(f).writerow([symbol, now, price, "","", qty, side, strategy, "", signal_tags])
 
@@ -316,11 +319,11 @@ class TradeLogger:
             for row in data:
                 if row[0] == symbol and row[3] == "":
                     entry_t = datetime.fromisoformat(row[1])
-                    days = (datetime.utcnow() - entry_t).days
+                    days = (datetime.now(timezone.utc) - entry_t).days
                     cls = ("day_trade" if days == 0
                            else "swing_trade" if days < 5
                            else "long_trade")
-                    row[3], row[4], row[8] = datetime.utcnow().isoformat(), exit_price, cls
+                    row[3], row[4], row[8] = datetime.now(timezone.utc).isoformat(), exit_price, cls
                     break
             f.seek(0); f.truncate()
             w = csv.writer(f)
@@ -994,7 +997,7 @@ def trade_logic(
 def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
-    tickers = load_tickers(TICKERS_FILE)
+    tickers = TICKERS
     if not tickers:
         logger.error("❌ No tickers loaded; skipping run_all_trades")
         return
@@ -1026,9 +1029,9 @@ def run_all_trades(model) -> None:
 
     # Now loop through each ticker and execute your minute‐bar logic:
     for symbol in tickers:
-        ThreadPoolExecutor().submit(
-            _safe_trade, ctx, symbol, current_cash, model, check_market_regime()
-        )
+    executor.submit(
+        _safe_trade, ctx, symbol, current_cash, model, check_market_regime()
+    )
 
 def _safe_trade(
     ctx: BotContext,
