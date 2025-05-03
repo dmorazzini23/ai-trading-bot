@@ -39,9 +39,7 @@ from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 
-# provide a stub for text-sentiment prediction
 def predict_text_sentiment(text: str) -> float:
-    # TODO: integrate real sentiment model
     return 0.0
 
 for _mod in (
@@ -56,7 +54,6 @@ for _mod in (
     except (ImportError, AttributeError):
         continue
 else:
-    # fallback if we still can’t find it
     class YFRateLimitError(Exception):
         """Fallback for yfinance rate-limit errors."""
         pass
@@ -238,24 +235,19 @@ class YFinanceFetcher:
         syms   = symbols if isinstance(symbols, (list, tuple)) else [symbols]
         chunks = [syms[i:i+self.batch_size] for i in range(0, len(syms), self.batch_size)]
         dfs    = []
-
         for batch in chunks:
             self._throttle()
             try:
-                batch_df = self._download_batch(batch, period, interval)
-            except YFRateLimitError as e:
-                logger.warning(f"[YFF] rate‐limited on batch {batch}, skipping: {e}")
-                continue
-            if batch_df is None or batch_df.empty:
-                logger.warning(f"[YFF] fetched empty DataFrame for {batch}, skipping.")
-                continue
-            dfs.append(batch_df)
-
+                dfs.append(self._download_batch(batch, period, interval))
+            except YFRateLimitError:
+                # on persistent rate‐limit, skip this batch
+                dfs.append(pd.DataFrame())
         if not dfs:
-            # no successful batches → upstream treats as “no data”
             return pd.DataFrame()
-
-        return pd.concat(dfs, axis=1, sort=True)
+        df = pd.concat(dfs, axis=1, sort=True)
+        if df.empty:
+            logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
+        return df
 
 # instantiate a singleton
 yff = YFinanceFetcher(calls_per_minute=5, batch_size=6)
@@ -268,84 +260,33 @@ class DataFetcher:
         self._minute_timestamps : Dict[str, datetime] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        """
-        Return a cached DataFrame if present; otherwise try Alpaca,
-        then fall back to whatever’s already in `_daily_cache` (i.e. our yfinance bulk fetch).
-        """
-        # if bulk-fetched via yfinance, it'll already be in the cache
-        if symbol in self._daily_cache:
-            return self._daily_cache[symbol]
-
-        # otherwise try Alpaca one-off (e.g. newly-added ticker)
-        try:
-            today = datetime.now(timezone.utc).date()
-            start = (today - timedelta(days=30)).isoformat()
-            end   = today.isoformat()
-            bars  = ctx.api.get_bars(symbol, TimeFrame.Day, start, end, limit=None)
-
-            if hasattr(bars, "df"):
-                df = bars.df
-            else:
-                df = pd.DataFrame([{
-                    "Open": b.o, "High": b.h, "Low": b.l,
-                    "Close": b.c, "Volume": b.v
-                } for b in bars])
-
-            if df.empty:
-                logger.warning(f"[Alpaca] no daily bars for {symbol}")
+        if symbol not in self._daily_cache:
+            try:
+                df = yff.fetch(symbol, period="5d", interval="1d")
+                if df.empty:
+                    raise YFRateLimitError("empty")
+            except YFRateLimitError:
                 df = None
-            else:
-                df = df.rename(columns={
-                    "open":"Open","high":"High",
-                    "low":"Low","close":"Close",
-                    "volume":"Volume"
-                })
-                df.index = pd.to_datetime(df.index).tz_localize(None)
-
-        except Exception as e:
-            logger.info(f"[Alpaca] failed for {symbol}: {e}; no fallback available")
-            df = None
-
-        self._daily_cache[symbol] = df
-        return df
+            except Exception:
+                df = None
+            self._daily_cache[symbol] = df
+        return self._daily_cache[symbol]
          
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        """Fetch the last 2 calendar days of 1-minute bars via Alpaca."""
         last = self._minute_timestamps.get(symbol)
         if last and last > datetime.utcnow() - timedelta(minutes=1):
             return self._minute_cache.get(symbol)
-
         try:
-            end = datetime.now(timezone.utc).isoformat()
-            start = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
-            bars = ctx.api.get_bars(symbol, TimeFrame.Minute, start, end, limit=None)
-
-            if hasattr(bars, "df"):
-                df = bars.df
-            else:
-                df = pd.DataFrame([{
-                    "Open": b.o, "High": b.h, "Low": b.l,
-                    "Close": b.c, "Volume": b.v
-                } for b in bars])
-
+            df = yff.fetch(symbol, period="1d", interval="1m")
             if df.empty:
-                logger.warning(f"[Alpaca] no minute bars for {symbol}")
-                df = None
-            else:
-                df = df.rename(columns={
-                    "open":"Open", "high":"High",
-                    "low":"Low",   "close":"Close",
-                    "volume":"Volume"
-                })
-                df.index = pd.to_datetime(df.index).tz_localize(None)
-
-        except Exception as e:
-            logger.warning(f"[get_minute_df] failed for {symbol}: {e}")
+                raise YFRateLimitError("empty")
+        except YFRateLimitError:
             df = None
-
+        except Exception:
+            df = None
         self._minute_cache[symbol]      = df
         self._minute_timestamps[symbol] = datetime.utcnow()
-        return df
+        return df 
         
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
@@ -548,27 +489,11 @@ ctx = BotContext(
 def fetch_data(ctx, symbols, period, interval):
     """Fallback for small bulk requests via Alpaca barset if needed."""
     dfs: List[pd.DataFrame] = []
-    tf = TimeFrame.Day if interval.endswith("d") else TimeFrame.Minute
-    limit = 5 if tf == TimeFrame.Day else 390
-
-    for sym in symbols:
-        try:
-            bars = ctx.api.get_bars(sym, tf, limit=limit)
-            if hasattr(bars, "df"):
-                df = bars.df
-            else:
-                df = pd.DataFrame([{
-                    "Open": b.o, "High": b.h, "Low": b.l, "Close": b.c, "Volume": b.v
-                } for b in bars])
-            if not df.empty:
-                df = df.rename(columns={
-                    "open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"
-                })
-                df.index = pd.to_datetime(df.index).tz_localize(None)
-                dfs.append(df)
-        except Exception:
-            continue
-
+    for batch in chunked(symbols, 3):
+        df = yff.fetch(batch, period=period, interval=interval)
+        if df is not None and not df.empty:
+            dfs.append(df)
+        time.sleep(random.uniform(2, 5))
     if not dfs:
         return None
     return pd.concat(dfs, axis=1, sort=True)
