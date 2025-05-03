@@ -940,7 +940,6 @@ def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
     tickers = load_tickers(TICKERS_FILE)
-    logger.info(f"✅ Loaded tickers: {tickers}")
     if not tickers:
         logger.error("❌ No tickers loaded; skipping run_all_trades")
         return
@@ -950,49 +949,31 @@ def run_all_trades(model) -> None:
     if _last_yf_prefetch_date != today:
         _last_yf_prefetch_date = today
 
-        # ── bulk prefetch in safe-size chunks ──
-        for batch in chunked(tickers, 6):  # you can adjust 6 up/down
-            try:
-                yf_daily = yff.fetch(batch, period="1mo", interval="1d")
-            except YFRateLimitError as e:
-                logger.warning(f"[Bulk YFF] batch {batch!r} rate-limited, skipping: {e}")
-                continue
-            except Exception as e:
-                logger.warning(f"[Bulk YFF] batch {batch!r} fetch failed: {e}")
-                continue
+        # ONE Alpaca call replaces all those yfinance batches
+        try:
+            prefetch_daily_with_alpaca(tickers)
+            logger.info("✅ Prefetched daily bars via Alpaca for all tickers")
+        except Exception as e:
+            logger.warning(f"[Alpaca] daily prefetch failed: {e}")
 
-            if yf_daily.empty:
-                logger.debug(f"[Bulk YFF] batch {batch!r} returned empty DataFrame")
-                continue
-
-            # populate _daily_cache for each symbol in this batch
-            if yf_daily.columns.nlevels == 2:
-                # MultiIndex case
-                for sym in batch:
-                    try:
-                        df = yf_daily.xs(sym, axis=1, level=1).copy()
-                    except KeyError:
-                        logger.debug(f"[Bulk YFF] no data for {sym} in this batch")
-                        continue
-                    df.index = pd.to_datetime(df.index).tz_localize(None)
-                    data_fetcher._daily_cache[sym] = df
-            else:
-                # single-symbol fallback
-                sym = batch[0]
-                df = yf_daily.copy()
-                df.index = pd.to_datetime(df.index).tz_localize(None)
-                data_fetcher._daily_cache[sym] = df
-
+    # Halt‐flag guard
     if check_halt_flag():
         logger.info("Trading halted via HALT_FLAG_FILE.")
         return
 
+    # Fetch current cash balance
     try:
         acct = api.get_account()
         current_cash = float(acct.cash)
     except Exception:
         logger.error("Failed to retrieve account balance.")
         return
+
+    # Now loop through each ticker and execute your minute‐bar logic:
+    for symbol in tickers:
+        ThreadPoolExecutor().submit(
+            _safe_trade, ctx, symbol, current_cash, model, check_market_regime()
+        )
 
 def _safe_trade(
     ctx: BotContext,
