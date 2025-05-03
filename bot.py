@@ -950,27 +950,38 @@ def run_all_trades(model) -> None:
     if _last_yf_prefetch_date != today:
         _last_yf_prefetch_date = today
 
-        yff.batch_size = len(tickers)
+        # ── bulk prefetch in safe-size chunks ──
+        for batch in chunked(tickers, 6):  # you can adjust 6 up/down
+            try:
+                yf_daily = yff.fetch(batch, period="1mo", interval="1d")
+            except YFRateLimitError as e:
+                logger.warning(f"[Bulk YFF] batch {batch!r} rate-limited, skipping: {e}")
+                continue
+            except Exception as e:
+                logger.warning(f"[Bulk YFF] batch {batch!r} fetch failed: {e}")
+                continue
 
-        try:
-            yf_daily = yff.fetch(tickers, period="1mo", interval="1d")
-            if not yf_daily.empty:
-                if yf_daily.columns.nlevels == 2:
-                    for sym in tickers:
+            if yf_daily.empty:
+                logger.debug(f"[Bulk YFF] batch {batch!r} returned empty DataFrame")
+                continue
+
+            # populate _daily_cache for each symbol in this batch
+            if yf_daily.columns.nlevels == 2:
+                # MultiIndex case
+                for sym in batch:
+                    try:
                         df = yf_daily.xs(sym, axis=1, level=1).copy()
-                        df.index = pd.to_datetime(df.index).tz_localize(None)
-                        data_fetcher._daily_cache[sym] = df
-                else:
-                    # single‐symbol fallback
-                    sym = tickers[0]
-                    df = yf_daily.copy()
+                    except KeyError:
+                        logger.debug(f"[Bulk YFF] no data for {sym} in this batch")
+                        continue
                     df.index = pd.to_datetime(df.index).tz_localize(None)
                     data_fetcher._daily_cache[sym] = df
-
-        except YFRateLimitError as e:
-            logger.warning(f"[Bulk YFF] rate-limited on prefetch, skipping: {e}")
-        except Exception as e:
-            logger.warning(f"[Bulk YFF] failed to prefetch daily bars: {e}")
+            else:
+                # single-symbol fallback
+                sym = batch[0]
+                df = yf_daily.copy()
+                df.index = pd.to_datetime(df.index).tz_localize(None)
+                data_fetcher._daily_cache[sym] = df
 
     if check_halt_flag():
         logger.info("Trading halted via HALT_FLAG_FILE.")
