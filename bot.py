@@ -275,7 +275,7 @@ class DataFetcher:
         # 5 trading days of daily bars
         if symbol not in self._daily_cache:
             try:
-                df = yff.fetch(symbol, period="5d", interval="1d")
+                df = fh.fetch(symbol, period="1d", interval="1m")
                 if df is None or df.empty:
                     raise DataFetchError(f"No daily data for {symbol}")
             except Exception as e:
@@ -292,7 +292,7 @@ class DataFetcher:
             return self._minute_cache.get(symbol)
 
         try:
-            df = yff.fetch(symbol, period="1d", interval="1m")
+            df = fh.fetch(symbol, period="1d", interval="1m")
             if df is None or df.empty:
                 raise DataFetchError(f"No minute data for {symbol}")
         except Exception as e:
@@ -522,8 +522,8 @@ def _fh_chunk_fetch(
     
 def prefetch_daily_with_alpaca(symbols: List[str]):
     all_syms = ["SPY"] + [s for s in symbols if s != "SPY"]
-    start    = (date.today() - timedelta(days=30)).isoformat()
-    end      = date.today().isoformat()
+    start = (date.today() - timedelta(days=30)).isoformat()
+    end   = date.today().isoformat()
 
     # 1) Alpaca bulk
     try:
@@ -542,52 +542,52 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
         logger.info(f"[prefetch] seeded {len(bars['symbol'].unique())} symbols via Alpaca")
         return
     except Exception as e:
-        logger.warning(f"[prefetch] Alpaca bulk failed: {e!r} — falling back to yfinance")
+        logger.warning(f"[prefetch] Alpaca bulk failed: {e!r} — falling back to Finnhub")
 
-    # 2) Symbol-by-symbol fallback in tiny chunks
+    # 2) Symbol-by-symbol fallback in tiny chunks via Finnhub
     for chunk_syms in chunked(all_syms, 3):
         try:
-            df_chunk = _fh_chunk_fetch(list(chunk_syms), period="1mo", interval="1d")
+            df_chunk = _fh_chunk_fetch(chunk_syms, period="1mo", interval="1d")
         except Exception as e:
             logger.warning(f"[prefetch] Finnhub chunk {chunk_syms} failed: {e!r}")
             df_chunk = pd.DataFrame()
 
-        if not df_chunk.empty and isinstance(df_chunk.columns, pd.MultiIndex):
-            # unpack (Field,Symbol) → per-symbol frames
-            for sym in chunk_syms:
-                if sym in df_chunk.columns.levels[1]:
-                    try:
-                        sym_df = df_chunk.xs(sym, axis=1, level=1).droplevel(1, axis=1)
+        if df_chunk is not None and not df_chunk.empty:
+            if isinstance(df_chunk.columns, pd.MultiIndex):
+                # unpack (Symbol,Field) → per-symbol frames
+                for sym in chunk_syms:
+                    if sym in df_chunk.columns.get_level_values(0):
+                        sym_df = df_chunk.xs(sym, level=0, axis=1)
                         sym_df.index = pd.to_datetime(sym_df.index)
                         data_fetcher._daily_cache[sym] = sym_df
-                        logger.info(f"⚠️  fetched {sym} via yfinance chunk")
-                    except Exception:
-                        pass
-        # always pause so you never exceed ~5 calls/min
+                        logger.info(f"⚠️  fetched {sym} via Finnhub chunk")
+            else:
+                # single-symbol DataFrame
+                sym = chunk_syms[0]
+                df_chunk.index = pd.to_datetime(df_chunk.index)
+                data_fetcher._daily_cache[sym] = df_chunk
+                logger.info(f"⚠️  fetched {sym} via Finnhub chunk")
+
+        # pause to respect rate limit
         time.sleep(12)
 
-    # 3) Per-symbol ultimate retry (slower) then dummy
+    # 3) Per-symbol ultimate retry via Finnhub, then dummy
     for sym in all_syms:
         if sym not in data_fetcher._daily_cache or data_fetcher._daily_cache[sym] is None:
             try:
-                df_sym = yff.fetch([sym], period="1mo", interval="1d")
-                if not df_sym.empty:
-                    if isinstance(df_sym.columns, pd.MultiIndex):
-                        df_sym = df_sym.xs(sym, axis=1, level=1).droplevel(1, axis=1)
+                df_sym = fh.fetch(sym, period="1mo", interval="1d")
+                if df_sym is not None and not df_sym.empty:
                     df_sym.index = pd.to_datetime(df_sym.index)
                     data_fetcher._daily_cache[sym] = df_sym
                     logger.info(f"⚠️  single-symbol fetch succeeded for {sym}")
                     continue
-            except YFRateLimitError:
-                logger.warning(f"[prefetch] rate-limited on single fetch {sym}")
-            except Exception:
-                logger.warning(f"[prefetch] failed final fetch for {sym}", exc_info=True)
+            except Exception as e:
+                logger.warning(f"[prefetch] single-symbol Finnhub fetch failed for {sym}: {e!r}")
 
             # last resort: dummy flat
             dates = pd.date_range(start=start, end=end, freq="D")
-            dummy = pd.DataFrame(index=dates)
-            for col in ("Open","High","Low","Close"):
-                dummy[col] = 1.0
+            dummy = pd.DataFrame(index=dates, columns=["Open","High","Low","Close","Volume"])
+            dummy[["Open","High","Low","Close"]] = 1.0
             dummy["Volume"] = 0
             data_fetcher._daily_cache[sym] = dummy
             logger.warning(f"🔶 Dummy {sym} inserted to satisfy data checks")
