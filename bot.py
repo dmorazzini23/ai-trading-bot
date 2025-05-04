@@ -247,10 +247,14 @@ class YFinanceFetcher:
                 dfs.append(pd.DataFrame())
         if not dfs:
             return pd.DataFrame()
-        df = pd.concat(dfs, axis=1, sort=True)
-        if df.empty:
-            logger.warning(f"[YFF] fetched empty DataFrame for {symbols}")
-        return df
+        # drop any empty DataFrames so concat never sees "all-empty"
+        valid = [d for d in dfs if d is not None and not d.empty]
+        if not valid:
+            # nothing to stitch together
+            return pd.DataFrame()
+
+        # safe to concatenate now
+        df = pd.concat(valid, axis=1, sort=True)
 
 # ─── YFINANCE FETCHER ────────────────────────────────────────────────────────
 # instantiate a singleton
