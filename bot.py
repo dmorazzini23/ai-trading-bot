@@ -494,11 +494,16 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(60))
+def _big_yf_download(symbols: List[str]) -> pd.DataFrame:
+    return yff.fetch(symbols, period="1mo", interval="1d")
+
+
 def prefetch_daily_with_alpaca(symbols: List[str]):
     """
     Pull the last 30 days of daily bars for SPY + all symbols at once and
     seed data_fetcher._daily_cache.  If Alpaca fails, fallback to ONE yfinance
-    fetch of the entire list; then dummy‐inject any still‐missing symbols.
+    fetch of the entire list (with retry); then dummy‐inject any still‐missing symbols.
     """
     all_syms = ["SPY"] + [s for s in symbols if s != "SPY"]
     start    = (date.today() - timedelta(days=30)).isoformat()
@@ -519,24 +524,27 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
             df.index = pd.to_datetime(df.index).tz_localize(None)
             data_fetcher._daily_cache[sym] = df
         logger.info(f"[prefetch] seeded {len(bars['symbol'].unique())} symbols via Alpaca")
-        return
     except Exception as e:
         logger.warning(f"[prefetch] Alpaca bulk fetch failed: {e!r} — falling back to yfinance")
 
-    # 2) Single yfinance fetch for everything
-    df = yff.fetch(all_syms, period="1mo", interval="1d")
-    if not df.empty:
-        # MultiIndex columns: (Field, Symbol)
-        for sym in all_syms:
-            try:
-                # select the second level == sym
-                sym_df = df.xs(sym, axis=1, level=1).droplevel(1, axis=1)
-                sym_df.index = pd.to_datetime(sym_df.index)
-                data_fetcher._daily_cache[sym] = sym_df
-                logger.info(f"⚠️  Fallback: fetched {sym} via yfinance")
-            except KeyError:
-                # still missing, will dummy‐inject below
-                continue
+        # 2) Single yfinance fetch for everything, with retry/backoff
+        try:
+            df_all = _big_yf_download(all_syms)
+        except Exception as yf_exc:
+            logger.error(f"[prefetch] Big yfinance download failed even after retry: {yf_exc!r}")
+            df_all = pd.DataFrame()
+
+        if not df_all.empty:
+            # MultiIndex columns: (Field, Symbol)
+            for sym in all_syms:
+                try:
+                    sym_df = df_all.xs(sym, axis=1, level=1).droplevel(1, axis=1)
+                    sym_df.index = pd.to_datetime(sym_df.index)
+                    data_fetcher._daily_cache[sym] = sym_df
+                    logger.info(f"⚠️  Fallback: fetched {sym} via yfinance")
+                except KeyError:
+                    # still missing, will get dummy below
+                    continue
 
     # 3) Dummy-inject any symbols still missing
     for sym in all_syms:
@@ -549,6 +557,12 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
             dummy["Volume"] = 0
             data_fetcher._daily_cache[sym] = dummy
             logger.warning(f"🔶 Dummy {sym} inserted to satisfy regime & data checks")
+
+    # 4) Diagnostics: who’s actually in cache?
+    logger.debug(f"[prefetch] cache keys: {sorted(data_fetcher._daily_cache.keys())}")
+    if "SPY" in data_fetcher._daily_cache:
+        spy = data_fetcher._daily_cache["SPY"]
+        logger.debug(f"[prefetch] SPY head:\n{spy.head().to_string()}")
         
 def fetch_data(ctx, symbols, period, interval):
     """Fallback for small bulk requests via Alpaca barset if needed."""
