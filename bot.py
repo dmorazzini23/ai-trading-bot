@@ -46,6 +46,7 @@ def predict_text_sentiment(text: str) -> float:
 
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, wait_random, retry_if_exception_type
 from ratelimit import limits, sleep_and_retry
+from collections import deque
 from more_itertools import chunked
 from logging import getLogger
 
