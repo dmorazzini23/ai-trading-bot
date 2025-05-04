@@ -66,7 +66,6 @@ structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
 logger = structlog.get_logger()
 log = logging.getLogger(__name__)
 
-logger = getLogger(__name__)
 finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
 
 # ─── C. PROMETHEUS METRICS ───────────────────────────────────────────────────
@@ -263,10 +262,7 @@ class FinnhubFetcher:
         return pd.concat(frames, axis=1, keys=syms, names=['Symbol','Field'])
 # ─── YFINANCE FETCHER ────────────────────────────────────────────────────────
 # instantiate a singleton
-yff = FinnhubFetcher(calls_per_minute=60)
-# ─── BULK PREFETCH GUARD ─────────────────────────────────────────────────────
-# only prefetch once per calendar day
-_last_yf_prefetch_date: Optional[date] = None
+fh = FinnhubFetcher(calls_per_minute=60)
 
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
@@ -505,14 +501,25 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(30))
-def _yf_chunk_fetch(symbols: List[str]) -> pd.DataFrame:
+@retry(
+    stop=stop_after_attempt(2),
+    wait=wait_fixed(30),
+    retry=retry_if_exception_type(Exception)
+)
+def _fh_chunk_fetch(
+    symbols: List[str],
+    period: str = "1mo",
+    interval: str = "1d"
+) -> pd.DataFrame:
     """
-    Use your throttled YFinanceFetcher for small batches.
-    Retries twice on YFRateLimitError.
+    Use your throttled FinnhubFetcher for small batches.
+    Retries twice on any exception.
     """
-    return yff.fetch(symbols, period="1mo", interval="1d")
-
+    df = fh.fetch(symbols, period=period, interval=interval)
+    if df is None or df.empty:
+        raise DataFetchError(f"No data returned for symbols {symbols}")
+    return df
+    
 def prefetch_daily_with_alpaca(symbols: List[str]):
     all_syms = ["SPY"] + [s for s in symbols if s != "SPY"]
     start    = (date.today() - timedelta(days=30)).isoformat()
@@ -540,9 +547,9 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
     # 2) Symbol-by-symbol fallback in tiny chunks
     for chunk_syms in chunked(all_syms, 3):
         try:
-            df_chunk = _yf_chunk_fetch(list(chunk_syms))
+            df_chunk = _fh_chunk_fetch(list(chunk_syms), period="1mo", interval="1d")
         except Exception as e:
-            logger.warning(f"[prefetch] Yahoo chunk {chunk_syms} failed: {e!r}")
+            logger.warning(f"[prefetch] Finnhub chunk {chunk_syms} failed: {e!r}")
             df_chunk = pd.DataFrame()
 
         if not df_chunk.empty and isinstance(df_chunk.columns, pd.MultiIndex):
