@@ -26,7 +26,6 @@ if not hasattr(np, "NaN"):
 import pandas as pd
 from numpy import NaN as npNaN
 import pandas_ta as ta
-import yfinance as yf
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask
@@ -40,37 +39,17 @@ import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 import sqlite3
 import finnhub
-from path.to.your_module import FinnhubFetcher
 
 executor = ThreadPoolExecutor(max_workers=4)
 
 def predict_text_sentiment(text: str) -> float:
     return 0.0
 
-for _mod in (
-    "yfinance.shared",
-    "yfinance._shared",
-    "yfinance.base",
-    "yfinance.utils",
-):
-    try:
-        YFRateLimitError = __import__(_mod, fromlist=["YFRateLimitError"]).YFRateLimitError
-        break
-    except (ImportError, AttributeError):
-        continue
-else:
-    class YFRateLimitError(Exception):
-        """Fallback for yfinance rate-limit errors."""
-        pass
-
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, wait_random, retry_if_exception_type
 from ratelimit import limits, sleep_and_retry
 from collections import deque
 from more_itertools import chunked
 from logging import getLogger
-
-logger = getLogger(__name__)
-finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
 
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
@@ -86,6 +65,9 @@ sentry_sdk.init(
 structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
 logger = structlog.get_logger()
 log = logging.getLogger(__name__)
+
+logger = getLogger(__name__)
+finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
 
 # ─── C. PROMETHEUS METRICS ───────────────────────────────────────────────────
 orders_total   = Counter('bot_orders_total',   'Total orders sent')
@@ -222,12 +204,13 @@ class FinnhubFetcher:
         """
         Convert a string like '5d', '1mo' into seconds.
         """
+        if period.endswith("mo"):
+            num = int(period[:-2])
+            return num * 30 * 86400
         num = int(period[:-1])
         unit = period[-1]
-        if unit == 'd':
+        if unit == "d":
             return num * 86400
-        if period.endswith('mo'):
-            return num * 30 * 86400
         raise ValueError(f"Unsupported period: {period}")
 
     @retry(
