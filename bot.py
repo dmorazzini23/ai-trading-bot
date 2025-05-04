@@ -285,20 +285,35 @@ class DataFetcher:
         return self._daily_cache[symbol]
 
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        # only re-fetch if our cache is >1m old
+        # Attempt Finnhub first
         last = self._minute_timestamps.get(symbol)
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=1)
-        if last and last > cutoff:
-            return self._minute_cache.get(symbol)
+        if last and last > datetime.now(timezone.utc) - timedelta(minutes=1):
+            return self._minute_cache[symbol]
 
         try:
             df = fh.fetch(symbol, period="1d", interval="1m")
-            if df is None or df.empty:
-                raise DataFetchError(f"No minute data for {symbol}")
         except Exception as e:
             logger.warning(f"[DataFetcher] minute fetch failed for {symbol}: {e}")
             df = None
 
+        # Fallback to Alpaca IEX minute bars
+        if df is None or df.empty:
+            try:
+                bars = ctx.api.get_bars(symbol, TimeFrame.Minute,
+                                        limit=390,  # full trading day
+                                        data_feed="iex").df
+                if not bars.empty:
+                    bars = bars.rename(columns={
+                        "t":"Date","o":"Open","h":"High",
+                        "l":"Low","c":"Close","v":"Volume"
+                    }).set_index("Date")
+                    bars.index = pd.to_datetime(bars.index).tz_localize(None)
+                    df = bars
+                    logger.info(f"[DataFetcher] minute bars via Alpaca IEX for {symbol}")
+            except Exception as e:
+                logger.warning(f"[DataFetcher] Alpaca minute fallback failed for {symbol}: {e}")
+
+        # Cache & return
         self._minute_cache[symbol]      = df
         self._minute_timestamps[symbol] = datetime.now(timezone.utc)
         return df
@@ -528,7 +543,7 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
     # 1) Alpaca bulk
     try:
         bars = api.get_bars(all_syms, TimeFrame.Day,
-                            start=start, end=end, limit=1000).df
+                            start=start, end=end, limit=1000, data_feed="iex").df
         for sym, df_sym in bars.groupby("symbol"):
             df = (
                 df_sym.rename(columns={
