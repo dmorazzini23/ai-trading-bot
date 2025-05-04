@@ -498,28 +498,16 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(60))
-def _big_yf_download(symbols: List[str]) -> pd.DataFrame:
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(30))
+def _yf_chunk_fetch(symbols: List[str]) -> pd.DataFrame:
     """
-    One-shot yfinance download for up to ~10 tickers at once.
-    Retries once after 60s if it fails.
+    Use your throttled YFinanceFetcher for small batches.
+    Retries twice on YFRateLimitError.
     """
-    df = yf.download(
-        tickers=symbols,
-        period="1mo",
-        interval="1d",
-        group_by="ticker",
-        progress=False,
-        auto_adjust=True,
-    )
-    return df
+    return yff.fetch(symbols, period="1mo", interval="1d")
+
 
 def prefetch_daily_with_alpaca(symbols: List[str]):
-    """
-    1) Try Alpaca bulk.
-    2) On failure, split into chunks of 10 and call _big_yf_download().
-    3) Dummy-inject any still-missing symbols.
-    """
     all_syms = ["SPY"] + [s for s in symbols if s != "SPY"]
     start    = (date.today() - timedelta(days=30)).isoformat()
     end      = date.today().isoformat()
@@ -541,31 +529,48 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
         logger.info(f"[prefetch] seeded {len(bars['symbol'].unique())} symbols via Alpaca")
         return
     except Exception as e:
-        logger.warning(f"[prefetch] Alpaca bulk failed: {e!r} — fallback to yfinance")
+        logger.warning(f"[prefetch] Alpaca bulk failed: {e!r} — falling back to yfinance")
 
-    # 2) Chunked Yahoo fallback
-    for chunk in chunked(all_syms, 10):
+    # 2) Symbol-by-symbol fallback in tiny chunks
+    for chunk_syms in chunked(all_syms, 3):
         try:
-            df_chunk = _big_yf_download(list(chunk))
-        except Exception as exc:
-            logger.warning(f"[prefetch] chunk {chunk} download failed: {exc!r}")
+            df_chunk = _yf_chunk_fetch(list(chunk_syms))
+        except Exception as e:
+            logger.warning(f"[prefetch] Yahoo chunk {chunk_syms} failed: {e!r}")
             df_chunk = pd.DataFrame()
 
         if not df_chunk.empty and isinstance(df_chunk.columns, pd.MultiIndex):
-            for sym in chunk:
-                if sym in df_chunk.columns.levels[0]:
-                    sym_df = df_chunk[sym].copy()
-                    sym_df.index = pd.to_datetime(sym_df.index)
-                    data_fetcher._daily_cache[sym] = sym_df
-                    logger.info(f"⚠️  Fallback chunk: fetched {sym} via yfinance")
-
-        # throttle: max ~5 downloads/min
+            # unpack (Field,Symbol) → per-symbol frames
+            for sym in chunk_syms:
+                if sym in df_chunk.columns.levels[1]:
+                    try:
+                        sym_df = df_chunk.xs(sym, axis=1, level=1).droplevel(1, axis=1)
+                        sym_df.index = pd.to_datetime(sym_df.index)
+                        data_fetcher._daily_cache[sym] = sym_df
+                        logger.info(f"⚠️  fetched {sym} via yfinance chunk")
+                    except Exception:
+                        pass
+        # always pause so you never exceed ~5 calls/min
         time.sleep(12)
 
-    # 3) Dummy-inject
+    # 3) Per-symbol ultimate retry (slower) then dummy
     for sym in all_syms:
-        df = data_fetcher._daily_cache.get(sym)
-        if df is None or df.empty:
+        if sym not in data_fetcher._daily_cache or data_fetcher._daily_cache[sym] is None:
+            try:
+                df_sym = yff.fetch([sym], period="1mo", interval="1d")
+                if not df_sym.empty:
+                    if isinstance(df_sym.columns, pd.MultiIndex):
+                        df_sym = df_sym.xs(sym, axis=1, level=1).droplevel(1, axis=1)
+                    df_sym.index = pd.to_datetime(df_sym.index)
+                    data_fetcher._daily_cache[sym] = df_sym
+                    logger.info(f"⚠️  single-symbol fetch succeeded for {sym}")
+                    continue
+            except YFRateLimitError:
+                logger.warning(f"[prefetch] rate-limited on single fetch {sym}")
+            except Exception:
+                logger.warning(f"[prefetch] failed final fetch for {sym}", exc_info=True)
+
+            # last resort: dummy flat
             dates = pd.date_range(start=start, end=end, freq="D")
             dummy = pd.DataFrame(index=dates)
             for col in ("Open","High","Low","Close"):
