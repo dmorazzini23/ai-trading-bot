@@ -272,17 +272,17 @@ class DataFetcher:
         self._minute_timestamps : Dict[str, datetime] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-    if symbol not in self._daily_cache:
-        try:
-            df = _yf_chunk_fetch([symbol])
-            if df.empty:
-                raise YFRateLimitError("empty")
-        except YFRateLimitError:
-            df = None
-        except Exception:
-            df = None
-        self._daily_cache[symbol] = df
-    return self._daily_cache[symbol]
+        if symbol not in self._daily_cache:
+            try:
+                df = _yf_chunk_fetch([symbol])
+                if df.empty:
+                    raise YFRateLimitError("empty")
+            except YFRateLimitError:
+                df = None
+            except Exception:
+                df = None
+            self._daily_cache[symbol] = df
+        return self._daily_cache[symbol]
 
          
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
