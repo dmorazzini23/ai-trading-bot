@@ -498,19 +498,28 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
-@retry(
-    stop=stop_after_attempt(2),
-    wait=wait_fixed(60),
-    retry=retry_if_exception_type(YFRateLimitError)
-)
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(60))
 def _big_yf_download(symbols: List[str]) -> pd.DataFrame:
-    df = yff.fetch(symbols, period="1mo", interval="1d")
-    if df.empty:
-        # force a retry if we got rate-limited or truly no data
-        raise YFRateLimitError(f"No data for {symbols}")
+    """
+    One-shot yfinance download for up to ~30 tickers at once,
+    using group_by='ticker' so it only makes one HTTP request.
+    """
+    df = yf.download(
+        tickers=symbols,
+        period="1mo",
+        interval="1d",
+        group_by="ticker",
+        progress=False,
+        auto_adjust=True,
+    )
     return df
 
 def prefetch_daily_with_alpaca(symbols: List[str]):
+    """
+    Pull the last 30 days of daily bars for SPY + all symbols at once and
+    seed data_fetcher._daily_cache.  If Alpaca fails, fallback to ONE yfinance
+    fetch of the entire list (with retry); then dummy‐inject any still‐missing symbols.
+    """
     all_syms = ["SPY"] + [s for s in symbols if s != "SPY"]
     start    = (date.today() - timedelta(days=30)).isoformat()
     end      = date.today().isoformat()
@@ -519,54 +528,46 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
     try:
         bars = api.get_bars(all_syms, TimeFrame.Day,
                             start=start, end=end, limit=1000).df
-        # …same as before…
-        return
+        for sym, df_sym in bars.groupby("symbol"):
+            df = (
+                df_sym.rename(columns={
+                    "t": "Date", "o": "Open", "h": "High",
+                    "l": "Low", "c": "Close", "v": "Volume"
+                })
+                .set_index("Date")
+            )
+            df.index = pd.to_datetime(df.index).tz_localize(None)
+            data_fetcher._daily_cache[sym] = df
+        logger.info(f"[prefetch] seeded {len(bars['symbol'].unique())} symbols via Alpaca")
     except Exception as e:
         logger.warning(f"[prefetch] Alpaca bulk fetch failed: {e!r} — falling back to yfinance")
 
-    # 2) Big yfinance download with retry
-    try:
-        df_all = _big_yf_download(all_syms)
-    except Exception as yf_exc:
-        logger.error(f"[prefetch] Big yfinance download failed even after retry: {yf_exc!r}")
-        df_all = pd.DataFrame()
+        # 2) Big, single yfinance download (grouped) to avoid per-symbol rate-limits
+        try:
+            df_all = _big_yf_download(all_syms)
+        except Exception as yf_exc:
+            logger.error(f"[prefetch] Big yfinance download failed even after retry: {yf_exc!r}")
+            df_all = pd.DataFrame()
 
-    if not df_all.empty:
-        # unpack MultiIndex into per-symbol frames
-        for sym in all_syms:
-            try:
-                sym_df = (
-                    df_all
-                    .xs(sym, axis=1, level=1)
-                    .droplevel(1, axis=1)
-                    .pipe(lambda df: df.assign(Date=pd.to_datetime(df.index)))
-                    .set_index("Date")
-                )
-                data_fetcher._daily_cache[sym] = sym_df
-                logger.info(f"⚠️ Fallback: fetched {sym} via yfinance")
-            except KeyError:
-                # missing here → will get dummy below
-                continue
-    else:
-        # 2b) Big download returned nothing → per-symbol fallback
-        for sym in all_syms:
-            try:
-                df_sym = _big_yf_download([sym])
-                if not df_sym.empty:
-                    df_sym.index = pd.to_datetime(df_sym.index)
-                    data_fetcher._daily_cache[sym] = df_sym
-                    logger.info(f"⚠️ Per-symbol fallback: fetched {sym} via yfinance")
-                else:
-                    logger.warning(f"[prefetch] No data for {sym} even after per-symbol retry")
-            except Exception as e_sym:
-                logger.warning(f"[prefetch] Error downloading {sym}: {e_sym!r}")
+        # unpack if we got anything back
+        if not df_all.empty and hasattr(df_all.columns, "levels"):
+            # df_all.columns is a MultiIndex: level0=ticker, level1=field
+            for sym in all_syms:
+                if sym in df_all.columns.levels[0]:
+                    sym_df = df_all[sym].copy()
+                    sym_df.index = pd.to_datetime(sym_df.index)
+                    data_fetcher._daily_cache[sym] = sym_df
+                    logger.info(f"⚠️  Fallback (big): fetched {sym} via yfinance")
+        else:
+            logger.warning("[prefetch] no data at all from big yfinance fallback")
 
-    # 3) Dummy-inject any still-missing
+    # 3) Dummy-inject any symbols still missing
     for sym in all_syms:
-        if sym not in data_fetcher._daily_cache or data_fetcher._daily_cache[sym].empty:
+        cached = data_fetcher._daily_cache.get(sym)
+        if cached is None or cached.empty:
             dates = pd.date_range(start=start, end=end, freq="D")
             dummy = pd.DataFrame(index=dates)
-            for col in ("Open","High","Low","Close"):
+            for col in ("Open", "High", "Low", "Close"):
                 dummy[col] = 1.0
             dummy["Volume"] = 0
             data_fetcher._daily_cache[sym] = dummy
