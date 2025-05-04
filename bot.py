@@ -46,7 +46,6 @@ def predict_text_sentiment(text: str) -> float:
 
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, wait_random, retry_if_exception_type
 from ratelimit import limits, sleep_and_retry
-from collections import deque
 from more_itertools import chunked
 from logging import getLogger
 
@@ -263,6 +262,7 @@ class FinnhubFetcher:
 # instantiate a singleton
 fh = FinnhubFetcher(calls_per_minute=60)
 
+_last_fh_prefetch_date: Optional[date] = None
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
     def __init__(self) -> None:
@@ -274,7 +274,7 @@ class DataFetcher:
         # 5 trading days of daily bars
         if symbol not in self._daily_cache:
             try:
-                df = fh.fetch(symbol, period="1d", interval="1m")
+                df = fh.fetch(symbol, period="1mo", interval="1d")
                 if df is None or df.empty:
                     raise DataFetchError(f"No daily data for {symbol}")
             except Exception as e:
