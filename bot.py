@@ -274,18 +274,11 @@ class DataFetcher:
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         if symbol not in self._daily_cache:
             try:
-                # use your chunk‐fetch wrapper (5 calls/min) instead of raw yff.fetch
-                df_all = _yf_chunk_fetch([symbol])
-                # unpack multi‐index if needed:
-                if isinstance(df_all.columns, pd.MultiIndex):
-                    df = (
-                        df_all
-                        .xs(symbol, axis=1, level=1)
-                        .droplevel(1, axis=1)
-                    )
-                else:
-                    df = df_all
-                df.index = pd.to_datetime(df.index)
+                # go through your throttled+retried wrapper
+                df = _yf_chunk_fetch([symbol])
+                # if Yahoo returned a multi-index, pull out just our symbol
+                if isinstance(df.columns, pd.MultiIndex):
+                    df = df.xs(symbol, axis=1, level=1).droplevel(1, axis=1)
                 if df.empty:
                     raise YFRateLimitError("empty")
             except YFRateLimitError:
