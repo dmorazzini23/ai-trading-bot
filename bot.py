@@ -506,7 +506,6 @@ def _yf_chunk_fetch(symbols: List[str]) -> pd.DataFrame:
     """
     return yff.fetch(symbols, period="1mo", interval="1d")
 
-
 def prefetch_daily_with_alpaca(symbols: List[str]):
     all_syms = ["SPY"] + [s for s in symbols if s != "SPY"]
     start    = (date.today() - timedelta(days=30)).isoformat()
