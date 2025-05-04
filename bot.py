@@ -212,7 +212,7 @@ class FinnhubFetcher:
             return num * 86400
         raise ValueError(f"Unsupported period: {period}")
 
-   @retry(
+    @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 1),
         retry=retry_if_exception_type(Exception)
