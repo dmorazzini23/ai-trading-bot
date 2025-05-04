@@ -38,6 +38,7 @@ from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 import finnhub
+from finnhub.exceptions import FinnhubAPIException
 
 executor = ThreadPoolExecutor(max_workers=4)
 
@@ -211,10 +212,10 @@ class FinnhubFetcher:
             return num * 86400
         raise ValueError(f"Unsupported period: {period}")
 
-    @retry(
-      stop=stop_after_attempt(3),
-      wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 1),
-      retry=retry_if_exception_type(Exception)
+   @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 1),
+        retry=retry_if_exception_type(Exception)
     )
     def fetch(self, symbols, period="1mo", interval="1d") -> pd.DataFrame:
         """
@@ -222,43 +223,47 @@ class FinnhubFetcher:
         period: e.g. '5d', '1mo'
         interval: '1d' or '1m'
         """
-        syms = symbols if isinstance(symbols, (list, tuple)) else [symbols]
-        now = int(time.time())
-        span = self._parse_period(period)
-        start = now - span
+        try:
+            syms = symbols if isinstance(symbols, (list, tuple)) else [symbols]
+            now = int(time.time())
+            span = self._parse_period(period)
+            start = now - span
 
-        # Finnhub resolution: 'D' for daily, '1' for 1-min
-        resolution = 'D' if interval == '1d' else '1'
+            # Finnhub resolution: 'D' for daily, '1' for 1-min
+            resolution = 'D' if interval == '1d' else '1'
 
-        frames = []
-        for sym in syms:
-            self._throttle()
-            resp = self.client.stock_candles(sym, resolution, _from=start, to=now)
-            if resp.get('s') != 'ok':
-                logger.warning(f"[FH] no data for {sym}: {resp.get('s')}")
-                frames.append(pd.DataFrame())
-                continue
+            frames = []
+            for sym in syms:
+                self._throttle()
+                resp = self.client.stock_candles(sym, resolution, _from=start, to=now)
+                if resp.get('s') != 'ok':
+                    logger.warning(f"[FH] no data for {sym}: {resp.get('s')}")
+                    frames.append(pd.DataFrame())
+                    continue
 
-            df = pd.DataFrame({
-                'Open':   resp['o'],
-                'High':   resp['h'],
-                'Low':    resp['l'],
-                'Close':  resp['c'],
-                'Volume': resp['v'],
-            }, index=pd.to_datetime(resp['t'], unit='s', utc=True))
+                df = pd.DataFrame({
+                    'Open':   resp['o'],
+                    'High':   resp['h'],
+                    'Low':    resp['l'],
+                    'Close':  resp['c'],
+                    'Volume': resp['v'],
+                }, index=pd.to_datetime(resp['t'], unit='s', utc=True))
 
-            # drop timezone so it matches your existing code
-            df.index = df.index.tz_convert(None)
-            frames.append(df)
+                # drop timezone so it matches your existing code
+                df.index = df.index.tz_convert(None)
+                frames.append(df)
 
-        if not frames:
+            if not frames:
+                return pd.DataFrame()
+            if len(frames) == 1:
+                return frames[0]
+
+            # multi-symbol: produce a (Field,Symbol) MultiIndex
+            return pd.concat(frames, axis=1, keys=syms, names=['Symbol','Field'])
+
+        except FinnhubAPIException as e:
+            logger.warning(f"[FH] no access for {symbols} ({period}/{interval}): {e}. returning empty df")
             return pd.DataFrame()
-
-        if len(frames) == 1:
-            return frames[0]
-
-        # multi‐symbol: produce a (Field,Symbol) MultiIndex
-        return pd.concat(frames, axis=1, keys=syms, names=['Symbol','Field'])
 # ─── FINNHUB FETCHER ────────────────────────────────────────────────────────
 # instantiate a singleton
 fh = FinnhubFetcher(calls_per_minute=60)
@@ -301,7 +306,7 @@ class DataFetcher:
             try:
                 bars = ctx.api.get_bars(symbol, TimeFrame.Minute,
                                         limit=390,  # full trading day
-                                        data_feed="iex").df
+                                        feed="iex").df
                 if not bars.empty:
                     bars = bars.rename(columns={
                         "t":"Date","o":"Open","h":"High",
@@ -543,7 +548,7 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
     # 1) Alpaca bulk
     try:
         bars = api.get_bars(all_syms, TimeFrame.Day,
-                            start=start, end=end, limit=1000, data_feed="iex").df
+                            start=start, end=end, limit=1000, feed="iex").df
         for sym, df_sym in bars.groupby("symbol"):
             df = (
                 df_sym.rename(columns={
