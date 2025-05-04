@@ -39,6 +39,7 @@ import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 import sqlite3
 import finnhub
+from collections import deque
 
 executor = ThreadPoolExecutor(max_workers=4)
 
@@ -596,7 +597,7 @@ def fetch_data(ctx, symbols, period, interval):
     """Fallback for small bulk requests via Alpaca barset if needed."""
     dfs: List[pd.DataFrame] = []
     for batch in chunked(symbols, 3):
-        df = yff.fetch(batch, period=period, interval=interval)
+        df = fh.fetch(batch, period=period, interval=interval)
         if df is not None and not df.empty:
             dfs.append(df)
         time.sleep(random.uniform(2, 5))
