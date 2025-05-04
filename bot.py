@@ -39,6 +39,8 @@ from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 import sqlite3
+import finnhub
+from path.to.your_module import FinnhubFetcher
 
 executor = ThreadPoolExecutor(max_workers=4)
 
@@ -66,6 +68,9 @@ from ratelimit import limits, sleep_and_retry
 from collections import deque
 from more_itertools import chunked
 from logging import getLogger
+
+logger = getLogger(__name__)
+finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
 
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
@@ -195,71 +200,87 @@ class BotContext:
     trailing_extremes: Dict[str, float] = field(default_factory=dict)
     take_profit_targets: Dict[str, float] = field(default_factory=dict)
 
-class YFinanceFetcher:
-    def __init__(self, calls_per_minute: int = 60, batch_size: int = 2):
+class FinnhubFetcher:
+    def __init__(self, calls_per_minute: int = 60):
         self.max_calls   = calls_per_minute
-        self.batch_size  = batch_size
         self._timestamps = deque()
+        self.client      = finnhub_client
 
     def _throttle(self):
         now = time.time()
+        # drop timestamps >60s ago
         while self._timestamps and now - self._timestamps[0] > 60:
             self._timestamps.popleft()
         if len(self._timestamps) >= self.max_calls:
             wait_secs = 60 - (now - self._timestamps[0]) + random.uniform(0.1, 0.5)
-            logger.debug(f"[YFF] rate-limit reached; sleeping {wait_secs:.2f}s")
+            logger.debug(f"[FH] rate-limit reached; sleeping {wait_secs:.2f}s")
             time.sleep(wait_secs)
             return self._throttle()
         self._timestamps.append(now)
 
+    def _parse_period(self, period: str) -> int:
+        """
+        Convert a string like '5d', '1mo' into seconds.
+        """
+        num = int(period[:-1])
+        unit = period[-1]
+        if unit == 'd':
+            return num * 86400
+        if period.endswith('mo'):
+            return num * 30 * 86400
+        raise ValueError(f"Unsupported period: {period}")
+
     @retry(
-        stop=stop_after_attempt(6),
-        wait=wait_exponential(multiplier=60, min=60, max=900) + wait_random(5, 30),
-        retry=retry_if_exception_type(YFRateLimitError)
+      stop=stop_after_attempt(3),
+      wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 1),
+      retry=retry_if_exception_type(Exception)
     )
-    def _download_batch(self, symbols: list[str], period: str, interval: str) -> pd.DataFrame:
-        try:
-            df = yf.download(symbols, period=period, interval=interval, progress=False)
-        except sqlite3.OperationalError as e:
-            # translate sqlite errors into a retryable YFRateLimitError
-            logger.warning(f"[YFF] sqlite OperationalError on {symbols}: {e!r}, retrying...")
-            raise YFRateLimitError() from e
-        except YFRateLimitError:
-            logger.warning(f"[YFF] rate-limited on batch {symbols}")
-            raise
-        except Exception as e:
-            msg = str(e).lower()
-            if "no objects to concatenate" in msg:
-                logger.warning(f"[YFF] no data to concatenate for {symbols}: {e!r}")
-                raise YFRateLimitError() from e
-            raise
+    def fetch(self, symbols, period="1mo", interval="1d") -> pd.DataFrame:
+        """
+        symbols: str or list[str]
+        period: e.g. '5d', '1mo'
+        interval: '1d' or '1m'
+        """
+        syms = symbols if isinstance(symbols, (list, tuple)) else [symbols]
+        now = int(time.time())
+        span = self._parse_period(period)
+        start = now - span
 
-    def fetch(self, symbols, period="1y", interval="1d") -> pd.DataFrame:
-        syms   = symbols if isinstance(symbols, (list, tuple)) else [symbols]
-        chunks = [syms[i:i+self.batch_size] for i in range(0, len(syms), self.batch_size)]
-        dfs    = []
-        for batch in chunks:
+        # Finnhub resolution: 'D' for daily, '1' for 1-min
+        resolution = 'D' if interval == '1d' else '1'
+
+        frames = []
+        for sym in syms:
             self._throttle()
-            try:
-                dfs.append(self._download_batch(batch, period, interval))
-            except YFRateLimitError:
-                # on persistent rate‐limit, skip this batch
-                dfs.append(pd.DataFrame())
-        if not dfs:
-            return pd.DataFrame()
-        # drop any empty DataFrames so concat never sees "all-empty"
-        valid = [d for d in dfs if d is not None and not d.empty]
-        if not valid:
-            # nothing to stitch together
+            resp = self.client.stock_candles(sym, resolution, _from=start, to=now)
+            if resp.get('s') != 'ok':
+                logger.warning(f"[FH] no data for {sym}: {resp.get('s')}")
+                frames.append(pd.DataFrame())
+                continue
+
+            df = pd.DataFrame({
+                'Open':   resp['o'],
+                'High':   resp['h'],
+                'Low':    resp['l'],
+                'Close':  resp['c'],
+                'Volume': resp['v'],
+            }, index=pd.to_datetime(resp['t'], unit='s', utc=True))
+
+            # drop timezone so it matches your existing code
+            df.index = df.index.tz_convert(None)
+            frames.append(df)
+
+        if not frames:
             return pd.DataFrame()
 
-        # safe to concatenate now
-        df = pd.concat(valid, axis=1, sort=True)
+        if len(frames) == 1:
+            return frames[0]
 
+        # multi‐symbol: produce a (Field,Symbol) MultiIndex
+        return pd.concat(frames, axis=1, keys=syms, names=['Symbol','Field'])
 # ─── YFINANCE FETCHER ────────────────────────────────────────────────────────
 # instantiate a singleton
-yff = YFinanceFetcher(calls_per_minute=5, batch_size=6)
-
+yff = FinnhubFetcher(calls_per_minute=60)
 # ─── BULK PREFETCH GUARD ─────────────────────────────────────────────────────
 # only prefetch once per calendar day
 _last_yf_prefetch_date: Optional[date] = None
@@ -269,43 +290,39 @@ class DataFetcher:
     def __init__(self) -> None:
         self._daily_cache: Dict[str, Optional[pd.DataFrame]] = {}
         self._minute_cache: Dict[str, Optional[pd.DataFrame]] = {}
-        self._minute_timestamps : Dict[str, datetime] = {}
+        self._minute_timestamps: Dict[str, datetime] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
+        # 5 trading days of daily bars
         if symbol not in self._daily_cache:
             try:
-                # go through your throttled+retried wrapper
-                df = _yf_chunk_fetch([symbol])
-                # if Yahoo returned a multi-index, pull out just our symbol
-                if isinstance(df.columns, pd.MultiIndex):
-                    df = df.xs(symbol, axis=1, level=1).droplevel(1, axis=1)
-                if df.empty:
-                    raise YFRateLimitError("empty")
-            except YFRateLimitError:
-                df = None
-            except Exception:
+                df = yff.fetch(symbol, period="5d", interval="1d")
+                if df is None or df.empty:
+                    raise DataFetchError(f"No daily data for {symbol}")
+            except Exception as e:
+                logger.warning(f"[DataFetcher] daily fetch failed for {symbol}: {e}")
                 df = None
             self._daily_cache[symbol] = df
         return self._daily_cache[symbol]
 
-         
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
+        # only re-fetch if our cache is >1m old
         last = self._minute_timestamps.get(symbol)
-        if last and last > datetime.now(timezone.utc) - timedelta(minutes=1):
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=1)
+        if last and last > cutoff:
             return self._minute_cache.get(symbol)
 
         try:
-            df = _yf_chunk_fetch([symbol])
-            if df.empty:
-                raise YFRateLimitError("empty")
-        except YFRateLimitError:
-            df = None
-        except Exception:
+            df = yff.fetch(symbol, period="1d", interval="1m")
+            if df is None or df.empty:
+                raise DataFetchError(f"No minute data for {symbol}")
+        except Exception as e:
+            logger.warning(f"[DataFetcher] minute fetch failed for {symbol}: {e}")
             df = None
 
         self._minute_cache[symbol]      = df
         self._minute_timestamps[symbol] = datetime.now(timezone.utc)
-        return df 
+        return df
         
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
