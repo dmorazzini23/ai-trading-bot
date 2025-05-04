@@ -501,8 +501,8 @@ ctx = BotContext(
 @retry(stop=stop_after_attempt(2), wait=wait_fixed(60))
 def _big_yf_download(symbols: List[str]) -> pd.DataFrame:
     """
-    One-shot yfinance download for up to ~30 tickers at once,
-    using group_by='ticker' so it only makes one HTTP request.
+    One-shot yfinance download for up to ~10 tickers at once.
+    Retries once after 60s if it fails.
     """
     df = yf.download(
         tickers=symbols,
@@ -516,62 +516,63 @@ def _big_yf_download(symbols: List[str]) -> pd.DataFrame:
 
 def prefetch_daily_with_alpaca(symbols: List[str]):
     """
-    Pull the last 30 days of daily bars for SPY + all symbols at once and
-    seed data_fetcher._daily_cache.  If Alpaca fails, fallback to ONE yfinance
-    fetch of the entire list (with retry); then dummy‐inject any still‐missing symbols.
+    1) Try Alpaca bulk.
+    2) On failure, split into chunks of 10 and call _big_yf_download().
+    3) Dummy-inject any still-missing symbols.
     """
     all_syms = ["SPY"] + [s for s in symbols if s != "SPY"]
     start    = (date.today() - timedelta(days=30)).isoformat()
     end      = date.today().isoformat()
 
-    # 1) Try Alpaca bulk
+    # 1) Alpaca bulk
     try:
         bars = api.get_bars(all_syms, TimeFrame.Day,
                             start=start, end=end, limit=1000).df
         for sym, df_sym in bars.groupby("symbol"):
             df = (
                 df_sym.rename(columns={
-                    "t": "Date", "o": "Open", "h": "High",
-                    "l": "Low", "c": "Close", "v": "Volume"
+                    "t":"Date","o":"Open","h":"High",
+                    "l":"Low","c":"Close","v":"Volume"
                 })
                 .set_index("Date")
             )
             df.index = pd.to_datetime(df.index).tz_localize(None)
             data_fetcher._daily_cache[sym] = df
         logger.info(f"[prefetch] seeded {len(bars['symbol'].unique())} symbols via Alpaca")
+        return
     except Exception as e:
-        logger.warning(f"[prefetch] Alpaca bulk fetch failed: {e!r} — falling back to yfinance")
+        logger.warning(f"[prefetch] Alpaca bulk failed: {e!r} — fallback to yfinance")
 
-        # 2) Big, single yfinance download (grouped) to avoid per-symbol rate-limits
+    # 2) Chunked Yahoo fallback
+    for chunk in chunked(all_syms, 10):
         try:
-            df_all = _big_yf_download(all_syms)
-        except Exception as yf_exc:
-            logger.error(f"[prefetch] Big yfinance download failed even after retry: {yf_exc!r}")
-            df_all = pd.DataFrame()
+            df_chunk = _big_yf_download(list(chunk))
+        except Exception as exc:
+            logger.warning(f"[prefetch] chunk {chunk} download failed: {exc!r}")
+            df_chunk = pd.DataFrame()
 
-        # unpack if we got anything back
-        if not df_all.empty and hasattr(df_all.columns, "levels"):
-            # df_all.columns is a MultiIndex: level0=ticker, level1=field
-            for sym in all_syms:
-                if sym in df_all.columns.levels[0]:
-                    sym_df = df_all[sym].copy()
+        if not df_chunk.empty and isinstance(df_chunk.columns, pd.MultiIndex):
+            for sym in chunk:
+                if sym in df_chunk.columns.levels[0]:
+                    sym_df = df_chunk[sym].copy()
                     sym_df.index = pd.to_datetime(sym_df.index)
                     data_fetcher._daily_cache[sym] = sym_df
-                    logger.info(f"⚠️  Fallback (big): fetched {sym} via yfinance")
-        else:
-            logger.warning("[prefetch] no data at all from big yfinance fallback")
+                    logger.info(f"⚠️  Fallback chunk: fetched {sym} via yfinance")
 
-    # 3) Dummy-inject any symbols still missing
+        # throttle: max ~5 downloads/min
+        time.sleep(12)
+
+    # 3) Dummy-inject
     for sym in all_syms:
-        cached = data_fetcher._daily_cache.get(sym)
-        if cached is None or cached.empty:
+        df = data_fetcher._daily_cache.get(sym)
+        if df is None or df.empty:
             dates = pd.date_range(start=start, end=end, freq="D")
             dummy = pd.DataFrame(index=dates)
-            for col in ("Open", "High", "Low", "Close"):
+            for col in ("Open","High","Low","Close"):
                 dummy[col] = 1.0
             dummy["Volume"] = 0
             data_fetcher._daily_cache[sym] = dummy
-            logger.warning(f"🔶 Dummy {sym} inserted to satisfy regime & data checks")
+            logger.warning(f"🔶 Dummy {sym} inserted to satisfy data checks")
         
 def fetch_data(ctx, symbols, period, interval):
     """Fallback for small bulk requests via Alpaca barset if needed."""
