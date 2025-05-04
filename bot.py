@@ -37,9 +37,7 @@ import joblib
 from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
-import sqlite3
 import finnhub
-from collections import deque
 
 executor = ThreadPoolExecutor(max_workers=4)
 
@@ -261,7 +259,7 @@ class FinnhubFetcher:
 
         # multi‐symbol: produce a (Field,Symbol) MultiIndex
         return pd.concat(frames, axis=1, keys=syms, names=['Symbol','Field'])
-# ─── YFINANCE FETCHER ────────────────────────────────────────────────────────
+# ─── FINNHUB FETCHER ────────────────────────────────────────────────────────
 # instantiate a singleton
 fh = FinnhubFetcher(calls_per_minute=60)
 
@@ -546,30 +544,33 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
         logger.warning(f"[prefetch] Alpaca bulk failed: {e!r} — falling back to Finnhub")
 
     # 2) Symbol-by-symbol fallback in tiny chunks via Finnhub
-    for chunk_syms in chunked(all_syms, 3):
+    for batch in chunked(all_syms, 3):
         try:
-            df_chunk = _fh_chunk_fetch(chunk_syms, period="1mo", interval="1d")
+            df_chunk = _fh_chunk_fetch(batch, period="1mo", interval="1d")
         except Exception as e:
-            logger.warning(f"[prefetch] Finnhub chunk {chunk_syms} failed: {e!r}")
-            df_chunk = pd.DataFrame()
+            logger.warning(f"[prefetch] Finnhub chunk {batch} failed: {e!r}")
+            continue
 
-        if df_chunk is not None and not df_chunk.empty:
-            if isinstance(df_chunk.columns, pd.MultiIndex):
-                # unpack (Symbol,Field) → per-symbol frames
-                for sym in chunk_syms:
-                    if sym in df_chunk.columns.get_level_values(0):
-                        sym_df = df_chunk.xs(sym, level=0, axis=1)
-                        sym_df.index = pd.to_datetime(sym_df.index)
-                        data_fetcher._daily_cache[sym] = sym_df
-                        logger.info(f"⚠️  fetched {sym} via Finnhub chunk")
-            else:
-                # single-symbol DataFrame
-                sym = chunk_syms[0]
-                df_chunk.index = pd.to_datetime(df_chunk.index)
-                data_fetcher._daily_cache[sym] = df_chunk
-                logger.info(f"⚠️  fetched {sym} via Finnhub chunk")
+        if df_chunk.empty:
+            continue
 
-        # pause to respect rate limit
+        # Normalize index once
+        df_chunk.index = pd.to_datetime(df_chunk.index)
+
+        if isinstance(df_chunk.columns, pd.MultiIndex):
+            # level 0 = symbol, level 1 = field
+            for sym in batch:
+                if sym in df_chunk.columns.get_level_values(0):
+                    sym_df = df_chunk.xs(sym, level=0, axis=1)
+                    data_fetcher._daily_cache[sym] = sym_df
+                    logger.info(f"⚠️  fetched {sym} via Finnhub chunk")
+        else:
+            # single‐symbol fetch always returns a flat DF
+            sym = batch[0]
+            data_fetcher._daily_cache[sym] = df_chunk
+            logger.info(f"⚠️  fetched {sym} via Finnhub chunk")
+
+        # throttle to ~5 calls/min
         time.sleep(12)
 
     # 3) Per-symbol ultimate retry via Finnhub, then dummy
@@ -1039,12 +1040,11 @@ def run_all_trades(model) -> None:
         logger.error("❌ No tickers loaded; skipping run_all_trades")
         return
 
-    global _last_yf_prefetch_date
+    global _last_fh_prefetch_date
     today = date.today()
-    if _last_yf_prefetch_date != today:
-        _last_yf_prefetch_date = today
+    if _last_fh_prefetch_date != today:
+        _last_fh_prefetch_date = today
 
-        # ONE Alpaca call replaces all those yfinance batches
         try:
             prefetch_daily_with_alpaca(tickers)
             logger.info("✅ Prefetched daily bars via Alpaca for all tickers")
