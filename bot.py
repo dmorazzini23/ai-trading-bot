@@ -498,10 +498,17 @@ ctx = BotContext(
 )
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
-@retry(stop=stop_after_attempt(2), wait=wait_fixed(60))
+@retry(
+    stop=stop_after_attempt(2),
+    wait=wait_fixed(60),
+    retry=retry_if_exception_type(YFRateLimitError)
+)
 def _big_yf_download(symbols: List[str]) -> pd.DataFrame:
-    return yff.fetch(symbols, period="1mo", interval="1d")
-
+    df = yff.fetch(symbols, period="1mo", interval="1d")
+    if df.empty:
+        # force a retry if we got rate-limited or truly no data
+        raise YFRateLimitError(f"No data for {symbols}")
+    return df
 
 def prefetch_daily_with_alpaca(symbols: List[str]):
     all_syms = ["SPY"] + [s for s in symbols if s != "SPY"]
