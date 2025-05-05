@@ -289,7 +289,7 @@ class DataFetcher:
             self._daily_cache[symbol] = df
         return self._daily_cache[symbol]
 
-     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
+    def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         # 0) cache hit?
         last = self._minute_timestamps.get(symbol)
         if last and last > datetime.now(timezone.utc) - timedelta(minutes=1):
