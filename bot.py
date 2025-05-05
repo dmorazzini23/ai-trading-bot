@@ -895,7 +895,8 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     """
     Place a market order, then verify fill price against latest quote.
     """
-    quote = ctx.api.get_last_quote(symbol)
+    # fetch the best bid/ask just before sending
+    quote = ctx.api.get_latest_quote(symbol)
     expected_price = quote.ask_price if side == "buy" else quote.bid_price
 
     try:
@@ -910,7 +911,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         return order
 
     except APIError as e:
-        # e.g. “requested: 100, available: 50”
+        # “requested: 100, available: 50”
         m = re.search(r"requested: (\d+), available: (\d+)", str(e))
         if m and int(m.group(2)) > 0:
             available = int(m.group(2))
@@ -926,8 +927,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         logger.warning(f"[submit_order] APIError for {symbol}: {e}")
         raise
 
-    except Exception as e:
-        # count it, log it, and return None so we don’t crash the whole bot
+    except Exception:
         order_failures.inc()
         logger.exception(f"[submit_order] unexpected error for {symbol}")
         return None
