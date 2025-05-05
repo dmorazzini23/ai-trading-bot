@@ -565,22 +565,40 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
     start = (date.today() - timedelta(days=30)).isoformat()
     end   = date.today().isoformat()
 
-    # 1) Alpaca bulk
     try:
-        bars = api.get_bars(all_syms, TimeFrame.Day,
-                            start=start, end=end, limit=1000, feed="iex").df
+        bars = api.get_bars(
+            all_syms,
+            TimeFrame.Day,
+            start=start,
+            end=end,
+            limit=1000,
+            feed="iex"
+        ).df
+
+        # Alpaca gives a datetime index and lowercase 'open','high','low','close','volume'
         for sym, df_sym in bars.groupby("symbol"):
-            df = (
-                df_sym.rename(columns={
-                    "t":"Date","o":"Open","h":"High",
-                    "l":"Low","c":"Close","v":"Volume"
-                })
-                .set_index("Date")
-            )
+            df = df_sym.copy()
+
+            # drop the extra 'symbol' column
+            df = df.drop(columns=["symbol"], errors="ignore")
+
+            # rename to your OHLCV convention
+            df = df.rename(columns={
+                "open":   "Open",
+                "high":   "High",
+                "low":    "Low",
+                "close":  "Close",
+                "volume": "Volume"
+            })
+
+            # index is already datetime; strip tz if present
             df.index = pd.to_datetime(df.index).tz_localize(None)
+
             data_fetcher._daily_cache[sym] = df
+
         logger.info(f"[prefetch] seeded {len(bars['symbol'].unique())} symbols via Alpaca")
         return
+
     except Exception as e:
         logger.warning(f"[prefetch] Alpaca bulk failed: {e!r} — falling back to Finnhub")
 
