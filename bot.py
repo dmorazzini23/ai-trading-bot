@@ -304,16 +304,26 @@ class DataFetcher:
         # Fallback to Alpaca IEX minute bars
         if df is None or df.empty:
             try:
-                bars = ctx.api.get_bars(symbol, TimeFrame.Minute,
+                bars = ctx.api.get_bars(symbol,
+                                        TimeFrame.Minute,
                                         limit=390,  # full trading day
                                         feed="iex").df
                 if not bars.empty:
-                    bars = bars.rename(columns={
-                        "t":"Date","o":"Open","h":"High",
-                        "l":"Low","c":"Close","v":"Volume"
-                    }).set_index("Date")
+                    # Ensure the index is a timezone-naive datetime index named "Date"
                     bars.index = pd.to_datetime(bars.index).tz_localize(None)
-                    df = bars
+                    bars.index.name = "Date"
+
+                    # Rename Alpaca's open/high/low/close/volume
+                    bars = bars.rename(columns={
+                        "open":   "Open",
+                        "high":   "High",
+                        "low":    "Low",
+                        "close":  "Close",
+                        "volume": "Volume"
+                    })
+
+                    # Keep only the OHLCV columns
+                    df = bars[["Open", "High", "Low", "Close", "Volume"]]
                     logger.info(f"[DataFetcher] minute bars via Alpaca IEX for {symbol}")
             except Exception as e:
                 logger.warning(f"[DataFetcher] Alpaca minute fallback failed for {symbol}: {e}")
