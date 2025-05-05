@@ -1053,7 +1053,7 @@ def trade_logic(
 ) -> None:
     logger.info(f"→ trade_logic start for {symbol}")
 
-    # early-exit if we shouldn’t even be trying
+    # early‐exit if we shouldn’t even be trying
     if not should_enter(ctx, symbol, balance, regime_ok):
         return
 
@@ -1063,7 +1063,7 @@ def trade_logic(
         logger.info(f"[SKIP] no minute data for {symbol}")
         return
 
-    # 2) compute intraday indicators
+    # 2) compute intraday indicators (pass freq="intraday")
     df = prepare_indicators(raw, freq="intraday")
     if df.empty:
         logger.info(f"[SKIP] not enough indicator data for {symbol}")
@@ -1074,7 +1074,7 @@ def trade_logic(
     if sig == -1:
         return
 
-    # 4) decide exit first (take-profit or trailing stop)
+    # 4) decide exit first (take‐profit or trailing stop)
     price, atr = df["Close"].iloc[-1], df["atr"].iloc[-1]
     do_exit, qty, _ = should_exit(ctx, symbol, price, atr)
     if do_exit:
