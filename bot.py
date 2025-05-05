@@ -890,42 +890,30 @@ def fractional_kelly_size(
 
     return max(size,1)
 
-def submit_order(
-    ctx: BotContext,
-    ticker: str,
-    qty: int,
-    side: str,
-    order_type_override: str = None
-) -> bool:
-    orders_total.inc()
-    order_type = order_type_override or ORDER_TYPE
+def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
+    """
+    Place a market order, then verify fill price against latest quote.
+    """
+    # fetch the current quote
+    quote = ctx.api.get_last_quote(symbol)
+    
+    # use the correct quote attributes for v2 API
+    expected_price = quote.ask_price if side == "buy" else quote.bid_price
 
     try:
-        with ctx.sem:
-            try:
-                quote = ctx.api.get_last_quote(ticker)
-            except AttributeError:
-                quote = ctx.api.get_latest_quote(ticker)
+        order = ctx.api.submit_order(
+            symbol=symbol,
+            qty=qty,
+            side=side,
+            type="market",
+            time_in_force="gtc",
+        )
+        logger.info(f"[submit_order] {side.upper()} {qty} {symbol} at market; expected ~{expected_price}")
+        return order
 
-            if order_type=="limit":
-                bid, ask = quote.bidprice, quote.askprice
-                spread = (ask-bid) if (ask and bid) else 0
-                limit_price = (bid+0.25*spread) if side=="buy" else (ask-0.25*spread)
-                ctx.api.submit_order(
-                    symbol=ticker, qty=qty, side=side,
-                    type="limit", limit_price=round(limit_price,2),
-                    time_in_force="gtc"
-                )
-                expected = round(limit_price,2)
-            else:
-                expected = quote.askprice if side=="buy" else quote.bidprice
-                ctx.api.submit_order(
-                    symbol=ticker, qty=qty, side=side,
-                    type="market", time_in_force="gtc"
-                )
-
-        logger.info(f"[SLIPPAGE] {ticker} expected={expected} side={side} qty={qty}")
-        return True
+    except Exception as e:
+        logger.error(f"[submit_order] failed to place {side} order for {symbol}: {e}")
+        return None
 
     except APIError as e:
         m = re.search(r"requested: (\d+), available: (\d+)", str(e))
