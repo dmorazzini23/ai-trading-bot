@@ -6,7 +6,7 @@ import time, random
 from datetime import datetime, date, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Dict, List, Any
-from alpaca_trade_api.entity_v2 import Order
+from alpaca_trade_api.entity import Order
 from dataclasses import dataclass, field
 from threading import Semaphore, Thread
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -927,6 +927,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         raise
 
     except Exception as e:
+        # count it, log it, and return None so we don’t crash the whole bot
         order_failures.inc()
         logger.exception(f"[submit_order] unexpected error for {symbol}")
         return None
