@@ -6,6 +6,7 @@ import time, random
 from datetime import datetime, date, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Dict, List, Any
+from alpaca_trade_api.entity_v2 import Order
 from dataclasses import dataclass, field
 from threading import Semaphore, Thread
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -894,10 +895,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     """
     Place a market order, then verify fill price against latest quote.
     """
-    # fetch the current quote
     quote = ctx.api.get_last_quote(symbol)
-    
-    # use the correct quote attributes for v2 API
     expected_price = quote.ask_price if side == "buy" else quote.bid_price
 
     try:
@@ -911,26 +909,27 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         logger.info(f"[submit_order] {side.upper()} {qty} {symbol} at market; expected ~{expected_price}")
         return order
 
-    except Exception as e:
-        logger.error(f"[submit_order] failed to place {side} order for {symbol}: {e}")
-        return None
-
     except APIError as e:
+        # e.g. “requested: 100, available: 50”
         m = re.search(r"requested: (\d+), available: (\d+)", str(e))
-        if m and int(m.group(2))>0:
+        if m and int(m.group(2)) > 0:
             available = int(m.group(2))
             ctx.api.submit_order(
-                symbol=ticker, qty=available,
-                side=side, type=order_type, time_in_force="gtc"
+                symbol=symbol,
+                qty=available,
+                side=side,
+                type="market",
+                time_in_force="gtc"
             )
-            return True
-        logger.warning(f"[submit_order] APIError: {e}")
+            logger.info(f"[submit_order] only {available} of {symbol} available, placed partial fill")
+            return None
+        logger.warning(f"[submit_order] APIError for {symbol}: {e}")
         raise
 
-    except Exception:
+    except Exception as e:
         order_failures.inc()
-        logger.exception(f"[submit_order] unexpected error for {ticker}")
-        raise
+        logger.exception(f"[submit_order] unexpected error for {symbol}")
+        return None
 
 def update_trailing_stop(
     ctx: BotContext,
