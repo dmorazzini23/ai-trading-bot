@@ -297,9 +297,9 @@ class DataFetcher:
 
         df: Optional[pd.DataFrame] = None
 
-        # 1) Try Finnhub
+        # 1) Try Finnhub for 5 days of 1-minute bars
         try:
-            df = fh.fetch(symbol, period="1d", interval="1m")
+            df = fh.fetch(symbol, period="5d", interval="1m")
         except FinnhubAPIException as e:
             logger.warning(f"[DataFetcher] Finnhub minute fetch failed for {symbol}: {e}")
         except Exception as e:
@@ -311,16 +311,11 @@ class DataFetcher:
                 bars = ctx.api.get_bars(
                     symbol,
                     TimeFrame.Minute,
-                    limit=390,      # full trading day
+                    limit=390 * 5,   # up to 5 full days
                     feed="iex"
                 ).df
 
                 if not bars.empty:
-                    # drop symbol column if present
-                    if "symbol" in bars.columns:
-                        bars = bars.drop(columns=["symbol"])
-
-                    # rename to match your OHLCV convention
                     bars = bars.rename(columns={
                         "open":   "Open",
                         "high":   "High",
@@ -328,17 +323,15 @@ class DataFetcher:
                         "close":  "Close",
                         "volume": "Volume"
                     })
-
-                    # ensure datetime index, strip tz
+                    if "symbol" in bars.columns:
+                        bars = bars.drop(columns=["symbol"])
                     bars.index = pd.to_datetime(bars.index).tz_localize(None)
-
-                    # keep exactly those five columns
-                    df = bars[["Open", "High", "Low", "Close", "Volume"]]
+                    df = bars[["Open","High","Low","Close","Volume"]]
                     logger.info(f"[DataFetcher] minute bars via Alpaca IEX for {symbol}")
             except Exception as e:
                 logger.warning(f"[DataFetcher] Alpaca minute fallback failed for {symbol}: {e}")
 
-        # 3) Cache & return (even if still empty)
+        # 3) cache & return
         self._minute_cache[symbol]      = df
         self._minute_timestamps[symbol] = datetime.now(timezone.utc)
         return df
@@ -1060,36 +1053,47 @@ def trade_logic(
 ) -> None:
     logger.info(f"→ trade_logic start for {symbol}")
 
+    # early-exit if we shouldn’t even be trying
     if not should_enter(ctx, symbol, balance, regime_ok):
         return
 
+    # 1) fetch minute bars
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw is None or raw.empty:
         logger.info(f"[SKIP] no minute data for {symbol}")
         return
 
-    df = prepare_indicators(raw)
-    if df is None or df.empty:
+    # 2) compute intraday indicators
+    df = prepare_indicators(raw, freq="intraday")
+    if df.empty:
         logger.info(f"[SKIP] not enough indicator data for {symbol}")
         return
 
+    # 3) signal + confirmation
     sig, conf, _ = signal_and_confirm(ctx, symbol, df, model)
     if sig == -1:
         return
 
+    # 4) decide exit first (take-profit or trailing stop)
     price, atr = df["Close"].iloc[-1], df["atr"].iloc[-1]
     do_exit, qty, _ = should_exit(ctx, symbol, price, atr)
     if do_exit:
         execute_exit(ctx, symbol, qty)
         return
 
+    # 5) size & entry
     size = calculate_entry_size(ctx, symbol, price, atr, conf)
     if size > 0:
         try:
             pos = int(ctx.api.get_position(symbol).qty)
         except Exception:
             pos = 0
-        execute_entry(ctx, symbol, size + abs(pos), "buy" if sig == 1 else "sell")
+        execute_entry(
+            ctx,
+            symbol,
+            size + abs(pos),
+            "buy" if sig == 1 else "sell"
+        )
 
 def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
@@ -1190,54 +1194,54 @@ def load_global_signal_performance(min_trades=10,threshold=0.4):
     logger.info(f"[MetaLearn] Keeping signals: {list(filtered.keys()) or 'none'}")
     return filtered
 
-def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.copy()
-    # --- normalize index → Date column
+
+    # normalize index → Date column
     if df.index.name:
         df = df.reset_index().rename(columns={df.index.name: "Date"})
     else:
         df = df.reset_index().rename(columns={"index": "Date"})
-    df.sort_values("Date", inplace=True)
     df["Date"] = pd.to_datetime(df["Date"])
-    df.set_index("Date", inplace=True)
-    df.dropna(subset=["High","Low","Close"], inplace=True)
+    df = df.sort_values("Date").set_index("Date")
 
-    # --- core indicators
-    df["vwap"]    = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
-    df["sma_50"]  = ta.sma(df["Close"], length=50)
-    df["sma_200"] = ta.sma(df["Close"], length=200)
-    df["rsi"]     = ta.rsi(df["Close"], length=14)
+    # core indicators needed for both daily & intraday
+    df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
+    df["rsi"]  = ta.rsi(df["Close"], length=14)
+    df["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+
+    # optional: still compute MACD intraday (26×1 m bars is ~half-day)
     macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
     df["macd"], df["macds"] = macd["MACD_12_26_9"], macd["MACDs_12_26_9"]
-    df["atr"]     = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
 
-    # --- Ichimoku: always coerce to two Series
+    # only compute long SMAs on daily
+    if freq == "daily":
+        df["sma_50"]  = ta.sma(df["Close"], length=50)
+        df["sma_200"] = ta.sma(df["Close"], length=200)
+
+    # Ichimoku (works on either)
     ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
-    # if tuple-like unpack; else DataFrame
     if isinstance(ich, tuple):
         conv_raw, base_raw = ich[0], ich[1]
     else:
         conv_raw, base_raw = ich.iloc[:, 0], ich.iloc[:, 1]
+    df["ichimoku_conv"] = conv_raw.iloc[:,0] if isinstance(conv_raw, pd.DataFrame) else conv_raw
+    df["ichimoku_base"] = base_raw.iloc[:,0] if isinstance(base_raw, pd.DataFrame) else base_raw
 
-    # if those pieces are still DataFrames, pick their first column
-    conv = conv_raw.iloc[:,0] if isinstance(conv_raw, pd.DataFrame) else conv_raw
-    base = base_raw.iloc[:,0] if isinstance(base_raw, pd.DataFrame) else base_raw
+    # stochastic RSI
+    st = ta.stochrsi(df["Close"])
+    df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
 
-    df["ichimoku_conv"] = conv
-    df["ichimoku_base"] = base
-
-    # --- stochastic RSI
-    stoch = ta.stochrsi(df["Close"])
-    df["stochrsi"] = stoch["STOCHRSIk_14_14_3_3"]
-
-    # --- clean up
+    # forward/backfill then drop only what we need
     df.ffill(inplace=True)
     df.bfill(inplace=True)
-    df.dropna(subset=[
-        "vwap","sma_50","sma_200","rsi",
-        "macd","macds","atr",
-        "ichimoku_conv","ichimoku_base","stochrsi"
-    ], inplace=True)
+
+    # choose required columns by timeframe
+    required = ["vwap","rsi","atr","ichimoku_conv","ichimoku_base","stochrsi","macd","macds"]
+    if freq == "daily":
+        required += ["sma_50","sma_200"]
+
+    df.dropna(subset=required, inplace=True)
     df.reset_index(drop=True, inplace=True)
     return df
     
