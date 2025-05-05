@@ -297,39 +297,33 @@ class DataFetcher:
 
         df: Optional[pd.DataFrame] = None
 
-        # 1) Try Finnhub for 5 days of 1-minute bars
+        # 1) Skip Finnhub entirely (go straight to Alpaca fallback)
+        df = None
+
+        # 2) Fallback to Alpaca IEX if no data
         try:
-            df = fh.fetch(symbol, period="5d", interval="1m")
-        except FinnhubAPIException as e:
-            logger.warning(f"[DataFetcher] Finnhub minute fetch failed for {symbol}: {e}")
+            bars = ctx.api.get_bars(
+                symbol,
+                TimeFrame.Minute,
+                limit=390 * 5,   # up to 5 full days
+                feed="iex"
+            ).df
+
+            if not bars.empty:
+                bars = bars.rename(columns={
+                    "open":   "Open",
+                    "high":   "High",
+                    "low":    "Low",
+                    "close":  "Close",
+                    "volume": "Volume"
+                })
+                if "symbol" in bars.columns:
+                    bars = bars.drop(columns=["symbol"])
+                bars.index = pd.to_datetime(bars.index).tz_localize(None)
+                df = bars[["Open","High","Low","Close","Volume"]]
+                logger.info(f"[DataFetcher] minute bars via Alpaca IEX for {symbol}")
         except Exception as e:
-            logger.warning(f"[DataFetcher] unexpected error fetching {symbol} from Finnhub: {e}")
-
-        # 2) Fallback to Alpaca IEX if Finnhub gave nothing
-        if df is None or df.empty:
-            try:
-                bars = ctx.api.get_bars(
-                    symbol,
-                    TimeFrame.Minute,
-                    limit=390 * 5,   # up to 5 full days
-                    feed="iex"
-                ).df
-
-                if not bars.empty:
-                    bars = bars.rename(columns={
-                        "open":   "Open",
-                        "high":   "High",
-                        "low":    "Low",
-                        "close":  "Close",
-                        "volume": "Volume"
-                    })
-                    if "symbol" in bars.columns:
-                        bars = bars.drop(columns=["symbol"])
-                    bars.index = pd.to_datetime(bars.index).tz_localize(None)
-                    df = bars[["Open","High","Low","Close","Volume"]]
-                    logger.info(f"[DataFetcher] minute bars via Alpaca IEX for {symbol}")
-            except Exception as e:
-                logger.warning(f"[DataFetcher] Alpaca minute fallback failed for {symbol}: {e}")
+            logger.warning(f"[DataFetcher] Alpaca minute fallback failed for {symbol}: {e}")
 
         # 3) cache & return
         self._minute_cache[symbol]      = df
@@ -1205,21 +1199,17 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").set_index("Date")
 
-    # core indicators needed for both daily & intraday
+    # core indicators
     df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
     df["rsi"]  = ta.rsi(df["Close"], length=14)
     df["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-
-    # optional: still compute MACD intraday (26×1 m bars is ~half-day)
     macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
     df["macd"], df["macds"] = macd["MACD_12_26_9"], macd["MACDs_12_26_9"]
 
-    # only compute long SMAs on daily
     if freq == "daily":
         df["sma_50"]  = ta.sma(df["Close"], length=50)
         df["sma_200"] = ta.sma(df["Close"], length=200)
 
-    # Ichimoku (works on either)
     ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
     if isinstance(ich, tuple):
         conv_raw, base_raw = ich[0], ich[1]
@@ -1228,20 +1218,22 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["ichimoku_conv"] = conv_raw.iloc[:,0] if isinstance(conv_raw, pd.DataFrame) else conv_raw
     df["ichimoku_base"] = base_raw.iloc[:,0] if isinstance(base_raw, pd.DataFrame) else base_raw
 
-    # stochastic RSI
     st = ta.stochrsi(df["Close"])
     df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
 
-    # forward/backfill then drop only what we need
+    # fill-forward/backward
     df.ffill(inplace=True)
     df.bfill(inplace=True)
 
-    # choose required columns by timeframe
+    # now drop only fully NaN rows for intraday,
+    # but require all indicators for daily
     required = ["vwap","rsi","atr","ichimoku_conv","ichimoku_base","stochrsi","macd","macds"]
     if freq == "daily":
         required += ["sma_50","sma_200"]
+        df.dropna(subset=required, how="any", inplace=True)
+    else:
+        df.dropna(subset=required, how="all", inplace=True)
 
-    df.dropna(subset=required, inplace=True)
     df.reset_index(drop=True, inplace=True)
     return df
     
