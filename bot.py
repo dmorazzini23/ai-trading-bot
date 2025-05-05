@@ -290,45 +290,54 @@ class DataFetcher:
         return self._daily_cache[symbol]
 
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        # Attempt Finnhub first
+        # cache-hit if within the last minute
         last = self._minute_timestamps.get(symbol)
         if last and last > datetime.now(timezone.utc) - timedelta(minutes=1):
             return self._minute_cache[symbol]
-
+    
+        # 1) Finnhub first
         try:
             df = fh.fetch(symbol, period="1d", interval="1m")
         except Exception as e:
             logger.warning(f"[DataFetcher] minute fetch failed for {symbol}: {e}")
             df = None
-
-        # Fallback to Alpaca IEX minute bars
+    
+        # 2) Alpaca IEX fallback if Finnhub gave nothing
         if df is None or df.empty:
             try:
-                bars = ctx.api.get_bars(symbol,
-                                        TimeFrame.Minute,
-                                        limit=390,  # full trading day
-                                        feed="iex").df
+                bars = ctx.api.get_bars(
+                    symbol,
+                    TimeFrame.Minute,
+                    limit=390,      # full trading day
+                    feed="iex"
+                ).df
+    
                 if not bars.empty:
-                    # Ensure the index is a timezone-naive datetime index named "Date"
-                    bars.index = pd.to_datetime(bars.index).tz_localize(None)
-                    bars.index.name = "Date"
-
-                    # Rename Alpaca's open/high/low/close/volume
-                    bars = bars.rename(columns={
-                        "open":   "Open",
-                        "high":   "High",
-                        "low":    "Low",
-                        "close":  "Close",
-                        "volume": "Volume"
+                    df_bars = bars.copy()
+    
+                    # drop symbol column if present
+                    if 'symbol' in df_bars.columns:
+                        df_bars = df_bars.drop(columns=['symbol'])
+    
+                    # rename to match your existing OHLCV
+                    df_bars = df_bars.rename(columns={
+                        'open':   'Open',
+                        'high':   'High',
+                        'low':    'Low',
+                        'close':  'Close',
+                        'volume': 'Volume'
                     })
-
-                    # Keep only the OHLCV columns
-                    df = bars[["Open", "High", "Low", "Close", "Volume"]]
+    
+                    # ensure datetime index, strip tz
+                    df_bars.index = pd.to_datetime(df_bars.index).tz_localize(None)
+    
+                    # keep only the five columns you care about
+                    df = df_bars[['Open', 'High', 'Low', 'Close', 'Volume']]
                     logger.info(f"[DataFetcher] minute bars via Alpaca IEX for {symbol}")
             except Exception as e:
                 logger.warning(f"[DataFetcher] Alpaca minute fallback failed for {symbol}: {e}")
-
-        # Cache & return
+    
+        # 3) cache & return (even if still None or empty)
         self._minute_cache[symbol]      = df
         self._minute_timestamps[symbol] = datetime.now(timezone.utc)
         return df
