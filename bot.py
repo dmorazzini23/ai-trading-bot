@@ -264,7 +264,7 @@ class FinnhubFetcher:
             return pd.concat(frames, axis=1, keys=syms, names=['Symbol','Field'])
 
         except FinnhubAPIException as e:
-            logger.warning(f"[FH] no access for {symbols} ({period}/{interval}): {e}. returning empty df")
+            logger.debug(f"[FH] no access for {symbols} ({period}/{interval}): {e}. returning empty df")
             return pd.DataFrame()
 # ─── FINNHUB FETCHER ────────────────────────────────────────────────────────
 # instantiate a singleton
