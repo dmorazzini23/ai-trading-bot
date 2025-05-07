@@ -912,8 +912,15 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         return order
 
     except APIError as e:
-        # “requested: 100, available: 50”
-        m = re.search(r"requested: (\d+), available: (\d+)", str(e))
+        msg = str(e).lower()
+
+        # Skip entirely if no buying power
+        if "insufficient buying power" in msg:
+            logger.warning(f"[submit_order] insufficient buying power for {symbol}; skipping order")
+            return None
+
+        # Partial-fill fallback for “requested X, available Y”
+        m = re.search(r"requested: (\d+), available: (\d+)", msg)
         if m and int(m.group(2)) > 0:
             available = int(m.group(2))
             ctx.api.submit_order(
@@ -921,10 +928,12 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                 qty=available,
                 side=side,
                 type="market",
-                time_in_force="gtc"
+                time_in_force="gtc",
             )
-            logger.info(f"[submit_order] only {available} of {symbol} available, placed partial fill")
+            logger.info(f"[submit_order] only {available} {symbol} available; placed partial fill")
             return None
+
+        # Other Alpaca API errors bubble up
         logger.warning(f"[submit_order] APIError for {symbol}: {e}")
         raise
 
@@ -1125,6 +1134,16 @@ def _safe_trade(
 ) -> None:
     try:
         trade_logic(ctx, symbol, balance, model, regime_ok)
+
+    except APIError as e:
+        msg = str(e).lower()
+
+        # skip entirely if no buying power
+        if "insufficient buying power" in msg:
+            logger.warning(f"[trade_logic] insufficient buying power for {symbol}; skipping")
+        else:
+            logger.exception(f"[trade_logic] APIError for {symbol}: {e}")
+
     except Exception:
         logger.exception(f"[trade_logic] unhandled exception for {symbol}")
 
