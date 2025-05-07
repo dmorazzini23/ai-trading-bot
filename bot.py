@@ -750,7 +750,7 @@ def check_daily_loss() -> bool:
     if day_start_equity is None or day_start_equity[0] != today:
         day_start_equity = (today, equity)
         daily_drawdown.set(0.0)
-        log.info(f"reset day_start_equity to {cash} on {today}")
+        log.info(f"reset day_start_equity to {equity} on {today}")
         return False
 
     loss = (day_start_equity[1] - equity) / day_start_equity[1]
