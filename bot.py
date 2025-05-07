@@ -740,20 +740,20 @@ def check_daily_loss() -> bool:
 
     try:
         acct = api.get_account()
-        cash = float(acct.cash)
-        log.debug(f"account cash: {cash}")
+        equity = float(acct.equity)
+        log.debug(f"account equity: {equity}")
     except Exception as e:
         log.warning(f"[check_daily_loss] could not fetch account cash: {e!r}")
         return False
 
     today = date.today()
     if day_start_equity is None or day_start_equity[0] != today:
-        day_start_equity = (today, cash)
+        day_start_equity = (today, equity)
         daily_drawdown.set(0.0)
         log.info(f"reset day_start_equity to {cash} on {today}")
         return False
 
-    loss = (day_start_equity[1] - cash) / day_start_equity[1]
+    loss = (day_start_equity[1] - equity) / day_start_equity[1]
     daily_drawdown.set(loss)
     log.info(f"daily drawdown is {loss:.2%}")
     return loss >= DAILY_LOSS_LIMIT
