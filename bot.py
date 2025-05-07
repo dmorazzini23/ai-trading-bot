@@ -118,6 +118,7 @@ class BotMode:
 
 BOT_MODE = os.getenv("BOT_MODE", "balanced")
 mode     = BotMode(BOT_MODE)
+log.info(f"Trading mode is set to '{mode.mode}'")
 params   = mode.get_config()
 
 # ─── CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
