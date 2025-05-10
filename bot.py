@@ -25,6 +25,7 @@ import numpy as np
 if not hasattr(np, "NaN"):
     np.NaN = np.nan
 import pandas as pd
+import pandas_market_calendars as mcal
 from numpy import NaN as npNaN
 import pandas_ta as ta
 import requests
@@ -60,6 +61,17 @@ from logging import getLogger
 day_start_equity: Optional[Tuple[date, float]] = None
 
 _calendar_cache = {}
+
+# ─── MARKET HOURS GUARD ───────────────────────────────────────────────────
+# set up the NYSE calendar once
+nyse = mcal.get_calendar("XNYS")
+
+def in_trading_hours(ts: pd.Timestamp) -> bool:
+    """Return True if ts (UTC) falls within today’s NYSE open/close."""
+    schedule = nyse.schedule(start_date=ts.date(), end_date=ts.date())
+    if schedule.empty:
+        return False
+    return schedule.market_open.iloc[0] <= ts <= schedule.market_close.iloc[0]
 
 # ─── A. ENVIRONMENT, SENTRY & LOGGING ────────────────────────────────────────
 load_dotenv()
@@ -1291,6 +1303,10 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
     return any(today <= d <= cutoff for d in dates)
 
 def run_all_trades(model) -> None:
+    now = pd.Timestamp.utcnow()
+    if not in_trading_hours(now):
+        logger.info(f"Outside market hours ({now}); skipping trade cycle")
+        return
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
     tickers = load_tickers(TICKERS_FILE)
