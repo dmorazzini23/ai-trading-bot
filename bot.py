@@ -185,6 +185,7 @@ class BotContext:
     confirmation_count: Dict[str, int] = field(default_factory=dict)
     trailing_extremes: Dict[str, float] = field(default_factory=dict)
     take_profit_targets: Dict[str, float] = field(default_factory=dict)
+    stop_targets:         Dict[str, float] = field(default_factory=dict)
 
 class FinnhubFetcher:
     def __init__(self, calls_per_minute: int = 60):
