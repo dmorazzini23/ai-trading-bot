@@ -151,6 +151,13 @@ CONFIRMATION_COUNT       = params["CONFIRMATION_COUNT"]
 CAPITAL_CAP              = params["CAPITAL_CAP"]
 PACIFIC                  = ZoneInfo("America/Los_Angeles")
 
+# ─── PAIR‐TRADING CONFIG ────────────────────────────────────────────────────
+your_cointegrated_pairs: List[Tuple[str,str]] = [
+    ("AAPL", "MSFT"),
+    ("XOM",  "CVX"),
+    # …etc.
+]
+
 # ─── ASSERT ALPACA KEYS ───────────────────────────────────────────────────────
 ALPACA_API_KEY    = os.getenv("APCA_API_KEY_ID")
 ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
@@ -972,6 +979,23 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         order_failures.inc()
         logger.exception(f"[submit_order] unexpected error for {symbol}")
         return None
+
+def twap_submit(
+    ctx: BotContext,
+    symbol: str,
+    total_qty: int,
+    side: str,
+    window_secs: int = 600,
+    n_slices: int = 10
+) -> None:
+    """
+    Slice a large order into `n_slices` over `window_secs` seconds.
+    """
+    slice_qty = total_qty // n_slices
+    wait_secs = window_secs / n_slices
+    for i in range(n_slices):
+        submit_order(ctx, symbol, slice_qty, side)
+        time.sleep(wait_secs)
 
 def update_trailing_stop(
     ctx: BotContext,
