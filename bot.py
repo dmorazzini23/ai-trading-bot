@@ -1036,7 +1036,7 @@ def calculate_entry_size(
     return min(kelly_sz, vol_sz)
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
-    twap_submit(symbol, qty, window_secs=300, n_slices=5)
+    twap_submit(ctx, symbol, qty, side, window_secs=300, n_slices=5)
     df_min = ctx.data_fetcher.get_minute_df(ctx, symbol)
     price = df_min["Close"].iloc[-1]
     ctx.trade_logger.log_entry(symbol, price, qty, side, "", "")
