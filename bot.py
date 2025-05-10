@@ -947,6 +947,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             time_in_force="gtc",
         )
         logger.info(f"[submit_order] {side.upper()} {qty} {symbol} at market; expected ~{expected_price}")
+        orders_total.inc()    # increment Prometheus counter for each order sent
         return order
 
     except APIError as e:
@@ -969,6 +970,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                 time_in_force="gtc",
             )
             logger.info(f"[submit_order] only {available} {symbol} available; placed partial fill")
+            orders_total.inc()
             return None
 
         # Other Alpaca API errors bubble up
@@ -993,8 +995,13 @@ def twap_submit(
     """
     slice_qty = total_qty // n_slices
     wait_secs = window_secs / n_slices
+
     for i in range(n_slices):
-        submit_order(ctx, symbol, slice_qty, side)
+        try:
+            submit_order(ctx, symbol, slice_qty, side)
+            # (orders_total is already incremented in submit_order)
+        except Exception as e:
+            logger.warning(f"[TWAP] slice {i+1}/{n_slices} for {symbol} failed: {e}")
         time.sleep(wait_secs)
 
 def update_trailing_stop(
