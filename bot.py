@@ -1190,18 +1190,33 @@ def trade_logic(
         )
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
-    # gather daily closes
+    # 1) Bail out if no symbols
+    if not symbols:
+        logger.warning("[Portfolio] No tickers to optimize—skipping.")
+        return {}
+
+    # 2) Build DataFrame of aligned daily closes
     closes = {}
     for sym in symbols:
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
-        if df is not None:
+        if df is not None and "Close" in df:
             closes[sym] = df["Close"]
     price_df = pd.DataFrame(closes).dropna()
-    μ        = expected_returns.mean_historical_return(price_df)
-    Σ        = risk_models.sample_cov(price_df)
-    ef       = EfficientFrontier(μ, Σ)
-    w        = ef.max_sharpe()  # or .min_volatility() / .risk_parity()
-    return w
+    
+    # 3) Compute expected returns & covariance
+    μ = expected_returns.mean_historical_return(price_df)
+    Σ = risk_models.sample_cov(price_df)
+
+    # 4) Guard against empty results
+    if μ.shape[0] == 0 or Σ.shape[0] == 0:
+        logger.warning("[Portfolio] Empty returns or covariance matrix—skipping optimization.")
+        return {}
+
+    # 5) Optimize
+    ef = EfficientFrontier(μ, Σ)
+    weights = ef.max_sharpe()  # or ef.min_volatility(), ef.efficient_risk(target_risk), etc.
+
+    return weights
 
 def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str,int]:
     # cointegration-based stat-arb
