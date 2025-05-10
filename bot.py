@@ -34,6 +34,8 @@ import schedule
 import portalocker
 from alpaca_trade_api.rest import REST, APIError, TimeFrame
 from sklearn.ensemble import RandomForestClassifier
+from statsmodels.tsa.stattools import coint
+from pypfopt import risk_models, expected_returns, EfficientFrontier
 import joblib
 from dotenv import load_dotenv
 import sentry_sdk
@@ -851,6 +853,22 @@ def is_within_entry_window(ctx: BotContext) -> bool:
     return True
 
 # ─── SIZING & EXECUTION ───────────────────────────────────────────────────────
+def scaled_atr_stop(entry_price: float,
+                    atr: float,
+                    now: datetime,
+                    market_open: datetime,
+                    market_close: datetime,
+                    max_factor: float = 2.0,
+                    min_factor: float = 0.5
+                   ) -> Tuple[float,float]:
+    total   = (market_close - market_open).total_seconds()
+    elapsed = (now - market_open).total_seconds()
+    α       = max(0, min(1, 1 - elapsed/total))
+    factor  = min_factor + α*(max_factor - min_factor)
+    stop    = entry_price - factor * atr
+    take    = entry_price + factor * atr
+    return stop, take
+
 def fractional_kelly_size(
     ctx: BotContext,
     balance: float,
@@ -891,6 +909,16 @@ def fractional_kelly_size(
     size = int(min(raw_pos,cap_pos,MAX_POSITION_SIZE))
 
     return max(size,1)
+
+def vol_target_position_size(cash: float,
+                             price: float,
+                             returns: np.ndarray,
+                             target_vol: float = 0.02
+                            ) -> int:
+    sigma = np.std(returns)
+    dollar_alloc = cash * (target_vol / sigma)
+    qty = int(dollar_alloc / price)
+    return max(qty, 1)
 
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
     """
@@ -962,17 +990,35 @@ def update_trailing_stop(
     return "hold"
 
 def calculate_entry_size(
-    ctx: BotContext, symbol: str, price: float, atr: float, win_prob: float
+    ctx: BotContext,
+    symbol: str,
+    price: float,
+    atr: float,
+    win_prob: float
 ) -> int:
-    return fractional_kelly_size(ctx, float(ctx.api.get_account().cash), price, atr, win_prob)
+    cash = float(ctx.api.get_account().cash)
+    # fetch last-month returns
+    df = ctx.data_fetcher.get_daily_df(ctx, symbol)
+    rets = (
+        df["Close"].pct_change().dropna().values
+        if df is not None and not df.empty
+        else np.array([0.0])
+    )
+    kelly_sz = fractional_kelly_size(ctx, cash, price, atr, win_prob)
+    vol_sz = vol_target_position_size(cash, price, rets, target_vol=0.02)
+    return min(kelly_sz, vol_sz)
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     submit_order(ctx, symbol, qty, side)
     df_min = ctx.data_fetcher.get_minute_df(ctx, symbol)
     price = df_min["Close"].iloc[-1]
     ctx.trade_logger.log_entry(symbol, price, qty, side, "", "")
-    tp = price*(1+TAKE_PROFIT_FACTOR) if side=="buy" else price*(1-TAKE_PROFIT_FACTOR)
-    ctx.take_profit_targets[symbol] = tp
+    now    = now_pacific()
+    mo     = datetime.combine(now.date(), ctx.market_open, PACIFIC)
+    mc     = datetime.combine(now.date(), ctx.market_close, PACIFIC)
+    stop, take = scaled_atr_stop(price, df_min["atr"].iloc[-1], now, mo, mc)
+    ctx.take_profit_targets[symbol] = take
+    ctx.stop_targets[symbol]        = stop
 
 def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
     submit_order(ctx, symbol, qty, "sell" if qty>0 else "buy")
@@ -982,7 +1028,8 @@ def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
 # ─── SIGNAL & TRADE LOGIC ────────────────────────────────────────────────────
 def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int,float,str]:
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, df, symbol, model)
-    if sig==-1 or conf<CONF_THRESHOLD:
+    conf *= weights.get(symbol, 1.0)
+    if sig == -1 or conf < CONF_THRESHOLD:
         logger.info(f"[SKIP] {symbol} no/low signal (sig={sig},conf={conf:.2f})")
         return -1,0.0,""
     return sig, conf, strat
@@ -1026,6 +1073,9 @@ def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple
         pos = int(ctx.api.get_position(symbol).qty)
     except Exception:
         pos=0
+    stop = ctx.stop_targets.get(symbol)
+    if stop is not None and price <= stop:
+        return True, abs(qty), "stop_loss"
     tp = ctx.take_profit_targets.get(symbol)
     if pos and tp and ((pos>0 and price>=tp) or (pos<0 and price<=tp)):
         return True, int(abs(pos)*SCALING_FACTOR), "take_profit"
@@ -1044,7 +1094,13 @@ def trade_logic(
     regime_ok: bool
 ) -> None:
     logger.info(f"→ trade_logic start for {symbol}")
-
+    for (s1,s2) in your_cointegrated_pairs:
+        if symbol in (s1,s2):
+            strat, sz = pair_trade_signal(s1,s2)
+            if strat:
+                execute_entry(ctx, symbol, sz, "buy" if strat=="long_spread" else "sell")
+                return
+    
     # early‐exit if we shouldn’t even be trying
     if not should_enter(ctx, symbol, balance, regime_ok):
         return
@@ -1087,10 +1143,25 @@ def trade_logic(
             "buy" if sig == 1 else "sell"
         )
 
+def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
+    # gather daily closes
+    closes = {}
+    for sym in symbols:
+        df = ctx.data_fetcher.get_daily_df(ctx, sym)
+        if df is not None:
+            closes[sym] = df["Close"]
+    price_df = pd.DataFrame(closes).dropna()
+    μ        = expected_returns.mean_historical_return(price_df)
+    Σ        = risk_models.sample_cov(price_df)
+    ef       = EfficientFrontier(μ, Σ)
+    w        = ef.max_sharpe()  # or .min_volatility() / .risk_parity()
+    return w
+
 def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
     tickers = load_tickers(TICKERS_FILE)
+    weights = compute_portfolio_weights(tickers)
     if not tickers:
         logger.error("❌ No tickers loaded; skipping run_all_trades")
         return
