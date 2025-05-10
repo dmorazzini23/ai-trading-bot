@@ -1140,11 +1140,11 @@ def trade_logic(
     # 1) pair-trade override
     for (s1, s2) in your_cointegrated_pairs:
         if symbol in (s1, s2):
-        strat, sz = pair_trade_signal(s1, s2)
-        if sz > 0:
-            side = "buy" if strat == "long_spread" else "sell"
-            execute_entry(ctx, symbol, sz, side)
-            return
+            strat, sz = pair_trade_signal(s1, s2)
+            if sz > 0:
+                side = "buy" if strat == "long_spread" else "sell"
+                execute_entry(ctx, symbol, sz, side)
+                return
 
     # 2) early-exit if we shouldn’t even be trying
     if not should_enter(ctx, symbol, balance, regime_ok):
