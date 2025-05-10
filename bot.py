@@ -32,6 +32,7 @@ from bs4 import BeautifulSoup
 from flask import Flask
 import schedule
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
 import portalocker
 from alpaca_trade_api.rest import REST, APIError, TimeFrame
 from sklearn.ensemble import RandomForestClassifier
@@ -1232,13 +1233,53 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str,int]:
         if z < -2: return ("long_spread",  1)
     return (None, 0)
 
-def is_near_event(symbol: str, window_secs: int = 30*60) -> bool:
-    # suspend trading around earnings
-    cal = yf.Ticker(symbol).calendar
-    if "Earnings Date" in cal.index:
-        ed = pd.to_datetime(cal.loc["Earnings Date"][0]).tz_localize(PACIFIC)
-        return abs((now_pacific() - ed).total_seconds()) < window_secs
-    return False
+def get_calendar_safe(symbol: str) -> pd.DataFrame:
+    """
+    Fetches and caches yf.Ticker(symbol).calendar, but on rate-limit
+    returns an empty DataFrame so downstream code can skip gracefully.
+    """
+    if symbol in _calendar_cache:
+        return _calendar_cache[symbol]
+
+    try:
+        cal = yf.Ticker(symbol).calendar
+    except YFRateLimitError:
+        logger.warning(f"[Events] Rate limited fetching calendar for {symbol}; skipping events.")
+        cal = pd.DataFrame()
+    except Exception as e:
+        logger.error(f"[Events] Unexpected error fetching calendar for {symbol}: {e}")
+        cal = pd.DataFrame()
+
+    _calendar_cache[symbol] = cal
+    return cal
+
+def is_near_event(symbol: str, days: int = 3) -> bool:
+    """
+    Returns True if any upcoming calendar event is within `days` from today.
+    Skips (returns False) on missing/empty data.
+    """
+    cal = get_calendar_safe(symbol)
+    if cal.empty:
+        return False
+
+    # Yahoo calendar index is usually a single-column with dates in the column names
+    # e.g. cal.columns = ['Earnings Date', ...], cal.loc['Value', ...] holds timestamps
+    # Normalize into a list of datetimes:
+    try:
+        dates = []
+        for col in cal.columns:
+            raw = cal.at['Value', col]
+            if isinstance(raw, (list, tuple)):
+                raw = raw[0]  # sometimes they wrap in a list
+            dates.append(pd.to_datetime(raw))
+    except Exception:
+        logger.debug(f"[Events] Malformed calendar for {symbol}, columns={cal.columns}")
+        return False
+
+    today = pd.Timestamp.now().normalize()
+    cutoff = today + pd.Timedelta(days=days)
+    # any date in [today, cutoff]?
+    return any(today <= d <= cutoff for d in dates)
 
 def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
