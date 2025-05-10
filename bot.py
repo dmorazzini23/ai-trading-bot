@@ -186,6 +186,7 @@ class BotContext:
     trailing_extremes: Dict[str, float] = field(default_factory=dict)
     take_profit_targets: Dict[str, float] = field(default_factory=dict)
     stop_targets:         Dict[str, float] = field(default_factory=dict)
+    portfolio_weights: Dict[str, float] = field(default_factory=dict)
 
 class FinnhubFetcher:
     def __init__(self, calls_per_minute: int = 60):
@@ -1011,7 +1012,7 @@ def calculate_entry_size(
     return min(kelly_sz, vol_sz)
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
-    submit_order(ctx, symbol, qty, side)
+    twap_submit(symbol, qty, window_secs=300, n_slices=5)
     df_min = ctx.data_fetcher.get_minute_df(ctx, symbol)
     price = df_min["Close"].iloc[-1]
     ctx.trade_logger.log_entry(symbol, price, qty, side, "", "")
@@ -1030,7 +1031,7 @@ def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
 # ─── SIGNAL & TRADE LOGIC ────────────────────────────────────────────────────
 def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int,float,str]:
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, df, symbol, model)
-    conf *= weights.get(symbol, 1.0)
+    conf *= ctx.portfolio_weights.get(symbol, 1.0)
     if sig == -1 or conf < CONF_THRESHOLD:
         logger.info(f"[SKIP] {symbol} no/low signal (sig={sig},conf={conf:.2f})")
         return -1,0.0,""
@@ -1077,7 +1078,7 @@ def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple
         pos=0
     stop = ctx.stop_targets.get(symbol)
     if stop is not None and price <= stop:
-        return True, abs(qty), "stop_loss"
+        return True, abs(pos), "stop_loss"
     tp = ctx.take_profit_targets.get(symbol)
     if pos and tp and ((pos>0 and price>=tp) or (pos<0 and price<=tp)):
         return True, int(abs(pos)*SCALING_FACTOR), "take_profit"
@@ -1187,7 +1188,6 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str,int]:
 
 def is_near_event(symbol: str, window_secs: int = 30*60) -> bool:
     # suspend trading around earnings
-    import yfinance as yf
     cal = yf.Ticker(symbol).calendar
     if "Earnings Date" in cal.index:
         ed = pd.to_datetime(cal.loc["Earnings Date"][0]).tz_localize(PACIFIC)
@@ -1199,6 +1199,7 @@ def run_all_trades(model) -> None:
 
     tickers = load_tickers(TICKERS_FILE)
     weights = compute_portfolio_weights(tickers)
+    ctx.portfolio_weights = weights
     if not tickers:
         logger.error("❌ No tickers loaded; skipping run_all_trades")
         return
