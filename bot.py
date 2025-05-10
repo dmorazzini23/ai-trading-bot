@@ -1221,19 +1221,30 @@ def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
 
     return weights
 
-def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str,int]:
+def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
     # cointegration-based stat-arb
     df1 = ctx.data_fetcher.get_daily_df(ctx, sym1)["Close"]
     df2 = ctx.data_fetcher.get_daily_df(ctx, sym2)["Close"]
     df  = pd.concat([df1, df2], axis=1).dropna()
-    t, p, _ = coint(df.iloc[:,0], df.iloc[:,1])
-    if p < 0.05:
-        β = np.polyfit(df.iloc[:,1], df.iloc[:,0], 1)[0]
-        spread = df.iloc[:,0] - β * df.iloc[:,1]
+
+    # test for cointegration
+    t_stat, p_value, _ = coint(df.iloc[:, 0], df.iloc[:, 1])
+    if p_value < 0.05:
+        # fit hedge ratio β
+        beta = np.polyfit(df.iloc[:, 1], df.iloc[:, 0], 1)[0]
+        spread = df.iloc[:, 0] - beta * df.iloc[:, 1]
+
+        # compute z-score series
         z = (spread - spread.mean()) / spread.std()
-        if z >  2: return ("short_spread", 1)
-        if z < -2: return ("long_spread",  1)
-    return (None, 0)
+        z0 = z.iloc[-1]  # most recent z-score
+
+        if z0 > 2:
+            return ("short_spread", 1)
+        elif z0 < -2:
+            return ("long_spread", 1)
+
+    # no valid signal
+    return ("no_signal", 0)
 
 def get_calendar_safe(symbol: str) -> pd.DataFrame:
     """
