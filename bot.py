@@ -31,6 +31,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask
 import schedule
+import yfinance as yf
 import portalocker
 from alpaca_trade_api.rest import REST, APIError, TimeFrame
 from sklearn.ensemble import RandomForestClassifier
@@ -1094,42 +1095,54 @@ def trade_logic(
     regime_ok: bool
 ) -> None:
     logger.info(f"→ trade_logic start for {symbol}")
-    for (s1,s2) in your_cointegrated_pairs:
-        if symbol in (s1,s2):
-            strat, sz = pair_trade_signal(s1,s2)
+
+    # 0) event-driven skip
+    if is_near_event(symbol):
+        logger.info(f"[SKIP] earnings/event window for {symbol}")
+        return
+
+    # 1) pair-trade override
+    for (s1, s2) in your_cointegrated_pairs:
+        if symbol in (s1, s2):
+            strat, sz = pair_trade_signal(s1, s2)
             if strat:
-                execute_entry(ctx, symbol, sz, "buy" if strat=="long_spread" else "sell")
+                execute_entry(
+                    ctx,
+                    symbol,
+                    sz,
+                    "buy" if strat == "long_spread" else "sell"
+                )
                 return
-    
-    # early‐exit if we shouldn’t even be trying
+
+    # 2) early-exit if we shouldn’t even be trying
     if not should_enter(ctx, symbol, balance, regime_ok):
         return
 
-    # 1) fetch minute bars
+    # 3) fetch minute bars
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw is None or raw.empty:
         logger.info(f"[SKIP] no minute data for {symbol}")
         return
 
-    # 2) compute intraday indicators (pass freq="intraday")
+    # 4) compute intraday indicators
     df = prepare_indicators(raw, freq="intraday")
     if df.empty:
         logger.info(f"[SKIP] not enough indicator data for {symbol}")
         return
 
-    # 3) signal + confirmation
+    # 5) signal + confirmation
     sig, conf, _ = signal_and_confirm(ctx, symbol, df, model)
     if sig == -1:
         return
 
-    # 4) decide exit first (take‐profit or trailing stop)
+    # 6) decide exit first (stop-loss / take-profit / trailing)
     price, atr = df["Close"].iloc[-1], df["atr"].iloc[-1]
     do_exit, qty, _ = should_exit(ctx, symbol, price, atr)
     if do_exit:
         execute_exit(ctx, symbol, qty)
         return
 
-    # 5) size & entry
+    # 7) size & entry
     size = calculate_entry_size(ctx, symbol, price, atr, conf)
     if size > 0:
         try:
@@ -1156,6 +1169,29 @@ def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     ef       = EfficientFrontier(μ, Σ)
     w        = ef.max_sharpe()  # or .min_volatility() / .risk_parity()
     return w
+
+def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str,int]:
+    # cointegration-based stat-arb
+    df1 = ctx.data_fetcher.get_daily_df(ctx, sym1)["Close"]
+    df2 = ctx.data_fetcher.get_daily_df(ctx, sym2)["Close"]
+    df  = pd.concat([df1, df2], axis=1).dropna()
+    t, p, _ = coint(df.iloc[:,0], df.iloc[:,1])
+    if p < 0.05:
+        β = np.polyfit(df.iloc[:,1], df.iloc[:,0], 1)[0]
+        spread = df.iloc[:,0] - β * df.iloc[:,1]
+        z = (spread - spread.mean()) / spread.std()
+        if z >  2: return ("short_spread", 1)
+        if z < -2: return ("long_spread",  1)
+    return (None, 0)
+
+def is_near_event(symbol: str, window_secs: int = 30*60) -> bool:
+    # suspend trading around earnings
+    import yfinance as yf
+    cal = yf.Ticker(symbol).calendar
+    if "Earnings Date" in cal.index:
+        ed = pd.to_datetime(cal.loc["Earnings Date"][0]).tz_localize(PACIFIC)
+        return abs((now_pacific() - ed).total_seconds()) < window_secs
+    return False
 
 def run_all_trades(model) -> None:
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
