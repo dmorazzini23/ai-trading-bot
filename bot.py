@@ -59,6 +59,8 @@ from logging import getLogger
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
 
+_calendar_cache = {}
+
 # ─── A. ENVIRONMENT, SENTRY & LOGGING ────────────────────────────────────────
 load_dotenv()
 RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
