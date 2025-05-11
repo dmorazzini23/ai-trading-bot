@@ -1247,7 +1247,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
 
     elif qty > SLICE_THRESHOLD:
         logger.info(f"[ENTRY] VWAP‐pegged slice {qty} {side.upper()} for {symbol}")
-        vwap_pegged_submit(ctx, symbol, qty, side=side, duration=300)
+        vwap_pegged_submit(ctx, symbol, qty, side)
 
     else:
         logger.info(f"[ENTRY] Market {side.upper()} {qty} {symbol}")
