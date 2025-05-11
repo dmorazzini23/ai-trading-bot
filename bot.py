@@ -1065,9 +1065,15 @@ def twap_submit(
             logger.warning(f"[TWAP] slice {i+1}/{n_slices} for {symbol} failed: {e}")
         time.sleep(wait_secs)
 
-def vwap_pegged_submit(ctx: BotContext, symbol: str, total_qty: int, duration: int = 300):
+def vwap_pegged_submit(
+    ctx: BotContext,
+    symbol: str,
+    total_qty: int,
+    side: str,
+    duration: int = 300
+):
     """
-    Place a VWAP‐pegged bracket order over `duration` seconds.
+    Place a VWAP‐pegged IOC bracket order over `duration` seconds.
     """
     start = time.time()
     placed = 0
@@ -1079,15 +1085,15 @@ def vwap_pegged_submit(ctx: BotContext, symbol: str, total_qty: int, duration: i
             ctx.api.submit_order(
                 symbol=symbol,
                 qty=to_send,
-                side="buy",
+                side=side,
                 type="limit",
                 time_in_force="ioc",
                 limit_price=vwap
             )
             placed += to_send
         except Exception:
-            logger.exception("VWAP‐pegged slice failed")
-        time.sleep(duration/10)
+            logger.exception("[VWAP] slice failed")
+        time.sleep(duration / 10)
 
 def pov_submit(ctx: BotContext, symbol: str, total_qty: int, pct: float = 0.1, side: str = "buy"):
     placed = 0
@@ -1151,25 +1157,32 @@ def calculate_entry_size(
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     """
-    Place an entry order.
-    If POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD, use POV slicing;
-    elif qty > SLICE_THRESHOLD, use VWAP‐pegged slicing;
-    otherwise do a simple submit_order.
+    Place an entry order:
+      * If qty <= 0 → skip
+      * If POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD → POV slicing
+      * Elif qty > SLICE_THRESHOLD → VWAP‐pegged slicing
+      * Else → simple market
     """
+    if qty <= 0:
+        logger.warning(f"[ENTRY] zero quantity for {symbol}, skipping")
+        return
+
     # choose slicing algorithm
     if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
-        # Participation‐of‐Volume slicing
+        logger.info(f"[ENTRY] POV slice {qty}@{POV_SLICE_PCT*100:.1f}% for {symbol}")
         pov_submit(ctx, symbol, qty, pct=POV_SLICE_PCT, side=side)
+
     elif qty > SLICE_THRESHOLD:
-        # VWAP‐pegged bracket over 5 min
-        vwap_pegged_submit(ctx, symbol, qty, duration=300)
+        logger.info(f"[ENTRY] VWAP‐pegged slice {qty} {side.upper()} for {symbol}")
+        vwap_pegged_submit(ctx, symbol, qty, side=side, duration=300)
+
     else:
-        # direct market/side order
+        logger.info(f"[ENTRY] Market {side.upper()} {qty} {symbol}")
         submit_order(ctx, symbol, qty, side)
 
     # now log & set stops/targets
     df_min = ctx.data_fetcher.get_minute_df(ctx, symbol)
-    price = df_min["Close"].iloc[-1]
+    price  = df_min["Close"].iloc[-1]
     ctx.trade_logger.log_entry(symbol, price, qty, side, "", "")
 
     now = now_pacific()
