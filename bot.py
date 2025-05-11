@@ -1099,6 +1099,13 @@ def pov_submit(
     pct: float = 0.1,
     side: str
 ) -> None:
+    """
+    Participation-of-Volume slicing:
+
+      • Each minute, slice up to `pct` of the prior-minute's volume until
+        `total_qty` shares have been placed.
+      • `side` (keyword-only) must be either 'buy' or 'sell'.
+    """
     placed = 0
     while placed < total_qty:
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
