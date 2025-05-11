@@ -45,6 +45,10 @@ import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 import finnhub
 from finnhub.exceptions import FinnhubAPIException
+import pybreaker
+
+# ─── CIRCUIT BREAKER FOR ALPACA CALLS ─────────────────────────────────────────
+breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
 
 executor = ThreadPoolExecutor(max_workers=4)
 
@@ -148,6 +152,7 @@ SCALING_FACTOR           = 0.5
 ORDER_TYPE               = 'market'
 LIMIT_ORDER_SLIPPAGE     = float(os.getenv("LIMIT_ORDER_SLIPPAGE", 0.005))
 MAX_POSITION_SIZE        = 1000
+SLICE_THRESHOLD          = 100
 DAILY_LOSS_LIMIT         = params["DAILY_LOSS_LIMIT"]
 MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD    = 0.8
@@ -567,6 +572,11 @@ ctx = BotContext(
     kelly_fraction=params["KELLY_FRACTION"],
 )
 
+# ─── CIRCUIT-BREAKER WRAPPERS ────────────────────────────────────────────────
+@breaker
+def safe_alpaca_get_account():
+    return api.get_account()
+    
 # ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
 # at startup
 if os.path.exists("regime_model.pkl"):
@@ -798,9 +808,12 @@ def check_daily_loss() -> bool:
     global day_start_equity
 
     try:
-        acct = api.get_account()
-        equity = float(acct.equity)
-        log.debug(f"account equity: {equity}")
+        acct = safe_alpaca_get_account()
+    except pybreaker.CircuitBreakerError:
+        logger.warning("Alpaca account call short-circuited")
+        return False
+    equity = float(acct.equity)
+    log.debug(f"account equity: {equity}")
     except Exception as e:
         log.warning(f"[check_daily_loss] could not fetch account cash: {e!r}")
         return False
@@ -1051,6 +1064,55 @@ def twap_submit(
             logger.warning(f"[TWAP] slice {i+1}/{n_slices} for {symbol} failed: {e}")
         time.sleep(wait_secs)
 
+def vwap_pegged_submit(ctx: BotContext, symbol: str, total_qty: int, duration: int = 300):
+    """
+    Place a VWAP‐pegged bracket order over `duration` seconds.
+    """
+    start = time.time()
+    placed = 0
+    while placed < total_qty and time.time() - start < duration:
+        df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+        vwap = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
+        to_send = min(max(1, total_qty // 10), total_qty - placed)
+        try:
+            ctx.api.submit_order(
+                symbol=symbol,
+                qty=to_send,
+                side="buy",
+                type="limit",
+                time_in_force="ioc",
+                limit_price=vwap
+            )
+            placed += to_send
+        except Exception:
+            logger.exception("VWAP‐pegged slice failed")
+        time.sleep(duration/10)
+
+def pov_submit(ctx: BotContext, symbol: str, total_qty: int, pct: float = 0.1):
+    """
+    Slice order so that each slice is pct * last-minute volume.
+    """
+    placed = 0
+    while placed < total_qty:
+        df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+        vol = df["Volume"].iloc[-1]
+        slice_qty = min(int(vol * pct), total_qty - placed)
+        if slice_qty < 1:
+            time.sleep(10)
+            continue
+        submit_order(ctx, symbol, slice_qty, "buy")
+        placed += slice_qty
+        time.sleep(60)
+
+def maybe_pyramid(ctx: BotContext, symbol: str, entry_price: float, current_price: float, atr: float):
+    profit = (current_price - entry_price) if entry_price else 0
+    if profit > 2 * atr:
+        pos = ctx.api.get_position(symbol)
+        qty = int(abs(int(pos.qty)) * 0.5)
+        if qty > 0:
+            submit_order(ctx, symbol, qty, "buy")
+            logger.info(f"Pyramided {qty} shares of {symbol}")
+
 def update_trailing_stop(
     ctx: BotContext,
     ticker: str,
@@ -1090,13 +1152,26 @@ def calculate_entry_size(
     return min(kelly_sz, vol_sz)
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
-    twap_submit(ctx, symbol, qty, side, window_secs=300, n_slices=5)
+    """
+    Place an entry order.  If qty > SLICE_THRESHOLD, use VWAP-pegged slicing;
+    otherwise do a simple submit_order.
+    """
+    # choose slicing algorithm
+    if qty > SLICE_THRESHOLD:
+        # VWAP-pegged bracket over 5min
+        vwap_pegged_submit(ctx, symbol, qty, duration=300)
+    else:
+        # direct market/side order
+        submit_order(ctx, symbol, qty, side)
+
+    # now log & set stops/targets
     df_min = ctx.data_fetcher.get_minute_df(ctx, symbol)
     price = df_min["Close"].iloc[-1]
     ctx.trade_logger.log_entry(symbol, price, qty, side, "", "")
-    now    = now_pacific()
-    mo     = datetime.combine(now.date(), ctx.market_open, PACIFIC)
-    mc     = datetime.combine(now.date(), ctx.market_close, PACIFIC)
+
+    now = now_pacific()
+    mo  = datetime.combine(now.date(), ctx.market_open, PACIFIC)
+    mc  = datetime.combine(now.date(), ctx.market_close, PACIFIC)
     stop, take = scaled_atr_stop(price, df_min["atr"].iloc[-1], now, mo, mc)
     ctx.take_profit_targets[symbol] = take
     ctx.stop_targets[symbol]        = stop
@@ -1189,21 +1264,21 @@ def trade_logic(
 ) -> None:
     logger.info(f"→ trade_logic start for {symbol}")
 
-    # 0) event-driven skip
+    # 0) event‐driven skip
     if is_near_event(symbol):
         logger.info(f"[SKIP] earnings/event window for {symbol}")
         return
 
-    # 1) pair-trade override
+    # 1) pair‐trade override
     for (s1, s2) in your_cointegrated_pairs:
         if symbol in (s1, s2):
             strat, sz = pair_trade_signal(s1, s2)
             if sz > 0:
                 side = "buy" if strat == "long_spread" else "sell"
                 execute_entry(ctx, symbol, sz, side)
-                return
+            return
 
-    # 2) early-exit if we shouldn’t even be trying
+    # 2) early‐exit if we shouldn’t even be trying
     if not should_enter(ctx, symbol, balance, regime_ok):
         return
 
@@ -1224,8 +1299,20 @@ def trade_logic(
     if sig == -1:
         return
 
-    # 6) decide exit first (stop-loss / take-profit / trailing)
+    # 6) decide exit first (stop‐loss / take‐profit / trailing), **and** maybe pyramid
     price, atr = df["Close"].iloc[-1], df["atr"].iloc[-1]
+
+    # ─── NEW PYRAMIDING BLOCK ───────────────────────────────────────────────
+    try:
+        pos = int(ctx.api.get_position(symbol).qty)
+    except Exception:
+        pos = 0
+    if pos > 0:
+        # approximate your entry price from your stored take‐profit and ATR factor
+        entry_price = ctx.take_profit_targets.get(symbol, 0) - TAKE_PROFIT_FACTOR * atr
+        maybe_pyramid(ctx, symbol, entry_price, price, atr)
+    # ────────────────────────────────────────────────────────────────────────
+
     do_exit, qty, _ = should_exit(ctx, symbol, price, atr)
     if do_exit:
         execute_exit(ctx, symbol, qty)
