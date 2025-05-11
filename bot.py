@@ -1097,7 +1097,10 @@ def pov_submit(
     total_qty: int,
     *,
     pct: float = 0.1,
-    side: str
+    side: str,
+    sleep_interval: int = 60,
+    max_retries: int = 3,
+    backoff_factor: float = 2
 ) -> None:
     """
     Participation-of-Volume slicing:
@@ -1105,28 +1108,52 @@ def pov_submit(
       • Each minute, slice up to `pct` of the prior-minute's volume until
         `total_qty` shares have been placed.
       • `side` (keyword-only) must be either 'buy' or 'sell'.
+      • `sleep_interval` controls how long to wait between slices (seconds).
+      • If minute bars are missing, retry up to `max_retries` with exponential backoff.
     """
-    # validate side
+    # 1) Validate side
     if side not in ("buy", "sell"):
         raise ValueError(f"side must be 'buy' or 'sell', got {side!r}")
 
     placed = 0
+    retries = 0
+    current_interval = sleep_interval
+
     while placed < total_qty:
-        # fetch and guard minute bars
+        # 2) Fetch minute bars and guard
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
         if df is None or df.empty:
-            logger.warning(f"[pov_submit] no minute data for {symbol}, aborting POV slice")
-            return
+            retries += 1
+            if retries > max_retries:
+                logger.warning(f"[pov_submit] no minute data for {symbol} after {max_retries} retries, aborting")
+                return
+            logger.warning(
+                f"[pov_submit] no minute data for {symbol}, retry {retries}/{max_retries} in {current_interval}s"
+            )
+            time.sleep(current_interval)
+            current_interval *= backoff_factor
+            continue
 
+        # reset retry state once we have data
+        retries = 0
+        current_interval = sleep_interval
+
+        # 3) Compute slice quantity
         vol = df["Volume"].iloc[-1]
         slice_qty = min(int(vol * pct), total_qty - placed)
         if slice_qty < 1:
-            time.sleep(10)
+            logger.debug(f"[pov_submit] slice_qty < 1 (vol={vol}), waiting {sleep_interval}s")
+            time.sleep(sleep_interval)
             continue
 
+        # 4) Submit and bookkeep
         submit_order(ctx, symbol, slice_qty, side)
         placed += slice_qty
-        time.sleep(60)
+        logger.info(f"[pov_submit] placed {slice_qty} shares (total placed {placed}/{total_qty})")
+        time.sleep(sleep_interval)
+
+    # 5) Final log
+    logger.info(f"[pov_submit] completed POV slice: total placed {placed}/{total_qty}")
 
 def maybe_pyramid(ctx: BotContext, symbol: str, entry_price: float, current_price: float, atr: float):
     profit = (current_price - entry_price) if entry_price else 0
