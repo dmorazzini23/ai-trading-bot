@@ -153,6 +153,7 @@ ORDER_TYPE               = 'market'
 LIMIT_ORDER_SLIPPAGE     = float(os.getenv("LIMIT_ORDER_SLIPPAGE", 0.005))
 MAX_POSITION_SIZE        = 1000
 SLICE_THRESHOLD          = 100
+POV_SLICE_PCT            = float(os.getenv("POV_SLICE_PCT", "0.0"))
 DAILY_LOSS_LIMIT         = params["DAILY_LOSS_LIMIT"]
 MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD    = 0.8
@@ -809,11 +810,11 @@ def check_daily_loss() -> bool:
 
     try:
         acct = safe_alpaca_get_account()
+        equity = float(acct.equity)
+        log.debug(f"account equity: {equity}")
     except pybreaker.CircuitBreakerError:
         logger.warning("Alpaca account call short-circuited")
         return False
-    equity = float(acct.equity)
-    log.debug(f"account equity: {equity}")
     except Exception as e:
         log.warning(f"[check_daily_loss] could not fetch account cash: {e!r}")
         return False
@@ -1153,12 +1154,17 @@ def calculate_entry_size(
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     """
-    Place an entry order.  If qty > SLICE_THRESHOLD, use VWAP-pegged slicing;
+    Place an entry order.  
+    If POV_SLICE_PCT > 0, use POV slicing;
+    elif qty > SLICE_THRESHOLD, use VWAP‐pegged slicing;
     otherwise do a simple submit_order.
     """
     # choose slicing algorithm
-    if qty > SLICE_THRESHOLD:
-        # VWAP-pegged bracket over 5min
+    if POV_SLICE_PCT > 0:
+        # Participation‐of‐Volume slicing
+        pov_submit(ctx, symbol, qty, pct=POV_SLICE_PCT)
+    elif qty > SLICE_THRESHOLD:
+        # VWAP‐pegged bracket over 5 min
         vwap_pegged_submit(ctx, symbol, qty, duration=300)
     else:
         # direct market/side order
