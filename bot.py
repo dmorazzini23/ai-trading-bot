@@ -1540,6 +1540,30 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     df.reset_index(drop=True, inplace=True)
     return df
+
+# ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
+def screen_universe(
+    candidates: Sequence[str],
+    ctx: BotContext,
+    lookback: str = "1mo",
+    interval: str = "1d",
+    top_n: int = 20
+) -> list[str]:
+    """
+    Fetch daily bars for each candidate, compute ATR, and return top_n highest-ATR symbols.
+    The lookback and interval args are accepted for symmetry with run_all_trades, but ignored here.
+    """
+    atrs: dict[str, float] = {}
+    for sym in candidates:
+        df = ctx.data_fetcher.get_daily_df(ctx, sym)
+        if df is None or len(df) < ATR_LENGTH:
+            continue
+        series = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
+        atr = series.iloc[-1] if not series.empty else np.nan
+        if not pd.isna(atr):
+            atrs[sym] = float(atr)
+    ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
+    return [sym for sym, _ in ranked[:top_n]]
     
 def load_tickers(path: str=TICKERS_FILE) -> list[str]:
     tickers=[]
