@@ -168,6 +168,23 @@ CONFIRMATION_COUNT       = params["CONFIRMATION_COUNT"]
 CAPITAL_CAP              = params["CAPITAL_CAP"]
 PACIFIC                  = ZoneInfo("America/Los_Angeles")
 
+# ─── SLICING CONFIG ────────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class SliceConfig:
+    pct: float = 0.1
+    sleep_interval: int = 60
+    max_retries: int = 3
+    backoff_factor: float = 2.0
+    max_backoff_interval: int = 300
+
+DEFAULT_SLICE_CFG = SliceConfig(
+    pct=POV_SLICE_PCT,
+    sleep_interval=60,
+    max_retries=3,
+    backoff_factor=2.0,
+    max_backoff_interval=300
+)
+
 # ─── PAIR‐TRADING CONFIG ────────────────────────────────────────────────────
 your_cointegrated_pairs: List[Tuple[str,str]] = [
     ("AAPL", "MSFT"),
@@ -1045,20 +1062,22 @@ def twap_submit(
     total_qty: int,
     side: str,
     window_secs: int = 600,
-    n_slices: int = 10
+    n_slices: int = 10,
 ) -> None:
-    """
-    Slice a large order into `n_slices` over `window_secs` seconds.
-    """
+    """Slice a large order into n_slices over window_secs seconds."""
+    if total_qty <= 0:
+        logger.warning(f"[twap_submit] non‐positive total_qty={total_qty}, skipping")
+        return
+
     slice_qty = total_qty // n_slices
     wait_secs = window_secs / n_slices
 
     for i in range(n_slices):
         try:
             submit_order(ctx, symbol, slice_qty, side)
-            # (orders_total is already incremented in submit_order)
         except Exception as e:
-            logger.warning(f"[TWAP] slice {i+1}/{n_slices} for {symbol} failed: {e}")
+            logger.exception(f"[TWAP] slice {i+1}/{n_slices} failed: {e}")
+            break
         time.sleep(wait_secs)
 
 def vwap_pegged_submit(
@@ -1067,16 +1086,24 @@ def vwap_pegged_submit(
     total_qty: int,
     side: str,
     duration: int = 300
-):
-    """
-    Place a VWAP‐pegged IOC bracket order over `duration` seconds.
-    """
+) -> None:
+    """Place a VWAP‐pegged IOC bracket order over duration seconds."""
+    if total_qty <= 0:
+        logger.warning(f"[vwap_pegged_submit] non‐positive total_qty={total_qty}, skipping")
+        return
+
     start = time.time()
     placed = 0
+
     while placed < total_qty and time.time() - start < duration:
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+        if not df or df.empty:
+            logger.warning("[VWAP] missing bars, aborting VWAP slice")
+            break
+
         vwap = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
         to_send = min(max(1, total_qty // 10), total_qty - placed)
+
         try:
             ctx.api.submit_order(
                 symbol=symbol,
@@ -1086,81 +1113,72 @@ def vwap_pegged_submit(
                 time_in_force="ioc",
                 limit_price=vwap
             )
-            placed += to_send
-        except Exception:
-            logger.exception("[VWAP] slice failed")
+        except Exception as e:
+            logger.exception(f"[VWAP] slice failed: {e}")
+            break
+
+        placed += to_send
         time.sleep(duration / 10)
 
 def pov_submit(
     ctx: BotContext,
     symbol: str,
     total_qty: int,
-    *,
-    pct: float = 0.1,
     side: str,
-    sleep_interval: int = 60,
-    max_retries: int = 3,
-    backoff_factor: float = 2.0,
-    max_backoff_interval: int = 300
+    cfg: SliceConfig = DEFAULT_SLICE_CFG,
 ) -> bool:
     """
-    Participation-of-Volume slicing:
+    Participation-of-Volume slicing.
 
-      • Each interval, slice up to `pct` of the last-minute's volume until
-        `total_qty` shares have been placed.
-      • `side` must be 'buy' or 'sell'.
-      • On missing bars, retry up to `max_retries` with exponential backoff,
-        capped at `max_backoff_interval`.
-      • Sleeps include a small random jitter.
-      • Returns True if all shares were placed, False if aborted early.
+    Returns True if it fully placed total_qty, False if aborted early.
     """
+    if total_qty <= 0:
+        logger.warning(f"[pov_submit] non‐positive total_qty={total_qty}, skipping")
+        return False
+
     if side not in ("buy", "sell"):
         raise ValueError(f"side must be 'buy' or 'sell', got {side!r}")
 
     placed = 0
     retries = 0
-    current_interval = sleep_interval
+    interval = cfg.sleep_interval
 
     while placed < total_qty:
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
-        if df is None or df.empty:
+        if not df or df.empty:
             retries += 1
-            if retries > max_retries:
-                logger.warning(f"[pov_submit] no minute data for {symbol} after {max_retries} retries, aborting")
+            if retries > cfg.max_retries:
+                logger.warning(f"[pov_submit] no minute data after {cfg.max_retries} retries, aborting")
                 return False
 
-            logger.warning(
-                f"[pov_submit] missing bars for {symbol}, retry {retries}/{max_retries} "
-                f"in {current_interval:.1f}s"
-            )
-            # sleep with jitter
-            sleep_time = current_interval * (0.8 + 0.4 * random.random())
+            logger.warning(f"[pov_submit] missing bars, retry {retries}/{cfg.max_retries} in {interval:.1f}s")
+            sleep_time = interval * (0.8 + 0.4 * random.random())
             time.sleep(sleep_time)
-
-            # cap the next backoff interval
-            current_interval = min(current_interval * backoff_factor, max_backoff_interval)
+            interval = min(interval * cfg.backoff_factor, cfg.max_backoff_interval)
             continue
 
-        # Reset retry counters
+        # reset on success
         retries = 0
-        current_interval = sleep_interval
+        interval = cfg.sleep_interval
 
         vol = df["Volume"].iloc[-1]
-        slice_qty = min(int(vol * pct), total_qty - placed)
+        slice_qty = min(int(vol * cfg.pct), total_qty - placed)
         if slice_qty < 1:
-            logger.debug(f"[pov_submit] slice_qty < 1 (vol={vol}), waiting {sleep_interval}s")
-            sleep_time = sleep_interval * (0.8 + 0.4 * random.random())
-            time.sleep(sleep_time)
+            logger.debug(f"[pov_submit] slice_qty<1 (vol={vol}), waiting")
+            time.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
             continue
 
-        submit_order(ctx, symbol, slice_qty, side)
+        try:
+            submit_order(ctx, symbol, slice_qty, side)
+        except Exception as e:
+            logger.exception(f"[pov_submit] submit_order failed on slice, aborting: {e}")
+            return False
+
         placed += slice_qty
-        logger.info(f"[pov_submit] placed {slice_qty} shares (total placed {placed}/{total_qty})")
+        logger.info(f"[pov_submit] placed {slice_qty} ({placed}/{total_qty})")
+        time.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
 
-        sleep_time = sleep_interval * (0.8 + 0.4 * random.random())
-        time.sleep(sleep_time)
-
-    logger.info(f"[pov_submit] completed POV slice: total placed {placed}/{total_qty}")
+    logger.info(f"[pov_submit] complete: placed {placed}/{total_qty}")
     return True
 
 def maybe_pyramid(ctx: BotContext, symbol: str, entry_price: float, current_price: float, atr: float):
