@@ -573,11 +573,15 @@ ctx = BotContext(
 if os.path.exists("regime_model.pkl"):
     regime_model = pickle.load(open("regime_model.pkl","rb"))
 else:
-    # load historical SPY daily, construct labels (e.g. 1=bull,0=bear)
-    hist = data_fetcher.get_daily_df(ctx, "SPY")
-    hist["vol"] = hist["Close"].pct_change().rolling(14).std()
-    # naive label: bull if close>ma200
+    # 1) pull SPY history
+    hist = data_fetcher.get_daily_df(ctx, "SPY") or pd.DataFrame()
+    # 2) sanity check
+    if len(hist) < 200:
+        raise RuntimeError("Not enough SPY bars to train regime model")
+    # 3) compute your extra features & labels
+    hist["vol"]   = hist["Close"].pct_change().rolling(14).std()
     hist["label"] = (hist.Close > hist.Close.rolling(200).mean()).astype(int)
+    # 4) train and persist
     regime_model = train_regime_model(hist.dropna(), hist.label)
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
@@ -820,12 +824,6 @@ def check_halt_flag() -> bool:
 
 def now_pacific() -> datetime:
     return datetime.now(PACIFIC)
-
-def within_market_hours() -> bool:
-    now = now_pacific()
-    start = datetime.combine(now.date(), MARKET_OPEN, PACIFIC) + ENTRY_START_OFFSET
-    end   = datetime.combine(now.date(), MARKET_CLOSE, PACIFIC) - ENTRY_END_OFFSET
-    return start <= now <= end
 
 _warned_missing_spy_columns = False
 
@@ -1138,7 +1136,7 @@ def pre_trade_checks(
     if check_halt_flag():
         logger.info(f"[SKIP] HALT_FLAG – {symbol}")
         return False
-    if not within_market_hours():
+    if not in_trading_hours(pd.Timestamp.utcnow()):
         logger.info(f"[SKIP] Market closed – {symbol}")
         return False
     if check_daily_loss():
@@ -1361,10 +1359,6 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
     cal = get_calendar_safe(symbol)
     if cal.empty:
         return False
-
-    # Yahoo calendar index is usually a single-column with dates in the column names
-    # e.g. cal.columns = ['Earnings Date', ...], cal.loc['Value', ...] holds timestamps
-    # Normalize into a list of datetimes:
     try:
         dates = []
         for col in cal.columns:
@@ -1385,7 +1379,7 @@ def run_all_trades(model) -> None:
     now = pd.Timestamp.utcnow()
     if not in_trading_hours(pd.Timestamp.utcnow()):
         logger.info("[SKIP] Market closed")
-        return False
+        return
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
     candidates = load_tickers(TICKERS_FILE)
@@ -1550,8 +1544,6 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 def screen_universe(
     candidates: Sequence[str],
     ctx: BotContext,
-    lookback: str = "1mo",
-    interval: str = "1d",
     top_n: int = 20
 ) -> list[str]:
     """Fetch daily bars for each candidate, compute ATR, and return top_n highest-ATR symbols."""
