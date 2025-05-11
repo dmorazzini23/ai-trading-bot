@@ -59,7 +59,6 @@ from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, wa
 from ratelimit import limits, sleep_and_retry
 from collections import deque
 from more_itertools import chunked
-from logging import getLogger
 
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
@@ -137,7 +136,7 @@ class BotMode:
 
 BOT_MODE = os.getenv("BOT_MODE", "balanced")
 mode     = BotMode(BOT_MODE)
-log.info(f"Trading mode is set to '{mode.mode}'")
+logger.info(f"Trading mode is set to '{mode.mode}'")
 params   = mode.get_config()
 
 # ─── CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
@@ -737,25 +736,25 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
 
     soup = BeautifulSoup(r.content, "lxml")
     rows = soup.find_all("tr")
-    log.info(f"get_sec_headlines({ticker}) ── total <tr> rows: {len(rows)}")
+    logger.info(f"get_sec_headlines({ticker}) ── total <tr> rows: {len(rows)}")
 
     texts = []
     for a in soup.find_all("a"):
         if "8-K" in a.text:
             tr = a.find_parent("tr")
             if not tr:
-                log.warning("found an <a> with '8-K' but no parent <tr>")
+                logger.warning("found an <a> with '8-K' but no parent <tr>")
                 continue
 
             tds = tr.find_all("td")
             if len(tds) < 4:
-                log.warning(f"unexpected <td> count {len(tds)} in row, skipping")
+                logger.warning(f"unexpected <td> count {len(tds)} in row, skipping")
                 continue
 
             texts.append(tds[-1].get_text(strip=True))
 
     if not texts:
-        log.warning(f"get_sec_headlines({ticker}) found no 8-K entries")
+        logger.warning(f"get_sec_headlines({ticker}) found no 8-K entries")
     return " ".join(texts)
 
 @limits(calls=60, period=60)
@@ -777,7 +776,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
         resp.raise_for_status()
     except requests.exceptions.HTTPError:
         if resp.status_code == 429:
-            log.warning(f"fetch_sentiment({ticker}) rate-limited → returning neutral 0.0")
+            logger.warning(f"fetch_sentiment({ticker}) rate-limited → returning neutral 0.0")
             return 0.0
         raise
 
@@ -808,24 +807,24 @@ def check_daily_loss() -> bool:
     try:
         acct = safe_alpaca_get_account()
         equity = float(acct.equity)
-        log.debug(f"account equity: {equity}")
+        logger.debug(f"account equity: {equity}")
     except pybreaker.CircuitBreakerError:
         logger.warning("Alpaca account call short-circuited")
         return False
     except Exception as e:
-        log.warning(f"[check_daily_loss] could not fetch account cash: {e!r}")
+        logger.warning(f"[check_daily_loss] could not fetch account cash: {e!r}")
         return False
 
     today = date.today()
     if day_start_equity is None or day_start_equity[0] != today:
         day_start_equity = (today, equity)
         daily_drawdown.set(0.0)
-        log.info(f"reset day_start_equity to {equity} on {today}")
+        logger.info(f"reset day_start_equity to {equity} on {today}")
         return False
 
     loss = (day_start_equity[1] - equity) / day_start_equity[1]
     daily_drawdown.set(loss)
-    log.info(f"daily drawdown is {loss:.2%}")
+    logger.info(f"daily drawdown is {loss:.2%}")
     return loss >= DAILY_LOSS_LIMIT
 
 def check_halt_flag() -> bool:
