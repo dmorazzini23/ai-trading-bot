@@ -112,7 +112,7 @@ class BotMode:
         self.mode = mode.lower()
         self.params = self.set_parameters()
 
-    def set_parameters(self) -> Dict[str, float]:
+    def set_parameters(self) -> dict[str, float]:
         if self.mode == "conservative":
             return {
                 "KELLY_FRACTION": 0.3, "CONF_THRESHOLD": 0.8, "CONFIRMATION_COUNT": 3,
@@ -132,7 +132,7 @@ class BotMode:
                 "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.8
             }
 
-    def get_config(self) -> Dict[str, float]:
+    def get_config(self) -> dict[str, float]:
         return self.params
 
 BOT_MODE = os.getenv("BOT_MODE", "balanced")
@@ -205,11 +205,11 @@ class BotContext:
     regime_atr_threshold: float
     daily_loss_limit: float
     kelly_fraction: float
-    confirmation_count: Dict[str, int] = field(default_factory=dict)
-    trailing_extremes: Dict[str, float] = field(default_factory=dict)
-    take_profit_targets: Dict[str, float] = field(default_factory=dict)
-    stop_targets:         Dict[str, float] = field(default_factory=dict)
-    portfolio_weights: Dict[str, float] = field(default_factory=dict)
+    confirmation_count: dict[str, int] = field(default_factory=dict)
+    trailing_extremes: dict[str, float] = field(default_factory=dict)
+    take_profit_targets: dict[str, float] = field(default_factory=dict)
+    stop_targets:         dict[str, float] = field(default_factory=dict)
+    portfolio_weights: dict[str, float] = field(default_factory=dict)
 
 class FinnhubFetcher:
     def __init__(self, calls_per_minute: int = 60):
@@ -309,24 +309,13 @@ def train_regime_model(df_spy: pd.DataFrame, labels: pd.Series) -> RandomForestC
     model.fit(X, y)
     pickle.dump(model, open("regime_model.pkl","wb"))
     return model
-
-# at startup
-if os.path.exists("regime_model.pkl"):
-    regime_model = pickle.load(open("regime_model.pkl","rb"))
-else:
-    # load historical SPY daily, construct labels (e.g. 1=bull,0=bear)
-    hist = data_fetcher.get_daily_df(ctx, "SPY")
-    hist["vol"] = hist["Close"].pct_change().rolling(14).std()
-    # naive label: bull if close>ma200
-    hist["label"] = (hist.Close > hist.Close.rolling(200).mean()).astype(int)
-    regime_model = train_regime_model(hist.dropna(), hist.label)
     
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
     def __init__(self) -> None:
-        self._daily_cache: Dict[str, Optional[pd.DataFrame]] = {}
-        self._minute_cache: Dict[str, Optional[pd.DataFrame]] = {}
-        self._minute_timestamps: Dict[str, datetime] = {}
+        self._daily_cache: dict[str, Optional[pd.DataFrame]] = {}
+        self._minute_cache: dict[str, Optional[pd.DataFrame]] = {}
+        self._minute_timestamps: dict[str, datetime] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         # 5 trading days of daily bars
@@ -514,7 +503,7 @@ class SignalManager:
         sig = 1 if ok else 0
         return sig, 1.0, 'regime'
 
-    def load_signal_weights(self) -> Dict[str, float]:
+    def load_signal_weights(self) -> dict[str, float]:
         if not os.path.exists(SIGNAL_WEIGHTS_FILE):
             return {}
         df = pd.read_csv(SIGNAL_WEIGHTS_FILE)
@@ -578,6 +567,18 @@ ctx = BotContext(
     daily_loss_limit=DAILY_LOSS_LIMIT,
     kelly_fraction=params["KELLY_FRACTION"],
 )
+
+# ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
+# at startup
+if os.path.exists("regime_model.pkl"):
+    regime_model = pickle.load(open("regime_model.pkl","rb"))
+else:
+    # load historical SPY daily, construct labels (e.g. 1=bull,0=bear)
+    hist = data_fetcher.get_daily_df(ctx, "SPY")
+    hist["vol"] = hist["Close"].pct_change().rolling(14).std()
+    # naive label: bull if close>ma200
+    hist["label"] = (hist.Close > hist.Close.rolling(200).mean()).astype(int)
+    regime_model = train_regime_model(hist.dropna(), hist.label)
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
 @retry(
@@ -1245,7 +1246,7 @@ def trade_logic(
             "buy" if sig == 1 else "sell"
         )
 
-def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
+def compute_portfolio_weights(symbols: List[str]) -> dict[str, float]:
     # 1) Bail out if no symbols
     if not symbols:
         logger.warning("[Portfolio] No tickers to optimize—skipping.")
@@ -1382,9 +1383,9 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
 
 def run_all_trades(model) -> None:
     now = pd.Timestamp.utcnow()
-    if not in_trading_hours(now):
-        logger.info(f"Outside market hours ({now}); skipping trade cycle")
-        return
+    if not in_trading_hours(pd.Timestamp.utcnow()):
+        logger.info("[SKIP] Market closed")
+        return False
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
     candidates = load_tickers(TICKERS_FILE)
@@ -1546,8 +1547,6 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     return df
 
 # ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
-from typing import Sequence
-
 def screen_universe(
     candidates: Sequence[str],
     ctx: BotContext,
