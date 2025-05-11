@@ -85,8 +85,6 @@ sentry_sdk.init(
     traces_sample_rate=0.1,
     environment=os.getenv("BOT_MODE", "live"),
 )
-structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
-logger = structlog.get_logger()
 
 finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
 
