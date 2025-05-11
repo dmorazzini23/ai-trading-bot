@@ -1100,18 +1100,20 @@ def pov_submit(
     side: str,
     sleep_interval: int = 60,
     max_retries: int = 3,
-    backoff_factor: float = 2
-) -> None:
+    backoff_factor: float = 2.0,
+    max_backoff_interval: int = 300
+) -> bool:
     """
     Participation-of-Volume slicing:
 
-      • Each minute, slice up to `pct` of the prior-minute's volume until
+      • Each interval, slice up to `pct` of the last-minute's volume until
         `total_qty` shares have been placed.
-      • `side` (keyword-only) must be either 'buy' or 'sell'.
-      • `sleep_interval` controls how long to wait between slices (seconds).
-      • If minute bars are missing, retry up to `max_retries` with exponential backoff.
+      • `side` must be 'buy' or 'sell'.
+      • On missing bars, retry up to `max_retries` with exponential backoff,
+        capped at `max_backoff_interval`.
+      • Sleeps include a small random jitter.
+      • Returns True if all shares were placed, False if aborted early.
     """
-    # 1) Validate side
     if side not in ("buy", "sell"):
         raise ValueError(f"side must be 'buy' or 'sell', got {side!r}")
 
@@ -1120,40 +1122,46 @@ def pov_submit(
     current_interval = sleep_interval
 
     while placed < total_qty:
-        # 2) Fetch minute bars and guard
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
         if df is None or df.empty:
             retries += 1
             if retries > max_retries:
                 logger.warning(f"[pov_submit] no minute data for {symbol} after {max_retries} retries, aborting")
-                return
+                return False
+
             logger.warning(
-                f"[pov_submit] no minute data for {symbol}, retry {retries}/{max_retries} in {current_interval}s"
+                f"[pov_submit] missing bars for {symbol}, retry {retries}/{max_retries} "
+                f"in {current_interval:.1f}s"
             )
-            time.sleep(current_interval)
-            current_interval *= backoff_factor
+            # sleep with jitter
+            sleep_time = current_interval * (0.8 + 0.4 * random.random())
+            time.sleep(sleep_time)
+
+            # cap the next backoff interval
+            current_interval = min(current_interval * backoff_factor, max_backoff_interval)
             continue
 
-        # reset retry state once we have data
+        # Reset retry counters
         retries = 0
         current_interval = sleep_interval
 
-        # 3) Compute slice quantity
         vol = df["Volume"].iloc[-1]
         slice_qty = min(int(vol * pct), total_qty - placed)
         if slice_qty < 1:
             logger.debug(f"[pov_submit] slice_qty < 1 (vol={vol}), waiting {sleep_interval}s")
-            time.sleep(sleep_interval)
+            sleep_time = sleep_interval * (0.8 + 0.4 * random.random())
+            time.sleep(sleep_time)
             continue
 
-        # 4) Submit and bookkeep
         submit_order(ctx, symbol, slice_qty, side)
         placed += slice_qty
         logger.info(f"[pov_submit] placed {slice_qty} shares (total placed {placed}/{total_qty})")
-        time.sleep(sleep_interval)
 
-    # 5) Final log
+        sleep_time = sleep_interval * (0.8 + 0.4 * random.random())
+        time.sleep(sleep_time)
+
     logger.info(f"[pov_submit] completed POV slice: total placed {placed}/{total_qty}")
+    return True
 
 def maybe_pyramid(ctx: BotContext, symbol: str, entry_price: float, current_price: float, atr: float):
     profit = (current_price - entry_price) if entry_price else 0
