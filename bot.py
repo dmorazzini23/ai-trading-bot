@@ -577,7 +577,9 @@ else:
     hist = data_fetcher.get_daily_df(ctx, "SPY") or pd.DataFrame()
     # 2) sanity check
     if len(hist) < 200:
-        raise RuntimeError("Not enough SPY bars to train regime model")
+        logger.error(f"Not enough SPY bars to train regime model (have {len(hist)}, need ≥200)")
+        raise SystemExit("Insufficient SPY history for regime model")
+
     # 3) compute your extra features & labels
     hist["vol"]   = hist["Close"].pct_change().rolling(14).std()
     hist["label"] = (hist.Close > hist.Close.rolling(200).mean()).astype(int)
@@ -1539,25 +1541,6 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     df.reset_index(drop=True, inplace=True)
     return df
-
-# ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
-def screen_universe(
-    candidates: Sequence[str],
-    ctx: BotContext,
-    top_n: int = 20
-) -> list[str]:
-    """Fetch daily bars for each candidate, compute ATR, and return top_n highest-ATR symbols."""
-    atrs: dict[str, float] = {}
-    for sym in candidates:
-        df = ctx.data_fetcher.get_daily_df(ctx, sym)
-        if df is None or len(df) < ATR_LENGTH:
-            continue
-        series = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
-        atr = series.iloc[-1] if not series.empty else np.nan
-        if not pd.isna(atr):
-            atrs[sym] = float(atr)
-    ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
-    return [sym for sym, _ in ranked[:top_n]]
     
 def load_tickers(path: str=TICKERS_FILE) -> list[str]:
     tickers=[]
