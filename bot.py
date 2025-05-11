@@ -1106,14 +1106,24 @@ def pov_submit(
         `total_qty` shares have been placed.
       • `side` (keyword-only) must be either 'buy' or 'sell'.
     """
+    # validate side
+    if side not in ("buy", "sell"):
+        raise ValueError(f"side must be 'buy' or 'sell', got {side!r}")
+
     placed = 0
     while placed < total_qty:
+        # fetch and guard minute bars
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+        if df is None or df.empty:
+            logger.warning(f"[pov_submit] no minute data for {symbol}, aborting POV slice")
+            return
+
         vol = df["Volume"].iloc[-1]
         slice_qty = min(int(vol * pct), total_qty - placed)
         if slice_qty < 1:
             time.sleep(10)
             continue
+
         submit_order(ctx, symbol, slice_qty, side)
         placed += slice_qty
         time.sleep(60)
