@@ -1089,10 +1089,7 @@ def vwap_pegged_submit(ctx: BotContext, symbol: str, total_qty: int, duration: i
             logger.exception("VWAP‐pegged slice failed")
         time.sleep(duration/10)
 
-def pov_submit(ctx: BotContext, symbol: str, total_qty: int, pct: float = 0.1):
-    """
-    Slice order so that each slice is pct * last-minute volume.
-    """
+def pov_submit(ctx: BotContext, symbol: str, total_qty: int, pct: float = 0.1, side: str = "buy"):
     placed = 0
     while placed < total_qty:
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
@@ -1101,7 +1098,7 @@ def pov_submit(ctx: BotContext, symbol: str, total_qty: int, pct: float = 0.1):
         if slice_qty < 1:
             time.sleep(10)
             continue
-        submit_order(ctx, symbol, slice_qty, "buy")
+        submit_order(ctx, symbol, slice_qty, side)
         placed += slice_qty
         time.sleep(60)
 
@@ -1154,15 +1151,15 @@ def calculate_entry_size(
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     """
-    Place an entry order.  
-    If POV_SLICE_PCT > 0, use POV slicing;
+    Place an entry order.
+    If POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD, use POV slicing;
     elif qty > SLICE_THRESHOLD, use VWAP‐pegged slicing;
     otherwise do a simple submit_order.
     """
     # choose slicing algorithm
-    if POV_SLICE_PCT > 0:
+    if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
         # Participation‐of‐Volume slicing
-        pov_submit(ctx, symbol, qty, pct=POV_SLICE_PCT)
+        pov_submit(ctx, symbol, qty, pct=POV_SLICE_PCT, side=side)
     elif qty > SLICE_THRESHOLD:
         # VWAP‐pegged bracket over 5 min
         vwap_pegged_submit(ctx, symbol, qty, duration=300)
