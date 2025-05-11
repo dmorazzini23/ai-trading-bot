@@ -26,7 +26,6 @@ if not hasattr(np, "NaN"):
     np.NaN = np.nan
 import pandas as pd
 import pandas_market_calendars as mcal
-from numpy import NaN as npNaN
 import pandas_ta as ta
 import requests
 from bs4 import BeautifulSoup
