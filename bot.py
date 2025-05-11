@@ -5,7 +5,7 @@ import re
 import time, random
 from datetime import datetime, date, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
-from typing import Optional, Tuple, Dict, List, Any
+from typing import Optional, Tuple, Dict, List, Any, Sequence
 from alpaca_trade_api.entity import Order
 from dataclasses import dataclass, field
 from threading import Semaphore, Thread
@@ -37,6 +37,7 @@ from yfinance.exceptions import YFRateLimitError
 import portalocker
 from alpaca_trade_api.rest import REST, APIError, TimeFrame
 from sklearn.ensemble import RandomForestClassifier
+import pickle
 from statsmodels.tsa.stattools import coint
 from pypfopt import risk_models, expected_returns, EfficientFrontier
 import joblib
@@ -298,6 +299,28 @@ class FinnhubFetcher:
 fh = FinnhubFetcher(calls_per_minute=60)
 
 _last_fh_prefetch_date: Optional[date] = None
+
+# ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
+def train_regime_model(df_spy: pd.DataFrame, labels: pd.Series) -> RandomForestClassifier:
+    feats = ["atr","rsi","macd","vol"]  # vol = pct_change.std()
+    X = df_spy[feats]
+    y = labels
+    model = RandomForestClassifier(n_estimators=100, max_depth=5)
+    model.fit(X, y)
+    pickle.dump(model, open("regime_model.pkl","wb"))
+    return model
+
+# at startup
+if os.path.exists("regime_model.pkl"):
+    regime_model = pickle.load(open("regime_model.pkl","rb"))
+else:
+    # load historical SPY daily, construct labels (e.g. 1=bull,0=bear)
+    hist = data_fetcher.get_daily_df(ctx, "SPY")
+    hist["vol"] = hist["Close"].pct_change().rolling(14).std()
+    # naive label: bull if close>ma200
+    hist["label"] = (hist.Close > hist.Close.rolling(200).mean()).astype(int)
+    regime_model = train_regime_model(hist.dropna(), hist.label)
+    
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
     def __init__(self) -> None:
@@ -688,6 +711,7 @@ def fetch_data(ctx, symbols, period, interval):
     wait=wait_exponential(multiplier=1, min=1, max=10),
     retry=retry_if_exception_type(requests.RequestException)
 )
+
 def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
     with ctx.sem:
         r = requests.get(
@@ -726,6 +750,7 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
     retry=retry_if_exception_type((requests.RequestException, DataFetchError))
 )
+
 def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     url = (
         f"https://newsapi.org/v2/everything?"
@@ -805,32 +830,39 @@ _warned_missing_spy_columns = False
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))
 def check_market_regime() -> bool:
-    # grab the pre-seeded SPY daily bars from the Alpaca cache
+    # pull the daily SPY cache
     df = data_fetcher._daily_cache.get("SPY")
-    if df is None or df.empty:
-        logger.warning("[check_market_regime] No SPY cache data – failing regime check")
+    if df is None or len(df) < 200:
+        logger.warning("[check_market_regime] insufficient SPY history – need ≥200 bars")
         return False
 
-    # make sure we have enough bars
-    if len(df) < REGIME_LOOKBACK:
-        logger.warning(
-            f"[check_market_regime] Not enough SPY rows: {len(df)} – need {REGIME_LOOKBACK}"
-        )
+    # compute all the your usual daily indicators
+    ind = prepare_indicators(df, freq="daily")
+    if ind.empty:
+        logger.warning("[check_market_regime] no indicators for SPY")
         return False
 
-    # calculate ATR
-    try:
-        atr = ta.atr(df["High"], df["Low"], df["Close"], length=REGIME_LOOKBACK).iloc[-1]
-        if pd.isna(atr):
-            logger.warning("[check_market_regime] ATR is NaN – failing regime check")
-            return False
-    except Exception as e:
-        logger.warning(f"[check_market_regime] ATR calc failed: {e}")
+    # get the last row of indicators
+    row = ind.iloc[-1]
+
+    # compute the extra volatility feature
+    vol = df["Close"].pct_change().rolling(14).std().iloc[-1]
+    if pd.isna(vol):
+        logger.warning("[check_market_regime] vol is NaN – failing regime check")
         return False
 
-    # calculate vol
-    vol = df["Close"].pct_change().std()
-    return (atr <= REGIME_ATR_THRESHOLD) or (vol <= 0.015)
+    # assemble into the same feature order used when training
+    feature_vector = [
+        row["atr"],
+        row["rsi"],
+        row["macd"],
+        vol
+    ]
+
+    # run your RF regime_model
+    pred = regime_model.predict([feature_vector])[0]
+
+    return bool(pred)
 
 def too_many_positions() -> bool:
     try:
@@ -1070,9 +1102,22 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     ctx.stop_targets[symbol]        = stop
 
 def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
+    # 1) send the exit order
     submit_order(ctx, symbol, qty, "sell" if qty>0 else "buy")
-    ctx.trade_logger.log_exit(symbol, ctx.data_fetcher.get_minute_df(ctx, symbol)["Close"].iloc[-1])
+
+    # 2) log the exit
+    ctx.trade_logger.log_exit(
+        symbol,
+        ctx.data_fetcher.get_minute_df(ctx, symbol)["Close"].iloc[-1]
+    )
+
+    # 3) now rebalance if needed
+    on_trade_exit_rebalance(ctx)
+
+    # 4) clean up your targets
     ctx.take_profit_targets.pop(symbol, None)
+    ctx.stop_targets.pop(symbol, None)
+
 
 # ─── SIGNAL & TRADE LOGIC ────────────────────────────────────────────────────
 def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int,float,str]:
@@ -1229,6 +1274,39 @@ def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
 
     return weights
 
+# ─── PORTFOLIO REBALANCING ──────────────────────────────────────────────────
+def on_trade_exit_rebalance(ctx: BotContext):
+    # recompute weights on the fly
+    current = compute_portfolio_weights(list(ctx.portfolio_weights.keys()))
+    old     = ctx.portfolio_weights
+
+    # check for any >10% drift
+    drift = max(abs(current[s] - old.get(s, 0)) for s in current)
+    if drift <= 0.1:
+        return
+
+    # update context
+    ctx.portfolio_weights = current
+
+    # submit rebalancing orders
+    total_value = float(ctx.api.get_account().portfolio_value)
+    for sym, w in current.items():
+        target_dollar = w * total_value
+        price = ctx.data_fetcher.get_minute_df(ctx, sym)["Close"].iloc[-1]
+        target_shares = int(target_dollar / price)
+        try:
+            ctx.api.submit_order(
+                symbol=sym,
+                qty=target_shares,
+                side="buy" if target_shares > 0 else "sell",
+                type="market",
+                time_in_force="day"
+            )
+        except Exception:
+            logger.exception(f"Rebalance failed for {sym}")
+
+    logger.info("Rebalanced portfolio weights")
+
 def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
     # cointegration-based stat-arb
     df1 = ctx.data_fetcher.get_daily_df(ctx, sym1)["Close"]
@@ -1309,7 +1387,8 @@ def run_all_trades(model) -> None:
         return
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
-    tickers = load_tickers(TICKERS_FILE)
+    candidates = load_tickers(TICKERS_FILE)
+    tickers    = screen_universe(candidates, ctx, lookback="1mo", interval="1d", top_n=20)
     weights = compute_portfolio_weights(tickers)
     ctx.portfolio_weights = weights
     if not tickers:
@@ -1465,6 +1544,29 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     df.reset_index(drop=True, inplace=True)
     return df
+
+# ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
+from typing import Sequence
+
+def screen_universe(
+    candidates: Sequence[str],
+    ctx: BotContext,
+    lookback: str = "1mo",
+    interval: str = "1d",
+    top_n: int = 20
+) -> list[str]:
+    """Fetch daily bars for each candidate, compute ATR, and return top_n highest-ATR symbols."""
+    atrs: dict[str, float] = {}
+    for sym in candidates:
+        df = ctx.data_fetcher.get_daily_df(ctx, sym)
+        if df is None or len(df) < ATR_LENGTH:
+            continue
+        series = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
+        atr = series.iloc[-1] if not series.empty else np.nan
+        if not pd.isna(atr):
+            atrs[sym] = float(atr)
+    ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
+    return [sym for sym, _ in ranked[:top_n]]
     
 def load_tickers(path: str=TICKERS_FILE) -> list[str]:
     tickers=[]
