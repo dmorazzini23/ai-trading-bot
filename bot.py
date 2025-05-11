@@ -1243,7 +1243,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     # choose slicing algorithm
     if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
         logger.info(f"[ENTRY] POV slice {qty}@{POV_SLICE_PCT*100:.1f}% for {symbol}")
-        pov_submit(ctx, symbol, qty, pct=POV_SLICE_PCT, side=side)
+        pov_submit(ctx, symbol, qty, side)
 
     elif qty > SLICE_THRESHOLD:
         logger.info(f"[ENTRY] VWAP‐pegged slice {qty} {side.upper()} for {symbol}")
