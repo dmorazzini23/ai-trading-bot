@@ -87,7 +87,6 @@ sentry_sdk.init(
 )
 structlog.configure(logger_factory=structlog.stdlib.LoggerFactory())
 logger = structlog.get_logger()
-log = logging.getLogger(__name__)
 
 finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
 
@@ -1095,7 +1094,14 @@ def vwap_pegged_submit(
             logger.exception("[VWAP] slice failed")
         time.sleep(duration / 10)
 
-def pov_submit(ctx: BotContext, symbol: str, total_qty: int, pct: float = 0.1, side: str = "buy"):
+def pov_submit(
+    ctx: BotContext,
+    symbol: str,
+    total_qty: int,
+    *,
+    pct: float = 0.1,
+    side: str
+) -> None:
     placed = 0
     while placed < total_qty:
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
@@ -1182,6 +1188,9 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
 
     # now log & set stops/targets
     df_min = ctx.data_fetcher.get_minute_df(ctx, symbol)
+    if df_min is None or df_min.empty:
+        logger.warning(f"[ENTRY] Failed to fetch minute bars for {symbol} after slicing, skipping stop/target setup")
+        return
     price  = df_min["Close"].iloc[-1]
     ctx.trade_logger.log_entry(symbol, price, qty, side, "", "")
 
