@@ -1556,7 +1556,14 @@ def run_all_trades(model) -> None:
     if _last_fh_prefetch_date != today:
         _last_fh_prefetch_date = today
 
-        # ALWAYS fetch a full year for SPY so regime checks can train
+        # 2a) Bulk-prefetch everything except SPY
+        try:
+            prefetch_daily_with_alpaca([s for s in candidates if s != "SPY"])
+            logger.info("✅ Prefetched daily bars via Alpaca for all tickers (excluding SPY)")
+        except Exception as e:
+            logger.warning(f"[run_all_trades] bulk prefetch failed: {e}")
+
+        # 2b) ALWAYS fetch a full year for SPY so regime checks can train
         try:
             bars = api.get_bars(
                 "SPY", TimeFrame.Day,
@@ -1565,20 +1572,17 @@ def run_all_trades(model) -> None:
                 limit=1000, feed="iex"
             ).df
             bars = bars.rename(columns={
-                "open":"Open", "high":"High",
-                "low":"Low", "close":"Close", "volume":"Volume"
+                "open":   "Open",
+                "high":   "High",
+                "low":    "Low",
+                "close":  "Close",
+                "volume": "Volume"
             })
             bars.index = pd.to_datetime(bars.index).tz_localize(None)
             data_fetcher._daily_cache["SPY"] = bars
             logger.info(f"[run_all_trades] fetched {len(bars)} SPY bars for regime")
         except Exception as e:
             logger.warning(f"[run_all_trades] SPY full-history fetch failed: {e}")
-
-        try:
-            prefetch_daily_with_alpaca(candidates)
-            logger.info("✅ Prefetched daily bars via Alpaca for all tickers")
-        except Exception as e:
-            logger.warning(f"[run_all_trades] bulk prefetch failed: {e}")
 
     # 3) Now screen by ATR
     tickers = screen_universe(candidates, ctx, lookback="1mo", interval="1d", top_n=20)
