@@ -597,27 +597,52 @@ def safe_alpaca_get_account():
 if os.path.exists("regime_model.pkl"):
     regime_model = pickle.load(open("regime_model.pkl","rb"))
 else:
-    # 1) pull SPY history via your DataFetcher
+    # 1) try your DataFetcher cache
     hist = data_fetcher.get_daily_df(ctx, "SPY") or pd.DataFrame()
-    # 1a) fallback to yfinance if empty
-    if hist.empty:
-        logger.warning("No SPY in DataFetcher cache – falling back to yfinance")
-        hist = yf.download("SPY", period="1y", interval="1d").rename(columns={
-            "Open":"Open","High":"High","Low":"Low","Close":"Close","Volume":"Volume"
-        })
-        hist.index = pd.to_datetime(hist.index).tz_localize(None)
 
-    # 2) sanity check
+    # 2) fallback to Alpaca bulk if empty
+    if hist.empty:
+        logger.info("No SPY in DataFetcher cache; pulling via Alpaca")
+        try:
+            start = (date.today() - timedelta(days=365)).isoformat()
+            end   = date.today().isoformat()
+            bars = api.get_bars(
+                "SPY", TimeFrame.Day,
+                start=start, end=end,
+                limit=1000, feed="iex"
+            ).df
+            # normalize to your OHLCV convention
+            hist = bars.rename(columns={
+                "open":"Open","high":"High",
+                "low":"Low","close":"Close","volume":"Volume"
+            })
+            hist.index = pd.to_datetime(hist.index).tz_localize(None)
+            logger.info(f"Fetched {len(hist)} SPY bars via Alpaca")
+        except Exception as e:
+            logger.warning(f"Alpaca SPY fetch failed: {e}; falling back to yfinance")
+
+    # 3) fallback to yfinance if still empty
+    if hist.empty:
+        logger.info("Pulling SPY via yfinance as last resort")
+        try:
+            yf_hist = yf.download("SPY", period="1y", interval="1d", progress=False)
+            # rename columns to match
+            hist = yf_hist.rename(columns={
+                "Open":"Open","High":"High",
+                "Low":"Low","Close":"Close","Volume":"Volume"
+            })
+            hist.index = pd.to_datetime(hist.index).tz_localize(None)
+            logger.info(f"Fetched {len(hist)} SPY bars via yfinance")
+        except Exception as e:
+            logger.warning(f"yfinance SPY fetch failed: {e}")
+
+    # 4) sanity‐check & train
     if len(hist) < 200:
-        logger.error(f"Not enough SPY bars to train regime model (have {len(hist)}, need ≥200)")
-        # instead of exiting, you could train a dummy model or skip regime checks:
+        logger.error(f"Not enough SPY bars ({len(hist)}), training dummy regime model")
         regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
-        logger.warning("Training fallback dummy regime model")
     else:
-        # 3) compute features & labels
         hist["vol"]   = hist["Close"].pct_change().rolling(14).std()
         hist["label"] = (hist.Close > hist.Close.rolling(200).mean()).astype(int)
-        # 4) train & persist
         regime_model = train_regime_model(hist.dropna(), hist.label)
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
