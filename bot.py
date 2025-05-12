@@ -611,7 +611,6 @@ else:
                 start=start, end=end,
                 limit=1000, feed="iex"
             ).df
-            # normalize to your OHLCV convention
             hist = bars.rename(columns={
                 "open":"Open","high":"High",
                 "low":"Low","close":"Close","volume":"Volume"
@@ -626,7 +625,6 @@ else:
         logger.info("Pulling SPY via yfinance as last resort")
         try:
             yf_hist = yf.download("SPY", period="1y", interval="1d", progress=False)
-            # rename columns to match
             hist = yf_hist.rename(columns={
                 "Open":"Open","High":"High",
                 "Low":"Low","Close":"Close","Volume":"Volume"
@@ -641,9 +639,20 @@ else:
         logger.error(f"Not enough SPY bars ({len(hist)}), training dummy regime model")
         regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
     else:
-        hist["vol"]   = hist["Close"].pct_change().rolling(14).std()
-        hist["label"] = (hist.Close > hist.Close.rolling(200).mean()).astype(int)
-        regime_model = train_regime_model(hist.dropna(), hist.label)
+        # compute all daily indicators so 'atr','rsi','macd' are present
+        ind = prepare_indicators(hist, freq="daily")
+
+        # add your extra features/labels aligned to ind.index
+        ind["vol"] = hist["Close"].pct_change().rolling(14).std().reindex(ind.index)
+        labels    = (
+            (hist["Close"] > hist["Close"].rolling(200).mean())
+            .astype(int)
+            .reindex(ind.index)
+        )
+
+        # drop any remaining NaNs and train
+        valid = ind.dropna().index
+        regime_model = train_regime_model(ind.loc[valid], labels.loc[valid])
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
 @retry(
