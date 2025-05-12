@@ -1558,7 +1558,7 @@ def run_all_trades(model) -> None:
 
         # 2a) Bulk-prefetch everything except SPY
         try:
-            prefetch_daily_with_alpaca([s for s in candidates if s != "SPY"])
+            prefetch_daily_with_alpaca([s for s in candidates if s != "SPY"] )
             logger.info("✅ Prefetched daily bars via Alpaca for all tickers (excluding SPY)")
         except Exception as e:
             logger.warning(f"[run_all_trades] bulk prefetch failed: {e}")
@@ -1572,11 +1572,8 @@ def run_all_trades(model) -> None:
                 limit=1000, feed="iex"
             ).df
             bars = bars.rename(columns={
-                "open":   "Open",
-                "high":   "High",
-                "low":    "Low",
-                "close":  "Close",
-                "volume": "Volume"
+                "open": "Open", "high": "High",
+                "low": "Low", "close": "Close", "volume": "Volume"
             })
             bars.index = pd.to_datetime(bars.index).tz_localize(None)
             data_fetcher._daily_cache["SPY"] = bars
