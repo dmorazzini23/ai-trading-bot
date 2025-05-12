@@ -1545,8 +1545,22 @@ def run_all_trades(model) -> None:
         return
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
+    # 1) Load your universe…
     candidates = load_tickers(TICKERS_FILE)
-    tickers    = screen_universe(candidates, ctx, lookback="1mo", interval="1d", top_n=20)
+
+    # 2) Seed the daily cache *once per day* before screening
+    global _last_fh_prefetch_date
+    today = date.today()
+    if _last_fh_prefetch_date != today:
+        _last_fh_prefetch_date = today
+        try:
+            prefetch_daily_with_alpaca(candidates)
+            logger.info("✅ Prefetched daily bars via Alpaca for all tickers")
+        except Exception as e:
+            logger.warning(f"[run_all_trades] bulk prefetch failed: {e}")
+
+    # 3) Now screen by ATR
+    tickers = screen_universe(candidates, ctx, lookback="1mo", interval="1d", top_n=20)
     weights = compute_portfolio_weights(tickers)
     ctx.portfolio_weights = weights
     if not tickers:
