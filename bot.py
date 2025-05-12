@@ -1285,7 +1285,6 @@ def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
     ctx.take_profit_targets.pop(symbol, None)
     ctx.stop_targets.pop(symbol, None)
 
-
 # ─── SIGNAL & TRADE LOGIC ────────────────────────────────────────────────────
 def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int,float,str]:
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, df, symbol, model)
