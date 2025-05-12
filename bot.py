@@ -1539,8 +1539,11 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
     return any(today <= d <= cutoff for d in dates)
 
 def run_all_trades(model) -> None:
+    # bring the module-level _last_fh_prefetch_date into scope
+    global _last_fh_prefetch_date
+
     now = pd.Timestamp.utcnow()
-    if not in_trading_hours(pd.Timestamp.utcnow()):
+    if not in_trading_hours(now):
         logger.info("[SKIP] Market closed")
         return
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
@@ -1549,7 +1552,6 @@ def run_all_trades(model) -> None:
     candidates = load_tickers(TICKERS_FILE)
 
     # 2) Seed the daily cache *once per day* before screening
-    global _last_fh_prefetch_date
     today = date.today()
     if _last_fh_prefetch_date != today:
         _last_fh_prefetch_date = today
@@ -1567,18 +1569,7 @@ def run_all_trades(model) -> None:
         logger.error("❌ No tickers loaded; skipping run_all_trades")
         return
 
-    global _last_fh_prefetch_date
-    today = date.today()
-    if _last_fh_prefetch_date != today:
-        _last_fh_prefetch_date = today
-
-        try:
-            prefetch_daily_with_alpaca(tickers)
-            logger.info("✅ Prefetched daily bars via Alpaca for all tickers")
-        except Exception as e:
-            logger.warning(f"[Alpaca] daily prefetch failed: {e}")
-
-    # Halt‐flag guard
+    # Halt-flag guard
     if check_halt_flag():
         logger.info("Trading halted via HALT_FLAG_FILE.")
         return
@@ -1591,10 +1582,15 @@ def run_all_trades(model) -> None:
         logger.error("Failed to retrieve account balance.")
         return
 
-    # Now loop through each ticker and execute your minute‐bar logic:
+    # 4) Loop through each ticker and execute your minute-bar logic
     for symbol in tickers:
         executor.submit(
-        _safe_trade, ctx, symbol, current_cash, model, check_market_regime()
+            _safe_trade,
+            ctx,
+            symbol,
+            current_cash,
+            model,
+            check_market_regime()
         )
 
 def _safe_trade(
