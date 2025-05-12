@@ -594,22 +594,31 @@ def safe_alpaca_get_account():
     return api.get_account()
     
 # ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
-# at startup
 if os.path.exists("regime_model.pkl"):
     regime_model = pickle.load(open("regime_model.pkl","rb"))
 else:
-    # 1) pull SPY history
+    # 1) pull SPY history via your DataFetcher
     hist = data_fetcher.get_daily_df(ctx, "SPY") or pd.DataFrame()
+    # 1a) fallback to yfinance if empty
+    if hist.empty:
+        logger.warning("No SPY in DataFetcher cache – falling back to yfinance")
+        hist = yf.download("SPY", period="1y", interval="1d").rename(columns={
+            "Open":"Open","High":"High","Low":"Low","Close":"Close","Volume":"Volume"
+        })
+        hist.index = pd.to_datetime(hist.index).tz_localize(None)
+
     # 2) sanity check
     if len(hist) < 200:
         logger.error(f"Not enough SPY bars to train regime model (have {len(hist)}, need ≥200)")
-        raise SystemExit("Insufficient SPY history for regime model")
-
-    # 3) compute your extra features & labels
-    hist["vol"]   = hist["Close"].pct_change().rolling(14).std()
-    hist["label"] = (hist.Close > hist.Close.rolling(200).mean()).astype(int)
-    # 4) train and persist
-    regime_model = train_regime_model(hist.dropna(), hist.label)
+        # instead of exiting, you could train a dummy model or skip regime checks:
+        regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+        logger.warning("Training fallback dummy regime model")
+    else:
+        # 3) compute features & labels
+        hist["vol"]   = hist["Close"].pct_change().rolling(14).std()
+        hist["label"] = (hist.Close > hist.Close.rolling(200).mean()).astype(int)
+        # 4) train & persist
+        regime_model = train_regime_model(hist.dropna(), hist.label)
 
 # ─── WRAPPED I/O CALLS ───────────────────────────────────────────────────────
 @retry(
