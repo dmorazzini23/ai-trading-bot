@@ -1705,7 +1705,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
 # ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
 if os.path.exists("regime_model.pkl"):
-    regime_model = pickle.load(open("regime_model.pkl","rb"))
+    regime_model = pickle.load(open("regime_model.pkl", "rb"))
 else:
     # 1) try your DataFetcher cache
     hist = data_fetcher.get_daily_df(ctx, "SPY") or pd.DataFrame()
@@ -1722,8 +1722,11 @@ else:
                 limit=1000, feed="iex"
             ).df
             hist = bars.rename(columns={
-                "open":"Open","high":"High",
-                "low":"Low","close":"Close","volume":"Volume"
+                "open":   "Open",
+                "high":   "High",
+                "low":    "Low",
+                "close":  "Close",
+                "volume": "Volume"
             })
             hist.index = pd.to_datetime(hist.index).tz_localize(None)
             logger.info(f"Fetched {len(hist)} SPY bars via Alpaca")
@@ -1736,8 +1739,11 @@ else:
         try:
             yf_hist = yf.download("SPY", period="1y", interval="1d", progress=False)
             hist = yf_hist.rename(columns={
-                "Open":"Open","High":"High",
-                "Low":"Low","Close":"Close","Volume":"Volume"
+                "Open":   "Open",
+                "High":   "High",
+                "Low":    "Low",
+                "Close":  "Close",
+                "Volume": "Volume"
             })
             hist.index = pd.to_datetime(hist.index).tz_localize(None)
             logger.info(f"Fetched {len(hist)} SPY bars via yfinance")
@@ -1746,23 +1752,25 @@ else:
 
     # 4) sanity‐check & train
     if len(hist) < 200:
-        logger.error(f"Not enough SPY bars ({len(hist)}), training dummy regime model")
+        logger.error(f"Not enough SPY bars ({len(hist)}), using dummy regime model")
         regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
     else:
-        # compute all daily indicators so 'atr','rsi','macd' are present
+        # compute your features
         ind = prepare_indicators(hist, freq="daily")
-
-        # add your extra features/labels aligned to ind.index
         ind["vol"] = hist["Close"].pct_change().rolling(14).std().reindex(ind.index)
-        labels    = (
-            (hist["Close"] > hist["Close"].rolling(200).mean())
-            .astype(int)
-            .reindex(ind.index)
-        )
 
-        # drop any remaining NaNs and train
-        valid = ind.dropna().index
-        regime_model = train_regime_model(ind.loc[valid], labels.loc[valid])
+        # compute labels
+        labels = ((hist["Close"] > hist["Close"].rolling(200).mean())
+                   .astype(int)
+                   .reindex(ind.index))
+
+        # only keep rows where both features & labels are present
+        valid = ind.dropna().index.intersection(labels.dropna().index)
+        if len(valid) == 0:
+            logger.error("No valid SPY data to train regime model; using dummy fallback")
+            regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+        else:
+            regime_model = train_regime_model(ind.loc[valid], labels.loc[valid])
 
 # ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
 def screen_universe(
