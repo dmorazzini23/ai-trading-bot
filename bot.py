@@ -1522,22 +1522,24 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
     Skips (returns False) on missing/empty data.
     """
     cal = get_calendar_safe(symbol)
-    if cal.empty:
+
+    # if we didn’t get a DataFrame (e.g. got a dict or None) or it's empty, bail
+    if not hasattr(cal, "empty") or cal.empty:
         return False
+
     try:
         dates = []
         for col in cal.columns:
             raw = cal.at['Value', col]
             if isinstance(raw, (list, tuple)):
-                raw = raw[0]  # sometimes they wrap in a list
+                raw = raw[0]
             dates.append(pd.to_datetime(raw))
     except Exception:
-        logger.debug(f"[Events] Malformed calendar for {symbol}, columns={cal.columns}")
+        logger.debug(f"[Events] Malformed calendar for {symbol}, columns={getattr(cal, 'columns', None)}")
         return False
 
-    today = pd.Timestamp.now().normalize()
+    today  = pd.Timestamp.now().normalize()
     cutoff = today + pd.Timedelta(days=days)
-    # any date in [today, cutoff]?
     return any(today <= d <= cutoff for d in dates)
 
 def run_all_trades(model) -> None:
