@@ -614,7 +614,9 @@ def _fh_chunk_fetch(
     return df
     
 def prefetch_daily_with_alpaca(symbols: List[str]):
-    all_syms = ["SPY"] + [s for s in symbols if s != "SPY"]
+    all_syms = [s for s in symbols if s != "SPY"]
+    if not all_syms:
+        return
     start = (date.today() - timedelta(days=30)).isoformat()
     end   = date.today().isoformat()
 
@@ -1558,7 +1560,7 @@ def run_all_trades(model) -> None:
 
         # 2a) Bulk-prefetch everything except SPY
         try:
-            prefetch_daily_with_alpaca([s for s in candidates if s != "SPY"] )
+            prefetch_daily_with_alpaca(candidates)
             logger.info("✅ Prefetched daily bars via Alpaca for all tickers (excluding SPY)")
         except Exception as e:
             logger.warning(f"[run_all_trades] bulk prefetch failed: {e}")
