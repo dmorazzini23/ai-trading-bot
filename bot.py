@@ -65,7 +65,8 @@ from more_itertools import chunked
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
 
-_calendar_cache = {}
+_calendar_cache: Dict[str, pd.DataFrame] = {}
+_calendar_last_fetch: Dict[str, date] = {}
 
 # ─── MARKET HOURS GUARD ───────────────────────────────────────────────────
 # set up the NYSE calendar once
@@ -338,7 +339,31 @@ class DataFetcher:
         self._minute_timestamps: dict[str, datetime] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        # 5 trading days of daily bars
+        # For SPY, always fetch 1 year of data via Alpaca
+        if symbol == "SPY":
+            today = date.today()
+            start = (today - timedelta(days=365)).isoformat()
+            end   = today.isoformat()
+            bars = ctx.api.get_bars(
+                symbol,
+                TimeFrame.Day,
+                start=start,
+                end=end,
+                limit=1000,
+                feed="iex"
+            ).df
+            bars.index = pd.to_datetime(bars.index).tz_localize(None)
+            df = bars.rename(columns={
+                "open":   "Open",
+                "high":   "High",
+                "low":    "Low",
+                "close":  "Close",
+                "volume": "Volume"
+            })
+            self._daily_cache[symbol] = df
+            return df
+
+        # existing logic for non-SPY symbols
         if symbol not in self._daily_cache:
             try:
                 df = fh.fetch(symbol, period="1mo", interval="1d")
@@ -349,7 +374,7 @@ class DataFetcher:
                 df = None
             self._daily_cache[symbol] = df
         return self._daily_cache[symbol]
-
+        
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         # 0) cache hit?
         last = self._minute_timestamps.get(symbol)
@@ -1497,23 +1522,27 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
     return ("no_signal", 0)
 
 def get_calendar_safe(symbol: str) -> pd.DataFrame:
-    """
-    Fetches and caches yf.Ticker(symbol).calendar, but on rate-limit
-    returns an empty DataFrame so downstream code can skip gracefully.
-    """
-    if symbol in _calendar_cache:
+    today = date.today()
+    # Return today's cache if available
+    if (
+        symbol in _calendar_cache
+        and _calendar_last_fetch.get(symbol) == today
+    ):
         return _calendar_cache[symbol]
 
     try:
         cal = yf.Ticker(symbol).calendar
     except YFRateLimitError:
-        logger.warning(f"[Events] Rate limited fetching calendar for {symbol}; skipping events.")
+        logger.warning(
+            f"[Events] Rate limited for {symbol}; skipping events."
+        )
         cal = pd.DataFrame()
     except Exception as e:
-        logger.error(f"[Events] Unexpected error fetching calendar for {symbol}: {e}")
+        logger.error(f"[Events] Error fetching calendar for {symbol}: {e}")
         cal = pd.DataFrame()
 
     _calendar_cache[symbol] = cal
+    _calendar_last_fetch[symbol] = today
     return cal
 
 def is_near_event(symbol: str, days: int = 3) -> bool:
@@ -1543,70 +1572,45 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
     return any(today <= d <= cutoff for d in dates)
 
 def run_all_trades(model) -> None:
-    # bring the module-level _last_fh_prefetch_date into scope
     global _last_fh_prefetch_date
 
     now = pd.Timestamp.utcnow()
     if not in_trading_hours(now):
         logger.info("[SKIP] Market closed")
         return
-    logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
+    logger.info(
+        f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}"
+    )
 
-    # 1) Load your universe…
+    # 1) Load universe and prefetch daily caches as before...
     candidates = load_tickers(TICKERS_FILE)
-
-    # 2) Seed the daily cache *once per day* before screening
     today = date.today()
     if _last_fh_prefetch_date != today:
         _last_fh_prefetch_date = today
+        prefetch_daily_with_alpaca(candidates)
+        # fetch SPY override already in get_daily_df
 
-        # 2a) Bulk-prefetch everything except SPY
-        try:
-            prefetch_daily_with_alpaca(candidates)
-            logger.info("✅ Prefetched daily bars via Alpaca for all tickers (excluding SPY)")
-        except Exception as e:
-            logger.warning(f"[run_all_trades] bulk prefetch failed: {e}")
-
-        # 2b) ALWAYS fetch a full year for SPY so regime checks can train
-        try:
-            bars = api.get_bars(
-                "SPY", TimeFrame.Day,
-                start=(today - timedelta(days=365)).isoformat(),
-                end=today.isoformat(),
-                limit=1000, feed="iex"
-            ).df
-            bars = bars.rename(columns={
-                "open": "Open", "high": "High",
-                "low": "Low", "close": "Close", "volume": "Volume"
-            })
-            bars.index = pd.to_datetime(bars.index).tz_localize(None)
-            data_fetcher._daily_cache["SPY"] = bars
-            logger.info(f"[run_all_trades] fetched {len(bars)} SPY bars for regime")
-        except Exception as e:
-            logger.warning(f"[run_all_trades] SPY full-history fetch failed: {e}")
-
-    # 3) Now screen by ATR
-    tickers = screen_universe(candidates, ctx, lookback="1mo", interval="1d", top_n=20)
+    # 2) Screen and compute portfolio weights
+    tickers = screen_universe(candidates, ctx)
     weights = compute_portfolio_weights(tickers)
     ctx.portfolio_weights = weights
     if not tickers:
         logger.error("❌ No tickers loaded; skipping run_all_trades")
         return
 
-    # Halt-flag guard
+    # 3) Halt-flag guard
     if check_halt_flag():
         logger.info("Trading halted via HALT_FLAG_FILE.")
         return
 
-    # Fetch current cash balance
-    try:
-        acct = api.get_account()
-        current_cash = float(acct.cash)
-    except Exception:
-        logger.error("Failed to retrieve account balance.")
-        return
+    # 4) Fetch account cash
+    acct = api.get_account()
+    current_cash = float(acct.cash)
 
-    # 4) Loop through each ticker and execute your minute-bar logic
+    # 5) Compute market regime only once
+    regime_ok = check_market_regime()
+
+    # 6) Submit trades with uniform regime flag
     for symbol in tickers:
         executor.submit(
             _safe_trade,
@@ -1614,9 +1618,8 @@ def run_all_trades(model) -> None:
             symbol,
             current_cash,
             model,
-            check_market_regime()
+            regime_ok
         )
-
 def _safe_trade(
     ctx: BotContext,
     symbol: str,
@@ -1741,70 +1744,34 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 if os.path.exists("regime_model.pkl"):
     regime_model = pickle.load(open("regime_model.pkl", "rb"))
 else:
-    # 1) try your DataFetcher cache
-    hist = data_fetcher.get_daily_df(ctx, "SPY") or pd.DataFrame()
+    # Fetch one year of SPY daily bars via Alpaca
+    today = date.today()
+    start = (today - timedelta(days=365)).isoformat()
+    hist = api.get_bars(
+        "SPY", TimeFrame.Day,
+        start=start, end=today.isoformat(),
+        limit=1000, feed="iex"
+    ).df
+    hist.index = pd.to_datetime(hist.index).tz_localize(None)
 
-    # 2) fallback to Alpaca bulk if empty
-    if hist.empty:
-        logger.info("No SPY in DataFetcher cache; pulling via Alpaca")
-        try:
-            start = (date.today() - timedelta(days=365)).isoformat()
-            end   = date.today().isoformat()
-            bars = api.get_bars(
-                "SPY", TimeFrame.Day,
-                start=start, end=end,
-                limit=1000, feed="iex"
-            ).df
-            hist = bars.rename(columns={
-                "open":   "Open",
-                "high":   "High",
-                "low":    "Low",
-                "close":  "Close",
-                "volume": "Volume"
-            })
-            hist.index = pd.to_datetime(hist.index).tz_localize(None)
-            logger.info(f"Fetched {len(hist)} SPY bars via Alpaca")
-        except Exception as e:
-            logger.warning(f"Alpaca SPY fetch failed: {e}; falling back to yfinance")
+    # Compute daily indicators (preserves Date index)
+    ind = prepare_indicators(hist, freq="daily").set_index("Date")
 
-    # 3) fallback to yfinance if still empty
-    if hist.empty:
-        logger.info("Pulling SPY via yfinance as last resort")
-        try:
-            yf_hist = yf.download("SPY", period="1y", interval="1d", progress=False)
-            hist = yf_hist.rename(columns={
-                "Open":   "Open",
-                "High":   "High",
-                "Low":    "Low",
-                "Close":  "Close",
-                "Volume": "Volume"
-            })
-            hist.index = pd.to_datetime(hist.index).tz_localize(None)
-            logger.info(f"Fetched {len(hist)} SPY bars via yfinance")
-        except Exception as e:
-            logger.warning(f"yfinance SPY fetch failed: {e}")
+    # Compute labels: 1 if Close > 200-day MA, else 0
+    labels = (
+        hist["Close"] > hist["Close"].rolling(200).mean()
+    ).astype(int).rename("label")
 
-    # 4) sanity‐check & train
-    if len(hist) < 200:
-        logger.error(f"Not enough SPY bars ({len(hist)}), using dummy regime model")
-        regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+    # Align on DateTimeIndex
+    valid = ind.join(labels, how="inner").dropna()
+    if len(valid) >= 200:
+        regime_model = train_regime_model(valid, valid["label"])
+        pickle.dump(regime_model, open("regime_model.pkl", "wb"))
     else:
-        # compute your features
-        ind = prepare_indicators(hist, freq="daily")
-        ind["vol"] = hist["Close"].pct_change().rolling(14).std().reindex(ind.index)
-
-        # compute labels
-        labels = ((hist["Close"] > hist["Close"].rolling(200).mean())
-                   .astype(int)
-                   .reindex(ind.index))
-
-        # only keep rows where both features & labels are present
-        valid = ind.dropna().index.intersection(labels.dropna().index)
-        if len(valid) == 0:
-            logger.error("No valid SPY data to train regime model; using dummy fallback")
-            regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
-        else:
-            regime_model = train_regime_model(ind.loc[valid], labels.loc[valid])
+        logger.error(
+            f"Not enough SPY bars ({len(hist)}) to train regime model; using dummy fallback"
+        )
+        regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 
 # ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
 def screen_universe(
