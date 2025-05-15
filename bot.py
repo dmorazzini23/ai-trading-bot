@@ -1723,16 +1723,17 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df.ffill(inplace=True)
     df.bfill(inplace=True)
 
-    # now drop only fully NaN rows for intraday,
-    # but require all indicators for daily
+    # ─── NEW: dropna & index handling ────────────────────────────────────────
     required = ["vwap","rsi","atr","ichimoku_conv","ichimoku_base","stochrsi","macd","macds"]
     if freq == "daily":
+        # for daily we require *all* indicators and keep the DateTimeIndex
         required += ["sma_50","sma_200"]
         df.dropna(subset=required, how="any", inplace=True)
     else:
+        # for intraday we just drop rows with *all* NaNs, then reset to a simple RangeIndex
         df.dropna(subset=required, how="all", inplace=True)
+        df.reset_index(drop=True, inplace=True)
 
-    df.reset_index(drop=True, inplace=True)
     return df
 
 # ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
