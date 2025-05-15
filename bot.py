@@ -1578,22 +1578,23 @@ def run_all_trades(model) -> None:
     if not in_trading_hours(now):
         logger.info("[SKIP] Market closed")
         return
-    logger.info(
-        f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}"
-    )
+    logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
-    # 1) Load universe and prefetch daily caches as before...
+    # 1) Load your universe…
     candidates = load_tickers(TICKERS_FILE)
     today = date.today()
     if _last_fh_prefetch_date != today:
         _last_fh_prefetch_date = today
+
+        # bulk-prefetch everything except SPY
         prefetch_daily_with_alpaca(candidates)
-        # fetch SPY override already in get_daily_df
+
+        # **ensure SPY is seeded, so regime checks will find it**
+        ctx.data_fetcher.get_daily_df(ctx, "SPY")
 
     # 2) Screen and compute portfolio weights
     tickers = screen_universe(candidates, ctx)
-    weights = compute_portfolio_weights(tickers)
-    ctx.portfolio_weights = weights
+    ctx.portfolio_weights = compute_portfolio_weights(tickers)
     if not tickers:
         logger.error("❌ No tickers loaded; skipping run_all_trades")
         return
@@ -1603,23 +1604,17 @@ def run_all_trades(model) -> None:
         logger.info("Trading halted via HALT_FLAG_FILE.")
         return
 
-    # 4) Fetch account cash
+    # 4) Fetch current cash
     acct = api.get_account()
     current_cash = float(acct.cash)
 
-    # 5) Compute market regime only once
+    # 5) Compute regime just once per cycle
     regime_ok = check_market_regime()
 
-    # 6) Submit trades with uniform regime flag
+    # 6) Fan-out your trades
     for symbol in tickers:
-        executor.submit(
-            _safe_trade,
-            ctx,
-            symbol,
-            current_cash,
-            model,
-            regime_ok
-        )
+        executor.submit(_safe_trade, ctx, symbol, current_cash, model, regime_ok)
+
 def _safe_trade(
     ctx: BotContext,
     symbol: str,
