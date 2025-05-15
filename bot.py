@@ -1686,6 +1686,7 @@ def load_global_signal_performance(min_trades=10,threshold=0.4):
     logger.info(f"[MetaLearn] Keeping signals: {list(filtered.keys()) or 'none'}")
     return filtered
 
+# ─── INDICATORS ──────────────────────────────────────────────────────────────
 def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.copy()
 
@@ -1697,45 +1698,43 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").set_index("Date")
 
-    # core indicators
-    df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
-    df["rsi"]  = ta.rsi(df["Close"], length=14)
-    df["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-    macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
-    df["macd"], df["macds"] = macd["MACD_12_26_9"], macd["MACDs_12_26_9"]
+    # core indicators (all use Uppercase columns)
+    df["vwap"]  = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
+    df["rsi"]   = ta.rsi(df["Close"],     length=14)
+    df["atr"]   = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+    macd        = ta.macd(df["Close"],    fast=12, slow=26, signal=9)
+    df["macd"]  = macd["MACD_12_26_9"]
+    df["macds"] = macd["MACDs_12_26_9"]
 
     if freq == "daily":
         df["sma_50"]  = ta.sma(df["Close"], length=50)
         df["sma_200"] = ta.sma(df["Close"], length=200)
 
+    # Ichimoku & StochRSI
     ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
-    if isinstance(ich, tuple):
-        conv_raw, base_raw = ich[0], ich[1]
-    else:
-        conv_raw, base_raw = ich.iloc[:, 0], ich.iloc[:, 1]
-    df["ichimoku_conv"] = conv_raw.iloc[:,0] if isinstance(conv_raw, pd.DataFrame) else conv_raw
-    df["ichimoku_base"] = base_raw.iloc[:,0] if isinstance(base_raw, pd.DataFrame) else base_raw
+    conv, base = ich[0], ich[1] if isinstance(ich, tuple) else (ich.iloc[:,0], ich.iloc[:,1])
+    df["ichimoku_conv"] = conv.iloc[:,0] if isinstance(conv, pd.DataFrame) else conv
+    df["ichimoku_base"] = base.iloc[:,0] if isinstance(base, pd.DataFrame) else base
+    sto = ta.stochrsi(df["Close"])
+    df["stochrsi"] = sto["STOCHRSIk_14_14_3_3"]
 
-    st = ta.stochrsi(df["Close"])
-    df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
-
-    # fill-forward/backward
+    # forward/backfill to smooth out missing
     df.ffill(inplace=True)
     df.bfill(inplace=True)
 
-    # ─── dropna & index handling ─────────────────────────────────────────────
+    # drop rules: require *all* for daily, but drop only *fully* NaN for intraday
     required = ["vwap","rsi","atr","ichimoku_conv","ichimoku_base","stochrsi","macd","macds"]
     if freq == "daily":
-        # require all indicators, but KEEP the DateTimeIndex
         required += ["sma_50","sma_200"]
         df.dropna(subset=required, how="any", inplace=True)
+        # KEEP the DateTimeIndex on daily
     else:
-        # drop rows where *all* indicators are NaN, then reset index
         df.dropna(subset=required, how="all", inplace=True)
+        # for intraday we don’t need the timestamps on the index
         df.reset_index(drop=True, inplace=True)
 
     return df
-    
+
 # ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
 if os.path.exists("regime_model.pkl"):
     regime_model = pickle.load(open("regime_model.pkl", "rb"))
