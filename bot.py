@@ -1739,25 +1739,37 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 if os.path.exists("regime_model.pkl"):
     regime_model = pickle.load(open("regime_model.pkl", "rb"))
 else:
-    # Fetch one year of SPY daily bars via Alpaca
+    # 1) fetch one year of SPY daily bars via Alpaca
     today = date.today()
     start = (today - timedelta(days=365)).isoformat()
     hist = api.get_bars(
-        "SPY", TimeFrame.Day,
-        start=start, end=today.isoformat(),
-        limit=1000, feed="iex"
+        "SPY",
+        TimeFrame.Day,
+        start=start,
+        end=today.isoformat(),
+        limit=1000,
+        feed="iex"
     ).df
+
+    # 2) strip timezone and rename to uppercase OHLCV
     hist.index = pd.to_datetime(hist.index).tz_localize(None)
+    hist = hist.rename(columns={
+        "open":   "Open",
+        "high":   "High",
+        "low":    "Low",
+        "close":  "Close",
+        "volume": "Volume"
+    })
 
-    # Compute daily indicators (preserves Date index)
-    ind = prepare_indicators(hist, freq="daily").set_index("Date")
+    # 3) compute indicators (prepare_indicators now sees High/Low/Close/Volume)
+    ind = prepare_indicators(hist, freq="daily")
 
-    # Compute labels: 1 if Close > 200-day MA, else 0
+    # 4) build labels: 1 if SPY close > 200-day MA, else 0
     labels = (
         hist["Close"] > hist["Close"].rolling(200).mean()
     ).astype(int).rename("label")
 
-    # Align on DateTimeIndex
+    # 5) align features + labels on the Date index
     valid = ind.join(labels, how="inner").dropna()
     if len(valid) >= 200:
         regime_model = train_regime_model(valid, valid["label"])
@@ -1766,7 +1778,10 @@ else:
         logger.error(
             f"Not enough SPY bars ({len(hist)}) to train regime model; using dummy fallback"
         )
-        regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+        regime_model = RandomForestClassifier(
+            n_estimators=RF_ESTIMATORS,
+            max_depth=RF_MAX_DEPTH
+        )
 
 # ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
 def screen_universe(
