@@ -1743,18 +1743,15 @@ else:
     # 1) fetch one year of SPY daily bars via Alpaca
     today = date.today()
     start = (today - timedelta(days=365)).isoformat()
-    hist = api.get_bars(
-        "SPY",
-        TimeFrame.Day,
-        start=start,
-        end=today.isoformat(),
-        limit=1000,
-        feed="iex"
+    bars = api.get_bars(
+        "SPY", TimeFrame.Day,
+        start=start, end=today.isoformat(),
+        limit=1000, feed="iex"
     ).df
 
-    # 2) strip timezone and rename to uppercase OHLCV
-    hist.index = pd.to_datetime(hist.index).tz_localize(None)
-    hist = hist.rename(columns={
+    # 2) normalize index & uppercase columns
+    bars.index = pd.to_datetime(bars.index).tz_localize(None)
+    bars = bars.rename(columns={
         "open":   "Open",
         "high":   "High",
         "low":    "Low",
@@ -1762,27 +1759,23 @@ else:
         "volume": "Volume"
     })
 
-    # 3) compute indicators (prepare_indicators now sees High/Low/Close/Volume)
-    ind = prepare_indicators(hist, freq="daily")
+    # 3) compute daily indicators (keeps DateTimeIndex!)
+    ind = prepare_indicators(bars, freq="daily")
 
-    # 4) build labels: 1 if SPY close > 200-day MA, else 0
+    # 4) compute labels: 1 if Close > 200-day MA else 0
     labels = (
-        hist["Close"] > hist["Close"].rolling(200).mean()
+        bars["Close"] > bars["Close"].rolling(200).mean()
     ).astype(int).rename("label")
 
-    # 5) align features + labels on the Date index
+    # 5) align on the DateTimeIndex
     valid = ind.join(labels, how="inner").dropna()
+
     if len(valid) >= 200:
         regime_model = train_regime_model(valid, valid["label"])
         pickle.dump(regime_model, open("regime_model.pkl", "wb"))
     else:
-        logger.error(
-            f"Not enough SPY bars ({len(hist)}) to train regime model; using dummy fallback"
-        )
-        regime_model = RandomForestClassifier(
-            n_estimators=RF_ESTIMATORS,
-            max_depth=RF_MAX_DEPTH
-        )
+        logger.error(f"Not enough SPY bars ({len(bars)}) to train regime model; using dummy fallback")
+        regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 
 # ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
 def screen_universe(
