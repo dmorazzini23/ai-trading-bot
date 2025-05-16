@@ -1773,11 +1773,12 @@ else:
 
     # 5) Align, train, and persist
     valid = ind.join(labels, how="inner").dropna()
-    if len(valid) >= 200:
+    if len(valid) >= 50:
         regime_model = train_regime_model(valid, valid["label"])
         pickle.dump(regime_model, open("regime_model.pkl", "wb"))
     else:
-        logger.error(f"Not enough SPY bars ({len(bars)}) to train regime model; using dummy fallback")
+        # log the number of _valid_ rows, not total bars
+        logger.error(f"Not enough valid SPY indicator rows ({len(valid)}) to train regime model; using dummy fallback")
         regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 
 # ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
