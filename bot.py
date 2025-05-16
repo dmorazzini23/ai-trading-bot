@@ -1738,7 +1738,6 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     return df
 
-
 # ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
 if os.path.exists("regime_model.pkl"):
     regime_model = pickle.load(open("regime_model.pkl", "rb"))
@@ -1752,7 +1751,7 @@ else:
         limit=1000, feed="iex"
     ).df
 
-    # 2) Normalize index & ensure uppercase OHLCV
+    # 2) Normalize index & uppercase OHLCV columns
     bars.index = pd.to_datetime(bars.index).tz_localize(None)
     bars = bars.rename(columns={
         "open":   "Open",
@@ -1762,15 +1761,15 @@ else:
         "volume": "Volume"
     })
 
-    # 3) Compute indicators (this now finds High/Low/etc)
+    # 3) Compute your indicators (now that bars has High/Low/Close/Volume)
     ind = prepare_indicators(bars, freq="daily")
 
-    # 4) Generate labels: 1 if Close > 200-day SMA, else 0
+    # 4) Build labels: 1 if Close > 200-day SMA, else 0
     labels = (
         bars["Close"] > bars["Close"].rolling(200).mean()
     ).astype(int).rename("label")
 
-    # 5) Align and train
+    # 5) Align, train, and persist
     valid = ind.join(labels, how="inner").dropna()
     if len(valid) >= 200:
         regime_model = train_regime_model(valid, valid["label"])
