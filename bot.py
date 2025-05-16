@@ -1698,11 +1698,11 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").set_index("Date")
 
-    # core indicators (all use Uppercase columns)
+    # compute core TA indicators (expects uppercase OHLCV columns)
     df["vwap"]  = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
-    df["rsi"]   = ta.rsi(df["Close"],     length=14)
+    df["rsi"]   = ta.rsi(df["Close"], length=14)
     df["atr"]   = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-    macd        = ta.macd(df["Close"],    fast=12, slow=26, signal=9)
+    macd       = ta.macd(df["Close"], fast=12, slow=26, signal=9)
     df["macd"]  = macd["MACD_12_26_9"]
     df["macds"] = macd["MACDs_12_26_9"]
 
@@ -1710,36 +1710,40 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["sma_50"]  = ta.sma(df["Close"], length=50)
         df["sma_200"] = ta.sma(df["Close"], length=200)
 
-    # Ichimoku & StochRSI
+    # Ichimoku
     ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
-    conv, base = ich[0], ich[1] if isinstance(ich, tuple) else (ich.iloc[:,0], ich.iloc[:,1])
+    conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:,0]
+    base = ich[1] if isinstance(ich, tuple) else ich.iloc[:,1]
     df["ichimoku_conv"] = conv.iloc[:,0] if isinstance(conv, pd.DataFrame) else conv
     df["ichimoku_base"] = base.iloc[:,0] if isinstance(base, pd.DataFrame) else base
-    sto = ta.stochrsi(df["Close"])
-    df["stochrsi"] = sto["STOCHRSIk_14_14_3_3"]
 
-    # forward/backfill to smooth out missing
+    # StochRSI
+    st = ta.stochrsi(df["Close"])
+    df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
+
+    # fill-forward/backward to smooth
     df.ffill(inplace=True)
     df.bfill(inplace=True)
 
-    # drop rules: require *all* for daily, but drop only *fully* NaN for intraday
+    # drop rules: require *all* for daily, but only fully-NaN for intraday
     required = ["vwap","rsi","atr","ichimoku_conv","ichimoku_base","stochrsi","macd","macds"]
     if freq == "daily":
         required += ["sma_50","sma_200"]
         df.dropna(subset=required, how="any", inplace=True)
-        # KEEP the DateTimeIndex on daily
+        # keep the DateTimeIndex intact for daily
     else:
         df.dropna(subset=required, how="all", inplace=True)
-        # for intraday we don’t need the timestamps on the index
+        # intraday: drop the index timestamps
         df.reset_index(drop=True, inplace=True)
 
     return df
+
 
 # ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
 if os.path.exists("regime_model.pkl"):
     regime_model = pickle.load(open("regime_model.pkl", "rb"))
 else:
-    # 1) fetch one year of SPY daily bars via Alpaca
+    # 1) Fetch one year of SPY daily bars
     today = date.today()
     start = (today - timedelta(days=365)).isoformat()
     bars = api.get_bars(
@@ -1748,7 +1752,7 @@ else:
         limit=1000, feed="iex"
     ).df
 
-    # 2) normalize index & uppercase columns
+    # 2) Normalize index & ensure uppercase OHLCV
     bars.index = pd.to_datetime(bars.index).tz_localize(None)
     bars = bars.rename(columns={
         "open":   "Open",
@@ -1758,17 +1762,16 @@ else:
         "volume": "Volume"
     })
 
-    # 3) compute daily indicators (keeps DateTimeIndex!)
+    # 3) Compute indicators (this now finds High/Low/etc)
     ind = prepare_indicators(bars, freq="daily")
 
-    # 4) compute labels: 1 if Close > 200-day MA else 0
+    # 4) Generate labels: 1 if Close > 200-day SMA, else 0
     labels = (
         bars["Close"] > bars["Close"].rolling(200).mean()
     ).astype(int).rename("label")
 
-    # 5) align on the DateTimeIndex
+    # 5) Align and train
     valid = ind.join(labels, how="inner").dropna()
-
     if len(valid) >= 200:
         regime_model = train_regime_model(valid, valid["label"])
         pickle.dump(regime_model, open("regime_model.pkl", "wb"))
