@@ -1726,18 +1726,20 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df.bfill(inplace=True)
 
     # drop rules: require *all* for daily, but only fully-NaN for intraday
-    required = ["vwap","rsi","atr","ichimoku_conv","ichimoku_base","stochrsi","macd","macds"]
+    required = ["vwap", "rsi", "atr", "ichimoku_conv",
+                "ichimoku_base", "stochrsi", "macd", "macds"]
+
     if freq == "daily":
-        required += ["sma_50","sma_200"]
+        required += ["sma_50", "sma_200"]
         df.dropna(subset=required, how="any", inplace=True)
-        # keep the DateTimeIndex intact for daily
+        # KEEP the DateTimeIndex for daily data!
     else:
         df.dropna(subset=required, how="all", inplace=True)
         # intraday: drop the index timestamps
         df.reset_index(drop=True, inplace=True)
 
     return df
-
+    
 # ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
 if os.path.exists("regime_model.pkl"):
     regime_model = pickle.load(open("regime_model.pkl", "rb"))
