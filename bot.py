@@ -321,16 +321,6 @@ class FinnhubFetcher:
 fh = FinnhubFetcher(calls_per_minute=60)
 
 _last_fh_prefetch_date: Optional[date] = None
-
-# ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
-def train_regime_model(df_spy: pd.DataFrame, labels: pd.Series) -> RandomForestClassifier:
-    feats = ["atr","rsi","macd","vol"]  # vol = pct_change.std()
-    X = df_spy[feats]
-    y = labels
-    model = RandomForestClassifier(n_estimators=100, max_depth=5)
-    model.fit(X, y)
-    pickle.dump(model, open("regime_model.pkl","wb"))
-    return model
     
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
@@ -866,42 +856,6 @@ def now_pacific() -> datetime:
     return datetime.now(PACIFIC)
 
 _warned_missing_spy_columns = False
-
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(0.5))
-def check_market_regime() -> bool:
-    # pull the daily SPY cache
-    df = data_fetcher._daily_cache.get("SPY")
-    if df is None or len(df) < 200:
-        logger.warning("[check_market_regime] insufficient SPY history – need ≥200 bars")
-        return False
-
-    # compute all the your usual daily indicators
-    ind = prepare_indicators(df, freq="daily")
-    if ind.empty:
-        logger.warning("[check_market_regime] no indicators for SPY")
-        return False
-
-    # get the last row of indicators
-    row = ind.iloc[-1]
-
-    # compute the extra volatility feature
-    vol = df["Close"].pct_change().rolling(14).std().iloc[-1]
-    if pd.isna(vol):
-        logger.warning("[check_market_regime] vol is NaN – failing regime check")
-        return False
-
-    # assemble into the same feature order used when training
-    feature_vector = [
-        row["atr"],
-        row["rsi"],
-        row["macd"],
-        vol
-    ]
-
-    # run your RF regime_model
-    pred = regime_model.predict([feature_vector])[0]
-
-    return bool(pred)
 
 def too_many_positions() -> bool:
     try:
