@@ -107,6 +107,7 @@ EQUITY_FILE         = abspath("last_equity.txt")
 PEAK_EQUITY_FILE    = abspath("peak_equity.txt")
 HALT_FLAG_PATH      = abspath("halt.flag")
 MODEL_PATH          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
+REGIME_MODEL_PATH = abspath("regime_model.pkl")
 
 # ─── STRATEGY MODE CONFIGURATION ─────────────────────────────────────────────
 class BotMode:
@@ -1741,8 +1742,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     return df
     
 # ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
-if os.path.exists("regime_model.pkl"):
-    regime_model = pickle.load(open("regime_model.pkl", "rb"))
+if os.path.exists(REGIME_MODEL_PATH):
+    regime_model = pickle.load(open(REGIME_MODEL_PATH, "rb"))
 else:
     # 1) Fetch one year of SPY daily bars
     today = date.today()
@@ -1763,7 +1764,7 @@ else:
         "volume": "Volume"
     })
 
-    # 3) Compute your indicators (now that bars has High/Low/Close/Volume)
+    # 3) Compute your indicators
     ind = prepare_indicators(bars, freq="daily")
 
     # 4) Build labels: 1 if Close > 200-day SMA, else 0
@@ -1775,11 +1776,16 @@ else:
     valid = ind.join(labels, how="inner").dropna()
     if len(valid) >= 50:
         regime_model = train_regime_model(valid, valid["label"])
-        pickle.dump(regime_model, open("regime_model.pkl", "wb"))
+        pickle.dump(regime_model, open(REGIME_MODEL_PATH, "wb"))
     else:
-        # log the number of _valid_ rows, not total bars
-        logger.error(f"Not enough valid SPY indicator rows ({len(valid)}) to train regime model; using dummy fallback")
-        regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+        logger.error(
+            f"Not enough valid SPY indicator rows ({len(valid)}) "
+            "to train regime model; using dummy fallback"
+        )
+        regime_model = RandomForestClassifier(
+            n_estimators=RF_ESTIMATORS,
+            max_depth=RF_MAX_DEPTH
+        )
 
 # ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
 def screen_universe(
