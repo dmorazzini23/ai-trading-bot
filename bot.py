@@ -1742,6 +1742,23 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     return df
     
 # ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
+def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Given a daily-SPY DataFrame with columns Open/High/Low/Close/Volume,
+    compute exactly the four features needed for regime detection:
+      - atr (14)
+      - rsi (14)
+      - macd (12,26,9)
+      - vol = 14d rolling std of daily returns
+    """
+    feat = pd.DataFrame(index=df.index)
+    feat["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+    feat["rsi"]  = ta.rsi(df["Close"], length=14)
+    feat["macd"] = ta.macd(df["Close"], fast=12, slow=26, signal=9)["MACD_12_26_9"]
+    feat["vol"]  = df["Close"].pct_change().rolling(14).std()
+    return feat.dropna()
+
+# train / load regime_model
 if os.path.exists(REGIME_MODEL_PATH):
     regime_model = pickle.load(open(REGIME_MODEL_PATH, "rb"))
 else:
@@ -1764,28 +1781,49 @@ else:
         "volume": "Volume"
     })
 
-    # 3) Compute your indicators
-    ind = prepare_indicators(bars, freq="daily")
-
-    # 4) Build labels: 1 if Close > 200-day SMA, else 0
+    # 3) Compute features + label
+    feats  = _compute_regime_features(bars)
     labels = (
         bars["Close"] > bars["Close"].rolling(200).mean()
-    ).astype(int).rename("label")
+    ).loc[feats.index].astype(int).rename("label")
 
-    # 5) Align, train, and persist
-    valid = ind.join(labels, how="inner").dropna()
-    if len(valid) >= 50:
-        regime_model = train_regime_model(valid, valid["label"])
+    training = feats.join(labels, how="inner").dropna()
+
+    # 4) Train or fallback
+    if len(training) >= 50:
+        X = training[["atr","rsi","macd","vol"]]
+        y = training["label"]
+        regime_model = RandomForestClassifier(
+            n_estimators=RF_ESTIMATORS,
+            max_depth=RF_MAX_DEPTH
+        )
+        regime_model.fit(X, y)
         pickle.dump(regime_model, open(REGIME_MODEL_PATH, "wb"))
+        logger.info(f"Trained regime_model on {len(training)} daily rows and saved to {REGIME_MODEL_PATH}")
     else:
         logger.error(
-            f"Not enough valid SPY indicator rows ({len(valid)}) "
-            "to train regime model; using dummy fallback"
+            f"Not enough valid SPY rows ({len(training)}) to train regime model; using dummy fallback"
         )
         regime_model = RandomForestClassifier(
             n_estimators=RF_ESTIMATORS,
             max_depth=RF_MAX_DEPTH
         )
+
+# ─── LIVE REGIME CHECK ───────────────────────────────────────────────────────
+def check_market_regime() -> bool:
+    df = data_fetcher._daily_cache.get("SPY")
+    if df is None or len(df) < 26:
+        logger.warning("[check_market_regime] insufficient SPY history – need ≥26 bars")
+        return False
+
+    feats = _compute_regime_features(df)
+    if feats.empty:
+        logger.warning("[check_market_regime] failed to compute regime features for SPY")
+        return False
+
+    fv = feats.iloc[-1][["atr","rsi","macd","vol"]].values.reshape(1, -1)
+    pred = regime_model.predict(fv)[0]
+    return bool(pred)
 
 # ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
 def screen_universe(
