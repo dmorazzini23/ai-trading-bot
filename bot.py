@@ -1063,7 +1063,7 @@ def vwap_pegged_submit(
 
     while placed < total_qty and time.time() - start < duration:
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
-        if not df or df.empty:
+        if df is None or df.empty:
             logger.warning("[VWAP] missing bars, aborting VWAP slice")
             break
 
@@ -1220,17 +1220,24 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
         submit_order(ctx, symbol, qty, side)
 
     # now log & set stops/targets
-    df_min = ctx.data_fetcher.get_minute_df(ctx, symbol)
-    if df_min is None or df_min.empty:
+    raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
+    if raw is None or raw.empty:
         logger.warning(f"[ENTRY] Failed to fetch minute bars for {symbol} after slicing, skipping stop/target setup")
         return
-    price  = df_min["Close"].iloc[-1]
+
+    # compute intraday indicators so we have ATR, VWAP, etc.
+    df_ind = prepare_indicators(raw, freq="intraday")
+    if df_ind.empty:
+        logger.warning(f"[ENTRY] Not enough indicator data for {symbol}, skipping stop/target setup")
+        return
+
+    price = df_ind["Close"].iloc[-1]
     ctx.trade_logger.log_entry(symbol, price, qty, side, "", "")
 
     now = now_pacific()
     mo  = datetime.combine(now.date(), ctx.market_open, PACIFIC)
     mc  = datetime.combine(now.date(), ctx.market_close, PACIFIC)
-    stop, take = scaled_atr_stop(price, df_min["atr"].iloc[-1], now, mo, mc)
+    stop, take = scaled_atr_stop(price, df_ind["atr"].iloc[-1], now, mo, mc)
     ctx.take_profit_targets[symbol] = take
     ctx.stop_targets[symbol]        = stop
 
