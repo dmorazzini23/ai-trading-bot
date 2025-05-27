@@ -1077,7 +1077,7 @@ def vwap_pegged_submit(
                 side=side,
                 type="limit",
                 time_in_force="ioc",
-                limit_price=vwap
+                limit_price=round(vwap, 2)
             )
         except Exception as e:
             logger.exception(f"[VWAP] slice failed: {e}")
@@ -1222,24 +1222,24 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     # now log & set stops/targets
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw is None or raw.empty:
-        logger.warning(f"[ENTRY] Failed to fetch minute bars for {symbol} after slicing, skipping stop/target setup")
+        logger.warning(f"[ENTRY] Failed to fetch minute bars for {symbol} after slicing")
         return
 
-    # compute intraday indicators so we have ATR, VWAP, etc.
     df_ind = prepare_indicators(raw, freq="intraday")
     if df_ind.empty:
-        logger.warning(f"[ENTRY] Not enough indicator data for {symbol}, skipping stop/target setup")
+        logger.warning(f"[ENTRY] Not enough indicator data for {symbol} after slicing")
         return
 
-    price = df_ind["Close"].iloc[-1]
-    ctx.trade_logger.log_entry(symbol, price, qty, side, "", "")
+    entry_price = df_ind["Close"].iloc[-1]
+    ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "")
 
     now = now_pacific()
     mo  = datetime.combine(now.date(), ctx.market_open, PACIFIC)
     mc  = datetime.combine(now.date(), ctx.market_close, PACIFIC)
-    stop, take = scaled_atr_stop(price, df_ind["atr"].iloc[-1], now, mo, mc)
-    ctx.take_profit_targets[symbol] = take
+    stop, take = scaled_atr_stop(entry_price, df_ind["atr"].iloc[-1], now, mo, mc)
+
     ctx.stop_targets[symbol]        = stop
+    ctx.take_profit_targets[symbol] = take
 
 def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
     # 1) send the exit order
