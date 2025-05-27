@@ -130,9 +130,9 @@ class BotMode:
             }
         else:  # balanced
             return {
-                "KELLY_FRACTION": 0.6, "CONF_THRESHOLD": 0.65, "CONFIRMATION_COUNT": 2,
+                "KELLY_FRACTION": 0.6, "CONF_THRESHOLD": 0.70, "CONFIRMATION_COUNT": 2,
                 "TAKE_PROFIT_FACTOR": 1.8, "DAILY_LOSS_LIMIT": 0.07,
-                "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.8
+                "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.2
             }
 
     def get_config(self) -> dict[str, float]:
@@ -148,25 +148,25 @@ NEWS_API_KEY             = os.getenv("NEWS_API_KEY")
 TRAILING_FACTOR          = params["TRAILING_FACTOR"]
 SECONDARY_TRAIL_FACTOR   = 1.0
 TAKE_PROFIT_FACTOR       = params["TAKE_PROFIT_FACTOR"]
-SCALING_FACTOR           = 0.5
+SCALING_FACTOR           = 0.3
 ORDER_TYPE               = 'market'
 LIMIT_ORDER_SLIPPAGE     = float(os.getenv("LIMIT_ORDER_SLIPPAGE", 0.005))
 MAX_POSITION_SIZE        = 1000
-SLICE_THRESHOLD          = 100
-POV_SLICE_PCT            = float(os.getenv("POV_SLICE_PCT", "0.0"))
+SLICE_THRESHOLD          = 50
+POV_SLICE_PCT            = float(os.getenv("POV_SLICE_PCT", "0.05"))
 DAILY_LOSS_LIMIT         = params["DAILY_LOSS_LIMIT"]
 MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
-CORRELATION_THRESHOLD    = 0.75
+CORRELATION_THRESHOLD    = 0.60
 MARKET_OPEN              = dt_time(0, 0)
 MARKET_CLOSE             = dt_time(23, 59)
-VOLUME_THRESHOLD         = int(os.getenv("VOLUME_THRESHOLD", "10000"))
-ENTRY_START_OFFSET       = timedelta(minutes=15)
-ENTRY_END_OFFSET         = timedelta(minutes=30)
+VOLUME_THRESHOLD         = int(os.getenv("VOLUME_THRESHOLD", "50000"))
+ENTRY_START_OFFSET       = timedelta(minutes=30)
+ENTRY_END_OFFSET         = timedelta(minutes=15)
 REGIME_LOOKBACK          = 14
 REGIME_ATR_THRESHOLD     = 20.0
-RF_ESTIMATORS            = 225
-RF_MAX_DEPTH             = 5
-ATR_LENGTH               = 12
+RF_ESTIMATORS            = 300
+RF_MAX_DEPTH             = 3
+ATR_LENGTH               = 14
 CONF_THRESHOLD           = params["CONF_THRESHOLD"]
 CONFIRMATION_COUNT       = params["CONFIRMATION_COUNT"]
 CAPITAL_CAP              = params["CAPITAL_CAP"]
@@ -444,7 +444,7 @@ class SignalManager:
     def __init__(self) -> None:
         self.momentum_lookback = 5
         self.mean_rev_lookback = 20
-        self.mean_rev_zscore_threshold = 1.5
+        self.mean_rev_zscore_threshold = 2.0
         self.regime_volatility_threshold = REGIME_ATR_THRESHOLD
 
     def signal_momentum(self, df: pd.DataFrame) -> Tuple[int, float, str]:
