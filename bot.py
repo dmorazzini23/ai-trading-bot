@@ -859,6 +859,37 @@ def check_daily_loss() -> bool:
     daily_drawdown.set(loss)
     return loss >= limit
 
+def count_day_trades() -> int:
+    """
+    Read your trade log and count the number of entries
+    that opened and closed on the same calendar date
+    in the last 5 business days.
+    """
+    df = pd.read_csv(TRADE_LOG_FILE, parse_dates=["entry_time","exit_time"])
+    df = df.dropna(subset=["exit_time"])  # only fully closed trades
+    today = pd.Timestamp.now().normalize()
+    bdays = pd.bdate_range(end=today, periods=5)
+    df["entry_date"] = df["entry_time"].dt.normalize()
+    df["exit_date"]  = df["exit_time"].dt.normalize()
+    mask = (
+        (df["entry_date"].isin(bdays)) &
+        (df["exit_date"].isin(bdays))   &
+        (df["entry_date"] == df["exit_date"])
+    )
+    return int(mask.sum())
+
+def check_pdt_rule(ctx: BotContext) -> bool:
+    acct = safe_alpaca_get_account()
+    equity = float(acct.equity)
+    # only enforce PDT below $25k
+    if equity >= PDT_EQUITY_THRESHOLD:
+        return False
+    day_trades = count_day_trades()
+    if day_trades >= PDT_DAY_TRADE_LIMIT:
+        logger.info(f"[SKIP] PDT limit reached: {day_trades} day-trades in last 5 business days")
+        return True
+    return False
+
 def check_halt_flag() -> bool:
     if not os.path.exists(HALT_FLAG_PATH):
         return False
@@ -1325,6 +1356,8 @@ def pre_trade_checks(
     balance: float,
     regime_ok: bool
 ) -> bool:
+    if check_pdt_rule(ctx):
+        return False
     if check_halt_flag():
         logger.info(f"[SKIP] HALT_FLAG – {symbol}")
         return False
