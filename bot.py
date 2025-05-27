@@ -832,20 +832,29 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
 def check_daily_loss() -> bool:
     global day_start_equity, last_drawdown
 
-    acct = safe_alpaca_get_account()
+    acct   = safe_alpaca_get_account()
     equity = float(acct.equity)
-    today = date.today()
+    today  = date.today()
 
-    # on new day, adjust limit based on yesterday’s drawdown
+    # **always** give limit a default value
+    limit = params["DAILY_LOSS_LIMIT"]
+
+    # on a brand-new trading day, reset your baseline and possibly
+    # tighten the limit if yesterday was bad
     if day_start_equity is None or day_start_equity[0] != today:
-        # if yesterday ≥5% drawdown → cap today at 3%
-        limit = 0.03 if last_drawdown >= 0.05 else params["DAILY_LOSS_LIMIT"]
-        # store for next day’s logic
-        last_drawdown = (day_start_equity[1] - equity) / day_start_equity[1] if day_start_equity else 0.0
+        # if yesterday’s drawdown ≥5%, cap today at 3%
+        if last_drawdown >= 0.05:
+            limit = 0.03
+        # compute yesterday’s drawdown for tomorrow’s logic
+        last_drawdown = (
+            (day_start_equity[1] - equity) / day_start_equity[1]
+            if day_start_equity else 0.0
+        )
         day_start_equity = (today, equity)
         daily_drawdown.set(0.0)
         return False
 
+    # otherwise check how far we’ve fallen so far today
     loss = (day_start_equity[1] - equity) / day_start_equity[1]
     daily_drawdown.set(loss)
     return loss >= limit
