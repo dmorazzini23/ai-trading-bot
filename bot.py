@@ -49,6 +49,14 @@ import finnhub
 from finnhub.exceptions import FinnhubAPIException
 import pybreaker
 
+def is_high_vol_regime() -> bool:
+    # uses your regime_model’s 14d vol vs its 20d rolling mean
+    df = data_fetcher._daily_cache.get("SPY")
+    feats = _compute_regime_features(df)
+    today_vol = feats["vol"].iloc[-1]
+    long_vol = feats["vol"].rolling(20).mean().iloc[-1]
+    return today_vol > long_vol
+
 # ─── CIRCUIT BREAKER FOR ALPACA CALLS ─────────────────────────────────────────
 breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
 
@@ -64,7 +72,7 @@ from more_itertools import chunked
 
 # for check_daily_loss()
 day_start_equity: Optional[Tuple[date, float]] = None
-
+last_drawdown: float = 0.0
 _calendar_cache: Dict[str, pd.DataFrame] = {}
 _calendar_last_fetch: Dict[str, date] = {}
 
@@ -130,7 +138,7 @@ class BotMode:
             }
         else:  # balanced
             return {
-                "KELLY_FRACTION": 0.6, "CONF_THRESHOLD": 0.70, "CONFIRMATION_COUNT": 2,
+                "KELLY_FRACTION": 0.6, "CONF_THRESHOLD": 0.75, "CONFIRMATION_COUNT": 2,
                 "TAKE_PROFIT_FACTOR": 1.8, "DAILY_LOSS_LIMIT": 0.07,
                 "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.2
             }
@@ -166,7 +174,8 @@ REGIME_LOOKBACK          = 14
 REGIME_ATR_THRESHOLD     = 20.0
 RF_ESTIMATORS            = 300
 RF_MAX_DEPTH             = 3
-ATR_LENGTH               = 14
+RF_MIN_SAMPLES_LEAF      = 5
+ATR_LENGTH               = 10
 CONF_THRESHOLD           = params["CONF_THRESHOLD"]
 CONFIRMATION_COUNT       = params["CONFIRMATION_COUNT"]
 CAPITAL_CAP              = params["CAPITAL_CAP"]
@@ -821,30 +830,25 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     retry=retry_if_exception_type(APIError)
 )
 def check_daily_loss() -> bool:
-    global day_start_equity
+    global day_start_equity, last_drawdown
 
-    try:
-        acct = safe_alpaca_get_account()
-        equity = float(acct.equity)
-        logger.debug(f"account equity: {equity}")
-    except pybreaker.CircuitBreakerError:
-        logger.warning("Alpaca account call short-circuited")
-        return False
-    except Exception as e:
-        logger.warning(f"[check_daily_loss] could not fetch account cash: {e!r}")
-        return False
-
+    acct = safe_alpaca_get_account()
+    equity = float(acct.equity)
     today = date.today()
+
+    # on new day, adjust limit based on yesterday’s drawdown
     if day_start_equity is None or day_start_equity[0] != today:
+        # if yesterday ≥5% drawdown → cap today at 3%
+        limit = 0.03 if last_drawdown >= 0.05 else params["DAILY_LOSS_LIMIT"]
+        # store for next day’s logic
+        last_drawdown = (day_start_equity[1] - equity) / day_start_equity[1] if day_start_equity else 0.0
         day_start_equity = (today, equity)
         daily_drawdown.set(0.0)
-        logger.info(f"reset day_start_equity to {equity} on {today}")
         return False
 
     loss = (day_start_equity[1] - equity) / day_start_equity[1]
     daily_drawdown.set(loss)
-    logger.info(f"daily drawdown is {loss:.2%}")
-    return loss >= DAILY_LOSS_LIMIT
+    return loss >= limit
 
 def check_halt_flag() -> bool:
     if not os.path.exists(HALT_FLAG_PATH):
@@ -1162,17 +1166,21 @@ def update_trailing_stop(
     price: float,
     qty: int,
     atr: float,
-    factor: float = TRAILING_FACTOR
 ) -> str:
+    # pick factor at runtime
+    factor = 1.0 if is_high_vol_regime() else TRAILING_FACTOR
     te = ctx.trailing_extremes
-    if qty>0:
-        te[ticker] = max(te.get(ticker,price),price)
-        if price<te[ticker]-factor*atr:
+
+    if qty > 0:
+        te[ticker] = max(te.get(ticker, price), price)
+        if price < te[ticker] - factor * atr:
             return "exit_long"
-    elif qty<0:
-        te[ticker] = min(te.get(ticker,price),price)
-        if price>te[ticker]+factor*atr:
+
+    elif qty < 0:
+        te[ticker] = min(te.get(ticker, price), price)
+        if price > te[ticker] + factor * atr:
             return "exit_short"
+
     return "hold"
 
 def calculate_entry_size(
@@ -1183,16 +1191,28 @@ def calculate_entry_size(
     win_prob: float
 ) -> int:
     cash = float(ctx.api.get_account().cash)
-    # fetch last-month returns
+
+    # tier capital cap by avg daily volume
+    df_daily = ctx.data_fetcher.get_daily_df(ctx, symbol)
+    avg_vol = df_daily["Volume"].tail(20).mean() if df_daily is not None else 0
+    cap_pct = 0.05 if avg_vol > 1e7 else 0.03
+    cap_sz  = int((cash * cap_pct) / price)
+
+    # fetch last-month returns for vol-based sizing
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
     rets = (
         df["Close"].pct_change().dropna().values
         if df is not None and not df.empty
         else np.array([0.0])
     )
+
+    # your two existing sizing methods
     kelly_sz = fractional_kelly_size(ctx, cash, price, atr, win_prob)
-    vol_sz = vol_target_position_size(cash, price, rets, target_vol=0.02)
-    return min(kelly_sz, vol_sz)
+    vol_sz   = vol_target_position_size(cash, price, rets, target_vol=0.02)
+
+    # final size = min of all caps
+    size = int(min(kelly_sz, vol_sz, cap_sz, MAX_POSITION_SIZE))
+    return max(size, 1)
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     """
@@ -1233,13 +1253,28 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     entry_price = df_ind["Close"].iloc[-1]
     ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "")
 
+    # set up time window
     now = now_pacific()
     mo  = datetime.combine(now.date(), ctx.market_open, PACIFIC)
     mc  = datetime.combine(now.date(), ctx.market_close, PACIFIC)
-    stop, take = scaled_atr_stop(entry_price, df_ind["atr"].iloc[-1], now, mo, mc)
+
+    # ─── DYNAMIC TP/STOP BASED ON REGIME ────────────────────────────────
+    if is_high_vol_regime():
+        tp_factor = TAKE_PROFIT_FACTOR * 1.1
+    else:
+        tp_factor = TAKE_PROFIT_FACTOR
+
+    stop, take = scaled_atr_stop(
+        entry_price,
+        df_ind["atr"].iloc[-1],
+        now, mo, mc,
+        max_factor=tp_factor,
+        min_factor=0.5
+    )
 
     ctx.stop_targets[symbol]        = stop
     ctx.take_profit_targets[symbol] = take
+    # ───────────────────────────────────────────────────────────────────
 
 def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
     # 1) send the exit order
@@ -1257,6 +1292,14 @@ def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
     # 4) clean up your targets
     ctx.take_profit_targets.pop(symbol, None)
     ctx.stop_targets.pop(symbol, None)
+
+def exit_all_positions():
+    """Liquidate every open position.  Intended for end-of-day clean-up."""
+    for pos in api.list_positions():
+        qty = abs(int(pos.qty))
+        if qty:
+            submit_order(ctx, pos.symbol, qty, "sell")
+            logger.info(f"[EOD EXIT] Sold {qty} {pos.symbol}")
 
 # ─── SIGNAL & TRADE LOGIC ────────────────────────────────────────────────────
 def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int, float, str]:
@@ -1589,7 +1632,7 @@ def load_model(path: str = MODEL_PATH):
         logger.info(f"Loading trained model from {path}")
         return joblib.load(path)
     logger.info("No model found; training fallback RandomForestClassifier")
-    model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+    model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH, min_samples_leaf=RF_MIN_SAMPLES_LEAF)
     X_dummy = np.random.randn(100,6)
     y_dummy = np.random.randint(0,2,size=100)
     model.fit(X_dummy, y_dummy)
@@ -1844,15 +1887,21 @@ if __name__ == "__main__":
         Thread(target=start_healthcheck, daemon=True).start()
         logger.info("Healthcheck endpoint running on port 8080")
 
+    # end-of-day summary and cleanup
     schedule.every().day.at("00:30").do(daily_summary)
-    logger.info("Scheduled daily summary at 00:30 UTC")
+    schedule.every().day.at("15:45").do(exit_all_positions)
+    logger.info("Scheduled daily_summary at 00:30 UTC and exit_all_positions at 15:45 UTC")
 
+    # load and kick off your model
     model = load_model()
     logger.info("🚀 AI Trading Bot is live!")
+
+    # ongoing jobs
     schedule.every(1).minutes.do(lambda: run_all_trades(model))
     schedule.every(6).hours.do(update_signal_weights)
     logger.info("Scheduled run_all_trades every 1m and update_signal_weights every 6h")
 
+    # scheduler loop
     while True:
         try:
             schedule.run_pending()
