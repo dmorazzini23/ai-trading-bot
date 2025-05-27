@@ -1252,12 +1252,12 @@ def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
     ctx.stop_targets.pop(symbol, None)
 
 # ─── SIGNAL & TRADE LOGIC ────────────────────────────────────────────────────
-def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int,float,str]:
+def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int, float, str]:
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, df, symbol, model)
-    conf *= ctx.portfolio_weights.get(symbol, 1.0)
+    # Removed portfolio-weight scaling to use raw confidence directly
     if sig == -1 or conf < CONF_THRESHOLD:
         logger.info(f"[SKIP] {symbol} no/low signal (sig={sig},conf={conf:.2f})")
-        return -1,0.0,""
+        return -1, 0.0, ""
     return sig, conf, strat
 
 def pre_trade_checks(
@@ -1389,33 +1389,17 @@ def trade_logic(
             "buy" if sig == 1 else "sell"
         )
 
-def compute_portfolio_weights(symbols: List[str]) -> dict[str, float]:
-    # 1) Bail out if no symbols
-    if not symbols:
-        logger.warning("[Portfolio] No tickers to optimize—skipping.")
+def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
+    """
+    Assign equal weights to each symbol in the universe.
+    """
+    n = len(symbols)
+    if n == 0:
+        logger.warning("[Portfolio] No tickers to weight—skipping.")
         return {}
-
-    # 2) Build DataFrame of aligned daily closes
-    closes = {}
-    for sym in symbols:
-        df = ctx.data_fetcher.get_daily_df(ctx, sym)
-        if df is not None and "Close" in df:
-            closes[sym] = df["Close"]
-    price_df = pd.DataFrame(closes).dropna()
-    
-    # 3) Compute expected returns & covariance
-    μ = expected_returns.mean_historical_return(price_df)
-    Σ = risk_models.sample_cov(price_df)
-
-    # 4) Guard against empty results
-    if μ.shape[0] == 0 or Σ.shape[0] == 0:
-        logger.warning("[Portfolio] Empty returns or covariance matrix—skipping optimization.")
-        return {}
-
-    # 5) Optimize
-    ef = EfficientFrontier(μ, Σ)
-    weights = ef.max_sharpe()  # or ef.min_volatility(), ef.efficient_risk(target_risk), etc.
-
+    equal_weight = 1.0 / n
+    weights = {s: equal_weight for s in symbols}
+    logger.info(f"[Portfolio] Equal weights assigned: {weights}")
     return weights
 
 # ─── PORTFOLIO REBALANCING ──────────────────────────────────────────────────
