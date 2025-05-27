@@ -1053,9 +1053,9 @@ def vwap_pegged_submit(
     side: str,
     duration: int = 300
 ) -> None:
-    """Place a VWAP‐pegged IOC bracket order over duration seconds."""
+    """Place a VWAP-pegged IOC bracket order over `duration` seconds."""
     if total_qty <= 0:
-        logger.warning(f"[vwap_pegged_submit] non‐positive total_qty={total_qty}, skipping")
+        logger.warning(f"[vwap_pegged_submit] non-positive total_qty={total_qty}, skipping")
         return
 
     start = time.time()
@@ -1067,24 +1067,25 @@ def vwap_pegged_submit(
             logger.warning("[VWAP] missing bars, aborting VWAP slice")
             break
 
-        vwap = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
-        to_send = min(max(1, total_qty // 10), total_qty - placed)
+        vwap_price = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
+        slice_qty  = min(max(1, total_qty // 10), total_qty - placed)
 
         try:
             ctx.api.submit_order(
                 symbol=symbol,
-                qty=to_send,
+                qty=slice_qty,
                 side=side,
                 type="limit",
                 time_in_force="ioc",
-                limit_price=round(vwap, 2)
+                limit_price=round(vwap_price, 2)
             )
         except Exception as e:
             logger.exception(f"[VWAP] slice failed: {e}")
             break
 
-        placed += to_send
+        placed += slice_qty
         time.sleep(duration / 10)
+
 
 def pov_submit(
     ctx: BotContext,
@@ -1199,35 +1200,35 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     Place an entry order:
       * If qty <= 0 → skip
       * If POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD → POV slicing
-      * Elif qty > SLICE_THRESHOLD → VWAP‐pegged slicing
+      * Elif qty > SLICE_THRESHOLD → VWAP-pegged slicing
       * Else → simple market
     """
     if qty <= 0:
         logger.warning(f"[ENTRY] zero quantity for {symbol}, skipping")
         return
 
-    # choose slicing algorithm
+    # 1) choose slicing vs market
     if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
         logger.info(f"[ENTRY] POV slice {qty}@{POV_SLICE_PCT*100:.1f}% for {symbol}")
         pov_submit(ctx, symbol, qty, side)
 
     elif qty > SLICE_THRESHOLD:
-        logger.info(f"[ENTRY] VWAP‐pegged slice {qty} {side.upper()} for {symbol}")
+        logger.info(f"[ENTRY] VWAP-pegged slice {qty} {side.upper()} for {symbol}")
         vwap_pegged_submit(ctx, symbol, qty, side)
 
     else:
         logger.info(f"[ENTRY] Market {side.upper()} {qty} {symbol}")
         submit_order(ctx, symbol, qty, side)
 
-    # now log & set stops/targets
+    # 2) log the fill and set stops/targets
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw is None or raw.empty:
-        logger.warning(f"[ENTRY] Failed to fetch minute bars for {symbol} after slicing")
+        logger.warning(f"[ENTRY] no minute bars for {symbol} after slicing")
         return
 
     df_ind = prepare_indicators(raw, freq="intraday")
     if df_ind.empty:
-        logger.warning(f"[ENTRY] Not enough indicator data for {symbol} after slicing")
+        logger.warning(f"[ENTRY] insufficient indicator data for {symbol} post-slice")
         return
 
     entry_price = df_ind["Close"].iloc[-1]
