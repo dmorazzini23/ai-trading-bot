@@ -1086,7 +1086,6 @@ def vwap_pegged_submit(
         placed += slice_qty
         time.sleep(duration / 10)
 
-
 def pov_submit(
     ctx: BotContext,
     symbol: str,
