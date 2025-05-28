@@ -882,17 +882,37 @@ def count_day_trades() -> int:
 
 def check_pdt_rule(ctx: BotContext) -> bool:
     acct = safe_alpaca_get_account()
-    equity = float(acct.equity)
-    day_trades = count_day_trades()
+    equity        = float(acct.equity)
+    day_trades     = count_day_trades()
+    api_day_trades = getattr(acct, "pattern_day_trades", None)
+    api_buying_pw  = getattr(acct, "daytrade_buying_power", None)
 
-    # add this:
-    logger.info(f"[PDT CHECK] equity=${equity:.2f}, day_trades_last_5bd={day_trades}")
+    logger.info(
+        f"[PDT CHECK] equity=${equity:.2f}, "
+        f"logged={day_trades} closed, "
+        f"API_day_trades={api_day_trades}, "
+        f"API_buying_pw={api_buying_pw}"
+    )
 
+    # no PDT restriction for $25k+ accounts
     if equity >= PDT_EQUITY_THRESHOLD:
-        return False  # no PDT restriction
+        return False
+
+    # Alpaca’s own day-trade count
+    if api_day_trades is not None and api_day_trades >= PDT_DAY_TRADE_LIMIT:
+        logger.info(f"[SKIP] PDT limit reached per API: {api_day_trades} day-trades")
+        return True
+
+    # Alpaca’s intraday buying power
+    if api_buying_pw is not None and float(api_buying_pw) <= 0:
+        logger.info(f"[SKIP] PDT buying power exhausted: {api_buying_pw}")
+        return True
+
+    # fallback: your CSV-based count
     if day_trades >= PDT_DAY_TRADE_LIMIT:
         logger.info(f"[SKIP] PDT limit reached: {day_trades} day-trades in last 5 business days")
         return True
+
     return False
 
 def check_halt_flag() -> bool:
@@ -1036,14 +1056,14 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             time_in_force="gtc",
         )
         logger.info(f"[submit_order] {side.upper()} {qty} {symbol} at market; expected ~{expected_price}")
-        orders_total.inc()    # increment Prometheus counter for each order sent
+        orders_total.inc()
         return order
 
     except APIError as e:
         msg = str(e).lower()
 
-        # Skip entirely if no buying power
-        if "insufficient buying power" in msg:
+        # Skip entirely on any buying-power exhaustion
+        if "insufficient buying power" in msg or "insufficient day trading buying power" in msg:
             logger.warning(f"[submit_order] insufficient buying power for {symbol}; skipping order")
             return None
 
