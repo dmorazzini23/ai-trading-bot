@@ -883,10 +883,13 @@ def count_day_trades() -> int:
 def check_pdt_rule(ctx: BotContext) -> bool:
     acct = safe_alpaca_get_account()
     equity = float(acct.equity)
-    # only enforce PDT below $25k
-    if equity >= PDT_EQUITY_THRESHOLD:
-        return False
     day_trades = count_day_trades()
+
+    # add this:
+    logger.info(f"[PDT CHECK] equity=${equity:.2f}, day_trades_last_5bd={day_trades}")
+
+    if equity >= PDT_EQUITY_THRESHOLD:
+        return False  # no PDT restriction
     if day_trades >= PDT_DAY_TRADE_LIMIT:
         logger.info(f"[SKIP] PDT limit reached: {day_trades} day-trades in last 5 business days")
         return True
