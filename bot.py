@@ -880,41 +880,54 @@ def count_day_trades() -> int:
     )
     return int(mask.sum())
 
+@sleep_and_retry
+@limits(calls=200, period=60)
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+    retry=retry_if_exception_type(APIError)
+)
 def check_pdt_rule(ctx: BotContext) -> bool:
+    """
+    Returns True if PDT limit reached (skip trading), False otherwise.
+    Combines Alpaca’s API day-trade count/buying power AND your logged count.
+    """
     acct = safe_alpaca_get_account()
-    equity        = float(acct.equity)
-    day_trades     = count_day_trades()
-    api_day_trades = getattr(acct, "pattern_day_trades", None)
-    api_buying_pw  = getattr(acct, "daytrade_buying_power", None)
+    equity = float(acct.equity)
+    logged_day_trades = count_day_trades()
+
+    # Try both possible attribute names for API-reported PDT count & buying power
+    api_day_trades = (
+        getattr(acct, "pattern_day_trades", None)
+        or getattr(acct, "pattern_day_trades_count", None)
+    )
+    api_buying_pw = (
+        getattr(acct, "daytrade_buying_power", None)
+        or getattr(acct, "day_trade_buying_power", None)
+    )
 
     logger.info(
         f"[PDT CHECK] equity=${equity:.2f}, "
-        f"logged={day_trades} closed, "
+        f"logged={logged_day_trades} closed, "
         f"API_day_trades={api_day_trades}, "
         f"API_buying_pw={api_buying_pw}"
     )
 
-    # no PDT restriction for $25k+ accounts
+    # No PDT restriction if you’re ≥ the $25k threshold
     if equity >= PDT_EQUITY_THRESHOLD:
         return False
 
-    # Alpaca’s own day-trade count
+    # If Alpaca’s API gives you a count, use it
     if api_day_trades is not None and api_day_trades >= PDT_DAY_TRADE_LIMIT:
-        logger.info(f"[SKIP] PDT limit reached per API: {api_day_trades} day-trades")
+        logger.info(f"[SKIP] PDT limit reached via API: {api_day_trades} day-trades")
         return True
 
-    # Alpaca’s intraday buying power
-    if api_buying_pw is not None and float(api_buying_pw) <= 0:
-        logger.info(f"[SKIP] PDT buying power exhausted: {api_buying_pw}")
-        return True
-
-    # fallback: your CSV-based count
-    if day_trades >= PDT_DAY_TRADE_LIMIT:
-        logger.info(f"[SKIP] PDT limit reached: {day_trades} day-trades in last 5 business days")
+    # Fallback to your logged count
+    if logged_day_trades >= PDT_DAY_TRADE_LIMIT:
+        logger.info(f"[SKIP] PDT limit reached via log: {logged_day_trades} day-trades")
         return True
 
     return False
-
 def check_halt_flag() -> bool:
     if not os.path.exists(HALT_FLAG_PATH):
         return False
