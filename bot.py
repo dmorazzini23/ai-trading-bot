@@ -1157,7 +1157,7 @@ def pov_submit(
 
     while placed < total_qty:
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
-        if not df or df.empty:
+        if df is None or df.empty:
             retries += 1
             if retries > cfg.max_retries:
                 logger.warning(f"[pov_submit] no minute data after {cfg.max_retries} retries, aborting")
