@@ -1358,8 +1358,11 @@ def pre_trade_checks(
     balance: float,
     regime_ok: bool
 ) -> bool:
+    # 1) PDT guard: skip if you’ve hit 3 day-trades in 5 b-days and equity < $25k
     if check_pdt_rule(ctx):
         return False
+
+    # 2) your existing guards…
     if check_halt_flag():
         logger.info(f"[SKIP] HALT_FLAG – {symbol}")
         return False
@@ -1378,6 +1381,7 @@ def pre_trade_checks(
     if too_correlated(symbol):
         logger.info(f"[SKIP] Correlation – {symbol}")
         return False
+
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
 
 def should_enter(
