@@ -1077,12 +1077,12 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     except APIError as e:
         msg = str(e).lower()
 
-        # Skip entirely on any buying-power exhaustion
+        # 1) Skip entirely on any buying-power exhaustion
         if "insufficient buying power" in msg or "insufficient day trading buying power" in msg:
             logger.warning(f"[submit_order] insufficient buying power for {symbol}; skipping order")
             return None
 
-        # Partial-fill fallback for “requested X, available Y”
+        # 2) Partial-fill fallback for “requested X, available Y”
         m = re.search(r"requested: (\d+), available: (\d+)", msg)
         if m and int(m.group(2)) > 0:
             available = int(m.group(2))
@@ -1097,7 +1097,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             orders_total.inc()
             return None
 
-        # Wash-trade fallback: switch to a bracket limit order to avoid wash rules
+        # 3) Wash-trade fallback: switch to a bracket limit order
         if "potential wash trade" in msg:
             logger.warning(f"[submit_order] wash-trade error for {symbol}; using bracket order fallback")
             tp_price = expected_price * 1.02
@@ -1110,7 +1110,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                 time_in_force="gtc",
                 order_class="bracket",
                 take_profit={"limit_price": tp_price},
-                stop_loss={"stop_price": sl_price}
+                stop_loss={"stop_price": sl_price},
             )
             logger.info(
                 f"[submit_order] placed bracket order for {symbol} @ limit {expected_price:.2f}; "
@@ -1119,7 +1119,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             orders_total.inc()
             return bracket
 
-        # Other Alpaca API errors bubble up
+        # 4) Other Alpaca API errors bubble up
         logger.warning(f"[submit_order] APIError for {symbol}: {e}")
         raise
 
@@ -1725,9 +1725,9 @@ def _safe_trade(
     except APIError as e:
         msg = str(e).lower()
 
-        # skip entirely if no buying power
-        if "insufficient buying power" in msg:
-            logger.warning(f"[trade_logic] insufficient buying power for {symbol}; skipping")
+        # on buying-power exhaustion or wash-trade, just skip
+        if "insufficient buying power" in msg or "potential wash trade" in msg:
+            logger.warning(f"[trade_logic] skipping {symbol} due to APIError: {e}")
         else:
             logger.exception(f"[trade_logic] APIError for {symbol}: {e}")
 
