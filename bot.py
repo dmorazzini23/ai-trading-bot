@@ -1495,18 +1495,16 @@ def trade_logic(ctx, symbol, model, feature_names, target_weight):
     target_weight: 0.05 for 5%
     """
 
-    # 1) Throttle your event calls, but stub them out if not available
-    if not _can_fetch_events(symbol):
-        logger.info(f"[Events] throttled for {symbol}; skipping events.")
-        events = []
-    else:
-        events = []  # ctx.api.get_events no longer exists
+    # 1) events are no longer supported via REST, so just stub out
+    #    (you can hook this back up when you have your own events store)
+    events = []  
 
-    # 2) Pull price & guard via get_last_trade()
+    # 2) Pull price & guard via get_bars()
     try:
-        last_trade = ctx.api.get_last_trade(symbol)
-        price = float(last_trade.price)
-    except (APIError, AttributeError):
+        bars = ctx.api.get_bars(symbol, TimeFrame.Minute, limit=1)
+        bar = bars[0]
+        price = float(bar.c)
+    except Exception:
         price = None
 
     if price is None or price <= 0:
@@ -1520,7 +1518,7 @@ def trade_logic(ctx, symbol, model, feature_names, target_weight):
         logger.info(f"[ENTRY] no cash left, skipping {symbol}")
         return
 
-    # 4) Prevent over-pyramiding: compute how many shares you *still* need
+    # 4) Prevent over-pyramiding
     equity = float(acct.equity)
     position = 0.0
     try:
@@ -1531,7 +1529,7 @@ def trade_logic(ctx, symbol, model, feature_names, target_weight):
 
     target_dollars = equity * target_weight
     to_invest = target_dollars - position
-    if to_invest <= price:   # not enough to buy a share
+    if to_invest <= price:   # not enough to buy one share
         logger.info(f"[ENTRY] position for {symbol} at/above target, skipping.")
         return
 
@@ -1540,7 +1538,7 @@ def trade_logic(ctx, symbol, model, feature_names, target_weight):
     # 5) Build your feature‐matrix with correct column names
     raw_feats = ctx.signal_extractor.extract(symbol)  # returns a dict or list
     df = pd.DataFrame([raw_feats])
-    df = df[feature_names]  # re-order & drop any extras
+    df = df[feature_names]  # reorder & drop extras
     sig = model.predict(df)[0]
 
     # finally, place your order
