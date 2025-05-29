@@ -1533,10 +1533,16 @@ def trade_logic(ctx, symbol, model, feature_names, target_weight):
 
     qty = int(to_invest // price)
 
-    # 5) Build your feature‐matrix
-    raw_feats = ctx.signal_extractor.extract(symbol)
-    df = pd.DataFrame([raw_feats])[feature_names]
-    sig = model.predict(df)[0]
+    # 5) Build your feature‐matrix from intraday bars
+    minute_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+    feat_df   = prepare_indicators(minute_df, freq="intraday")
+    if feat_df.empty:
+        logger.warning(f"[FEATURES] insufficient indicator data for {symbol}, skipping.")
+        return
+
+    # grab the most recent row and reorder/drop to match model.feature_names_in_
+    X = feat_df[feature_names].tail(1)
+    sig = model.predict(X)[0]
 
     # finally, place your order
     if sig > 0:
