@@ -1486,73 +1486,111 @@ def _can_fetch_events(symbol):
     _LAST_EVENT_TS[symbol] = now
     return True
 
-def trade_logic(ctx, symbol, model, feature_names, target_weight):
+def _safe_trade(
+    ctx: BotContext,
+    symbol: str,
+    balance: float,
+    model: RandomForestClassifier,
+    regime_ok: bool
+) -> None:
+    try:
+        trade_logic(ctx, symbol, balance, model, regime_ok)
+    except APIError as e:
+        msg = str(e).lower()
+        if "insufficient buying power" in msg or "potential wash trade" in msg:
+            logger.warning(f"[trade_logic] skipping {symbol} due to APIError: {e}")
+        else:
+            logger.exception(f"[trade_logic] APIError for {symbol}: {e}")
+    except Exception:
+        logger.exception(f"[trade_logic] unhandled exception for {symbol}")
+
+
+def trade_logic(
+    ctx: BotContext,
+    symbol: str,
+    balance: float,
+    model: RandomForestClassifier,
+    regime_ok: bool
+) -> None:
     """
-    ctx          : your Alpaca context
-    symbol       : e.g. "AAPL"
-    model        : your trained RandomForestClassifier
-    feature_names: list(model.feature_names_in_)
-    target_weight: 0.05 for 5%
+    ctx        : your Alpaca context
+    symbol     : e.g. "AAPL"
+    balance    : current cash
+    model      : your trained RandomForestClassifier
+    regime_ok  : whether we’re in a favorable market regime
     """
 
-    # 1) stub out events (no get_events in REST v2)
-    events = []
-
-    # 2) Pull price & guard via get_bars()
+    # 1) Pull the latest price
     try:
         bars = ctx.api.get_bars(symbol, TimeFrame.Minute, limit=1)
         price = float(bars[0].c)
     except Exception:
-        price = None
-
-    if price is None or price <= 0:
         logger.warning(f"[PRICE] no valid price for {symbol}, skipping.")
         return
-
-    # 3) Use buying_power (margin) in paper accounts
-    acct = ctx.api.get_account()
-    buying_pw = float(acct.buying_power)
-    if buying_pw <= 0:
-        logger.info(f"[ENTRY] no buying power left, skipping {symbol}")
+    if price <= 0:
         return
 
-    # 4) Prevent over-pyramiding
-    equity = float(acct.equity)
-    position = 0.0
+    # 2) Buying power guard
+    acct = ctx.api.get_account()
+    if float(acct.buying_power) <= 0:
+        return
+
+    # 3) Regime / PDT / loss / correlation / position‐limit checks...
+    if not regime_ok:
+        logger.info(f"[SKIP] Market regime bad – {symbol}")
+        return
+    if check_pdt_rule(ctx):
+        return
+    if check_daily_loss():
+        return
+    if too_many_positions():
+        return
+    if too_correlated(symbol):
+        return
+    if check_halt_flag():
+        return
+    if not in_trading_hours(pd.Timestamp.utcnow()):
+        return
+
+    # 4) Determine target weight & size
+    target_weight = ctx.portfolio_weights.get(symbol, 0)
+    target_dollars = float(acct.equity) * target_weight
     try:
         pos = ctx.api.get_position(symbol)
-        position = float(pos.market_value)
+        current_value = float(pos.market_value)
     except APIError:
-        pass
-
-    target_dollars = equity * target_weight
-    to_invest = target_dollars - position
+        current_value = 0.0
+    to_invest = target_dollars - current_value
     if to_invest <= price:
-        logger.info(f"[ENTRY] position for {symbol} at/above target, skipping.")
+        logger.info(f"[ENTRY] {symbol} already at/above target weight, skipping.")
         return
-
     qty = int(to_invest // price)
 
-    # 5) Build your feature‐matrix from intraday bars
+    # 5) Build your feature matrix from intraday bars
     minute_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
     feat_df   = prepare_indicators(minute_df, freq="intraday")
     if feat_df.empty:
-        logger.warning(f"[FEATURES] insufficient indicator data for {symbol}, skipping.")
+        logger.info(f"[SKIP] insufficient intraday history for {symbol}")
         return
 
-    # grab the most recent row and reorder/drop to match model.feature_names_in_
-    X = feat_df[feature_names].tail(1)
-    sig = model.predict(X)[0]
+    # 6) Pull out exactly the columns your model was trained on
+    feature_names = list(model.feature_names_in_)
+    try:
+        X = feat_df[feature_names].tail(1)
+    except KeyError as e:
+        logger.error(f"[FEATURES] missing columns for {symbol}: {e}")
+        return
 
-    # finally, place your order
+    # 7) Predict and place the trade
+    sig = model.predict(X)[0]
     if sig > 0:
-        logger.info(f"[ENTRY] Market BUY {qty} {symbol}")
+        logger.info(f"[ENTRY] BUY {qty} {symbol}")
         ctx.api.submit_order(symbol, qty, 'buy', 'market', 'day')
     elif sig < 0:
-        logger.info(f"[ENTRY] Market SELL {qty} {symbol}")
+        logger.info(f"[ENTRY] SELL {qty} {symbol}")
         ctx.api.submit_order(symbol, qty, 'sell', 'market', 'day')
     else:
-        logger.info(f"[SKIP] {symbol} no/low signal ({sig})")
+        logger.info(f"[SKIP] {symbol} no signal ({sig})")
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """
