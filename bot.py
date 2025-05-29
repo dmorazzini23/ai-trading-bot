@@ -1494,7 +1494,7 @@ def trade_logic(ctx, symbol, model, feature_names, target_weight):
     feature_names: list(model.feature_names_in_)
     target_weight: 0.05 for 5%
     """
-    logger = ctx.logger
+    logger = logger
 
     # 1) Throttle your event calls
     if not _can_fetch_events(symbol):
