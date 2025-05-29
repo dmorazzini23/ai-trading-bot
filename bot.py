@@ -1495,19 +1495,18 @@ def trade_logic(ctx, symbol, model, feature_names, target_weight):
     target_weight: 0.05 for 5%
     """
 
-    # 1) Throttle your event calls, but stub out events entirely
+    # 1) Throttle your event calls, but stub them out if not available
     if not _can_fetch_events(symbol):
         logger.info(f"[Events] throttled for {symbol}; skipping events.")
         events = []
     else:
-        # no events endpoint in this context—just skip
-        events = []
+        events = []  # ctx.api.get_events no longer exists
 
-    # 2) Pull price & guard
+    # 2) Pull price & guard via get_last_trade()
     try:
-        bar = ctx.api.get_barset(symbol, 'minute', 1)[symbol][0]
-        price = bar.c  # or .vwap, etc.
-    except (IndexError, APIError):
+        last_trade = ctx.api.get_last_trade(symbol)
+        price = float(last_trade.price)
+    except (APIError, AttributeError):
         price = None
 
     if price is None or price <= 0:
@@ -1542,7 +1541,6 @@ def trade_logic(ctx, symbol, model, feature_names, target_weight):
     raw_feats = ctx.signal_extractor.extract(symbol)  # returns a dict or list
     df = pd.DataFrame([raw_feats])
     df = df[feature_names]  # re-order & drop any extras
-    # now model.predict(df) won’t warn you about missing names
     sig = model.predict(df)[0]
 
     # finally, place your order
