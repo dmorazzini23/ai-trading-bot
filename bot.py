@@ -165,8 +165,8 @@ POV_SLICE_PCT            = float(os.getenv("POV_SLICE_PCT", "0.05"))
 DAILY_LOSS_LIMIT         = params["DAILY_LOSS_LIMIT"]
 MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD    = 0.60
-MARKET_OPEN              = dt_time(0, 0)
-MARKET_CLOSE             = dt_time(23, 59)
+MARKET_OPEN              = dt_time(6, 30)
+MARKET_CLOSE             = dt_time(13, 0)
 VOLUME_THRESHOLD         = int(os.getenv("VOLUME_THRESHOLD", "50000"))
 ENTRY_START_OFFSET       = timedelta(minutes=30)
 ENTRY_END_OFFSET         = timedelta(minutes=15)
@@ -1324,6 +1324,10 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
       * Elif qty > SLICE_THRESHOLD → VWAP-pegged slicing
       * Else → simple market
     """
+    buying_pw = float(ctx.api.get_account().buying_power)
+    if buying_pw <= 0:
+        logger.info(f"[ENTRY] no buying power left, skipping {symbol}")
+        return
     if qty <= 0:
         logger.warning(f"[ENTRY] zero quantity for {symbol}, skipping")
         return
