@@ -1495,15 +1495,13 @@ def trade_logic(ctx, symbol, model, feature_names, target_weight):
     target_weight: 0.05 for 5%
     """
 
-    # 1) events are no longer supported via REST, so just stub out
-    #    (you can hook this back up when you have your own events store)
-    events = []  
+    # 1) stub out events (no get_events in REST v2)
+    events = []
 
     # 2) Pull price & guard via get_bars()
     try:
         bars = ctx.api.get_bars(symbol, TimeFrame.Minute, limit=1)
-        bar = bars[0]
-        price = float(bar.c)
+        price = float(bars[0].c)
     except Exception:
         price = None
 
@@ -1511,11 +1509,11 @@ def trade_logic(ctx, symbol, model, feature_names, target_weight):
         logger.warning(f"[PRICE] no valid price for {symbol}, skipping.")
         return
 
-    # 3) Use cash instead of margin in paper accounts
+    # 3) Use buying_power (margin) in paper accounts
     acct = ctx.api.get_account()
-    cash = float(acct.cash)
-    if cash <= 0:
-        logger.info(f"[ENTRY] no cash left, skipping {symbol}")
+    buying_pw = float(acct.buying_power)
+    if buying_pw <= 0:
+        logger.info(f"[ENTRY] no buying power left, skipping {symbol}")
         return
 
     # 4) Prevent over-pyramiding
@@ -1529,16 +1527,15 @@ def trade_logic(ctx, symbol, model, feature_names, target_weight):
 
     target_dollars = equity * target_weight
     to_invest = target_dollars - position
-    if to_invest <= price:   # not enough to buy one share
+    if to_invest <= price:
         logger.info(f"[ENTRY] position for {symbol} at/above target, skipping.")
         return
 
     qty = int(to_invest // price)
 
-    # 5) Build your feature‐matrix with correct column names
-    raw_feats = ctx.signal_extractor.extract(symbol)  # returns a dict or list
-    df = pd.DataFrame([raw_feats])
-    df = df[feature_names]  # reorder & drop extras
+    # 5) Build your feature‐matrix
+    raw_feats = ctx.signal_extractor.extract(symbol)
+    df = pd.DataFrame([raw_feats])[feature_names]
     sig = model.predict(df)[0]
 
     # finally, place your order
