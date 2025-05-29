@@ -1514,87 +1514,55 @@ def _safe_trade(
     except Exception:
         logger.exception(f"[trade_logic] unhandled exception for {symbol}")
 
-def trade_logic(
-    ctx: BotContext,
-    symbol: str,
-    balance: float,
-    model: RandomForestClassifier,
-    regime_ok: bool
-) -> None:
-    
-    # 1) compute the signal
-    sig = model.predict(X)[0]
-    logger.debug(f"[SIGNAL] {symbol}: {sig}")
+def trade_logic(ctx, symbol, balance, model, regime_ok):
+    # 1. get your feature DataFrame for this symbol
+    feat_df = ctx.feature_df[symbol]            # ← adjust to whatever you're using
 
-    # 2) grab the actual last price from your raw bars, not feat_df
-    raw_df = ctx.raw_bars[symbol]             # ← adjust this to your raw-bars variable
-    current_price = raw_df['close'].iloc[-1]  # ← now 'close' will exist
-
-    # 3) compute target quantity
-    target_weight = ctx.portfolio.get(symbol, 0.0)
-    qty = int(balance * target_weight / current_price)
-
-    # 4) send the order (or skip)
-    if sig > 0:
-        if qty > 0:
-            logger.info(f"[ENTRY] BUY {qty} {symbol}")
-            ctx.api.submit_order(symbol, qty, 'buy', 'market', 'day')
-        else:
-            logger.info(f"[SKIP] {symbol} qty=0")
-    elif sig < 0:
-        if qty > 0:
-            logger.info(f"[ENTRY] SELL {qty} {symbol}")
-            ctx.api.submit_order(symbol, qty, 'sell', 'market', 'day')
-        else:
-            logger.info(f"[SKIP] {symbol} qty=0")
-    else:
-        logger.info(f"[SKIP] {symbol} no signal ({sig})")
-
-    # 5) Build your feature matrix from intraday bars
-    minute_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
-    feat_df   = prepare_indicators(minute_df, freq="intraday")
-    if feat_df.empty:
-        logger.info(f"[SKIP] insufficient intraday history for {symbol}")
-        return
-
-    # 6) Figure out exactly which columns to feed the model
+    # 2. figure out which columns to use
     if hasattr(model, "feature_names_in_"):
         feature_names = list(model.feature_names_in_)
     else:
-        # fallback to your known intraday indicator set
-        feature_names = INTRADAY_FEATURES.copy()
-        # if you trained a 6-feature fallback model, truncate:
-        feature_names = feature_names[: getattr(model, "n_features_in_", len(feature_names))]
+        feature_names = [                          # ← manually list your trained-on features
+            "feat1", "feat2", "feat3",  # etc…
+        ]
 
-    # 7) Safely select them and predict
-    try:
-        X = feat_df[feature_names].tail(1)
-    except KeyError as e:
-        logger.error(f"[FEATURES] missing columns for {symbol}: {e}")
+    # 3. bail out early if we don't have any data or we're missing columns
+    if feat_df.empty:
+        logger.info(f"[SKIP] {symbol} no feature data")
         return
 
+    missing = [f for f in feature_names if f not in feat_df.columns]
+    if missing:
+        logger.info(f"[SKIP] {symbol} missing features: {missing}")
+        return
+
+    # 4. build your feature vector
+    X = feat_df[feature_names].tail(1)
+
+    # 5. predict the signal
     sig = model.predict(X)[0]
+    logger.debug(f"[SIGNAL] {symbol}: {sig}")
 
-    if sig > 0:
-        # compute how many shares to trade
-        current_price = feat_df['close'].iloc[-1]
-        target_weight = ctx.portfolio.get(symbol, 0.0)
-        qty = int(balance * target_weight / current_price)
+    # 6. grab the last close from your raw-bars DataFrame
+    raw_df = ctx.raw_bars[symbol]                # ← adjust to match your raw data var
+    if "close" not in raw_df.columns:
+        logger.info(f"[SKIP] {symbol} no close price available")
+        return
+    current_price = raw_df["close"].iloc[-1]
 
+    # 7. compute how many shares to trade
+    target_weight = ctx.portfolio.get(symbol, 0.0)
+    qty = int(balance * target_weight / current_price)
+
+    # 8. send the order (or skip)
+    if sig > 0 and qty > 0:
         logger.info(f"[ENTRY] BUY {qty} {symbol}")
-        ctx.api.submit_order(symbol, qty, 'buy', 'market', 'day')
-
-    elif sig < 0:
-        # compute how many shares to trade
-        current_price = feat_df['close'].iloc[-1]
-        target_weight = ctx.portfolio.get(symbol, 0.0)
-        qty = int(balance * target_weight / current_price)
-
+        ctx.api.submit_order(symbol, qty, "buy", "market", "day")
+    elif sig < 0 and qty > 0:
         logger.info(f"[ENTRY] SELL {qty} {symbol}")
-        ctx.api.submit_order(symbol, qty, 'sell', 'market', 'day')
-
+        ctx.api.submit_order(symbol, qty, "sell", "market", "day")
     else:
-        logger.info(f"[SKIP] {symbol} no signal ({sig})")
+        logger.info(f"[SKIP] {symbol} no action (sig={sig}, qty={qty})")
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """
