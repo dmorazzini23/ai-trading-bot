@@ -1548,26 +1548,26 @@ def trade_logic(
 
     sig = model.predict(X)[0]
 
-if sig > 0:
-    # compute how many shares to trade
-    current_price = feat_df['close'].iloc[-1]
-    target_weight = ctx.portfolio.get(symbol, 0.0)
-    qty = int(balance * target_weight / current_price)
+    if sig > 0:
+        # compute how many shares to trade
+        current_price = feat_df['close'].iloc[-1]
+        target_weight = ctx.portfolio.get(symbol, 0.0)
+        qty = int(balance * target_weight / current_price)
 
-    logger.info(f"[ENTRY] BUY {qty} {symbol}")
-    ctx.api.submit_order(symbol, qty, 'buy', 'market', 'day')
+        logger.info(f"[ENTRY] BUY {qty} {symbol}")
+        ctx.api.submit_order(symbol, qty, 'buy', 'market', 'day')
 
-elif sig < 0:
-    # compute how many shares to trade
-    current_price = feat_df['close'].iloc[-1]
-    target_weight = ctx.portfolio.get(symbol, 0.0)
-    qty = int(balance * target_weight / current_price)
+    elif sig < 0:
+        # compute how many shares to trade
+        current_price = feat_df['close'].iloc[-1]
+        target_weight = ctx.portfolio.get(symbol, 0.0)
+        qty = int(balance * target_weight / current_price)
 
-    logger.info(f"[ENTRY] SELL {qty} {symbol}")
-    ctx.api.submit_order(symbol, qty, 'sell', 'market', 'day')
+        logger.info(f"[ENTRY] SELL {qty} {symbol}")
+        ctx.api.submit_order(symbol, qty, 'sell', 'market', 'day')
 
-else:
-    logger.info(f"[SKIP] {symbol} no signal ({sig})")
+    else:
+        logger.info(f"[SKIP] {symbol} no signal ({sig})")
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """
