@@ -1771,44 +1771,58 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").set_index("Date")
 
-    # compute core TA indicators (expects uppercase OHLCV columns)
-    df["vwap"]  = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
-    df["rsi"]   = ta.rsi(df["Close"], length=14)
-    df["atr"]   = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-    macd       = ta.macd(df["Close"], fast=12, slow=26, signal=9)
-    df["macd"]  = macd["MACD_12_26_9"]
-    df["macds"] = macd["MACDs_12_26_9"]
+    # --- CORE TA INDICATORS ---
+    # VWAP, RSI, ATR
+    df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
+    df["rsi"]  = ta.rsi(df["Close"], length=14)
+    df["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
 
-    if freq == "daily":
-        df["sma_50"]  = ta.sma(df["Close"], length=50)
-        df["sma_200"] = ta.sma(df["Close"], length=200)
+    # MACD may occasionally return None
+    try:
+        macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
+        # if it didn’t return a proper DataFrame, force a failure
+        if macd is None or not isinstance(macd, pd.DataFrame):
+            raise ValueError("MACD returned None")
+        df["macd"]  = macd["MACD_12_26_9"]
+        df["macds"] = macd["MACDs_12_26_9"]
+    except Exception:
+        df["macd"]  = np.nan
+        df["macds"] = np.nan
 
     # Ichimoku
-    ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
-    conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:,0]
-    base = ich[1] if isinstance(ich, tuple) else ich.iloc[:,1]
-    df["ichimoku_conv"] = conv.iloc[:,0] if isinstance(conv, pd.DataFrame) else conv
-    df["ichimoku_base"] = base.iloc[:,0] if isinstance(base, pd.DataFrame) else base
+    try:
+        ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
+        # ich returns a tuple or a DataFrame; handle both
+        conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
+        base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
+        df["ichimoku_conv"] = conv.iloc[:, 0] if hasattr(conv, "iloc") else conv
+        df["ichimoku_base"] = base.iloc[:, 0] if hasattr(base, "iloc") else base
+    except Exception:
+        df["ichimoku_conv"] = np.nan
+        df["ichimoku_base"] = np.nan
 
     # StochRSI
-    st = ta.stochrsi(df["Close"])
-    df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
+    try:
+        st = ta.stochrsi(df["Close"])
+        df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
+    except Exception:
+        df["stochrsi"] = np.nan
 
     # fill-forward/backward to smooth
     df.ffill(inplace=True)
     df.bfill(inplace=True)
 
-    # drop rules: require *all* for daily, but only fully-NaN for intraday
-    required = ["vwap", "rsi", "atr", "ichimoku_conv",
-                "ichimoku_base", "stochrsi", "macd", "macds"]
-
+    # now drop rows without any of our required indicators
+    required = ["vwap","rsi","atr","macd","macds","ichimoku_conv","ichimoku_base","stochrsi"]
     if freq == "daily":
-        required += ["sma_50", "sma_200"]
+        # also require SMAs on daily bars
+        df["sma_50"]  = ta.sma(df["Close"], length=50)
+        df["sma_200"] = ta.sma(df["Close"], length=200)
+        required += ["sma_50","sma_200"]
         df.dropna(subset=required, how="any", inplace=True)
-        # KEEP the DateTimeIndex for daily data!
     else:
+        # intraday: be more forgiving—only drop rows where *all* are missing
         df.dropna(subset=required, how="all", inplace=True)
-        # intraday: drop the index timestamps
         df.reset_index(drop=True, inplace=True)
 
     return df
