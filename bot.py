@@ -1495,12 +1495,13 @@ def trade_logic(ctx, symbol, model, feature_names, target_weight):
     target_weight: 0.05 for 5%
     """
 
-    # 1) Throttle your event calls
+    # 1) Throttle your event calls, but stub out events entirely
     if not _can_fetch_events(symbol):
         logger.info(f"[Events] throttled for {symbol}; skipping events.")
+        events = []
     else:
-        events = ctx.api.get_events(symbol)
-        # …process events…
+        # no events endpoint in this context—just skip
+        events = []
 
     # 2) Pull price & guard
     try:
