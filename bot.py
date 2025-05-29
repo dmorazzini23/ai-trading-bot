@@ -1474,82 +1474,86 @@ def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple
         return True, abs(pos), "trailing_stop"
     return False,0,""
 
-def trade_logic(
-    ctx: BotContext,
-    symbol: str,
-    balance: float,
-    model,
-    regime_ok: bool
-) -> None:
-    logger.info(f"→ trade_logic start for {symbol}")
+# at top‐level, to enforce a 15s cooldown per symbol for events:
+_LAST_EVENT_TS = {}
+EVENT_COOLDOWN = 15.0  # seconds
 
-    # 0) event‐driven skip
-    if is_near_event(symbol):
-        logger.info(f"[SKIP] earnings/event window for {symbol}")
-        return
+def _can_fetch_events(symbol):
+    now = time.time()
+    last = _LAST_EVENT_TS.get(symbol, 0)
+    if now - last < EVENT_COOLDOWN:
+        return False
+    _LAST_EVENT_TS[symbol] = now
+    return True
 
-    # 1) pair‐trade override
-    for (s1, s2) in your_cointegrated_pairs:
-        if symbol in (s1, s2):
-            strat, sz = pair_trade_signal(s1, s2)
-            if sz > 0:
-                side = "buy" if strat == "long_spread" else "sell"
-                execute_entry(ctx, symbol, sz, side)
-            return
+def trade_logic(ctx, symbol, model, feature_names, target_weight):
+    """
+    ctx          : your Alpaca context
+    symbol       : e.g. "AAPL"
+    model        : your trained RandomForestClassifier
+    feature_names: list(model.feature_names_in_)
+    target_weight: 0.05 for 5%
+    """
+    logger = ctx.logger
 
-    # 2) early‐exit if we shouldn’t even be trying
-    if not should_enter(ctx, symbol, balance, regime_ok):
-        return
+    # 1) Throttle your event calls
+    if not _can_fetch_events(symbol):
+        logger.info(f"[Events] throttled for {symbol}; skipping events.")
+    else:
+        events = ctx.api.get_events(symbol)
+        # …process events…
 
-    # 3) fetch minute bars
-    raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
-    if raw is None or raw.empty:
-        logger.info(f"[SKIP] no minute data for {symbol}")
-        return
-
-    # 4) compute intraday indicators
-    df = prepare_indicators(raw, freq="intraday")
-    if df.empty:
-        logger.info(f"[SKIP] not enough indicator data for {symbol}")
-        return
-
-    # 5) signal + confirmation
-    sig, conf, _ = signal_and_confirm(ctx, symbol, df, model)
-    if sig == -1:
-        return
-
-    # 6) decide exit first (stop‐loss / take‐profit / trailing), **and** maybe pyramid
-    price, atr = df["Close"].iloc[-1], df["atr"].iloc[-1]
-
-    # ─── NEW PYRAMIDING BLOCK ───────────────────────────────────────────────
+    # 2) Pull price & guard
     try:
-        pos = int(ctx.api.get_position(symbol).qty)
-    except Exception:
-        pos = 0
-    if pos > 0:
-        # approximate your entry price from your stored take‐profit and ATR factor
-        entry_price = ctx.take_profit_targets.get(symbol, 0) - TAKE_PROFIT_FACTOR * atr
-        maybe_pyramid(ctx, symbol, entry_price, price, atr)
-    # ────────────────────────────────────────────────────────────────────────
+        bar = ctx.api.get_barset(symbol, 'minute', 1)[symbol][0]
+        price = bar.c  # or .vwap, etc.
+    except (IndexError, APIError):
+        price = None
 
-    do_exit, qty, _ = should_exit(ctx, symbol, price, atr)
-    if do_exit:
-        execute_exit(ctx, symbol, qty)
+    if price is None or price <= 0:
+        logger.warning(f"[PRICE] no valid price for {symbol}, skipping.")
         return
 
-    # 7) size & entry
-    size = calculate_entry_size(ctx, symbol, price, atr, conf)
-    if size > 0:
-        try:
-            pos = int(ctx.api.get_position(symbol).qty)
-        except Exception:
-            pos = 0
-        execute_entry(
-            ctx,
-            symbol,
-            size + abs(pos),
-            "buy" if sig == 1 else "sell"
-        )
+    # 3) Use cash instead of margin in paper accounts
+    acct = ctx.api.get_account()
+    cash = float(acct.cash)
+    if cash <= 0:
+        logger.info(f"[ENTRY] no cash left, skipping {symbol}")
+        return
+
+    # 4) Prevent over-pyramiding: compute how many shares you *still* need
+    equity = float(acct.equity)
+    position = 0.0
+    try:
+        pos = ctx.api.get_position(symbol)
+        position = float(pos.market_value)
+    except APIError:
+        pass
+
+    target_dollars = equity * target_weight
+    to_invest = target_dollars - position
+    if to_invest <= price:   # not enough to buy a share
+        logger.info(f"[ENTRY] position for {symbol} at/above target, skipping.")
+        return
+
+    qty = int(to_invest // price)
+
+    # 5) Build your feature‐matrix with correct column names
+    raw_feats = ctx.signal_extractor.extract(symbol)  # returns a dict or list
+    df = pd.DataFrame([raw_feats])
+    df = df[feature_names]  # re-order & drop any extras
+    # now model.predict(df) won’t warn you about missing names
+    sig = model.predict(df)[0]
+
+    # finally, place your order
+    if sig > 0:
+        logger.info(f"[ENTRY] Market BUY {qty} {symbol}")
+        ctx.api.submit_order(symbol, qty, 'buy', 'market', 'day')
+    elif sig < 0:
+        logger.info(f"[ENTRY] Market SELL {qty} {symbol}")
+        ctx.api.submit_order(symbol, qty, 'sell', 'market', 'day')
+    else:
+        logger.info(f"[SKIP] {symbol} no/low signal ({sig})")
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """
