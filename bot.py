@@ -1055,6 +1055,8 @@ def vol_target_position_size(cash: float,
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
     """
     Place a market order, then verify fill price against latest quote.
+    Falls back to partial fill on availability errors,
+    and to a bracket limit order on wash-trade errors.
     """
     # fetch the best bid/ask just before sending
     quote = ctx.api.get_latest_quote(symbol)
@@ -1094,6 +1096,29 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             logger.info(f"[submit_order] only {available} {symbol} available; placed partial fill")
             orders_total.inc()
             return None
+
+        # Wash-trade fallback: switch to a bracket limit order to avoid wash rules
+        if "potential wash trade" in msg:
+            logger.warning(f"[submit_order] wash-trade error for {symbol}; using bracket order fallback")
+            # use expected_price as our limit, with TP/SL offsets
+            tp_price = expected_price * 1.02
+            sl_price = expected_price * 0.98
+            bracket = ctx.api.submit_order(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                type="limit",
+                time_in_force="gtc",
+                order_class="bracket",
+                take_profit={"limit_price": tp_price},
+                stop_loss={"stop_price": sl_price}
+            )
+            logger.info(
+                f"[submit_order] placed bracket order for {symbol} @ limit {expected_price:.2f}; "
+                f"TP @ {tp_price:.2f}, SL @ {sl_price:.2f}"
+            )
+            orders_total.inc()
+            return bracket
 
         # Other Alpaca API errors bubble up
         logger.warning(f"[submit_order] APIError for {symbol}: {e}")
