@@ -1100,7 +1100,6 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         # Wash-trade fallback: switch to a bracket limit order to avoid wash rules
         if "potential wash trade" in msg:
             logger.warning(f"[submit_order] wash-trade error for {symbol}; using bracket order fallback")
-            # use expected_price as our limit, with TP/SL offsets
             tp_price = expected_price * 1.02
             sl_price = expected_price * 0.98
             bracket = ctx.api.submit_order(
