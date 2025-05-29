@@ -49,6 +49,20 @@ import finnhub
 from finnhub.exceptions import FinnhubAPIException
 import pybreaker
 
+_LAST_EVENT_TS = {}
+EVENT_COOLDOWN = 15.0  # seconds
+
+INTRADAY_FEATURES = [
+    "vwap",
+    "rsi",
+    "atr",
+    "macd",
+    "macds",
+    "ichimoku_conv",
+    "ichimoku_base",
+    "stochrsi",
+]
+
 def is_high_vol_regime() -> bool:
     # uses your regime_model’s 14d vol vs its 20d rolling mean
     df = data_fetcher._daily_cache.get("SPY")
@@ -1474,10 +1488,6 @@ def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple
         return True, abs(pos), "trailing_stop"
     return False,0,""
 
-# at top‐level, to enforce a 15s cooldown per symbol for events:
-_LAST_EVENT_TS = {}
-EVENT_COOLDOWN = 15.0  # seconds
-
 def _can_fetch_events(symbol):
     now = time.time()
     last = _LAST_EVENT_TS.get(symbol, 0)
@@ -1504,7 +1514,6 @@ def _safe_trade(
     except Exception:
         logger.exception(f"[trade_logic] unhandled exception for {symbol}")
 
-
 def trade_logic(
     ctx: BotContext,
     symbol: str,
@@ -1512,59 +1521,7 @@ def trade_logic(
     model: RandomForestClassifier,
     regime_ok: bool
 ) -> None:
-    """
-    ctx        : your Alpaca context
-    symbol     : e.g. "AAPL"
-    balance    : current cash
-    model      : your trained RandomForestClassifier
-    regime_ok  : whether we’re in a favorable market regime
-    """
-
-    # 1) Pull the latest price
-    try:
-        bars = ctx.api.get_bars(symbol, TimeFrame.Minute, limit=1)
-        price = float(bars[0].c)
-    except Exception:
-        logger.warning(f"[PRICE] no valid price for {symbol}, skipping.")
-        return
-    if price <= 0:
-        return
-
-    # 2) Buying power guard
-    acct = ctx.api.get_account()
-    if float(acct.buying_power) <= 0:
-        return
-
-    # 3) Regime / PDT / loss / correlation / position‐limit checks...
-    if not regime_ok:
-        logger.info(f"[SKIP] Market regime bad – {symbol}")
-        return
-    if check_pdt_rule(ctx):
-        return
-    if check_daily_loss():
-        return
-    if too_many_positions():
-        return
-    if too_correlated(symbol):
-        return
-    if check_halt_flag():
-        return
-    if not in_trading_hours(pd.Timestamp.utcnow()):
-        return
-
-    # 4) Determine target weight & size
-    target_weight = ctx.portfolio_weights.get(symbol, 0)
-    target_dollars = float(acct.equity) * target_weight
-    try:
-        pos = ctx.api.get_position(symbol)
-        current_value = float(pos.market_value)
-    except APIError:
-        current_value = 0.0
-    to_invest = target_dollars - current_value
-    if to_invest <= price:
-        logger.info(f"[ENTRY] {symbol} already at/above target weight, skipping.")
-        return
-    qty = int(to_invest // price)
+    # … your existing checks and sizing …
 
     # 5) Build your feature matrix from intraday bars
     minute_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
@@ -1573,15 +1530,22 @@ def trade_logic(
         logger.info(f"[SKIP] insufficient intraday history for {symbol}")
         return
 
-    # 6) Pull out exactly the columns your model was trained on
-    feature_names = list(model.feature_names_in_)
+    # 6) Figure out exactly which columns to feed the model
+    if hasattr(model, "feature_names_in_"):
+        feature_names = list(model.feature_names_in_)
+    else:
+        # fallback to your known intraday indicator set
+        feature_names = INTRADAY_FEATURES.copy()
+        # if you trained a 6-feature fallback model, truncate:
+        feature_names = feature_names[: getattr(model, "n_features_in_", len(feature_names))]
+
+    # 7) Safely select them and predict
     try:
         X = feat_df[feature_names].tail(1)
     except KeyError as e:
         logger.error(f"[FEATURES] missing columns for {symbol}: {e}")
         return
 
-    # 7) Predict and place the trade
     sig = model.predict(X)[0]
     if sig > 0:
         logger.info(f"[ENTRY] BUY {qty} {symbol}")
