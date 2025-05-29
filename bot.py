@@ -1521,7 +1521,34 @@ def trade_logic(
     model: RandomForestClassifier,
     regime_ok: bool
 ) -> None:
-    # … your existing checks and sizing …
+    
+    # 1) compute the signal
+    sig = model.predict(X)[0]
+    logger.debug(f"[SIGNAL] {symbol}: {sig}")
+
+    # 2) grab the actual last price from your raw bars, not feat_df
+    raw_df = ctx.raw_bars[symbol]             # ← adjust this to your raw-bars variable
+    current_price = raw_df['close'].iloc[-1]  # ← now 'close' will exist
+
+    # 3) compute target quantity
+    target_weight = ctx.portfolio.get(symbol, 0.0)
+    qty = int(balance * target_weight / current_price)
+
+    # 4) send the order (or skip)
+    if sig > 0:
+        if qty > 0:
+            logger.info(f"[ENTRY] BUY {qty} {symbol}")
+            ctx.api.submit_order(symbol, qty, 'buy', 'market', 'day')
+        else:
+            logger.info(f"[SKIP] {symbol} qty=0")
+    elif sig < 0:
+        if qty > 0:
+            logger.info(f"[ENTRY] SELL {qty} {symbol}")
+            ctx.api.submit_order(symbol, qty, 'sell', 'market', 'day')
+        else:
+            logger.info(f"[SKIP] {symbol} qty=0")
+    else:
+        logger.info(f"[SKIP] {symbol} no signal ({sig})")
 
     # 5) Build your feature matrix from intraday bars
     minute_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
