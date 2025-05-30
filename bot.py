@@ -1514,53 +1514,52 @@ def _safe_trade(
     except Exception:
         logger.exception(f"[trade_logic] unhandled exception for {symbol}")
 
-def trade_logic(ctx, symbol, balance, model, regime_ok):
-    # 1. get your feature DataFrame for this symbol
-    feat_df = ctx.feature_df[symbol]            # ← adjust to whatever you're using
+def trade_logic(ctx, symbol: str, balance: float, model, regime_ok: bool) -> None:
+    # 1. Fetch raw minute bars
+    raw_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+    if raw_df is None or raw_df.empty:
+        logger.info(f"[SKIP] {symbol} no raw data")
+        return
 
-    # 2. figure out which columns to use
+    # 2. Compute intraday indicators
+    feat_df = prepare_indicators(raw_df, freq="intraday")
+    if feat_df.empty:
+        logger.info(f"[SKIP] {symbol} insufficient feature data")
+        return
+
+    # 3. Determine feature names
     if hasattr(model, "feature_names_in_"):
         feature_names = list(model.feature_names_in_)
     else:
-        feature_names = [                          # ← manually list your trained-on features
-            "feat1", "feat2", "feat3",  # etc…
+        feature_names = [  # manually list trained-on features
+            "rsi", "macd", "atr", "vwap", "macds", "ichimoku_conv", "ichimoku_base", "stochrsi"
         ]
 
-    # 3. bail out early if we don't have any data or we're missing columns
-    if feat_df.empty:
-        logger.info(f"[SKIP] {symbol} no feature data")
-        return
-
+    # 4. Check for missing features
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
         logger.info(f"[SKIP] {symbol} missing features: {missing}")
         return
 
-    # 4. build your feature vector
+    # 5. Build feature vector and predict
     X = feat_df[feature_names].tail(1)
-
-    # 5. predict the signal
     sig = model.predict(X)[0]
     logger.debug(f"[SIGNAL] {symbol}: {sig}")
 
-    # 6. grab the last close from your raw-bars DataFrame
-    raw_df = ctx.raw_bars[symbol]                # ← adjust to match your raw data var
-    if "close" not in raw_df.columns:
-        logger.info(f"[SKIP] {symbol} no close price available")
-        return
-    current_price = raw_df["close"].iloc[-1]
+    # 6. Grab last close price (uppercase)
+    current_price = raw_df["Close"].iloc[-1]
 
-    # 7. compute how many shares to trade
-    target_weight = ctx.portfolio.get(symbol, 0.0)
+    # 7. Compute quantity from portfolio_weights
+    target_weight = ctx.portfolio_weights.get(symbol, 0.0)
     qty = int(balance * target_weight / current_price)
 
-    # 8. send the order (or skip)
+    # 8. Send order
     if sig > 0 and qty > 0:
         logger.info(f"[ENTRY] BUY {qty} {symbol}")
-        ctx.api.submit_order(symbol, qty, "buy", "market", "day")
+        submit_order(ctx, symbol, qty, "buy")
     elif sig < 0 and qty > 0:
         logger.info(f"[ENTRY] SELL {qty} {symbol}")
-        ctx.api.submit_order(symbol, qty, "sell", "market", "day")
+        submit_order(ctx, symbol, qty, "sell")
     else:
         logger.info(f"[SKIP] {symbol} no action (sig={sig}, qty={qty})")
 
