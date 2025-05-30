@@ -1539,6 +1539,9 @@ def trade_logic(
     if sig == 0:
         logger.debug(f"[SKIP] {symbol} no signal (conf={conf:.2f})")
         return
+    # log raw score for extra visibility
+    # Note: you can grab `score` out of evaluate() if you return it,
+    # or recompute it here if you prefer. For now we’ll just reuse `conf`.
     logger.info(f"[SIGNAL] {symbol}: {sig} (conf={conf:.2f}, via {strat})")
 
     # 6) calculate target qty
@@ -1548,6 +1551,17 @@ def trade_logic(
     if raw_qty <= 0:
         logger.debug(f"[SKIP] {symbol} no action (sig={sig}, qty={raw_qty})")
         return
+
+    # ─── BUY THRESHOLD ────────────────────────────────────────────────────
+    # only enter new longs when our score meets BUY_THRESHOLD
+    if sig > 0 and conf >= BUY_THRESHOLD:
+        qty = raw_qty
+        logger.info(f"[THRESHOLD] {symbol}: conf={conf:.2f} ≥ {BUY_THRESHOLD:.2f} → BUY {qty}")
+        submit_order(ctx, symbol, qty, "buy")
+
+    else:
+        logger.debug(f"[SKIP BUY] {symbol}: conf={conf:.2f} < BUY_THRESHOLD ({BUY_THRESHOLD:.2f})")
+    return
 
     # 7) if it's a SELL, cap it by your actual position size
     if sig < 0:
@@ -2009,17 +2023,55 @@ def start_healthcheck() -> None:
         # catch “Address already in use” and just skip spinning up Flask
         logger.warning(f"Healthcheck port {port} in use: {e}. Skipping health-endpoint.")
 
+def initial_rebalance(ctx, symbols):
+    """
+    Buy an equal‐weight basket of `symbols` with all available cash.
+    """
+    account = ctx.api.get_account()
+    cash = float(account.cash)
+    n = len(symbols)
+    if n == 0 or cash <= 0:
+        return
+    per_symbol = cash / n
+    for sym in symbols:
+        # note: get_latest_quote returns .askprice or .ask_price depending on version
+        price = float(ctx.api.get_latest_quote(sym).askprice)
+        qty   = int(per_symbol // price)
+        if qty > 0:
+            logger.info(f"[REBALANCE] Buying {qty} {sym} @ ${price:.2f}")
+            ctx.api.submit_order(
+                symbol=sym,
+                qty=qty,
+                side="buy",
+                type="market",
+                time_in_force="day",
+            )
+
 if __name__ == "__main__":
     start_http_server(8000)
     if RUN_HEALTH:
         Thread(target=start_healthcheck, daemon=True).start()
+
+    # your daily exit & summary jobs
     schedule.every().day.at("00:30").do(daily_summary)
     schedule.every().day.at("15:45").do(exit_all_positions)
+
+    # load model & fire your first run
     model = load_model()
     logger.info("🚀 AI Trading Bot is live!")
+
+    # ─── INITIAL REBALANCE (runs once) ─────────────────────────────────
+    if not getattr(ctx, "_rebalance_done", False):
+        universe = load_tickers(TICKERS_FILE)
+        initial_rebalance(ctx, universe)
+        ctx._rebalance_done = True
+    # ────────────────────────────────────────────────────────────────────
+
+    # schedule your recurring jobs
     schedule.every(1).minutes.do(lambda: run_all_trades(model))
     schedule.every(6).hours.do(update_signal_weights)
 
+    # finally, enter your scheduler loop
     while True:
         schedule.run_pending()
         pytime.sleep(1)
