@@ -2,7 +2,7 @@
 import os
 import csv
 import re
-import time, random
+import time as pytime, random
 from datetime import datetime, date, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Dict, List, Any, Sequence
@@ -472,7 +472,7 @@ class SignalManager:
         self.mean_rev_zscore_threshold = 2.0
         self.regime_volatility_threshold = REGIME_ATR_THRESHOLD
 
-    def signal_momentum(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+    def signal_momentum(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
         if df is None or len(df) <= self.momentum_lookback:
             return -1, 0.0, 'momentum'
         try:
@@ -485,7 +485,7 @@ class SignalManager:
             logger.exception("Error in signal_momentum")
             return -1, 0.0, 'momentum'
 
-    def signal_mean_reversion(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+    def signal_mean_reversion(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
         if df is None or len(df) < self.mean_rev_lookback:
             return -1, 0.0, 'mean_reversion'
         try:
@@ -502,7 +502,7 @@ class SignalManager:
             logger.exception("Error in signal_mean_reversion")
             return -1, 0.0, 'mean_reversion'
 
-    def signal_stochrsi(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+    def signal_stochrsi(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
         if df is None or 'stochrsi' not in df or df['stochrsi'].dropna().empty:
             return -1, 0.0, 'stochrsi'
         try:
@@ -513,7 +513,7 @@ class SignalManager:
             logger.exception("Error in signal_stochrsi")
             return -1, 0.0, 'stochrsi'
 
-    def signal_obv(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+    def signal_obv(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
         if df is None or len(df) < 6:
             return -1, 0.0, 'obv'
         try:
@@ -528,7 +528,7 @@ class SignalManager:
             logger.exception("Error in signal_obv")
             return -1, 0.0, 'obv'
 
-    def signal_vsa(self, df: pd.DataFrame) -> Tuple[int, float, str]:
+    def signal_vsa(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
         if df is None or len(df) < 20:
             return -1, 0.0, 'vsa'
         try:
@@ -543,7 +543,7 @@ class SignalManager:
             logger.exception("Error in signal_vsa")
             return -1, 0.0, 'vsa'
 
-    def signal_ml(self, df: pd.DataFrame, model: Any) -> Tuple[int, float, str]:
+    def signal_ml(self, df: pd.DataFrame, model: Any=None) -> Tuple[int, float, str]:
         try:
             feat = ['rsi','macd','atr','vwap','sma_50','sma_200']
             X = df[feat].iloc[-1].values.reshape(1,-1)
@@ -554,12 +554,12 @@ class SignalManager:
         except Exception:
             return -1, 0.0, 'ml'
 
-    def signal_sentiment(self, ctx: BotContext, ticker: str) -> Tuple[int, float, str]:
+    def signal_sentiment(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
         score = fetch_sentiment(ctx, ticker)
         sig = 1 if score > 0 else 0 if score < 0 else -1
         return sig, abs(score), 'sentiment'
 
-    def signal_regime(self, ctx: BotContext) -> Tuple[int, float, str]:
+    def signal_regime(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
         ok = check_market_regime()
         sig = 1 if ok else 0
         return sig, 1.0, 'regime'
@@ -576,19 +576,19 @@ class SignalManager:
         weights = self.load_signal_weights()
 
         fns = [
-            self.signal_momentum,
-            self.signal_mean_reversion,
-            self.signal_ml,
-            lambda d: self.signal_sentiment(ctx, ticker),
-            lambda d: self.signal_regime(ctx),
-            self.signal_stochrsi,
-            self.signal_obv,
-            self.signal_vsa,
+            lambda d,m: self.signal_momentum(d,m),
+            lambda d,m: self.signal_mean_reversion(d,m),
+            lambda d,m: self.signal_ml(d,m),
+            lambda d,m: self.signal_sentiment(d,m),
+            lambda d,m: self.signal_regime(d,m),
+            lambda d,m: self.signal_stochrsi(d,m),
+            lambda d,m: self.signal_obv(d,m),
+            lambda d,m: self.signal_vsa(d,m),
         ]
 
         for fn in fns:
             try:
-                s, w, lab = fn(df, model) if fn == self.signal_ml else fn(df)
+                s, w, lab = fn(df, model)
                 if allowed_tags and lab not in allowed_tags:
                     continue
                 if s in (0, 1):
@@ -1531,22 +1531,28 @@ def trade_logic(ctx, symbol: str, balance: float, model, regime_ok: bool) -> Non
     if hasattr(model, "feature_names_in_"):
         feature_names = list(model.feature_names_in_)
     else:
-        feature_names = [  # manually list trained-on features
-            "rsi", "macd", "atr", "vwap", "macds", "ichimoku_conv", "ichimoku_base", "stochrsi"
+        # manually list your trained-on features
+        feature_names = [
+            "rsi", "macd", "atr", "vwap",
+            "macds", "ichimoku_conv", "ichimoku_base", "stochrsi"
         ]
 
     # 4. Check for missing features
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
-        logger.info(f"[SKIP] {symbol} missing features: {missing}")
+        logger.debug(f"[SKIP] {symbol} missing features: {missing}")
         return
 
-    # 5. Build feature vector and predict
-    X = feat_df[feature_names].tail(1)
-    sig = model.predict(X)[0]
+    # 5. Build feature vector and predict immediately
+    X = feat_df[feature_names].iloc[[-1]]
+    try:
+        sig = model.predict(X)[0]
+    except Exception as e:
+        logger.warning(f"[trade_logic] prediction failed for {symbol}: {e}")
+        return
     logger.debug(f"[SIGNAL] {symbol}: {sig}")
 
-    # 6. Grab last close price (uppercase)
+    # 6. Grab last close price (uppercase column names)
     current_price = raw_df["Close"].iloc[-1]
 
     # 7. Compute quantity from portfolio_weights
@@ -1561,7 +1567,7 @@ def trade_logic(ctx, symbol: str, balance: float, model, regime_ok: bool) -> Non
         logger.info(f"[ENTRY] SELL {qty} {symbol}")
         submit_order(ctx, symbol, qty, "sell")
     else:
-        logger.info(f"[SKIP] {symbol} no action (sig={sig}, qty={qty})")
+        logger.debug(f"[SKIP] {symbol} no action (sig={sig}, qty={qty})")
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """
@@ -2023,4 +2029,4 @@ if __name__ == "__main__":
             schedule.run_pending()
         except Exception as e:
             logger.exception(f"Scheduler loop error: {e}")
-        time.sleep(30)
+        pytime.sleep(30)
