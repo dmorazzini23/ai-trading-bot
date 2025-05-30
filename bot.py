@@ -21,7 +21,6 @@ from dataclasses import dataclass, field
 from threading import Semaphore, Lock, Thread
 from concurrent.futures import ThreadPoolExecutor
 from tenacity import RetryError
-from config import BUY_THRESHOLD
 
 import numpy as np
 if not hasattr(np, "NaN"):
