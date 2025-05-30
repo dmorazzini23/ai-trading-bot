@@ -268,7 +268,7 @@ class FinnhubFetcher:
         if len(self._timestamps) >= self.max_calls:
             wait_secs = 60 - (now - self._timestamps[0]) + random.uniform(0.1, 0.5)
             logger.debug(f"[FH] rate-limit reached; sleeping {wait_secs:.2f}s")
-            time.sleep(wait_secs)
+            pytime.sleep(wait_secs)
             return self._throttle()
         self._timestamps.append(now)
 
@@ -660,6 +660,7 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
     all_syms = [s for s in symbols if s != "SPY"]
     if not all_syms:
         return
+
     start = (date.today() - timedelta(days=30)).isoformat()
     end   = date.today().isoformat()
 
@@ -673,14 +674,8 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
             feed="iex"
         ).df
 
-        # Alpaca gives a datetime index and lowercase 'open','high','low','close','volume'
         for sym, df_sym in bars.groupby("symbol"):
-            df = df_sym.copy()
-
-            # drop the extra 'symbol' column
-            df = df.drop(columns=["symbol"], errors="ignore")
-
-            # rename to your OHLCV convention
+            df = df_sym.copy().drop(columns=["symbol"], errors="ignore")
             df = df.rename(columns={
                 "open":   "Open",
                 "high":   "High",
@@ -688,11 +683,9 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
                 "close":  "Close",
                 "volume": "Volume"
             })
-
-            # index is already datetime; strip tz if present
             df.index = pd.to_datetime(df.index).tz_localize(None)
-
-            data_fetcher._daily_cache[sym] = df
+            with cache_lock:
+                data_fetcher._daily_cache[sym] = df
 
         logger.info(f"[prefetch] seeded {len(bars['symbol'].unique())} symbols via Alpaca")
         return
@@ -700,56 +693,35 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
     except Exception as e:
         logger.warning(f"[prefetch] Alpaca bulk failed: {e!r} — falling back to Finnhub")
 
-    # 2) Symbol-by-symbol fallback in tiny chunks via Finnhub
+    # …in your Finnhub chunk loop, do the same:
     for batch in chunked(all_syms, 3):
-        try:
-            df_chunk = _fh_chunk_fetch(batch, period="1mo", interval="1d")
-        except Exception as e:
-            logger.warning(f"[prefetch] Finnhub chunk {batch} failed: {e!r}")
-            continue
+        # after you extract sym_df:
+        with cache_lock:
+            data_fetcher._daily_cache[sym] = sym_df
+        logger.info(f"⚠️ fetched {sym} via Finnhub chunk")
+        pytime.sleep(12)
 
-        if df_chunk.empty:
-            continue
-
-        # Normalize index once
-        df_chunk.index = pd.to_datetime(df_chunk.index)
-
-        if isinstance(df_chunk.columns, pd.MultiIndex):
-            # level 0 = symbol, level 1 = field
-            for sym in batch:
-                if sym in df_chunk.columns.get_level_values(0):
-                    sym_df = df_chunk.xs(sym, level=0, axis=1)
-                    data_fetcher._daily_cache[sym] = sym_df
-                    logger.info(f"⚠️  fetched {sym} via Finnhub chunk")
-        else:
-            # single‐symbol fetch always returns a flat DF
-            sym = batch[0]
-            data_fetcher._daily_cache[sym] = df_chunk
-            logger.info(f"⚠️  fetched {sym} via Finnhub chunk")
-
-        # throttle to ~5 calls/min
-        time.sleep(12)
-
-    # 3) Per-symbol ultimate retry via Finnhub, then dummy
+    # …and in your per-symbol ultimate retry:
     for sym in all_syms:
-        if sym not in data_fetcher._daily_cache or data_fetcher._daily_cache[sym] is None:
-            try:
-                df_sym = fh.fetch(sym, period="1mo", interval="1d")
-                if df_sym is not None and not df_sym.empty:
-                    df_sym.index = pd.to_datetime(df_sym.index)
+        try:
+            df_sym = fh.fetch(sym, period="1mo", interval="1d")
+            if df_sym is not None and not df_sym.empty:
+                df_sym.index = pd.to_datetime(df_sym.index)
+                with cache_lock:
                     data_fetcher._daily_cache[sym] = df_sym
-                    logger.info(f"⚠️  single-symbol fetch succeeded for {sym}")
-                    continue
-            except Exception as e:
-                logger.warning(f"[prefetch] single-symbol Finnhub fetch failed for {sym}: {e!r}")
+                logger.info(f"⚠️ single-symbol fetch succeeded for {sym}")
+                continue
+        except Exception as e:
+            logger.warning(f"[prefetch] single-symbol Finnhub fetch failed for {sym}: {e!r}")
 
-            # last resort: dummy flat
-            dates = pd.date_range(start=start, end=end, freq="D")
-            dummy = pd.DataFrame(index=dates, columns=["Open","High","Low","Close","Volume"])
-            dummy[["Open","High","Low","Close"]] = 1.0
-            dummy["Volume"] = 0
+        # dummy fallback
+        dates = pd.date_range(start=start, end=end, freq="D")
+        dummy = pd.DataFrame(index=dates, columns=["Open","High","Low","Close","Volume"])
+        dummy[["Open","High","Low","Close"]] = 1.0
+        dummy["Volume"] = 0
+        with cache_lock:
             data_fetcher._daily_cache[sym] = dummy
-            logger.warning(f"🔶 Dummy {sym} inserted to satisfy data checks")
+        logger.warning(f"🔶 Dummy {sym} inserted to satisfy data checks")
         
 def fetch_data(ctx, symbols, period, interval):
     """Fallback for small bulk requests via Alpaca barset if needed."""
@@ -1063,12 +1035,6 @@ def vol_target_position_size(cash: float,
     retry=retry_if_exception_type(APIError)
 )
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
-    """
-    Place a market order, then verify fill price against latest quote.
-    Falls back to partial fill on availability errors,
-    and to a bracket limit order on wash-trade errors.
-    """
-    # fetch the best bid/ask just before sending
     quote = ctx.api.get_latest_quote(symbol)
     expected_price = quote.ask_price if side == "buy" else quote.bid_price
 
@@ -1086,10 +1052,9 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
 
     except APIError as e:
         msg = str(e).lower()
-
-        # 1) Skip entirely on any buying-power exhaustion
-        if "insufficient buying power" in msg or "insufficient day trading buying power" in msg:
-            logger.warning(f"[submit_order] insufficient buying power for {symbol}; skipping order")
+        # if it’s retries-exhausted, tenacity will bubble up
+        if "insufficient buying power" in msg:
+            logger.warning(f"[submit_order] insufficient buying power for {symbol}; skipping")
             return None
 
         # 2) Partial-fill fallback for “requested X, available Y”
@@ -1146,11 +1111,6 @@ def twap_submit(
     window_secs: int = 600,
     n_slices: int = 10,
 ) -> None:
-    """Slice a large order into n_slices over window_secs seconds."""
-    if total_qty <= 0:
-        logger.warning(f"[twap_submit] non‐positive total_qty={total_qty}, skipping")
-        return
-
     slice_qty = total_qty // n_slices
     wait_secs = window_secs / n_slices
 
@@ -1160,7 +1120,7 @@ def twap_submit(
         except Exception as e:
             logger.exception(f"[TWAP] slice {i+1}/{n_slices} failed: {e}")
             break
-        time.sleep(wait_secs)
+        pytime.sleep(wait_secs)
 
 def vwap_pegged_submit(
     ctx: BotContext,
@@ -1169,15 +1129,10 @@ def vwap_pegged_submit(
     side: str,
     duration: int = 300
 ) -> None:
-    """Place a VWAP-pegged IOC bracket order over `duration` seconds."""
-    if total_qty <= 0:
-        logger.warning(f"[vwap_pegged_submit] non-positive total_qty={total_qty}, skipping")
-        return
-
-    start = time.time()
+    start = pytime.time()
     placed = 0
 
-    while placed < total_qty and time.time() - start < duration:
+    while placed < total_qty and pytime.time() - start < duration:
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
         if df is None or df.empty:
             logger.warning("[VWAP] missing bars, aborting VWAP slice")
@@ -1200,7 +1155,7 @@ def vwap_pegged_submit(
             break
 
         placed += slice_qty
-        time.sleep(duration / 10)
+        pytime.sleep(duration / 10)
 
 def pov_submit(
     ctx: BotContext,
@@ -1209,18 +1164,6 @@ def pov_submit(
     side: str,
     cfg: SliceConfig = DEFAULT_SLICE_CFG,
 ) -> bool:
-    """
-    Participation-of-Volume slicing.
-
-    Returns True if it fully placed total_qty, False if aborted early.
-    """
-    if total_qty <= 0:
-        logger.warning(f"[pov_submit] non‐positive total_qty={total_qty}, skipping")
-        return False
-
-    if side not in ("buy", "sell"):
-        raise ValueError(f"side must be 'buy' or 'sell', got {side!r}")
-
     placed = 0
     retries = 0
     interval = cfg.sleep_interval
@@ -1235,7 +1178,7 @@ def pov_submit(
 
             logger.warning(f"[pov_submit] missing bars, retry {retries}/{cfg.max_retries} in {interval:.1f}s")
             sleep_time = interval * (0.8 + 0.4 * random.random())
-            time.sleep(sleep_time)
+            pytime.sleep(sleep_time)
             interval = min(interval * cfg.backoff_factor, cfg.max_backoff_interval)
             continue
 
@@ -1258,7 +1201,7 @@ def pov_submit(
 
         placed += slice_qty
         logger.info(f"[pov_submit] placed {slice_qty} ({placed}/{total_qty})")
-        time.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
+        pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
 
     logger.info(f"[pov_submit] complete: placed {placed}/{total_qty}")
     return True
@@ -1423,9 +1366,8 @@ def exit_all_positions():
 # ─── SIGNAL & TRADE LOGIC ────────────────────────────────────────────────────
 def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int, float, str]:
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, df, symbol, model)
-    # Removed portfolio-weight scaling to use raw confidence directly
     if sig == -1 or conf < CONF_THRESHOLD:
-        logger.info(f"[SKIP] {symbol} no/low signal (sig={sig},conf={conf:.2f})")
+        logger.debug(f"[SKIP] {symbol} no/low signal (sig={sig},conf={conf:.2f})")
         return -1, 0.0, ""
     return sig, conf, strat
 
@@ -1435,28 +1377,26 @@ def pre_trade_checks(
     balance: float,
     regime_ok: bool
 ) -> bool:
-    # 1) PDT guard: skip if you’ve hit 3 day-trades in 5 b-days and equity < $25k
     if check_pdt_rule(ctx):
+        logger.debug(f"[SKIP] PDT rule – {symbol}")
         return False
-
-    # 2) your existing guards…
     if check_halt_flag():
-        logger.info(f"[SKIP] HALT_FLAG – {symbol}")
+        logger.debug(f"[SKIP] HALT_FLAG – {symbol}")
         return False
     if not in_trading_hours(pd.Timestamp.utcnow()):
-        logger.info(f"[SKIP] Market closed – {symbol}")
+        logger.debug(f"[SKIP] Market closed – {symbol}")
         return False
     if check_daily_loss():
-        logger.info(f"[SKIP] Daily-loss limit – {symbol}")
+        logger.debug(f"[SKIP] Daily-loss limit – {symbol}")
         return False
     if not regime_ok:
-        logger.info(f"[SKIP] Market regime – {symbol}")
+        logger.debug(f"[SKIP] Market regime – {symbol}")
         return False
     if too_many_positions():
-        logger.info(f"[SKIP] Max positions – {symbol}")
+        logger.debug(f"[SKIP] Max positions – {symbol}")
         return False
     if too_correlated(symbol):
-        logger.info(f"[SKIP] Correlation – {symbol}")
+        logger.debug(f"[SKIP] Correlation – {symbol}")
         return False
 
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
