@@ -1071,6 +1071,7 @@ def vol_target_position_size(cash: float,
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=10),
     retry=retry_if_exception_type(APIError)
+    retry_error_callback=lambda retry_state: None
 )
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
     """
@@ -1545,7 +1546,6 @@ def trade_logic(
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, feat_df, symbol, model)
 
     # debug‐log each component and final score
-    # (you’ll need to return your raw components list from evaluate; see below)
     logger.debug(f"[COMPONENTS] {symbol}: " +
                  ", ".join(f"{name}={flag}×{weight:.3f}"
                            for flag, weight, name in ctx.signal_manager.last_components))
@@ -1567,11 +1567,14 @@ def trade_logic(
         return
 
     # ─── BUY THRESHOLD ────────────────────────────────────────────────────
-    # only enter new longs when our score meets BUY_THRESHOLD
     if sig > 0 and conf >= BUY_THRESHOLD:
         qty = raw_qty
         logger.info(f"[THRESHOLD] {symbol}: conf={conf:.2f} ≥ {BUY_THRESHOLD:.2f} → BUY {qty}")
-        submit_order(ctx, symbol, qty, "buy")
+        order = submit_order(ctx, symbol, qty, "buy")
+        if order is None:
+            logger.debug(f"[trade_logic] no order placed for {symbol}; moving on")
+        else:
+            logger.info(f"[trade_logic] order placed: {order.id} {order.side} {order.qty} {order.symbol}")
 
     else:
         logger.debug(f"[SKIP BUY] {symbol}: conf={conf:.2f} < BUY_THRESHOLD ({BUY_THRESHOLD:.2f})")
