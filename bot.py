@@ -1070,8 +1070,7 @@ def vol_target_position_size(cash: float,
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type(APIError)
-    retry_error_callback=lambda retry_state: None
+    retry=retry_if_exception_type(APIError),
 )
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
     """
@@ -1082,8 +1081,8 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     quote = ctx.api.get_latest_quote(symbol)
     expected_price = quote.ask_price if side == "buy" else quote.bid_price
 
+    # 1) Market order with debug/info/error logging around the API call:
     try:
-        # 1) Market order
         logger.debug(f"[ORDER] submit {side.upper()} {qty} of {symbol}")
         order = ctx.api.submit_order(
             symbol=symbol,
@@ -1093,7 +1092,6 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             time_in_force="gtc",
         )
         logger.debug(f"[ORDER OK] {order.id} {side} {qty} {symbol}")
-        orders_total.inc()
         return order
 
     except APIError as e:
@@ -1108,55 +1106,46 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         m = re.search(r"requested: (\d+), available: (\d+)", msg)
         if m and int(m.group(2)) > 0:
             available = int(m.group(2))
-            try:
-                logger.debug(f"[ORDER] submit partial fill {side.upper()} {available} of {symbol}")
-                ctx.api.submit_order(
-                    symbol=symbol,
-                    qty=available,
-                    side=side,
-                    type="market",
-                    time_in_force="gtc",
-                )
-                logger.debug(f"[ORDER OK] partial fill {available} {symbol}")
-                orders_total.inc()
-            except Exception as inner:
-                logger.error(f"[ORDER ERROR] {symbol} {side} {available}: {inner}")
-                raise
-            return None
+            order = ctx.api.submit_order(
+                symbol=symbol,
+                qty=available,
+                side=side,
+                type="market",
+                time_in_force="gtc",
+            )
+            logger.info(f"[submit_order] only {available} {symbol} available; placed partial fill")
+            return order
 
         # 4) Wash‐trade fallback → bracket limit
         if "potential wash trade" in msg:
             logger.warning(f"[submit_order] wash‐trade error for {symbol}; using bracket fallback")
             tp_price = expected_price * 1.02
             sl_price = expected_price * 0.98
-            try:
-                logger.debug(f"[ORDER] submit bracket {side.upper()} {qty} {symbol} @ limit {expected_price:.2f}")
-                bracket = ctx.api.submit_order(
-                    symbol=symbol,
-                    qty=qty,
-                    side=side,
-                    type="limit",
-                    time_in_force="gtc",
-                    order_class="bracket",
-                    take_profit={"limit_price": tp_price},
-                    stop_loss={"stop_price": sl_price},
-                )
-                logger.debug(f"[ORDER OK] bracket {bracket.id} {side} {qty} {symbol}")
-                orders_total.inc()
-                return bracket
-            except Exception as inner:
-                logger.error(f"[ORDER ERROR] bracket {symbol} {side} {qty}: {inner}")
-                raise
+            bracket = ctx.api.submit_order(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                type="limit",
+                time_in_force="gtc",
+                order_class="bracket",
+                take_profit={"limit_price": tp_price},
+                stop_loss={"stop_price": sl_price},
+            )
+            logger.info(
+                f"[submit_order] placed bracket order @ limit {expected_price:.2f}; "
+                f"TP={tp_price:.2f}, SL={sl_price:.2f}"
+            )
+            return bracket
 
-        # 5) If we get here, re‐raise to trigger Tenacity backoff
+        # 5) Other APIError → retry
         logger.warning(f"[submit_order] APIError for {symbol}: {e} → retrying")
         raise
 
-    except Exception as e:
+    except Exception:
         # non-API errors count as final failures
         order_failures.inc()
-        logger.error(f"[ORDER ERROR] {symbol} {side} {qty}: {e}")
-        raise
+        logger.exception(f"[submit_order] unexpected error for {symbol}")
+        return None
 
 def twap_submit(
     ctx: BotContext,
