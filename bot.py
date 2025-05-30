@@ -1531,14 +1531,12 @@ def trade_logic(
         logger.info(f"[SKIP] {symbol} missing features: {missing}")
         return
 
-    # 5) predict
-    X = feat_df[feature_names].iloc[[-1]]
-    try:
-        sig = model.predict(X)[0]
-    except Exception as e:
-        logger.warning(f"[trade_logic] prediction failed for {symbol}: {e}")
+    # 5) get a combined signal + confidence
+    sig, conf, strat = signal_and_confirm(ctx, symbol, feat_df, model)
+    if sig == -1:
+        logger.debug(f"[SKIP] {symbol} no signal (conf={conf:.2f})")
         return
-    logger.debug(f"[SIGNAL] {symbol}: {sig}")
+    logger.info(f"[SIGNAL] {symbol}: {sig} (conf={conf:.2f}, via {strat})")
 
     # 6) qty
     current_price   = raw_df["Close"].iloc[-1]
@@ -1723,37 +1721,13 @@ def run_all_trades(model) -> None:
 
 # ─── UTILITIES ────────────────────────────────────────────────────────────────
 def load_model(path: str = MODEL_PATH):
-    feature_cols = [
-        "rsi","macd","atr","vwap",
-        "macds","ichimoku_conv","ichimoku_base","stochrsi"
-    ]
+    # 1) Fail fast if no real model on disk
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"No trained model found at {path}")
 
-    if os.path.exists(path):
-        model = joblib.load(path)
-        if (
-            hasattr(model, "feature_names_in_")
-            and list(model.feature_names_in_) == feature_cols
-        ):
-            logger.info(f"Loaded trained model from {path}")
-            return model
-        else:
-            logger.warning("⚠️  Model features mismatch; retraining on eight intraday cols")
-
-    # train new fallback on exactly those 8 features
-    logger.info("Training fallback RandomForestClassifier on 8 features")
-    X_dummy = pd.DataFrame(
-        np.random.randn(100, len(feature_cols)),
-        columns=feature_cols
-    )
-    y_dummy = np.random.randint(0, 2, size=100)
-    model = RandomForestClassifier(
-        n_estimators=RF_ESTIMATORS,
-        max_depth=RF_MAX_DEPTH,
-        min_samples_leaf=RF_MIN_SAMPLES_LEAF
-    )
-    model.fit(X_dummy, y_dummy)
-    joblib.dump(model, path)
-    logger.info(f"Fallback model trained and saved to {path}")
+    # 2) Load your genuine RF
+    model = joblib.load(path)
+    logger.info(f"Loaded trained model from {path}")
     return model
 
 def update_signal_weights():
