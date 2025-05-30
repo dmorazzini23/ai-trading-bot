@@ -1708,24 +1708,28 @@ def run_all_trades(model) -> None:
 
 # ─── UTILITIES ────────────────────────────────────────────────────────────────
 def load_model(path: str = MODEL_PATH):
-    # exactly the 8 intraday features your code uses downstream:
     feature_cols = [
-        "rsi", "macd", "atr", "vwap",
-        "macds", "ichimoku_conv", "ichimoku_base", "stochrsi"
+        "rsi","macd","atr","vwap",
+        "macds","ichimoku_conv","ichimoku_base","stochrsi"
     ]
 
     if os.path.exists(path):
-        logger.info(f"Loading trained model from {path}")
-        return joblib.load(path)
+        model = joblib.load(path)
+        # if loaded model wasn’t trained on exactly our 8 columns, retrain
+        if not (hasattr(model, "feature_names_in_")
+                and list(model.feature_names_in_) == feature_cols):
+            logger.info("Existing model feature‐names mismatch, retraining fallback")
+        else:
+            logger.info(f"Loaded trained model from {path}")
+            return model
 
-    logger.info("No model found; training fallback RandomForestClassifier on 8 features")
+    # train new fallback on exactly those 8 features
+    logger.info("Training fallback RandomForestClassifier on 8 features")
     model = RandomForestClassifier(
         n_estimators=RF_ESTIMATORS,
         max_depth=RF_MAX_DEPTH,
         min_samples_leaf=RF_MIN_SAMPLES_LEAF
     )
-
-    # build a DataFrame so that model.feature_names_in_ matches exactly
     X_dummy = pd.DataFrame(
         np.random.randn(100, len(feature_cols)),
         columns=feature_cols
