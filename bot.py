@@ -41,6 +41,13 @@ from prometheus_client import start_http_server, Counter, Gauge
 import finnhub
 import pybreaker
 
+import warnings
+warnings.filterwarnings(
+  "ignore",
+  message=".*valid feature names.*",
+  category=UserWarning
+)
+
 # thread-safety locks
 cache_lock   = Lock()
 targets_lock = Lock()
@@ -1924,8 +1931,10 @@ def check_market_regime() -> bool:
         logger.warning("[check_market_regime] failed to compute regime features for SPY")
         return False
 
-    fv = feats.iloc[-1][["atr","rsi","macd","vol"]].values.reshape(1, -1)
-    pred = regime_model.predict(fv)[0]
+       # build a 1-row DataFrame so it has valid feature names
+    cols = ["atr","rsi","macd","vol"]
+    X = feats[cols].iloc[[-1]]           # this is a DataFrame, not an array
+    pred = regime_model.predict(X)[0]
     return bool(pred)
 
 # ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
