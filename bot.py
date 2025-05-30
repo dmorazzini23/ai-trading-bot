@@ -261,7 +261,7 @@ class FinnhubFetcher:
         self.client      = finnhub_client
 
     def _throttle(self):
-        now = time.time()
+        now = pytime.time()
         # drop timestamps >60s ago
         while self._timestamps and now - self._timestamps[0] > 60:
             self._timestamps.popleft()
@@ -298,7 +298,7 @@ class FinnhubFetcher:
         """
         try:
             syms = symbols if isinstance(symbols, (list, tuple)) else [symbols]
-            now = int(time.time())
+            now = int(pytime.time())
             span = self._parse_period(period)
             start = now - span
 
@@ -1428,7 +1428,7 @@ def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple
     return False,0,""
 
 def _can_fetch_events(symbol):
-    now = time.time()
+    now = pytime.time()
     last = _LAST_EVENT_TS.get(symbol, 0)
     if now - last < EVENT_COOLDOWN:
         return False
