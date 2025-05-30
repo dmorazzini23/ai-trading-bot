@@ -1,4 +1,3 @@
-# ─── STANDARD LIBRARIES ─────────────────────────────────────────────────────
 import os
 import csv
 import re
@@ -8,27 +7,21 @@ from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Dict, List, Any, Sequence
 from alpaca_trade_api.entity import Order
 from dataclasses import dataclass, field
-from threading import Semaphore, Thread
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Semaphore, Lock, Thread
+from concurrent.futures import ThreadPoolExecutor
 
 import logging
-logging.basicConfig(
-    format="%(message)s",
-    level=logging.INFO,
-)
-
+logging.basicConfig(format="%(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── STRUCTURED LOGGING, RETRIES & RATE LIMITING ────────────────────────────
-import structlog
-
-# ─── THIRD-PARTY LIBRARIES ────────────────────────────────────────────────────
 import numpy as np
 if not hasattr(np, "NaN"):
     np.NaN = np.nan
+
 import pandas as pd
 import pandas_market_calendars as mcal
 import pandas_ta as ta
+
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask
@@ -36,21 +29,24 @@ import schedule
 import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
 import portalocker
+
 from alpaca_trade_api.rest import REST, APIError, TimeFrame
 from sklearn.ensemble import RandomForestClassifier
+
 import pickle
-from statsmodels.tsa.stattools import coint
-from pypfopt import risk_models, expected_returns, EfficientFrontier
 import joblib
 from dotenv import load_dotenv
 import sentry_sdk
 from prometheus_client import start_http_server, Counter, Gauge
 import finnhub
-from finnhub.exceptions import FinnhubAPIException
 import pybreaker
 
-_LAST_EVENT_TS = {}
-EVENT_COOLDOWN = 15.0  # seconds
+# thread-safety locks
+cache_lock   = Lock()
+targets_lock = Lock()
+
+_LAST_EVENT_TS   = {}
+EVENT_COOLDOWN   = 15.0  # seconds
 
 INTRADAY_FEATURES = [
     "vwap",
@@ -376,7 +372,8 @@ class DataFetcher:
                 "close":  "Close",
                 "volume": "Volume"
             })
-            self._daily_cache[symbol] = df
+            with cache_lock:
+                self._daily_cache[symbol] = df
             return df
 
         # existing logic for non-SPY symbols
@@ -428,8 +425,9 @@ class DataFetcher:
             logger.warning(f"[DataFetcher] Alpaca minute fallback failed for {symbol}: {e}")
 
         # 3) cache & return
-        self._minute_cache[symbol]      = df
-        self._minute_timestamps[symbol] = datetime.now(timezone.utc)
+        with cache_lock:
+            self._minute_cache[symbol]      = df
+            self._minute_timestamps[symbol] = datetime.now(timezone.utc)
         return df
         
 class TradeLogger:
@@ -554,8 +552,12 @@ class SignalManager:
         except Exception:
             return -1, 0.0, 'ml'
 
-    def signal_sentiment(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
-        score = fetch_sentiment(ctx, ticker)
+    def signal_sentiment(self, ctx: BotContext, ticker: str, df: pd.DataFrame = None, model: Any = None) -> Tuple[int, float, str]:
+        try:
+            score = fetch_sentiment(ctx, ticker)
+        except Exception as e:
+            logger.warning(f"[signal_sentiment] {ticker} error: {e}")
+            score = 0.0
         sig = 1 if score > 0 else 0 if score < 0 else -1
         return sig, abs(score), 'sentiment'
 
@@ -768,7 +770,6 @@ def fetch_data(ctx, symbols, period, interval):
     wait=wait_exponential(multiplier=1, min=1, max=10),
     retry=retry_if_exception_type(requests.RequestException)
 )
-
 def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
     with ctx.sem:
         r = requests.get(
@@ -778,29 +779,19 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
         )
         r.raise_for_status()
 
-    soup = BeautifulSoup(r.content, "lxml")
-    rows = soup.find_all("tr")
-    logger.info(f"get_sec_headlines({ticker}) ── total <tr> rows: {len(rows)}")
-
-    texts = []
-    for a in soup.find_all("a"):
-        if "8-K" in a.text:
+    try:
+        soup = BeautifulSoup(r.content, "lxml")
+        texts = []
+        for a in soup.find_all("a", string=re.compile(r"8[- ]?K")):
             tr = a.find_parent("tr")
-            if not tr:
-                logger.warning("found an <a> with '8-K' but no parent <tr>")
-                continue
-
-            tds = tr.find_all("td")
-            if len(tds) < 4:
-                logger.warning(f"unexpected <td> count {len(tds)} in row, skipping")
-                continue
-
-            texts.append(tds[-1].get_text(strip=True))
-
-    if not texts:
-        logger.warning(f"get_sec_headlines({ticker}) found no 8-K entries")
-    return " ".join(texts)
-
+            tds = tr.find_all("td") if tr else []
+            if len(tds) >= 4:
+                texts.append(tds[-1].get_text(strip=True))
+        return " ".join(texts)
+    except Exception as e:
+        logger.warning(f"[get_sec_headlines] parse failed for {ticker}: {e}")
+        return ""
+        
 @limits(calls=60, period=60)
 @retry(
     stop=stop_after_attempt(3),
@@ -1066,6 +1057,11 @@ def vol_target_position_size(cash: float,
     qty = int(dollar_alloc / price)
     return max(qty, 1)
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    retry=retry_if_exception_type(APIError)
+)
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
     """
     Place a market order, then verify fill price against latest quote.
@@ -1288,12 +1284,14 @@ def update_trailing_stop(
     te = ctx.trailing_extremes
 
     if qty > 0:
-        te[ticker] = max(te.get(ticker, price), price)
+        with targets_lock:
+            te[ticker] = max(te.get(ticker, price), price)
         if price < te[ticker] - factor * atr:
             return "exit_long"
 
     elif qty < 0:
-        te[ticker] = min(te.get(ticker, price), price)
+        with targets_lock:
+            te[ticker] = min(te.get(ticker, price), price)
         if price > te[ticker] + factor * atr:
             return "exit_short"
 
@@ -1392,8 +1390,9 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
         min_factor=0.5
     )
 
-    ctx.stop_targets[symbol]        = stop
-    ctx.take_profit_targets[symbol] = take
+    with targets_lock:
+        ctx.stop_targets[symbol]        = stop
+        ctx.take_profit_targets[symbol] = take
     # ───────────────────────────────────────────────────────────────────
 
 def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
@@ -1514,36 +1513,41 @@ def _safe_trade(
     except Exception:
         logger.exception(f"[trade_logic] unhandled exception for {symbol}")
 
-def trade_logic(ctx, symbol: str, balance: float, model, regime_ok: bool) -> None:
-    # 1. Fetch raw minute bars
+def trade_logic(
+    ctx: BotContext,
+    symbol: str,
+    balance: float,
+    model,
+    regime_ok: bool
+) -> None:
+    # 1) raw bars
     raw_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw_df is None or raw_df.empty:
-        logger.info(f"[SKIP] {symbol} no raw data")
+        logger.debug(f"[SKIP] {symbol} no raw data")
         return
 
-    # 2. Compute intraday indicators
+    # 2) indicators
     feat_df = prepare_indicators(raw_df, freq="intraday")
     if feat_df.empty:
-        logger.info(f"[SKIP] {symbol} insufficient feature data")
+        logger.debug(f"[SKIP] {symbol} insufficient feature data")
         return
 
-    # 3. Determine feature names
+    # 3) feature names
     if hasattr(model, "feature_names_in_"):
         feature_names = list(model.feature_names_in_)
     else:
-        # manually list your trained-on features
         feature_names = [
             "rsi", "macd", "atr", "vwap",
             "macds", "ichimoku_conv", "ichimoku_base", "stochrsi"
         ]
 
-    # 4. Check for missing features
+    # 4) missing?
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
         logger.debug(f"[SKIP] {symbol} missing features: {missing}")
         return
 
-    # 5. Build feature vector and predict immediately
+    # 5) predict
     X = feat_df[feature_names].iloc[[-1]]
     try:
         sig = model.predict(X)[0]
@@ -1552,14 +1556,12 @@ def trade_logic(ctx, symbol: str, balance: float, model, regime_ok: bool) -> Non
         return
     logger.debug(f"[SIGNAL] {symbol}: {sig}")
 
-    # 6. Grab last close price (uppercase column names)
-    current_price = raw_df["Close"].iloc[-1]
+    # 6) qty
+    current_price   = raw_df["Close"].iloc[-1]
+    target_weight   = ctx.portfolio_weights.get(symbol, 0.0)
+    qty             = int(balance * target_weight / current_price)
 
-    # 7. Compute quantity from portfolio_weights
-    target_weight = ctx.portfolio_weights.get(symbol, 0.0)
-    qty = int(balance * target_weight / current_price)
-
-    # 8. Send order
+    # 7) send
     if sig > 0 and qty > 0:
         logger.info(f"[ENTRY] BUY {qty} {symbol}")
         submit_order(ctx, symbol, qty, "buy")
@@ -2003,30 +2005,15 @@ def start_healthcheck() -> None:
 
 if __name__ == "__main__":
     start_http_server(8000)
-    logger.info("Prometheus metrics server started on port 8000")
-
     if RUN_HEALTH:
         Thread(target=start_healthcheck, daemon=True).start()
-        logger.info("Healthcheck endpoint running on port 8080")
-
-    # end-of-day summary and cleanup
     schedule.every().day.at("00:30").do(daily_summary)
     schedule.every().day.at("15:45").do(exit_all_positions)
-    logger.info("Scheduled daily_summary at 00:30 UTC and exit_all_positions at 15:45 UTC")
-
-    # load and kick off your model
     model = load_model()
     logger.info("🚀 AI Trading Bot is live!")
-
-    # ongoing jobs
     schedule.every(1).minutes.do(lambda: run_all_trades(model))
     schedule.every(6).hours.do(update_signal_weights)
-    logger.info("Scheduled run_all_trades every 1m and update_signal_weights every 6h")
 
-    # scheduler loop
     while True:
-        try:
-            schedule.run_pending()
-        except Exception as e:
-            logger.exception(f"Scheduler loop error: {e}")
-        pytime.sleep(30)
+        schedule.run_pending()
+        pytime.sleep(1)
