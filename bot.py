@@ -2034,7 +2034,7 @@ def initial_rebalance(ctx, symbols):
     per_symbol = cash / n
     for sym in symbols:
         # note: get_latest_quote returns .askprice or .ask_price depending on version
-        price = float(ctx.api.get_latest_quote(sym).askprice)
+        price = float(ctx.api.get_latest_quote(sym).ask_price)
         qty   = int(per_symbol // price)
         if qty > 0:
             logger.info(f"[REBALANCE] Buying {qty} {sym} @ ${price:.2f}")
