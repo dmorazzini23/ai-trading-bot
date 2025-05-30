@@ -2031,7 +2031,7 @@ def initial_rebalance(ctx, symbols):
     equity = float(acct.equity)
     # avoid PDT errors if under $25k
     if equity < PDT_EQUITY_THRESHOLD:
-        logger.info("[REBALANCE] Skipping initial rebalance: equity < PDT threshold")
+        logger.info(f"[REBALANCE] Skipping initial rebalance: equity ${equity:.2f} < PDT threshold ${PDT_EQUITY_THRESHOLD}")
         return
 
     cash = float(acct.cash)
@@ -2066,6 +2066,7 @@ def initial_rebalance(ctx, symbols):
                 )
             except APIError as e:
                 msg = str(e).lower()
+                # skip on insufficient power / PDT errors
                 if "insufficient" in msg or "day trading buying power" in msg:
                     logger.warning(f"[REBALANCE SKIPPED] {sym}: {e}")
                 else:
@@ -2073,20 +2074,21 @@ def initial_rebalance(ctx, symbols):
         except Exception as e:
             logger.exception(f"[REBALANCE] failed to fetch quote or compute qty for {sym}: {e}")
 
+
 if __name__ == "__main__":
     start_http_server(8000)
     if RUN_HEALTH:
         Thread(target=start_healthcheck, daemon=True).start()
 
-    # your daily exit & summary jobs
+    # daily jobs
     schedule.every().day.at("00:30").do(daily_summary)
     schedule.every().day.at("15:45").do(exit_all_positions)
 
-    # load model & fire your first run
+    # load your model
     model = load_model()
     logger.info("🚀 AI Trading Bot is live!")
 
-    # ─── INITIAL REBALANCE (runs once) ─────────────────────────────────
+    # ─── INITIAL REBALANCE (runs once) ───────────────────────────────────────
     try:
         if not getattr(ctx, "_rebalance_done", False):
             universe = load_tickers(TICKERS_FILE)
@@ -2094,13 +2096,13 @@ if __name__ == "__main__":
             ctx._rebalance_done = True
     except Exception as e:
         logger.warning(f"[REBALANCE] aborted due to error: {e}")
-    # ────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────────────
 
-    # schedule your recurring jobs
+    # recurring jobs
     schedule.every(1).minutes.do(lambda: run_all_trades(model))
     schedule.every(6).hours.do(update_signal_weights)
 
-    # finally, enter your scheduler loop
+    # scheduler loop
     while True:
         schedule.run_pending()
         pytime.sleep(1)
