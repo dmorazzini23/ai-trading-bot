@@ -1533,7 +1533,6 @@ def trade_logic(
 
     # 5) get a combined signal + confidence
     sig, conf, strat = signal_and_confirm(ctx, symbol, feat_df, model)
-    # only skip if truly neutral
     if sig == 0:
         logger.debug(f"[SKIP] {symbol} no signal (conf={conf:.2f})")
         return
@@ -1543,17 +1542,21 @@ def trade_logic(
     current_price = raw_df["Close"].iloc[-1]
     target_weight = ctx.portfolio_weights.get(symbol, 0.0)
     qty = int(balance * target_weight / current_price)
-
-    # 7) send
-    if sig > 0 and qty > 0:
-        logger.info(f"[ENTRY] BUY {qty} {symbol}")
-        submit_order(ctx, symbol, qty, "buy")
-    elif sig < 0 and qty > 0:
-        logger.info(f"[ENTRY] SELL {qty} {symbol}")
-        submit_order(ctx, symbol, qty, "sell")
-    else:
-        # happens if qty is zero
+    if qty <= 0:
         logger.debug(f"[SKIP] {symbol} no action (sig={sig}, qty={qty})")
+        return
+
+    # 7) send, but guard against insufficient buying power
+    try:
+        if sig > 0:
+            logger.info(f"[ENTRY] BUY {qty} {symbol}")
+            submit_order(ctx, symbol, qty, "buy")
+        else:
+            logger.info(f"[ENTRY] SELL {qty} {symbol}")
+            submit_order(ctx, symbol, qty, "sell")
+    except (APIError, RetryError) as e:
+        logger.warning(f"[trade_logic] skipping {symbol} due to order error: {e}")
+        return
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """
