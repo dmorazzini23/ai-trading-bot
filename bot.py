@@ -617,14 +617,13 @@ class SignalManager:
         if not signals:
             return -1, 0.0, 'no_signal'
 
-        score = sum((1 if s == 1 else -1) * w for s, w, _ in signals)
+        self.last_components = [(s, w, lab) for (s, w, lab) in signals]
+        score = sum((1 if s==1 else -1)*w for s,w,_ in signals)
         conf  = min(abs(score), 1.0)
-        final = 1 if score >  0.5 else 0 if score < -0.5 else -1
-        label = '+'.join(lbl for _, _, lbl in signals)
-
-        logger.info(f"[SignalManager] {ticker} | final={final} score={score:.2f} | components: {signals}")
+        final = 1 if score > 0.5 else 0 if score < -0.5 else -1
+        label = "+".join(lab for _,_,lab in signals)
         return final, conf, label
-
+        
 # ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 api            = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=ALPACA_BASE_URL)
 data_fetcher   = DataFetcher()
@@ -1084,6 +1083,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
 
     try:
         # 1) Market order
+        logger.debug(f"[ORDER] submit {side.upper()} {qty} of {symbol}")
         order = ctx.api.submit_order(
             symbol=symbol,
             qty=qty,
@@ -1091,7 +1091,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             type="market",
             time_in_force="gtc",
         )
-        logger.info(f"[submit_order] {side.upper()} {qty} {symbol} at market; expected ~{expected_price}")
+        logger.debug(f"[ORDER OK] {order.id} {side} {qty} {symbol}")
         orders_total.inc()
         return order
 
@@ -1107,15 +1107,20 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         m = re.search(r"requested: (\d+), available: (\d+)", msg)
         if m and int(m.group(2)) > 0:
             available = int(m.group(2))
-            ctx.api.submit_order(
-                symbol=symbol,
-                qty=available,
-                side=side,
-                type="market",
-                time_in_force="gtc",
-            )
-            logger.info(f"[submit_order] only {available} {symbol} available; placed partial fill")
-            orders_total.inc()
+            try:
+                logger.debug(f"[ORDER] submit partial fill {side.upper()} {available} of {symbol}")
+                ctx.api.submit_order(
+                    symbol=symbol,
+                    qty=available,
+                    side=side,
+                    type="market",
+                    time_in_force="gtc",
+                )
+                logger.debug(f"[ORDER OK] partial fill {available} {symbol}")
+                orders_total.inc()
+            except Exception as inner:
+                logger.error(f"[ORDER ERROR] {symbol} {side} {available}: {inner}")
+                raise
             return None
 
         # 4) Wash‐trade fallback → bracket limit
@@ -1123,31 +1128,34 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             logger.warning(f"[submit_order] wash‐trade error for {symbol}; using bracket fallback")
             tp_price = expected_price * 1.02
             sl_price = expected_price * 0.98
-            bracket = ctx.api.submit_order(
-                symbol=symbol,
-                qty=qty,
-                side=side,
-                type="limit",
-                time_in_force="gtc",
-                order_class="bracket",
-                take_profit={"limit_price": tp_price},
-                stop_loss={"stop_price": sl_price},
-            )
-            logger.info(
-                f"[submit_order] placed bracket order @ limit {expected_price:.2f}; TP={tp_price:.2f}, SL={sl_price:.2f}"
-            )
-            orders_total.inc()
-            return bracket
+            try:
+                logger.debug(f"[ORDER] submit bracket {side.upper()} {qty} {symbol} @ limit {expected_price:.2f}")
+                bracket = ctx.api.submit_order(
+                    symbol=symbol,
+                    qty=qty,
+                    side=side,
+                    type="limit",
+                    time_in_force="gtc",
+                    order_class="bracket",
+                    take_profit={"limit_price": tp_price},
+                    stop_loss={"stop_price": sl_price},
+                )
+                logger.debug(f"[ORDER OK] bracket {bracket.id} {side} {qty} {symbol}")
+                orders_total.inc()
+                return bracket
+            except Exception as inner:
+                logger.error(f"[ORDER ERROR] bracket {symbol} {side} {qty}: {inner}")
+                raise
 
         # 5) If we get here, re‐raise to trigger Tenacity backoff
         logger.warning(f"[submit_order] APIError for {symbol}: {e} → retrying")
         raise
 
-    except Exception:
+    except Exception as e:
         # non-API errors count as final failures
         order_failures.inc()
-        logger.exception(f"[submit_order] unexpected error for {symbol}")
-        return None
+        logger.error(f"[ORDER ERROR] {symbol} {side} {qty}: {e}")
+        raise
 
 def twap_submit(
     ctx: BotContext,
@@ -1534,14 +1542,21 @@ def trade_logic(
         return
 
     # 5) signal
-    sig, conf, strat = signal_and_confirm(ctx, symbol, feat_df, model)
-    if sig == 0:
-        logger.debug(f"[SKIP] {symbol} no signal (conf={conf:.2f})")
+    sig, conf, strat = ctx.signal_manager.evaluate(ctx, feat_df, symbol, model)
+
+    # debug‐log each component and final score
+    # (you’ll need to return your raw components list from evaluate; see below)
+    logger.debug(f"[COMPONENTS] {symbol}: " +
+                 ", ".join(f"{name}={flag}×{weight:.3f}"
+                           for flag, weight, name in ctx.signal_manager.last_components))
+    final_score = sum(flag * weight for flag, weight, _ in ctx.signal_manager.last_components)
+    logger.debug(f"[FINAL SCORE] {symbol}: {final_score:.4f}")
+
+    if final_score < BUY_THRESHOLD:
+        logger.debug(f"[SKIP BUY] {symbol}: score {final_score:.2f} < threshold {BUY_THRESHOLD}")
         return
-    # log raw score for extra visibility
-    # Note: you can grab `score` out of evaluate() if you return it,
-    # or recompute it here if you prefer. For now we’ll just reuse `conf`.
-    logger.info(f"[SIGNAL] {symbol}: {sig} (conf={conf:.2f}, via {strat})")
+
+    logger.info(f"[SIGNAL] {symbol}: +1 (score={final_score:.2f}) → BUY")
 
     # 6) calculate target qty
     current_price = raw_df["Close"].iloc[-1]
