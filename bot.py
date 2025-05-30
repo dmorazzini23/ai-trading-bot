@@ -753,7 +753,7 @@ def fetch_data(ctx, symbols, period, interval):
         df = fh.fetch(batch, period=period, interval=interval)
         if df is not None and not df.empty:
             dfs.append(df)
-        time.sleep(random.uniform(2, 5))
+        pytime.sleep(random.uniform(2, 5))
     if not dfs:
         return None
     return pd.concat(dfs, axis=1, sort=True)
@@ -1220,7 +1220,7 @@ def pov_submit(
         slice_qty = min(int(vol * cfg.pct), total_qty - placed)
         if slice_qty < 1:
             logger.debug(f"[pov_submit] slice_qty<1 (vol={vol}), waiting")
-            time.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
+            pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
             continue
 
         try:
