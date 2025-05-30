@@ -208,7 +208,7 @@ CAPITAL_CAP              = params["CAPITAL_CAP"]
 PACIFIC                  = ZoneInfo("America/Los_Angeles")
 PDT_DAY_TRADE_LIMIT      = 3
 PDT_EQUITY_THRESHOLD     = 25_000.0
-BUY_THRESHOLD            = 0.5
+BUY_THRESHOLD            = float(os.getenv("BUY_THRESHOLD", "0.5"))
 
 # ─── SLICING CONFIG ────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
