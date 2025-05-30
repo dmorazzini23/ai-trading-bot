@@ -1532,29 +1532,45 @@ def trade_logic(
         logger.info(f"[SKIP] {symbol} missing features: {missing}")
         return
 
-    # 5) get a combined signal + confidence
+    # 5) signal
     sig, conf, strat = signal_and_confirm(ctx, symbol, feat_df, model)
     if sig == 0:
         logger.debug(f"[SKIP] {symbol} no signal (conf={conf:.2f})")
         return
     logger.info(f"[SIGNAL] {symbol}: {sig} (conf={conf:.2f}, via {strat})")
 
-    # 6) qty
+    # 6) calculate target qty
     current_price = raw_df["Close"].iloc[-1]
     target_weight = ctx.portfolio_weights.get(symbol, 0.0)
-    qty = int(balance * target_weight / current_price)
-    if qty <= 0:
-        logger.debug(f"[SKIP] {symbol} no action (sig={sig}, qty={qty})")
+    raw_qty = int(balance * target_weight / current_price)
+    if raw_qty <= 0:
+        logger.debug(f"[SKIP] {symbol} no action (sig={sig}, qty={raw_qty})")
         return
 
-    # 7) send, but guard against insufficient buying power
+    # 7) if it's a SELL, cap it by your actual position size
+    if sig < 0:
+        try:
+            pos = ctx.api.get_position(symbol)
+            current_pos = int(float(pos.qty))
+        except Exception:
+            current_pos = 0
+
+        qty = min(current_pos, raw_qty)
+        if qty <= 0:
+            logger.debug(f"[SKIP] {symbol} no shares to sell (pos={current_pos})")
+            return
+
+        logger.info(f"[ENTRY] SELL {qty} {symbol}")
+        order_side = "sell"
+
+    else:  # BUY
+        qty = raw_qty
+        logger.info(f"[ENTRY] BUY {qty} {symbol}")
+        order_side = "buy"
+
+    # 8) submit, handling any API/Retry errors
     try:
-        if sig > 0:
-            logger.info(f"[ENTRY] BUY {qty} {symbol}")
-            submit_order(ctx, symbol, qty, "buy")
-        else:
-            logger.info(f"[ENTRY] SELL {qty} {symbol}")
-            submit_order(ctx, symbol, qty, "sell")
+        submit_order(ctx, symbol, qty, order_side)
     except (APIError, RetryError) as e:
         logger.warning(f"[trade_logic] skipping {symbol} due to order error: {e}")
         return
