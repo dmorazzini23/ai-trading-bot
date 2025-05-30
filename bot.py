@@ -11,7 +11,10 @@ from threading import Semaphore, Lock, Thread
 from concurrent.futures import ThreadPoolExecutor
 
 import logging
-logging.basicConfig(format="%(message)s", level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(message)s",
+    level=logging.DEBUG
+)
 logger = logging.getLogger(__name__)
 
 import numpy as np
@@ -1500,7 +1503,7 @@ def trade_logic(
     # 1) raw bars
     raw_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw_df is None or raw_df.empty:
-        logger.debug(f"[SKIP] {symbol} no raw data")
+        logger.info(f"[SKIP] {symbol} no raw data")
         return
 
     # 2) indicators
@@ -1521,7 +1524,7 @@ def trade_logic(
     # 4) missing?
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
-        logger.debug(f"[SKIP] {symbol} missing features: {missing}")
+        logger.info(f"[SKIP] {symbol} missing features: {missing}")
         return
 
     # 5) predict
@@ -1692,6 +1695,7 @@ def run_all_trades(model) -> None:
 
     # 2) Screen and compute portfolio weights
     tickers = screen_universe(candidates, ctx)
+    logger.info(f"➡️  Tick​ers to trade this cycle: {tickers}")
     ctx.portfolio_weights = compute_portfolio_weights(tickers)
     if not tickers:
         logger.error("❌ No tickers loaded; skipping run_all_trades")
