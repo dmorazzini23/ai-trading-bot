@@ -2025,11 +2025,11 @@ def start_healthcheck() -> None:
 def initial_rebalance(ctx, symbols):
     """
     Buy an equal-weight basket of `symbols` with all available cash,
-    skipping any where you don’t have the buying power.
+    skipping any where you don’t have buying power or a valid price.
     """
     acct = ctx.api.get_account()
     equity = float(acct.equity)
-    # if you’re under $25k, skip rebalance entirely to avoid PDT crashes
+    # avoid PDT errors if under $25k
     if equity < PDT_EQUITY_THRESHOLD:
         logger.info("[REBALANCE] Skipping initial rebalance: equity < PDT threshold")
         return
@@ -2045,13 +2045,17 @@ def initial_rebalance(ctx, symbols):
     for sym in symbols:
         try:
             quote = ctx.api.get_latest_quote(sym)
-            price = float(quote.ask_price)
-            qty   = int(per_symbol // price)
+            price = float(getattr(quote, "ask_price", 0) or 0)
+            # guard against bad price
+            if price <= 0:
+                logger.warning(f"[REBALANCE] skipping {sym}: invalid quote price={price}")
+                continue
+
+            qty = int(per_symbol // price)
             if qty <= 0:
                 continue
 
             logger.info(f"[REBALANCE] Buying {qty} {sym} @ ${price:.2f}")
-            # wrap the actual order
             try:
                 ctx.api.submit_order(
                     symbol=sym,
@@ -2067,7 +2071,7 @@ def initial_rebalance(ctx, symbols):
                 else:
                     logger.exception(f"[REBALANCE ERROR] {sym}: {e}")
         except Exception as e:
-            logger.exception(f"[REBALANCE] failed to fetch price or place order for {sym}: {e}")
+            logger.exception(f"[REBALANCE] failed to fetch quote or compute qty for {sym}: {e}")
 
 if __name__ == "__main__":
     start_http_server(8000)
