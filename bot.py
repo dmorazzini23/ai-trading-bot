@@ -1533,15 +1533,16 @@ def trade_logic(
 
     # 5) get a combined signal + confidence
     sig, conf, strat = signal_and_confirm(ctx, symbol, feat_df, model)
-    if sig == -1:
+    # only skip if truly neutral
+    if sig == 0:
         logger.debug(f"[SKIP] {symbol} no signal (conf={conf:.2f})")
         return
     logger.info(f"[SIGNAL] {symbol}: {sig} (conf={conf:.2f}, via {strat})")
 
     # 6) qty
-    current_price   = raw_df["Close"].iloc[-1]
-    target_weight   = ctx.portfolio_weights.get(symbol, 0.0)
-    qty             = int(balance * target_weight / current_price)
+    current_price = raw_df["Close"].iloc[-1]
+    target_weight = ctx.portfolio_weights.get(symbol, 0.0)
+    qty = int(balance * target_weight / current_price)
 
     # 7) send
     if sig > 0 and qty > 0:
@@ -1551,6 +1552,7 @@ def trade_logic(
         logger.info(f"[ENTRY] SELL {qty} {symbol}")
         submit_order(ctx, symbol, qty, "sell")
     else:
+        # happens if qty is zero
         logger.debug(f"[SKIP] {symbol} no action (sig={sig}, qty={qty})")
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
@@ -1729,7 +1731,7 @@ def load_model(path: str = MODEL_PATH):
     model = joblib.load(path)
     logger.info(f"Loaded trained model from {path}")
     return model
-
+    
 def update_signal_weights():
     if not os.path.exists(TRADE_LOG_FILE):
         logger.warning("No trades log found; skipping weight update.")
