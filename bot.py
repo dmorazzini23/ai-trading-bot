@@ -1715,27 +1715,27 @@ def load_model(path: str = MODEL_PATH):
 
     if os.path.exists(path):
         model = joblib.load(path)
-        if not (
+        if (
             hasattr(model, "feature_names_in_")
             and list(model.feature_names_in_) == feature_cols
         ):
-            logger.info("⚠️  Model feature names mismatch; retraining fallback RF on 8 features")
-        else:
             logger.info(f"Loaded trained model from {path}")
             return model
+        else:
+            logger.warning("⚠️  Model features mismatch; retraining on eight intraday cols")
 
     # train new fallback on exactly those 8 features
     logger.info("Training fallback RandomForestClassifier on 8 features")
-    model = RandomForestClassifier(
-        n_estimators=RF_ESTIMATORS,
-        max_depth=RF_MAX_DEPTH,
-        min_samples_leaf=RF_MIN_SAMPLES_LEAF
-    )
     X_dummy = pd.DataFrame(
         np.random.randn(100, len(feature_cols)),
         columns=feature_cols
     )
     y_dummy = np.random.randint(0, 2, size=100)
+    model = RandomForestClassifier(
+        n_estimators=RF_ESTIMATORS,
+        max_depth=RF_MAX_DEPTH,
+        min_samples_leaf=RF_MIN_SAMPLES_LEAF
+    )
     model.fit(X_dummy, y_dummy)
     joblib.dump(model, path)
     logger.info(f"Fallback model trained and saved to {path}")
