@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from threading import Semaphore, Lock, Thread
 from concurrent.futures import ThreadPoolExecutor
 from tenacity import RetryError
+from config import BUY_THRESHOLD
 
 import numpy as np
 if not hasattr(np, "NaN"):
@@ -207,6 +208,7 @@ CAPITAL_CAP              = params["CAPITAL_CAP"]
 PACIFIC                  = ZoneInfo("America/Los_Angeles")
 PDT_DAY_TRADE_LIMIT      = 3
 PDT_EQUITY_THRESHOLD     = 25_000.0
+BUY_THRESHOLD            = 0.5
 
 # ─── SLICING CONFIG ────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
