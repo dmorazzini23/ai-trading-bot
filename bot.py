@@ -20,6 +20,7 @@ from alpaca_trade_api.entity import Order
 from dataclasses import dataclass, field
 from threading import Semaphore, Lock, Thread
 from concurrent.futures import ThreadPoolExecutor
+from tenacity import RetryError
 
 import numpy as np
 if not hasattr(np, "NaN"):
@@ -1557,7 +1558,7 @@ def trade_logic(
     except (APIError, RetryError) as e:
         logger.warning(f"[trade_logic] skipping {symbol} due to order error: {e}")
         return
-
+        
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """
     Assign equal weights to each symbol in the universe.
