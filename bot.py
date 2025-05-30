@@ -1728,28 +1728,6 @@ def run_all_trades(model) -> None:
     for symbol in tickers:
         executor.submit(_safe_trade, ctx, symbol, current_cash, model, regime_ok)
 
-def _safe_trade(
-    ctx: BotContext,
-    symbol: str,
-    balance: float,
-    model,
-    regime_ok: bool
-) -> None:
-    try:
-        trade_logic(ctx, symbol, balance, model, regime_ok)
-
-    except APIError as e:
-        msg = str(e).lower()
-
-        # on buying-power exhaustion or wash-trade, just skip
-        if "insufficient buying power" in msg or "potential wash trade" in msg:
-            logger.warning(f"[trade_logic] skipping {symbol} due to APIError: {e}")
-        else:
-            logger.exception(f"[trade_logic] APIError for {symbol}: {e}")
-
-    except Exception:
-        logger.exception(f"[trade_logic] unhandled exception for {symbol}")
-
 # ─── UTILITIES ────────────────────────────────────────────────────────────────
 def load_model(path: str = MODEL_PATH):
     if os.path.exists(path):
