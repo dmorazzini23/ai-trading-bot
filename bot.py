@@ -420,7 +420,7 @@ class DataFetcher:
                     bars = bars.drop(columns=["symbol"])
                 bars.index = pd.to_datetime(bars.index).tz_localize(None)
                 df = bars[["Open","High","Low","Close","Volume"]]
-                logger.info(f"[DataFetcher] minute bars via Alpaca IEX for {symbol}")
+                logger.debug(f"[DataFetcher] minute bars via Alpaca IEX for {symbol}")  # demoted to DEBUG
         except Exception as e:
             logger.warning(f"[DataFetcher] Alpaca minute fallback failed for {symbol}: {e}")
 
@@ -674,8 +674,9 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
             feed="iex"
         ).df
 
+        # Bulk‐seed from Alpaca
         for sym, df_sym in bars.groupby("symbol"):
-            df = df_sym.copy().drop(columns=["symbol"], errors="ignore")
+            df = df_sym.drop(columns=["symbol"], errors="ignore").copy()
             df = df.rename(columns={
                 "open":   "Open",
                 "high":   "High",
@@ -693,15 +694,37 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
     except Exception as e:
         logger.warning(f"[prefetch] Alpaca bulk failed: {e!r} — falling back to Finnhub")
 
-    # …in your Finnhub chunk loop, do the same:
+    # 1) Chunked fallback via FinnhubFetcher
     for batch in chunked(all_syms, 3):
-        # after you extract sym_df:
-        with cache_lock:
-            data_fetcher._daily_cache[sym] = sym_df
-        logger.info(f"⚠️ fetched {sym} via Finnhub chunk")
+        try:
+            df_chunk = _fh_chunk_fetch(batch, period="1mo", interval="1d")
+        except Exception as e:
+            logger.warning(f"[prefetch] Finnhub chunk {batch} failed: {e!r}")
+            continue
+        if df_chunk.empty:
+            continue
+
+        # normalize index
+        df_chunk.index = pd.to_datetime(df_chunk.index)
+
+        if isinstance(df_chunk.columns, pd.MultiIndex):
+            # multi‐symbol: break out per‐symbol
+            for sym in batch:
+                if sym in df_chunk.columns.get_level_values(0):
+                    sym_df = df_chunk.xs(sym, level=0, axis=1)
+                    with cache_lock:
+                        data_fetcher._daily_cache[sym] = sym_df
+                    logger.info(f"⚠️ fetched {sym} via Finnhub chunk")
+        else:
+            # single‐symbol
+            sym = batch[0]
+            with cache_lock:
+                data_fetcher._daily_cache[sym] = df_chunk
+            logger.info(f"⚠️ fetched {sym} via Finnhub chunk")
+
         pytime.sleep(12)
 
-    # …and in your per-symbol ultimate retry:
+    # 2) Ultimate per‐symbol retry + dummy fallback
     for sym in all_syms:
         try:
             df_sym = fh.fetch(sym, period="1mo", interval="1d")
@@ -714,7 +737,7 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
         except Exception as e:
             logger.warning(f"[prefetch] single-symbol Finnhub fetch failed for {sym}: {e!r}")
 
-        # dummy fallback
+        # last‐resort dummy
         dates = pd.date_range(start=start, end=end, freq="D")
         dummy = pd.DataFrame(index=dates, columns=["Open","High","Low","Close","Volume"])
         dummy[["Open","High","Low","Close"]] = 1.0
@@ -1035,10 +1058,16 @@ def vol_target_position_size(cash: float,
     retry=retry_if_exception_type(APIError)
 )
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
+    """
+    Place a market order (with exponential backoff on any APIError),
+    then fall back on partial fills or bracket limits as needed.
+    """
+    # fetch the best bid/ask just before sending
     quote = ctx.api.get_latest_quote(symbol)
     expected_price = quote.ask_price if side == "buy" else quote.bid_price
 
     try:
+        # 1) Market order
         order = ctx.api.submit_order(
             symbol=symbol,
             qty=qty,
@@ -1052,12 +1081,13 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
 
     except APIError as e:
         msg = str(e).lower()
-        # if it’s retries-exhausted, tenacity will bubble up
+
+        # 2) Insufficient buying power
         if "insufficient buying power" in msg:
             logger.warning(f"[submit_order] insufficient buying power for {symbol}; skipping")
             return None
 
-        # 2) Partial-fill fallback for “requested X, available Y”
+        # 3) Partial‐fill fallback
         m = re.search(r"requested: (\d+), available: (\d+)", msg)
         if m and int(m.group(2)) > 0:
             available = int(m.group(2))
@@ -1072,9 +1102,9 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             orders_total.inc()
             return None
 
-        # 3) Wash-trade fallback: switch to a bracket limit order
+        # 4) Wash‐trade fallback → bracket limit
         if "potential wash trade" in msg:
-            logger.warning(f"[submit_order] wash-trade error for {symbol}; using bracket order fallback")
+            logger.warning(f"[submit_order] wash‐trade error for {symbol}; using bracket fallback")
             tp_price = expected_price * 1.02
             sl_price = expected_price * 0.98
             bracket = ctx.api.submit_order(
@@ -1088,17 +1118,17 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                 stop_loss={"stop_price": sl_price},
             )
             logger.info(
-                f"[submit_order] placed bracket order for {symbol} @ limit {expected_price:.2f}; "
-                f"TP @ {tp_price:.2f}, SL @ {sl_price:.2f}"
+                f"[submit_order] placed bracket order @ limit {expected_price:.2f}; TP={tp_price:.2f}, SL={sl_price:.2f}"
             )
             orders_total.inc()
             return bracket
 
-        # 4) Other Alpaca API errors bubble up
-        logger.warning(f"[submit_order] APIError for {symbol}: {e}")
+        # 5) If we get here, re‐raise to trigger Tenacity backoff
+        logger.warning(f"[submit_order] APIError for {symbol}: {e} → retrying")
         raise
 
     except Exception:
+        # non-API errors count as final failures
         order_failures.inc()
         logger.exception(f"[submit_order] unexpected error for {symbol}")
         return None
