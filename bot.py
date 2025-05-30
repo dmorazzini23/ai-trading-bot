@@ -1,3 +1,14 @@
+import logging
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(message)s",
+    level=logging.DEBUG
+)
+logger = logging.getLogger(__name__)
+
+logging.getLogger("alpaca_trade_api").setLevel(logging.DEBUG)
+logging.getLogger("urllib3").setLevel(logging.DEBUG)
+logging.getLogger("requests").setLevel(logging.DEBUG)
+
 import os
 import csv
 import re
@@ -9,13 +20,6 @@ from alpaca_trade_api.entity import Order
 from dataclasses import dataclass, field
 from threading import Semaphore, Lock, Thread
 from concurrent.futures import ThreadPoolExecutor
-
-import logging
-logging.basicConfig(
-    format="%(asctime)s %(levelname)s %(message)s",
-    level=logging.DEBUG
-)
-logger = logging.getLogger(__name__)
 
 import numpy as np
 if not hasattr(np, "NaN"):
