@@ -2024,27 +2024,50 @@ def start_healthcheck() -> None:
 
 def initial_rebalance(ctx, symbols):
     """
-    Buy an equal‐weight basket of `symbols` with all available cash.
+    Buy an equal-weight basket of `symbols` with all available cash,
+    skipping any where you don’t have the buying power.
     """
-    account = ctx.api.get_account()
-    cash = float(account.cash)
+    acct = ctx.api.get_account()
+    equity = float(acct.equity)
+    # if you’re under $25k, skip rebalance entirely to avoid PDT crashes
+    if equity < PDT_EQUITY_THRESHOLD:
+        logger.info("[REBALANCE] Skipping initial rebalance: equity < PDT threshold")
+        return
+
+    cash = float(acct.cash)
     n = len(symbols)
     if n == 0 or cash <= 0:
+        logger.info("[REBALANCE] No symbols or no cash; skipping")
         return
+
     per_symbol = cash / n
+
     for sym in symbols:
-        # note: get_latest_quote returns .askprice or .ask_price depending on version
-        price = float(ctx.api.get_latest_quote(sym).ask_price)
-        qty   = int(per_symbol // price)
-        if qty > 0:
+        try:
+            quote = ctx.api.get_latest_quote(sym)
+            price = float(quote.ask_price)
+            qty   = int(per_symbol // price)
+            if qty <= 0:
+                continue
+
             logger.info(f"[REBALANCE] Buying {qty} {sym} @ ${price:.2f}")
-            ctx.api.submit_order(
-                symbol=sym,
-                qty=qty,
-                side="buy",
-                type="market",
-                time_in_force="day",
-            )
+            # wrap the actual order
+            try:
+                ctx.api.submit_order(
+                    symbol=sym,
+                    qty=qty,
+                    side="buy",
+                    type="market",
+                    time_in_force="day",
+                )
+            except APIError as e:
+                msg = str(e).lower()
+                if "insufficient" in msg or "day trading buying power" in msg:
+                    logger.warning(f"[REBALANCE SKIPPED] {sym}: {e}")
+                else:
+                    logger.exception(f"[REBALANCE ERROR] {sym}: {e}")
+        except Exception as e:
+            logger.exception(f"[REBALANCE] failed to fetch price or place order for {sym}: {e}")
 
 if __name__ == "__main__":
     start_http_server(8000)
@@ -2060,10 +2083,13 @@ if __name__ == "__main__":
     logger.info("🚀 AI Trading Bot is live!")
 
     # ─── INITIAL REBALANCE (runs once) ─────────────────────────────────
-    if not getattr(ctx, "_rebalance_done", False):
-        universe = load_tickers(TICKERS_FILE)
-        initial_rebalance(ctx, universe)
-        ctx._rebalance_done = True
+    try:
+        if not getattr(ctx, "_rebalance_done", False):
+            universe = load_tickers(TICKERS_FILE)
+            initial_rebalance(ctx, universe)
+            ctx._rebalance_done = True
+    except Exception as e:
+        logger.warning(f"[REBALANCE] aborted due to error: {e}")
     # ────────────────────────────────────────────────────────────────────
 
     # schedule your recurring jobs
