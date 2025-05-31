@@ -41,7 +41,15 @@ from prometheus_client import start_http_server, Counter, Gauge, Histogram
 import finnhub
 import pybreaker
 
-from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, wait_random, retry_if_exception_type, RetryError
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_fixed,
+    wait_exponential,
+    wait_random,
+    retry_if_exception_type,
+    RetryError
+)
 from ratelimit import limits, sleep_and_retry
 
 import warnings
@@ -51,19 +59,11 @@ warnings.filterwarnings(
     category=UserWarning
 )
 
-# ─── HELPERS ──────────────────────────────────────────────────────────────────
-def chunked(lst: List[Any], n: int):
-    """
-    Yield successive chunks of size n from lst.
-    """
-    for i in range(0, len(lst), n):
-        yield lst[i:i+n]
-
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 load_dotenv()
 RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
 
-# Logging: set root logger to INFO, keep key modules at WARNING
+# Logging: set root logger to INFO, lower noisy libraries
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     level=logging.INFO
@@ -201,18 +201,27 @@ api = REST(
     base_url=os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 )
 
-# Ensure Alpaca credentials exist
 def ensure_alpaca_credentials() -> None:
     if not os.getenv("APCA_API_KEY_ID") or not os.getenv("APCA_API_SECRET_KEY"):
         raise RuntimeError("Missing Alpaca API credentials; please check .env")
 ensure_alpaca_credentials()
 
-# ─── PROMETHEUS METRICS & UTILITIES ─────────────────────────────────────────
+# Prometheus-safe account fetch
 @breaker
 def safe_alpaca_get_account():
     return api.get_account()
 
-# ─── C. DATA FETCHERS ─────────────────────────────────────────────────────────
+# ─── C. HELPERS ────────────────────────────────────────────────────────────────
+def chunked(iterable: Sequence, n: int):
+    """Yield successive n-sized chunks from iterable."""
+    for i in range(0, len(iterable), n):
+        yield iterable[i:i + n]
+
+def ttl_seconds() -> int:
+    """Configurable TTL for minute-bar cache (default 60s)."""
+    return int(os.getenv("MINUTE_CACHE_TTL", "60"))
+
+# ─── D. DATA FETCHERS ─────────────────────────────────────────────────────────
 class FinnhubFetcher:
     def __init__(self, calls_per_minute: int = FINNHUB_RPM):
         self.max_calls = calls_per_minute
@@ -220,15 +229,15 @@ class FinnhubFetcher:
         self.client = finnhub_client
 
     def _throttle(self):
-        now = pytime.time()
-        while self._timestamps and now - self._timestamps[0] > 60:
+        now_ts = pytime.time()
+        while self._timestamps and now_ts - self._timestamps[0] > 60:
             self._timestamps.popleft()
         if len(self._timestamps) >= self.max_calls:
-            wait_secs = 60 - (now - self._timestamps[0]) + random.uniform(0.1, 0.5)
+            wait_secs = 60 - (now_ts - self._timestamps[0]) + random.uniform(0.1, 0.5)
             logger.debug(f"[FH] rate-limit reached; sleeping {wait_secs:.2f}s")
             pytime.sleep(wait_secs)
             return self._throttle()
-        self._timestamps.append(now)
+        self._timestamps.append(now_ts)
 
     def _parse_period(self, period: str) -> int:
         if period.endswith("mo"):
@@ -249,13 +258,13 @@ class FinnhubFetcher:
         syms = symbols if isinstance(symbols, (list, tuple)) else [symbols]
         now_ts = int(pytime.time())
         span = self._parse_period(period)
-        start = now_ts - span
+        start_ts = now_ts - span
 
         resolution = 'D' if interval == '1d' else '1'
         frames = []
         for sym in syms:
             self._throttle()
-            resp = self.client.stock_candles(sym, resolution, _from=start, to=now_ts)
+            resp = self.client.stock_candles(sym, resolution, _from=start_ts, to=now_ts)
             if resp.get('s') != 'ok':
                 logger.warning(f"[FH] no data for {sym}: status={resp.get('s')}")
                 frames.append(pd.DataFrame())
@@ -292,9 +301,9 @@ class DataFetcher:
         # Regime-based fetch symbols
         if symbol in REGIME_SYMBOLS:
             if symbol not in self._daily_cache:
-                today = date.today()
-                start = (today - timedelta(days=365)).isoformat()
-                end = today.isoformat()
+                today_date = date.today()
+                start = (today_date - timedelta(days=365)).isoformat()
+                end = today_date.isoformat()
                 bars = ctx.api.get_bars(
                     symbol,
                     TimeFrame.Day,
@@ -315,7 +324,7 @@ class DataFetcher:
                 daily_cache_hit.inc()
                 return self._daily_cache[symbol]
 
-        # Non-regime symbols
+        # Non‐regime symbols
         if symbol not in self._daily_cache:
             try:
                 df = fh.fetch(symbol, period="1mo", interval="1d")
@@ -333,8 +342,8 @@ class DataFetcher:
 
     def get_minute_df(self, ctx: 'BotContext', symbol: str) -> Optional[pd.DataFrame]:
         now_utc = datetime.now(timezone.utc)
-        last = self._minute_timestamps.get(symbol)
-        if last and last > now_utc - timedelta(seconds=ttl_seconds()):
+        last_ts = self._minute_timestamps.get(symbol)
+        if last_ts and last_ts > now_utc - timedelta(seconds=ttl_seconds()):
             minute_cache_hit.inc()
             return self._minute_cache[symbol]
         minute_cache_miss.inc()
@@ -382,11 +391,7 @@ class DataFetcher:
             self._minute_timestamps[symbol] = now_utc
         return df
 
-def ttl_seconds() -> int:
-    """Configurable TTL for minute-bar cache (default 60s)."""
-    return int(os.getenv("MINUTE_CACHE_TTL", "60"))
-
-# ─── D. TRADE LOGGER ───────────────────────────────────────────────────────────
+# ─── E. TRADE LOGGER ───────────────────────────────────────────────────────────
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
         self.path = path
@@ -420,7 +425,7 @@ class TradeLogger:
             w = csv.writer(f)
             w.writerow(header); w.writerows(data)
 
-# ─── E. SIGNAL MANAGER & HELPER FUNCTIONS ─────────────────────────────────────
+# ─── F. SIGNAL MANAGER & HELPER FUNCTIONS ─────────────────────────────────────
 class SignalManager:
     def __init__(self) -> None:
         self.momentum_lookback = 5
@@ -577,7 +582,7 @@ class SignalManager:
         label = "+".join(lab for _, _, lab in signals)
         return final, conf, label
 
-# ─── F. BOT CONTEXT ───────────────────────────────────────────────────────────
+# ─── G. BOT CONTEXT ───────────────────────────────────────────────────────────
 @dataclass
 class BotContext:
     api: REST
@@ -600,7 +605,6 @@ class BotContext:
     stop_targets: dict[str, float] = field(default_factory=dict)
     portfolio_weights: dict[str, float] = field(default_factory=dict)
 
-# Instantiate singletons
 data_fetcher   = DataFetcher()
 signal_manager = SignalManager()
 trade_logger   = TradeLogger()
@@ -621,7 +625,7 @@ ctx = BotContext(
     kelly_fraction=params["KELLY_FRACTION"],
 )
 
-# ─── G. MARKET HOURS GUARD ────────────────────────────────────────────────────
+# ─── H. MARKET HOURS GUARD ────────────────────────────────────────────────────
 nyse = mcal.get_calendar("XNYS")
 def in_trading_hours(ts: pd.Timestamp) -> bool:
     schedule_today = nyse.schedule(start_date=ts.date(), end_date=ts.date())
@@ -629,7 +633,7 @@ def in_trading_hours(ts: pd.Timestamp) -> bool:
         return False
     return schedule_today.market_open.iloc[0] <= ts <= schedule_today.market_close.iloc[0]
 
-# ─── H. SENTIMENT & EVENTS ────────────────────────────────────────────────────
+# ─── I. SENTIMENT & EVENTS ────────────────────────────────────────────────────
 @sleep_and_retry
 @limits(calls=30, period=60)
 @retry(
@@ -706,12 +710,11 @@ def _can_fetch_events(symbol: str) -> bool:
     _LAST_EVENT_TS[symbol] = now_ts
     return True
 
-# Yahoo Finance calendar helper
 _calendar_cache: Dict[str, pd.DataFrame] = {}
 _calendar_last_fetch: Dict[str, date] = {}
 def get_calendar_safe(symbol: str) -> pd.DataFrame:
-    today = date.today()
-    if symbol in _calendar_cache and _calendar_last_fetch.get(symbol) == today:
+    today_date = date.today()
+    if symbol in _calendar_cache and _calendar_last_fetch.get(symbol) == today_date:
         return _calendar_cache[symbol]
     try:
         cal = yf.Ticker(symbol).calendar
@@ -722,7 +725,7 @@ def get_calendar_safe(symbol: str) -> pd.DataFrame:
         logger.error(f"[Events] Error fetching calendar for {symbol}: {e}")
         cal = pd.DataFrame()
     _calendar_cache[symbol] = cal
-    _calendar_last_fetch[symbol] = today
+    _calendar_last_fetch[symbol] = today_date
     return cal
 
 def is_near_event(symbol: str, days: int = 3) -> bool:
@@ -743,7 +746,7 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
     cutoff = today_ts + pd.Timedelta(days=days)
     return any(today_ts <= d <= cutoff for d in dates)
 
-# ─── I. RISK & GUARDS ─────────────────────────────────────────────────────────
+# ─── J. RISK & GUARDS ─────────────────────────────────────────────────────────
 day_start_equity: Optional[Tuple[date, float]] = None
 last_drawdown: float = 0.0
 
@@ -874,7 +877,7 @@ def too_correlated(sym: str) -> bool:
     avg_corr = corr_matrix.where(~np.eye(len(good_syms), dtype=bool)).stack().mean()
     return avg_corr > CORRELATION_THRESHOLD
 
-# ─── J. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
+# ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext) -> bool:
     now = datetime.now(PACIFIC)
     start = (datetime.combine(now.date(), ctx.market_open) + ctx.entry_start_offset).time()
@@ -895,8 +898,8 @@ def scaled_atr_stop(
 ) -> Tuple[float, float]:
     total = (market_close - market_open).total_seconds()
     elapsed = (now - market_open).total_seconds()
-    α = max(0, min(1, 1 - elapsed/total))
-    factor = min_factor + α*(max_factor - min_factor)
+    α = max(0, min(1, 1 - elapsed / total))
+    factor = min_factor + α * (max_factor - min_factor)
     stop = entry_price - factor * atr
     take = entry_price + factor * atr
     return stop, take
@@ -1095,9 +1098,9 @@ def vwap_pegged_submit(
     side: str,
     duration: int = 300
 ) -> None:
-    start = pytime.time()
+    start_time = pytime.time()
     placed = 0
-    while placed < total_qty and pytime.time() - start < duration:
+    while placed < total_qty and pytime.time() - start_time < duration:
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
         if df is None or df.empty:
             logger.warning("[VWAP] missing bars, aborting VWAP slice", extra={"symbol": symbol})
@@ -1295,7 +1298,7 @@ def exit_all_positions() -> None:
             submit_order(ctx, pos.symbol, qty, "sell")
             logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
 
-# ─── K. SIGNAL & TRADE LOGIC ───────────────────────────────────────────────────
+# ─── L. SIGNAL & TRADE LOGIC ───────────────────────────────────────────────────
 def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int, float, str]:
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, df, symbol, model)
     if sig == -1 or conf < CONF_THRESHOLD:
@@ -1465,7 +1468,7 @@ def trade_logic(
     # If holding, check for stops/take/trailing
     if current_qty > 0:
         price = feat_df["Close"].iloc[-1]
-        atr = feat_df["atr"].iloc[-1]
+        atr   = feat_df["atr"].iloc[-1]
         should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
         if should_exit_flag and exit_qty > 0:
             logger.info("EXIT_SIGNAL", extra={"symbol": symbol, "reason": reason, "exit_qty": exit_qty, "price": price})
@@ -1526,7 +1529,7 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
     from statsmodels.tsa.stattools import coint
     df1 = ctx.data_fetcher.get_daily_df(ctx, sym1)["Close"]
     df2 = ctx.data_fetcher.get_daily_df(ctx, sym2)["Close"]
-    df = pd.concat([df1, df2], axis=1).dropna()
+    df  = pd.concat([df1, df2], axis=1).dropna()
     t_stat, p_value, _ = coint(df.iloc[:, 0], df.iloc[:, 1])
     if p_value < 0.05:
         beta = np.polyfit(df.iloc[:, 1], df.iloc[:, 0], 1)[0]
@@ -1539,7 +1542,7 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
             return ("long_spread", 1)
     return ("no_signal", 0)
 
-# ─── L. UTILITIES ─────────────────────────────────────────────────────────────
+# ─── M. UTILITIES ─────────────────────────────────────────────────────────────
 def fetch_data(ctx, symbols: List[str], period: str, interval: str) -> Optional[pd.DataFrame]:
     dfs: List[pd.DataFrame] = []
     for batch in chunked(symbols, 3):
