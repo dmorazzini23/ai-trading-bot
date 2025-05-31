@@ -1514,19 +1514,27 @@ def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple
     try:
         pos = int(ctx.api.get_position(symbol).qty)
     except Exception:
-        pos=0
+        pos = 0
+
+    # 1) Stop‐loss
     stop = ctx.stop_targets.get(symbol)
     if stop is not None and price <= stop:
         return True, abs(pos), "stop_loss"
+
+    # 2) Take‐profit (partial)
     tp = ctx.take_profit_targets.get(symbol)
-    if pos and tp and ((pos>0 and price>=tp) or (pos<0 and price<=tp)):
-        return True, int(abs(pos)*SCALING_FACTOR), "take_profit"
+    if pos and tp and ((pos > 0 and price >= tp) or (pos < 0 and price <= tp)):
+        return True, int(abs(pos) * SCALING_FACTOR), "take_profit"
+
+    # 3) Trailing‐stop
     action = update_trailing_stop(ctx, symbol, price, pos, atr)
-    if action=="exit_long" and pos>0:
+    if action == "exit_long" and pos > 0:
         return True, pos, "trailing_stop"
-    if action=="exit_short" and pos<0:
+    if action == "exit_short" and pos < 0:
         return True, abs(pos), "trailing_stop"
-    return False,0,""
+
+    # 4) No “exit after N days”—purely signal/risk-based
+    return False, 0, ""
 
 def _can_fetch_events(symbol):
     now = pytime.time()
@@ -1561,19 +1569,19 @@ def trade_logic(
     model,
     regime_ok: bool
 ) -> None:
-    # 1) raw bars
+    # 1) Get the latest minute bars
     raw_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw_df is None or raw_df.empty:
         logger.info(f"[SKIP] {symbol} no raw data")
         return
 
-    # 2) indicators
+    # 2) Compute intraday indicators (vwap, rsi, atr, macd, stochrsi, etc.)
     feat_df = prepare_indicators(raw_df, freq="intraday")
     if feat_df.empty:
         logger.debug(f"[SKIP] {symbol} insufficient feature data")
         return
 
-    # 3) feature names
+    # 3) Make sure all features needed by the model are present
     if hasattr(model, "feature_names_in_"):
         feature_names = list(model.feature_names_in_)
     else:
@@ -1581,78 +1589,102 @@ def trade_logic(
             "rsi", "macd", "atr", "vwap",
             "macds", "ichimoku_conv", "ichimoku_base", "stochrsi"
         ]
-
-    # 4) missing?
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
         logger.info(f"[SKIP] {symbol} missing features: {missing}")
         return
 
-    # 5) signal
+    # 4) Evaluate ensemble of signals (final_sig ∈ {1,0,-1}, conf ∈ [0,1])
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, feat_df, symbol, model)
-
-    # debug‐log each component and final score
     logger.debug(f"[COMPONENTS] {symbol}: " +
                  ", ".join(f"{name}={flag}×{weight:.3f}"
                            for flag, weight, name in ctx.signal_manager.last_components))
     final_score = sum(flag * weight for flag, weight, _ in ctx.signal_manager.last_components)
     logger.debug(f"[FINAL SCORE] {symbol}: {final_score:.4f}")
 
-    if final_score < BUY_THRESHOLD:
-        logger.debug(f"[SKIP BUY] {symbol}: score {final_score:.2f} < threshold {BUY_THRESHOLD}")
+    # 5) Check if we already have a position
+    try:
+        pos = ctx.api.get_position(symbol)
+        current_qty = int(abs(int(pos.qty)))   # how many shares are currently held (long)
+    except Exception:
+        current_qty = 0
+
+    # 6) If the ensemble is bearish (final_sig < 0) AND we hold a long position, EXIT immediately.
+    if final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
+        # Full exit
+        price = feat_df["Close"].iloc[-1]
+        logger.info(f"[SIGNAL-REVERSAL EXIT] {symbol}: final_score={final_score:.2f} < 0 → SELL {current_qty}")
+        submit_order(ctx, symbol, current_qty, "sell")
+        ctx.trade_logger.log_exit(symbol, price)
+        # Clean up any existing stop/take targets
+        with targets_lock:
+            ctx.stop_targets.pop(symbol, None)
+            ctx.take_profit_targets.pop(symbol, None)
         return
 
-    logger.info(f"[SIGNAL] {symbol}: +1 (score={final_score:.2f}) → BUY")
+    # 7) If the ensemble is bullish (final_sig > 0), and we do NOT hold any position, ENTER.
+    if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
+        current_price = feat_df["Close"].iloc[-1]
+        # Compute raw_qty based on portfolio weight + sizing methods
+        target_weight = ctx.portfolio_weights.get(symbol, 0.0)
+        raw_qty = int(balance * target_weight / current_price)
+        if raw_qty <= 0:
+            logger.debug(f"[SKIP BUY] {symbol} no action (sig={sig}, raw_qty={raw_qty})")
+            return
 
-    # 6) calculate target qty
-    current_price = raw_df["Close"].iloc[-1]
-    target_weight = ctx.portfolio_weights.get(symbol, 0.0)
-    raw_qty = int(balance * target_weight / current_price)
-    if raw_qty <= 0:
-        logger.debug(f"[SKIP] {symbol} no action (sig={sig}, qty={raw_qty})")
-        return
-
-    # ─── BUY THRESHOLD ────────────────────────────────────────────────────
-    if sig > 0 and conf >= BUY_THRESHOLD:
-        qty = raw_qty
-        logger.info(f"[THRESHOLD] {symbol}: conf={conf:.2f} ≥ {BUY_THRESHOLD:.2f} → BUY {qty}")
-        order = submit_order(ctx, symbol, qty, "buy")
+        logger.info(f"[SIGNAL] {symbol}: final_score={final_score:.2f} ≥ BUY_THRESHOLD → BUY {raw_qty}")
+        order = submit_order(ctx, symbol, raw_qty, "buy")
         if order is None:
             logger.debug(f"[trade_logic] no order placed for {symbol}; moving on")
         else:
-            logger.info(f"[trade_logic] order placed: {order.id} {order.side} {order.qty} {order.symbol}")
+            logger.debug(f"[trade_logic] order placed: {order.id} {order.side} {order.qty} {order.symbol}")
+            ctx.trade_logger.log_entry(symbol, current_price, raw_qty, "buy", strat)
 
-    else:
-        logger.debug(f"[SKIP BUY] {symbol}: conf={conf:.2f} < BUY_THRESHOLD ({BUY_THRESHOLD:.2f})")
-    return
+            # Immediately set stop‐loss & take‐profit based on ATR
+            now = now_pacific()
+            mo  = datetime.combine(now.date(), ctx.market_open, PACIFIC)
+            mc  = datetime.combine(now.date(), ctx.market_close, PACIFIC)
 
-    # 7) if it's a SELL, cap it by your actual position size
-    if sig < 0:
-        try:
-            pos = ctx.api.get_position(symbol)
-            current_pos = int(float(pos.qty))
-        except Exception:
-            current_pos = 0
+            if is_high_vol_regime():
+                tp_factor = TAKE_PROFIT_FACTOR * 1.1
+            else:
+                tp_factor = TAKE_PROFIT_FACTOR
 
-        qty = min(current_pos, raw_qty)
-        if qty <= 0:
-            logger.debug(f"[SKIP] {symbol} no shares to sell (pos={current_pos})")
-            return
-
-        logger.info(f"[ENTRY] SELL {qty} {symbol}")
-        order_side = "sell"
-
-    else:  # BUY
-        qty = raw_qty
-        logger.info(f"[ENTRY] BUY {qty} {symbol}")
-        order_side = "buy"
-
-    # 8) submit, handling any API/Retry errors
-    try:
-        submit_order(ctx, symbol, qty, order_side)
-    except (APIError, RetryError) as e:
-        logger.warning(f"[trade_logic] skipping {symbol} due to order error: {e}")
+            stop, take = scaled_atr_stop(
+                entry_price=current_price,
+                atr= feat_df["atr"].iloc[-1],
+                now=now, market_open=mo, market_close=mc,
+                max_factor=tp_factor,
+                min_factor=0.5
+            )
+            with targets_lock:
+                ctx.stop_targets[symbol] = stop
+                ctx.take_profit_targets[symbol] = take
         return
+
+    # 8) If we already hold a position, check stop/take/trailing‐stop.
+    if current_qty > 0:
+        price = feat_df["Close"].iloc[-1]
+        atr   = feat_df["atr"].iloc[-1]
+        should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
+        if should_exit_flag and exit_qty > 0:
+            logger.info(f"[{reason.upper()} EXIT] {symbol}: exit_qty={exit_qty} at price={price:.2f}")
+            submit_order(ctx, symbol, exit_qty, "sell")
+            ctx.trade_logger.log_exit(symbol, price)
+
+            # If we sold everything, clear the stops/take dictionaries
+            try:
+                pos_after = ctx.api.get_position(symbol)
+                if int(abs(int(pos_after.qty))) == 0:
+                    with targets_lock:
+                        ctx.stop_targets.pop(symbol, None)
+                        ctx.take_profit_targets.pop(symbol, None)
+            except Exception:
+                pass
+        return
+
+    # 9) Otherwise, do nothing (i.e. hold until either a new signal or a stop/take/trailing triggers).
+    return
         
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """
@@ -2149,7 +2181,7 @@ if __name__ == "__main__":
 
     # daily jobs
     schedule.every().day.at("00:30").do(daily_summary)
-    schedule.every().day.at("15:45").do(exit_all_positions)
+    # schedule.every().day.at("15:45").do(exit_all_positions)   # ← disabled
 
     # load your model
     model = load_model()
