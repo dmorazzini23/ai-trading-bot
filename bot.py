@@ -17,6 +17,7 @@ import numpy as np
 np.NaN = np.nan
 
 import pandas as pd
+import pandas_ta as ta                          
 import pandas_market_calendars as mcal
 
 import requests
@@ -1722,9 +1723,9 @@ def screen_universe(
         if df is None or len(df) < ATR_LENGTH:
             continue
         series = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
-        atr = series.iloc[-1] if not series.empty else np.nan
-        if not pd.isna(atr):
-            atrs[sym] = float(atr)
+        atr_val = series.iloc[-1] if not series.empty else np.nan
+        if not pd.isna(atr_val):
+            atrs[sym] = float(atr_val)
     ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
     return [sym for sym, _ in ranked[:top_n]]
 
