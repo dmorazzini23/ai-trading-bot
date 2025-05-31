@@ -1,14 +1,5 @@
 import logging
-logging.basicConfig(
-    format="%(asctime)s %(levelname)s %(message)s",
-    level=logging.DEBUG
-)
-logger = logging.getLogger(__name__)
-
-logging.getLogger("alpaca_trade_api").setLevel(logging.DEBUG)
-logging.getLogger("urllib3").setLevel(logging.DEBUG)
-logging.getLogger("requests").setLevel(logging.DEBUG)
-
+from logging import LoggerAdapter
 import os
 import csv
 import re
@@ -21,15 +12,10 @@ from dataclasses import dataclass, field
 from threading import Semaphore, Lock, Thread
 from concurrent.futures import ThreadPoolExecutor
 from tenacity import RetryError
-
 import numpy as np
-if not hasattr(np, "NaN"):
-    np.NaN = np.nan
-
 import pandas as pd
 import pandas_market_calendars as mcal
 import pandas_ta as ta
-
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask
@@ -37,97 +23,59 @@ import schedule
 import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
 import portalocker
-
 from alpaca_trade_api.rest import REST, APIError, TimeFrame
 from sklearn.ensemble import RandomForestClassifier
-
 import pickle
 import joblib
 from dotenv import load_dotenv
 import sentry_sdk
-from prometheus_client import start_http_server, Counter, Gauge
+from prometheus_client import start_http_server, Counter, Gauge, Histogram
 import finnhub
 import pybreaker
-
-import warnings
-warnings.filterwarnings(
-  "ignore",
-  message=".*valid feature names.*",
-  category=UserWarning
-)
-
-# ─── THREAD‐SAFETY LOCKS & GLOBALS ───────────────────────────────────────────
-cache_lock   = Lock()
-targets_lock = Lock()
-
-_LAST_EVENT_TS   = {}
-EVENT_COOLDOWN   = 15.0  # seconds
-
-INTRADAY_FEATURES = [
-    "vwap",
-    "rsi",
-    "atr",
-    "macd",
-    "macds",
-    "ichimoku_conv",
-    "ichimoku_base",
-    "stochrsi",
-]
-
-def is_high_vol_regime() -> bool:
-    # Uses our regime_model’s 14d vol vs its 20d rolling mean
-    df = data_fetcher._daily_cache.get("SPY")
-    feats = _compute_regime_features(df)
-    today_vol = feats["vol"].iloc[-1]
-    long_vol = feats["vol"].rolling(20).mean().iloc[-1]
-    return today_vol > long_vol
-
-# ─── CIRCUIT BREAKER FOR ALPACA CALLS ─────────────────────────────────────────
-breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
-executor = ThreadPoolExecutor(max_workers=4)
-
-def predict_text_sentiment(text: str) -> float:
-    # Placeholder: always returns neutral. You can plug in your own model.
-    return 0.0
-
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, wait_random, retry_if_exception_type
 from ratelimit import limits, sleep_and_retry
 from collections import deque
 from more_itertools import chunked
 
-# for check_daily_loss()
-day_start_equity: Optional[Tuple[date, float]] = None
-last_drawdown: float = 0.0
-_calendar_cache: Dict[str, pd.DataFrame] = {}
-_calendar_last_fetch: Dict[str, date] = {}
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message=".*valid feature names.*",
+    category=UserWarning
+)
 
-# ─── MARKET HOURS GUARD ───────────────────────────────────────────────────────
-nyse = mcal.get_calendar("XNYS")
-
-def in_trading_hours(ts: pd.Timestamp) -> bool:
-    """Return True if ts (UTC) falls within today’s NYSE open/close."""
-    schedule = nyse.schedule(start_date=ts.date(), end_date=ts.date())
-    if schedule.empty:
-        return False
-    return schedule.market_open.iloc[0] <= ts <= schedule.market_close.iloc[0]
-
-# ─── A. ENVIRONMENT, SENTRY & LOGGING ─────────────────────────────────────────
+# ─── CONFIGURATION CONSTANTS & LOGGING ─────────────────────────────────────
 load_dotenv()
+# Root logger at DEBUG; reduce noisy modules to INFO or WARNING
+logging.basicConfig(
+    format="%(asctime)s %(levelname)s %(message)s",
+    level=logging.DEBUG
+)
+logger = logging.getLogger(__name__)
+logging.getLogger("alpaca_trade_api").setLevel(logging.INFO)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("requests").setLevel(logging.WARNING)
+
+# Prometheus metrics
+orders_total = Counter('bot_orders_total', 'Total orders sent')
+order_failures = Counter('bot_order_failures', 'Order submission failures')
+daily_drawdown = Gauge('bot_daily_drawdown', 'Current daily drawdown fraction')
+signals_evaluated = Counter('bot_signals_evaluated_total', 'Total signals evaluated')
+run_all_trades_duration = Histogram('bot_run_all_trades_duration_seconds', 'Time spent in run_all_trades')
+cache_hits = Counter('bot_cache_hits_total', 'Number of cache hits in DataFetcher')
+cache_misses = Counter('bot_cache_misses_total', 'Number of cache misses in DataFetcher')
+event_cooldown_hits = Counter('bot_event_cooldown_hits_total', 'Number of times _can_fetch_events blocked due to cooldown')
+
+# Environment
 RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN"),
     traces_sample_rate=0.1,
     environment=os.getenv("BOT_MODE", "live"),
 )
+FINNHUB_RPM = int(os.getenv("FINNHUB_RPM", "60"))  # make Finnhub rate limit configurable
 
-finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
-
-# ─── C. PROMETHEUS METRICS ───────────────────────────────────────────────────
-orders_total   = Counter('bot_orders_total',   'Total orders sent')
-order_failures = Counter('bot_order_failures', 'Order submission failures')
-daily_drawdown = Gauge('bot_daily_drawdown',   'Current daily drawdown fraction')
-
-# ─── PATH CONFIGURATION ───────────────────────────────────────────────────────
+# Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 def abspath(fname: str) -> str:
     return os.path.join(BASE_DIR, fname)
@@ -141,7 +89,7 @@ HALT_FLAG_PATH      = abspath("halt.flag")
 MODEL_PATH          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
 REGIME_MODEL_PATH   = abspath("regime_model.pkl")
 
-# ─── STRATEGY MODE CONFIGURATION ─────────────────────────────────────────────
+# Bot mode parameters
 class BotMode:
     def __init__(self, mode: str = "balanced") -> None:
         self.mode = mode.lower()
@@ -150,33 +98,21 @@ class BotMode:
     def set_parameters(self) -> dict[str, float]:
         if self.mode == "conservative":
             return {
-                "KELLY_FRACTION": 0.3,
-                "CONF_THRESHOLD": 0.8,
-                "CONFIRMATION_COUNT": 3,
-                "TAKE_PROFIT_FACTOR": 1.2,
-                "DAILY_LOSS_LIMIT": 0.05,
-                "CAPITAL_CAP": 0.05,
-                "TRAILING_FACTOR": 1.5,
+                "KELLY_FRACTION": 0.3, "CONF_THRESHOLD": 0.8, "CONFIRMATION_COUNT": 3,
+                "TAKE_PROFIT_FACTOR": 1.2, "DAILY_LOSS_LIMIT": 0.05,
+                "CAPITAL_CAP": 0.05, "TRAILING_FACTOR": 1.5
             }
         elif self.mode == "aggressive":
             return {
-                "KELLY_FRACTION": 0.75,
-                "CONF_THRESHOLD": 0.6,
-                "CONFIRMATION_COUNT": 1,
-                "TAKE_PROFIT_FACTOR": 2.2,
-                "DAILY_LOSS_LIMIT": 0.1,
-                "CAPITAL_CAP": 0.1,
-                "TRAILING_FACTOR": 2.0,
+                "KELLY_FRACTION": 0.75, "CONF_THRESHOLD": 0.6, "CONFIRMATION_COUNT": 1,
+                "TAKE_PROFIT_FACTOR": 2.2, "DAILY_LOSS_LIMIT": 0.1,
+                "CAPITAL_CAP": 0.1, "TRAILING_FACTOR": 2.0
             }
         else:  # balanced
             return {
-                "KELLY_FRACTION": 0.6,
-                "CONF_THRESHOLD": 0.75,
-                "CONFIRMATION_COUNT": 2,
-                "TAKE_PROFIT_FACTOR": 1.8,
-                "DAILY_LOSS_LIMIT": 0.07,
-                "CAPITAL_CAP": 0.08,
-                "TRAILING_FACTOR": 1.2,
+                "KELLY_FRACTION": 0.6, "CONF_THRESHOLD": 0.75, "CONFIRMATION_COUNT": 2,
+                "TAKE_PROFIT_FACTOR": 1.8, "DAILY_LOSS_LIMIT": 0.07,
+                "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.2
             }
 
     def get_config(self) -> dict[str, float]:
@@ -187,7 +123,7 @@ mode     = BotMode(BOT_MODE)
 logger.info(f"Trading mode is set to '{mode.mode}'")
 params   = mode.get_config()
 
-# ─── CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
+# Constants
 NEWS_API_KEY             = os.getenv("NEWS_API_KEY")
 TRAILING_FACTOR          = params["TRAILING_FACTOR"]
 SECONDARY_TRAIL_FACTOR   = 1.0
@@ -201,8 +137,8 @@ POV_SLICE_PCT            = float(os.getenv("POV_SLICE_PCT", "0.05"))
 DAILY_LOSS_LIMIT         = params["DAILY_LOSS_LIMIT"]
 MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD    = 0.60
-MARKET_OPEN              = dt_time(6, 30)     # 9:30 ET is 6:30 PT
-MARKET_CLOSE             = dt_time(13, 0)     # 4:00 ET is 1:00 PT
+MARKET_OPEN              = dt_time(6, 30)
+MARKET_CLOSE             = dt_time(13, 0)
 VOLUME_THRESHOLD         = int(os.getenv("VOLUME_THRESHOLD", "50000"))
 ENTRY_START_OFFSET       = timedelta(minutes=30)
 ENTRY_END_OFFSET         = timedelta(minutes=15)
@@ -219,43 +155,41 @@ PACIFIC                  = ZoneInfo("America/Los_Angeles")
 PDT_DAY_TRADE_LIMIT      = 3
 PDT_EQUITY_THRESHOLD     = 25_000.0
 BUY_THRESHOLD            = float(os.getenv("BUY_THRESHOLD", "0.5"))
+MINUTE_CACHE_TTL         = int(os.getenv("MINUTE_CACHE_TTL", "60"))  # seconds
 
-# ─── SLICING CONFIG ────────────────────────────────────────────────────────────
-@dataclass(frozen=True)
-class SliceConfig:
-    pct: float = 0.1
-    sleep_interval: int = 60
-    max_retries: int = 3
-    backoff_factor: float = 2.0
-    max_backoff_interval: int = 300
+# Regime symbols (instead of hard-coding "SPY")
+REGIME_SYMBOLS = os.getenv("REGIME_SYMBOLS", "SPY").split(",")
 
-DEFAULT_SLICE_CFG = SliceConfig(
-    pct=POV_SLICE_PCT,
-    sleep_interval=60,
-    max_retries=3,
-    backoff_factor=2.0,
-    max_backoff_interval=300
-)
+# Thread-safety locks & state
+cache_lock   = Lock()
+targets_lock = Lock()
+_LAST_EVENT_TS   = {}
+EVENT_COOLDOWN   = 15.0  # seconds
 
-# ─── PAIR‐TRADING CONFIG ────────────────────────────────────────────────────
-your_cointegrated_pairs: List[Tuple[str,str]] = [
-    ("AAPL", "MSFT"),
-    ("XOM",  "CVX"),
-    # …etc.
-]
+# ─── CIRCUIT BREAKER ───────────────────────────────────────────────────────
+breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
+executor = ThreadPoolExecutor(max_workers=4)
 
-# ─── ASSERT ALPACA KEYS ───────────────────────────────────────────────────────
-ALPACA_API_KEY    = os.getenv("APCA_API_KEY_ID")
-ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
-ALPACA_BASE_URL   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+# ─── HELPER FOR STRUCTURED LOGGING ─────────────────────────────────────────
+def structured_logger(name: str, **fields) -> LoggerAdapter:
+    """
+    Returns a LoggerAdapter that will include the provided fields in every log record.
+    """
+    return LoggerAdapter(logger, fields)
 
-def ensure_alpaca_credentials() -> None:
-    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-        raise RuntimeError("Missing Alpaca API credentials; please check .env")
+# ─── SENTIMENT PREDICTION (stub) ────────────────────────────────────────────
+def predict_text_sentiment(text: str) -> float:
+    return 0.0
 
-ensure_alpaca_credentials()
+# ─── MARKET HOURS GUARD ───────────────────────────────────────────────────
+nyse = mcal.get_calendar("XNYS")
+def in_trading_hours(ts: pd.Timestamp) -> bool:
+    schedule = nyse.schedule(start_date=ts.date(), end_date=ts.date())
+    if schedule.empty:
+        return False
+    return schedule.market_open.iloc[0] <= ts <= schedule.market_close.iloc[0]
 
-# ─── TYPED EXCEPTION & CONTEXT ───────────────────────────────────────────────
+# ─── TYPED EXCEPTION & CONTEXT ─────────────────────────────────────────────
 class DataFetchError(Exception):
     pass
 
@@ -279,17 +213,21 @@ class BotContext:
     trailing_extremes: dict[str, float] = field(default_factory=dict)
     take_profit_targets: dict[str, float] = field(default_factory=dict)
     stop_targets:         dict[str, float] = field(default_factory=dict)
-    portfolio_weights:    dict[str, float] = field(default_factory=dict)
+    portfolio_weights: dict[str, float] = field(default_factory=dict)
+    just_exited: set[str] = field(default_factory=set)  # to prevent immediate re-entry
 
-# ─── FINNHUB FETCHER ───────────────────────────────────────────────────────────
+# ─── FINNHUB FETCHER ────────────────────────────────────────────────────────
+finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
+
 class FinnhubFetcher:
-    def __init__(self, calls_per_minute: int = 60):
+    def __init__(self, calls_per_minute: int = FINNHUB_RPM):
         self.max_calls   = calls_per_minute
         self._timestamps = deque()
         self.client      = finnhub_client
 
     def _throttle(self):
         now = pytime.time()
+        # drop timestamps >60s ago
         while self._timestamps and now - self._timestamps[0] > 60:
             self._timestamps.popleft()
         if len(self._timestamps) >= self.max_calls:
@@ -329,9 +267,7 @@ class FinnhubFetcher:
             span = self._parse_period(period)
             start = now - span
 
-            # Finnhub resolution: 'D' for daily, '1' for 1-min
             resolution = 'D' if interval == '1d' else '1'
-
             frames = []
             for sym in syms:
                 self._throttle()
@@ -349,7 +285,6 @@ class FinnhubFetcher:
                     'Volume': resp['v'],
                 }, index=pd.to_datetime(resp['t'], unit='s', utc=True))
 
-                # drop timezone so it matches your existing code
                 df.index = df.index.tz_convert(None)
                 frames.append(df)
 
@@ -357,52 +292,53 @@ class FinnhubFetcher:
                 return pd.DataFrame()
             if len(frames) == 1:
                 return frames[0]
-
-            # multi-symbol: produce a (Symbol,Field) MultiIndex
             return pd.concat(frames, axis=1, keys=syms, names=['Symbol','Field'])
-
         except Exception as e:
             logger.debug(f"[FH] fetch error for {symbols}: {e}. returning empty df")
             return pd.DataFrame()
 
-# instantiate a singleton
-fh = FinnhubFetcher(calls_per_minute=60)
+fh = FinnhubFetcher()
+
 _last_fh_prefetch_date: Optional[date] = None
 
-# ─── CORE CLASSES ─────────────────────────────────────────────────────────────
+# ─── DATA FETCHER ────────────────────────────────────────────────────────────
 class DataFetcher:
     def __init__(self) -> None:
         self._daily_cache: dict[str, Optional[pd.DataFrame]] = {}
         self._minute_cache: dict[str, Optional[pd.DataFrame]] = {}
-        self._minute_timestamps: dict[str, datetime] = {}
+        self._minute_timestamps: dict[str, float] = {}
 
     def get_daily_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        # For SPY, always fetch 1 year of data via Alpaca
-        if symbol == "SPY":
+        # Pull one year for any symbol in REGIME_SYMBOLS
+        if symbol in REGIME_SYMBOLS:
             today = date.today()
             start = (today - timedelta(days=365)).isoformat()
             end   = today.isoformat()
-            bars = ctx.api.get_bars(
-                symbol,
-                TimeFrame.Day,
-                start=start,
-                end=end,
-                limit=1000,
-                feed="iex"
-            ).df
-            bars.index = pd.to_datetime(bars.index).tz_localize(None)
-            df = bars.rename(columns={
-                "open":   "Open",
-                "high":   "High",
-                "low":    "Low",
-                "close":  "Close",
-                "volume": "Volume"
-            })
-            with cache_lock:
-                self._daily_cache[symbol] = df
-            return df
+            try:
+                bars = ctx.api.get_bars(
+                    symbol,
+                    TimeFrame.Day,
+                    start=start,
+                    end=end,
+                    limit=1000,
+                    feed="iex"
+                ).df
+                bars.index = pd.to_datetime(bars.index).tz_localize(None)
+                df = bars.rename(columns={
+                    "open":   "Open",
+                    "high":   "High",
+                    "low":    "Low",
+                    "close":  "Close",
+                    "volume": "Volume"
+                })
+                with cache_lock:
+                    self._daily_cache[symbol] = df
+                return df
+            except Exception as e:
+                logger.warning(f"[DataFetcher] daily fetch failed for {symbol}: {e}")
+                return None
 
-        # existing logic for non-SPY symbols
+        # Otherwise, cache for 1 day (if present, return)
         if symbol not in self._daily_cache:
             try:
                 df = fh.fetch(symbol, period="1mo", interval="1d")
@@ -415,17 +351,16 @@ class DataFetcher:
         return self._daily_cache[symbol]
 
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
-        # 0) cache hit?
-        last = self._minute_timestamps.get(symbol)
-        if last and last > datetime.now(timezone.utc) - timedelta(minutes=1):
-            return self._minute_cache[symbol]
+        now_ts = pytime.time()
+        last = self._minute_timestamps.get(symbol, 0)
+        if last and now_ts - last < MINUTE_CACHE_TTL:
+            cache_hits.inc()
+            return self._minute_cache.get(symbol)
 
+        cache_misses.inc()
         df: Optional[pd.DataFrame] = None
 
-        # 1) Skip Finnhub entirely (go straight to Alpaca fallback)
-        df = None
-
-        # 2) Fallback to Alpaca IEX if no data
+        # 1) Try Alpaca IEX
         try:
             bars = ctx.api.get_bars(
                 symbol,
@@ -433,7 +368,6 @@ class DataFetcher:
                 limit=390 * 5,   # up to 5 full days
                 feed="iex"
             ).df
-
             if not bars.empty:
                 bars = bars.rename(columns={
                     "open":   "Open",
@@ -443,19 +377,33 @@ class DataFetcher:
                     "volume": "Volume"
                 })
                 if "symbol" in bars.columns:
-                    bars = bars.drop(columns=["symbol"])
+                    bars = bars.drop(columns=["symbol"], errors="ignore")
                 bars.index = pd.to_datetime(bars.index).tz_localize(None)
                 df = bars[["Open","High","Low","Close","Volume"]]
-                logger.debug(f"[DataFetcher] minute bars via Alpaca IEX for {symbol}")  # demoted to DEBUG
+                logger.debug(f"[DataFetcher] minute bars via Alpaca IEX for {symbol}")
         except Exception as e:
-            logger.warning(f"[DataFetcher] Alpaca minute fallback failed for {symbol}: {e}")
+            logger.warning(f"[DataFetcher] Alpaca minute fetch failed for {symbol}: {e}")
+            df = None
 
-        # 3) cache & return
+        # 2) If Alpaca returned empty or None, fallback to Finnhub 1-min
+        if df is None or df.empty:
+            try:
+                fh_df = fh.fetch(symbol, period="5d", interval="1m")
+                if fh_df is not None and not fh_df.empty:
+                    fh_df.index = pd.to_datetime(fh_df.index).tz_localize(None)
+                    df = fh_df.rename(columns=lambda c: c.capitalize())
+                    logger.info(f"[DataFetcher] fallback to Finnhub 1-min bars for {symbol}")
+            except Exception as e:
+                logger.warning(f"[DataFetcher] Finnhub minute fetch failed for {symbol}: {e}")
+                df = None
+
+        # 3) Cache & return
         with cache_lock:
             self._minute_cache[symbol]      = df
-            self._minute_timestamps[symbol] = datetime.now(timezone.utc)
+            self._minute_timestamps[symbol] = now_ts
         return df
 
+# ─── TRADE LOGGER ────────────────────────────────────────────────────────────
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
         self.path = path
@@ -480,38 +428,40 @@ class TradeLogger:
                 if row[0] == symbol and row[3] == "":
                     entry_t = datetime.fromisoformat(row[1])
                     days = (datetime.now(timezone.utc) - entry_t).days
-                    cls = (
-                        "day_trade"   if days == 0
-                        else "swing_trade" if days < 5
-                        else "long_trade"
-                    )
+                    cls = ("day_trade" if days == 0
+                           else "swing_trade" if days < 5
+                           else "long_trade")
                     row[3], row[4], row[8] = datetime.now(timezone.utc).isoformat(), exit_price, cls
                     break
             f.seek(0); f.truncate()
             w = csv.writer(f)
             w.writerow(header); w.writerows(data)
 
+# ─── SIGNAL MANAGER ─────────────────────────────────────────────────────────
 class SignalManager:
     def __init__(self) -> None:
         self.momentum_lookback = 5
         self.mean_rev_lookback = 20
         self.mean_rev_zscore_threshold = 2.0
         self.regime_volatility_threshold = REGIME_ATR_THRESHOLD
+        self.last_components: List[Tuple[int, float, str]] = []
 
     def signal_momentum(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
+        signals_evaluated.inc()
         if df is None or len(df) <= self.momentum_lookback:
             return -1, 0.0, 'momentum'
         try:
             df['momentum'] = df['Close'].pct_change(self.momentum_lookback)
             val = df['momentum'].iloc[-1]
-            signal = 1 if val > 0 else 0 if val < 0 else -1
-            weight = min(abs(val) * 10, 1.0)
-            return signal, weight, 'momentum'
+            s = 1 if val > 0 else -1 if val < 0 else -1
+            w = min(abs(val) * 10, 1.0)
+            return s, w, 'momentum'
         except Exception:
             logger.exception("Error in signal_momentum")
             return -1, 0.0, 'momentum'
 
     def signal_mean_reversion(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
+        signals_evaluated.inc()
         if df is None or len(df) < self.mean_rev_lookback:
             return -1, 0.0, 'mean_reversion'
         try:
@@ -519,29 +469,27 @@ class SignalManager:
             sd = df['Close'].rolling(self.mean_rev_lookback).std()
             df['zscore'] = (df['Close'] - ma) / sd
             val = df['zscore'].iloc[-1]
-            signal = (
-                0 if val > self.mean_rev_zscore_threshold
-                else 1 if val < -self.mean_rev_zscore_threshold
-                else -1
-            )
-            weight = min(abs(val)/3, 1.0)
-            return signal, weight, 'mean_reversion'
+            s = -1 if val > self.mean_rev_zscore_threshold else 1 if val < -self.mean_rev_zscore_threshold else -1
+            w = min(abs(val)/3, 1.0)
+            return s, w, 'mean_reversion'
         except Exception:
             logger.exception("Error in signal_mean_reversion")
             return -1, 0.0, 'mean_reversion'
 
     def signal_stochrsi(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
+        signals_evaluated.inc()
         if df is None or 'stochrsi' not in df or df['stochrsi'].dropna().empty:
             return -1, 0.0, 'stochrsi'
         try:
             val = df['stochrsi'].iloc[-1]
-            signal = 1 if val < 0.2 else 0 if val > 0.8 else -1
-            return signal, 0.3, 'stochrsi'
+            s = 1 if val < 0.2 else -1 if val > 0.8 else -1
+            return s, 0.3, 'stochrsi'
         except Exception:
             logger.exception("Error in signal_stochrsi")
             return -1, 0.0, 'stochrsi'
 
     def signal_obv(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
+        signals_evaluated.inc()
         if df is None or len(df) < 6:
             return -1, 0.0, 'obv'
         try:
@@ -549,14 +497,15 @@ class SignalManager:
             if len(obv) < 5:
                 return -1, 0.0, 'obv'
             slope = np.polyfit(range(5), obv.tail(5), 1)[0]
-            signal = 1 if slope > 0 else 0 if slope < 0 else -1
-            weight = min(abs(slope)/1e6, 1.0)
-            return signal, weight, 'obv'
+            s = 1 if slope > 0 else -1 if slope < 0 else -1
+            w = min(abs(slope)/1e6, 1.0)
+            return s, w, 'obv'
         except Exception:
             logger.exception("Error in signal_obv")
             return -1, 0.0, 'obv'
 
     def signal_vsa(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
+        signals_evaluated.inc()
         if df is None or len(df) < 20:
             return -1, 0.0, 'vsa'
         try:
@@ -564,41 +513,40 @@ class SignalManager:
             vsa = df['Volume'] * body
             score = vsa.iloc[-1]
             avg   = vsa.rolling(20).mean().iloc[-1]
-            signal = (
-                1 if df['Close'].iloc[-1] > df['Open'].iloc[-1]
-                else 0 if df['Close'].iloc[-1] < df['Open'].iloc[-1]
-                else -1
-            )
-            weight = min(score/avg, 1.0)
-            return signal, weight, 'vsa'
+            s = 1 if df['Close'].iloc[-1] > df['Open'].iloc[-1] else -1 if df['Close'].iloc[-1] < df['Open'].iloc[-1] else -1
+            w = min(score/avg, 1.0)
+            return s, w, 'vsa'
         except Exception:
             logger.exception("Error in signal_vsa")
             return -1, 0.0, 'vsa'
 
     def signal_ml(self, df: pd.DataFrame, model: Any=None) -> Tuple[int, float, str]:
+        signals_evaluated.inc()
         try:
             feat = ['rsi','macd','atr','vwap','sma_50','sma_200']
             X = df[feat].iloc[-1].values.reshape(1,-1)
             pred = model.predict(X)[0]
             proba = model.predict_proba(X)[0][pred]
-            sig = 1 if pred == 1 else 0
-            return sig, proba, 'ml'
+            s = 1 if pred == 1 else -1
+            return s, proba, 'ml'
         except Exception:
             return -1, 0.0, 'ml'
 
     def signal_sentiment(self, ctx: BotContext, ticker: str, df: pd.DataFrame = None, model: Any = None) -> Tuple[int, float, str]:
+        signals_evaluated.inc()
         try:
             score = fetch_sentiment(ctx, ticker)
         except Exception as e:
             logger.warning(f"[signal_sentiment] {ticker} error: {e}")
             score = 0.0
-        sig = 1 if score > 0 else 0 if score < 0 else -1
-        return sig, abs(score), 'sentiment'
+        s = 1 if score > 0 else -1 if score < 0 else -1
+        return s, abs(score), 'sentiment'
 
     def signal_regime(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
+        signals_evaluated.inc()
         ok = check_market_regime()
-        sig = 1 if ok else 0
-        return sig, 1.0, 'regime'
+        s = 1 if ok else -1
+        return s, 1.0, 'regime'
 
     def load_signal_weights(self) -> dict[str, float]:
         if not os.path.exists(SIGNAL_WEIGHTS_FILE):
@@ -607,6 +555,10 @@ class SignalManager:
         return {row['signal']: row['weight'] for _, row in df.iterrows()}
 
     def evaluate(self, ctx: BotContext, df: pd.DataFrame, ticker: str, model: Any) -> Tuple[int, float, str]:
+        """
+        Runs all signals, includes both s ∈ {–1, 1}. Short signals subtract from score.
+        Returns (final ∈ {–1,0,1}, confidence ∈ [0,1], label)
+        """
         signals: List[Tuple[int, float, str]] = []
         allowed_tags = set(load_global_signal_performance() or [])
         weights = self.load_signal_weights()
@@ -627,7 +579,7 @@ class SignalManager:
                 s, w, lab = fn(df, model)
                 if allowed_tags and lab not in allowed_tags:
                     continue
-                if s in (0, 1):
+                if s in (-1, 1):
                     signals.append((s, weights.get(lab, w), lab))
             except Exception:
                 continue
@@ -636,13 +588,22 @@ class SignalManager:
             return -1, 0.0, 'no_signal'
 
         self.last_components = [(s, w, lab) for (s, w, lab) in signals]
-        score = sum((1 if s==1 else -1)*w for s,w,_ in signals)
+        score = sum(s * w for s, w, _ in signals)
         conf  = min(abs(score), 1.0)
-        final = 1 if score > 0.5 else 0 if score < -0.5 else -1
+        final = 1 if score > 0.5 else -1 if score < -0.5 else 0
         label = "+".join(lab for _,_,lab in signals)
         return final, conf, label
 
-# ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
+# ─── GLOBAL STATE ───────────────────────────────────────────────────────────
+# Alpaca credentials
+ALPACA_API_KEY    = os.getenv("APCA_API_KEY_ID")
+ALPACA_SECRET_KEY = os.getenv("APCA_API_SECRET_KEY")
+ALPACA_BASE_URL   = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+def ensure_alpaca_credentials() -> None:
+    if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+        raise RuntimeError("Missing Alpaca API credentials; please check .env")
+ensure_alpaca_credentials()
+
 api            = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=ALPACA_BASE_URL)
 data_fetcher   = DataFetcher()
 signal_manager = SignalManager()
@@ -664,7 +625,7 @@ ctx = BotContext(
     kelly_fraction=params["KELLY_FRACTION"],
 )
 
-# ─── CIRCUIT‐BREAKER WRAPPER ─────────────────────────────────────────────────
+# ─── CIRCUIT-BREAKER WRAPPERS ────────────────────────────────────────────────
 @breaker
 def safe_alpaca_get_account():
     return api.get_account()
@@ -680,107 +641,75 @@ def _fh_chunk_fetch(
     period: str = "1mo",
     interval: str = "1d"
 ) -> pd.DataFrame:
-    """
-    Use our throttled FinnhubFetcher for small batches.
-    Retries twice on any exception.
-    """
     df = fh.fetch(symbols, period=period, interval=interval)
     if df is None or df.empty:
         raise DataFetchError(f"No data returned for symbols {symbols}")
     return df
 
 def prefetch_daily_with_alpaca(symbols: List[str]):
-    all_syms = [s for s in symbols if s != "SPY"]
+    """
+    Chunk the full list of symbols into smaller batches to avoid rate limits.
+    """
+    all_syms = [s for s in symbols if s not in REGIME_SYMBOLS]
     if not all_syms:
         return
 
+    # batch size for Alpaca: e.g. 10 symbols per request
+    batch_size = 10
     start = (date.today() - timedelta(days=30)).isoformat()
     end   = date.today().isoformat()
 
-    try:
-        bars = api.get_bars(
-            all_syms,
-            TimeFrame.Day,
-            start=start,
-            end=end,
-            limit=1000,
-            feed="iex"
-        ).df
-
-        # Bulk‐seed from Alpaca
-        for sym, df_sym in bars.groupby("symbol"):
-            df = df_sym.drop(columns=["symbol"], errors="ignore").copy()
-            df = df.rename(columns={
-                "open":   "Open",
-                "high":   "High",
-                "low":    "Low",
-                "close":  "Close",
-                "volume": "Volume"
-            })
-            df.index = pd.to_datetime(df.index).tz_localize(None)
-            with cache_lock:
-                data_fetcher._daily_cache[sym] = df
-
-        logger.info(f"[prefetch] seeded {len(bars['symbol'].unique())} symbols via Alpaca")
-        return
-
-    except Exception as e:
-        logger.warning(f"[prefetch] Alpaca bulk failed: {e!r} — falling back to Finnhub")
-
-    # 1) Chunked fallback via FinnhubFetcher
-    for batch in chunked(all_syms, 3):
+    for batch in chunked(all_syms, batch_size):
         try:
-            df_chunk = _fh_chunk_fetch(batch, period="1mo", interval="1d")
-        except Exception as e:
-            logger.warning(f"[prefetch] Finnhub chunk {batch} failed: {e!r}")
-            continue
-        if df_chunk.empty:
-            continue
-
-        # normalize index
-        df_chunk.index = pd.to_datetime(df_chunk.index)
-
-        if isinstance(df_chunk.columns, pd.MultiIndex):
-            # multi‐symbol: break out per‐symbol
-            for sym in batch:
-                if sym in df_chunk.columns.get_level_values(0):
-                    sym_df = df_chunk.xs(sym, level=0, axis=1)
-                    with cache_lock:
-                        data_fetcher._daily_cache[sym] = sym_df
-                    logger.info(f"⚠️ fetched {sym} via Finnhub chunk")
-        else:
-            # single‐symbol
-            sym = batch[0]
-            with cache_lock:
-                data_fetcher._daily_cache[sym] = df_chunk
-            logger.info(f"⚠️ fetched {sym} via Finnhub chunk")
-
-        pytime.sleep(12)
-
-    # 2) Ultimate per‐symbol retry + dummy fallback
-    for sym in all_syms:
-        try:
-            df_sym = fh.fetch(sym, period="1mo", interval="1d")
-            if df_sym is not None and not df_sym.empty:
-                df_sym.index = pd.to_datetime(df_sym.index)
+            bars = api.get_bars(
+                batch,
+                TimeFrame.Day,
+                start=start,
+                end=end,
+                limit=1000,
+                feed="iex"
+            ).df
+            for sym, df_sym in bars.groupby("symbol"):
+                df = df_sym.drop(columns=["symbol"], errors="ignore").copy()
+                df = df.rename(columns={
+                    "open":   "Open",
+                    "high":   "High",
+                    "low":    "Low",
+                    "close":  "Close",
+                    "volume": "Volume"
+                })
+                df.index = pd.to_datetime(df.index).tz_localize(None)
                 with cache_lock:
-                    data_fetcher._daily_cache[sym] = df_sym
-                logger.info(f"⚠️ single-symbol fetch succeeded for {sym}")
-                continue
+                    data_fetcher._daily_cache[sym] = df
+            logger.info(f"[prefetch] seeded {len(batch)} symbols via Alpaca")
         except Exception as e:
-            logger.warning(f"[prefetch] single-symbol Finnhub fetch failed for {sym}: {e!r}")
+            logger.warning(f"[prefetch] Alpaca batch {batch} failed: {e!r} — falling back to Finnhub")
+            # fallback to Finnhub chunk logic for this batch
+            for subbatch in chunked(batch, 3):
+                try:
+                    df_chunk = _fh_chunk_fetch(subbatch, period="1mo", interval="1d")
+                except Exception as ex2:
+                    logger.warning(f"[prefetch] Finnhub chunk {subbatch} failed: {ex2!r}")
+                    continue
+                if df_chunk.empty:
+                    continue
+                df_chunk.index = pd.to_datetime(df_chunk.index)
+                if isinstance(df_chunk.columns, pd.MultiIndex):
+                    for sym in subbatch:
+                        if sym in df_chunk.columns.get_level_values(0):
+                            sym_df = df_chunk.xs(sym, level=0, axis=1)
+                            with cache_lock:
+                                data_fetcher._daily_cache[sym] = sym_df
+                            logger.info(f"[prefetch] fetched {sym} via Finnhub")
+                else:
+                    sym = subbatch[0]
+                    with cache_lock:
+                        data_fetcher._daily_cache[sym] = df_chunk
+                    logger.info(f"[prefetch] fetched {sym} via Finnhub")
+                pytime.sleep(12)
 
-        # last‐resort dummy
-        dates = pd.date_range(start=start, end=end, freq="D")
-        dummy = pd.DataFrame(index=dates, columns=["Open","High","Low","Close","Volume"])
-        dummy[["Open","High","Low","Close"]] = 1.0
-        dummy["Volume"] = 0
-        with cache_lock:
-            data_fetcher._daily_cache[sym] = dummy
-        logger.warning(f"🔶 Dummy {sym} inserted to satisfy data checks")
-
+# 1) fallback for small bulk requests
 def fetch_data(ctx, symbols, period, interval):
-    """Fallback for small bulk requests via Alpaca barset if needed."""
     dfs: List[pd.DataFrame] = []
     for batch in chunked(symbols, 3):
         df = fh.fetch(batch, period=period, interval=interval)
@@ -791,6 +720,7 @@ def fetch_data(ctx, symbols, period, interval):
         return None
     return pd.concat(dfs, axis=1, sort=True)
 
+# ─── NEWS / SEC HEADLINES ───────────────────────────────────────────────────
 @sleep_and_retry
 @limits(calls=30, period=60)
 @retry(
@@ -799,6 +729,9 @@ def fetch_data(ctx, symbols, period, interval):
     retry=retry_if_exception_type(requests.RequestException)
 )
 def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
+    if not _can_fetch_events(ticker):
+        event_cooldown_hits.inc()
+        return ""
     with ctx.sem:
         r = requests.get(
             f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
@@ -820,6 +753,7 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
         logger.warning(f"[get_sec_headlines] parse failed for {ticker}: {e}")
         return ""
 
+# ─── SENTIMENT FETCH ────────────────────────────────────────────────────────
 @limits(calls=60, period=60)
 @retry(
     stop=stop_after_attempt(3),
@@ -833,7 +767,6 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
         f"&apiKey={NEWS_API_KEY}"
     )
     resp = requests.get(url, timeout=10)
-
     try:
         resp.raise_for_status()
     except requests.exceptions.HTTPError:
@@ -856,6 +789,9 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     return float(sum(scores) / len(scores)) if scores else 0.0
 
 # ─── CHECKS & GUARDS ─────────────────────────────────────────────────────────
+day_start_equity: Optional[Tuple[date, float]] = None
+last_drawdown: float = 0.0
+
 @sleep_and_retry
 @limits(calls=200, period=60)
 @retry(
@@ -870,15 +806,10 @@ def check_daily_loss() -> bool:
     equity = float(acct.equity)
     today  = date.today()
 
-    # always give limit a default value
     limit = params["DAILY_LOSS_LIMIT"]
-
-    # on a brand-new trading day, reset your baseline and possibly tighten the limit if yesterday was bad
     if day_start_equity is None or day_start_equity[0] != today:
-        # if yesterday’s drawdown ≥5%, cap today at 3%
         if last_drawdown >= 0.05:
             limit = 0.03
-        # compute yesterday’s drawdown for tomorrow’s logic
         last_drawdown = (
             (day_start_equity[1] - equity) / day_start_equity[1]
             if day_start_equity else 0.0
@@ -887,19 +818,15 @@ def check_daily_loss() -> bool:
         daily_drawdown.set(0.0)
         return False
 
-    # otherwise check how far we’ve fallen so far today
     loss = (day_start_equity[1] - equity) / day_start_equity[1]
     daily_drawdown.set(loss)
+    if loss > 0.05:
+        sentry_sdk.capture_message(f"[WARNING] Daily drawdown = {loss:.2%}")
     return loss >= limit
 
 def count_day_trades() -> int:
-    """
-    Read your trade log and count the number of entries
-    that opened and closed on the same calendar date
-    in the last 5 business days.
-    """
     df = pd.read_csv(TRADE_LOG_FILE, parse_dates=["entry_time","exit_time"])
-    df = df.dropna(subset=["exit_time"])  # only fully closed trades
+    df = df.dropna(subset=["exit_time"])
     today = pd.Timestamp.now().normalize()
     bdays = pd.bdate_range(end=today, periods=5)
     df["entry_date"] = df["entry_time"].dt.normalize()
@@ -919,15 +846,10 @@ def count_day_trades() -> int:
     retry=retry_if_exception_type(APIError)
 )
 def check_pdt_rule(ctx: BotContext) -> bool:
-    """
-    Returns True if PDT limit reached (skip trading), False otherwise.
-    Combines Alpaca’s API day-trade count/buying power AND your logged count.
-    """
     acct = safe_alpaca_get_account()
     equity = float(acct.equity)
     logged_day_trades = count_day_trades()
 
-    # Try both possible attribute names for API-reported PDT count & buying power
     api_day_trades = (
         getattr(acct, "pattern_day_trades", None)
         or getattr(acct, "pattern_day_trades_count", None)
@@ -944,20 +866,14 @@ def check_pdt_rule(ctx: BotContext) -> bool:
         f"API_buying_pw={api_buying_pw}"
     )
 
-    # No PDT restriction if you’re ≥ the $25k threshold
     if equity >= PDT_EQUITY_THRESHOLD:
         return False
-
-    # If Alpaca’s API gives you a count, use it
     if api_day_trades is not None and api_day_trades >= PDT_DAY_TRADE_LIMIT:
         logger.info(f"[SKIP] PDT limit reached via API: {api_day_trades} day-trades")
         return True
-
-    # Fallback to your logged count
     if logged_day_trades >= PDT_DAY_TRADE_LIMIT:
         logger.info(f"[SKIP] PDT limit reached via log: {logged_day_trades} day-trades")
         return True
-
     return False
 
 def check_halt_flag() -> bool:
@@ -969,7 +885,14 @@ def check_halt_flag() -> bool:
 def now_pacific() -> datetime:
     return datetime.now(PACIFIC)
 
-_warned_missing_spy_columns = False
+def _can_fetch_events(symbol: str) -> bool:
+    now = pytime.time()
+    last = _LAST_EVENT_TS.get(symbol, 0)
+    if now - last < EVENT_COOLDOWN:
+        event_cooldown_hits.inc()
+        return False
+    _LAST_EVENT_TS[symbol] = now
+    return True
 
 def too_many_positions() -> bool:
     try:
@@ -1009,8 +932,8 @@ def too_correlated(sym: str) -> bool:
 # ─── SIZING & EXECUTION ───────────────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext) -> bool:
     now = now_pacific()
-    start = (datetime.combine(now.date(),ctx.market_open) + ctx.entry_start_offset).time()
-    end   = (datetime.combine(now.date(),ctx.market_close) - ctx.entry_end_offset).time()
+    start = (datetime.combine(now.date(), ctx.market_open) + ctx.entry_start_offset).time()
+    end   = (datetime.combine(now.date(), ctx.market_close) - ctx.entry_end_offset).time()
     if not (start <= now.time() <= end):
         logger.info(f"[SKIP] entry window ({start}–{end}), now={now.time()}")
         return False
@@ -1060,18 +983,18 @@ def fractional_kelly_size(
     else:
         frac = ctx.kelly_fraction
 
-    edge = win_prob - (1 - win_prob)/payoff_ratio
-    kelly = max(edge/payoff_ratio, 0) * frac
+    edge = win_prob - (1-win_prob)/payoff_ratio
+    kelly = max(edge/payoff_ratio,0)*frac
 
-    dollars_to_risk = kelly * balance
+    dollars_to_risk = kelly*balance
     if atr <= 0:
         return 1
 
-    raw_pos = dollars_to_risk / atr
-    cap_pos = (balance * CAPITAL_CAP) / price
+    raw_pos = dollars_to_risk/atr
+    cap_pos = (balance*CAPITAL_CAP)/price
     size = int(min(raw_pos, cap_pos, MAX_POSITION_SIZE))
 
-    return max(size, 1)
+    return max(size,1)
 
 def vol_target_position_size(cash: float,
                              price: float,
@@ -1079,7 +1002,9 @@ def vol_target_position_size(cash: float,
                              target_vol: float = 0.02
                             ) -> int:
     sigma = np.std(returns)
-    dollar_alloc = cash * (target_vol / sigma) if sigma > 0 else cash * target_vol
+    if sigma <= 0:
+        return 1
+    dollar_alloc = cash * (target_vol / sigma)
     qty = int(dollar_alloc / price)
     return max(qty, 1)
 
@@ -1090,58 +1015,50 @@ def vol_target_position_size(cash: float,
 )
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
     """
-    - If inside regular trading hours → market order (unchanged).
+    - If inside regular trading hours → market order.
     - If outside regular hours → limit order with extended_hours=True at the last bid/ask.
     """
-    # 1) look up the best bid/ask to decide limit price if we’re off‐hours
+    # 1) look up the best bid/ask
     try:
         quote = ctx.api.get_latest_quote(symbol)
         last_price = quote.ask_price if side.lower() == "buy" else quote.bid_price
     except Exception:
         last_price = None
 
-    # 2) detect “after‐hours” by calling in_trading_hours(...)
+    # 2) detect off‐hours
     now_utc = pd.Timestamp.utcnow()
     is_regular_hours = in_trading_hours(now_utc)
 
-    # 3) If off‐hours, switch to a limit order with extended_hours=True
+    # 3) If off‐hours, limit order
     if not is_regular_hours:
         if last_price is None or last_price <= 0:
-            logger.warning(
-                f"[submit_order] cannot trade {symbol} off‐hours: no valid bid/ask (last_price={last_price})"
-            )
+            logger.warning(f"[submit_order] cannot trade {symbol} off‐hours: no valid bid/ask")
             return None
 
         limit_price = round(last_price, 2)
-        logger.info(
-            f"[OFF‐HOURS] sending LIMIT {side.upper()} {qty} {symbol} @ {limit_price} extended_hours=True"
-        )
+        logger.info(f"[OFF‐HOURS] LIMIT {side.upper()} {qty} {symbol} @ {limit_price}")
         try:
             off_order = ctx.api.submit_order(
                 symbol=symbol,
                 qty=qty,
                 side=side,
                 type="limit",
-                time_in_force="day",       # “day” still lets Alpaca hold the limit until next close
+                time_in_force="day",
                 limit_price=limit_price,
                 extended_hours=True,
             )
             logger.debug(f"[OFF‐HOURS OK] {off_order.id} {side} {qty} {symbol} @ {limit_price}")
             return off_order
-
         except APIError as e:
-            msg = str(e).lower()
-            logger.warning(
-                f"[submit_order off‐hours] APIError for {symbol}: {e} (limit_price={limit_price})"
-            )
+            logger.warning(f"[submit_order off‐hours] APIError for {symbol}: {e} (limit_price={limit_price})")
             return None
         except Exception:
             logger.exception(f"[submit_order off‐hours] unexpected error for {symbol}")
             return None
 
-    # 4) Otherwise: inside regular hours → market order
+    # 4) Inside regular hours → market
     try:
-        logger.debug(f"[ORDER] submit MARKET {side.upper()} {qty} {symbol}")
+        logger.debug(f"[ORDER] MARKET {side.upper()} {qty} {symbol}")
         order = ctx.api.submit_order(
             symbol=symbol,
             qty=qty,
@@ -1150,12 +1067,12 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             time_in_force="gtc",
         )
         logger.debug(f"[ORDER OK] {order.id} {side} {qty} {symbol}")
+        orders_total.inc()
         return order
 
     except APIError as e:
         msg = str(e).lower()
-
-        # 4a) Insufficient buying power (day‐trade limit, etc.)
+        # 4a) Insufficient buying power
         if "insufficient buying power" in msg:
             logger.warning(f"[submit_order] insufficient buying power for {symbol}; skipping")
             return None
@@ -1164,47 +1081,46 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         m = re.search(r"requested: (\d+), available: (\d+)", msg)
         if m and int(m.group(2)) > 0:
             available = int(m.group(2))
+            if available < SLICE_THRESHOLD and available > 0:
+                qty_to_place = available
+            else:
+                qty_to_place = available
             order = ctx.api.submit_order(
                 symbol=symbol,
-                qty=available,
+                qty=qty_to_place,
                 side=side,
                 type="market",
                 time_in_force="gtc",
             )
-            logger.info(
-                f"[submit_order] only {available} {symbol} available; placed partial fill"
-            )
+            logger.info(f"[submit_order] partial fill {symbol}: placed {qty_to_place}")
+            orders_total.inc()
             return order
 
-        # 4c) Wash‐trade fallback → place a small bracket order
+        # 4c) Wash‐trade fallback (simplified to last_price)
         if "potential wash trade" in msg:
-            logger.warning(f"[submit_order] wash‐trade error for {symbol}; using bracket fallback")
-            tp_price = (last_price * 1.02) if last_price else None
-            sl_price = (last_price * 0.98) if last_price else None
-            if tp_price and sl_price:
-                bracket = ctx.api.submit_order(
-                    symbol=symbol,
-                    qty=qty,
-                    side=side,
-                    type="limit",
-                    time_in_force="gtc",
-                    order_class="bracket",
-                    take_profit={"limit_price": round(tp_price,2)},
-                    stop_loss={"stop_price": round(sl_price,2)},
-                )
-                logger.info(
-                    f"[submit_order] placed bracket {symbol}: TP={tp_price:.2f}, SL={sl_price:.2f}"
-                )
-                return bracket
-            else:
+            if last_price is None or last_price <= 0:
                 return None
+            tp_price = last_price * 1.02
+            sl_price = last_price * 0.98
+            bracket = ctx.api.submit_order(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                type="limit",
+                time_in_force="gtc",
+                order_class="bracket",
+                take_profit={"limit_price": tp_price},
+                stop_loss={"stop_price": sl_price},
+            )
+            logger.info(f"[submit_order] bracket {symbol}: TP={tp_price:.2f}, SL={sl_price:.2f}")
+            orders_total.inc()
+            return bracket
 
-        # 4d) Other APIError → re‐raise so tenacity can retry
+        # 4d) Other APIError → retry
         logger.warning(f"[submit_order] APIError for {symbol}: {e} → retrying")
         raise
 
     except Exception:
-        # non‐API errors count as final failures
         order_failures.inc()
         logger.exception(f"[submit_order] unexpected error for {symbol}")
         return None
@@ -1219,7 +1135,6 @@ def twap_submit(
 ) -> None:
     slice_qty = total_qty // n_slices
     wait_secs = window_secs / n_slices
-
     for i in range(n_slices):
         try:
             submit_order(ctx, symbol, slice_qty, side)
@@ -1237,16 +1152,13 @@ def vwap_pegged_submit(
 ) -> None:
     start = pytime.time()
     placed = 0
-
     while placed < total_qty and pytime.time() - start < duration:
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
         if df is None or df.empty:
             logger.warning("[VWAP] missing bars, aborting VWAP slice")
             break
-
         vwap_price = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
         slice_qty  = min(max(1, total_qty // 10), total_qty - placed)
-
         try:
             ctx.api.submit_order(
                 symbol=symbol,
@@ -1256,12 +1168,28 @@ def vwap_pegged_submit(
                 time_in_force="ioc",
                 limit_price=round(vwap_price, 2)
             )
+            orders_total.inc()
         except Exception as e:
             logger.exception(f"[VWAP] slice failed: {e}")
             break
-
         placed += slice_qty
         pytime.sleep(duration / 10)
+
+@dataclass(frozen=True)
+class SliceConfig:
+    pct: float = 0.1
+    sleep_interval: int = 60
+    max_retries: int = 3
+    backoff_factor: float = 2.0
+    max_backoff_interval: int = 300
+
+DEFAULT_SLICE_CFG = SliceConfig(
+    pct=POV_SLICE_PCT,
+    sleep_interval=60,
+    max_retries=3,
+    backoff_factor=2.0,
+    max_backoff_interval=300
+)
 
 def pov_submit(
     ctx: BotContext,
@@ -1273,42 +1201,34 @@ def pov_submit(
     placed = 0
     retries = 0
     interval = cfg.sleep_interval
-
     while placed < total_qty:
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
         if df is None or df.empty:
             retries += 1
             if retries > cfg.max_retries:
-                logger.warning(f"[pov_submit] no minute data after {cfg.max_retries} retries, aborting")
+                logger.warning(f"[pov_submit] no minute data, aborting")
                 return False
-
             logger.warning(f"[pov_submit] missing bars, retry {retries}/{cfg.max_retries} in {interval:.1f}s")
             sleep_time = interval * (0.8 + 0.4 * random.random())
             pytime.sleep(sleep_time)
             interval = min(interval * cfg.backoff_factor, cfg.max_backoff_interval)
             continue
-
-        # reset on success
         retries = 0
         interval = cfg.sleep_interval
-
         vol = df["Volume"].iloc[-1]
         slice_qty = min(int(vol * cfg.pct), total_qty - placed)
         if slice_qty < 1:
             logger.debug(f"[pov_submit] slice_qty<1 (vol={vol}), waiting")
             pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
             continue
-
         try:
             submit_order(ctx, symbol, slice_qty, side)
         except Exception as e:
-            logger.exception(f"[pov_submit] submit_order failed on slice, aborting: {e}")
+            logger.exception(f"[pov_submit] submit_order failed: {e}")
             return False
-
         placed += slice_qty
         logger.info(f"[pov_submit] placed {slice_qty} ({placed}/{total_qty})")
         pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
-
     logger.info(f"[pov_submit] complete: placed {placed}/{total_qty}")
     return True
 
@@ -1328,22 +1248,18 @@ def update_trailing_stop(
     qty: int,
     atr: float,
 ) -> str:
-    # pick factor at runtime
     factor = 1.0 if is_high_vol_regime() else TRAILING_FACTOR
     te = ctx.trailing_extremes
-
     if qty > 0:
         with targets_lock:
             te[ticker] = max(te.get(ticker, price), price)
         if price < te[ticker] - factor * atr:
             return "exit_long"
-
     elif qty < 0:
         with targets_lock:
             te[ticker] = min(te.get(ticker, price), price)
         if price > te[ticker] + factor * atr:
             return "exit_short"
-
     return "hold"
 
 def calculate_entry_size(
@@ -1354,111 +1270,77 @@ def calculate_entry_size(
     win_prob: float
 ) -> int:
     cash = float(ctx.api.get_account().cash)
-
-    # tier capital cap by avg daily volume
     df_daily = ctx.data_fetcher.get_daily_df(ctx, symbol)
     avg_vol = df_daily["Volume"].tail(20).mean() if df_daily is not None else 0
     cap_pct = 0.05 if avg_vol > 1e7 else 0.03
     cap_sz  = int((cash * cap_pct) / price)
 
-    # fetch last-month returns for vol-based sizing
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
     rets = (
         df["Close"].pct_change().dropna().values
         if df is not None and not df.empty
         else np.array([0.0])
     )
-
-    # your two existing sizing methods
     kelly_sz = fractional_kelly_size(ctx, cash, price, atr, win_prob)
     vol_sz   = vol_target_position_size(cash, price, rets, target_vol=0.02)
-
-    # final size = min of all caps
     size = int(min(kelly_sz, vol_sz, cap_sz, MAX_POSITION_SIZE))
     return max(size, 1)
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
-    """
-    Place an entry order:
-      * If qty <= 0 → skip
-      * If POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD → POV slicing
-      * Elif qty > SLICE_THRESHOLD → VWAP-pegged slicing
-      * Else → simple market
-    """
     buying_pw = float(ctx.api.get_account().buying_power)
     if buying_pw <= 0:
-        logger.info(f"[ENTRY] no buying power left, skipping {symbol}")
+        logger.info(f"[ENTRY] no buying power, skipping {symbol}")
         return
     if qty <= 0:
-        logger.warning(f"[ENTRY] zero quantity for {symbol}, skipping")
+        logger.warning(f"[ENTRY] zero qty for {symbol}, skipping")
         return
 
-    # 1) choose slicing vs market
     if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
-        logger.info(f"[ENTRY] POV slice {qty}@{POV_SLICE_PCT*100:.1f}% for {symbol}")
+        logger.info(f"[ENTRY] POV slice {qty}@{POV_SLICE_PCT*100:.1f}% {symbol}")
         pov_submit(ctx, symbol, qty, side)
     elif qty > SLICE_THRESHOLD:
-        logger.info(f"[ENTRY] VWAP-pegged slice {qty} {side.upper()} for {symbol}")
+        logger.info(f"[ENTRY] VWAP slice {qty} {side.upper()} {symbol}")
         vwap_pegged_submit(ctx, symbol, qty, side)
     else:
-        logger.info(f"[ENTRY] Market {side.upper()} {qty} {symbol}")
+        logger.info(f"[ENTRY] MARKET {side.upper()} {qty} {symbol}")
         submit_order(ctx, symbol, qty, side)
 
-    # 2) log the fill and set stops/targets
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw is None or raw.empty:
-        logger.warning(f"[ENTRY] no minute bars for {symbol} after slicing")
+        logger.warning(f"[ENTRY] no minute bars after slice {symbol}")
         return
 
     df_ind = prepare_indicators(raw, freq="intraday")
     if df_ind.empty:
-        logger.warning(f"[ENTRY] insufficient indicator data for {symbol} post-slice")
+        logger.warning(f"[ENTRY] insufficient indicators post-slice {symbol}")
         return
 
     entry_price = df_ind["Close"].iloc[-1]
     ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "")
 
-    # set up time window
     now = now_pacific()
     mo  = datetime.combine(now.date(), ctx.market_open, PACIFIC)
     mc  = datetime.combine(now.date(), ctx.market_close, PACIFIC)
 
-    # ─── DYNAMIC TP/STOP BASED ON REGIME ────────────────────────────────
-    if is_high_vol_regime():
-        tp_factor = TAKE_PROFIT_FACTOR * 1.1
-    else:
-        tp_factor = TAKE_PROFIT_FACTOR
-
-    stop, take = scaled_atr_stop(
-        entry_price,
-        df_ind["atr"].iloc[-1],
-        now, mo, mc,
-        max_factor=tp_factor,
-        min_factor=0.5
-    )
+    tp_factor = TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
+    stop, take = scaled_atr_stop(entry_price, df_ind["atr"].iloc[-1], now, mo, mc, max_factor=tp_factor, min_factor=0.5)
 
     with targets_lock:
         ctx.stop_targets[symbol]        = stop
         ctx.take_profit_targets[symbol] = take
-    # ───────────────────────────────────────────────────────────────────
 
 def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
-    # 1) send the exit order
-    submit_order(ctx, symbol, qty, "sell")
-
-    # 2) log the exit
-    last_price = ctx.data_fetcher.get_minute_df(ctx, symbol)["Close"].iloc[-1]
-    ctx.trade_logger.log_exit(symbol, last_price)
-
-    # 3) now rebalance if needed
+    submit_order(ctx, symbol, qty, "sell" if qty > 0 else "buy")
+    ctx.trade_logger.log_exit(
+        symbol,
+        ctx.data_fetcher.get_minute_df(ctx, symbol)["Close"].iloc[-1]
+    )
     on_trade_exit_rebalance(ctx)
-
-    # 4) clean up your targets
-    ctx.take_profit_targets.pop(symbol, None)
-    ctx.stop_targets.pop(symbol, None)
+    with targets_lock:
+        ctx.take_profit_targets.pop(symbol, None)
+        ctx.stop_targets.pop(symbol, None)
 
 def exit_all_positions():
-    """Liquidate every open position.  Intended for end-of-day clean-up."""
     for pos in api.list_positions():
         qty = abs(int(pos.qty))
         if qty:
@@ -1466,45 +1348,12 @@ def exit_all_positions():
             logger.info(f"[EOD EXIT] Sold {qty} {pos.symbol}")
 
 # ─── SIGNAL & TRADE LOGIC ────────────────────────────────────────────────────
-def _can_fetch_events(symbol):
-    now = pytime.time()
-    last = _LAST_EVENT_TS.get(symbol, 0)
-    if now - last < EVENT_COOLDOWN:
-        return False
-    _LAST_EVENT_TS[symbol] = now
-    return True
-
-def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple[bool,int,str]:
-    """
-    1) Stop‐loss
-    2) Take‐profit (partial)
-    3) Trailing‐stop
-    4) No “exit after N days”—purely signal/risk-based
-    """
-    try:
-        pos = int(float(ctx.api.get_position(symbol).qty))
-    except Exception:
-        pos = 0
-
-    # 1) Stop‐loss
-    stop = ctx.stop_targets.get(symbol)
-    if stop is not None and price <= stop:
-        return True, abs(pos), "stop_loss"
-
-    # 2) Take‐profit (partial)
-    tp = ctx.take_profit_targets.get(symbol)
-    if pos and tp and ((pos > 0 and price >= tp) or (pos < 0 and price <= tp)):
-        return True, int(abs(pos) * SCALING_FACTOR), "take_profit"
-
-    # 3) Trailing‐stop
-    action = update_trailing_stop(ctx, symbol, price, pos, atr)
-    if action == "exit_long" and pos > 0:
-        return True, pos, "trailing_stop"
-    if action == "exit_short" and pos < 0:
-        return True, abs(pos), "trailing_stop"
-
-    # 4) No time-based exit—purely signal/risk
-    return False, 0, ""
+def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int, float, str]:
+    sig, conf, strat = ctx.signal_manager.evaluate(ctx, df, symbol, model)
+    if sig == 0 or abs(conf) < CONF_THRESHOLD:
+        logger.debug(f"[SKIP] {symbol} low signal (sig={sig},conf={conf:.2f})")
+        return -1, 0.0, ""
+    return sig, conf, strat
 
 def pre_trade_checks(
     ctx: BotContext,
@@ -1515,33 +1364,89 @@ def pre_trade_checks(
     if check_pdt_rule(ctx):
         logger.debug(f"[SKIP] PDT rule – {symbol}")
         return False
-
     if check_halt_flag():
         logger.debug(f"[SKIP] HALT_FLAG – {symbol}")
         return False
-
-    # MARKET‐HOURS GUARD is intentionally disabled:
-    # if not in_trading_hours(pd.Timestamp.utcnow()):
-    #     logger.debug(f"[SKIP] Market closed – {symbol}")
-    #     return False
-
     if check_daily_loss():
-        logger.debug(f"[SKIP] Daily-loss limit – {symbol}")
+        logger.debug(f"[SKIP] Daily-loss – {symbol}")
         return False
-
     if not regime_ok:
-        logger.debug(f"[SKIP] Market regime – {symbol}")
+        logger.debug(f"[SKIP] Regime – {symbol}")
         return False
-
     if too_many_positions():
         logger.debug(f"[SKIP] Max positions – {symbol}")
         return False
-
     if too_correlated(symbol):
         logger.debug(f"[SKIP] Correlation – {symbol}")
         return False
-
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
+
+def should_enter(
+    ctx: BotContext,
+    symbol: str,
+    balance: float,
+    regime_ok: bool
+) -> bool:
+    return pre_trade_checks(ctx, symbol, balance, regime_ok) and is_within_entry_window(ctx)
+
+def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple[bool,int,str]:
+    try:
+        pos = ctx.api.get_position(symbol)
+        current_qty = int(abs(int(pos.qty)))
+    except Exception:
+        current_qty = 0
+
+    stop = ctx.stop_targets.get(symbol)
+    if stop is not None and price <= stop:
+        return True, current_qty, "stop_loss"
+
+    tp = ctx.take_profit_targets.get(symbol)
+    if current_qty > 0 and tp and price >= tp:
+        exit_qty = int(current_qty * SCALING_FACTOR)
+        exit_qty = max(exit_qty, 1)  # guard: sell at least 1
+        return True, exit_qty, "take_profit"
+
+    action = update_trailing_stop(ctx, symbol, price, current_qty, atr)
+    if action == "exit_long" and current_qty > 0:
+        return True, current_qty, "trailing_stop"
+    if action == "exit_short" and current_qty < 0:
+        return True, abs(current_qty), "trailing_stop"
+
+    return False, 0, ""
+
+_running = False
+def run_all_trades_wrapper(model):
+    global _running
+    if _running:
+        logger.warning("[run_all_trades] still running; skipping this cycle")
+        return
+    _running = True
+    try:
+        with run_all_trades_duration.time():
+            run_all_trades(model)
+    finally:
+        _running = False
+
+def _safe_trade(
+    ctx: BotContext,
+    symbol: str,
+    balance: float,
+    model: RandomForestClassifier,
+    regime_ok: bool
+) -> None:
+    try:
+        trade_logic(ctx, symbol, balance, model, regime_ok)
+    except RetryError as e:
+        logger.warning(f"[trade_logic] retries exhausted for {symbol}: {e}")
+        return
+    except APIError as e:
+        msg = str(e).lower()
+        if "insufficient buying power" in msg or "potential wash trade" in msg:
+            logger.warning(f"[trade_logic] skipping {symbol} due to APIError: {e}")
+        else:
+            logger.exception(f"[trade_logic] APIError for {symbol}: {e}")
+    except Exception:
+        logger.exception(f"[trade_logic] unhandled exception for {symbol}")
 
 def trade_logic(
     ctx: BotContext,
@@ -1550,99 +1455,64 @@ def trade_logic(
     model,
     regime_ok: bool
 ) -> None:
-    # 1) Get the latest minute bars
     raw_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw_df is None or raw_df.empty:
         logger.info(f"[SKIP] {symbol} no raw data")
         return
 
-    # 2) Compute intraday indicators (vwap, rsi, atr, macd, stochrsi, etc.)
     feat_df = prepare_indicators(raw_df, freq="intraday")
+    # don’t drop entire symbol if only one indicator missing—let evaluate skip missing signals
     if feat_df.empty:
-        logger.debug(f"[SKIP] {symbol} insufficient feature data")
+        logger.debug(f"[SKIP] {symbol} insufficient indicators")
         return
 
-    # 3) Make sure all features needed by the model are present
-    if hasattr(model, "feature_names_in_"):
-        feature_names = list(model.feature_names_in_)
-    else:
-        feature_names = [
-            "rsi", "macd", "atr", "vwap",
-            "macds", "ichimoku_conv", "ichimoku_base", "stochrsi"
-        ]
-    missing = [f for f in feature_names if f not in feat_df.columns]
-    if missing:
-        logger.info(f"[SKIP] {symbol} missing features: {missing}")
-        return
-
-    # 4) Evaluate ensemble of signals (final_sig ∈ {1,0,-1}, conf ∈ [0,1])
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, feat_df, symbol, model)
-    logger.debug(f"[COMPONENTS] {symbol}: " +
-                 ", ".join(f"{name}={flag}×{weight:.3f}"
-                           for flag, weight, name in ctx.signal_manager.last_components))
-    final_score = sum(flag * weight for flag, weight, _ in ctx.signal_manager.last_components)
+    structured = structured_logger(__name__, symbol=symbol, components=ctx.signal_manager.last_components)
+    structured.info("components", extra={"components": ctx.signal_manager.last_components})
+    final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
     logger.debug(f"[FINAL SCORE] {symbol}: {final_score:.4f}")
 
-    # 5) Check if we already have a position
     try:
         pos = ctx.api.get_position(symbol)
-        current_qty = int(abs(int(pos.qty)))   # how many shares are currently held (long)
+        current_qty = int(abs(int(pos.qty)))
     except Exception:
         current_qty = 0
 
-    # ─── SELL ON BEARISH SIGNAL IF LONG ────────────────────────────────────────
+    # Exit if bearish signal
     if final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
         price = feat_df["Close"].iloc[-1]
-        logger.info(f"[SIGNAL-REVERSAL EXIT] {symbol}: final_score={final_score:.2f} < 0 → SELL {current_qty}")
+        logger.info(f"[SIGNAL-REVERSAL EXIT] {symbol}: final_score={final_score:.2f} → SELL {current_qty}")
         submit_order(ctx, symbol, current_qty, "sell")
         ctx.trade_logger.log_exit(symbol, price)
-        # Clean up any existing stop/take targets
         with targets_lock:
             ctx.stop_targets.pop(symbol, None)
             ctx.take_profit_targets.pop(symbol, None)
+        ctx.just_exited.add(symbol)
         return
 
-    # ─── BUY ON BULLISH SIGNAL IF FLAT ────────────────────────────────────────
-    if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
+    # Buy if bullish and no position
+    if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0 and symbol not in ctx.just_exited:
         current_price = feat_df["Close"].iloc[-1]
-        # Compute raw_qty based on portfolio weight + sizing methods
         target_weight = ctx.portfolio_weights.get(symbol, 0.0)
         raw_qty = int(balance * target_weight / current_price)
         if raw_qty <= 0:
-            logger.debug(f"[SKIP BUY] {symbol} no action (sig={sig}, raw_qty={raw_qty})")
+            logger.debug(f"[SKIP BUY] {symbol} raw_qty={raw_qty}")
             return
-
-        logger.info(f"[SIGNAL] {symbol}: final_score={final_score:.2f} ≥ BUY_THRESHOLD → BUY {raw_qty}")
+        logger.info(f"[SIGNAL] {symbol}: final_score={final_score:.2f} → BUY {raw_qty}")
         order = submit_order(ctx, symbol, raw_qty, "buy")
-        if order is None:
-            logger.debug(f"[trade_logic] no order placed for {symbol}; moving on")
-        else:
-            logger.debug(f"[trade_logic] order placed: {order.id} {order.side} {order.qty} {order.symbol}")
+        if order:
             ctx.trade_logger.log_entry(symbol, current_price, raw_qty, "buy", strat)
-
-            # Immediately set stop‐loss & take‐profit based on ATR
             now = now_pacific()
             mo  = datetime.combine(now.date(), ctx.market_open, PACIFIC)
             mc  = datetime.combine(now.date(), ctx.market_close, PACIFIC)
-
-            if is_high_vol_regime():
-                tp_factor = TAKE_PROFIT_FACTOR * 1.1
-            else:
-                tp_factor = TAKE_PROFIT_FACTOR
-
-            stop, take = scaled_atr_stop(
-                entry_price=current_price,
-                atr= feat_df["atr"].iloc[-1],
-                now=now, market_open=mo, market_close=mc,
-                max_factor=tp_factor,
-                min_factor=0.5
-            )
+            tp_factor = TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
+            stop, take = scaled_atr_stop(current_price, feat_df["atr"].iloc[-1], now, mo, mc, max_factor=tp_factor, min_factor=0.5)
             with targets_lock:
                 ctx.stop_targets[symbol] = stop
                 ctx.take_profit_targets[symbol] = take
         return
 
-    # ─── IF WE HOLD A POSITION, CHECK STOP/TAKE/TRAIL ─────────────────────────
+    # Check exit conditions if holding
     if current_qty > 0:
         price = feat_df["Close"].iloc[-1]
         atr   = feat_df["atr"].iloc[-1]
@@ -1651,25 +1521,19 @@ def trade_logic(
             logger.info(f"[{reason.upper()} EXIT] {symbol}: exit_qty={exit_qty} at price={price:.2f}")
             submit_order(ctx, symbol, exit_qty, "sell")
             ctx.trade_logger.log_exit(symbol, price)
-
-            # If we sold everything, clear targets
             try:
                 pos_after = ctx.api.get_position(symbol)
                 if int(abs(int(pos_after.qty))) == 0:
                     with targets_lock:
                         ctx.stop_targets.pop(symbol, None)
                         ctx.take_profit_targets.pop(symbol, None)
+                    ctx.just_exited.add(symbol)
             except Exception:
                 pass
         return
 
-    # ─── OTHERWISE, HOLD (No time‐based exit) ───────────────────────────────────
-    return
-
+# ─── PORTFOLIO REBALANCING ──────────────────────────────────────────────────
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
-    """
-    Assign equal weights to each symbol in the universe.
-    """
     n = len(symbols)
     if n == 0:
         logger.warning("[Portfolio] No tickers to weight—skipping.")
@@ -1679,21 +1543,13 @@ def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     logger.info(f"[Portfolio] Equal weights assigned: {weights}")
     return weights
 
-# ─── PORTFOLIO REBALANCING ──────────────────────────────────────────────────
 def on_trade_exit_rebalance(ctx: BotContext):
-    # recompute weights on the fly
     current = compute_portfolio_weights(list(ctx.portfolio_weights.keys()))
     old     = ctx.portfolio_weights
-
-    # check for any >10% drift
-    drift = max(abs(current[s] - old.get(s, 0)) for s in current)
+    drift = max(abs(current[s] - old.get(s, 0)) for s in current) if current else 0
     if drift <= 0.1:
         return
-
-    # update context
     ctx.portfolio_weights = current
-
-    # submit rebalancing orders
     total_value = float(ctx.api.get_account().portfolio_value)
     for sym, w in current.items():
         target_dollar = w * total_value
@@ -1707,50 +1563,38 @@ def on_trade_exit_rebalance(ctx: BotContext):
                 type="market",
                 time_in_force="day"
             )
+            orders_total.inc()
         except Exception:
             logger.exception(f"Rebalance failed for {sym}")
-
     logger.info("Rebalanced portfolio weights")
 
+from statsmodels.tsa.stattools import coint
+
 def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
-    # cointegration-based stat-arb
     df1 = ctx.data_fetcher.get_daily_df(ctx, sym1)["Close"]
     df2 = ctx.data_fetcher.get_daily_df(ctx, sym2)["Close"]
     df  = pd.concat([df1, df2], axis=1).dropna()
-
-    # test for cointegration
-    try:
-        from statsmodels.tsa.stattools import coint
-    except ImportError:
-        return ("no_signal", 0)
-
     t_stat, p_value, _ = coint(df.iloc[:, 0], df.iloc[:, 1])
     if p_value < 0.05:
-        # fit hedge ratio β
         beta = np.polyfit(df.iloc[:, 1], df.iloc[:, 0], 1)[0]
         spread = df.iloc[:, 0] - beta * df.iloc[:, 1]
-
-        # compute z-score series
         z = (spread - spread.mean()) / spread.std()
-        z0 = z.iloc[-1]  # most recent z-score
-
+        z0 = z.iloc[-1]
         if z0 > 2:
             return ("short_spread", 1)
         elif z0 < -2:
             return ("long_spread", 1)
-
-    # no valid signal
     return ("no_signal", 0)
 
+_calendar_cache: Dict[str, pd.DataFrame] = {}
+_calendar_last_fetch: Dict[str, date] = {}
 def get_calendar_safe(symbol: str) -> pd.DataFrame:
     today = date.today()
-    # Return today's cache if available
     if (
         symbol in _calendar_cache
         and _calendar_last_fetch.get(symbol) == today
     ):
         return _calendar_cache[symbol]
-
     try:
         cal = yf.Ticker(symbol).calendar
     except YFRateLimitError:
@@ -1759,22 +1603,14 @@ def get_calendar_safe(symbol: str) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"[Events] Error fetching calendar for {symbol}: {e}")
         cal = pd.DataFrame()
-
     _calendar_cache[symbol] = cal
     _calendar_last_fetch[symbol] = today
     return cal
 
 def is_near_event(symbol: str, days: int = 3) -> bool:
-    """
-    Returns True if any upcoming calendar event is within `days` from today.
-    Skips (returns False) on missing/empty data.
-    """
     cal = get_calendar_safe(symbol)
-
-    # if we didn’t get a DataFrame or it's empty, bail
     if not hasattr(cal, "empty") or cal.empty:
         return False
-
     try:
         dates = []
         for col in cal.columns:
@@ -1783,259 +1619,12 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
                 raw = raw[0]
             dates.append(pd.to_datetime(raw))
     except Exception:
-        logger.debug(f"[Events] Malformed calendar for {symbol}, columns={getattr(cal, 'columns', None)}")
+        logger.debug(f"[Events] Malformed calendar for {symbol}")
         return False
-
     today  = pd.Timestamp.now().normalize()
     cutoff = today + pd.Timedelta(days=days)
     return any(today <= d <= cutoff for d in dates)
 
-def run_all_trades(model) -> None:
-    global _last_fh_prefetch_date
-
-    now = pd.Timestamp.utcnow()
-    # MARKET‐HOURS GUARD is disabled:
-    # if not in_trading_hours(now):
-    #     logger.info("[SKIP] Market closed")
-    #     return
-
-    logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
-
-    # 1) Load your universe…
-    candidates = load_tickers(TICKERS_FILE)
-    today = date.today()
-    if _last_fh_prefetch_date != today:
-        _last_fh_prefetch_date = today
-
-        # bulk-prefetch everything except SPY
-        prefetch_daily_with_alpaca(candidates)
-
-        # ensure SPY is seeded, so regime checks will find it
-        ctx.data_fetcher.get_daily_df(ctx, "SPY")
-
-    # 2) Screen and compute portfolio weights
-    tickers = screen_universe(candidates, ctx)
-    logger.info(f"➡️  Tick​ers to trade this cycle: {tickers}")
-    ctx.portfolio_weights = compute_portfolio_weights(tickers)
-    if not tickers:
-        logger.error("❌ No tickers loaded; skipping run_all_trades")
-        return
-
-    # 3) Halt-flag guard
-    if check_halt_flag():
-        logger.info("Trading halted via HALT_FLAG_FILE.")
-        return
-
-    # 4) Fetch current cash
-    acct = api.get_account()
-    current_cash = float(acct.cash)
-
-    # 5) Compute regime just once per cycle
-    regime_ok = check_market_regime()
-
-    # 6) Fan-out your trades
-    for symbol in tickers:
-        executor.submit(_safe_trade, ctx, symbol, current_cash, model, regime_ok)
-
-def load_model(path: str = MODEL_PATH):
-    # 1) Fail fast if no real model on disk
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"No trained model found at {path}")
-
-    # 2) Load your genuine RF
-    model = joblib.load(path)
-    logger.info(f"Loaded trained model from {path}")
-    return model
-
-def update_signal_weights():
-    if not os.path.exists(TRADE_LOG_FILE):
-        logger.warning("No trades log found; skipping weight update.")
-        return
-    df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["entry_price","exit_price","signal_tags"])
-    df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].apply(lambda s:1 if s=="buy" else -1)
-    stats = {}
-    for _,row in df.iterrows():
-        for tag in row["signal_tags"].split("+"):
-            stats.setdefault(tag,[]).append(row["pnl"])
-    new_weights = {tag:round(np.mean([1 if p>0 else 0 for p in pnls]),3) for tag,pnls in stats.items()}
-    ALPHA = 0.2
-    old = pd.read_csv(SIGNAL_WEIGHTS_FILE).set_index("signal")["weight"].to_dict() if os.path.exists(SIGNAL_WEIGHTS_FILE) else {}
-    merged = {tag:round(ALPHA*w + (1-ALPHA)*old.get(tag,w),3) for tag,w in new_weights.items()}
-    out_df = pd.DataFrame.from_dict(merged, orient="index", columns=["weight"]).reset_index()
-    out_df.columns = ["signal","weight"]
-    out_df.to_csv(SIGNAL_WEIGHTS_FILE, index=False)
-    logger.info(f"[MetaLearn] Updated weights for {len(merged)} signals.")
-
-def load_global_signal_performance(min_trades=10, threshold=0.4):
-    if not os.path.exists(TRADE_LOG_FILE):
-        logger.info("[MetaLearn] no history - allowing all signals")
-        return None
-    df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["exit_price","entry_price","signal_tags"])
-    df["pnl"] = (df.exit_price - df.entry_price) * df.side.apply(lambda s:1 if s=="buy" else -1)
-    results = {}
-    for _,row in df.iterrows():
-        for tag in row.signal_tags.split("+"):
-            results.setdefault(tag,[]).append(row.pnl)
-    win_rates = {
-        tag: round(np.mean([1 if p>0 else 0 for p in pnls]),3)
-        for tag,pnls in results.items() if len(pnls) >= min_trades
-    }
-    filtered = {tag:wr for tag,wr in win_rates.items() if wr >= threshold}
-    logger.info(f"[MetaLearn] Keeping signals: {list(filtered.keys()) or 'none'}")
-    return filtered
-
-# ─── INDICATORS ──────────────────────────────────────────────────────────────
-def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
-    df = df.copy()
-
-    # normalize index → Date column
-    if df.index.name:
-        df = df.reset_index().rename(columns={df.index.name: "Date"})
-    else:
-        df = df.reset_index().rename(columns={"index": "Date"})
-    df["Date"] = pd.to_datetime(df["Date"])
-    df = df.sort_values("Date").set_index("Date")
-
-    # --- CORE TA INDICATORS --- 
-    df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
-    df["rsi"]  = ta.rsi(df["Close"], length=14)
-    df["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-
-    # MACD may occasionally return None
-    try:
-        macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
-        if macd is None or not isinstance(macd, pd.DataFrame):
-            raise ValueError("MACD returned None")
-        df["macd"]  = macd["MACD_12_26_9"]
-        df["macds"] = macd["MACDs_12_26_9"]
-    except Exception:
-        df["macd"]  = np.nan
-        df["macds"] = np.nan
-
-    # Ichimoku
-    try:
-        ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
-        conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
-        base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
-        df["ichimoku_conv"] = conv.iloc[:, 0] if hasattr(conv, "iloc") else conv
-        df["ichimoku_base"] = base.iloc[:, 0] if hasattr(base, "iloc") else base
-    except Exception:
-        df["ichimoku_conv"] = np.nan
-        df["ichimoku_base"] = np.nan
-
-    # StochRSI
-    try:
-        st = ta.stochrsi(df["Close"])
-        df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
-    except Exception:
-        df["stochrsi"] = np.nan
-
-    # fill‐forward/backward to smooth
-    df.ffill(inplace=True)
-    df.bfill(inplace=True)
-
-    # now drop rows without any of our required indicators
-    required = ["vwap","rsi","atr","macd","macds","ichimoku_conv","ichimoku_base","stochrsi"]
-    if freq == "daily":
-        # also require SMAs on daily bars
-        df["sma_50"]  = ta.sma(df["Close"], length=50)
-        df["sma_200"] = ta.sma(df["Close"], length=200)
-        required += ["sma_50","sma_200"]
-        df.dropna(subset=required, how="any", inplace=True)
-    else:
-        # intraday: be more forgiving—only drop rows where *all* are missing
-        df.dropna(subset=required, how="all", inplace=True)
-        df.reset_index(drop=True, inplace=True)
-
-    return df
-
-# ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
-def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Given a daily-SPY DataFrame with columns Open/High/Low/Close/Volume,
-    compute the features needed for regime detection:
-      - atr (14)
-      - rsi (14)
-      - macd (12,26,9)
-      - vol = 14d rolling std of daily returns
-    """
-    feat = pd.DataFrame(index=df.index)
-    feat["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-    feat["rsi"]  = ta.rsi(df["Close"], length=14)
-    feat["macd"] = ta.macd(df["Close"], fast=12, slow=26, signal=9)["MACD_12_26_9"]
-    feat["vol"]  = df["Close"].pct_change().rolling(14).std()
-    return feat.dropna()
-
-# train / load regime_model
-if os.path.exists(REGIME_MODEL_PATH):
-    regime_model = pickle.load(open(REGIME_MODEL_PATH, "rb"))
-else:
-    # 1) Fetch one year of SPY daily bars
-    today = date.today()
-    start = (today - timedelta(days=365)).isoformat()
-    bars = api.get_bars(
-        "SPY", TimeFrame.Day,
-        start=start, end=today.isoformat(),
-        limit=1000, feed="iex"
-    ).df
-
-    # 2) Normalize index & uppercase OHLCV columns
-    bars.index = pd.to_datetime(bars.index).tz_localize(None)
-    bars = bars.rename(columns={
-        "open":   "Open",
-        "high":   "High",
-        "low":    "Low",
-        "close":  "Close",
-        "volume": "Volume"
-    })
-
-    # 3) Compute features + label
-    feats  = _compute_regime_features(bars)
-    labels = (
-        bars["Close"] > bars["Close"].rolling(200).mean()
-    ).loc[feats.index].astype(int).rename("label")
-
-    training = feats.join(labels, how="inner").dropna()
-
-    # 4) Train or fallback
-    if len(training) >= 50:
-        X = training[["atr","rsi","macd","vol"]]
-        y = training["label"]
-        regime_model = RandomForestClassifier(
-            n_estimators=RF_ESTIMATORS,
-            max_depth=RF_MAX_DEPTH
-        )
-        regime_model.fit(X, y)
-        pickle.dump(regime_model, open(REGIME_MODEL_PATH, "wb"))
-        logger.info(f"Trained regime_model on {len(training)} daily rows and saved to {REGIME_MODEL_PATH}")
-    else:
-        logger.error(
-            f"Not enough valid SPY rows ({len(training)}) to train regime model; using dummy fallback"
-        )
-        regime_model = RandomForestClassifier(
-            n_estimators=RF_ESTIMATORS,
-            max_depth=RF_MAX_DEPTH
-        )
-
-# ─── LIVE REGIME CHECK ───────────────────────────────────────────────────────
-def check_market_regime() -> bool:
-    df = data_fetcher._daily_cache.get("SPY")
-    if df is None or len(df) < 26:
-        logger.warning("[check_market_regime] insufficient SPY history – need ≥26 bars")
-        return False
-
-    feats = _compute_regime_features(df)
-    if feats.empty:
-        logger.warning("[check_market_regime] failed to compute regime features for SPY")
-        return False
-
-    # build a 1-row DataFrame so it has valid feature names
-    cols = ["atr","rsi","macd","vol"]
-    X = feats[cols].iloc[[-1]]  # this is a DataFrame, not an array
-    pred = regime_model.predict(X)[0]
-    return bool(pred)
-
-# ─── UNIVERSE SELECTION ─────────────────────────────────────────────────────
 def screen_universe(
     candidates: Sequence[str],
     ctx: BotContext,
@@ -2043,9 +1632,6 @@ def screen_universe(
     interval: str = "1d",
     top_n: int = 20
 ) -> list[str]:
-    """
-    Fetch daily bars for each candidate, compute ATR, and return top_n highest-ATR symbols.
-    """
     atrs: dict[str, float] = {}
     for sym in candidates:
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
@@ -2059,13 +1645,13 @@ def screen_universe(
     return [sym for sym, _ in ranked[:top_n]]
 
 def load_tickers(path: str=TICKERS_FILE) -> list[str]:
-    tickers = []
+    tickers=[]
     try:
         with open(path,newline="") as f:
-            reader = csv.reader(f)
+            reader=csv.reader(f)
             next(reader,None)
             for row in reader:
-                t = row[0].strip().upper()
+                t=row[0].strip().upper()
                 if t and t not in tickers:
                     tickers.append(t)
     except Exception as e:
@@ -2073,7 +1659,6 @@ def load_tickers(path: str=TICKERS_FILE) -> list[str]:
     return tickers
 
 def daily_summary() -> None:
-    """End-of-day summary: compute and log PnL, win rate, total trades, and max drawdown."""
     if not os.path.exists(TRADE_LOG_FILE):
         logger.info("[daily_summary] No trades to summarize.")
         return
@@ -2083,7 +1668,199 @@ def daily_summary() -> None:
     win_rate = (df.pnl > 0).mean() if total_trades else 0
     total_pnl = df.pnl.sum()
     max_dd = (df.pnl.cumsum().cummax() - df.pnl.cumsum()).max()
-    logger.info(f"[daily_summary] Trades={total_trades} WinRate={win_rate:.2%} PnL={total_pnl:.2f} MaxDD={max_dd:.2f}")
+    logger.info(f"[daily_summary] Trades={total_trades} WinRate={win_rate:.2%}Pnl={total_pnl:.2f} MaxDD={max_dd:.2f}")
+
+def run_all_trades(model) -> None:
+    global _last_fh_prefetch_date
+    now = pd.Timestamp.utcnow()
+    logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
+
+    candidates = load_tickers(TICKERS_FILE)
+    today = date.today()
+    if _last_fh_prefetch_date != today:
+        _last_fh_prefetch_date = today
+        prefetch_daily_with_alpaca(candidates)
+        # ensure all regime symbols are seeded
+        for rs in REGIME_SYMBOLS:
+            ctx.data_fetcher.get_daily_df(ctx, rs)
+
+    tickers = screen_universe(candidates, ctx)
+    logger.info(f"➡️ Tickers to trade this cycle: {tickers}")
+    ctx.portfolio_weights = compute_portfolio_weights(tickers)
+    if not tickers:
+        logger.error("❌ No tickers loaded; skipping run_all_trades")
+        return
+
+    if check_halt_flag():
+        logger.info("Trading halted via HALT_FLAG_FILE.")
+        return
+
+    acct = api.get_account()
+    current_cash = float(acct.cash)
+    regime_ok = check_market_regime()
+
+    # clear just_exited set after 60 seconds
+    def clear_just_exited():
+        pytime.sleep(60)
+        ctx.just_exited.clear()
+    Thread(target=clear_just_exited, daemon=True).start()
+
+    for symbol in tickers:
+        executor.submit(_safe_trade, ctx, symbol, current_cash, model, regime_ok)
+
+# ─── MODEL LOADING & SIGNAL WEIGHTS ─────────────────────────────────────────
+def load_model(path: str = MODEL_PATH):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"No trained model found at {path}")
+    model = joblib.load(path)
+    logger.info(f"Loaded trained model from {path}")
+    return model
+
+def update_signal_weights():
+    if not os.path.exists(TRADE_LOG_FILE):
+        logger.warning("No trades log found; skipping weight update.")
+        return
+    df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["entry_price","exit_price","signal_tags"])
+    df["pnl"] = (df["exit_price"]-df["entry_price"])*df["side"].apply(lambda s:1 if s=="buy" else -1)
+    stats={}
+    for _,row in df.iterrows():
+        for tag in row["signal_tags"].split("+"):
+            stats.setdefault(tag,[]).append(row["pnl"])
+    new_weights={tag:round(np.mean([1 if p>0 else 0 for p in pnls]),3) for tag,pnls in stats.items()}
+    ALPHA=0.2
+    old = pd.read_csv(SIGNAL_WEIGHTS_FILE).set_index("signal")["weight"].to_dict() if os.path.exists(SIGNAL_WEIGHTS_FILE) else {}
+    merged={tag:round(ALPHA*w+(1-ALPHA)*old.get(tag,w),3) for tag,w in new_weights.items()}
+    out_df = pd.DataFrame.from_dict(merged,orient="index",columns=["weight"]).reset_index()
+    out_df.columns=["signal","weight"]
+    out_df.to_csv(SIGNAL_WEIGHTS_FILE,index=False)
+    logger.info(f"[MetaLearn] Updated weights for {len(merged)} signals.")
+
+def load_global_signal_performance(min_trades=10,threshold=0.4):
+    if not os.path.exists(TRADE_LOG_FILE):
+        logger.info("[MetaLearn] no history - allowing all signals")
+        return None
+    df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["exit_price","entry_price","signal_tags"])
+    df["pnl"] = (df.exit_price-df.entry_price)*df.side.apply(lambda s:1 if s=="buy" else -1)
+    results={}
+    for _,row in df.iterrows():
+        for tag in row.signal_tags.split("+"):
+            results.setdefault(tag,[]).append(row.pnl)
+    win_rates={tag:round(np.mean([1 if p>0 else 0 for p in pnls]),3)
+               for tag,pnls in results.items() if len(pnls)>=min_trades}
+    filtered={tag:wr for tag,wr in win_rates.items() if wr>=threshold}
+    logger.info(f"[MetaLearn] Keeping signals: {list(filtered.keys()) or 'none'}")
+    return filtered
+
+# ─── INDICATORS ──────────────────────────────────────────────────────────────
+def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
+    df = df.copy()
+    if df.index.name:
+        df = df.reset_index().rename(columns={df.index.name: "Date"})
+    else:
+        df = df.reset_index().rename(columns={"index": "Date"})
+    df["Date"] = pd.to_datetime(df["Date"])
+    df = df.sort_values("Date").set_index("Date")
+
+    df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
+    df["rsi"]  = ta.rsi(df["Close"], length=14)
+    df["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+
+    try:
+        macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
+        if macd is None or not isinstance(macd, pd.DataFrame):
+            raise ValueError("MACD returned None")
+        df["macd"]  = macd["MACD_12_26_9"]
+        df["macds"] = macd["MACDs_12_26_9"]
+    except Exception:
+        df["macd"]  = np.nan
+        df["macds"] = np.nan
+
+    try:
+        ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
+        conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
+        base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
+        df["ichimoku_conv"] = conv.iloc[:, 0] if hasattr(conv, "iloc") else conv
+        df["ichimoku_base"] = base.iloc[:, 0] if hasattr(base, "iloc") else base
+    except Exception:
+        df["ichimoku_conv"] = np.nan
+        df["ichimoku_base"] = np.nan
+
+    try:
+        st = ta.stochrsi(df["Close"])
+        df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
+    except Exception:
+        df["stochrsi"] = np.nan
+
+    df.ffill(inplace=True); df.bfill(inplace=True)
+
+    required = ["vwap","rsi","atr","macd","macds","ichimoku_conv","ichimoku_base","stochrsi"]
+    if freq == "daily":
+        df["sma_50"]  = ta.sma(df["Close"], length=50)
+        df["sma_200"] = ta.sma(df["Close"], length=200)
+        required += ["sma_50","sma_200"]
+        df.dropna(subset=required, how="any", inplace=True)
+    else:
+        df.dropna(subset=required, how="all", inplace=True)
+        df.reset_index(drop=True, inplace=True)
+
+    return df
+
+# ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
+def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
+    feat = pd.DataFrame(index=df.index)
+    feat["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+    feat["rsi"]  = ta.rsi(df["Close"], length=14)
+    feat["macd"] = ta.macd(df["Close"], fast=12, slow=26, signal=9)["MACD_12_26_9"]
+    feat["vol"]  = df["Close"].pct_change().rolling(14).std()
+    return feat.dropna()
+
+if os.path.exists(REGIME_MODEL_PATH):
+    regime_model = pickle.load(open(REGIME_MODEL_PATH, "rb"))
+else:
+    today = date.today()
+    start = (today - timedelta(days=365)).isoformat()
+    try:
+        bars = api.get_bars(" ".join(REGIME_SYMBOLS), TimeFrame.Day, start=start, end=today.isoformat(), limit=1000, feed="iex").df
+        bars.index = pd.to_datetime(bars.index).tz_localize(None)
+        bars = bars.rename(columns={
+            "open":   "Open",
+            "high":   "High",
+            "low":    "Low",
+            "close":  "Close",
+            "volume": "Volume"
+        })
+        feats  = _compute_regime_features(bars)
+        labels = (bars["Close"] > bars["Close"].rolling(200).mean()).loc[feats.index].astype(int).rename("label")
+        training = feats.join(labels, how="inner").dropna()
+        if len(training) >= 50:
+            X = training[["atr","rsi","macd","vol"]]
+            y = training["label"]
+            regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+            regime_model.fit(X, y)
+            pickle.dump(regime_model, open(REGIME_MODEL_PATH, "wb"))
+            logger.info(f"Trained regime_model on {len(training)} daily rows and saved to {REGIME_MODEL_PATH}")
+        else:
+            logger.error(f"Not enough SPY rows ({len(training)}) to train; using dummy fallback")
+            regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+    except Exception as e:
+        logger.error(f"[REGIME TRAIN] error: {e}")
+        regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+
+def check_market_regime() -> bool:
+    # assume the first symbol in REGIME_SYMBOLS is primary
+    primary = REGIME_SYMBOLS[0]
+    df = data_fetcher._daily_cache.get(primary)
+    if df is None or len(df) < 26:
+        logger.warning("[check_market_regime] insufficient history – need ≥26 bars")
+        return False
+    feats = _compute_regime_features(df)
+    if feats.empty:
+        logger.warning("[check_market_regime] failed to compute regime features")
+        return False
+    cols = ["atr","rsi","macd","vol"]
+    X = feats[cols].iloc[[-1]]
+    pred = regime_model.predict(X)[0]
+    return bool(pred)
 
 # ─── MAIN LOOP ───────────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -2092,47 +1869,34 @@ def health() -> str:
     return "OK", 200
 
 def start_healthcheck() -> None:
-    # allow overriding via ENV so you don’t have to re-deploy to pick a new port
     port = int(os.getenv("HEALTHCHECK_PORT", "8080"))
     try:
         app.run(host="0.0.0.0", port=port)
     except OSError as e:
-        # catch “Address already in use” and just skip spinning up Flask
         logger.warning(f"Healthcheck port {port} in use: {e}. Skipping health-endpoint.")
 
 def initial_rebalance(ctx, symbols):
-    """
-    Buy an equal-weight basket of `symbols` with all available cash,
-    skipping any where you don’t have buying power or a valid price.
-    """
     acct = ctx.api.get_account()
     equity = float(acct.equity)
-    # avoid PDT errors if under $25k
     if equity < PDT_EQUITY_THRESHOLD:
-        logger.info(f"[REBALANCE] Skipping initial rebalance: equity ${equity:.2f} < PDT threshold ${PDT_EQUITY_THRESHOLD}")
+        logger.info(f"[REBALANCE] Skipping: equity ${equity:.2f} < PDT threshold ${PDT_EQUITY_THRESHOLD}")
         return
-
     cash = float(acct.cash)
     n = len(symbols)
     if n == 0 or cash <= 0:
         logger.info("[REBALANCE] No symbols or no cash; skipping")
         return
-
     per_symbol = cash / n
-
     for sym in symbols:
         try:
             quote = ctx.api.get_latest_quote(sym)
             price = float(getattr(quote, "ask_price", 0) or 0)
-            # guard against bad price
             if price <= 0:
                 logger.warning(f"[REBALANCE] skipping {sym}: invalid quote price={price}")
                 continue
-
             qty = int(per_symbol // price)
             if qty <= 0:
                 continue
-
             logger.info(f"[REBALANCE] Buying {qty} {sym} @ ${price:.2f}")
             try:
                 ctx.api.submit_order(
@@ -2142,48 +1906,39 @@ def initial_rebalance(ctx, symbols):
                     type="market",
                     time_in_force="day",
                 )
+                orders_total.inc()
             except APIError as e:
                 msg = str(e).lower()
-                # skip on insufficient power / PDT errors
                 if "insufficient" in msg or "day trading buying power" in msg:
                     logger.warning(f"[REBALANCE SKIPPED] {sym}: {e}")
                 else:
                     logger.exception(f"[REBALANCE ERROR] {sym}: {e}")
         except Exception as e:
-            logger.exception(f"[REBALANCE] failed to fetch quote or compute qty for {sym}: {e}")
+            logger.exception(f"[REBALANCE] failed for {sym}: {e}")
 
 if __name__ == "__main__":
-    # Start Prometheus metrics server
     start_http_server(8000)
-
-    # Start health endpoint if requested
     if RUN_HEALTH:
         Thread(target=start_healthcheck, daemon=True).start()
 
-    # Daily jobs
     schedule.every().day.at("00:30").do(daily_summary)
-    # ─── MODIFIED: disabled forced EOD exit ───────────────────────────────────
+    # disable forced EOD exit
     # schedule.every().day.at("15:45").do(exit_all_positions)
 
-    # Load your model
     model = load_model()
     logger.info("🚀 AI Trading Bot is live!")
 
-    # ─── INITIAL REBALANCE (runs once) ───────────────────────────────────────
     try:
         if not getattr(ctx, "_rebalance_done", False):
             universe = load_tickers(TICKERS_FILE)
             initial_rebalance(ctx, universe)
             ctx._rebalance_done = True
     except Exception as e:
-        logger.warning(f"[REBALANCE] aborted due to error: {e}")
-    # ─────────────────────────────────────────────────────────────────────────
+        logger.warning(f"[REBALANCE] aborted: {e}")
 
-    # Recurring jobs
-    schedule.every(1).minutes.do(lambda: run_all_trades(model))
+    schedule.every(1).minutes.do(lambda: run_all_trades_wrapper(model))
     schedule.every(6).hours.do(update_signal_weights)
 
-    # Scheduler loop
     while True:
         schedule.run_pending()
         pytime.sleep(1)
