@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import logging
 import os
 import csv
@@ -44,7 +43,6 @@ import pybreaker
 
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, wait_random, retry_if_exception_type, RetryError
 from ratelimit import limits, sleep_and_retry
-from more_itertools import chunked
 
 import warnings
 warnings.filterwarnings(
@@ -53,11 +51,19 @@ warnings.filterwarnings(
     category=UserWarning
 )
 
+# ─── HELPERS ──────────────────────────────────────────────────────────────────
+def chunked(lst: List[Any], n: int):
+    """
+    Yield successive chunks of size n from lst.
+    """
+    for i in range(0, len(lst), n):
+        yield lst[i:i+n]
+
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 load_dotenv()
 RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
 
-# Logging: set root logger to INFO, keep key modules at DEBUG if needed
+# Logging: set root logger to INFO, keep key modules at WARNING
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     level=logging.INFO
