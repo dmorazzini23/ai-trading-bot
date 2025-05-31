@@ -1424,21 +1424,29 @@ def pre_trade_checks(
     if check_pdt_rule(ctx):
         logger.debug(f"[SKIP] PDT rule – {symbol}")
         return False
+
     if check_halt_flag():
         logger.debug(f"[SKIP] HALT_FLAG – {symbol}")
         return False
-    if not in_trading_hours(pd.Timestamp.utcnow()):
-        logger.debug(f"[SKIP] Market closed – {symbol}")
-        return False
+
+    # ─── DISABLED MARKET‐HOURS GUARD ───────────────────────────────────
+    # if not in_trading_hours(pd.Timestamp.utcnow()):
+    #     logger.debug(f"[SKIP] Market closed – {symbol}")
+    #     return False
+    # ─────────────────────────────────────────────────────────────────────
+
     if check_daily_loss():
         logger.debug(f"[SKIP] Daily-loss limit – {symbol}")
         return False
+
     if not regime_ok:
         logger.debug(f"[SKIP] Market regime – {symbol}")
         return False
+
     if too_many_positions():
         logger.debug(f"[SKIP] Max positions – {symbol}")
         return False
+
     if too_correlated(symbol):
         logger.debug(f"[SKIP] Correlation – {symbol}")
         return False
@@ -1722,9 +1730,12 @@ def run_all_trades(model) -> None:
     global _last_fh_prefetch_date
 
     now = pd.Timestamp.utcnow()
-    if not in_trading_hours(now):
-        logger.info("[SKIP] Market closed")
-        return
+    # ─── DISABLED MARKET‐HOURS GUARD ───────────────────────────────────
+    #if not in_trading_hours(now):
+    #    logger.info("[SKIP] Market closed")
+    #    return
+    # ─────────────────────────────────────────────────────────────────────
+
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
     # 1) Load your universe…
