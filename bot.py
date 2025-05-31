@@ -56,7 +56,7 @@ warnings.filterwarnings(
   category=UserWarning
 )
 
-# thread-safety locks
+# ─── THREAD‐SAFETY LOCKS & GLOBALS ───────────────────────────────────────────
 cache_lock   = Lock()
 targets_lock = Lock()
 
@@ -75,7 +75,7 @@ INTRADAY_FEATURES = [
 ]
 
 def is_high_vol_regime() -> bool:
-    # uses your regime_model’s 14d vol vs its 20d rolling mean
+    # Uses our regime_model’s 14d vol vs its 20d rolling mean
     df = data_fetcher._daily_cache.get("SPY")
     feats = _compute_regime_features(df)
     today_vol = feats["vol"].iloc[-1]
@@ -84,10 +84,10 @@ def is_high_vol_regime() -> bool:
 
 # ─── CIRCUIT BREAKER FOR ALPACA CALLS ─────────────────────────────────────────
 breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
-
 executor = ThreadPoolExecutor(max_workers=4)
 
 def predict_text_sentiment(text: str) -> float:
+    # Placeholder: always returns neutral. You can plug in your own model.
     return 0.0
 
 from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, wait_random, retry_if_exception_type
@@ -101,8 +101,7 @@ last_drawdown: float = 0.0
 _calendar_cache: Dict[str, pd.DataFrame] = {}
 _calendar_last_fetch: Dict[str, date] = {}
 
-# ─── MARKET HOURS GUARD ───────────────────────────────────────────────────
-# set up the NYSE calendar once
+# ─── MARKET HOURS GUARD ───────────────────────────────────────────────────────
 nyse = mcal.get_calendar("XNYS")
 
 def in_trading_hours(ts: pd.Timestamp) -> bool:
@@ -112,7 +111,7 @@ def in_trading_hours(ts: pd.Timestamp) -> bool:
         return False
     return schedule.market_open.iloc[0] <= ts <= schedule.market_close.iloc[0]
 
-# ─── A. ENVIRONMENT, SENTRY & LOGGING ────────────────────────────────────────
+# ─── A. ENVIRONMENT, SENTRY & LOGGING ─────────────────────────────────────────
 load_dotenv()
 RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
 sentry_sdk.init(
@@ -140,7 +139,7 @@ EQUITY_FILE         = abspath("last_equity.txt")
 PEAK_EQUITY_FILE    = abspath("peak_equity.txt")
 HALT_FLAG_PATH      = abspath("halt.flag")
 MODEL_PATH          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
-REGIME_MODEL_PATH = abspath("regime_model.pkl")
+REGIME_MODEL_PATH   = abspath("regime_model.pkl")
 
 # ─── STRATEGY MODE CONFIGURATION ─────────────────────────────────────────────
 class BotMode:
@@ -151,21 +150,33 @@ class BotMode:
     def set_parameters(self) -> dict[str, float]:
         if self.mode == "conservative":
             return {
-                "KELLY_FRACTION": 0.3, "CONF_THRESHOLD": 0.8, "CONFIRMATION_COUNT": 3,
-                "TAKE_PROFIT_FACTOR": 1.2, "DAILY_LOSS_LIMIT": 0.05,
-                "CAPITAL_CAP": 0.05, "TRAILING_FACTOR": 1.5
+                "KELLY_FRACTION": 0.3,
+                "CONF_THRESHOLD": 0.8,
+                "CONFIRMATION_COUNT": 3,
+                "TAKE_PROFIT_FACTOR": 1.2,
+                "DAILY_LOSS_LIMIT": 0.05,
+                "CAPITAL_CAP": 0.05,
+                "TRAILING_FACTOR": 1.5,
             }
         elif self.mode == "aggressive":
             return {
-                "KELLY_FRACTION": 0.75, "CONF_THRESHOLD": 0.6, "CONFIRMATION_COUNT": 1,
-                "TAKE_PROFIT_FACTOR": 2.2, "DAILY_LOSS_LIMIT": 0.1,
-                "CAPITAL_CAP": 0.1, "TRAILING_FACTOR": 2.0
+                "KELLY_FRACTION": 0.75,
+                "CONF_THRESHOLD": 0.6,
+                "CONFIRMATION_COUNT": 1,
+                "TAKE_PROFIT_FACTOR": 2.2,
+                "DAILY_LOSS_LIMIT": 0.1,
+                "CAPITAL_CAP": 0.1,
+                "TRAILING_FACTOR": 2.0,
             }
         else:  # balanced
             return {
-                "KELLY_FRACTION": 0.6, "CONF_THRESHOLD": 0.75, "CONFIRMATION_COUNT": 2,
-                "TAKE_PROFIT_FACTOR": 1.8, "DAILY_LOSS_LIMIT": 0.07,
-                "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.2
+                "KELLY_FRACTION": 0.6,
+                "CONF_THRESHOLD": 0.75,
+                "CONFIRMATION_COUNT": 2,
+                "TAKE_PROFIT_FACTOR": 1.8,
+                "DAILY_LOSS_LIMIT": 0.07,
+                "CAPITAL_CAP": 0.08,
+                "TRAILING_FACTOR": 1.2,
             }
 
     def get_config(self) -> dict[str, float]:
@@ -190,8 +201,8 @@ POV_SLICE_PCT            = float(os.getenv("POV_SLICE_PCT", "0.05"))
 DAILY_LOSS_LIMIT         = params["DAILY_LOSS_LIMIT"]
 MAX_PORTFOLIO_POSITIONS  = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD    = 0.60
-MARKET_OPEN              = dt_time(6, 30)
-MARKET_CLOSE             = dt_time(13, 0)
+MARKET_OPEN              = dt_time(6, 30)     # 9:30 ET is 6:30 PT
+MARKET_CLOSE             = dt_time(13, 0)     # 4:00 ET is 1:00 PT
 VOLUME_THRESHOLD         = int(os.getenv("VOLUME_THRESHOLD", "50000"))
 ENTRY_START_OFFSET       = timedelta(minutes=30)
 ENTRY_END_OFFSET         = timedelta(minutes=15)
@@ -268,8 +279,9 @@ class BotContext:
     trailing_extremes: dict[str, float] = field(default_factory=dict)
     take_profit_targets: dict[str, float] = field(default_factory=dict)
     stop_targets:         dict[str, float] = field(default_factory=dict)
-    portfolio_weights: dict[str, float] = field(default_factory=dict)
+    portfolio_weights:    dict[str, float] = field(default_factory=dict)
 
+# ─── FINNHUB FETCHER ───────────────────────────────────────────────────────────
 class FinnhubFetcher:
     def __init__(self, calls_per_minute: int = 60):
         self.max_calls   = calls_per_minute
@@ -278,7 +290,6 @@ class FinnhubFetcher:
 
     def _throttle(self):
         now = pytime.time()
-        # drop timestamps >60s ago
         while self._timestamps and now - self._timestamps[0] > 60:
             self._timestamps.popleft()
         if len(self._timestamps) >= self.max_calls:
@@ -347,18 +358,17 @@ class FinnhubFetcher:
             if len(frames) == 1:
                 return frames[0]
 
-            # multi-symbol: produce a (Field,Symbol) MultiIndex
+            # multi-symbol: produce a (Symbol,Field) MultiIndex
             return pd.concat(frames, axis=1, keys=syms, names=['Symbol','Field'])
 
-        except FinnhubAPIException as e:
-            logger.debug(f"[FH] no access for {symbols} ({period}/{interval}): {e}. returning empty df")
+        except Exception as e:
+            logger.debug(f"[FH] fetch error for {symbols}: {e}. returning empty df")
             return pd.DataFrame()
-# ─── FINNHUB FETCHER ────────────────────────────────────────────────────────
+
 # instantiate a singleton
 fh = FinnhubFetcher(calls_per_minute=60)
-
 _last_fh_prefetch_date: Optional[date] = None
-    
+
 # ─── CORE CLASSES ─────────────────────────────────────────────────────────────
 class DataFetcher:
     def __init__(self) -> None:
@@ -403,7 +413,7 @@ class DataFetcher:
                 df = None
             self._daily_cache[symbol] = df
         return self._daily_cache[symbol]
-        
+
     def get_minute_df(self, ctx: BotContext, symbol: str) -> Optional[pd.DataFrame]:
         # 0) cache hit?
         last = self._minute_timestamps.get(symbol)
@@ -445,7 +455,7 @@ class DataFetcher:
             self._minute_cache[symbol]      = df
             self._minute_timestamps[symbol] = datetime.now(timezone.utc)
         return df
-        
+
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
         self.path = path
@@ -470,9 +480,11 @@ class TradeLogger:
                 if row[0] == symbol and row[3] == "":
                     entry_t = datetime.fromisoformat(row[1])
                     days = (datetime.now(timezone.utc) - entry_t).days
-                    cls = ("day_trade" if days == 0
-                           else "swing_trade" if days < 5
-                           else "long_trade")
+                    cls = (
+                        "day_trade"   if days == 0
+                        else "swing_trade" if days < 5
+                        else "long_trade"
+                    )
                     row[3], row[4], row[8] = datetime.now(timezone.utc).isoformat(), exit_price, cls
                     break
             f.seek(0); f.truncate()
@@ -507,9 +519,11 @@ class SignalManager:
             sd = df['Close'].rolling(self.mean_rev_lookback).std()
             df['zscore'] = (df['Close'] - ma) / sd
             val = df['zscore'].iloc[-1]
-            signal = (0 if val > self.mean_rev_zscore_threshold
-                      else 1 if val < -self.mean_rev_zscore_threshold
-                      else -1)
+            signal = (
+                0 if val > self.mean_rev_zscore_threshold
+                else 1 if val < -self.mean_rev_zscore_threshold
+                else -1
+            )
             weight = min(abs(val)/3, 1.0)
             return signal, weight, 'mean_reversion'
         except Exception:
@@ -550,7 +564,11 @@ class SignalManager:
             vsa = df['Volume'] * body
             score = vsa.iloc[-1]
             avg   = vsa.rolling(20).mean().iloc[-1]
-            signal = 1 if df['Close'].iloc[-1] > df['Open'].iloc[-1] else 0 if df['Close'].iloc[-1] < df['Open'].iloc[-1] else -1
+            signal = (
+                1 if df['Close'].iloc[-1] > df['Open'].iloc[-1]
+                else 0 if df['Close'].iloc[-1] < df['Open'].iloc[-1]
+                else -1
+            )
             weight = min(score/avg, 1.0)
             return signal, weight, 'vsa'
         except Exception:
@@ -623,7 +641,7 @@ class SignalManager:
         final = 1 if score > 0.5 else 0 if score < -0.5 else -1
         label = "+".join(lab for _,_,lab in signals)
         return final, conf, label
-        
+
 # ─── GLOBAL STATE ─────────────────────────────────────────────────────────────
 api            = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, base_url=ALPACA_BASE_URL)
 data_fetcher   = DataFetcher()
@@ -646,7 +664,7 @@ ctx = BotContext(
     kelly_fraction=params["KELLY_FRACTION"],
 )
 
-# ─── CIRCUIT-BREAKER WRAPPERS ────────────────────────────────────────────────
+# ─── CIRCUIT‐BREAKER WRAPPER ─────────────────────────────────────────────────
 @breaker
 def safe_alpaca_get_account():
     return api.get_account()
@@ -663,14 +681,14 @@ def _fh_chunk_fetch(
     interval: str = "1d"
 ) -> pd.DataFrame:
     """
-    Use your throttled FinnhubFetcher for small batches.
+    Use our throttled FinnhubFetcher for small batches.
     Retries twice on any exception.
     """
     df = fh.fetch(symbols, period=period, interval=interval)
     if df is None or df.empty:
         raise DataFetchError(f"No data returned for symbols {symbols}")
     return df
-    
+
 def prefetch_daily_with_alpaca(symbols: List[str]):
     all_syms = [s for s in symbols if s != "SPY"]
     if not all_syms:
@@ -760,7 +778,7 @@ def prefetch_daily_with_alpaca(symbols: List[str]):
         with cache_lock:
             data_fetcher._daily_cache[sym] = dummy
         logger.warning(f"🔶 Dummy {sym} inserted to satisfy data checks")
-        
+
 def fetch_data(ctx, symbols, period, interval):
     """Fallback for small bulk requests via Alpaca barset if needed."""
     dfs: List[pd.DataFrame] = []
@@ -801,14 +819,13 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
     except Exception as e:
         logger.warning(f"[get_sec_headlines] parse failed for {ticker}: {e}")
         return ""
-        
+
 @limits(calls=60, period=60)
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
     retry=retry_if_exception_type((requests.RequestException, DataFetchError))
 )
-
 def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     url = (
         f"https://newsapi.org/v2/everything?"
@@ -853,11 +870,10 @@ def check_daily_loss() -> bool:
     equity = float(acct.equity)
     today  = date.today()
 
-    # **always** give limit a default value
+    # always give limit a default value
     limit = params["DAILY_LOSS_LIMIT"]
 
-    # on a brand-new trading day, reset your baseline and possibly
-    # tighten the limit if yesterday was bad
+    # on a brand-new trading day, reset your baseline and possibly tighten the limit if yesterday was bad
     if day_start_equity is None or day_start_equity[0] != today:
         # if yesterday’s drawdown ≥5%, cap today at 3%
         if last_drawdown >= 0.05:
@@ -943,6 +959,7 @@ def check_pdt_rule(ctx: BotContext) -> bool:
         return True
 
     return False
+
 def check_halt_flag() -> bool:
     if not os.path.exists(HALT_FLAG_PATH):
         return False
@@ -992,14 +1009,13 @@ def too_correlated(sym: str) -> bool:
 # ─── SIZING & EXECUTION ───────────────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext) -> bool:
     now = now_pacific()
-    start = (datetime.combine(now.date(),ctx.market_open)+ctx.entry_start_offset).time()
-    end   = (datetime.combine(now.date(),ctx.market_close)-ctx.entry_end_offset).time()
-    if not (start<=now.time()<=end):
+    start = (datetime.combine(now.date(),ctx.market_open) + ctx.entry_start_offset).time()
+    end   = (datetime.combine(now.date(),ctx.market_close) - ctx.entry_end_offset).time()
+    if not (start <= now.time() <= end):
         logger.info(f"[SKIP] entry window ({start}–{end}), now={now.time()}")
         return False
     return True
 
-# ─── SIZING & EXECUTION ───────────────────────────────────────────────────────
 def scaled_atr_stop(entry_price: float,
                     atr: float,
                     now: datetime,
@@ -1032,30 +1048,30 @@ def fractional_kelly_size(
         with portalocker.Lock(PEAK_EQUITY_FILE,'r+',timeout=1) as f:
             content = f.read().strip()
             peak_equity = float(content) if content else balance
-            if balance>peak_equity:
+            if balance > peak_equity:
                 f.seek(0); f.truncate(); f.write(str(balance))
                 peak_equity = balance
 
     drawdown = (peak_equity - balance)/peak_equity
-    if drawdown>0.10:
+    if drawdown > 0.10:
         frac = 0.3
-    elif drawdown>0.05:
+    elif drawdown > 0.05:
         frac = 0.45
     else:
         frac = ctx.kelly_fraction
 
-    edge = win_prob - (1-win_prob)/payoff_ratio
-    kelly = max(edge/payoff_ratio,0)*frac
+    edge = win_prob - (1 - win_prob)/payoff_ratio
+    kelly = max(edge/payoff_ratio, 0) * frac
 
-    dollars_to_risk = kelly*balance
-    if atr<=0:
+    dollars_to_risk = kelly * balance
+    if atr <= 0:
         return 1
 
-    raw_pos = dollars_to_risk/atr
-    cap_pos = (balance*CAPITAL_CAP)/price
-    size = int(min(raw_pos,cap_pos,MAX_POSITION_SIZE))
+    raw_pos = dollars_to_risk / atr
+    cap_pos = (balance * CAPITAL_CAP) / price
+    size = int(min(raw_pos, cap_pos, MAX_POSITION_SIZE))
 
-    return max(size,1)
+    return max(size, 1)
 
 def vol_target_position_size(cash: float,
                              price: float,
@@ -1063,7 +1079,7 @@ def vol_target_position_size(cash: float,
                              target_vol: float = 0.02
                             ) -> int:
     sigma = np.std(returns)
-    dollar_alloc = cash * (target_vol / sigma)
+    dollar_alloc = cash * (target_vol / sigma) if sigma > 0 else cash * target_vol
     qty = int(dollar_alloc / price)
     return max(qty, 1)
 
@@ -1080,12 +1096,11 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     # 1) look up the best bid/ask to decide limit price if we’re off‐hours
     try:
         quote = ctx.api.get_latest_quote(symbol)
-        # if buying, use ask_price; if selling, use bid_price
         last_price = quote.ask_price if side.lower() == "buy" else quote.bid_price
     except Exception:
         last_price = None
 
-    # 2) detect “after‐hours” by calling your in_trading_hours(...) guard
+    # 2) detect “after‐hours” by calling in_trading_hours(...)
     now_utc = pd.Timestamp.utcnow()
     is_regular_hours = in_trading_hours(now_utc)
 
@@ -1093,15 +1108,13 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     if not is_regular_hours:
         if last_price is None or last_price <= 0:
             logger.warning(
-                f"[submit_order] cannot trade {symbol} off‐hours: "
-                f"no valid bid/ask (last_price={last_price})"
+                f"[submit_order] cannot trade {symbol} off‐hours: no valid bid/ask (last_price={last_price})"
             )
             return None
 
         limit_price = round(last_price, 2)
         logger.info(
-            f"[OFF‐HOURS] sending LIMIT {side.upper()} {qty} of {symbol} "
-            f"@ {limit_price} with extended_hours=True"
+            f"[OFF‐HOURS] sending LIMIT {side.upper()} {qty} {symbol} @ {limit_price} extended_hours=True"
         )
         try:
             off_order = ctx.api.submit_order(
@@ -1109,17 +1122,15 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                 qty=qty,
                 side=side,
                 type="limit",
-                time_in_force="day",            # “day” still lets Alpaca hold the limit until next close
+                time_in_force="day",       # “day” still lets Alpaca hold the limit until next close
                 limit_price=limit_price,
-                extended_hours=True,            # ← key flag for after‐hours
+                extended_hours=True,
             )
             logger.debug(f"[OFF‐HOURS OK] {off_order.id} {side} {qty} {symbol} @ {limit_price}")
             return off_order
 
         except APIError as e:
             msg = str(e).lower()
-            # You can still catch partial‐fill or wash‐trade errors here, but note:
-            # extended‐hours only works with limit orders. If Alpaca rejects you, it’ll come back as APIError.
             logger.warning(
                 f"[submit_order off‐hours] APIError for {symbol}: {e} (limit_price={limit_price})"
             )
@@ -1128,9 +1139,9 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             logger.exception(f"[submit_order off‐hours] unexpected error for {symbol}")
             return None
 
-    # 4) Otherwise: inside regular hours → keep your existing “market” logic
+    # 4) Otherwise: inside regular hours → market order
     try:
-        logger.debug(f"[ORDER] submit MARKET {side.upper()} {qty} of {symbol}")
+        logger.debug(f"[ORDER] submit MARKET {side.upper()} {qty} {symbol}")
         order = ctx.api.submit_order(
             symbol=symbol,
             qty=qty,
@@ -1165,26 +1176,28 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             )
             return order
 
-        # 4c) Wash‐trade fallback → your existing bracket logic
+        # 4c) Wash‐trade fallback → place a small bracket order
         if "potential wash trade" in msg:
             logger.warning(f"[submit_order] wash‐trade error for {symbol}; using bracket fallback")
-            tp_price = expected_price * 1.02 if 'expected_price' in locals() else last_price * 1.02
-            sl_price = expected_price * 0.98 if 'expected_price' in locals() else last_price * 0.98
-            bracket = ctx.api.submit_order(
-                symbol=symbol,
-                qty=qty,
-                side=side,
-                type="limit",
-                time_in_force="gtc",
-                order_class="bracket",
-                take_profit={"limit_price": tp_price},
-                stop_loss={"stop_price": sl_price},
-            )
-            logger.info(
-                f"[submit_order] placed bracket order @ limit {last_price:.2f}; "
-                f"TP={tp_price:.2f}, SL={sl_price:.2f}"
-            )
-            return bracket
+            tp_price = (last_price * 1.02) if last_price else None
+            sl_price = (last_price * 0.98) if last_price else None
+            if tp_price and sl_price:
+                bracket = ctx.api.submit_order(
+                    symbol=symbol,
+                    qty=qty,
+                    side=side,
+                    type="limit",
+                    time_in_force="gtc",
+                    order_class="bracket",
+                    take_profit={"limit_price": round(tp_price,2)},
+                    stop_loss={"stop_price": round(sl_price,2)},
+                )
+                logger.info(
+                    f"[submit_order] placed bracket {symbol}: TP={tp_price:.2f}, SL={sl_price:.2f}"
+                )
+                return bracket
+            else:
+                return None
 
         # 4d) Other APIError → re‐raise so tenacity can retry
         logger.warning(f"[submit_order] APIError for {symbol}: {e} → retrying")
@@ -1384,11 +1397,9 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
         logger.info(f"[ENTRY] POV slice {qty}@{POV_SLICE_PCT*100:.1f}% for {symbol}")
         pov_submit(ctx, symbol, qty, side)
-
     elif qty > SLICE_THRESHOLD:
         logger.info(f"[ENTRY] VWAP-pegged slice {qty} {side.upper()} for {symbol}")
         vwap_pegged_submit(ctx, symbol, qty, side)
-
     else:
         logger.info(f"[ENTRY] Market {side.upper()} {qty} {symbol}")
         submit_order(ctx, symbol, qty, side)
@@ -1433,13 +1444,11 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
 
 def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
     # 1) send the exit order
-    submit_order(ctx, symbol, qty, "sell" if qty>0 else "buy")
+    submit_order(ctx, symbol, qty, "sell")
 
     # 2) log the exit
-    ctx.trade_logger.log_exit(
-        symbol,
-        ctx.data_fetcher.get_minute_df(ctx, symbol)["Close"].iloc[-1]
-    )
+    last_price = ctx.data_fetcher.get_minute_df(ctx, symbol)["Close"].iloc[-1]
+    ctx.trade_logger.log_exit(symbol, last_price)
 
     # 3) now rebalance if needed
     on_trade_exit_rebalance(ctx)
@@ -1457,62 +1466,23 @@ def exit_all_positions():
             logger.info(f"[EOD EXIT] Sold {qty} {pos.symbol}")
 
 # ─── SIGNAL & TRADE LOGIC ────────────────────────────────────────────────────
-def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int, float, str]:
-    sig, conf, strat = ctx.signal_manager.evaluate(ctx, df, symbol, model)
-    if sig == -1 or conf < CONF_THRESHOLD:
-        logger.debug(f"[SKIP] {symbol} no/low signal (sig={sig},conf={conf:.2f})")
-        return -1, 0.0, ""
-    return sig, conf, strat
-
-def pre_trade_checks(
-    ctx: BotContext,
-    symbol: str,
-    balance: float,
-    regime_ok: bool
-) -> bool:
-    if check_pdt_rule(ctx):
-        logger.debug(f"[SKIP] PDT rule – {symbol}")
+def _can_fetch_events(symbol):
+    now = pytime.time()
+    last = _LAST_EVENT_TS.get(symbol, 0)
+    if now - last < EVENT_COOLDOWN:
         return False
-
-    if check_halt_flag():
-        logger.debug(f"[SKIP] HALT_FLAG – {symbol}")
-        return False
-
-    # ─── DISABLED MARKET‐HOURS GUARD ───────────────────────────────────
-    # if not in_trading_hours(pd.Timestamp.utcnow()):
-    #     logger.debug(f"[SKIP] Market closed – {symbol}")
-    #     return False
-    # ─────────────────────────────────────────────────────────────────────
-
-    if check_daily_loss():
-        logger.debug(f"[SKIP] Daily-loss limit – {symbol}")
-        return False
-
-    if not regime_ok:
-        logger.debug(f"[SKIP] Market regime – {symbol}")
-        return False
-
-    if too_many_positions():
-        logger.debug(f"[SKIP] Max positions – {symbol}")
-        return False
-
-    if too_correlated(symbol):
-        logger.debug(f"[SKIP] Correlation – {symbol}")
-        return False
-
-    return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
-
-def should_enter(
-    ctx: BotContext,
-    symbol: str,
-    balance: float,
-    regime_ok: bool
-) -> bool:
-    return pre_trade_checks(ctx, symbol, balance, regime_ok) and is_within_entry_window(ctx)
+    _LAST_EVENT_TS[symbol] = now
+    return True
 
 def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple[bool,int,str]:
+    """
+    1) Stop‐loss
+    2) Take‐profit (partial)
+    3) Trailing‐stop
+    4) No “exit after N days”—purely signal/risk-based
+    """
     try:
-        pos = int(ctx.api.get_position(symbol).qty)
+        pos = int(float(ctx.api.get_position(symbol).qty))
     except Exception:
         pos = 0
 
@@ -1533,34 +1503,45 @@ def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple
     if action == "exit_short" and pos < 0:
         return True, abs(pos), "trailing_stop"
 
-    # 4) No “exit after N days”—purely signal/risk-based
+    # 4) No time-based exit—purely signal/risk
     return False, 0, ""
 
-def _can_fetch_events(symbol):
-    now = pytime.time()
-    last = _LAST_EVENT_TS.get(symbol, 0)
-    if now - last < EVENT_COOLDOWN:
-        return False
-    _LAST_EVENT_TS[symbol] = now
-    return True
-
-def _safe_trade(
+def pre_trade_checks(
     ctx: BotContext,
     symbol: str,
     balance: float,
-    model: RandomForestClassifier,
     regime_ok: bool
-) -> None:
-    try:
-        trade_logic(ctx, symbol, balance, model, regime_ok)
-    except APIError as e:
-        msg = str(e).lower()
-        if "insufficient buying power" in msg or "potential wash trade" in msg:
-            logger.warning(f"[trade_logic] skipping {symbol} due to APIError: {e}")
-        else:
-            logger.exception(f"[trade_logic] APIError for {symbol}: {e}")
-    except Exception:
-        logger.exception(f"[trade_logic] unhandled exception for {symbol}")
+) -> bool:
+    if check_pdt_rule(ctx):
+        logger.debug(f"[SKIP] PDT rule – {symbol}")
+        return False
+
+    if check_halt_flag():
+        logger.debug(f"[SKIP] HALT_FLAG – {symbol}")
+        return False
+
+    # MARKET‐HOURS GUARD is intentionally disabled:
+    # if not in_trading_hours(pd.Timestamp.utcnow()):
+    #     logger.debug(f"[SKIP] Market closed – {symbol}")
+    #     return False
+
+    if check_daily_loss():
+        logger.debug(f"[SKIP] Daily-loss limit – {symbol}")
+        return False
+
+    if not regime_ok:
+        logger.debug(f"[SKIP] Market regime – {symbol}")
+        return False
+
+    if too_many_positions():
+        logger.debug(f"[SKIP] Max positions – {symbol}")
+        return False
+
+    if too_correlated(symbol):
+        logger.debug(f"[SKIP] Correlation – {symbol}")
+        return False
+
+    return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
 
 def trade_logic(
     ctx: BotContext,
@@ -1609,9 +1590,8 @@ def trade_logic(
     except Exception:
         current_qty = 0
 
-    # 6) If the ensemble is bearish (final_sig < 0) AND we hold a long position, EXIT immediately.
+    # ─── SELL ON BEARISH SIGNAL IF LONG ────────────────────────────────────────
     if final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
-        # Full exit
         price = feat_df["Close"].iloc[-1]
         logger.info(f"[SIGNAL-REVERSAL EXIT] {symbol}: final_score={final_score:.2f} < 0 → SELL {current_qty}")
         submit_order(ctx, symbol, current_qty, "sell")
@@ -1622,7 +1602,7 @@ def trade_logic(
             ctx.take_profit_targets.pop(symbol, None)
         return
 
-    # 7) If the ensemble is bullish (final_sig > 0), and we do NOT hold any position, ENTER.
+    # ─── BUY ON BULLISH SIGNAL IF FLAT ────────────────────────────────────────
     if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
         current_price = feat_df["Close"].iloc[-1]
         # Compute raw_qty based on portfolio weight + sizing methods
@@ -1662,7 +1642,7 @@ def trade_logic(
                 ctx.take_profit_targets[symbol] = take
         return
 
-    # 8) If we already hold a position, check stop/take/trailing‐stop.
+    # ─── IF WE HOLD A POSITION, CHECK STOP/TAKE/TRAIL ─────────────────────────
     if current_qty > 0:
         price = feat_df["Close"].iloc[-1]
         atr   = feat_df["atr"].iloc[-1]
@@ -1672,7 +1652,7 @@ def trade_logic(
             submit_order(ctx, symbol, exit_qty, "sell")
             ctx.trade_logger.log_exit(symbol, price)
 
-            # If we sold everything, clear the stops/take dictionaries
+            # If we sold everything, clear targets
             try:
                 pos_after = ctx.api.get_position(symbol)
                 if int(abs(int(pos_after.qty))) == 0:
@@ -1683,9 +1663,9 @@ def trade_logic(
                 pass
         return
 
-    # 9) Otherwise, do nothing (i.e. hold until either a new signal or a stop/take/trailing triggers).
+    # ─── OTHERWISE, HOLD (No time‐based exit) ───────────────────────────────────
     return
-        
+
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """
     Assign equal weights to each symbol in the universe.
@@ -1739,6 +1719,11 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
     df  = pd.concat([df1, df2], axis=1).dropna()
 
     # test for cointegration
+    try:
+        from statsmodels.tsa.stattools import coint
+    except ImportError:
+        return ("no_signal", 0)
+
     t_stat, p_value, _ = coint(df.iloc[:, 0], df.iloc[:, 1])
     if p_value < 0.05:
         # fit hedge ratio β
@@ -1769,9 +1754,7 @@ def get_calendar_safe(symbol: str) -> pd.DataFrame:
     try:
         cal = yf.Ticker(symbol).calendar
     except YFRateLimitError:
-        logger.warning(
-            f"[Events] Rate limited for {symbol}; skipping events."
-        )
+        logger.warning(f"[Events] Rate limited for {symbol}; skipping events.")
         cal = pd.DataFrame()
     except Exception as e:
         logger.error(f"[Events] Error fetching calendar for {symbol}: {e}")
@@ -1788,7 +1771,7 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
     """
     cal = get_calendar_safe(symbol)
 
-    # if we didn’t get a DataFrame (e.g. got a dict or None) or it's empty, bail
+    # if we didn’t get a DataFrame or it's empty, bail
     if not hasattr(cal, "empty") or cal.empty:
         return False
 
@@ -1811,11 +1794,10 @@ def run_all_trades(model) -> None:
     global _last_fh_prefetch_date
 
     now = pd.Timestamp.utcnow()
-    # ─── DISABLED MARKET‐HOURS GUARD ───────────────────────────────────
-    #if not in_trading_hours(now):
-    #    logger.info("[SKIP] Market closed")
-    #    return
-    # ─────────────────────────────────────────────────────────────────────
+    # MARKET‐HOURS GUARD is disabled:
+    # if not in_trading_hours(now):
+    #     logger.info("[SKIP] Market closed")
+    #     return
 
     logger.info(f"🔄 run_all_trades fired at {datetime.now(timezone.utc).isoformat()}")
 
@@ -1828,7 +1810,7 @@ def run_all_trades(model) -> None:
         # bulk-prefetch everything except SPY
         prefetch_daily_with_alpaca(candidates)
 
-        # **ensure SPY is seeded, so regime checks will find it**
+        # ensure SPY is seeded, so regime checks will find it
         ctx.data_fetcher.get_daily_df(ctx, "SPY")
 
     # 2) Screen and compute portfolio weights
@@ -1855,7 +1837,6 @@ def run_all_trades(model) -> None:
     for symbol in tickers:
         executor.submit(_safe_trade, ctx, symbol, current_cash, model, regime_ok)
 
-# ─── UTILITIES ────────────────────────────────────────────────────────────────
 def load_model(path: str = MODEL_PATH):
     # 1) Fail fast if no real model on disk
     if not os.path.exists(path):
@@ -1865,39 +1846,41 @@ def load_model(path: str = MODEL_PATH):
     model = joblib.load(path)
     logger.info(f"Loaded trained model from {path}")
     return model
-    
+
 def update_signal_weights():
     if not os.path.exists(TRADE_LOG_FILE):
         logger.warning("No trades log found; skipping weight update.")
         return
     df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["entry_price","exit_price","signal_tags"])
-    df["pnl"] = (df["exit_price"]-df["entry_price"])*df["side"].apply(lambda s:1 if s=="buy" else -1)
-    stats={}
+    df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].apply(lambda s:1 if s=="buy" else -1)
+    stats = {}
     for _,row in df.iterrows():
         for tag in row["signal_tags"].split("+"):
             stats.setdefault(tag,[]).append(row["pnl"])
-    new_weights={tag:round(np.mean([1 if p>0 else 0 for p in pnls]),3) for tag,pnls in stats.items()}
-    ALPHA=0.2
+    new_weights = {tag:round(np.mean([1 if p>0 else 0 for p in pnls]),3) for tag,pnls in stats.items()}
+    ALPHA = 0.2
     old = pd.read_csv(SIGNAL_WEIGHTS_FILE).set_index("signal")["weight"].to_dict() if os.path.exists(SIGNAL_WEIGHTS_FILE) else {}
-    merged={tag:round(ALPHA*w+(1-ALPHA)*old.get(tag,w),3) for tag,w in new_weights.items()}
-    out_df = pd.DataFrame.from_dict(merged,orient="index",columns=["weight"]).reset_index()
-    out_df.columns=["signal","weight"]
-    out_df.to_csv(SIGNAL_WEIGHTS_FILE,index=False)
+    merged = {tag:round(ALPHA*w + (1-ALPHA)*old.get(tag,w),3) for tag,w in new_weights.items()}
+    out_df = pd.DataFrame.from_dict(merged, orient="index", columns=["weight"]).reset_index()
+    out_df.columns = ["signal","weight"]
+    out_df.to_csv(SIGNAL_WEIGHTS_FILE, index=False)
     logger.info(f"[MetaLearn] Updated weights for {len(merged)} signals.")
 
-def load_global_signal_performance(min_trades=10,threshold=0.4):
+def load_global_signal_performance(min_trades=10, threshold=0.4):
     if not os.path.exists(TRADE_LOG_FILE):
         logger.info("[MetaLearn] no history - allowing all signals")
         return None
     df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["exit_price","entry_price","signal_tags"])
-    df["pnl"] = (df.exit_price-df.entry_price)*df.side.apply(lambda s:1 if s=="buy" else -1)
-    results={}
+    df["pnl"] = (df.exit_price - df.entry_price) * df.side.apply(lambda s:1 if s=="buy" else -1)
+    results = {}
     for _,row in df.iterrows():
         for tag in row.signal_tags.split("+"):
             results.setdefault(tag,[]).append(row.pnl)
-    win_rates={tag:round(np.mean([1 if p>0 else 0 for p in pnls]),3)
-               for tag,pnls in results.items() if len(pnls)>=min_trades}
-    filtered={tag:wr for tag,wr in win_rates.items() if wr>=threshold}
+    win_rates = {
+        tag: round(np.mean([1 if p>0 else 0 for p in pnls]),3)
+        for tag,pnls in results.items() if len(pnls) >= min_trades
+    }
+    filtered = {tag:wr for tag,wr in win_rates.items() if wr >= threshold}
     logger.info(f"[MetaLearn] Keeping signals: {list(filtered.keys()) or 'none'}")
     return filtered
 
@@ -1913,8 +1896,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").set_index("Date")
 
-    # --- CORE TA INDICATORS ---
-    # VWAP, RSI, ATR
+    # --- CORE TA INDICATORS --- 
     df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
     df["rsi"]  = ta.rsi(df["Close"], length=14)
     df["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
@@ -1922,7 +1904,6 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     # MACD may occasionally return None
     try:
         macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
-        # if it didn’t return a proper DataFrame, force a failure
         if macd is None or not isinstance(macd, pd.DataFrame):
             raise ValueError("MACD returned None")
         df["macd"]  = macd["MACD_12_26_9"]
@@ -1934,7 +1915,6 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     # Ichimoku
     try:
         ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
-        # ich returns a tuple or a DataFrame; handle both
         conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
         base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
         df["ichimoku_conv"] = conv.iloc[:, 0] if hasattr(conv, "iloc") else conv
@@ -1950,7 +1930,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     except Exception:
         df["stochrsi"] = np.nan
 
-    # fill-forward/backward to smooth
+    # fill‐forward/backward to smooth
     df.ffill(inplace=True)
     df.bfill(inplace=True)
 
@@ -1968,12 +1948,12 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df.reset_index(drop=True, inplace=True)
 
     return df
-    
+
 # ─── REGIME CLASSIFIER ──────────────────────────────────────────────────────
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     Given a daily-SPY DataFrame with columns Open/High/Low/Close/Volume,
-    compute exactly the four features needed for regime detection:
+    compute the features needed for regime detection:
       - atr (14)
       - rsi (14)
       - macd (12,26,9)
@@ -2049,9 +2029,9 @@ def check_market_regime() -> bool:
         logger.warning("[check_market_regime] failed to compute regime features for SPY")
         return False
 
-       # build a 1-row DataFrame so it has valid feature names
+    # build a 1-row DataFrame so it has valid feature names
     cols = ["atr","rsi","macd","vol"]
-    X = feats[cols].iloc[[-1]]           # this is a DataFrame, not an array
+    X = feats[cols].iloc[[-1]]  # this is a DataFrame, not an array
     pred = regime_model.predict(X)[0]
     return bool(pred)
 
@@ -2065,7 +2045,6 @@ def screen_universe(
 ) -> list[str]:
     """
     Fetch daily bars for each candidate, compute ATR, and return top_n highest-ATR symbols.
-    The lookback and interval args are accepted for symmetry with run_all_trades, but ignored here.
     """
     atrs: dict[str, float] = {}
     for sym in candidates:
@@ -2078,15 +2057,15 @@ def screen_universe(
             atrs[sym] = float(atr)
     ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
     return [sym for sym, _ in ranked[:top_n]]
-    
+
 def load_tickers(path: str=TICKERS_FILE) -> list[str]:
-    tickers=[]
+    tickers = []
     try:
         with open(path,newline="") as f:
-            reader=csv.reader(f)
+            reader = csv.reader(f)
             next(reader,None)
             for row in reader:
-                t=row[0].strip().upper()
+                t = row[0].strip().upper()
                 if t and t not in tickers:
                     tickers.append(t)
     except Exception as e:
@@ -2173,17 +2152,20 @@ def initial_rebalance(ctx, symbols):
         except Exception as e:
             logger.exception(f"[REBALANCE] failed to fetch quote or compute qty for {sym}: {e}")
 
-
 if __name__ == "__main__":
+    # Start Prometheus metrics server
     start_http_server(8000)
+
+    # Start health endpoint if requested
     if RUN_HEALTH:
         Thread(target=start_healthcheck, daemon=True).start()
 
-    # daily jobs
+    # Daily jobs
     schedule.every().day.at("00:30").do(daily_summary)
-    # schedule.every().day.at("15:45").do(exit_all_positions)   # ← disabled
+    # ─── MODIFIED: disabled forced EOD exit ───────────────────────────────────
+    # schedule.every().day.at("15:45").do(exit_all_positions)
 
-    # load your model
+    # Load your model
     model = load_model()
     logger.info("🚀 AI Trading Bot is live!")
 
@@ -2197,11 +2179,11 @@ if __name__ == "__main__":
         logger.warning(f"[REBALANCE] aborted due to error: {e}")
     # ─────────────────────────────────────────────────────────────────────────
 
-    # recurring jobs
+    # Recurring jobs
     schedule.every(1).minutes.do(lambda: run_all_trades(model))
     schedule.every(6).hours.do(update_signal_weights)
 
-    # scheduler loop
+    # Scheduler loop
     while True:
         schedule.run_pending()
         pytime.sleep(1)
