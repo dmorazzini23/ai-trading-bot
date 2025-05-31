@@ -1074,16 +1074,63 @@ def vol_target_position_size(cash: float,
 )
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
     """
-    Place a market order (with exponential backoff on any APIError),
-    then fall back on partial fills or bracket limits as needed.
+    - If inside regular trading hours → market order (unchanged).
+    - If outside regular hours → limit order with extended_hours=True at the last bid/ask.
     """
-    # fetch the best bid/ask just before sending
-    quote = ctx.api.get_latest_quote(symbol)
-    expected_price = quote.ask_price if side == "buy" else quote.bid_price
-
-    # 1) Market order with debug/info/error logging around the API call:
+    # 1) look up the best bid/ask to decide limit price if we’re off‐hours
     try:
-        logger.debug(f"[ORDER] submit {side.upper()} {qty} of {symbol}")
+        quote = ctx.api.get_latest_quote(symbol)
+        # if buying, use ask_price; if selling, use bid_price
+        last_price = quote.ask_price if side.lower() == "buy" else quote.bid_price
+    except Exception:
+        last_price = None
+
+    # 2) detect “after‐hours” by calling your in_trading_hours(...) guard
+    now_utc = pd.Timestamp.utcnow()
+    is_regular_hours = in_trading_hours(now_utc)
+
+    # 3) If off‐hours, switch to a limit order with extended_hours=True
+    if not is_regular_hours:
+        if last_price is None or last_price <= 0:
+            logger.warning(
+                f"[submit_order] cannot trade {symbol} off‐hours: "
+                f"no valid bid/ask (last_price={last_price})"
+            )
+            return None
+
+        limit_price = round(last_price, 2)
+        logger.info(
+            f"[OFF‐HOURS] sending LIMIT {side.upper()} {qty} of {symbol} "
+            f"@ {limit_price} with extended_hours=True"
+        )
+        try:
+            off_order = ctx.api.submit_order(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                type="limit",
+                time_in_force="day",            # “day” still lets Alpaca hold the limit until next close
+                limit_price=limit_price,
+                extended_hours=True,            # ← key flag for after‐hours
+            )
+            logger.debug(f"[OFF‐HOURS OK] {off_order.id} {side} {qty} {symbol} @ {limit_price}")
+            return off_order
+
+        except APIError as e:
+            msg = str(e).lower()
+            # You can still catch partial‐fill or wash‐trade errors here, but note:
+            # extended‐hours only works with limit orders. If Alpaca rejects you, it’ll come back as APIError.
+            logger.warning(
+                f"[submit_order off‐hours] APIError for {symbol}: {e} (limit_price={limit_price})"
+            )
+            return None
+        except Exception:
+            logger.exception(f"[submit_order off‐hours] unexpected error for {symbol}")
+            return None
+
+    # 4) Otherwise: inside regular hours → keep your existing “market” logic
+    try:
+        logger.debug(f"[ORDER] submit MARKET {side.upper()} {qty} of {symbol}")
         order = ctx.api.submit_order(
             symbol=symbol,
             qty=qty,
@@ -1097,12 +1144,12 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     except APIError as e:
         msg = str(e).lower()
 
-        # 2) Insufficient buying power
+        # 4a) Insufficient buying power (day‐trade limit, etc.)
         if "insufficient buying power" in msg:
             logger.warning(f"[submit_order] insufficient buying power for {symbol}; skipping")
             return None
 
-        # 3) Partial‐fill fallback
+        # 4b) Partial‐fill fallback
         m = re.search(r"requested: (\d+), available: (\d+)", msg)
         if m and int(m.group(2)) > 0:
             available = int(m.group(2))
@@ -1113,14 +1160,16 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                 type="market",
                 time_in_force="gtc",
             )
-            logger.info(f"[submit_order] only {available} {symbol} available; placed partial fill")
+            logger.info(
+                f"[submit_order] only {available} {symbol} available; placed partial fill"
+            )
             return order
 
-        # 4) Wash‐trade fallback → bracket limit
+        # 4c) Wash‐trade fallback → your existing bracket logic
         if "potential wash trade" in msg:
             logger.warning(f"[submit_order] wash‐trade error for {symbol}; using bracket fallback")
-            tp_price = expected_price * 1.02
-            sl_price = expected_price * 0.98
+            tp_price = expected_price * 1.02 if 'expected_price' in locals() else last_price * 1.02
+            sl_price = expected_price * 0.98 if 'expected_price' in locals() else last_price * 0.98
             bracket = ctx.api.submit_order(
                 symbol=symbol,
                 qty=qty,
@@ -1132,17 +1181,17 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                 stop_loss={"stop_price": sl_price},
             )
             logger.info(
-                f"[submit_order] placed bracket order @ limit {expected_price:.2f}; "
+                f"[submit_order] placed bracket order @ limit {last_price:.2f}; "
                 f"TP={tp_price:.2f}, SL={sl_price:.2f}"
             )
             return bracket
 
-        # 5) Other APIError → retry
+        # 4d) Other APIError → re‐raise so tenacity can retry
         logger.warning(f"[submit_order] APIError for {symbol}: {e} → retrying")
         raise
 
     except Exception:
-        # non-API errors count as final failures
+        # non‐API errors count as final failures
         order_failures.inc()
         logger.exception(f"[submit_order] unexpected error for {symbol}")
         return None
