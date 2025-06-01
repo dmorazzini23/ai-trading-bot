@@ -1372,13 +1372,13 @@ def pre_trade_checks(
         logger.debug("SKIP_DAILY_LOSS", extra={"symbol": symbol})
         return False
     if not regime_ok:
-        logger.debug("SKIP_MARKET_REGIME", extra={"symbol": symbol}")
+        logger.debug("SKIP_MARKET_REGIME", extra={"symbol": symbol})
         return False
     if too_many_positions():
-        logger.debug("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol}")
+        logger.debug("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol})
         return False
     if too_correlated(symbol):
-        logger.debug("SKIP_HIGH_CORRELATION", extra={"symbol": symbol}")
+        logger.debug("SKIP_HIGH_CORRELATION", extra={"symbol": symbol})
         return False
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
 
