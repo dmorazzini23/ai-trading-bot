@@ -54,6 +54,10 @@ from tenacity import (
 )
 from ratelimit import limits, sleep_and_retry
 
+# ─── FINBERT SENTIMENT MODEL IMPORTS ───────────────────────────────────────────
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
 import warnings
 warnings.filterwarnings(
     "ignore",
@@ -700,9 +704,35 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
             scores.append(predict_text_sentiment(text))
     return float(sum(scores) / len(scores)) if scores else 0.0
 
+# ─── FINBERT LOADING ─────────────────────────────────────────────────────────
+# Load tokenizer and model once at startup
+_FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("ProsusAI/finbert-sentiment")
+_FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert-sentiment")
+_FINBERT_MODEL.eval()
+
 def predict_text_sentiment(text: str) -> float:
-    # Placeholder for real NLP sentiment; returns neutral
-    return 0.0
+    """
+    Uses FinBERT to assign a sentiment score ∈ [–1.0, +1.0].
+    FinBERT outputs three logits: [negative, neutral, positive].
+    We convert them to a single continuous score: (pos_prob – neg_prob).
+    """
+    try:
+        inputs = _FINBERT_TOKENIZER(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=128,
+        )
+        with torch.no_grad():
+            outputs = _FINBERT_MODEL(**inputs)
+            logits = outputs.logits[0]  # shape = (3,)
+            probs = torch.softmax(logits, dim=0)  # [p_neg, p_neu, p_pos]
+
+        neg, neu, pos = probs.tolist()
+        return float(pos - neg)
+    except Exception as e:
+        logger.warning(f"[predict_text_sentiment] inference failed: {e}")
+        return 0.0
 
 def _can_fetch_events(symbol: str) -> bool:
     now_ts = pytime.time()
