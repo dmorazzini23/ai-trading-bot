@@ -56,7 +56,7 @@ from ratelimit import limits, sleep_and_retry
 
 # ─── FINBERT SENTIMENT MODEL IMPORTS ───────────────────────────────────────────
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
 
 import warnings
 warnings.filterwarnings(
@@ -705,33 +705,50 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     return float(sum(scores) / len(scores)) if scores else 0.0
 
 # ─── FINBERT LOADING ─────────────────────────────────────────────────────────
-# Load tokenizer and model once at startup
-_FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("ProsusAI/finbert-sentiment")
-_FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert-sentiment")
-_FINBERT_MODEL.eval()
+# Use a community‐hosted FinBERT ("yiyanghkust/finbert-tone"); if you have a private HF token, set HF_TOKEN.
+HF_TOKEN = os.getenv("HF_TOKEN", None)
+FINBERT_NAME = "yiyanghkust/finbert-tone"
+
+try:
+    if HF_TOKEN:
+        _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained(FINBERT_NAME, use_auth_token=HF_TOKEN)
+        _FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained(FINBERT_NAME, use_auth_token=HF_TOKEN)
+    else:
+        _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained(FINBERT_NAME)
+        _FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained(FINBERT_NAME)
+
+    _FINBERT_MODEL.eval()
+    _SENT_PIPELINE = pipeline(
+        "sentiment-analysis",
+        model=_FINBERT_MODEL,
+        tokenizer=_FINBERT_TOKENIZER,
+        return_all_scores=False
+    )
+except Exception as e:
+    logger.warning(f"[FinBERT] could not load {FINBERT_NAME}: {e}; falling back to dummy sentiment")
+    _FINBERT_TOKENIZER = None
+    _FINBERT_MODEL     = None
+    _SENT_PIPELINE     = None
 
 def predict_text_sentiment(text: str) -> float:
     """
-    Uses FinBERT to assign a sentiment score ∈ [–1.0, +1.0].
-    FinBERT outputs three logits: [negative, neutral, positive].
-    We convert them to a single continuous score: (pos_prob – neg_prob).
+    Returns a float in [-1.0, +1.0]. If FinBERT is unavailable or fails, returns 0.0.
     """
-    try:
-        inputs = _FINBERT_TOKENIZER(
-            text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=128,
-        )
-        with torch.no_grad():
-            outputs = _FINBERT_MODEL(**inputs)
-            logits = outputs.logits[0]  # shape = (3,)
-            probs = torch.softmax(logits, dim=0)  # [p_neg, p_neu, p_pos]
+    if _SENT_PIPELINE is None:
+        return 0.0
 
-        neg, neu, pos = probs.tolist()
-        return float(pos - neg)
+    try:
+        out = _SENT_PIPELINE(text[:512])
+        label = out[0]["label"]
+        score = out[0]["score"]
+        if label.lower().startswith("neg"):
+            return -score
+        elif label.lower().startswith("pos"):
+            return +score
+        else:
+            return 0.0
     except Exception as e:
-        logger.warning(f"[predict_text_sentiment] inference failed: {e}")
+        logger.warning(f"[predict_text_sentiment] failed: {e}")
         return 0.0
 
 def _can_fetch_events(symbol: str) -> bool:
@@ -1355,13 +1372,13 @@ def pre_trade_checks(
         logger.debug("SKIP_DAILY_LOSS", extra={"symbol": symbol})
         return False
     if not regime_ok:
-        logger.debug("SKIP_MARKET_REGIME", extra={"symbol": symbol})
+        logger.debug("SKIP_MARKET_REGIME", extra={"symbol": symbol}")
         return False
     if too_many_positions():
-        logger.debug("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol})
+        logger.debug("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol}")
         return False
     if too_correlated(symbol):
-        logger.debug("SKIP_HIGH_CORRELATION", extra={"symbol": symbol})
+        logger.debug("SKIP_HIGH_CORRELATION", extra={"symbol": symbol}")
         return False
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
 
