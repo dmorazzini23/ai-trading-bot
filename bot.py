@@ -32,7 +32,7 @@ from alpaca_trade_api.rest import REST, APIError, TimeFrame
 from alpaca_trade_api.entity import Order
 
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, BayesianRidge
 import pickle
 import joblib
 
@@ -1624,6 +1624,40 @@ def run_meta_learning_weight_optimizer(
     out_df.to_csv(output_path, index=False)
     logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
 
+def run_bayesian_meta_learning_optimizer(
+    trade_log_path: str = TRADE_LOG_FILE,
+    output_path: str = SIGNAL_WEIGHTS_FILE
+):
+    if not os.path.exists(trade_log_path):
+        logger.warning("METALEARN_NO_TRADES")
+        return
+
+    df = pd.read_csv(trade_log_path).dropna(subset=["entry_price", "exit_price", "signal_tags"])
+    if df.empty:
+        logger.warning("METALEARN_NO_VALID_ROWS")
+        return
+
+    df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map({"buy": 1, "sell": -1})
+    df["outcome"] = (df["pnl"] > 0).astype(int)
+
+    tags = sorted(set(tag for row in df["signal_tags"] for tag in row.split("+")))
+    X = np.array([[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]])
+    y = df["outcome"].values
+
+    if len(y) < len(tags):
+        logger.warning("METALEARN_TOO_FEW_SAMPLES")
+        return
+
+    model = BayesianRidge(fit_intercept=True, normalize=True)
+    model.fit(X, y)
+    joblib.dump(model, abspath("meta_model_bayes.pkl"))
+    logger.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
+
+    weights = {tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)}
+    out_df = pd.DataFrame(list(weights.items()), columns=["signal", "weight"])
+    out_df.to_csv(output_path, index=False)
+    logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
+
 def load_global_signal_performance(min_trades: int = 10, threshold: float = 0.4) -> Optional[Dict[str, float]]:
     if not os.path.exists(TRADE_LOG_FILE):
         logger.info("METALEARN_NO_HISTORY")
@@ -1956,6 +1990,7 @@ if __name__ == "__main__":
     schedule.every().day.at("00:30").do(daily_summary)
     # schedule.every().day.at("15:45").do(exit_all_positions)  # disabled as requested
     schedule.every().day.at("01:00").do(run_meta_learning_weight_optimizer)
+    schedule.every().day.at("02:00").do(run_bayesian_meta_learning_optimizer)
 
     # Load model
     model = load_model()
