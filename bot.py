@@ -513,6 +513,10 @@ class TradeLogger:
             logger.warning("STREAK_HALT_TRIGGERED", extra={"loss_streak": _LOSS_STREAK, "halt_until": _STREAK_HALT_UNTIL})
 
 # ─── F. SIGNAL MANAGER & HELPER FUNCTIONS ─────────────────────────────────────
+# ─── We add a small module‐level cache for last‐seen prices and a threshold
+_LAST_PRICE: Dict[str, float] = {}
+PRICE_TTL_PCT = 0.005  # only fetch sentiment if price moved > 0.5%
+
 class SignalManager:
     def __init__(self) -> None:
         self.momentum_lookback = 5
@@ -602,11 +606,34 @@ class SignalManager:
             return -1, 0.0, 'ml'
 
     def signal_sentiment(self, ctx: 'BotContext', ticker: str, df: pd.DataFrame=None, model: Any=None) -> Tuple[int, float, str]:
-        try:
-            score = fetch_sentiment(ctx, ticker)
-        except Exception as e:
-            logger.warning(f"[signal_sentiment] {ticker} error: {e}")
-            score = 0.0
+        """
+        Only fetch sentiment if price has moved > PRICE_TTL_PCT; otherwise, return cached/neutral.
+        """
+        if df is None or df.empty:
+            return -1, 0.0, "sentiment"
+
+        latest_close = float(df["Close"].iloc[-1])
+        prev_close = _LAST_PRICE.get(ticker, None)
+
+        # If price hasn’t moved enough, return cached or neutral
+        if prev_close is not None and abs(latest_close - prev_close) / prev_close < PRICE_TTL_PCT:
+            cached = _SENTIMENT_CACHE.get(ticker)
+            if cached and (pytime.time() - cached[0] < SENTIMENT_TTL_SEC):
+                score = cached[1]
+            else:
+                score = 0.0
+                _SENTIMENT_CACHE[ticker] = (pytime.time(), score)
+        else:
+            # Price moved enough → fetch fresh sentiment
+            try:
+                score = fetch_sentiment(ctx, ticker)
+            except Exception as e:
+                logger.warning(f"[signal_sentiment] {ticker} error: {e}")
+                score = 0.0
+
+        # Update last‐seen price
+        _LAST_PRICE[ticker] = latest_close
+
         s = 1 if score > 0 else -1 if score < 0 else -1
         return s, abs(score), 'sentiment'
 
@@ -2291,6 +2318,14 @@ if __name__ == "__main__":
     # Load model
     model = load_model()
     logger.info("BOT_LAUNCHED")
+
+    # ─── WARM-CACHE SENTIMENT FOR ALL TICKERS ─────────────────────────────────────
+    # This will prevent the initial burst of NewsAPI calls and 429s
+    all_tickers = load_tickers(TICKERS_FILE)
+    now_ts = pytime.time()
+    for t in all_tickers:
+        # store (timestamp, 0.0) so initial fetch always returns neutral until cache expires
+        _SENTIMENT_CACHE[t] = (now_ts, 0.0)
 
     # Initial rebalance (once)
     try:
