@@ -755,10 +755,9 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
             scores.append(predict_text_sentiment(text))
     return float(sum(scores) / len(scores)) if scores else 0.0
 
-# ─── FINBERT LOADING ─────────────────────────────────────────────────────────
-# Load tokenizer and model once at startup
-_FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("ProsusAI/finbert-sentiment")
-_FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert-sentiment")
+# ─── FINBERT LOADING (public model) ────────────────────────────────────────
+_FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
+_FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained("yiyanghkust/finbert-tone")
 _FINBERT_MODEL.eval()
 
 def predict_text_sentiment(text: str) -> float:
