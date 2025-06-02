@@ -2306,7 +2306,12 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
 if __name__ == "__main__":
     logger.info(">>> BOT __main__ ENTERED – starting up")
     
-    start_http_server(9200)
+    # Try to start Prometheus metrics server; if port is already in use, log and continue
+    try:
+        start_http_server(9200)
+    except OSError as e:
+        logger.warning(f"Metrics server port 9200 already in use; skipping start_http_server: {e!r}")
+
     if RUN_HEALTH:
         Thread(target=start_healthcheck, daemon=True).start()
 
