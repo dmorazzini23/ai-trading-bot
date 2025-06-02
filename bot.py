@@ -1,5 +1,3 @@
-# bot.py
-
 import logging
 import os
 import csv
@@ -501,6 +499,44 @@ class DataFetcher:
             self._minute_cache[symbol] = df
             self._minute_timestamps[symbol] = now_utc
         return df
+
+    def get_historical_minute(
+        self,
+        symbol: str,
+        start_date: date,
+        end_date: date
+    ) -> Optional[pd.DataFrame]:
+        """
+        Fetch all minute bars for `symbol` between start_date and end_date (inclusive),
+        using Alpaca’s get_bars with TimeFrame.Minute. Returns a DataFrame indexed by naive Timestamps.
+        """
+        try:
+            # Build ISO timestamps for Alpaca (e.g. "2025-05-01T00:00:00Z")
+            start_iso = f"{start_date.isoformat()}T00:00:00Z"
+            end_iso   = f"{end_date.isoformat()}T23:59:59Z"
+
+            bars = self.api.get_bars(
+                symbol,
+                TimeFrame.Minute,
+                start=start_iso,
+                end=end_iso,
+                limit=100000  # enough to cover ~30 trading days of minute bars
+            ).df
+            if bars is None or bars.empty:
+                return None
+
+            # Convert index to naive (drop timezone) and rename columns
+            bars.index = pd.to_datetime(bars.index).tz_localize(None)
+            bars = bars.rename(columns={
+                "open":   "Open",
+                "high":   "High",
+                "low":    "Low",
+                "close":  "Close",
+                "volume": "Volume",
+            })
+            return bars[["Open", "High", "Low", "Close", "Volume"]]
+        except Exception:
+            return None
 
 # ─── E. TRADE LOGGER ───────────────────────────────────────────────────────────
 class TradeLogger:
