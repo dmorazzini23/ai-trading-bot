@@ -1490,7 +1490,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
         logger.info("VWAP_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
         vwap_pegged_submit(ctx, symbol, qty, side)
     else:
-        logger.info("MARKET_ENTRY", extra={"symbol": symbol, "qty": qty}")
+        logger.info("MARKET_ENTRY", extra={"symbol": symbol, "qty": qty})
         submit_order(ctx, symbol, qty, side)
 
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
