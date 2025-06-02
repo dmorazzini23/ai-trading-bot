@@ -69,19 +69,12 @@ MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
 def gather_minute_data(ctx, symbols, lookback_days=30):
     """
-    Fetch last `lookback_days` of minute bars for each symbol.
-    This assumes that `ctx` has a `data_fetcher.get_minute_df(...)` method that
-    can be used to retrieve intraday minute bars for arbitrary dates.
-    If your original DataFetcher only supports "last 5 days" from Finnhub/Alpaca,
-    you may need to expand it or fetch in chunks.
+    For each symbol, grab whatever 1-minute bars are currently cached or fetchable.
+    DataFetcher.get_minute_df returns the most recent ~5 trading days of 1-minute bars.
     """
-    end_dt = datetime.now().date()
-    start_dt = end_dt - timedelta(days=lookback_days)
     raw_store = {}
     for sym in symbols:
-        # You must implement `get_historical_minute(...)` in your DataFetcher,
-        # or fetch minute bars day-by-day between start_dt and end_dt.
-        raw = ctx.data_fetcher.get_historical_minute(sym, start_dt, end_dt)
+        raw = ctx.data_fetcher.get_minute_df(ctx, sym)
         if raw is None or raw.empty:
             continue
         raw_store[sym] = raw
@@ -116,7 +109,7 @@ def build_feature_label_df(raw_store, Δ_minutes=30, threshold_pct=0.002):
 
 def retrain_meta_learner(ctx, symbols, lookback_days=30, Δ_minutes=30, threshold_pct=0.002):
     """
-    1. Gather minute data for each symbol over the last `lookback_days`.
+    1. Gather minute data for each symbol over the last available intraday window.
     2. Build features & labels using a Δ‐minute horizon.
     3. Train a RandomForestClassifier on (X, y).
     4. Save the new model to MODEL_PATH.
