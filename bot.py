@@ -500,7 +500,7 @@ class DataFetcher:
             self._minute_timestamps[symbol] = now_utc
         return df
 
-     def get_historical_minute(
+    def get_historical_minute(
         self,
         ctx: 'BotContext',
         symbol: str,
