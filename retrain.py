@@ -3,7 +3,7 @@ import joblib
 import pandas as pd
 import numpy as np
 
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
@@ -67,18 +67,26 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 # Read the same MODEL_PATH from the environment (just like bot.py does):
 MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
+
 def gather_minute_data(ctx, symbols, lookback_days=30):
     """
-    For each symbol, grab whatever 1-minute bars are currently cached or fetchable.
-    DataFetcher.get_minute_df returns the most recent ~5 trading days of 1-minute bars.
+    Fetch last `lookback_days` of minute bars for each symbol.
+    This assumes that `ctx` has a `data_fetcher.get_historical_minute(...)` method
+    that accepts (ctx, symbol, start_dt, end_dt).
     """
+    end_dt = datetime.now().date()
+    start_dt = end_dt - timedelta(days=lookback_days)
     raw_store = {}
+
     for sym in symbols:
-        raw = ctx.data_fetcher.get_minute_df(ctx, sym)
+        # Now we pass ctx into get_historical_minute
+        raw = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
         if raw is None or raw.empty:
             continue
         raw_store[sym] = raw
+
     return raw_store
+
 
 def build_feature_label_df(raw_store, Δ_minutes=30, threshold_pct=0.002):
     """
@@ -107,9 +115,10 @@ def build_feature_label_df(raw_store, Δ_minutes=30, threshold_pct=0.002):
     df_all = pd.DataFrame(rows).dropna()
     return df_all
 
+
 def retrain_meta_learner(ctx, symbols, lookback_days=30, Δ_minutes=30, threshold_pct=0.002):
     """
-    1. Gather minute data for each symbol over the last available intraday window.
+    1. Gather minute data for each symbol over the last `lookback_days`.
     2. Build features & labels using a Δ‐minute horizon.
     3. Train a RandomForestClassifier on (X, y).
     4. Save the new model to MODEL_PATH.
