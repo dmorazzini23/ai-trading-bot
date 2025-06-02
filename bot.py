@@ -646,7 +646,10 @@ class SignalManager:
 
         for fn in fns:
             try:
-                s, w, lab = fn(df, model) if fn != self.signal_sentiment else fn(ctx, ticker, df, model)
+                if fn == self.signal_sentiment:
+                    s, w, lab = fn(ctx, ticker, df, model)
+                else:
+                    s, w, lab = fn(df, model)
                 if allowed_tags and lab not in allowed_tags:
                     continue
                 if s in (-1, 1):
@@ -721,6 +724,11 @@ def in_trading_hours(ts: pd.Timestamp) -> bool:
     return schedule_today.market_open.iloc[0] <= ts <= schedule_today.market_close.iloc[0]
 
 # ─── I. SENTIMENT & EVENTS ────────────────────────────────────────────────────
+
+# ─── Sentiment cache ─────────────────────────────────────────────────
+_SENTIMENT_CACHE: Dict[str, Tuple[float, float]] = {}  # {ticker: (timestamp, score)}
+SENTIMENT_TTL_SEC = 600  # 10 minutes
+
 @sleep_and_retry
 @limits(calls=30, period=60)
 @retry(
@@ -760,8 +768,18 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
 def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     """
     Fetch sentiment via NewsAPI + FinBERT + Form 4 signal.
+    Uses a simple in-memory TTL cache to avoid hitting NewsAPI too often.
     If FinBERT isn’t available, return neutral 0.0.
     """
+    now_ts = pytime.time()
+    # Check cache first
+    cached = _SENTIMENT_CACHE.get(ticker)
+    if cached:
+        last_ts, last_score = cached
+        if now_ts - last_ts < SENTIMENT_TTL_SEC:
+            return last_score
+
+    # Cache miss or stale → fetch fresh
     # 1) Fetch NewsAPI articles
     url = (
         f"https://newsapi.org/v2/everything?"
@@ -774,7 +792,9 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     except requests.exceptions.HTTPError:
         if resp.status_code == 429:
             logger.warning(f"fetch_sentiment({ticker}) rate-limited → returning neutral 0.0")
-            return 0.0
+            score = 0.0
+            _SENTIMENT_CACHE[ticker] = (now_ts, score)
+            return score
         raise
 
     payload = resp.json()
@@ -798,8 +818,10 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     except Exception as e:
         logger.warning(f"[fetch_sentiment] Form4 fetch failed for {ticker}: {e}")
 
-    # Combine scores (weighted: 80% news, 20% form4)
-    return 0.8 * news_score + 0.2 * form4_score
+    final_score = 0.8 * news_score + 0.2 * form4_score
+    # Store in cache
+    _SENTIMENT_CACHE[ticker] = (now_ts, final_score)
+    return final_score
 
 def predict_text_sentiment(text: str) -> float:
     """
@@ -1465,10 +1487,10 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
         logger.info("POV_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
         pov_submit(ctx, symbol, qty, side)
     elif qty > SLICE_THRESHOLD:
-        logger.info("VWAP_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
+        logger.info("VWAP_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty}")
         vwap_pegged_submit(ctx, symbol, qty, side)
     else:
-        logger.info("MARKET_ENTRY", extra={"symbol": symbol, "qty": qty})
+        logger.info("MARKET_ENTRY", extra={"symbol": symbol, "qty": qty}")
         submit_order(ctx, symbol, qty, side)
 
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
