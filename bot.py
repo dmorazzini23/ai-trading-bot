@@ -1611,25 +1611,25 @@ def pre_trade_checks(
 ) -> bool:
     # Streak kill-switch check
     if _STREAK_HALT_UNTIL and datetime.now(PACIFIC) < _STREAK_HALT_UNTIL:
-        logger.debug("SKIP_STREAK_HALT", extra={"symbol": symbol, "until": _STREAK_HALT_UNTIL})
+        logger.info("SKIP_STREAK_HALT", extra={"symbol": symbol, "until": _STREAK_HALT_UNTIL})
         return False
     if check_pdt_rule(ctx):
-        logger.debug("SKIP_PDT_RULE", extra={"symbol": symbol})
+        logger.info("SKIP_PDT_RULE", extra={"symbol": symbol})
         return False
     if check_halt_flag():
-        logger.debug("SKIP_HALT_FLAG", extra={"symbol": symbol})
+        logger.info("SKIP_HALT_FLAG", extra={"symbol": symbol})
         return False
     if check_daily_loss():
-        logger.debug("SKIP_DAILY_LOSS", extra={"symbol": symbol})
+        logger.info("SKIP_DAILY_LOSS", extra={"symbol": symbol})
         return False
     if not regime_ok:
-        logger.debug("SKIP_MARKET_REGIME", extra={"symbol": symbol})
+        logger.info("SKIP_MARKET_REGIME", extra={"symbol": symbol})
         return False
     if too_many_positions():
-        logger.debug("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol})
+        logger.info("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol})
         return False
     if too_correlated(symbol):
-        logger.debug("SKIP_HIGH_CORRELATION", extra={"symbol": symbol})
+        logger.info("SKIP_HIGH_CORRELATION", extra={"symbol": symbol})
         return False
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
 
