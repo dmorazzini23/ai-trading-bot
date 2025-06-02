@@ -78,6 +78,9 @@ warnings.filterwarnings(
     category=UserWarning
 )
 
+print("=== bot.py STARTING up ===")
+logger.info("=== bot.py STARTING up ===")
+
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 load_dotenv()
 RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
