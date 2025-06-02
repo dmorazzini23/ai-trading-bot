@@ -70,24 +70,35 @@ MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
 def gather_minute_data(ctx, symbols, lookback_days=5):
     """
-    Fetch the last `lookback_days` of minute bars for each symbol, 
-    but only via get_minute_df (which already pulls up to 5 days at once).
+    1) Try to fetch up to the last 5 calendar days of minute bars via get_minute_df().
+    2) If that comes back empty for a given symbol, do a single-day Alpaca fallback
+       (yesterday’s date) via get_historical_minute().
+    We then trim to `lookback_days` and return whatever is non-empty.
     """
-    raw_store = {}
+    raw_store: dict[str, pd.DataFrame] = {}
     cutoff_ts = pd.Timestamp.now() - pd.Timedelta(days=lookback_days)
 
     for sym in symbols:
-        # get_minute_df returns up to 5 days of 1-minute bars in one call (cached)
+        # ── PRIMARY: pull up to 5 days in one shot ──────────────────────────
         raw = ctx.data_fetcher.get_minute_df(ctx, sym)
-        if raw is None or raw.empty:
+        if raw is not None and not raw.empty:
+            # Keep only the last `lookback_days` worth of rows:
+            recent = raw.loc[raw.index >= cutoff_ts]
+            if not recent.empty:
+                raw_store[sym] = recent
+                continue  # next symbol
+
+        # ── FALLBACK: try exactly “yesterday” via get_historical_minute(…) ──
+        yesterday = (date.today() - timedelta(days=1))
+        bars1d = ctx.data_fetcher.get_historical_minute(sym, yesterday, yesterday)
+        if bars1d is None or bars1d.empty:
+            # no minute bars at all
             continue
 
-        # Only keep rows within the last `lookback_days`
-        recent = raw.loc[raw.index >= cutoff_ts]
-        if recent.empty:
-            continue
-
-        raw_store[sym] = recent
+        # Keep only rows within lookback_days (this is just 1 day, so OK)
+        bars1d = bars1d.loc[bars1d.index >= cutoff_ts]
+        if not bars1d.empty:
+            raw_store[sym] = bars1d
 
     return raw_store
 
