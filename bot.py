@@ -68,10 +68,7 @@ except Exception as e:
     _HUGGINGFACE_AVAILABLE = False
     _FINBERT_TOKENIZER = None
     _FINBERT_MODEL = None
-    logging.warning(f"FinBERT load failed ({e}); falling back to VADER")
-
-from nltk.sentiment.vader import SentimentIntensityAnalyzer
-_vader = SentimentIntensityAnalyzer()
+    logging.warning(f"FinBERT load failed ({e}); falling back to neutral sentiment")
 
 import warnings
 warnings.filterwarnings(
@@ -755,7 +752,8 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
 )
 def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     """
-    Fetch sentiment via NewsAPI + FinBERT/VADER + Form 4 signal.
+    Fetch sentiment via NewsAPI + FinBERT + Form 4 signal.
+    If FinBERT isn’t available, return neutral 0.0.
     """
     # 1) Fetch NewsAPI articles
     url = (
@@ -798,7 +796,8 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
 
 def predict_text_sentiment(text: str) -> float:
     """
-    Uses FinBERT (if available) or VADER to assign a sentiment score ∈ [–1, +1].
+    Uses FinBERT (if available) to assign a sentiment score ∈ [–1, +1].
+    If FinBERT is unavailable, return 0.0.
     """
     if _HUGGINGFACE_AVAILABLE and _FINBERT_MODEL and _FINBERT_TOKENIZER:
         try:
@@ -816,11 +815,8 @@ def predict_text_sentiment(text: str) -> float:
             neg, neu, pos = probs.tolist()
             return float(pos - neg)
         except Exception as e:
-            logger.warning(f"[predict_text_sentiment] FinBERT inference failed ({e}), falling back to VADER")
-
-    # VADER fallback
-    vs = _vader.polarity_scores(text)
-    return vs["compound"]
+            logger.warning(f"[predict_text_sentiment] FinBERT inference failed ({e}); returning neutral")
+    return 0.0
 
 def fetch_form4_filings(ticker: str) -> List[dict]:
     """
@@ -1041,7 +1037,7 @@ def is_within_entry_window(ctx: BotContext) -> bool:
         return False
     # Also check streak kill-switch
     if _STREAK_HALT_UNTIL and datetime.now(PACIFIC) < _STREAK_HALT_UNTIL:
-        logger.info("SKIP_STREAK_HALT", extra={"until": _STREAK_HALT_UNTIL})
+        logger.info("SKIP_STREAK_HALT", extra={"until": _STREAK_HALT_UNTIL}")
         return False
     return True
 
