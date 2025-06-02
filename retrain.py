@@ -69,19 +69,16 @@ MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
 def gather_minute_data(ctx, symbols, lookback_days=30):
     """
-    Fetch last `lookback_days` of minute bars for each symbol.
-    This now calls data_fetcher.get_historical_minute(ctx, symbol, start_dt, end_dt).
+    Fetch last `lookback_days` of minute bars for each symbol,
+    by calling DataFetcher.get_historical_minute(ctx, symbol, ...).
     """
     end_dt = datetime.now().date()
     start_dt = end_dt - timedelta(days=lookback_days)
     raw_store = {}
 
     for sym in symbols:
-        # ⚠️ Pass `ctx` as first argument here:
         raw = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
         if raw is None or raw.empty:
-            # You can uncomment the next line for debugging if you want to see which symbols failed:
-            # print(f"  ⚠️ No minute bars for {sym} from {start_dt} to {end_dt}")
             continue
         raw_store[sym] = raw
 
