@@ -500,7 +500,7 @@ class DataFetcher:
             self._minute_timestamps[symbol] = now_utc
         return df
 
-    def get_historical_minute(
+     def get_historical_minute(
         self,
         ctx: 'BotContext',
         symbol: str,
@@ -509,38 +509,58 @@ class DataFetcher:
     ) -> Optional[pd.DataFrame]:
         """
         Fetch all minute bars for `symbol` between start_date and end_date (inclusive),
-        using Alpaca’s get_bars with TimeFrame.Minute. Returns a DataFrame indexed by naive Timestamps.
+        by calling Alpaca’s get_bars for each calendar day. Returns a DataFrame
+        indexed by naive Timestamps, or None if no data was returned at all.
         """
-        try:
-            # Build ISO timestamps for Alpaca (e.g. "2025-05-01T00:00:00Z")
-            start_iso = f"{start_date.isoformat()}T00:00:00Z"
-            end_iso   = f"{end_date.isoformat()}T23:59:59Z"
+        all_days: list[pd.DataFrame] = []
+        current_day = start_date
 
-            bars = ctx.api.get_bars(
-                symbol,
-                TimeFrame.Minute,
-                start=start_iso,
-                end=end_iso,
-                limit=100_000  # enough to cover ~30 trading days of minute bars
-            ).df
+        while current_day <= end_date:
+            # Build ISO strings for that single day:
+            day_start_iso = f"{current_day.isoformat()}T00:00:00Z"
+            day_end_iso   = f"{current_day.isoformat()}T23:59:59Z"
 
-            if bars is None or bars.empty:
-                return None
+            try:
+                bars_day = ctx.api.get_bars(
+                    symbol,
+                    TimeFrame.Minute,
+                    start=day_start_iso,
+                    end=day_end_iso,
+                    limit=10000
+                ).df
+            except Exception:
+                bars_day = None
 
-            # Convert index to naive (drop timezone) and rename columns:
-            bars.index = pd.to_datetime(bars.index).tz_localize(None)
-            bars = bars.rename(columns={
-                "open":   "Open",
-                "high":   "High",
-                "low":    "Low",
-                "close":  "Close",
-                "volume": "Volume",
-            })
-            return bars[["Open", "High", "Low", "Close", "Volume"]]
+            if bars_day is not None and not bars_day.empty:
+                # Drop the “symbol” column (if present), rename columns to Title‐case,
+                # drop timezone from index, then keep only OHLCV.
+                if "symbol" in bars_day.columns:
+                    bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
 
-        except Exception:
+                bars_day.index = pd.to_datetime(bars_day.index).tz_localize(None)
+                bars_day = bars_day.rename(columns={
+                    "open":   "Open",
+                    "high":   "High",
+                    "low":    "Low",
+                    "close":  "Close",
+                    "volume": "Volume",
+                })
+                bars_day = bars_day[["Open", "High", "Low", "Close", "Volume"]]
+                all_days.append(bars_day)
+
+            # Move to next calendar day:
+            current_day += timedelta(days=1)
+
+        if not all_days:
+            # No minute bars found for any day → return None
             return None
 
+        # Concatenate, sort by timestamp, drop exact duplicates (just in case)
+        combined = pd.concat(all_days, axis=0)
+        combined = combined[~combined.index.duplicated(keep="first")]
+        combined = combined.sort_index()
+        return combined
+        
 # ─── E. TRADE LOGGER ───────────────────────────────────────────────────────────
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
