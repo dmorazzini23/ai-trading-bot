@@ -3,13 +3,13 @@ import joblib
 import pandas as pd
 import numpy as np
 
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
 import pandas_ta as ta
 
-# ─── COPY&Paste of prepare_indicators (exactly as in bot.py) ─────────────────
+# ─── COPY&PASTE of prepare_indicators (unchanged) ─────────────────
 def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.copy()
     if df.index.name:
@@ -19,6 +19,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").set_index("Date")
 
+    # Calculate basic TA indicators
     df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
     df["rsi"] = ta.rsi(df["Close"], length=14)
     df["atr"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
@@ -67,20 +68,26 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
 
-def gather_minute_data(ctx, symbols, lookback_days=30):
+def gather_minute_data(ctx, symbols, lookback_days=5):
     """
-    Fetch last `lookback_days` of minute bars for each symbol,
-    by calling DataFetcher.get_historical_minute(ctx, symbol, ...).
+    Fetch the last `lookback_days` of minute bars for each symbol, 
+    but only via get_minute_df (which already pulls up to 5 days at once).
     """
-    end_dt = datetime.now().date()
-    start_dt = end_dt - timedelta(days=lookback_days)
     raw_store = {}
+    cutoff_ts = pd.Timestamp.now() - pd.Timedelta(days=lookback_days)
 
     for sym in symbols:
-        raw = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
+        # get_minute_df returns up to 5 days of 1-minute bars in one call (cached)
+        raw = ctx.data_fetcher.get_minute_df(ctx, sym)
         if raw is None or raw.empty:
             continue
-        raw_store[sym] = raw
+
+        # Only keep rows within the last `lookback_days`
+        recent = raw.loc[raw.index >= cutoff_ts]
+        if recent.empty:
+            continue
+
+        raw_store[sym] = recent
 
     return raw_store
 
@@ -113,9 +120,9 @@ def build_feature_label_df(raw_store, Δ_minutes=30, threshold_pct=0.002):
     return df_all
 
 
-def retrain_meta_learner(ctx, symbols, lookback_days=30, Δ_minutes=30, threshold_pct=0.002):
+def retrain_meta_learner(ctx, symbols, lookback_days=5, Δ_minutes=30, threshold_pct=0.002):
     """
-    1. Gather minute data for each symbol over the last `lookback_days`.
+    1. Gather minute data for each symbol over the last `lookback_days` (via get_minute_df).
     2. Build features & labels using a Δ‐minute horizon.
     3. Train a RandomForestClassifier on (X, y).
     4. Save the new model to MODEL_PATH.
@@ -125,7 +132,7 @@ def retrain_meta_learner(ctx, symbols, lookback_days=30, Δ_minutes=30, threshol
 
     raw_store = gather_minute_data(ctx, symbols, lookback_days=lookback_days)
     if not raw_store:
-        print("  ⚠️ No minute data fetched at all; skipping retrain.")
+        print("  ⚠️ No minute data fetched; skipping retrain.")
         return False
 
     df_all = build_feature_label_df(raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct)
