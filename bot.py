@@ -287,6 +287,13 @@ def is_high_vol_thr_spy() -> bool:
     current_atr = float(atr_series.iloc[-1])
     return (current_atr - mean) / std >= 2
 
+def is_high_vol_regime() -> bool:
+    """
+    Wrapper for is_high_vol_thr_spy to be used inside update_trailing_stop and execute_entry.
+    Returns True if SPY is in a high-volatility regime (ATR > mean + 2*std).
+    """
+    return is_high_vol_thr_spy()
+
 # ─── D. DATA FETCHERS ─────────────────────────────────────────────────────────
 class FinnhubFetcher:
     def __init__(self, calls_per_minute: int = FINNHUB_RPM):
@@ -639,7 +646,7 @@ class SignalManager:
 
         for fn in fns:
             try:
-                s, w, lab = fn(df, model)
+                s, w, lab = fn(df, model) if fn != self.signal_sentiment else fn(ctx, ticker, df, model)
                 if allowed_tags and lab not in allowed_tags:
                     continue
                 if s in (-1, 1):
