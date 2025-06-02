@@ -33,6 +33,7 @@ from alpaca_trade_api.entity import Order
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import Ridge, BayesianRidge
+from sklearn.decomposition import PCA
 import pickle
 import joblib
 
@@ -56,7 +57,7 @@ from ratelimit import limits, sleep_and_retry
 
 # ─── FINBERT SENTIMENT MODEL IMPORTS ───────────────────────────────────────────
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 import warnings
 warnings.filterwarnings(
@@ -112,6 +113,7 @@ HALT_FLAG_PATH      = abspath("halt.flag")
 MODEL_PATH          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
 REGIME_MODEL_PATH   = abspath("regime_model.pkl")
 META_MODEL_PATH     = abspath("meta_model.pkl")
+SLIPPAGE_LOG_PATH   = abspath("slippage_log.csv")
 
 # Strategy mode
 class BotMode:
@@ -184,6 +186,9 @@ FINNHUB_RPM             = int(os.getenv("FINNHUB_RPM", "60"))
 # Regime symbols (makes SPY configurable)
 REGIME_SYMBOLS = ["SPY"]
 
+# Slippage threshold to adjust slicing (e.g. 0.5%)
+SLIPPAGE_ADJUST_THRESHOLD = 0.005
+
 # ─── THREAD-SAFETY LOCKS & CIRCUIT BREAKER ─────────────────────────────────────
 cache_lock   = Lock()
 targets_lock = Lock()
@@ -194,6 +199,9 @@ executor = ThreadPoolExecutor(max_workers=4)
 # EVENT cooldown
 _LAST_EVENT_TS = {}
 EVENT_COOLDOWN = 15.0  # seconds
+
+# Slippage tracker in memory
+slippage_stats: Dict[str, List[float]] = {}
 
 # ─── TYPED EXCEPTION ─────────────────────────────────────────────────────────
 class DataFetchError(Exception):
@@ -535,6 +543,43 @@ class SignalManager:
         s = 1 if ok else -1
         return s, 1.0, 'regime'
 
+    def signal_vol_spike(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
+        """Volume spike: if current minute volume > 2× mean of last 5."""
+        try:
+            if df is None or len(df) < 6:
+                return -1, 0.0, 'vol_spike'
+            last_vol = df['Volume'].iloc[-1]
+            mean5 = df['Volume'].iloc[-6:-1].mean()
+            if mean5 <= 0 or last_vol <= 0:
+                return -1, 0.0, 'vol_spike'
+            if last_vol > 2 * mean5:
+                w = min((last_vol / mean5 - 1) / 2, 1.0)
+                return 1, w, 'vol_spike'
+            return -1, 0.0, 'vol_spike'
+        except Exception:
+            logger.exception("Error in signal_vol_spike")
+            return -1, 0.0, 'vol_spike'
+
+    def signal_insider(self, ctx: 'BotContext', ticker: str, df: pd.DataFrame=None, model: Any=None) -> Tuple[int, float, str]:
+        """Check for recent Form 4 filings in last 7 days."""
+        try:
+            now = datetime.utcnow()
+            url = (
+                f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
+                f"&CIK={ticker}&type=4&dateb={now.strftime('%Y%m%d')}&count=1"
+            )
+            r = requests.get(url, headers={"User-Agent": "AI Trading Bot"}, timeout=10)
+            r.raise_for_status()
+            soup = BeautifulSoup(r.content, "lxml")
+            date_td = soup.find('td', string=re.compile(r"\d{4}-\d{2}-\d{2}"))
+            if date_td:
+                form_date = pd.to_datetime(date_td.text.strip())
+                if now - pd.Timestamp(form_date) <= pd.Timedelta(days=7):
+                    return 1, 0.2, 'insider'
+            return -1, 0.0, 'insider'
+        except Exception:
+            return -1, 0.0, 'insider'
+
     def load_signal_weights(self) -> dict[str, float]:
         if not os.path.exists(SIGNAL_WEIGHTS_FILE):
             return {}
@@ -562,11 +607,17 @@ class SignalManager:
             self.signal_stochrsi,
             self.signal_obv,
             self.signal_vsa,
+            self.signal_vol_spike,
+            self.signal_insider,
         ]
 
         for fn in fns:
             try:
-                s, w, lab = fn(df, model)
+                # sentiment and insider require ctx & ticker, so detect signature
+                if fn.__name__ in ('signal_sentiment', 'signal_insider'):
+                    s, w, lab = fn(ctx, ticker, df, model)
+                else:
+                    s, w, lab = fn(df, model)
                 if allowed_tags and lab not in allowed_tags:
                     continue
                 if s in (-1, 1):
@@ -705,50 +756,33 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     return float(sum(scores) / len(scores)) if scores else 0.0
 
 # ─── FINBERT LOADING ─────────────────────────────────────────────────────────
-# Use a community‐hosted FinBERT ("yiyanghkust/finbert-tone"); if you have a private HF token, set HF_TOKEN.
-HF_TOKEN = os.getenv("HF_TOKEN", None)
-FINBERT_NAME = "yiyanghkust/finbert-tone"
-
-try:
-    if HF_TOKEN:
-        _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained(FINBERT_NAME, use_auth_token=HF_TOKEN)
-        _FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained(FINBERT_NAME, use_auth_token=HF_TOKEN)
-    else:
-        _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained(FINBERT_NAME)
-        _FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained(FINBERT_NAME)
-
-    _FINBERT_MODEL.eval()
-    _SENT_PIPELINE = pipeline(
-        "sentiment-analysis",
-        model=_FINBERT_MODEL,
-        tokenizer=_FINBERT_TOKENIZER,
-        return_all_scores=False
-    )
-except Exception as e:
-    logger.warning(f"[FinBERT] could not load {FINBERT_NAME}: {e}; falling back to dummy sentiment")
-    _FINBERT_TOKENIZER = None
-    _FINBERT_MODEL     = None
-    _SENT_PIPELINE     = None
+# Load tokenizer and model once at startup
+_FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("ProsusAI/finbert-sentiment")
+_FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert-sentiment")
+_FINBERT_MODEL.eval()
 
 def predict_text_sentiment(text: str) -> float:
     """
-    Returns a float in [-1.0, +1.0]. If FinBERT is unavailable or fails, returns 0.0.
+    Uses FinBERT to assign a sentiment score ∈ [–1.0, +1.0].
+    FinBERT outputs three logits: [negative, neutral, positive].
+    We convert them to a single continuous score: (pos_prob – neg_prob).
     """
-    if _SENT_PIPELINE is None:
-        return 0.0
-
     try:
-        out = _SENT_PIPELINE(text[:512])
-        label = out[0]["label"]
-        score = out[0]["score"]
-        if label.lower().startswith("neg"):
-            return -score
-        elif label.lower().startswith("pos"):
-            return +score
-        else:
-            return 0.0
+        inputs = _FINBERT_TOKENIZER(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=128,
+        )
+        with torch.no_grad():
+            outputs = _FINBERT_MODEL(**inputs)
+            logits = outputs.logits[0]  # shape = (3,)
+            probs = torch.softmax(logits, dim=0)  # [p_neg, p_neu, p_pos]
+
+        neg, neu, pos = probs.tolist()
+        return float(pos - neg)
     except Exception as e:
-        logger.warning(f"[predict_text_sentiment] failed: {e}")
+        logger.warning(f"[predict_text_sentiment] inference failed: {e}")
         return 0.0
 
 def _can_fetch_events(symbol: str) -> bool:
@@ -795,6 +829,31 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
     today_ts = pd.Timestamp.now().normalize()
     cutoff = today_ts + pd.Timedelta(days=days)
     return any(today_ts <= d <= cutoff for d in dates)
+
+# ─── SLIPPAGE TRACKER ─────────────────────────────────────────────────────────
+def initialize_slippage_log():
+    if not os.path.exists(SLIPPAGE_LOG_PATH):
+        with portalocker.Lock(SLIPPAGE_LOG_PATH, 'w', timeout=1) as f:
+            csv.writer(f).writerow([
+                "timestamp", "symbol", "side", "expected_price", "fill_price", "slippage"
+            ])
+
+def record_slippage(symbol: str, side: str, expected_price: float, fill_price: float):
+    """Log slippage to CSV and update in-memory stats."""
+    if expected_price is None or fill_price is None or expected_price <= 0:
+        return
+    slippage = (fill_price - expected_price) / expected_price if side.lower() == "buy" else (expected_price - fill_price) / expected_price
+    ts = datetime.utcnow().isoformat()
+    with portalocker.Lock(SLIPPAGE_LOG_PATH, 'a', timeout=1) as f:
+        csv.writer(f).writerow([ts, symbol, side, expected_price, fill_price, slippage])
+    slippage_stats.setdefault(symbol, []).append(slippage)
+
+def get_avg_slippage(symbol: str) -> float:
+    lst = slippage_stats.get(symbol, [])
+    return float(np.mean(lst)) if lst else 0.0
+
+# Initialize slippage log at startup
+initialize_slippage_log()
 
 # ─── J. RISK & GUARDS ─────────────────────────────────────────────────────────
 day_start_equity: Optional[Tuple[date, float]] = None
@@ -844,6 +903,29 @@ def count_day_trades() -> int:
         (df["entry_date"] == df["exit_date"])
     )
     return int(mask.sum())
+
+def check_consecutive_losses(limit: int = 3) -> bool:
+    """Return True if there are ≥ limit consecutive losing trades in today's history."""
+    if not os.path.exists(TRADE_LOG_FILE):
+        return False
+    df = pd.read_csv(TRADE_LOG_FILE, parse_dates=["entry_time","exit_time"])
+    df = df.dropna(subset=["exit_time", "entry_price", "exit_price"])
+    df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map({"buy": 1, "sell": -1})
+    # Filter to today's trades
+    today = pd.Timestamp.now().normalize()
+    df["exit_date"] = df["exit_time"].dt.normalize()
+    df_today = df[df["exit_date"] == today]
+    # Sort by exit_time descending
+    df_today = df_today.sort_values("exit_time", ascending=False)
+    consecutive = 0
+    for pnl in df_today["pnl"]:
+        if pnl < 0:
+            consecutive += 1
+            if consecutive >= limit:
+                return True
+        else:
+            break
+    return False
 
 _running = False
 
@@ -954,6 +1036,22 @@ def scaled_atr_stop(
     take = entry_price + factor * atr
     return stop, take
 
+def compute_spy_atr_stats(ctx: BotContext) -> Optional[Tuple[float, float, float]]:
+    """
+    Compute SPY ATR mean and std over past year, plus latest ATR.
+    """
+    df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
+    if df is None or len(df) < 365:
+        return None
+    atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+    one_year = atr_series.dropna().iloc[-252:]  # approx 252 trading days
+    if len(one_year) < 50:
+        return None
+    mean_atr = one_year.mean()
+    std_atr = one_year.std()
+    latest_atr = atr_series.iloc[-1]
+    return float(latest_atr), float(mean_atr), float(std_atr)
+
 def fractional_kelly_size(
     ctx: BotContext,
     balance: float,
@@ -962,6 +1060,7 @@ def fractional_kelly_size(
     win_prob: float,
     payoff_ratio: float = 1.5
 ) -> int:
+    # Update peak equity
     if not os.path.exists(PEAK_EQUITY_FILE):
         with portalocker.Lock(PEAK_EQUITY_FILE, 'w', timeout=1) as f:
             f.write(str(balance))
@@ -981,6 +1080,13 @@ def fractional_kelly_size(
         frac = 0.45
     else:
         frac = ctx.kelly_fraction
+
+    # Check for extreme volatility regime: ATR > mean + 2*std on SPY
+    stats = compute_spy_atr_stats(ctx)
+    if stats is not None:
+        latest_atr, mean_atr, std_atr = stats
+        if latest_atr > mean_atr + 2 * std_atr:
+            frac *= 0.5  # cut Kelly by 50%
 
     edge = win_prob - (1 - win_prob) / payoff_ratio
     kelly = max(edge / payoff_ratio, 0) * frac
@@ -1015,21 +1121,23 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     """
     If inside regular hours → market order.
     If outside → limit with extended_hours=True at last bid/ask.
+    Logs slippage after fill.
     """
     try:
         quote = ctx.api.get_latest_quote(symbol)
-        last_price = quote.ask_price if side.lower() == "buy" else quote.bid_price
+        expected_price = quote.ask_price if side.lower() == "buy" else quote.bid_price
     except Exception:
-        last_price = None
+        expected_price = None
 
     now_utc = pd.Timestamp.utcnow()
     is_regular_hours = in_trading_hours(now_utc)
 
+    order = None
     if not is_regular_hours:
-        if last_price is None or last_price <= 0:
-            logger.warning("OFF_HOURS_NO_PRICE", extra={"symbol": symbol, "last_price": last_price})
+        if expected_price is None or expected_price <= 0:
+            logger.warning("OFF_HOURS_NO_PRICE", extra={"symbol": symbol, "expected_price": expected_price})
             return None
-        limit_price = round(last_price, 2)
+        limit_price = round(expected_price, 2)
         logger.info("OFF_HOURS_ORDER", extra={"symbol": symbol, "side": side, "qty": qty, "limit_price": limit_price})
         try:
             off_order = ctx.api.submit_order(
@@ -1043,7 +1151,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             )
             logger.debug("OFF_HOURS_OK", extra={"order_id": off_order.id})
             orders_total.inc()
-            return off_order
+            order = off_order
         except APIError as e:
             logger.warning(f"[submit_order off‐hours] APIError for {symbol}: {e} (limit_price={limit_price})")
             order_failures.inc()
@@ -1052,76 +1160,94 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
             logger.exception(f"[submit_order off‐hours] unexpected error for {symbol}")
             order_failures.inc()
             return None
-
-    # Inside regular hours
-    try:
-        logger.debug("MARKET_ORDER", extra={"symbol": symbol, "side": side, "qty": qty})
-        order = ctx.api.submit_order(
-            symbol=symbol,
-            qty=qty,
-            side=side,
-            type="market",
-            time_in_force="gtc",
-        )
-        logger.debug("ORDER_OK", extra={"order_id": order.id})
-        orders_total.inc()
-        return order
-    except APIError as e:
-        msg = str(e).lower()
-        if "insufficient buying power" in msg:
-            logger.warning("INSUFFICIENT_POWER", extra={"symbol": symbol})
-            order_failures.inc()
-            return None
-        m = re.search(r"requested: (\d+), available: (\d+)", msg)
-        if m:
-            available = int(m.group(2))
-            if available > 0:
-                try:
-                    order = ctx.api.submit_order(
-                        symbol=symbol,
-                        qty=available,
-                        side=side,
-                        type="market",
-                        time_in_force="gtc",
-                    )
-                    logger.info("PARTIAL_FILL", extra={"symbol": symbol, "available": available})
-                    orders_total.inc()
-                    return order
-                except Exception as e2:
-                    logger.exception(f"[submit_order] partial-fill failed for {symbol}: {e2}")
+    else:
+        # Inside regular hours
+        try:
+            logger.debug("MARKET_ORDER", extra={"symbol": symbol, "side": side, "qty": qty})
+            order = ctx.api.submit_order(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                type="market",
+                time_in_force="gtc",
+            )
+            logger.debug("ORDER_OK", extra={"order_id": order.id})
+            orders_total.inc()
+        except APIError as e:
+            msg = str(e).lower()
+            if "insufficient buying power" in msg:
+                logger.warning("INSUFFICIENT_POWER", extra={"symbol": symbol})
+                order_failures.inc()
+                return None
+            m = re.search(r"requested: (\d+), available: (\d+)", msg)
+            if m:
+                available = int(m.group(2))
+                if available > 0:
+                    try:
+                        order = ctx.api.submit_order(
+                            symbol=symbol,
+                            qty=available,
+                            side=side,
+                            type="market",
+                            time_in_force="gtc",
+                        )
+                        logger.info("PARTIAL_FILL", extra={"symbol": symbol, "available": available})
+                        orders_total.inc()
+                    except Exception as e2:
+                        logger.exception(f"[submit_order] partial-fill failed for {symbol}: {e2}")
+                        order_failures.inc()
+                        return None
+            elif "potential wash trade" in msg:
+                logger.warning("WASH_TRADE_FALLBACK", extra={"symbol": symbol})
+                if expected_price is None or expected_price <= 0:
                     order_failures.inc()
                     return None
-        if "potential wash trade" in msg:
-            logger.warning("WASH_TRADE_FALLBACK", extra={"symbol": symbol})
-            if last_price is None or last_price <= 0:
-                order_failures.inc()
-                return None
-            tp_price = last_price * 1.02
-            sl_price = last_price * 0.98
-            try:
-                bracket = ctx.api.submit_order(
-                    symbol=symbol,
-                    qty=qty,
-                    side=side,
-                    type="limit",
-                    time_in_force="gtc",
-                    order_class="bracket",
-                    take_profit={"limit_price": tp_price},
-                    stop_loss={"stop_price": sl_price},
-                )
-                logger.info("BRACKET_ORDER_PLACED", extra={"symbol": symbol, "tp": tp_price, "sl": sl_price})
-                orders_total.inc()
-                return bracket
-            except Exception as e2:
-                logger.exception(f"[submit_order] bracket fallback failed for {symbol}: {e2}")
-                order_failures.inc()
-                return None
-        logger.warning("API_ERROR_RETRY", extra={"symbol": symbol, "error": str(e)})
-        raise
-    except Exception:
-        order_failures.inc()
-        logger.exception(f"[submit_order] unexpected error for {symbol}")
-        return None
+                tp_price = expected_price * 1.02
+                sl_price = expected_price * 0.98
+                try:
+                    bracket = ctx.api.submit_order(
+                        symbol=symbol,
+                        qty=qty,
+                        side=side,
+                        type="limit",
+                        time_in_force="gtc",
+                        order_class="bracket",
+                        take_profit={"limit_price": tp_price},
+                        stop_loss={"stop_price": sl_price},
+                    )
+                    logger.info("BRACKET_ORDER_PLACED", extra={"symbol": symbol, "tp": tp_price, "sl": sl_price})
+                    orders_total.inc()
+                    order = bracket
+                except Exception as e2:
+                    logger.exception(f"[submit_order] bracket fallback failed for {symbol}: {e2}")
+                    order_failures.inc()
+                    return None
+            else:
+                logger.warning("API_ERROR_RETRY", extra={"symbol": symbol, "error": str(e)})
+                raise
+        except Exception:
+            order_failures.inc()
+            logger.exception(f"[submit_order] unexpected error for {symbol}")
+            return None
+
+    # After placing order, attempt to fetch fill price and log slippage
+    if order is not None:
+        # give a brief pause to allow status to update
+        pytime.sleep(0.5)
+        try:
+            filled = api.get_order(order.id)
+            fill_price = None
+            if hasattr(filled, 'filled_avg_price') and filled.filled_avg_price:
+                fill_price = float(filled.filled_avg_price)
+            elif hasattr(filled, 'filled_quantity') and float(filled.filled_quantity) > 0:
+                # fallback: use last trade price if available
+                fill_price = float(filled.filled_avg_price or expected_price)
+            if fill_price and expected_price:
+                record_slippage(symbol, side, expected_price, fill_price)
+        except Exception:
+            pass
+
+    return order
 
 def twap_submit(
     ctx: BotContext,
@@ -1155,8 +1281,36 @@ def vwap_pegged_submit(
         if df is None or df.empty:
             logger.warning("[VWAP] missing bars, aborting VWAP slice", extra={"symbol": symbol})
             break
+
+        # Microstructure‐aware adjustments:
+        # 1) Spread check
+        try:
+            quote = ctx.api.get_latest_quote(symbol)
+            bid = quote.bid_price
+            ask = quote.ask_price
+            if bid and ask and ask > bid:
+                mid = (ask + bid) / 2
+                spread_pct = (ask - bid) / mid
+                if spread_pct > 0.001:  # if spread > 0.1%
+                    slice_factor = 0.5
+                else:
+                    slice_factor = 1.0
+            else:
+                slice_factor = 1.0
+        except Exception:
+            slice_factor = 1.0
+
+        # 2) Volume spike check
+        last_vol = df["Volume"].iloc[-1]
+        mean5 = df["Volume"].iloc[-6:-1].mean() if len(df) >= 6 else 0
+        if mean5 > 0 and last_vol > 2 * mean5:
+            slice_factor *= 0.5
+
         vwap_price = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
-        slice_qty = min(max(1, total_qty // 10), total_qty - placed)
+        base_slice = min(max(1, total_qty // 10), total_qty - placed)
+        slice_qty = int(base_slice * slice_factor)
+        slice_qty = max(slice_qty, 1)
+
         try:
             ctx.api.submit_order(
                 symbol=symbol,
@@ -1213,8 +1367,13 @@ def pov_submit(
             continue
         retries = 0
         interval = cfg.sleep_interval
+
         vol = df["Volume"].iloc[-1]
-        slice_qty = min(int(vol * cfg.pct), total_qty - placed)
+        # Slippage‐aware adjustment
+        avg_slip = get_avg_slippage(symbol)
+        local_pct = cfg.pct * (0.5 if avg_slip > SLIPPAGE_ADJUST_THRESHOLD else 1.0)
+
+        slice_qty = min(int(vol * local_pct), total_qty - placed)
         if slice_qty < 1:
             logger.debug(f"[pov_submit] slice_qty<1 (vol={vol}), waiting", extra={"symbol": symbol})
             pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
@@ -1280,6 +1439,31 @@ def calculate_entry_size(
     kelly_sz = fractional_kelly_size(ctx, cash, price, atr, win_prob)
     vol_sz = vol_target_position_size(cash, price, rets, target_vol=0.02)
     size = int(min(kelly_sz, vol_sz, cap_sz, MAX_POSITION_SIZE))
+
+    # Position dependency: if any open position is highly correlated, halve size
+    try:
+        existing = api.list_positions()
+        for pos in existing:
+            s = pos.symbol
+            if s == symbol:
+                continue
+            df1 = ctx.data_fetcher.get_daily_df(ctx, symbol)
+            df2 = ctx.data_fetcher.get_daily_df(ctx, s)
+            if df1 is None or df2 is None or len(df1) < 20 or len(df2) < 20:
+                continue
+            # align
+            ret1 = df1["Close"].pct_change().dropna().iloc[-50:]
+            ret2 = df2["Close"].pct_change().dropna().iloc[-50:]
+            min_len = min(len(ret1), len(ret2))
+            if min_len < 10:
+                continue
+            corr = np.corrcoef(ret1.tail(min_len), ret2.tail(min_len))[0,1]
+            if abs(corr) > CORRELATION_THRESHOLD:
+                size = size // 2
+                break
+    except Exception:
+        pass
+
     return max(size, 1)
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
@@ -1370,6 +1554,9 @@ def pre_trade_checks(
         return False
     if check_daily_loss():
         logger.debug("SKIP_DAILY_LOSS", extra={"symbol": symbol})
+        return False
+    if check_consecutive_losses():
+        logger.debug("SKIP_CONSECUTIVE_LOSSES", extra={"symbol": symbol})
         return False
     if not regime_ok:
         logger.debug("SKIP_MARKET_REGIME", extra={"symbol": symbol})
@@ -1489,6 +1676,10 @@ def trade_logic(
         if raw_qty <= 0:
             logger.debug("SKIP_NO_QTY", extra={"symbol": symbol})
             return
+        # Position dependency already baked into calculate_entry_size if used
+        # Here, we override raw_qty with calculate_entry_size for more nuanced sizing
+        raw_qty = calculate_entry_size(ctx, symbol, current_price, feat_df["atr"].iloc[-1], conf)
+
         logger.info("SIGNAL_BUY", extra={"symbol": symbol, "final_score": final_score, "qty": raw_qty})
         order = submit_order(ctx, symbol, raw_qty, "buy")
         if order is None:
@@ -1545,6 +1736,47 @@ def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     equal_weight = 1.0 / n
     weights = {s: equal_weight for s in symbols}
     logger.info("PORTFOLIO_WEIGHTS", extra={"weights": weights})
+    return weights
+
+def compute_pca_adjusted_weights(symbols: List[str], ctx: BotContext) -> Dict[str, float]:
+    """
+    Run PCA on past 90 days of returns for 'symbols'.  
+    If any symbol loads > 0.7 on PC1, halve its weight, then renormalize.
+    """
+    if not symbols:
+        return {}
+    rets = []
+    valid_syms = []
+    for s in symbols:
+        df = ctx.data_fetcher.get_daily_df(ctx, s)
+        if df is None or len(df) < 90:
+            continue
+        r = df["Close"].pct_change().dropna().iloc[-90:]
+        if len(r) < 60:
+            continue
+        rets.append(r.values)
+        valid_syms.append(s)
+    if len(valid_syms) < 2:
+        return compute_portfolio_weights(symbols)
+    rets_arr = np.vstack([r for r in rets]).T  # shape (days, symbols)
+    try:
+        pca = PCA(n_components=1)
+        scores = pca.fit_transform(rets_arr)  # shape (days, 1)
+        loadings = pca.components_[0]  # shape (symbols,)
+    except Exception:
+        return compute_portfolio_weights(symbols)
+
+    weights = compute_portfolio_weights(symbols)
+    # Adjust weights
+    for sym, load in zip(valid_syms, loadings):
+        if abs(load) > 0.7:
+            weights[sym] = weights.get(sym, 0.0) * 0.5
+
+    # Renormalize
+    total = sum(weights.values())
+    if total > 0:
+        for sym in weights:
+            weights[sym] = weights[sym] / total
     return weights
 
 def on_trade_exit_rebalance(ctx: BotContext) -> None:
@@ -1828,6 +2060,10 @@ def check_market_regime() -> bool:
     pred = regime_model.predict(X)[0]
     return bool(pred)
 
+def is_high_vol_regime() -> bool:
+    """Alias for regime-based trailing-stop logic."""
+    return check_market_regime()
+
 def screen_universe(
     candidates: Sequence[str],
     ctx: BotContext,
@@ -1966,7 +2202,9 @@ def run_all_trades(model) -> None:
     # Screen universe & compute weights
     tickers = screen_universe(candidates, ctx)
     logger.info("CANDIDATES_SCREENED", extra={"tickers": tickers})
-    ctx.portfolio_weights = compute_portfolio_weights(tickers)
+    equal_weights = compute_portfolio_weights(tickers)
+    adjusted_weights = compute_pca_adjusted_weights(tickers, ctx)
+    ctx.portfolio_weights = adjusted_weights
     if not tickers:
         logger.error("NO_TICKERS_TO_TRADE")
         _running = False
