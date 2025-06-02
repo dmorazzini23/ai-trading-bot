@@ -55,11 +55,6 @@ from tenacity import (
 )
 from ratelimit import limits, sleep_and_retry
 
-# ─── OPTIONAL: Async clients for performance ────────────────────────────────────
-# (Not fully rewired throughout, but shown as placeholder for future async refactor)
-import asyncio
-import httpx
-
 # ─── FINBERT SENTIMENT MODEL IMPORTS & FALLBACK ─────────────────────────────────
 try:
     import torch
@@ -1184,7 +1179,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         # Microstructure-aware: check spread and adjust slice settings
         spread = (quote.ask_price - quote.bid_price) if quote and quote.ask_price and quote.bid_price else 0.0
         # If spread > 1 std of typical spreads, prefer market order to avoid stale limit
-        # For simplicity, if spread > $0.05, use market
+        # For simplicity, if spread > $0.05, use market order to minimize slippage
         if spread > 0.05:
             logger.info("HIGH_SPREAD_MARKET_FALLBACK", extra={"symbol": symbol, "spread": spread})
             order_type = "market"
