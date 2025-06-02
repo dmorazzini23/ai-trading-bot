@@ -2306,7 +2306,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
 if __name__ == "__main__":
     logger.info(">>> BOT __main__ ENTERED – starting up")
     
-    start_http_server(8000)
+    start_http_server(9000)
     if RUN_HEALTH:
         Thread(target=start_healthcheck, daemon=True).start()
 
