@@ -56,52 +56,23 @@ from tenacity import (
 )
 from ratelimit import limits, sleep_and_retry
 
-# ─── FINBERT SENTIMENT MODEL IMPORTS & FALLBACK ─────────────────────────────────
-try:
-    import torch
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification
-    _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
-    _FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained("yiyanghkust/finbert-tone")
-    _FINBERT_MODEL.eval()
-    _HUGGINGFACE_AVAILABLE = True
-    logging.info("FinBERT loaded successfully")
-except Exception as e:
-    _HUGGINGFACE_AVAILABLE = False
-    _FINBERT_TOKENIZER = None
-    _FINBERT_MODEL = None
-    logging.warning(f"FinBERT load failed ({e}); falling back to neutral sentiment")
-
 import warnings
-warnings.filterwarnings(
-    "ignore",
-    message=".*valid feature names.*",
-    category=UserWarning
-)
-
-print("=== bot.py STARTING up ===")
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 load_dotenv()
 RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
 
-# Logging: set root logger to INFO, lower noisy libraries
+# Logging: set root logger to INFO, send to both stderr and a log file
 default_log_path = "/var/log/ai-trading-bot.log"
 logging.basicConfig(
-    filename=default_log_path,
+    level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
-    level=logging.INFO
+    handlers=[
+        logging.StreamHandler(),  # stderr for journalctl
+        logging.FileHandler(default_log_path, mode="a")
+    ]
 )
-
-# Ensure we also send everything to stderr (so systemd/journalctl will pick it up)
-stream_handler = logging.StreamHandler()
-stream_handler.setFormatter(
-    logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-)
-stream_handler.setLevel(logging.INFO)
-logging.getLogger().addHandler(stream_handler)
-
 logger = logging.getLogger(__name__)
-logger.info("=== bot.py STARTING up ===")
 logging.getLogger("alpaca_trade_api").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("requests").setLevel(logging.WARNING)
@@ -112,6 +83,28 @@ sentry_sdk.init(
     traces_sample_rate=0.1,
     environment=os.getenv("BOT_MODE", "live"),
 )
+
+# Suppress specific pandas_ta warnings
+warnings.filterwarnings(
+    "ignore",
+    message=".*valid feature names.*",
+    category=UserWarning
+)
+
+# ─── FINBERT SENTIMENT MODEL IMPORTS & FALLBACK ─────────────────────────────────
+try:
+    import torch
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+    _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
+    _FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained("yiyanghkust/finbert-tone")
+    _FINBERT_MODEL.eval()
+    _HUGGINGFACE_AVAILABLE = True
+    logger.info("FinBERT loaded successfully")
+except Exception as e:
+    _HUGGINGFACE_AVAILABLE = False
+    _FINBERT_TOKENIZER = None
+    _FINBERT_MODEL = None
+    logger.warning(f"FinBERT load failed ({e}); falling back to neutral sentiment")
 
 # Prometheus metrics
 orders_total            = Counter('bot_orders_total', 'Total orders sent')
@@ -2108,7 +2101,7 @@ def daily_summary() -> None:
         logger.info("DAILY_SUMMARY_NO_TRADES")
         return
     df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["entry_price", "exit_price"])
-    df["pnl"] = (df.exit_price - df.entry_price) * df.side.map({"buy": 1, "sell": -1})
+    df["pnl"] = (df.exit_price - df.entry_price) * df["side"].map({"buy": 1, "sell": -1})
     total_trades = len(df)
     win_rate = (df.pnl > 0).mean() if total_trades else 0
     total_pnl = df.pnl.sum()
@@ -2319,50 +2312,55 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
             logger.exception("INITIAL_REBALANCE_FETCH_ERROR", extra={"symbol": sym, "error": str(e)})
 
 if __name__ == "__main__":
-    logger.info(">>> BOT __main__ ENTERED – starting up")
-    
-    # Try to start Prometheus metrics server; if port is already in use, log and continue
     try:
-        start_http_server(9200)
-    except OSError as e:
-        logger.warning(f"Metrics server port 9200 already in use; skipping start_http_server: {e!r}")
+        logger.info(">>> BOT __main__ ENTERED – starting up")
+        
+        # Try to start Prometheus metrics server; if port is already in use, log and continue
+        try:
+            start_http_server(9200)
+        except OSError as e:
+            logger.warning(f"Metrics server port 9200 already in use; skipping start_http_server: {e!r}")
 
-    if RUN_HEALTH:
-        Thread(target=start_healthcheck, daemon=True).start()
+        if RUN_HEALTH:
+            Thread(target=start_healthcheck, daemon=True).start()
 
-    # Daily jobs
-    schedule.every().day.at("00:30").do(daily_summary)
-    schedule.every().day.at("00:35").do(run_daily_pca_adjustment, ctx)
-    # schedule.every().day.at("15:45").do(exit_all_positions)  # disabled as requested
-    schedule.every().day.at("01:00").do(run_meta_learning_weight_optimizer)
-    schedule.every().day.at("02:00").do(run_bayesian_meta_learning_optimizer)
+        # Daily jobs
+        schedule.every().day.at("00:30").do(daily_summary)
+        schedule.every().day.at("00:35").do(run_daily_pca_adjustment, ctx)
+        # schedule.every().day.at("15:45").do(exit_all_positions)  # disabled as requested
+        schedule.every().day.at("01:00").do(run_meta_learning_weight_optimizer)
+        schedule.every().day.at("02:00").do(run_bayesian_meta_learning_optimizer)
 
-    # Load model
-    model = load_model()
-    logger.info("BOT_LAUNCHED")
+        # Load model
+        model = load_model()
+        logger.info("BOT_LAUNCHED")
 
-    # ─── WARM-CACHE SENTIMENT FOR ALL TICKERS ─────────────────────────────────────
-    # This will prevent the initial burst of NewsAPI calls and 429s
-    all_tickers = load_tickers(TICKERS_FILE)
-    now_ts = pytime.time()
-    for t in all_tickers:
-        # store (timestamp, 0.0) so initial fetch always returns neutral until cache expires
-        _SENTIMENT_CACHE[t] = (now_ts, 0.0)
+        # ─── WARM-CACHE SENTIMENT FOR ALL TICKERS ─────────────────────────────────────
+        # This will prevent the initial burst of NewsAPI calls and 429s
+        all_tickers = load_tickers(TICKERS_FILE)
+        now_ts = pytime.time()
+        for t in all_tickers:
+            # store (timestamp, 0.0) so initial fetch always returns neutral until cache expires
+            _SENTIMENT_CACHE[t] = (now_ts, 0.0)
 
-    # Initial rebalance (once)
-    try:
-        if not getattr(ctx, "_rebalance_done", False):
-            universe = load_tickers(TICKERS_FILE)
-            initial_rebalance(ctx, universe)
-            ctx._rebalance_done = True
+        # Initial rebalance (once)
+        try:
+            if not getattr(ctx, "_rebalance_done", False):
+                universe = load_tickers(TICKERS_FILE)
+                initial_rebalance(ctx, universe)
+                ctx._rebalance_done = True
+        except Exception as e:
+            logger.warning(f"[REBALANCE] aborted due to error: {e}")
+
+        # Recurring jobs
+        schedule.every(1).minutes.do(lambda: run_all_trades(model))
+        schedule.every(6).hours.do(update_signal_weights)
+
+        # Scheduler loop
+        while True:
+            schedule.run_pending()
+            pytime.sleep(1)
+
     except Exception as e:
-        logger.warning(f"[REBALANCE] aborted due to error: {e}")
-
-    # Recurring jobs
-    schedule.every(1).minutes.do(lambda: run_all_trades(model))
-    schedule.every(6).hours.do(update_signal_weights)
-
-    # Scheduler loop
-    while True:
-        schedule.run_pending()
-        pytime.sleep(1)
+        logger.exception(f"Fatal error in __main__: {e}")
+        raise
