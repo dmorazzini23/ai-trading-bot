@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 
 import pandas_ta as ta
 
-# ─── COPY&PASTE of prepare_indicators (exactly as in bot.py) ─────────────────
+# ─── COPY&Paste of prepare_indicators (exactly as in bot.py) ─────────────────
 def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.copy()
     if df.index.name:
@@ -19,7 +19,6 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").set_index("Date")
 
-    # Calculate basic TA indicators
     df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
     df["rsi"] = ta.rsi(df["Close"], length=14)
     df["atr"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
@@ -71,17 +70,18 @@ MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 def gather_minute_data(ctx, symbols, lookback_days=30):
     """
     Fetch last `lookback_days` of minute bars for each symbol.
-    This assumes that `ctx` has a `data_fetcher.get_historical_minute(...)` method
-    that accepts (ctx, symbol, start_dt, end_dt).
+    This now calls data_fetcher.get_historical_minute(ctx, symbol, start_dt, end_dt).
     """
     end_dt = datetime.now().date()
     start_dt = end_dt - timedelta(days=lookback_days)
     raw_store = {}
 
     for sym in symbols:
-        # Now we pass ctx into get_historical_minute
+        # ⚠️ Pass `ctx` as first argument here:
         raw = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
         if raw is None or raw.empty:
+            # You can uncomment the next line for debugging if you want to see which symbols failed:
+            # print(f"  ⚠️ No minute bars for {sym} from {start_dt} to {end_dt}")
             continue
         raw_store[sym] = raw
 
@@ -128,7 +128,7 @@ def retrain_meta_learner(ctx, symbols, lookback_days=30, Δ_minutes=30, threshol
 
     raw_store = gather_minute_data(ctx, symbols, lookback_days=lookback_days)
     if not raw_store:
-        print("  ⚠️ No minute data fetched; skipping retrain.")
+        print("  ⚠️ No minute data fetched at all; skipping retrain.")
         return False
 
     df_all = build_feature_label_df(raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct)
