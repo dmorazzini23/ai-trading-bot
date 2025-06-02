@@ -9,9 +9,9 @@ from datetime import datetime, date, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Dict, List, Any, Sequence
 from threading import Semaphore, Lock, Thread
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from collections import deque, defaultdict
+from collections import deque
 
 import numpy as np
 # Ensure numpy.NaN exists for pandas_ta compatibility
@@ -48,7 +48,6 @@ import pybreaker
 from tenacity import (
     retry,
     stop_after_attempt,
-    wait_fixed,
     wait_exponential,
     wait_random,
     retry_if_exception_type,
@@ -207,8 +206,10 @@ FINNHUB_RPM             = int(os.getenv("FINNHUB_RPM", "60"))
 REGIME_SYMBOLS = ["SPY"]
 
 # ─── THREAD-SAFETY LOCKS & CIRCUIT BREAKER ─────────────────────────────────────
-cache_lock   = Lock()
-targets_lock = Lock()
+cache_lock      = Lock()
+targets_lock    = Lock()
+vol_lock        = Lock()
+sentiment_lock  = Lock()
 
 breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
 executor = ThreadPoolExecutor(max_workers=4)
@@ -264,34 +265,47 @@ def compute_spy_vol_stats(ctx: 'BotContext') -> None:
     """Compute daily ATR mean/std on SPY for the past 1 year."""
     global _VOL_STATS
     today = date.today()
-    if _VOL_STATS["last_update"] == today:
-        return
+    with vol_lock:
+        if _VOL_STATS["last_update"] == today:
+            return
+
     df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
     if df is None or len(df) < 252 + ATR_LENGTH:
         return
+
     # Compute ATR series for last 252 trading days
     atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH).dropna()
     if len(atr_series) < 252:
         return
+
     recent = atr_series.iloc[-252:]
-    _VOL_STATS["mean"] = float(recent.mean())
-    _VOL_STATS["std"] = float(recent.std())
-    _VOL_STATS["last_update"] = today
-    logger.info("SPY_VOL_STATS_UPDATED", extra={"mean": _VOL_STATS["mean"], "std": _VOL_STATS["std"]})
+    mean_val = float(recent.mean())
+    std_val = float(recent.std())
+
+    with vol_lock:
+        _VOL_STATS["mean"] = mean_val
+        _VOL_STATS["std"] = std_val
+        _VOL_STATS["last_update"] = today
+
+    logger.info("SPY_VOL_STATS_UPDATED", extra={"mean": mean_val, "std": std_val})
 
 def is_high_vol_thr_spy() -> bool:
     """Return True if SPY ATR > mean + 2*std."""
-    mean = _VOL_STATS["mean"]
-    std = _VOL_STATS["std"]
+    with vol_lock:
+        mean = _VOL_STATS["mean"]
+        std = _VOL_STATS["std"]
     if mean is None or std is None:
         return False
-    # Get latest ATR from daily cache
-    spy_df = data_fetcher._daily_cache.get(REGIME_SYMBOLS[0])
+
+    with cache_lock:
+        spy_df = data_fetcher._daily_cache.get(REGIME_SYMBOLS[0])
     if spy_df is None or len(spy_df) < ATR_LENGTH:
         return False
+
     atr_series = ta.atr(spy_df["High"], spy_df["Low"], spy_df["Close"], length=ATR_LENGTH)
     if atr_series.empty:
         return False
+
     current_atr = float(atr_series.iloc[-1])
     return (current_atr - mean) / std >= 2
 
@@ -310,15 +324,17 @@ class FinnhubFetcher:
         self.client = finnhub_client
 
     def _throttle(self):
-        now_ts = pytime.time()
-        while self._timestamps and now_ts - self._timestamps[0] > 60:
-            self._timestamps.popleft()
-        if len(self._timestamps) >= self.max_calls:
+        while True:
+            now_ts = pytime.time()
+            # drop timestamps older than 60 seconds
+            while self._timestamps and now_ts - self._timestamps[0] > 60:
+                self._timestamps.popleft()
+            if len(self._timestamps) < self.max_calls:
+                self._timestamps.append(now_ts)
+                return
             wait_secs = 60 - (now_ts - self._timestamps[0]) + random.uniform(0.1, 0.5)
             logger.debug(f"[FH] rate-limit reached; sleeping {wait_secs:.2f}s")
             pytime.sleep(wait_secs)
-            return self._throttle()
-        self._timestamps.append(now_ts)
 
     def _parse_period(self, period: str) -> int:
         if period.endswith("mo"):
@@ -380,55 +396,60 @@ class DataFetcher:
 
     def get_daily_df(self, ctx: 'BotContext', symbol: str) -> Optional[pd.DataFrame]:
         # Regime-based fetch symbols
-        if symbol in REGIME_SYMBOLS:
-            if symbol not in self._daily_cache:
-                today_date = date.today()
-                start = (today_date - timedelta(days=365)).isoformat()
-                end = today_date.isoformat()
-                bars = ctx.api.get_bars(
-                    symbol,
-                    TimeFrame.Day,
-                    start=start,
-                    end=end,
-                    limit=1000,
-                    feed="iex"
-                ).df
-                bars.index = pd.to_datetime(bars.index).tz_localize(None)
-                df = bars.rename(columns={
-                    "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
-                })
-                with cache_lock:
-                    self._daily_cache[symbol] = df
-                daily_cache_hit.inc()
-                return df
-            else:
+        with cache_lock:
+            if symbol in self._daily_cache and symbol in REGIME_SYMBOLS:
                 daily_cache_hit.inc()
                 return self._daily_cache[symbol]
 
-        # Non‐regime symbols
-        if symbol not in self._daily_cache:
-            try:
-                df = fh.fetch(symbol, period="1mo", interval="1d")
-                if df is None or df.empty:
-                    raise DataFetchError(f"No daily data for {symbol}")
-                daily_cache_hit.inc()
-            except Exception as e:
-                logger.warning(f"[DataFetcher] daily fetch failed for {symbol}: {e}")
-                df = None
-                daily_cache_miss.inc()
-            self._daily_cache[symbol] = df
-        else:
+        if symbol in REGIME_SYMBOLS:
+            today_date = date.today()
+            start = (today_date - timedelta(days=365)).isoformat()
+            end = today_date.isoformat()
+            bars = ctx.api.get_bars(
+                symbol,
+                TimeFrame.Day,
+                start=start,
+                end=end,
+                limit=1000,
+                feed="iex"
+            ).df
+            bars.index = pd.to_datetime(bars.index).tz_localize(None)
+            df = bars.rename(columns={
+                "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
+            })
+            with cache_lock:
+                self._daily_cache[symbol] = df
             daily_cache_hit.inc()
-        return self._daily_cache[symbol]
+            return df
+
+        with cache_lock:
+            if symbol in self._daily_cache:
+                daily_cache_hit.inc()
+                return self._daily_cache[symbol]
+
+        try:
+            df = fh.fetch(symbol, period="1mo", interval="1d")
+            if df is None or df.empty:
+                raise DataFetchError(f"No daily data for {symbol}")
+            daily_cache_hit.inc()
+        except Exception as e:
+            logger.warning(f"[DataFetcher] daily fetch failed for {symbol}: {e}")
+            df = None
+            daily_cache_miss.inc()
+
+        with cache_lock:
+            self._daily_cache[symbol] = df
+        return df
 
     def get_minute_df(self, ctx: 'BotContext', symbol: str) -> Optional[pd.DataFrame]:
         now_utc = datetime.now(timezone.utc)
-        last_ts = self._minute_timestamps.get(symbol)
-        if last_ts and last_ts > now_utc - timedelta(seconds=ttl_seconds()):
-            minute_cache_hit.inc()
-            return self._minute_cache[symbol]
-        minute_cache_miss.inc()
+        with cache_lock:
+            last_ts = self._minute_timestamps.get(symbol)
+            if last_ts and last_ts > now_utc - timedelta(seconds=ttl_seconds()):
+                minute_cache_hit.inc()
+                return self._minute_cache[symbol]
 
+        minute_cache_miss.inc()
         df: Optional[pd.DataFrame] = None
 
         # 1) Alpaca IEX fetch
@@ -477,7 +498,7 @@ class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
         self.path = path
         if not os.path.exists(path):
-            with portalocker.Lock(path, 'w', timeout=1) as f:
+            with portalocker.Lock(path, 'w', timeout=5) as f:
                 csv.writer(f).writerow([
                     "symbol","entry_time","entry_price",
                     "exit_time","exit_price","qty","side",
@@ -486,12 +507,12 @@ class TradeLogger:
 
     def log_entry(self, symbol: str, price: float, qty: int, side: str, strategy: str, signal_tags: str="") -> None:
         now_iso = datetime.now(timezone.utc).isoformat()
-        with portalocker.Lock(self.path, 'a', timeout=1) as f:
+        with portalocker.Lock(self.path, 'a', timeout=5) as f:
             csv.writer(f).writerow([symbol, now_iso, price, "","", qty, side, strategy, "", signal_tags])
 
     def log_exit(self, symbol: str, exit_price: float) -> None:
         global _LOSS_STREAK, _STREAK_HALT_UNTIL
-        with portalocker.Lock(self.path, 'r+', timeout=1) as f:
+        with portalocker.Lock(self.path, 'r+', timeout=5) as f:
             rows = list(csv.reader(f))
             header, data = rows[0], rows[1:]
             pnl = 0.0
@@ -521,9 +542,10 @@ class TradeLogger:
             logger.warning("STREAK_HALT_TRIGGERED", extra={"loss_streak": _LOSS_STREAK, "halt_until": _STREAK_HALT_UNTIL})
 
 # ─── F. SIGNAL MANAGER & HELPER FUNCTIONS ─────────────────────────────────────
-# ─── We add a small module‐level cache for last‐seen prices and a threshold
 _LAST_PRICE: Dict[str, float] = {}
+_SENTIMENT_CACHE: Dict[str, Tuple[float, float]] = {}  # {ticker: (timestamp, score)}
 PRICE_TTL_PCT = 0.005  # only fetch sentiment if price moved > 0.5%
+SENTIMENT_TTL_SEC = 600  # 10 minutes
 
 class SignalManager:
     def __init__(self) -> None:
@@ -621,16 +643,18 @@ class SignalManager:
             return -1, 0.0, "sentiment"
 
         latest_close = float(df["Close"].iloc[-1])
-        prev_close = _LAST_PRICE.get(ticker, None)
+        with sentiment_lock:
+            prev_close = _LAST_PRICE.get(ticker, None)
 
         # If price hasn’t moved enough, return cached or neutral
         if prev_close is not None and abs(latest_close - prev_close) / prev_close < PRICE_TTL_PCT:
-            cached = _SENTIMENT_CACHE.get(ticker)
-            if cached and (pytime.time() - cached[0] < SENTIMENT_TTL_SEC):
-                score = cached[1]
-            else:
-                score = 0.0
-                _SENTIMENT_CACHE[ticker] = (pytime.time(), score)
+            with sentiment_lock:
+                cached = _SENTIMENT_CACHE.get(ticker)
+                if cached and (pytime.time() - cached[0] < SENTIMENT_TTL_SEC):
+                    score = cached[1]
+                else:
+                    score = 0.0
+                    _SENTIMENT_CACHE[ticker] = (pytime.time(), score)
         else:
             # Price moved enough → fetch fresh sentiment
             try:
@@ -639,8 +663,10 @@ class SignalManager:
                 logger.warning(f"[signal_sentiment] {ticker} error: {e}")
                 score = 0.0
 
-        # Update last‐seen price
-        _LAST_PRICE[ticker] = latest_close
+        # Update last‐seen price & cache
+        with sentiment_lock:
+            _LAST_PRICE[ticker] = latest_close
+            _SENTIMENT_CACHE[ticker] = (pytime.time(), score)
 
         s = 1 if score > 0 else -1 if score < 0 else -1
         return s, abs(score), 'sentiment'
@@ -759,11 +785,6 @@ def in_trading_hours(ts: pd.Timestamp) -> bool:
     return schedule_today.market_open.iloc[0] <= ts <= schedule_today.market_close.iloc[0]
 
 # ─── I. SENTIMENT & EVENTS ────────────────────────────────────────────────────
-
-# ─── Sentiment cache ─────────────────────────────────────────────────
-_SENTIMENT_CACHE: Dict[str, Tuple[float, float]] = {}  # {ticker: (timestamp, score)}
-SENTIMENT_TTL_SEC = 600  # 10 minutes
-
 @sleep_and_retry
 @limits(calls=30, period=60)
 @retry(
@@ -807,12 +828,12 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     If FinBERT isn’t available, return neutral 0.0.
     """
     now_ts = pytime.time()
-    # Check cache first
-    cached = _SENTIMENT_CACHE.get(ticker)
-    if cached:
-        last_ts, last_score = cached
-        if now_ts - last_ts < SENTIMENT_TTL_SEC:
-            return last_score
+    with sentiment_lock:
+        cached = _SENTIMENT_CACHE.get(ticker)
+        if cached:
+            last_ts, last_score = cached
+            if now_ts - last_ts < SENTIMENT_TTL_SEC:
+                return last_score
 
     # Cache miss or stale → fetch fresh
     # 1) Fetch NewsAPI articles
@@ -827,9 +848,9 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     except requests.exceptions.HTTPError:
         if resp.status_code == 429:
             logger.warning(f"fetch_sentiment({ticker}) rate-limited → returning neutral 0.0")
-            score = 0.0
-            _SENTIMENT_CACHE[ticker] = (now_ts, score)
-            return score
+            with sentiment_lock:
+                _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
+            return 0.0
         raise
 
     payload = resp.json()
@@ -854,8 +875,8 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
         logger.warning(f"[fetch_sentiment] Form4 fetch failed for {ticker}: {e}")
 
     final_score = 0.8 * news_score + 0.2 * form4_score
-    # Store in cache
-    _SENTIMENT_CACHE[ticker] = (now_ts, final_score)
+    with sentiment_lock:
+        _SENTIMENT_CACHE[ticker] = (now_ts, final_score)
     return final_score
 
 def predict_text_sentiment(text: str) -> float:
@@ -1075,7 +1096,14 @@ def too_correlated(sym: str) -> bool:
         d = fetch_data(ctx, [s], period="3mo", interval="1d")
         if d is None or d.empty:
             continue
-        series = d["Close"].pct_change().dropna()
+        # Handle DataFrame with MultiIndex columns (symbol, field) or single-level
+        if isinstance(d.columns, pd.MultiIndex):
+            if (s, "Close") in d.columns:
+                series = d[(s, "Close")].pct_change().dropna()
+            else:
+                continue
+        else:
+            series = d["Close"].pct_change().dropna()
         if not series.empty:
             rets[s] = series
 
@@ -1137,11 +1165,11 @@ def fractional_kelly_size(
         base_frac = ctx.kelly_fraction
 
     if not os.path.exists(PEAK_EQUITY_FILE):
-        with portalocker.Lock(PEAK_EQUITY_FILE, 'w', timeout=1) as f:
+        with portalocker.Lock(PEAK_EQUITY_FILE, 'w', timeout=5) as f:
             f.write(str(balance))
         peak_equity = balance
     else:
-        with portalocker.Lock(PEAK_EQUITY_FILE, 'r+', timeout=1) as f:
+        with portalocker.Lock(PEAK_EQUITY_FILE, 'r+', timeout=5) as f:
             content = f.read().strip()
             peak_equity = float(content) if content else balance
             if balance > peak_equity:
@@ -1163,7 +1191,7 @@ def fractional_kelly_size(
         return 1
 
     raw_pos = dollars_to_risk / atr
-    cap_pos = (balance * CAPITAL_CAP) / price
+    cap_pos = (balance * CAPITAL_CAP) / price if price > 0 else 0
     size = int(min(raw_pos, cap_pos, MAX_POSITION_SIZE))
     return max(size, 1)
 
@@ -1174,7 +1202,7 @@ def vol_target_position_size(
     target_vol: float = 0.02
 ) -> int:
     sigma = np.std(returns)
-    if sigma <= 0:
+    if sigma <= 0 or price <= 0:
         return 1
     dollar_alloc = cash * (target_vol / sigma)
     qty = int(dollar_alloc / price)
@@ -1238,13 +1266,10 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     try:
         # Microstructure-aware: check spread and adjust slice settings
         spread = (quote.ask_price - quote.bid_price) if quote and quote.ask_price and quote.bid_price else 0.0
-        # If spread > 1 std of typical spreads, prefer market order to avoid stale limit
         # For simplicity, if spread > $0.05, use market order to minimize slippage
+        order_type = "market"
         if spread > 0.05:
             logger.info("HIGH_SPREAD_MARKET_FALLBACK", extra={"symbol": symbol, "spread": spread})
-            order_type = "market"
-        else:
-            order_type = "market"
         logger.debug("MARKET_ORDER", extra={"symbol": symbol, "side": side, "qty": qty})
         order = ctx.api.submit_order(
             symbol=symbol,
@@ -1352,13 +1377,11 @@ def vwap_pegged_submit(
             logger.warning("[VWAP] missing bars, aborting VWAP slice", extra={"symbol": symbol})
             break
         vwap_price = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
-        # Microstructure-aware: adjust slice_qty if spread high
         try:
             quote = ctx.api.get_latest_quote(symbol)
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
         except Exception:
             spread = 0.0
-        # If spread > $0.05, reduce slice to 50% to minimize slippage
         if spread > 0.05:
             slice_qty = max(1, int((total_qty - placed) * 0.5))
         else:
@@ -1372,7 +1395,6 @@ def vwap_pegged_submit(
                 time_in_force="ioc",
                 limit_price=round(vwap_price, 2)
             )
-            # Log slippage if filled
             fill_price = float(getattr(od, "filled_avg_price", 0) or 0)
             expected = vwap_price
             if fill_price > 0:
@@ -1428,7 +1450,6 @@ def pov_submit(
         retries = 0
         interval = cfg.sleep_interval
 
-        # Microstructure-aware: fetch spread
         try:
             quote = ctx.api.get_latest_quote(symbol)
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
@@ -1436,7 +1457,6 @@ def pov_submit(
             spread = 0.0
 
         vol = df["Volume"].iloc[-1]
-        # If spread high, slice smaller for fewer slippage
         if spread > 0.05:
             slice_qty = min(int(vol * cfg.pct * 0.5), total_qty - placed)
         else:
@@ -1448,7 +1468,6 @@ def pov_submit(
             continue
         try:
             od = submit_order(ctx, symbol, slice_qty, side)
-            # slippage already logged in submit_order
         except Exception as e:
             logger.exception(f"[pov_submit] submit_order failed on slice, aborting: {e}", extra={"symbol": symbol})
             return False
@@ -1502,7 +1521,7 @@ def calculate_entry_size(
     df_daily = ctx.data_fetcher.get_daily_df(ctx, symbol)
     avg_vol = df_daily["Volume"].tail(20).mean() if df_daily is not None else 0
     cap_pct = 0.05 if avg_vol > 1e7 else 0.03
-    cap_sz = int((cash * cap_pct) / price)
+    cap_sz = int((cash * cap_pct) / price) if price > 0 else 0
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
     rets = df["Close"].pct_change().dropna().values if df is not None and not df.empty else np.array([0.0])
     kelly_sz = fractional_kelly_size(ctx, cash, price, atr, win_prob)
@@ -1717,7 +1736,7 @@ def trade_logic(
     if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
         current_price = feat_df["Close"].iloc[-1]
         target_weight = ctx.portfolio_weights.get(symbol, 0.0)
-        raw_qty = int(balance * target_weight / current_price)
+        raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
         if raw_qty <= 0:
             logger.debug("SKIP_NO_QTY", extra={"symbol": symbol})
             return
@@ -2050,7 +2069,8 @@ else:
         regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 
 def check_market_regime() -> bool:
-    df = data_fetcher._daily_cache.get(REGIME_SYMBOLS[0])
+    with cache_lock:
+        df = data_fetcher._daily_cache.get(REGIME_SYMBOLS[0])
     if df is None or len(df) < 26:
         logger.warning("INSUFFICIENT_REGIME_HISTORY")
         return False
@@ -2175,8 +2195,7 @@ def start_healthcheck() -> None:
     except OSError as e:
         logger.warning(f"Healthcheck port {port} in use: {e}. Skipping health-endpoint.")
 
-@run_all_trades_duration.time()
-def run_all_trades(model) -> None:
+def run_all_trades_worker(model):
     global _last_fh_prefetch_date, _running
     now_utc = pd.Timestamp.utcnow()
     # Prevent overlapping runs
@@ -2234,7 +2253,7 @@ def run_all_trades(model) -> None:
                         logger.warning(f"[prefetch] Finnhub fetch failed for {sym}: {e2}")
                     dates = pd.date_range(start=(today_date - timedelta(days=30)), end=today_date, freq="D")
                     dummy = pd.DataFrame(index=dates, columns=["Open", "High", "Low", "Close", "Volume"])
-                    dummy[["Open", "High", "Low", "Close"]] = 1.0
+                    dummy[["Open", "High", "Low", "Close"]] = np.nan
                     dummy["Volume"] = 0
                     with cache_lock:
                         data_fetcher._daily_cache[sym] = dummy
@@ -2264,11 +2283,22 @@ def run_all_trades(model) -> None:
     current_cash = float(acct.cash)
     regime_ok = check_market_regime()
 
+    futures = []
     for symbol in tickers:
-        executor.submit(_safe_trade, ctx, symbol, current_cash, model, regime_ok)
+        futures.append(executor.submit(_safe_trade, ctx, symbol, current_cash, model, regime_ok))
+
+    # Wait for all trades to finish before allowing next run
+    for f in as_completed(futures):
+        try:
+            f.result()
+        except Exception:
+            pass
 
     _running = False
     logger.info("RUN_ALL_TRADES_COMPLETE")
+
+def schedule_run_all_trades(model):
+    Thread(target=run_all_trades_worker, args=(model,), daemon=True).start()
 
 def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     acct = ctx.api.get_account()
@@ -2325,11 +2355,11 @@ if __name__ == "__main__":
             Thread(target=start_healthcheck, daemon=True).start()
 
         # Daily jobs
-        schedule.every().day.at("00:30").do(daily_summary)
-        schedule.every().day.at("00:35").do(run_daily_pca_adjustment, ctx)
-        # schedule.every().day.at("15:45").do(exit_all_positions)  # disabled as requested
-        schedule.every().day.at("01:00").do(run_meta_learning_weight_optimizer)
-        schedule.every().day.at("02:00").do(run_bayesian_meta_learning_optimizer)
+        schedule.every().day.at("00:30").do(lambda: Thread(target=daily_summary, daemon=True).start())
+        schedule.every().day.at("00:35").do(lambda: Thread(target=run_daily_pca_adjustment, args=(ctx,), daemon=True).start())
+        # schedule.every().day.at("15:45").do(lambda: Thread(target=exit_all_positions, daemon=True).start())  # disabled as requested
+        schedule.every().day.at("01:00").do(lambda: Thread(target=run_meta_learning_weight_optimizer, daemon=True).start())
+        schedule.every().day.at("02:00").do(lambda: Thread(target=run_bayesian_meta_learning_optimizer, daemon=True).start())
 
         # Load model
         model = load_model()
@@ -2339,9 +2369,9 @@ if __name__ == "__main__":
         # This will prevent the initial burst of NewsAPI calls and 429s
         all_tickers = load_tickers(TICKERS_FILE)
         now_ts = pytime.time()
-        for t in all_tickers:
-            # store (timestamp, 0.0) so initial fetch always returns neutral until cache expires
-            _SENTIMENT_CACHE[t] = (now_ts, 0.0)
+        with sentiment_lock:
+            for t in all_tickers:
+                _SENTIMENT_CACHE[t] = (now_ts, 0.0)
 
         # Initial rebalance (once)
         try:
@@ -2353,8 +2383,8 @@ if __name__ == "__main__":
             logger.warning(f"[REBALANCE] aborted due to error: {e}")
 
         # Recurring jobs
-        schedule.every(1).minutes.do(lambda: run_all_trades(model))
-        schedule.every(6).hours.do(update_signal_weights)
+        schedule.every(1).minutes.do(lambda: schedule_run_all_trades(model))
+        schedule.every(6).hours.do(lambda: Thread(target=update_signal_weights, daemon=True).start())
 
         # Scheduler loop
         while True:
