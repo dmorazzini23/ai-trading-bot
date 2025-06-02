@@ -501,12 +501,12 @@ class DataFetcher:
         return df
 
     def get_historical_minute(
-            self,
-            ctx: 'BotContext',
-            symbol: str,
-            start_date: date,
-            end_date: date
-        ) -> Optional[pd.DataFrame]:
+        self,
+        ctx: 'BotContext',
+        symbol: str,
+        start_date: date,
+        end_date: date
+    ) -> Optional[pd.DataFrame]:
         """
         Fetch all minute bars for `symbol` between start_date and end_date (inclusive),
         by calling Alpaca’s get_bars for each calendar day. Returns a DataFrame
@@ -514,12 +514,12 @@ class DataFetcher:
         """
         all_days: list[pd.DataFrame] = []
         current_day = start_date
-    
+
         while current_day <= end_date:
             # Build ISO strings for that single day:
             day_start_iso = f"{current_day.isoformat()}T00:00:00Z"
             day_end_iso   = f"{current_day.isoformat()}T23:59:59Z"
-    
+
             try:
                 bars_day = ctx.api.get_bars(
                     symbol,
@@ -530,13 +530,13 @@ class DataFetcher:
                 ).df
             except Exception:
                 bars_day = None
-    
+
             if bars_day is not None and not bars_day.empty:
                 # Drop the “symbol” column (if present), rename columns to Title‐case,
                 # drop timezone from index, then keep only OHLCV.
                 if "symbol" in bars_day.columns:
                     bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
-    
+
                 bars_day.index = pd.to_datetime(bars_day.index).tz_localize(None)
                 bars_day = bars_day.rename(columns={
                     "open":   "Open",
@@ -547,17 +547,14 @@ class DataFetcher:
                 })
                 bars_day = bars_day[["Open", "High", "Low", "Close", "Volume"]]
                 all_days.append(bars_day)
-    
-            # Pause briefly before next‐day request to avoid hitting Alpaca rate limits
-            pytime.sleep(0.5)
-    
+
             # Move to next calendar day:
             current_day += timedelta(days=1)
-    
+
         if not all_days:
             # No minute bars found for any day → return None
             return None
-    
+
         # Concatenate, sort by timestamp, drop exact duplicates (just in case)
         combined = pd.concat(all_days, axis=0)
         combined = combined[~combined.index.duplicated(keep="first")]
