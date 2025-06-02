@@ -3,7 +3,7 @@ import joblib
 import pandas as pd
 import numpy as np
 
-from datetime import datetime, date, timedelta   # <-- added `date`
+from datetime import datetime, date, timedelta   # <— added `date` here
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
@@ -71,7 +71,7 @@ MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 def gather_minute_data(ctx, symbols, lookback_days: int = 5):
     """
     For each symbol, grab minute bars from Alpaca day-by-day over the last `lookback_days`.
-    This uses DataFetcher.get_historical_minute(symbol, start_date, end_date) internally.
+    This uses DataFetcher.get_historical_minute(ctx, symbol, start_date, end_date) internally.
     Returns a dict: { symbol: DataFrame_of_minute_bars }.
     """
     raw_store: dict[str, pd.DataFrame] = {}
@@ -80,7 +80,8 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5):
 
     for sym in symbols:
         try:
-            bars = ctx.data_fetcher.get_historical_minute(sym, start_dt, end_dt)
+            # ←— pass ctx as the first argument:
+            bars = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
         except Exception:
             bars = None
 
@@ -88,8 +89,6 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5):
             # no minute bars at all, skip
             continue
 
-        # Optionally: you can further trim to only the last `lookback_days`, 
-        # but get_historical_minute already loops exactly from start_dt→end_dt.
         raw_store[sym] = bars
 
     return raw_store
