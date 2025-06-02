@@ -1,3 +1,5 @@
+# bot.py
+
 import logging
 import os
 import csv
@@ -130,8 +132,15 @@ SIGNAL_WEIGHTS_FILE = abspath("signal_weights.csv")
 EQUITY_FILE         = abspath("last_equity.txt")
 PEAK_EQUITY_FILE    = abspath("peak_equity.txt")
 HALT_FLAG_PATH      = abspath("halt.flag")
-MODEL_PATH          = abspath(os.getenv("MODEL_PATH", "trained_model.pkl"))
+
+# <-- NEW: marker file for daily retraining -->
+RETRAIN_MARKER_FILE = abspath("last_retrain.txt")
+
+# Main meta‐learner path: this is where retrain.py will dump the new sklearn model each day.
+MODEL_PATH          = abspath(os.getenv("MODEL_PATH", "meta_model.pkl"))
+
 REGIME_MODEL_PATH   = abspath("regime_model.pkl")
+# (We keep a separate meta‐model for signal‐weight learning, if you use Bayesian/Ridge, etc.)
 META_MODEL_PATH     = abspath("meta_model.pkl")
 
 # Strategy mode
@@ -2210,6 +2219,48 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
         "adjusted": high_load_syms
     })
 
+try:
+    from retrain import retrain_meta_learner
+except ImportError:
+    retrain_meta_learner = None
+    logger.warning("retrain.py not found or retrain_meta_learner missing. Daily retraining disabled.")
+
+def load_or_retrain_daily(ctx: BotContext) -> Any:
+    """
+    1. Check RETRAIN_MARKER_FILE for last retrain date (YYYY-MM-DD).
+    2. If missing or older than today, call retrain_meta_learner(ctx, symbols) and update marker.
+    3. Then load the (new) model from MODEL_PATH.
+    """
+    today_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    marker = RETRAIN_MARKER_FILE
+
+    need_to_retrain = True
+    if os.path.isfile(marker):
+        with open(marker, "r") as f:
+            last_date = f.read().strip()
+        if last_date == today_str:
+            need_to_retrain = False
+
+    if need_to_retrain:
+        if retrain_meta_learner is None:
+            logger.warning("Daily retraining requested, but retrain_meta_learner is unavailable.")
+        else:
+            symbols = load_tickers(TICKERS_FILE)
+            logger.info(f"▶ Starting meta-learner retraining for {today_str} on {len(symbols)} tickers...")
+            success = retrain_meta_learner(ctx, symbols)
+            if success:
+                try:
+                    with open(marker, "w") as f:
+                        f.write(today_str)
+                except Exception as e:
+                    logger.warning(f"Failed to write retrain marker file: {e}")
+            else:
+                logger.warning(f"Retraining failed; continuing with existing model.")
+
+    # Finally, load whichever model is at MODEL_PATH
+    model = load_model(MODEL_PATH)
+    return model
+
 # ─── M. MAIN LOOP & SCHEDULER ─────────────────────────────────────────────────
 app = Flask(__name__)
 
@@ -2390,8 +2441,7 @@ if __name__ == "__main__":
         schedule.every().day.at("01:00").do(lambda: Thread(target=run_meta_learning_weight_optimizer, daemon=True).start())
         schedule.every().day.at("02:00").do(lambda: Thread(target=run_bayesian_meta_learning_optimizer, daemon=True).start())
 
-        # Load model
-        model = load_model()
+        model = load_or_retrain_daily(ctx)
         logger.info("BOT_LAUNCHED")
 
         # ─── WARM-CACHE SENTIMENT FOR ALL TICKERS ─────────────────────────────────────
