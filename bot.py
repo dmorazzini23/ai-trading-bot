@@ -480,7 +480,7 @@ class DataFetcher:
                 # If empty, fall back to Finnhub 1-min
                 df_fh = fh.fetch(symbol, period="5d", interval="1m")
                 if df_fh is not None and not df_fh.empty:
-                    df = df_fh.rename(columns=lambda c: c if c in ["Open","High","Low","Close","Volume"] else c)
+                    df = df_fh.rename(columns=lambda c: c if c in ["Open", "High", "Low", "Close", "Volume"] else c)
                     logger.warning(f"[DataFetcher] fallback to Finnhub 1-min for {symbol}")
         except Exception as e:
             logger.warning(f"[DataFetcher] Alpaca minute fetch failed for {symbol}: {e}")
@@ -488,7 +488,7 @@ class DataFetcher:
             try:
                 df_fh = fh.fetch(symbol, period="5d", interval="1m")
                 if df_fh is not None and not df_fh.empty:
-                    df = df_fh.rename(columns=lambda c: c if c in ["Open","High","Low","Close","Volume"] else c)
+                    df = df_fh.rename(columns=lambda c: c if c in ["Open", "High", "Low", "Close", "Volume"] else c)
                     logger.warning(f"[DataFetcher] fallback to Finnhub 1-min for {symbol}")
                 else:
                     df = None
