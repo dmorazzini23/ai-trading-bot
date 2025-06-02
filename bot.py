@@ -59,8 +59,8 @@ from ratelimit import limits, sleep_and_retry
 try:
     import torch
     from transformers import AutoTokenizer, AutoModelForSequenceClassification
-    _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("ProsusAI/finbert-sentiment")
-    _FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert-sentiment")
+    _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
+    _FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained("yiyanghkust/finbert-tone")
     _FINBERT_MODEL.eval()
     _HUGGINGFACE_AVAILABLE = True
     logging.info("FinBERT loaded successfully")
