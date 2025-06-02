@@ -507,63 +507,63 @@ class DataFetcher:
         start_date: date,
         end_date: date
     ) -> Optional[pd.DataFrame]:
-    """
-    Fetch all minute bars for `symbol` between start_date and end_date (inclusive),
-    by calling Alpaca’s get_bars for each calendar day. Returns a DataFrame
-    indexed by naive Timestamps, or None if no data was returned at all.
-    """
-    all_days: list[pd.DataFrame] = []
-    current_day = start_date
+        """
+        Fetch all minute bars for `symbol` between start_date and end_date (inclusive),
+        by calling Alpaca’s get_bars for each calendar day. Returns a DataFrame
+        indexed by naive Timestamps, or None if no data was returned at all.
+        """
+        all_days: list[pd.DataFrame] = []
+        current_day = start_date
 
-    while current_day <= end_date:
-        # Build ISO strings for that single day:
-        day_start_iso = f"{current_day.isoformat()}T00:00:00Z"
-        day_end_iso   = f"{current_day.isoformat()}T23:59:59Z"
+        while current_day <= end_date:
+            # Build ISO strings for that single day:
+            day_start_iso = f"{current_day.isoformat()}T00:00:00Z"
+            day_end_iso   = f"{current_day.isoformat()}T23:59:59Z"
 
-        try:
-            bars_day = ctx.api.get_bars(
-                symbol,
-                TimeFrame.Minute,
-                start=day_start_iso,
-                end=day_end_iso,
-                limit=10000
-            ).df
-        except Exception:
-            bars_day = None
+            try:
+                bars_day = ctx.api.get_bars(
+                    symbol,
+                    TimeFrame.Minute,
+                    start=day_start_iso,
+                    end=day_end_iso,
+                    limit=10000
+                ).df
+            except Exception:
+                bars_day = None
 
-        if bars_day is not None and not bars_day.empty:
-            # Drop the “symbol” column (if present), rename columns to Title‐case,
-            # drop timezone from index, then keep only OHLCV.
-            if "symbol" in bars_day.columns:
-                bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
+            if bars_day is not None and not bars_day.empty:
+                # Drop the “symbol” column (if present), rename columns to Title-case,
+                # drop timezone from index, then keep only OHLCV.
+                if "symbol" in bars_day.columns:
+                    bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
 
-            bars_day.index = pd.to_datetime(bars_day.index).tz_localize(None)
-            bars_day = bars_day.rename(columns={
-                "open":   "Open",
-                "high":   "High",
-                "low":    "Low",
-                "close":  "Close",
-                "volume": "Volume",
-            })
-            bars_day = bars_day[["Open", "High", "Low", "Close", "Volume"]]
-            all_days.append(bars_day)
+                bars_day.index = pd.to_datetime(bars_day.index).tz_localize(None)
+                bars_day = bars_day.rename(columns={
+                    "open":   "Open",
+                    "high":   "High",
+                    "low":    "Low",
+                    "close":  "Close",
+                    "volume": "Volume",
+                })
+                bars_day = bars_day[["Open", "High", "Low", "Close", "Volume"]]
+                all_days.append(bars_day)
 
-        # ⚠️ Brief pause so we don’t hit Alpaca’s rate limit too hard:
-        import time
-        time.sleep(0.1)
+            # ⚠️ Brief pause so we don’t hit Alpaca’s rate limit too hard:
+            import time
+            time.sleep(0.1)
 
-        # Move to next calendar day:
-        current_day += timedelta(days=1)
+            # Move to next calendar day:
+            current_day += timedelta(days=1)
 
-    if not all_days:
-        # No minute bars found for any day → return None
-        return None
+        if not all_days:
+            # No minute bars found for any day → return None
+            return None
 
-    # Concatenate, sort by timestamp, drop exact duplicates (just in case)
-    combined = pd.concat(all_days, axis=0)
-    combined = combined[~combined.index.duplicated(keep="first")]
-    combined = combined.sort_index()
-    return combined
+        # Concatenate, sort by timestamp, drop exact duplicates (just in case)
+        combined = pd.concat(all_days, axis=0)
+        combined = combined[~combined.index.duplicated(keep="first")]
+        combined = combined.sort_index()
+        return combined
         
 # ─── E. TRADE LOGGER ───────────────────────────────────────────────────────────
 class TradeLogger:
