@@ -1690,44 +1690,41 @@ def trade_logic(
     """
     Core per-symbol logic: fetch data, compute features, evaluate signals, enter/exit orders.
     """
-    # ─── 1) Indicate which symbol we’re about to process ───────────────────
-    logger.info("PROCESSING_SYMBOL", extra={"symbol": symbol})
+    logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
 
     raw_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw_df is None or raw_df.empty:
-        logger.info("SKIP_NO_RAW_DATA", extra={"symbol": symbol})
+        logger.info(f"SKIP_NO_RAW_DATA | symbol={symbol}")
         return
 
     feat_df = prepare_indicators(raw_df, freq="intraday")
     if feat_df.empty:
-        logger.debug("SKIP_INSUFFICIENT_FEATURES", extra={"symbol": symbol})
+        logger.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
         return
 
     if hasattr(model, "feature_names_in_"):
         feature_names = list(model.feature_names_in_)
     else:
-        feature_names = ["rsi", "macd", "atr", "vwap", "macds", "ichimoku_conv", "ichimoku_base", "stochrsi"]
+        feature_names = ["rsi", "macd", "atr", "vwap", "macds",
+                         "ichimoku_conv", "ichimoku_base", "stochrsi"]
 
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
-        logger.info("SKIP_MISSING_FEATURES", extra={"symbol": symbol, "missing": missing})
+        logger.info(f"SKIP_MISSING_FEATURES | symbol={symbol}  missing={missing}")
         return
 
-    # ─── 2) Evaluate signals, then immediately log final_score & confidence ───
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, feat_df, symbol, model)
     comp_list = [
         {"signal": lab, "flag": s, "weight": w}
         for s, w, lab in ctx.signal_manager.last_components
     ]
-    logger.debug("COMPONENTS", extra={"symbol": symbol, "components": comp_list})
+    logger.debug(f"COMPONENTS | symbol={symbol}  components={comp_list!r}")
 
     final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
-    # ←← Extra log: show raw final_score & confidence for debugging
-    logger.info("SIGNAL_RESULT", extra={
-        "symbol": symbol,
-        "final_score": final_score,
-        "confidence": conf
-    })
+    # ←← Log actual numeric values in the message itself:
+    logger.info(
+        f"SIGNAL_RESULT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
+    )
 
     try:
         pos = ctx.api.get_position(symbol)
@@ -1735,14 +1732,12 @@ def trade_logic(
     except Exception:
         current_qty = 0
 
-    # ─── 3) Exit: bearish reversal ───────────────────────────────────────────
+    # Exit: bearish reversal
     if final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
         price = feat_df["Close"].iloc[-1]
-        logger.info("SIGNAL_REVERSAL_EXIT", extra={
-            "symbol": symbol,
-            "final_score": final_score,
-            "confidence": conf
-        })
+        logger.info(
+            f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
+        )
         submit_order(ctx, symbol, current_qty, "sell")
         ctx.trade_logger.log_exit(symbol, price)
         with targets_lock:
@@ -1750,31 +1745,26 @@ def trade_logic(
             ctx.take_profit_targets.pop(symbol, None)
         return
 
-    # ─── 4) Entry: bullish ───────────────────────────────────────────────────
+    # Entry: bullish
     if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
         current_price = feat_df["Close"].iloc[-1]
         target_weight = ctx.portfolio_weights.get(symbol, 0.0)
         raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
 
         if raw_qty <= 0:
-            logger.debug("SKIP_NO_QTY", extra={"symbol": symbol})
+            logger.debug(f"SKIP_NO_QTY | symbol={symbol}")
             return
 
-        logger.info("SIGNAL_BUY", extra={
-            "symbol": symbol,
-            "final_score": final_score,
-            "confidence": conf,
-            "qty": raw_qty
-        })
+        logger.info(
+            f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  "
+            f"confidence={conf:.4f}  qty={raw_qty}"
+        )
 
         order = submit_order(ctx, symbol, raw_qty, "buy")
         if order is None:
-            logger.debug("TRADE_LOGIC_NO_ORDER", extra={"symbol": symbol})
+            logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
         else:
-            logger.debug("TRADE_LOGIC_ORDER_PLACED", extra={
-                "symbol": symbol,
-                "order_id": order.id
-            })
+            logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
             ctx.trade_logger.log_entry(symbol, current_price, raw_qty, "buy", strat)
 
             now_pac = datetime.now(PACIFIC)
@@ -1789,11 +1779,8 @@ def trade_logic(
             stop, take = scaled_atr_stop(
                 entry_price=current_price,
                 atr=feat_df["atr"].iloc[-1],
-                now=now_pac,
-                market_open=mo,
-                market_close=mc,
-                max_factor=tp_factor,
-                min_factor=0.5
+                now=now_pac, market_open=mo, market_close=mc,
+                max_factor=tp_factor, min_factor=0.5
             )
             with targets_lock:
                 ctx.stop_targets[symbol] = stop
@@ -1801,19 +1788,16 @@ def trade_logic(
 
         return
 
-    # ─── 5) If holding, check for stops/take/trailing ───────────────────────
+    # If holding, check for stops/take/trailing
     if current_qty > 0:
         price = feat_df["Close"].iloc[-1]
         atr   = feat_df["atr"].iloc[-1]
         should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
-
         if should_exit_flag and exit_qty > 0:
-            logger.info("EXIT_SIGNAL", extra={
-                "symbol": symbol,
-                "reason": reason,
-                "exit_qty": exit_qty,
-                "price": price
-            })
+            logger.info(
+                f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  "
+                f"exit_qty={exit_qty}  price={price:.4f}"
+            )
             submit_order(ctx, symbol, exit_qty, "sell")
             ctx.trade_logger.log_exit(symbol, price)
             try:
@@ -1824,15 +1808,13 @@ def trade_logic(
                         ctx.take_profit_targets.pop(symbol, None)
             except Exception:
                 pass
-
         return
 
-    # ─── 6) Else hold (no action) ───────────────────────────────────────────
-    logger.info("SKIP_LOW_OR_NO_SIGNAL", extra={
-        "symbol": symbol,
-        "final_score": final_score,
-        "confidence": conf
-    })
+    # Else hold / no action
+    logger.info(
+        f"SKIP_LOW_OR_NO_SIGNAL | symbol={symbol}  "
+        f"final_score={final_score:.4f}  confidence={conf:.4f}"
+    )
     return
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
