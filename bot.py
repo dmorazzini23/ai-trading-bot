@@ -1690,6 +1690,9 @@ def trade_logic(
     """
     Core per-symbol logic: fetch data, compute features, evaluate signals, enter/exit orders.
     """
+    # Log that we’re starting to process this symbol
+    logger.info("PROCESSING_SYMBOL", extra={"symbol": symbol})
+
     raw_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw_df is None or raw_df.empty:
         logger.info("SKIP_NO_RAW_DATA", extra={"symbol": symbol})
@@ -1714,6 +1717,7 @@ def trade_logic(
     logger.debug("COMPONENTS", extra={"symbol": symbol, "components": comp_list})
     final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
     logger.debug("FINAL_SCORE", extra={"symbol": symbol, "final_score": final_score})
+    logger.info("SIGNAL_EVALUATED", extra={"symbol": symbol, "final_score": final_score, "conf": conf})
 
     try:
         pos = ctx.api.get_position(symbol)
@@ -1724,7 +1728,7 @@ def trade_logic(
     # Exit: bearish reversal
     if final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
         price = feat_df["Close"].iloc[-1]
-        logger.info("SIGNAL_REVERSAL_EXIT", extra={"symbol": symbol, "final_score": final_score})
+        logger.info("SIGNAL_REVERSAL_EXIT", extra={"symbol": symbol, "final_score": final_score, "conf": conf})
         submit_order(ctx, symbol, current_qty, "sell")
         ctx.trade_logger.log_exit(symbol, price)
         with targets_lock:
@@ -1740,7 +1744,7 @@ def trade_logic(
         if raw_qty <= 0:
             logger.debug("SKIP_NO_QTY", extra={"symbol": symbol})
             return
-        logger.info("SIGNAL_BUY", extra={"symbol": symbol, "final_score": final_score, "qty": raw_qty})
+        logger.info("SIGNAL_BUY", extra={"symbol": symbol, "final_score": final_score, "conf": conf, "qty": raw_qty})
         order = submit_order(ctx, symbol, raw_qty, "buy")
         if order is None:
             logger.debug("TRADE_LOGIC_NO_ORDER", extra={"symbol": symbol})
@@ -1783,9 +1787,12 @@ def trade_logic(
                         ctx.take_profit_targets.pop(symbol, None)
             except Exception:
                 pass
+        else:
+            logger.info("HOLD_POSITION", extra={"symbol": symbol, "current_qty": current_qty, "final_score": final_score})
         return
 
-    # Else hold
+    # Else hold / no open position and no buy signal
+    logger.info("SKIP_LOW_OR_NO_SIGNAL", extra={"symbol": symbol, "final_score": final_score, "conf": conf})
     return
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
