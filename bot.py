@@ -79,7 +79,6 @@ warnings.filterwarnings(
 )
 
 print("=== bot.py STARTING up ===")
-logger.info("=== bot.py STARTING up ===")
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 load_dotenv()
@@ -108,6 +107,7 @@ file_handler.setLevel(logging.INFO)
 logging.getLogger().addHandler(file_handler)
 
 logger = logging.getLogger(__name__)
+logger.info("=== bot.py STARTING up ===")
 logging.getLogger("alpaca_trade_api").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("requests").setLevel(logging.WARNING)
