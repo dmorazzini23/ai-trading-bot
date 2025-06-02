@@ -1717,6 +1717,7 @@ def trade_logic(
     logger.debug("COMPONENTS", extra={"symbol": symbol, "components": comp_list})
     final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
     logger.debug("FINAL_SCORE", extra={"symbol": symbol, "final_score": final_score})
+    # New log: record the final_score and confidence
     logger.info("SIGNAL_EVALUATED", extra={"symbol": symbol, "final_score": final_score, "conf": conf})
 
     try:
@@ -1788,6 +1789,7 @@ def trade_logic(
             except Exception:
                 pass
         else:
+            # New log: still holding, no exit triggered
             logger.info("HOLD_POSITION", extra={"symbol": symbol, "current_qty": current_qty, "final_score": final_score})
         return
 
