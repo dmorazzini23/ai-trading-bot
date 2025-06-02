@@ -88,23 +88,21 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# ─── FileHandler so that we write logs into /var/log/ai-trading-bot.log ─────────────────
-import pathlib
-
-LOG_PATH = "/var/log/ai-trading-bot.log"
-# Ensure the directory exists
-pathlib.Path(LOG_PATH).parent.mkdir(parents=True, exist_ok=True)
-
-file_handler = logging.FileHandler(LOG_PATH)
-file_handler.setLevel(logging.INFO)
-file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-logging.getLogger().addHandler(file_handler)
-
 # Ensure we also send everything to stderr (so systemd/journalctl will pick it up)
 stream_handler = logging.StreamHandler()
-stream_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+stream_handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+)
 stream_handler.setLevel(logging.INFO)
 logging.getLogger().addHandler(stream_handler)
+
+# Add this block so all logs also go into /var/log/ai-trading-bot.log
+file_handler = logging.FileHandler("/var/log/ai-trading-bot.log")
+file_handler.setFormatter(
+    logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+)
+file_handler.setLevel(logging.INFO)
+logging.getLogger().addHandler(file_handler)
 
 logger = logging.getLogger(__name__)
 logging.getLogger("alpaca_trade_api").setLevel(logging.WARNING)
