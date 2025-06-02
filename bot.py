@@ -85,7 +85,9 @@ load_dotenv()
 RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
 
 # Logging: set root logger to INFO, lower noisy libraries
+default_log_path = "/var/log/ai-trading-bot.log"
 logging.basicConfig(
+    filename=default_log_path,
     format="%(asctime)s %(levelname)s %(message)s",
     level=logging.INFO
 )
@@ -97,14 +99,6 @@ stream_handler.setFormatter(
 )
 stream_handler.setLevel(logging.INFO)
 logging.getLogger().addHandler(stream_handler)
-
-# Add this block so all logs also go into /var/log/ai-trading-bot.log
-file_handler = logging.FileHandler("/var/log/ai-trading-bot.log")
-file_handler.setFormatter(
-    logging.Formatter("%(asctime)s %(levelname)s %(message)s")
-)
-file_handler.setLevel(logging.INFO)
-logging.getLogger().addHandler(file_handler)
 
 logger = logging.getLogger(__name__)
 logger.info("=== bot.py STARTING up ===")
