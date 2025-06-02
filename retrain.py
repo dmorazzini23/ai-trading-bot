@@ -68,37 +68,29 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
 
-def gather_minute_data(ctx, symbols, lookback_days=5):
+def gather_minute_data(ctx, symbols, lookback_days: int = 5):
     """
-    1) Try to fetch up to the last 5 calendar days of minute bars via get_minute_df().
-    2) If that comes back empty for a given symbol, do a single-day Alpaca fallback
-       (yesterday’s date) via get_historical_minute().
-    We then trim to `lookback_days` and return whatever is non-empty.
+    For each symbol, grab minute bars from Alpaca day-by-day over the last `lookback_days`.
+    This uses DataFetcher.get_historical_minute(symbol, start_date, end_date) internally.
+    Returns a dict: { symbol: DataFrame_of_minute_bars }.
     """
     raw_store: dict[str, pd.DataFrame] = {}
-    cutoff_ts = pd.Timestamp.now() - pd.Timedelta(days=lookback_days)
+    end_dt = date.today()
+    start_dt = end_dt - timedelta(days=lookback_days)
 
     for sym in symbols:
-        # ── PRIMARY: pull up to 5 days in one shot ──────────────────────────
-        raw = ctx.data_fetcher.get_minute_df(ctx, sym)
-        if raw is not None and not raw.empty:
-            # Keep only the last `lookback_days` worth of rows:
-            recent = raw.loc[raw.index >= cutoff_ts]
-            if not recent.empty:
-                raw_store[sym] = recent
-                continue  # next symbol
+        try:
+            bars = ctx.data_fetcher.get_historical_minute(sym, start_dt, end_dt)
+        except Exception:
+            bars = None
 
-        # ── FALLBACK: try exactly “yesterday” via get_historical_minute(…) ──
-        yesterday = (date.today() - timedelta(days=1))
-        bars1d = ctx.data_fetcher.get_historical_minute(sym, yesterday, yesterday)
-        if bars1d is None or bars1d.empty:
-            # no minute bars at all
+        if bars is None or bars.empty:
+            # no minute bars at all, skip
             continue
 
-        # Keep only rows within lookback_days (this is just 1 day, so OK)
-        bars1d = bars1d.loc[bars1d.index >= cutoff_ts]
-        if not bars1d.empty:
-            raw_store[sym] = bars1d
+        # Optionally: you can further trim to only the last `lookback_days`, 
+        # but get_historical_minute already loops exactly from start_dt→end_dt.
+        raw_store[sym] = bars
 
     return raw_store
 
