@@ -86,6 +86,12 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     level=logging.INFO
 )
+# Ensure we also send everything to stderr (so systemd/journalctl will pick it up)
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+stream_handler.setLevel(logging.INFO)
+logging.getLogger().addHandler(stream_handler)
+
 logger = logging.getLogger(__name__)
 logging.getLogger("alpaca_trade_api").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -1646,7 +1652,7 @@ def _safe_trade(
         logger.warning(f"[trade_logic] retries exhausted for {symbol}: {e}", extra={"symbol": symbol})
     except APIError as e:
         msg = str(e).lower()
-        if "insufficient buying power" in msg or "potential wash trade" in msg:
+        if "insufficient buying power" in msg or "otential wash trade" in msg:
             logger.warning(f"[trade_logic] skipping {symbol} due to APIError: {e}", extra={"symbol": symbol})
         else:
             logger.exception(f"[trade_logic] APIError for {symbol}: {e}")
