@@ -1037,7 +1037,7 @@ def is_within_entry_window(ctx: BotContext) -> bool:
         return False
     # Also check streak kill-switch
     if _STREAK_HALT_UNTIL and datetime.now(PACIFIC) < _STREAK_HALT_UNTIL:
-        logger.info("SKIP_STREAK_HALT", extra={"until": _STREAK_HALT_UNTIL}")
+        logger.info("SKIP_STREAK_HALT", extra={"until": _STREAK_HALT_UNTIL})
         return False
     return True
 
