@@ -502,6 +502,7 @@ class DataFetcher:
 
     def get_historical_minute(
         self,
+        ctx: 'BotContext',
         symbol: str,
         start_date: date,
         end_date: date
@@ -515,17 +516,18 @@ class DataFetcher:
             start_iso = f"{start_date.isoformat()}T00:00:00Z"
             end_iso   = f"{end_date.isoformat()}T23:59:59Z"
 
-            bars = self.api.get_bars(
+            bars = ctx.api.get_bars(
                 symbol,
                 TimeFrame.Minute,
                 start=start_iso,
                 end=end_iso,
-                limit=100000  # enough to cover ~30 trading days of minute bars
+                limit=100_000  # enough to cover ~30 trading days of minute bars
             ).df
+
             if bars is None or bars.empty:
                 return None
 
-            # Convert index to naive (drop timezone) and rename columns
+            # Convert index to naive (drop timezone) and rename columns:
             bars.index = pd.to_datetime(bars.index).tz_localize(None)
             bars = bars.rename(columns={
                 "open":   "Open",
@@ -535,6 +537,7 @@ class DataFetcher:
                 "volume": "Volume",
             })
             return bars[["Open", "High", "Low", "Close", "Volume"]]
+
         except Exception:
             return None
 
