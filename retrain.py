@@ -3,7 +3,7 @@ import joblib
 import pandas as pd
 import numpy as np
 
-from datetime import datetime, date, timedelta   # ← added `date` here
+from datetime import datetime, date, timedelta   # ← we still need `date` here
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
@@ -51,7 +51,10 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df.ffill(inplace=True)
     df.bfill(inplace=True)
 
-    required = ["vwap", "rsi", "atr", "macd", "macds", "ichimoku_conv", "ichimoku_base", "stochrsi"]
+    required = [
+        "vwap", "rsi", "atr", "macd", "macds",
+        "ichimoku_conv", "ichimoku_base", "stochrsi"
+    ]
     if freq == "daily":
         df["sma_50"] = ta.sma(df["Close"], length=50)
         df["sma_200"] = ta.sma(df["Close"], length=200)
@@ -70,8 +73,8 @@ MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
 def gather_minute_data(ctx, symbols, lookback_days: int = 10):
     """
-    For each symbol, grab minute bars from Alpaca day-by-day over the last `lookback_days`.
-    This uses DataFetcher.get_historical_minute(ctx, symbol, start_date, end_date) internally.
+    For each symbol, try to get today’s intraday minute bars first (via get_minute_df).
+    If that yields no data, fall back on get_historical_minute (day-by-day).
     Returns a dict: { symbol: DataFrame_of_minute_bars }.
     """
     raw_store: dict[str, pd.DataFrame] = {}
@@ -80,13 +83,21 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 10):
 
     for sym in symbols:
         bars = None
+
+        # 1) Try to grab whatever intraday minutes are already cached:
         try:
-            bars = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
+            bars = ctx.data_fetcher.get_minute_df(ctx, sym)
         except Exception:
             bars = None
 
+        # 2) If nothing from get_minute_df, fetch historical day‐by‐day:
         if bars is None or bars.empty:
-            # No minute bars at all, log it
+            try:
+                bars = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
+            except Exception:
+                bars = None
+
+        if bars is None or bars.empty:
             print(f"[gather_minute_data] {sym} → no minute bars from {start_dt} to {end_dt}")
             continue
 
@@ -98,8 +109,7 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 10):
 def build_feature_label_df(raw_store, Δ_minutes=30, threshold_pct=0.002):
     """
     Build a single DataFrame of (feature_vector, label) for each minute‐slice.
-    Label = 1 if price change over next Δ_minutes ≥ threshold_pct,
-            0 otherwise.
+    Label = 1 if price change over next Δ_minutes ≥ threshold_pct, else 0.
     """
     rows = []
     for sym, raw in raw_store.items():
@@ -125,9 +135,10 @@ def build_feature_label_df(raw_store, Δ_minutes=30, threshold_pct=0.002):
 
 def retrain_meta_learner(ctx, symbols, lookback_days=10, Δ_minutes=30, threshold_pct=0.002):
     """
-    1. Gather minute data for each symbol over the last `lookback_days` (via get_minute_df).
-    2. Build features & labels using a Δ‐minute horizon.
-    3. Train a RandomForestClassifier on (X, y).
+    1. Gather minute data for each symbol over the last `lookback_days`.
+       (tries get_minute_df first, then get_historical_minute)
+    2. Build features & labels with a Δ‐minute horizon.
+    3. Train RandomForestClassifier on (X, y).
     4. Save the new model to MODEL_PATH.
     Returns True if training succeeded, False otherwise.
     """
@@ -171,3 +182,4 @@ def retrain_meta_learner(ctx, symbols, lookback_days=10, Δ_minutes=30, threshol
     joblib.dump(clf, MODEL_PATH)
     print(f"  ✔ Saved new meta‐learner to {MODEL_PATH}")
     return True
+
