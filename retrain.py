@@ -3,7 +3,7 @@ import joblib
 import pandas as pd
 import numpy as np
 
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, time, timedelta
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
@@ -134,11 +134,25 @@ def retrain_meta_learner(
     ctx, symbols, lookback_days: int = 5, Δ_minutes: int = 30, threshold_pct: float = 0.002
 ) -> bool:
     """
-    1) Call gather_minute_data()—prints per‐symbol counts.
-    2) If at least one symbol has ≥ Δ_minutes+1 bars, build features & train.
-    3) Otherwise, skip retrain with a clear message.
+    1) Skip retrain on weekends or outside market hours.
+    2) Call gather_minute_data()—prints per‐symbol counts.
+    3) If at least one symbol has ≥ Δ_minutes+1 bars, build features & train.
+    4) Otherwise, skip retrain with a clear message.
     """
-    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ▶ Starting meta‐learner retraining…")
+    now = datetime.now()
+    # Skip on weekends
+    if now.weekday() >= 5:
+        print(f"[retrain_meta_learner] Weekend detected (weekday={now.weekday()}). Skipping retrain.")
+        return False
+
+    # Skip outside market hours (9:30 AM–4:00 PM)
+    market_open  = time(9, 30)
+    market_close = time(16, 0)
+    if not (market_open <= now.time() <= market_close):
+        print(f"[retrain_meta_learner] Outside market hours ({now.time().strftime('%H:%M')}). Skipping retrain.")
+        return False
+
+    print(f"[{now:%Y-%m-%d %H:%M:%S}] ▶ Starting meta‐learner retraining…")
     raw_store = gather_minute_data(ctx, symbols, lookback_days=lookback_days)
     if not raw_store:
         print("  ⚠️ No symbol returned any minute bars → skipping retrain.")
@@ -176,4 +190,5 @@ def retrain_meta_learner(
     joblib.dump(clf, MODEL_PATH)
     print(f"  ✔ Saved new meta‐learner to {MODEL_PATH}")
     return True
+
 
