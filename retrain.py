@@ -67,53 +67,50 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     return df
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Read the same MODEL_PATH from the environment (just like bot.py does):
 MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
 
-def gather_minute_data(ctx, symbols, lookback_days: int = 10):
+def gather_minute_data(ctx, symbols, lookback_days: int = 5):
     """
-    1) Try to grab minute‐cache via get_minute_df(ctx, sym).
-    2) If that is empty, fetch day‐by‐day via get_historical_minute(ctx, sym,...).
-    Prints one line per symbol so you know exactly what succeeded/failed.
+    For each symbol, try:
+      1) get_minute_df(ctx, sym)  (cached intraday)
+      2) if empty, get_historical_minute(ctx, sym, start→end)
+    Print exactly how many rows for each symbol.
     """
     raw_store: dict[str, pd.DataFrame] = {}
     end_dt = date.today()
     start_dt = end_dt - timedelta(days=lookback_days)
-    any_symbol_had_data = False
 
     for sym in symbols:
         bars = None
-
-        # 1) first attempt: get whatever intraday minutes are already cached
         try:
+            # 1) Attempt the cached intraday call
             bars = ctx.data_fetcher.get_minute_df(ctx, sym)
         except Exception:
             bars = None
 
-        # 2) if no intraday cache, fetch day-by-day historical
         if bars is None or bars.empty:
             try:
+                # 2) Fallback to day‐by‐day historical minute bars
                 bars = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
             except Exception:
                 bars = None
 
         if bars is None or bars.empty:
-            print(f"[gather_minute_data] → {sym} returned NO minute rows ({start_dt}→{end_dt})")
+            print(f"[gather_minute_data] → {sym} returned NO minute bars ({start_dt}→{end_dt})")
             continue
 
-        # At this point we have at least some rows for 'sym'
         print(f"[gather_minute_data] → {sym} fetched {len(bars)} rows of minute data")
         raw_store[sym] = bars
-        any_symbol_had_data = True
 
-    # If absolutely no symbol returned bars, raw_store will be empty
     return raw_store
 
 
 def build_feature_label_df(raw_store, Δ_minutes=30, threshold_pct=0.002):
     """
-    Build a single DataFrame of (feature_vector, label) for each minute-slice.
-    Label = 1 if price change over next Δ_minutes ≥ threshold_pct, else 0.
+    Build a single DataFrame of (feature_vector, label) for each minute‐slice.
+    Label = 1 if price change over next Δ_minutes ≥ threshold_pct, 0 otherwise.
     """
     rows = []
     for sym, raw in raw_store.items():
@@ -137,144 +134,49 @@ def build_feature_label_df(raw_store, Δ_minutes=30, threshold_pct=0.002):
     return df_all
 
 
-def retrain_meta_learner(ctx, symbols, lookback_days=10, Δ_minutes=30, threshold_pct=0.002):
+def retrain_meta_learner(ctx, symbols, lookback_days=5, Δ_minutes=30, threshold_pct=0.002):
     """
-    1. Gather minute data for each symbol over the last `lookback_days`.
-       - tries get_minute_df() first, then get_historical_minute()
-    2. If ANY symbol did produce minute rows, build features/labels and train.
-    3. If ZERO symbols produced minute rows, fallback to downloading ONE‐DAY Daily-OHLC and train on daily features.
-    4. Save new model to MODEL_PATH.
-    Returns True if training succeeded; False otherwise.
+    1) Gather minute data (cached first, then historical).
+    2) If any symbol delivered rows, build features + train intraday model.
+    3) Otherwise, immediately return False (no daily fallback).
     """
-    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ▶ Starting meta-learner retraining…")
+    print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ▶ Starting meta‐learner retraining…")
 
     raw_store = gather_minute_data(ctx, symbols, lookback_days=lookback_days)
-    if raw_store:
-        # Build minute‐based features/labels
-        df_all = build_feature_label_df(raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct)
-        if df_all.empty:
-            print("  ⚠️ Feature/label DataFrame (intraday) is empty; skipping minute-train.")
-        else:
-            X = df_all.drop(columns=["label"])
-            y = df_all["label"]
-            X_train, X_val, y_train, y_val = train_test_split(
-                X, y, test_size=0.2, random_state=42, stratify=y
-            )
-            clf = RandomForestClassifier(
-                n_estimators=200,
-                max_depth=6,
-                class_weight="balanced",
-                random_state=42,
-                n_jobs=-1
-            )
-            clf.fit(X_train, y_train)
-            try:
-                from sklearn.metrics import roc_auc_score
-                val_probs = clf.predict_proba(X_val)[:, 1]
-                auc = roc_auc_score(y_val, val_probs)
-                print(f"  ✔ Validation AUC (intraday) = {auc:.4f}")
-            except Exception:
-                pass
-
-            joblib.dump(clf, MODEL_PATH)
-            print(f"  ✔ Saved new intraday meta-learner to {MODEL_PATH}")
-            return True
-
-        # If we reach here, intraday features/labels existed but df_all was empty
-        # fall through below to daily fallback
-
-
-    # If raw_store was empty OR intraday df_all was empty, do a daily fallback:
-    print("  ‼️ No valid intraday training data found. Falling back to a 1-day daily dataset…")
-    # We will grab “yesterday’s” daily OHLC for each symbol,
-    # compute the same indicators at daily frequency, and train.
-
-    # 1) Build a tiny DataFrame for each symbol’s single daily OHLC:
-    daily_rows = []
-    from_date = date.today() - timedelta(days=1)
-    to_date   = date.today() - timedelta(days=1)
-    for sym in symbols:
-        try:
-            df_daily = ctx.data_fetcher.get_daily_df(ctx, sym)
-        except Exception:
-            df_daily = None
-
-        if df_daily is None or df_daily.empty or from_date not in df_daily.index.date:
-            print(f"[daily_fallback] → {sym} missing daily row for {from_date}")
-            continue
-
-        # Extract just that one day’s OHLCV
-        one_day_row = df_daily.loc[df_daily.index.date == from_date].iloc[0]
-        daily_rows.append({
-            "Open": one_day_row["open"],
-            "High": one_day_row["high"],
-            "Low":  one_day_row["low"],
-            "Close": one_day_row["close"],
-            "Volume": one_day_row["volume"],
-            "symbol": sym
-        })
-
-    if not daily_rows:
-        print("  ❌ Even daily fallback failed; skipping retrain entirely.")
+    if not raw_store:
+        print("  ⚠️ No minute data fetched; skipping retrain (no daily fallback).")
         return False
 
-    # Build a single DataFrame (each row is one symbol’s daily OHLC)
-    df_daily_all = pd.DataFrame(daily_rows)
-    # Compute indicators on a 1-row DataFrame by re-indexing as if it were a 1-day series
-    # (we’ll just treat each symbol independently for training.)
-    feature_rows = []
-    for row in daily_rows:
-        temp_df = pd.DataFrame([row], index=[from_date])
-        temp_feat = prepare_indicators(
-            temp_df.rename(columns={
-                "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume":"volume"
-            }),
-            freq="daily"
-        )
-        if temp_feat.empty:
-            continue
-        feat_dict = temp_feat.iloc[0].to_dict()
-        feat_dict["label"] = 0  # label=0 (no future minute data to compute a “future Δ”)
-        feature_rows.append(feat_dict)
-
-    if not feature_rows:
-        print("  ❌ Daily-fallback indicators empty; skipping retrain entirely.")
+    df_all = build_feature_label_df(raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct)
+    if df_all.empty:
+        print("  ⚠️ Feature/label DataFrame is empty; skipping retrain.")
         return False
 
-    df_features = pd.DataFrame(feature_rows).dropna()
-    X = df_features.drop(columns=["label"])
-    y = df_features["label"].astype(int)
+    X = df_all.drop(columns=["label"])
+    y = df_all["label"]
 
-    if X.empty:
-        print("  ❌ Daily fallback X is empty; skipping retrain entirely.")
-        return False
-
-    # Just train/test‐split on these few rows:
     X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2 if len(y) > 1 else 0.5,
-        random_state=42, stratify=y if len(set(y)) > 1 else None
+        X, y, test_size=0.2, random_state=42, stratify=y
     )
+
     clf = RandomForestClassifier(
-        n_estimators=100,
-        max_depth=4,
+        n_estimators=200,
+        max_depth=6,
         class_weight="balanced",
         random_state=42,
         n_jobs=-1
     )
     clf.fit(X_train, y_train)
-    print("  ✔ Trained fallback daily-model on", len(X_train), "rows.")
 
+    # (Optional) report validation AUC:
     try:
         from sklearn.metrics import roc_auc_score
-        if len(set(y_val)) > 1:
-            val_probs = clf.predict_proba(X_val)[:, 1]
-            auc = roc_auc_score(y_val, val_probs)
-            print(f"  ✔ Validation AUC (daily fallback) = {auc:.4f}")
+        val_probs = clf.predict_proba(X_val)[:, 1]
+        auc = roc_auc_score(y_val, val_probs)
+        print(f"  ✔ Validation AUC = {auc:.4f}")
     except Exception:
         pass
 
     joblib.dump(clf, MODEL_PATH)
-    print(f"  ✔ Saved new daily-fallback meta-learner to {MODEL_PATH}")
+    print(f"  ✔ Saved new meta‐learner to {MODEL_PATH}")
     return True
-
-
