@@ -3,7 +3,7 @@ import joblib
 import pandas as pd
 import numpy as np
 
-from datetime import datetime, date, timedelta   # <— added `date` here
+from datetime import datetime, date, timedelta   # ← added `date` here
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
@@ -68,7 +68,12 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
 
-def gather_minute_data(ctx, symbols, lookback_days: int = 5):
+def gather_minute_data(ctx, symbols, lookback_days: int = 10):
+    """
+    For each symbol, grab minute bars from Alpaca day-by-day over the last `lookback_days`.
+    This uses DataFetcher.get_historical_minute(ctx, symbol, start_date, end_date) internally.
+    Returns a dict: { symbol: DataFrame_of_minute_bars }.
+    """
     raw_store: dict[str, pd.DataFrame] = {}
     end_dt = date.today()
     start_dt = end_dt - timedelta(days=lookback_days)
@@ -81,7 +86,7 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5):
             bars = None
 
         if bars is None or bars.empty:
-            # no minute bars at all, log it
+            # No minute bars at all, log it
             print(f"[gather_minute_data] {sym} → no minute bars from {start_dt} to {end_dt}")
             continue
 
