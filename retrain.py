@@ -131,7 +131,12 @@ def build_feature_label_df(
     return df_all
 
 def retrain_meta_learner(
-    ctx, symbols, lookback_days: int = 5, Δ_minutes: int = 30, threshold_pct: float = 0.002
+    ctx,
+    symbols,
+    lookback_days: int = 5,
+    Δ_minutes: int = 30,
+    threshold_pct: float = 0.002,
+    force: bool = False,
 ) -> bool:
     """
     1) Skip retrain on weekends or outside market hours.
@@ -140,17 +145,22 @@ def retrain_meta_learner(
     4) Otherwise, skip retrain with a clear message.
     """
     now = datetime.now()
-    # Skip on weekends
-    if now.weekday() >= 5:
-        print(f"[retrain_meta_learner] Weekend detected (weekday={now.weekday()}). Skipping retrain.")
-        return False
+    if not force:
+        # Skip on weekends
+        if now.weekday() >= 5:
+            print(
+                f"[retrain_meta_learner] Weekend detected (weekday={now.weekday()}). Skipping retrain."
+            )
+            return False
 
-    # Skip outside market hours (9:30 AM–4:00 PM)
-    market_open  = time(9, 30)
-    market_close = time(16, 0)
-    if not (market_open <= now.time() <= market_close):
-        print(f"[retrain_meta_learner] Outside market hours ({now.time().strftime('%H:%M')}). Skipping retrain.")
-        return False
+        # Skip outside market hours (9:30 AM–4:00 PM)
+        market_open = time(9, 30)
+        market_close = time(16, 0)
+        if not (market_open <= now.time() <= market_close):
+            print(
+                f"[retrain_meta_learner] Outside market hours ({now.time().strftime('%H:%M')}). Skipping retrain."
+            )
+            return False
 
     print(f"[{now:%Y-%m-%d %H:%M:%S}] ▶ Starting meta‐learner retraining…")
     raw_store = gather_minute_data(ctx, symbols, lookback_days=lookback_days)

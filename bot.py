@@ -1756,6 +1756,11 @@ def trade_logic(
     """
     logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
 
+    # Run pre-trade checks that enforce PDT, halt flags, market regime, etc.
+    if not should_enter(ctx, symbol, balance, regime_ok):
+        logger.debug("SKIP_PRE_TRADE_CHECKS", extra={"symbol": symbol})
+        return
+
     raw_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if raw_df is None or raw_df.empty:
         logger.info(f"SKIP_NO_RAW_DATA | symbol={symbol}")
@@ -1956,8 +1961,13 @@ def fetch_data(ctx, symbols: List[str], period: str, interval: str) -> Optional[
 
 def load_model(path: str = MODEL_PATH):
     if not os.path.exists(path):
-        raise FileNotFoundError(f"No trained model found at {path}")
-    model = joblib.load(path)
+        logger.warning("MODEL_MISSING", extra={"path": path})
+        return None
+    try:
+        model = joblib.load(path)
+    except Exception as e:
+        logger.exception(f"Failed to load model at {path}: {e}")
+        return None
     logger.info("MODEL_LOADED", extra={"path": path})
     return model
 
@@ -2296,13 +2306,23 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         if last_date == today_str:
             need_to_retrain = False
 
+    if not os.path.exists(MODEL_PATH):
+        logger.warning(
+            "MODEL_PATH missing; forcing initial retrain.",
+            extra={"path": MODEL_PATH},
+        )
+        need_to_retrain = True
+
     if need_to_retrain:
         if retrain_meta_learner is None:
             logger.warning("Daily retraining requested, but retrain_meta_learner is unavailable.")
         else:
             symbols = load_tickers(TICKERS_FILE)
-            logger.info(f"▶ Starting meta-learner retraining for {today_str} on {len(symbols)} tickers...")
-            success = retrain_meta_learner(ctx, symbols)
+            logger.info(
+                f"▶ Starting meta-learner retraining for {today_str} on {len(symbols)} tickers..."
+            )
+            force_train = not os.path.exists(MODEL_PATH)
+            success = retrain_meta_learner(ctx, symbols, force=force_train)
             if success:
                 try:
                     with open(marker, "w") as f:
@@ -2314,6 +2334,8 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
 
     # Finally, load whichever model is at MODEL_PATH
     model = load_model(MODEL_PATH)
+    if model is None:
+        raise FileNotFoundError(f"Model not found at {MODEL_PATH} after retrain")
     return model
 
 # ─── M. MAIN LOOP & SCHEDULER ─────────────────────────────────────────────────
