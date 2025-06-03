@@ -2144,6 +2144,55 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["macd"] = np.nan
         df["macds"] = np.nan
 
+    # Additional indicators for richer ML features
+    try:
+        bb = ta.bbands(df["Close"], length=20)
+        df["bb_upper"]   = bb["BBU_20_2.0"]
+        df["bb_lower"]   = bb["BBL_20_2.0"]
+        df["bb_percent"] = bb["BBP_20_2.0"]
+    except Exception:
+        df["bb_upper"] = np.nan
+        df["bb_lower"] = np.nan
+        df["bb_percent"] = np.nan
+
+    try:
+        adx = ta.adx(df["High"], df["Low"], df["Close"], length=14)
+        df["adx"] = adx["ADX_14"]
+        df["dmp"] = adx["DMP_14"]
+        df["dmn"] = adx["DMN_14"]
+    except Exception:
+        df["adx"] = np.nan
+        df["dmp"] = np.nan
+        df["dmn"] = np.nan
+
+    try:
+        df["cci"] = ta.cci(df["High"], df["Low"], df["Close"], length=20)
+    except Exception:
+        df["cci"] = np.nan
+
+    try:
+        df["mfi"] = ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=14)
+    except Exception:
+        df["mfi"] = np.nan
+
+    try:
+        df["tema"] = ta.tema(df["Close"], length=10)
+    except Exception:
+        df["tema"] = np.nan
+
+    try:
+        df["willr"] = ta.willr(df["High"], df["Low"], df["Close"], length=14)
+    except Exception:
+        df["willr"] = np.nan
+
+    try:
+        psar = ta.psar(df["High"], df["Low"], df["Close"])
+        df["psar_long"]  = psar["PSARl_0.02_0.2"]
+        df["psar_short"] = psar["PSARs_0.02_0.2"]
+    except Exception:
+        df["psar_long"] = np.nan
+        df["psar_short"] = np.nan
+
     try:
         ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
         conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
