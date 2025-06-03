@@ -69,24 +69,23 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
 MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
-
 def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.DataFrame]:
     """
-    For each symbol, fetch minute bars from Alpaca day‐by‐day over last `lookback_days`.
-    Prints exactly how many rows were returned for each symbol.
+    For each symbol, fetch minute bars from Alpaca day‐by‐day over the last `lookback_days`.
+    Prints per‐symbol row‐counts, and only stores those with ≥ 1 row.
     """
     raw_store: dict[str, pd.DataFrame] = {}
     end_dt = date.today()
     start_dt = end_dt - timedelta(days=lookback_days)
 
-    print(f"[gather_minute_data] start={start_dt}  end={end_dt}  symbols={symbols}")
+    print(f"[gather_minute_data] start={start_dt}, end={end_dt}, symbols={symbols}")
     for sym in symbols:
         bars = None
         try:
             bars = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
         except Exception as e:
             bars = None
-            print(f"[gather_minute_data] ✗ {sym} → exception fetching {start_dt}→{end_dt}: {e}")
+            print(f"[gather_minute_data] ✗ {sym} → exception {start_dt}→{end_dt}: {e}")
 
         if bars is None or bars.empty:
             print(f"[gather_minute_data] – {sym} → 0 rows")
@@ -96,20 +95,19 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.Dat
 
     return raw_store
 
-
 def build_feature_label_df(
     raw_store: dict[str, pd.DataFrame],
     Δ_minutes: int = 30,
     threshold_pct: float = 0.002
 ) -> pd.DataFrame:
     """
-    Build one row per minute‐slice. If a symbol has fewer than Δ_minutes+1 rows,
-    it’s skipped—print a notice.
+    Build a combined DataFrame of (feature_vector, label) for each minute‐slice.
+    If a symbol has fewer than Δ_minutes+1 rows, it is skipped with a notice.
     """
     rows = []
     for sym, raw in raw_store.items():
         if raw.shape[0] < (Δ_minutes + 1):
-            print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {Δ_minutes+1}")
+            print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {Δ_minutes + 1}")
             continue
 
         feat = prepare_indicators(raw, freq="intraday")
@@ -132,14 +130,13 @@ def build_feature_label_df(
     df_all = pd.DataFrame(rows).dropna()
     return df_all
 
-
 def retrain_meta_learner(
     ctx, symbols, lookback_days: int = 5, Δ_minutes: int = 30, threshold_pct: float = 0.002
 ) -> bool:
     """
-    1) Call gather_minute_data(…) and print per‐symbol row counts.
-    2) If at least one symbol ended up with ≥ Δ_minutes+1 bars, build features & train.
-    3) Else, print “No usable minute data” and return False.
+    1) Call gather_minute_data()—prints per‐symbol counts.
+    2) If at least one symbol has ≥ Δ_minutes+1 bars, build features & train.
+    3) Otherwise, skip retrain with a clear message.
     """
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ▶ Starting meta‐learner retraining…")
     raw_store = gather_minute_data(ctx, symbols, lookback_days=lookback_days)
@@ -159,8 +156,11 @@ def retrain_meta_learner(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
     clf = RandomForestClassifier(
-        n_estimators=200, max_depth=6, class_weight="balanced",
-        random_state=42, n_jobs=-1
+        n_estimators=200,
+        max_depth=6,
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1
     )
     clf.fit(X_train, y_train)
 
@@ -176,3 +176,4 @@ def retrain_meta_learner(
     joblib.dump(clf, MODEL_PATH)
     print(f"  ✔ Saved new meta‐learner to {MODEL_PATH}")
     return True
+
