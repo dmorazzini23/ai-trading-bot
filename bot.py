@@ -1708,20 +1708,29 @@ def should_enter(
 def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple[bool, int, str]:
     try:
         pos = ctx.api.get_position(symbol)
-        current_qty = int(abs(int(pos.qty)))
+        current_qty = int(pos.qty)
     except Exception:
         current_qty = 0
 
     stop = ctx.stop_targets.get(symbol)
-    if stop is not None and price <= stop:
-        return True, current_qty, "stop_loss"
+    if stop is not None:
+        if current_qty > 0 and price <= stop:
+            return True, abs(current_qty), "stop_loss"
+        if current_qty < 0 and price >= stop:
+            return True, abs(current_qty), "stop_loss"
+
     tp = ctx.take_profit_targets.get(symbol)
     if current_qty > 0 and tp and price >= tp:
-        exit_qty = max(int(current_qty * SCALING_FACTOR), 1)
+        exit_qty = max(int(abs(current_qty) * SCALING_FACTOR), 1)
         return True, exit_qty, "take_profit"
+    if current_qty < 0 and tp and price <= tp:
+        exit_qty = max(int(abs(current_qty) * SCALING_FACTOR), 1)
+        return True, exit_qty, "take_profit"
+
     action = update_trailing_stop(ctx, symbol, price, current_qty, atr)
-    if action == "exit_long" and current_qty > 0:
-        return True, current_qty, "trailing_stop"
+    if (action == "exit_long" and current_qty > 0) or (action == "exit_short" and current_qty < 0):
+        return True, abs(current_qty), "trailing_stop"
+
     return False, 0, ""
 
 def _safe_trade(
@@ -1797,17 +1806,30 @@ def trade_logic(
 
     try:
         pos = ctx.api.get_position(symbol)
-        current_qty = int(abs(int(pos.qty)))
+        current_qty = int(pos.qty)
     except Exception:
         current_qty = 0
 
-    # Exit: bearish reversal
+    # Exit: bearish reversal for longs
     if final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
         price = feat_df["Close"].iloc[-1]
         logger.info(
             f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
         )
         submit_order(ctx, symbol, current_qty, "sell")
+        ctx.trade_logger.log_exit(symbol, price)
+        with targets_lock:
+            ctx.stop_targets.pop(symbol, None)
+            ctx.take_profit_targets.pop(symbol, None)
+        return
+
+    # Exit: bullish reversal for shorts
+    if final_score > 0 and current_qty < 0 and abs(conf) >= CONF_THRESHOLD:
+        price = feat_df["Close"].iloc[-1]
+        logger.info(
+            f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
+        )
+        submit_order(ctx, symbol, abs(current_qty), "buy")
         ctx.trade_logger.log_exit(symbol, price)
         with targets_lock:
             ctx.stop_targets.pop(symbol, None)
@@ -1857,8 +1879,63 @@ def trade_logic(
 
         return
 
+    # Entry: bearish short
+    if final_score < 0 and conf >= BUY_THRESHOLD and current_qty == 0:
+        current_price = feat_df["Close"].iloc[-1]
+        atr = feat_df["atr"].iloc[-1]
+        qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
+
+        try:
+            asset = ctx.api.get_asset(symbol)
+            if hasattr(asset, "shortable") and not asset.shortable:
+                logger.info(f"SKIP_NOT_SHORTABLE | symbol={symbol}")
+                return
+            avail = getattr(asset, "shortable_shares", None)
+            if avail is not None:
+                qty = min(qty, int(avail))
+        except Exception:
+            pass
+
+        if qty <= 0:
+            logger.debug(f"SKIP_NO_QTY | symbol={symbol}")
+            return
+
+        logger.info(
+            f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  "
+            f"confidence={conf:.4f}  qty={qty}"
+        )
+
+        order = submit_order(ctx, symbol, qty, "sell")
+        if order is None:
+            logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
+        else:
+            logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
+            ctx.trade_logger.log_entry(symbol, current_price, qty, "sell", strat)
+
+            now_pac = datetime.now(PACIFIC)
+            mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
+            mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
+
+            if is_high_vol_regime():
+                tp_factor = TAKE_PROFIT_FACTOR * 1.1
+            else:
+                tp_factor = TAKE_PROFIT_FACTOR
+
+            long_stop, long_take = scaled_atr_stop(
+                entry_price=current_price,
+                atr=atr,
+                now=now_pac, market_open=mo, market_close=mc,
+                max_factor=tp_factor, min_factor=0.5
+            )
+            stop, take = long_take, long_stop
+            with targets_lock:
+                ctx.stop_targets[symbol] = stop
+                ctx.take_profit_targets[symbol] = take
+
+        return
+
     # If holding, check for stops/take/trailing
-    if current_qty > 0:
+    if current_qty != 0:
         price = feat_df["Close"].iloc[-1]
         atr   = feat_df["atr"].iloc[-1]
         should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
@@ -1867,11 +1944,12 @@ def trade_logic(
                 f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  "
                 f"exit_qty={exit_qty}  price={price:.4f}"
             )
-            submit_order(ctx, symbol, exit_qty, "sell")
+            side = "sell" if current_qty > 0 else "buy"
+            submit_order(ctx, symbol, exit_qty, side)
             ctx.trade_logger.log_exit(symbol, price)
             try:
                 pos_after = ctx.api.get_position(symbol)
-                if int(abs(int(pos_after.qty))) == 0:
+                if int(pos_after.qty) == 0:
                     with targets_lock:
                         ctx.stop_targets.pop(symbol, None)
                         ctx.take_profit_targets.pop(symbol, None)
