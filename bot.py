@@ -1278,135 +1278,99 @@ def vol_target_position_size(
     retry=retry_if_exception_type(APIError),
 )
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
-    """
-    If inside regular hours → market order.
-    If outside → limit with extended_hours=True at last bid/ask.
-    Also logs slippage = (fill_price - expected_quote).
-    """
-    try:
-        quote = ctx.api.get_latest_quote(symbol)
-        expected_price = quote.ask_price if side.lower() == "buy" else quote.bid_price
-    except Exception:
-        expected_price = None
+    """Submit an order with microstructure-aware logic."""
 
-    now_utc = pd.Timestamp.utcnow()
-    is_regular_hours = in_trading_hours(now_utc)
+    def _send(qty_slice: int) -> Optional[Order]:
+        attempt = 0
+        while attempt < 3:
+            attempt += 1
+            try:
+                quote = ctx.api.get_latest_quote(symbol)
+                bid = float(getattr(quote, "bid_price", 0) or 0)
+                ask = float(getattr(quote, "ask_price", 0) or 0)
+            except Exception as e:
+                logger.warning(f"[submit_order] quote fetch failed (attempt {attempt}) for {symbol}: {e}")
+                bid = ask = 0.0
 
-    if not is_regular_hours:
-        if expected_price is None or expected_price <= 0:
-            logger.warning("OFF_HOURS_NO_PRICE", extra={"symbol": symbol, "expected": expected_price})
-            return None
-        limit_price = round(expected_price, 2)
-        logger.info("OFF_HOURS_ORDER", extra={"symbol": symbol, "side": side, "qty": qty, "limit_price": limit_price})
-        try:
-            off_order = ctx.api.submit_order(
-                symbol=symbol,
-                qty=qty,
-                side=side,
-                type="limit",
-                time_in_force="day",
-                limit_price=limit_price,
-                extended_hours=True,
-            )
-            # Log slippage: use last fill price if available
-            fill_price = float(getattr(off_order, "filled_avg_price", limit_price))
-            if expected_price:
-                slip = (fill_price - expected_price) * 100  # in cents
+            now_utc = pd.Timestamp.utcnow()
+            regular = in_trading_hours(now_utc)
+
+            order_kwargs: dict[str, Any] = {
+                "symbol": symbol,
+                "qty": qty_slice,
+                "side": side,
+            }
+            expected_price: Optional[float] = None
+
+            if regular:
+                spread = (ask - bid) if ask and bid else 0.0
+                mid = (ask + bid) / 2 if ask and bid else None
+                order_kwargs["time_in_force"] = "gtc"
+                if spread > 0.03 and mid:
+                    limit_price = round(mid, 2)
+                    order_kwargs.update({"type": "limit", "limit_price": limit_price})
+                    expected_price = limit_price
+                else:
+                    order_kwargs["type"] = "market"
+                    expected_price = ask if side.lower() == "buy" else bid
+            else:
+                px = bid if side.lower() == "buy" else ask
+                if px <= 0:
+                    logger.warning("OFF_HOURS_NO_PRICE", extra={"symbol": symbol})
+                    return None
+                limit_price = round(px, 2)
+                order_kwargs.update({
+                    "type": "limit",
+                    "limit_price": limit_price,
+                    "time_in_force": "day",
+                    "extended_hours": True,
+                })
+                expected_price = limit_price
+
+            try:
+                order = ctx.api.submit_order(**order_kwargs)
+                fill_price = float(getattr(order, "filled_avg_price", expected_price or 0) or 0)
+                slip = ((fill_price - expected_price) * 100) if expected_price else 0.0
                 slippage_total.inc(abs(slip))
                 slippage_count.inc()
                 _slippage_log.append((symbol, expected_price, fill_price, datetime.now(timezone.utc)))
-            orders_total.inc()
-            return off_order
-        except APIError as e:
-            logger.warning(f"[submit_order off‐hours] APIError for {symbol}: {e} (limit_price={limit_price})")
-            order_failures.inc()
-            return None
+                logger.info("ORDER_SUBMITTED", extra={
+                    "symbol": symbol, "side": side, "qty": qty_slice,
+                    "expected_price": expected_price, "fill_price": fill_price,
+                    "slippage_cents": slip,
+                })
+                orders_total.inc()
+                return order
+            except APIError as e:
+                logger.warning(f"[submit_order] APIError (attempt {attempt}) for {symbol}: {e}")
+                pytime.sleep(attempt)
+            except Exception as e:
+                logger.exception(f"[submit_order] unexpected error attempt {attempt} for {symbol}: {e}")
+                pytime.sleep(attempt)
+        # final fallback
+        try:
+            logger.warning(f"FALLBACK_MARKET_ORDER for {symbol}")
+            return ctx.api.submit_order(
+                symbol=symbol, qty=qty_slice, side=side, type="market", time_in_force="gtc"
+            )
         except Exception:
-            logger.exception(f"[submit_order off‐hours] unexpected error for {symbol}")
-            order_failures.inc()
             return None
 
-    # Inside regular hours
-    try:
-        # Microstructure-aware: check spread and adjust slice settings
-        spread = (quote.ask_price - quote.bid_price) if quote and quote.ask_price and quote.bid_price else 0.0
-        # For simplicity, if spread > $0.05, use market order to minimize slippage
-        order_type = "market"
-        if spread > 0.05:
-            logger.info("HIGH_SPREAD_MARKET_FALLBACK", extra={"symbol": symbol, "spread": spread})
-        logger.debug("MARKET_ORDER", extra={"symbol": symbol, "side": side, "qty": qty})
-        order = ctx.api.submit_order(
-            symbol=symbol,
-            qty=qty,
-            side=side,
-            type=order_type,
-            time_in_force="gtc",
-        )
-        # Log slippage
-        fill_price = float(getattr(order, "filled_avg_price", 0) or 0)
-        if expected_price and fill_price > 0:
-            slip = (fill_price - expected_price) * 100  # in cents
-            slippage_total.inc(abs(slip))
-            slippage_count.inc()
-            _slippage_log.append((symbol, expected_price, fill_price, datetime.now(timezone.utc)))
-        orders_total.inc()
-        return order
-    except APIError as e:
-        msg = str(e).lower()
-        if "insufficient buying power" in msg:
-            logger.warning("INSUFFICIENT_POWER", extra={"symbol": symbol})
-            order_failures.inc()
-            return None
-        m = re.search(r"requested: (\d+), available: (\d+)", msg)
-        if m:
-            available = int(m.group(2))
-            if available > 0:
-                try:
-                    order = ctx.api.submit_order(
-                        symbol=symbol,
-                        qty=available,
-                        side=side,
-                        type="market",
-                        time_in_force="gtc",
-                    )
-                    logger.info("PARTIAL_FILL", extra={"symbol": symbol, "available": available})
-                    orders_total.inc()
-                    return order
-                except Exception as e2:
-                    logger.exception(f"[submit_order] partial-fill failed for {symbol}: {e2}")
-                    order_failures.inc()
-                    return None
-        if "potential wash trade" in msg:
-            logger.warning("WASH_TRADE_FALLBACK", extra={"symbol": symbol})
-            if expected_price is None or expected_price <= 0:
-                order_failures.inc()
-                return None
-            tp_price = expected_price * 1.02
-            sl_price = expected_price * 0.98
-            try:
-                bracket = ctx.api.submit_order(
-                    symbol=symbol,
-                    qty=qty,
-                    side=side,
-                    type="limit",
-                    time_in_force="gtc",
-                    order_class="bracket",
-                    take_profit={"limit_price": tp_price},
-                    stop_loss={"stop_price": sl_price},
-                )
-                logger.info("BRACKET_ORDER_PLACED", extra={"symbol": symbol, "tp": tp_price, "sl": sl_price})
-                orders_total.inc()
-                return bracket
-            except Exception as e2:
-                logger.exception(f"[submit_order] bracket fallback failed for {symbol}: {e2}")
-                order_failures.inc()
-                return None
-        logger.warning("API_ERROR_RETRY", extra={"symbol": symbol, "error": str(e)})
-        raise
-    except Exception:
-        order_failures.inc()
-        logger.exception(f"[submit_order] unexpected error for {symbol}")
-        return None
+    # Handle slicing
+    if qty > 50:
+        remaining = qty
+        last_order = None
+        while remaining > 0:
+            slice_qty = min(max(1, int(qty * random.uniform(0.1, 0.2))), remaining)
+            last_order = _send(slice_qty)
+            filled = int(float(getattr(last_order, "filled_qty", slice_qty) or slice_qty)) if last_order else 0
+            remaining -= filled
+            if remaining > 0:
+                pytime.sleep(random.uniform(2, 5))
+        return last_order
+    else:
+        return _send(qty)
+
 
 def twap_submit(
     ctx: BotContext,
