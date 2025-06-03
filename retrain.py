@@ -67,21 +67,19 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     return df
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Read the same MODEL_PATH from the environment (just like bot.py does):
 MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
 
 def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.DataFrame]:
     """
-    For each symbol, grab minute bars from Alpaca day‐by‐day over the last `lookback_days`.
-    This calls DataFetcher.get_historical_minute(ctx, symbol, start_dt, end_dt) only.
-    Prints one line per symbol showing how many rows were fetched (or zero).
-    Returns a dict mapping symbol→DataFrame of minute bars.
+    For each symbol, fetch minute bars from Alpaca day‐by‐day over last `lookback_days`.
+    Prints exactly how many rows were returned for each symbol.
     """
     raw_store: dict[str, pd.DataFrame] = {}
     end_dt = date.today()
     start_dt = end_dt - timedelta(days=lookback_days)
 
+    print(f"[gather_minute_data] start={start_dt}  end={end_dt}  symbols={symbols}")
     for sym in symbols:
         bars = None
         try:
@@ -91,35 +89,32 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.Dat
             print(f"[gather_minute_data] ✗ {sym} → exception fetching {start_dt}→{end_dt}: {e}")
 
         if bars is None or bars.empty:
-            print(f"[gather_minute_data] – {sym} → 0 rows ({start_dt}→{end_dt})")
-            continue
-
-        # At least one row of minute data
-        print(f"[gather_minute_data] ✓ {sym} → {len(bars)} rows ({start_dt}→{end_dt})")
-        raw_store[sym] = bars
+            print(f"[gather_minute_data] – {sym} → 0 rows")
+        else:
+            print(f"[gather_minute_data] ✓ {sym} → {len(bars)} rows")
+            raw_store[sym] = bars
 
     return raw_store
 
 
-def build_feature_label_df(raw_store: dict[str, pd.DataFrame],
-                           Δ_minutes: int = 30,
-                           threshold_pct: float = 0.002
-                          ) -> pd.DataFrame:
+def build_feature_label_df(
+    raw_store: dict[str, pd.DataFrame],
+    Δ_minutes: int = 30,
+    threshold_pct: float = 0.002
+) -> pd.DataFrame:
     """
-    Build a single DataFrame of (feature_vector, label) for each minute‐slice.
-    Label = 1 if price change over next Δ_minutes ≥ threshold_pct, else 0.
+    Build one row per minute‐slice. If a symbol has fewer than Δ_minutes+1 rows,
+    it’s skipped—print a notice.
     """
     rows = []
     for sym, raw in raw_store.items():
-        # We only want symbols with at least (Δ_minutes+1) rows of minute data
-        if raw.shape[0] < Δ_minutes + 1:
-            print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} rows (< {Δ_minutes+1})")
+        if raw.shape[0] < (Δ_minutes + 1):
+            print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {Δ_minutes+1}")
             continue
 
-        # Compute intraday indicators
         feat = prepare_indicators(raw, freq="intraday")
         if feat.empty:
-            print(f"[build_feature_label_df] – {sym} → indicators all NaN, skipping")
+            print(f"[build_feature_label_df] – {sym} indicators empty after dropna")
             continue
 
         closes = raw["Close"].values
@@ -138,46 +133,38 @@ def build_feature_label_df(raw_store: dict[str, pd.DataFrame],
     return df_all
 
 
-def retrain_meta_learner(ctx, symbols, lookback_days: int = 5,
-                         Δ_minutes: int = 30, threshold_pct: float = 0.002
-                        ) -> bool:
+def retrain_meta_learner(
+    ctx, symbols, lookback_days: int = 5, Δ_minutes: int = 30, threshold_pct: float = 0.002
+) -> bool:
     """
-    1) Gather minute bars for each symbol over the last `lookback_days` (no daily fallback).
-    2) If any symbol yields ≥ Δ_minutes+1 rows, build features + train.
-    3) Otherwise, immediately skip retrain.
-    Returns True if training succeeded, False otherwise.
+    1) Call gather_minute_data(…) and print per‐symbol row counts.
+    2) If at least one symbol ended up with ≥ Δ_minutes+1 bars, build features & train.
+    3) Else, print “No usable minute data” and return False.
     """
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ▶ Starting meta‐learner retraining…")
-
     raw_store = gather_minute_data(ctx, symbols, lookback_days=lookback_days)
     if not raw_store:
         print("  ⚠️ No symbol returned any minute bars → skipping retrain.")
         return False
 
-    # Build features + labels
     df_all = build_feature_label_df(raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct)
     if df_all.empty:
-        print("  ⚠️ No usable rows after building (Δ_minutes, threshold) → skipping retrain.")
+        print("  ⚠️ No usable rows after building (Δ, threshold) → skipping retrain.")
         return False
 
     X = df_all.drop(columns=["label"])
     y = df_all["label"]
 
-    # Split, train, save
     X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
-
     clf = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=6,
-        class_weight="balanced",
-        random_state=42,
-        n_jobs=-1
+        n_estimators=200, max_depth=6, class_weight="balanced",
+        random_state=42, n_jobs=-1
     )
     clf.fit(X_train, y_train)
 
-    # Optional: report validation AUC
+    # Optional—print validation AUC
     try:
         from sklearn.metrics import roc_auc_score
         val_probs = clf.predict_proba(X_val)[:, 1]
@@ -189,4 +176,3 @@ def retrain_meta_learner(ctx, symbols, lookback_days: int = 5,
     joblib.dump(clf, MODEL_PATH)
     print(f"  ✔ Saved new meta‐learner to {MODEL_PATH}")
     return True
-
