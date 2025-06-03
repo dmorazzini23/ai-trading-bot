@@ -71,12 +71,12 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
 
-def gather_minute_data(ctx, symbols, lookback_days: int = 5):
+def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.DataFrame]:
     """
-    For each symbol, try:
-      1) get_minute_df(ctx, sym)  (cached intraday)
-      2) if empty, get_historical_minute(ctx, sym, start→end)
-    Print exactly how many rows for each symbol.
+    For each symbol, grab minute bars from Alpaca day‐by‐day over the last `lookback_days`.
+    This calls DataFetcher.get_historical_minute(ctx, symbol, start_dt, end_dt) only.
+    Prints one line per symbol showing how many rows were fetched (or zero).
+    Returns a dict mapping symbol→DataFrame of minute bars.
     """
     raw_store: dict[str, pd.DataFrame] = {}
     end_dt = date.today()
@@ -85,37 +85,41 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5):
     for sym in symbols:
         bars = None
         try:
-            # 1) Attempt the cached intraday call
-            bars = ctx.data_fetcher.get_minute_df(ctx, sym)
-        except Exception:
+            bars = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
+        except Exception as e:
             bars = None
+            print(f"[gather_minute_data] ✗ {sym} → exception fetching {start_dt}→{end_dt}: {e}")
 
         if bars is None or bars.empty:
-            try:
-                # 2) Fallback to day‐by‐day historical minute bars
-                bars = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
-            except Exception:
-                bars = None
-
-        if bars is None or bars.empty:
-            print(f"[gather_minute_data] → {sym} returned NO minute bars ({start_dt}→{end_dt})")
+            print(f"[gather_minute_data] – {sym} → 0 rows ({start_dt}→{end_dt})")
             continue
 
-        print(f"[gather_minute_data] → {sym} fetched {len(bars)} rows of minute data")
+        # At least one row of minute data
+        print(f"[gather_minute_data] ✓ {sym} → {len(bars)} rows ({start_dt}→{end_dt})")
         raw_store[sym] = bars
 
     return raw_store
 
 
-def build_feature_label_df(raw_store, Δ_minutes=30, threshold_pct=0.002):
+def build_feature_label_df(raw_store: dict[str, pd.DataFrame],
+                           Δ_minutes: int = 30,
+                           threshold_pct: float = 0.002
+                          ) -> pd.DataFrame:
     """
     Build a single DataFrame of (feature_vector, label) for each minute‐slice.
-    Label = 1 if price change over next Δ_minutes ≥ threshold_pct, 0 otherwise.
+    Label = 1 if price change over next Δ_minutes ≥ threshold_pct, else 0.
     """
     rows = []
     for sym, raw in raw_store.items():
+        # We only want symbols with at least (Δ_minutes+1) rows of minute data
+        if raw.shape[0] < Δ_minutes + 1:
+            print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} rows (< {Δ_minutes+1})")
+            continue
+
+        # Compute intraday indicators
         feat = prepare_indicators(raw, freq="intraday")
         if feat.empty:
+            print(f"[build_feature_label_df] – {sym} → indicators all NaN, skipping")
             continue
 
         closes = raw["Close"].values
@@ -123,7 +127,7 @@ def build_feature_label_df(raw_store, Δ_minutes=30, threshold_pct=0.002):
         for i in range(n - Δ_minutes):
             base_price = closes[i]
             future_price = closes[i + Δ_minutes]
-            ret_pct = future_price / base_price - 1.0
+            ret_pct = (future_price / base_price) - 1.0
             label = 1 if ret_pct >= threshold_pct else 0
 
             row = feat.iloc[i].copy().to_dict()
@@ -134,27 +138,32 @@ def build_feature_label_df(raw_store, Δ_minutes=30, threshold_pct=0.002):
     return df_all
 
 
-def retrain_meta_learner(ctx, symbols, lookback_days=5, Δ_minutes=30, threshold_pct=0.002):
+def retrain_meta_learner(ctx, symbols, lookback_days: int = 5,
+                         Δ_minutes: int = 30, threshold_pct: float = 0.002
+                        ) -> bool:
     """
-    1) Gather minute data (cached first, then historical).
-    2) If any symbol delivered rows, build features + train intraday model.
-    3) Otherwise, immediately return False (no daily fallback).
+    1) Gather minute bars for each symbol over the last `lookback_days` (no daily fallback).
+    2) If any symbol yields ≥ Δ_minutes+1 rows, build features + train.
+    3) Otherwise, immediately skip retrain.
+    Returns True if training succeeded, False otherwise.
     """
     print(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] ▶ Starting meta‐learner retraining…")
 
     raw_store = gather_minute_data(ctx, symbols, lookback_days=lookback_days)
     if not raw_store:
-        print("  ⚠️ No minute data fetched; skipping retrain (no daily fallback).")
+        print("  ⚠️ No symbol returned any minute bars → skipping retrain.")
         return False
 
+    # Build features + labels
     df_all = build_feature_label_df(raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct)
     if df_all.empty:
-        print("  ⚠️ Feature/label DataFrame is empty; skipping retrain.")
+        print("  ⚠️ No usable rows after building (Δ_minutes, threshold) → skipping retrain.")
         return False
 
     X = df_all.drop(columns=["label"])
     y = df_all["label"]
 
+    # Split, train, save
     X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
@@ -168,7 +177,7 @@ def retrain_meta_learner(ctx, symbols, lookback_days=5, Δ_minutes=30, threshold
     )
     clf.fit(X_train, y_train)
 
-    # (Optional) report validation AUC:
+    # Optional: report validation AUC
     try:
         from sklearn.metrics import roc_auc_score
         val_probs = clf.predict_proba(X_val)[:, 1]
@@ -180,3 +189,4 @@ def retrain_meta_learner(ctx, symbols, lookback_days=5, Δ_minutes=30, threshold
     joblib.dump(clf, MODEL_PATH)
     print(f"  ✔ Saved new meta‐learner to {MODEL_PATH}")
     return True
+
