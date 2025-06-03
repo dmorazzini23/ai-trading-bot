@@ -2491,9 +2491,7 @@ if __name__ == "__main__":
 
         # Daily jobs
         schedule.every().day.at("00:30").do(lambda: Thread(target=daily_summary, daemon=True).start())
-        schedule.every().day.at("00:35").do(lambda: Thread(target=run_daily_pca_adjustment, args=(ctx,), daemon=True).start())
-        # schedule.every().day.at("15:45").do(lambda: Thread(target=exit_all_positions, daemon=True).start())  # disabled as requested
-        schedule.every().day.at("01:00").do(lambda: Thread(target=run_meta_learning_weight_optimizer, daemon=True).start())
+        schedule.every().day.at("10:00").do(lambda: Thread(target=run_meta_learning_weight_optimizer, daemon=True).start())
         schedule.every().day.at("02:00").do(lambda: Thread(target=run_bayesian_meta_learning_optimizer, daemon=True).start())
 
         model = load_or_retrain_daily(ctx)
