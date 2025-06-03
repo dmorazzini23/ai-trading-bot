@@ -1371,7 +1371,6 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     else:
         return _send(qty)
 
-
 def twap_submit(
     ctx: BotContext,
     symbol: str,
