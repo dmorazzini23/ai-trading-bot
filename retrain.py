@@ -69,24 +69,20 @@ MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
 
 def gather_minute_data(ctx, symbols, lookback_days: int = 5):
-    """
-    For each symbol, grab minute bars from Alpaca day-by-day over the last `lookback_days`.
-    This uses DataFetcher.get_historical_minute(ctx, symbol, start_date, end_date) internally.
-    Returns a dict: { symbol: DataFrame_of_minute_bars }.
-    """
     raw_store: dict[str, pd.DataFrame] = {}
     end_dt = date.today()
     start_dt = end_dt - timedelta(days=lookback_days)
 
     for sym in symbols:
+        bars = None
         try:
-            # ←— pass ctx as the first argument:
             bars = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
         except Exception:
             bars = None
 
         if bars is None or bars.empty:
-            # no minute bars at all, skip
+            # no minute bars at all, log it
+            print(f"[gather_minute_data] {sym} → no minute bars from {start_dt} to {end_dt}")
             continue
 
         raw_store[sym] = bars
@@ -122,7 +118,7 @@ def build_feature_label_df(raw_store, Δ_minutes=30, threshold_pct=0.002):
     return df_all
 
 
-def retrain_meta_learner(ctx, symbols, lookback_days=5, Δ_minutes=30, threshold_pct=0.002):
+def retrain_meta_learner(ctx, symbols, lookback_days=10, Δ_minutes=30, threshold_pct=0.002):
     """
     1. Gather minute data for each symbol over the last `lookback_days` (via get_minute_df).
     2. Build features & labels using a Δ‐minute horizon.
