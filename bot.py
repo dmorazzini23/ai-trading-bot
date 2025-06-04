@@ -902,6 +902,12 @@ ctx = BotContext(
     kelly_fraction=params["KELLY_FRACTION"],
 )
 
+# Warm up regime history cache so initial regime checks pass
+try:
+    ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
+except Exception as e:
+    logger.warning(f"[warm_cache] failed to seed regime history: {e}")
+
 # ─── H. MARKET HOURS GUARD ────────────────────────────────────────────────────
 nyse = mcal.get_calendar("XNYS")
 def in_trading_hours(ts: pd.Timestamp) -> bool:
@@ -1175,7 +1181,6 @@ _running = False
 def check_pdt_rule(ctx: BotContext) -> bool:
     acct = safe_alpaca_get_account()
     equity = float(acct.equity)
-    logged_day_trades = count_day_trades()
 
     api_day_trades = (
         getattr(acct, "pattern_day_trades", None)
@@ -1190,26 +1195,34 @@ def check_pdt_rule(ctx: BotContext) -> bool:
         "PDT_CHECK",
         extra={
             "equity": equity,
-            "logged_day_trades": logged_day_trades,
             "api_day_trades": api_day_trades,
-            "api_buying_pw": api_buying_pw
-        }
+            "api_buying_pw": api_buying_pw,
+        },
     )
 
-    if equity >= PDT_EQUITY_THRESHOLD:
-        return False
     if api_day_trades is not None and api_day_trades >= PDT_DAY_TRADE_LIMIT:
         logger.info("SKIP_PDT_RULE", extra={"api_day_trades": api_day_trades})
         return True
-    if logged_day_trades >= PDT_DAY_TRADE_LIMIT:
-        logger.info("SKIP_PDT_RULE_LOG", extra={"logged_day_trades": logged_day_trades})
-        return True
+
+    if equity < PDT_EQUITY_THRESHOLD:
+        if api_buying_pw and float(api_buying_pw) > 0:
+            logger.warning(
+                "PDT_EQUITY_LOW", extra={"equity": equity, "buying_pw": api_buying_pw}
+            )
+        else:
+            logger.warning(
+                "PDT_EQUITY_LOW_NO_BP",
+                extra={"equity": equity, "buying_pw": api_buying_pw},
+            )
+            return True
+
     return False
 
 def check_halt_flag() -> bool:
     if not os.path.exists(HALT_FLAG_PATH):
         return False
-    age = datetime.now() - datetime.fromtimestamp(os.path.getmtime(HALT_FLAG_PATH))
+    mtime = os.path.getmtime(HALT_FLAG_PATH)
+    age = datetime.now(timezone.utc) - datetime.fromtimestamp(mtime, timezone.utc)
     return age < timedelta(hours=1)
 
 def too_many_positions() -> bool:
@@ -1254,13 +1267,16 @@ def too_correlated(sym: str) -> bool:
 
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext) -> bool:
-    now = datetime.now(PACIFIC)
-    start = (datetime.combine(now.date(), ctx.market_open) + ctx.entry_start_offset).time()
-    end = (datetime.combine(now.date(), ctx.market_close) - ctx.entry_end_offset).time()
-    if not (start <= now.time() <= end):
-        logger.info("SKIP_ENTRY_WINDOW", extra={"start": start, "end": end, "now": now.time()})
+    """Return True if current time is during regular Eastern trading hours."""
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    start = dt_time(9, 30)
+    end = dt_time(16, 0)
+    if not (start <= now_et.time() <= end):
+        logger.info(
+            "SKIP_ENTRY_WINDOW",
+            extra={"start": start, "end": end, "now": now_et.time()},
+        )
         return False
-    # Also check streak kill-switch
     if _STREAK_HALT_UNTIL and datetime.now(PACIFIC) < _STREAK_HALT_UNTIL:
         logger.info("SKIP_STREAK_HALT", extra={"until": _STREAK_HALT_UNTIL})
         return False
@@ -1386,15 +1402,17 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                 px = bid if side.lower() == "buy" else ask
                 if px <= 0:
                     logger.warning("OFF_HOURS_NO_PRICE", extra={"symbol": symbol})
-                    return None
-                limit_price = round(px, 2)
-                order_kwargs.update({
-                    "type": "limit",
-                    "limit_price": limit_price,
-                    "time_in_force": "day",
-                    "extended_hours": True,
-                })
-                expected_price = limit_price
+                    order_kwargs.update({"type": "market", "time_in_force": "opg"})
+                    expected_price = None
+                else:
+                    limit_price = round(px, 2)
+                    order_kwargs.update({
+                        "type": "limit",
+                        "limit_price": limit_price,
+                        "time_in_force": "day",
+                        "extended_hours": True,
+                    })
+                    expected_price = limit_price
 
             try:
                 logger.info(
