@@ -1,4 +1,5 @@
 import logging
+import logging.handlers
 import os
 import csv
 import json
@@ -7,6 +8,9 @@ import time
 import time as pytime
 import pathlib
 import random
+import signal
+import sys
+import atexit
 from datetime import datetime, date, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Dict, List, Any, Sequence
@@ -94,14 +98,20 @@ RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
 
 # Logging: set root logger to INFO, send to both stderr and a log file
 default_log_path = "/var/log/ai-trading-bot.log"
+# Use a rotating file handler so the log file cannot grow without bound.
+file_handler = logging.handlers.RotatingFileHandler(
+    default_log_path, maxBytes=10_000_000, backupCount=5
+)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
     handlers=[
         logging.StreamHandler(),  # stderr for journalctl
-        logging.FileHandler(default_log_path, mode="a")
-    ]
+        file_handler,
+    ],
+    force=True,
 )
+atexit.register(logging.shutdown)
 logger = logging.getLogger(__name__)
 logging.getLogger("alpaca_trade_api").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -161,6 +171,7 @@ SIGNAL_WEIGHTS_FILE = abspath("signal_weights.csv")
 EQUITY_FILE         = abspath("last_equity.txt")
 PEAK_EQUITY_FILE    = abspath("peak_equity.txt")
 HALT_FLAG_PATH      = abspath("halt.flag")
+SLIPPAGE_LOG_FILE   = abspath("slippage.csv")
 
 # Hyperparameter files
 HYPERPARAMS_FILE     = abspath("hyperparams.json")
@@ -265,6 +276,8 @@ cache_lock      = Lock()
 targets_lock    = Lock()
 vol_lock        = Lock()
 sentiment_lock  = Lock()
+slippage_lock   = Lock()
+meta_lock       = Lock()
 
 breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
 executor = ThreadPoolExecutor(max_workers=4)
@@ -282,6 +295,10 @@ _VOL_STATS = {"mean": None, "std": None, "last_update": None}
 
 # Slippage logs (in-memory for quick access)
 _slippage_log: List[Tuple[str, float, float, datetime]] = []  # (symbol, expected, actual, timestamp)
+# Ensure persistent slippage log file exists
+if not os.path.exists(SLIPPAGE_LOG_FILE):
+    with open(SLIPPAGE_LOG_FILE, "w", newline="") as f:
+        csv.writer(f).writerow(["timestamp", "symbol", "expected", "actual", "slippage_cents"])
 
 # ─── TYPED EXCEPTION ─────────────────────────────────────────────────────────
 class DataFetchError(Exception):
@@ -1533,6 +1550,15 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                 slippage_total.inc(abs(slip))
                 slippage_count.inc()
                 _slippage_log.append((symbol, expected_price, fill_price, datetime.now(timezone.utc)))
+                with slippage_lock:
+                    with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
+                        csv.writer(sf).writerow([
+                            datetime.now(timezone.utc).isoformat(),
+                            symbol,
+                            expected_price,
+                            fill_price,
+                            slip,
+                        ])
                 logger.info(
                     "ORDER_ACK",
                     extra={
@@ -1552,8 +1578,14 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                 orders_total.inc()
                 return order
             except APIError as e:
+                msg = str(e).lower()
                 logger.warning(f"[submit_order] APIError (attempt {attempt}) for {symbol}: {e}")
-                pytime.sleep(attempt)
+                if "too many requests" in msg or "rate limit" in msg:
+                    sleep_time = 60
+                    logger.warning(f"[submit_order] rate limit hit; sleeping {sleep_time}s")
+                    pytime.sleep(sleep_time)
+                else:
+                    pytime.sleep(attempt)
             except Exception as e:
                 logger.exception(f"[submit_order] unexpected error attempt {attempt} for {symbol}: {e}")
                 pytime.sleep(attempt)
@@ -1738,6 +1770,15 @@ def vwap_pegged_submit(
                     slippage_total.inc(abs(slip))
                     slippage_count.inc()
                     _slippage_log.append((symbol, vwap_price, fill_price, datetime.now(timezone.utc)))
+                    with slippage_lock:
+                        with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
+                            csv.writer(sf).writerow([
+                                datetime.now(timezone.utc).isoformat(),
+                                symbol,
+                                vwap_price,
+                                fill_price,
+                                slip,
+                            ])
                 orders_total.inc()
                 break
             except APIError as e:
@@ -2411,69 +2452,81 @@ def run_meta_learning_weight_optimizer(
     output_path: str = SIGNAL_WEIGHTS_FILE,
     alpha: float = 1.0
 ):
-    if not os.path.exists(trade_log_path):
-        logger.warning("METALEARN_NO_TRADES")
+    if not meta_lock.acquire(blocking=False):
+        logger.warning("METALEARN_SKIPPED_LOCKED")
         return
+    try:
+        if not os.path.exists(trade_log_path):
+            logger.warning("METALEARN_NO_TRADES")
+            return
 
-    df = pd.read_csv(trade_log_path).dropna(subset=["entry_price", "exit_price", "signal_tags"])
-    if df.empty:
-        logger.warning("METALEARN_NO_VALID_ROWS")
-        return
+        df = pd.read_csv(trade_log_path).dropna(subset=["entry_price", "exit_price", "signal_tags"])
+        if df.empty:
+            logger.warning("METALEARN_NO_VALID_ROWS")
+            return
 
-    df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map({"buy": 1, "sell": -1})
-    df["outcome"] = (df["pnl"] > 0).astype(int)
+        df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map({"buy": 1, "sell": -1})
+        df["outcome"] = (df["pnl"] > 0).astype(int)
 
-    tags = sorted(set(tag for row in df["signal_tags"] for tag in row.split("+")))
-    X = np.array([[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]])
-    y = df["outcome"].values
+        tags = sorted(set(tag for row in df["signal_tags"] for tag in row.split("+")))
+        X = np.array([[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]])
+        y = df["outcome"].values
 
-    if len(y) < len(tags):
-        logger.warning("METALEARN_TOO_FEW_SAMPLES")
-        return
+        if len(y) < len(tags):
+            logger.warning("METALEARN_TOO_FEW_SAMPLES")
+            return
 
-    model = Ridge(alpha=alpha, fit_intercept=True)
-    model.fit(X, y)
-    joblib.dump(model, META_MODEL_PATH)
-    logger.info("META_MODEL_TRAINED", extra={"samples": len(y)})
+        model = Ridge(alpha=alpha, fit_intercept=True)
+        model.fit(X, y)
+        joblib.dump(model, META_MODEL_PATH)
+        logger.info("META_MODEL_TRAINED", extra={"samples": len(y)})
 
-    weights = {tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)}
-    out_df = pd.DataFrame(list(weights.items()), columns=["signal", "weight"])
-    out_df.to_csv(output_path, index=False)
-    logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
+        weights = {tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)}
+        out_df = pd.DataFrame(list(weights.items()), columns=["signal", "weight"])
+        out_df.to_csv(output_path, index=False)
+        logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
+    finally:
+        meta_lock.release()
 
 def run_bayesian_meta_learning_optimizer(
     trade_log_path: str = TRADE_LOG_FILE,
     output_path: str = SIGNAL_WEIGHTS_FILE
 ):
-    if not os.path.exists(trade_log_path):
-        logger.warning("METALEARN_NO_TRADES")
+    if not meta_lock.acquire(blocking=False):
+        logger.warning("METALEARN_SKIPPED_LOCKED")
         return
+    try:
+        if not os.path.exists(trade_log_path):
+            logger.warning("METALEARN_NO_TRADES")
+            return
 
-    df = pd.read_csv(trade_log_path).dropna(subset=["entry_price", "exit_price", "signal_tags"])
-    if df.empty:
-        logger.warning("METALEARN_NO_VALID_ROWS")
-        return
+        df = pd.read_csv(trade_log_path).dropna(subset=["entry_price", "exit_price", "signal_tags"])
+        if df.empty:
+            logger.warning("METALEARN_NO_VALID_ROWS")
+            return
 
-    df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map({"buy": 1, "sell": -1})
-    df["outcome"] = (df["pnl"] > 0).astype(int)
+        df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map({"buy": 1, "sell": -1})
+        df["outcome"] = (df["pnl"] > 0).astype(int)
 
-    tags = sorted(set(tag for row in df["signal_tags"] for tag in row.split("+")))
-    X = np.array([[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]])
-    y = df["outcome"].values
+        tags = sorted(set(tag for row in df["signal_tags"] for tag in row.split("+")))
+        X = np.array([[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]])
+        y = df["outcome"].values
 
-    if len(y) < len(tags):
-        logger.warning("METALEARN_TOO_FEW_SAMPLES")
-        return
+        if len(y) < len(tags):
+            logger.warning("METALEARN_TOO_FEW_SAMPLES")
+            return
 
-    model = BayesianRidge(fit_intercept=True, normalize=True)
-    model.fit(X, y)
-    joblib.dump(model, abspath("meta_model_bayes.pkl"))
-    logger.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
+        model = BayesianRidge(fit_intercept=True, normalize=True)
+        model.fit(X, y)
+        joblib.dump(model, abspath("meta_model_bayes.pkl"))
+        logger.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
 
-    weights = {tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)}
-    out_df = pd.DataFrame(list(weights.items()), columns=["signal", "weight"])
-    out_df.to_csv(output_path, index=False)
-    logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
+        weights = {tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)}
+        out_df = pd.DataFrame(list(weights.items()), columns=["signal", "weight"])
+        out_df.to_csv(output_path, index=False)
+        logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
+    finally:
+        meta_lock.release()
 
 def load_global_signal_performance(min_trades: int = 10, threshold: float = 0.4) -> Optional[Dict[str, float]]:
     if not os.path.exists(TRADE_LOG_FILE):
@@ -2752,6 +2805,13 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
         "adjusted": high_load_syms
     })
 
+def daily_reset() -> None:
+    """Reset daily counters and in-memory slippage logs."""
+    global _slippage_log, _LOSS_STREAK
+    _slippage_log.clear()
+    _LOSS_STREAK = 0
+    logger.info("DAILY_STATE_RESET")
+
 # At top‐level, define retrain_meta_learner = None so load_or_retrain_daily can reference it safely
 retrain_meta_learner = None
 
@@ -2782,20 +2842,26 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         if retrain_meta_learner is None:
             logger.warning("Daily retraining requested, but retrain_meta_learner is unavailable.")
         else:
-            symbols = load_tickers(TICKERS_FILE)
-            logger.info(
-                f"▶ Starting meta-learner retraining for {today_str} on {len(symbols)} tickers..."
-            )
-            force_train = not os.path.exists(MODEL_PATH)
-            success = retrain_meta_learner(ctx, symbols, force=force_train)
-            if success:
-                try:
-                    with open(marker, "w") as f:
-                        f.write(today_str)
-                except Exception as e:
-                    logger.warning(f"Failed to write retrain marker file: {e}")
+            if not meta_lock.acquire(blocking=False):
+                logger.warning("METALEARN_SKIPPED_LOCKED")
             else:
-                logger.warning(f"Retraining failed; continuing with existing model.")
+                try:
+                    symbols = load_tickers(TICKERS_FILE)
+                    logger.info(
+                        f"▶ Starting meta-learner retraining for {today_str} on {len(symbols)} tickers..."
+                    )
+                    force_train = not os.path.exists(MODEL_PATH)
+                    success = retrain_meta_learner(ctx, symbols, force=force_train)
+                    if success:
+                        try:
+                            with open(marker, "w") as f:
+                                f.write(today_str)
+                        except Exception as e:
+                            logger.warning(f"Failed to write retrain marker file: {e}")
+                    else:
+                        logger.warning("Retraining failed; continuing with existing model.")
+                finally:
+                    meta_lock.release()
 
     # Finally, load whichever model is at MODEL_PATH
     model = load_model(MODEL_PATH)
@@ -2960,6 +3026,13 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
             logger.exception("INITIAL_REBALANCE_FETCH_ERROR", extra={"symbol": sym, "error": str(e)})
 
 if __name__ == "__main__":
+    def _handle_term(signum, frame):
+        logger.info("PROCESS_TERMINATION", extra={"signal": signum})
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _handle_term)
+    signal.signal(signal.SIGINT, _handle_term)
+
     try:
         logger.info(">>> BOT __main__ ENTERED – starting up")
         
@@ -2974,6 +3047,7 @@ if __name__ == "__main__":
 
         # Daily jobs
         schedule.every().day.at("00:30").do(lambda: Thread(target=daily_summary, daemon=True).start())
+        schedule.every().day.at("00:05").do(lambda: Thread(target=daily_reset, daemon=True).start())
         schedule.every().day.at("10:00").do(lambda: Thread(target=run_meta_learning_weight_optimizer, daemon=True).start())
         schedule.every().day.at("02:00").do(lambda: Thread(target=run_bayesian_meta_learning_optimizer, daemon=True).start())
 
