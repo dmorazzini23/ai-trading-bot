@@ -5,7 +5,7 @@ import numpy as np
 
 from datetime import datetime, date, time, timedelta
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 
 import pandas_ta as ta
 
@@ -225,26 +225,50 @@ def retrain_meta_learner(
     X = df_all.drop(columns=["label"])
     y = df_all["label"]
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-    clf = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=6,
-        class_weight="balanced",
-        random_state=42,
-        n_jobs=-1
-    )
-    clf.fit(X_train, y_train)
+    split_idx = int(len(df_all) * 0.8)
+    X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
+    y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
 
-    # Optional—print validation AUC
-    try:
-        from sklearn.metrics import roc_auc_score
+    pos_ratio = y_train.mean()
+    scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
+    print(f"  ✔ Using scoring='{scoring}' (positive ratio={pos_ratio:.3f})")
+
+    base_clf = RandomForestClassifier(class_weight="balanced", random_state=42, n_jobs=-1)
+    param_dist = {
+        "n_estimators": [100, 200, 300, 400, 500],
+        "max_depth": [None, 4, 6, 8, 10],
+        "min_samples_split": [2, 5, 10],
+        "min_samples_leaf": [1, 2, 4],
+        "max_features": ["sqrt", "log2", 0.5],
+    }
+    tscv = TimeSeriesSplit(n_splits=5)
+    search = RandomizedSearchCV(
+        estimator=base_clf,
+        param_distributions=param_dist,
+        n_iter=20,
+        scoring=scoring,
+        cv=tscv,
+        random_state=42,
+        n_jobs=-1,
+        verbose=1,
+    )
+    search.fit(X_train, y_train)
+    clf = search.best_estimator_
+    print(f"  ✔ Best params: {search.best_params_}")
+
+    from sklearn.metrics import f1_score, roc_auc_score
+    if scoring == "f1":
+        val_pred = clf.predict(X_val)
+        metric = f1_score(y_val, val_pred)
+        print(f"  ✔ Holdout F1 = {metric:.4f}")
+    else:
         val_probs = clf.predict_proba(X_val)[:, 1]
-        auc = roc_auc_score(y_val, val_probs)
-        print(f"  ✔ Validation AUC = {auc:.4f}")
-    except Exception:
-        pass
+        metric = roc_auc_score(y_val, val_probs)
+        print(f"  ✔ Holdout AUC = {metric:.4f}")
+
+    importances = pd.Series(clf.feature_importances_, index=X.columns)
+    print("  ✔ Top feature importances:")
+    print(importances.sort_values(ascending=False).head(10))
 
     joblib.dump(clf, MODEL_PATH)
     print(f"  ✔ Saved new meta‐learner to {MODEL_PATH}")
