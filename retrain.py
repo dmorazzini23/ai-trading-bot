@@ -329,6 +329,49 @@ def retrain_meta_learner(
         metric = f1_score(y_val, blended_pred)
         print(f"  ✔ Ensemble holdout F1 = {metric:.4f}")
     else:
+        codex/update-retrain.py-to-filter-features-by-importance
+        val_probs = clf.predict_proba(X_val)[:, 1]
+        metric = roc_auc_score(y_val, val_probs)
+        print(f"  ✔ Holdout AUC = {metric:.4f}")
+
+    importances = pd.Series(clf.feature_importances_, index=X.columns)
+    print("  ✔ Top feature importances:")
+    print(importances.sort_values(ascending=False).head(10))
+
+    # ─── Feature Selection ────────────────────────────────────────────────────
+    selected = importances[importances >= 0.005].index.tolist()
+    if len(selected) == 0:
+        print("  ⚠️ No features met the importance threshold; using all features.")
+        selected = list(X.columns)
+
+    print(f"  ✔ Selected {len(selected)} features with importance >= 0.005")
+    print("  ✔ Final feature list:")
+    print(selected)
+
+    # Retrain final model using only the selected features
+    X_train_sel = X_train[selected]
+    X_val_sel = X_val[selected]
+
+    final_clf = RandomForestClassifier(
+        class_weight="balanced",
+        random_state=42,
+        n_jobs=-1,
+        **search.best_params_,
+    )
+    final_clf.fit(X_train_sel, y_train)
+
+    if scoring == "f1":
+        val_pred = final_clf.predict(X_val_sel)
+        metric = f1_score(y_val, val_pred)
+        print(f"  ✔ Final Holdout F1 = {metric:.4f}")
+    else:
+        val_probs = final_clf.predict_proba(X_val_sel)[:, 1]
+        metric = roc_auc_score(y_val, val_probs)
+        print(f"  ✔ Final Holdout AUC = {metric:.4f}")
+
+    joblib.dump(final_clf, MODEL_PATH)
+    print(f"  ✔ Saved new meta‐learner to {MODEL_PATH}")
+
         metric = roc_auc_score(y_val, blended)
         print(f"  ✔ Ensemble holdout AUC = {metric:.4f}")
 
@@ -338,6 +381,7 @@ def retrain_meta_learner(
     print(
         f"  ✔ Saved models to {MODEL_RF_PATH}, {MODEL_XGB_PATH}, {MODEL_LGB_PATH}"
     )
+        main
     return True
 
 
