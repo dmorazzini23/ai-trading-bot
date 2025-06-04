@@ -48,15 +48,20 @@ import finnhub
 from finnhub import FinnhubAPIException
 import pybreaker
 
-def cancel_all_open_orders(ctx: 'BotContext') -> None:
-    """On startup, fetch and cancel any Alpaca orders whose status is 'open'."""
+def cancel_all_open_orders(ctx: "BotContext") -> None:
+    """
+    On startup or each run, cancel every Alpaca order whose status is 'open'.
+    """
     try:
         open_orders = ctx.api.list_orders(status="open", limit=500)
-        for order in open_orders:
-            if getattr(order, "status", "") == "open":
-                ctx.api.cancel_order(order.id)
-    except Exception as e:
-        logger.warning(f"[cancel_all_open_orders] failed: {e}")
+        for od in open_orders:
+            if getattr(od, "status", "").lower() == "open":
+                try:
+                    ctx.api.cancel_order(od.id)
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
 def reconcile_positions(ctx: 'BotContext') -> None:
     """On startup, fetch all live positions and clear any in-memory stop/take targets for assets no longer held."""
@@ -658,51 +663,68 @@ def _parse_local_positions() -> Dict[str, int]:
     return positions
 
 def audit_positions(ctx: "BotContext") -> None:
-    """Ensure broker positions match the local trade log, flattening any discrepancies."""
+    """
+    Fetch local vs. broker positions and submit market orders to correct any mismatch.
+    """
+    # 1) Read local open positions from the trade log
     local = _parse_local_positions()
+
+    # 2) Fetch remote (broker) positions
     try:
         remote = {p.symbol: int(p.qty) for p in ctx.api.list_positions()}
-    except Exception as e:
-        logger.warning(f"[audit_positions] failed to fetch remote positions: {e}")
+    except Exception:
         return
-    all_symbols = set(local) | set(remote)
-    for sym in all_symbols:
-        local_qty = local.get(sym, 0)
-        remote_qty = remote.get(sym, 0)
-        diff_qty = remote_qty - local_qty
-        if diff_qty > 0:
+
+    # 3) For any symbol in remote whose remote_qty != local_qty, correct via market order
+    for sym, rq in remote.items():
+        lq = local.get(sym, 0)
+        if lq != rq:
+            diff = rq - lq
+            if diff > 0:
+                # Broker has more shares than local: sell off the excess
+                try:
+                    ctx.api.submit_order(symbol=sym, qty=diff, side="sell", type="market")
+                except Exception:
+                    pass
+            else:
+                # Broker has fewer shares than local: buy back the missing shares
+                try:
+                    ctx.api.submit_order(symbol=sym, qty=abs(diff), side="buy", type="market")
+                except Exception:
+                    pass
+
+    # 4) For any symbol in local that is not in remote, buy at market to restore
+    for sym, lq in local.items():
+        if sym not in remote:
             try:
-                # Broker holds more than local ➔ sell the excess
-                ctx.api.submit_order(symbol=sym, qty=diff_qty, side="sell", type="market")
-            except Exception as e:
-                logger.warning(f"[audit_positions] could not flatten remote overhang for {sym}: {e}")
-        elif diff_qty < 0:
-            try:
-                # Broker holds fewer shares than local ➔ buy the missing amount
-                ctx.api.submit_order(symbol=sym, qty=abs(diff_qty), side="buy", type="market")
-            except Exception as e:
-                logger.warning(f"[audit_positions] could not restore missing remote position for {sym}: {e}")
+                ctx.api.submit_order(symbol=sym, qty=lq, side="buy", type="market")
+            except Exception:
+                pass
 
 def validate_open_orders(ctx: "BotContext") -> None:
-    """Check for open orders stuck or mismatched with local positions."""
     try:
         open_orders = ctx.api.list_orders(status="open")
-    except Exception as e:
-        logger.warning(f"[validate_open_orders] list_orders failed: {e}")
+    except Exception:
         return
+
     now = datetime.now(timezone.utc)
     for od in open_orders:
         created = pd.to_datetime(getattr(od, "created_at", now))
         age = (now - created).total_seconds() / 60.0
-        if age > 5 and getattr(od, "status", "") in {"new", "accepted"}:
+
+        if age > 5 and getattr(od, "status", "").lower() in {"new", "accepted"}:
             try:
                 ctx.api.cancel_order(od.id)
                 qty = int(getattr(od, "qty", 0))
                 side = getattr(od, "side", "")
                 if qty > 0 and side in {"buy", "sell"}:
+                    # Resubmit exactly the same size and side as a market order
                     ctx.api.submit_order(symbol=od.symbol, qty=qty, side=side, type="market")
-            except Exception as e:
-                logger.warning(f"[validate_open_orders] could not cancel/replace stuck order {od.id}: {e}")
+            except Exception:
+                pass
+
+    # After canceling/replacing any stuck orders, fix any position mismatches
+    audit_positions(ctx)
 
 # ─── F. SIGNAL MANAGER & HELPER FUNCTIONS ─────────────────────────────────────
 _LAST_PRICE: Dict[str, float] = {}
@@ -2595,6 +2617,7 @@ else:
         regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 
 def check_market_regime() -> bool:
+    # Always return True; never skip any symbol due to regime filtering.
     return True
 
 def screen_universe(
@@ -2762,9 +2785,8 @@ def start_healthcheck() -> None:
 
 def run_all_trades_worker(model):
     global _last_fh_prefetch_date, _running
-    # on every run, first cancel and replace any stuck orders and flatten position mismatches
+    # On each run, clear open orders and correct any position mismatches
     cancel_all_open_orders(ctx)
-    reconcile_positions(ctx)
     audit_positions(ctx)
     now_utc = pd.Timestamp.utcnow()
     # Prevent overlapping runs
@@ -2932,7 +2954,6 @@ if __name__ == "__main__":
         model = load_or_retrain_daily(ctx)
         logger.info("BOT_LAUNCHED")
         cancel_all_open_orders(ctx)
-        reconcile_positions(ctx)
         audit_positions(ctx)
 
         # ─── WARM-CACHE SENTIMENT FOR ALL TICKERS ─────────────────────────────────────
