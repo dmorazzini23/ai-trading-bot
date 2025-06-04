@@ -53,13 +53,11 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
                 })[["Open", "High", "Low", "Close", "Volume"]]
             break
         except Exception as e:
-            # On any error (including rate‐limit), sleep and retry
             if attempt < 3:
                 print(f"  ▶ Failed to download {symbol} (attempt {attempt}/3): {e!r}. Sleeping 2s…")
                 time.sleep(2)
             else:
                 print(f"  ▶ Final attempt failed for {symbol}; proceeding with empty DataFrame.")
-
     # 3) Save to cache (even if empty)
     try:
         df_final.to_csv(cache_fname)
@@ -72,7 +70,10 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
 
 
 def run_backtest(symbols, start, end, params) -> dict:
-    """Run a very small simulated backtest using cached yfinance data."""
+    """
+    Run a very small simulated backtest using cached yfinance data.
+    Returns a dict with "net_pnl" and "sharpe".
+    """
     # 1) Load (or download+cache) each symbol’s DataFrame
     data: dict[str, pd.DataFrame] = {}
     for s in symbols:
@@ -94,7 +95,7 @@ def run_backtest(symbols, start, end, params) -> dict:
 
             if positions[sym] == 0:
                 # Entry logic
-                if ret > params["BUY_THRESHOLD"] and cash > 0:
+                if (not np.isnan(ret)) and ret > params["BUY_THRESHOLD"] and cash > 0:
                     qty = int((cash * params["SCALING_FACTOR"]) / price)
                     if qty > 0:
                         cost = qty * price * (1 + params["LIMIT_ORDER_SLIPPAGE"])
@@ -120,15 +121,26 @@ def run_backtest(symbols, start, end, params) -> dict:
                 total_value += positions[sym] * df.loc[d, "Close"]
         portfolio.append(total_value)
 
+    if not portfolio:
+        return {"net_pnl": 0.0, "sharpe": float("nan")}
+
     series = pd.Series(portfolio, index=dates)
     pct = series.pct_change().dropna()
-    sharpe = (pct.mean() / pct.std()) * np.sqrt(252) if not pct.empty else 0.0
-    net_pnl = portfolio[-1] - portfolio[0] if portfolio else 0.0
+
+    if pct.empty or pct.std() == 0:
+        sharpe = float("nan")
+    else:
+        sharpe = (pct.mean() / pct.std()) * np.sqrt(252)
+
+    net_pnl = portfolio[-1] - portfolio[0]
     return {"net_pnl": net_pnl, "sharpe": sharpe}
 
 
 def optimize_hyperparams(ctx, symbols, backtest_data, param_grid: dict, metric: str = "sharpe") -> dict:
-    """Grid search over hyperparameters."""
+    """
+    Grid search over hyperparameters.
+    If Sharpe is nan, treat it as a very low score (never wins).
+    """
     keys = list(param_grid.keys())
     combos = list(product(*param_grid.values()))
     best_params = None
@@ -137,10 +149,16 @@ def optimize_hyperparams(ctx, symbols, backtest_data, param_grid: dict, metric: 
     for combo in combos:
         params = dict(zip(keys, combo))
         result = run_backtest(symbols, backtest_data["start"], backtest_data["end"], params)
-        score = result.get(metric, 0)
+        score = result.get(metric, 0.0)
+
+        # If score is nan, replace with very low number
+        if isinstance(score, float) and np.isnan(score):
+            score = -float("inf")
+
+        print(f"  ▶ Testing {params}  →  {metric}={score:.6f}")
         if score > best_score:
             best_score = score
-            best_params = params
+            best_params = params.copy()
 
     return best_params or {}
 
@@ -163,13 +181,14 @@ def main():
     }
 
     data_cfg = {"start": args.start, "end": args.end}
+    print(f"▶ Starting grid search over {len(symbols)} symbols from {args.start} to {args.end}...\n")
     best = optimize_hyperparams(None, symbols, data_cfg, param_grid, metric="sharpe")
 
     # Write results
     with open("best_hyperparams.json", "w") as f:
         json.dump(best, f, indent=2)
 
-    print("Best hyperparameters:", best)
+    print(f"\n✔ Best hyperparameters: {best}")
 
 
 if __name__ == "__main__":
