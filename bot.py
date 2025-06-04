@@ -623,7 +623,7 @@ def _parse_local_positions() -> Dict[str, int]:
     positions = {k: v for k, v in positions.items() if v != 0}
     return positions
 
-def reconcile_positions(ctx: BotContext) -> None:
+def reconcile_positions(ctx: "BotContext") -> None:
     """Compare broker positions against local trade log and warn on discrepancies."""
     local = _parse_local_positions()
     try:
@@ -645,7 +645,7 @@ def reconcile_positions(ctx: BotContext) -> None:
                 extra={"symbol": sym, "local_qty": lq, "broker_qty": 0},
             )
 
-def validate_open_orders(ctx: BotContext) -> None:
+def validate_open_orders(ctx: "BotContext") -> None:
     """Check for open orders stuck or mismatched with local positions."""
     try:
         open_orders = ctx.api.list_orders(status="open")
