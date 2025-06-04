@@ -193,28 +193,15 @@ def retrain_meta_learner(
     threshold_pct: float = 0.002,
     force: bool = False,
 ) -> bool:
-    """
-    1) Skip retrain on weekends or outside market hours.
-    2) Call gather_minute_data()—prints per‐symbol counts.
-    3) If at least one symbol has ≥ Δ_minutes+1 bars, build features & train.
-    4) Otherwise, skip retrain with a clear message.
-    """
     now = datetime.now()
     if not force:
-        # Skip on weekends
         if now.weekday() >= 5:
-            print(
-                f"[retrain_meta_learner] Weekend detected (weekday={now.weekday()}). Skipping retrain."
-            )
+            print(f"[retrain_meta_learner] Weekend detected (weekday={now.weekday()}). Skipping retrain.")
             return False
-
-        # Skip outside market hours (9:30 AM–4:00 PM)
         market_open = time(9, 30)
         market_close = time(16, 0)
         if not (market_open <= now.time() <= market_close):
-            print(
-                f"[retrain_meta_learner] Outside market hours ({now.time().strftime('%H:%M')}). Skipping retrain."
-            )
+            print(f"[retrain_meta_learner] Outside market hours ({now.time().strftime('%H:%M')}). Skipping retrain.")
             return False
 
     print(f"[{now:%Y-%m-%d %H:%M:%S}] ▶ Starting meta‐learner retraining…")
@@ -269,11 +256,7 @@ def retrain_meta_learner(
             },
         ),
         "lgb": (
-            LGBMClassifier(
-                objective="binary",
-                random_state=42,
-                n_jobs=-1,
-            ),
+            LGBMClassifier(objective="binary", random_state=42, n_jobs=-1),
             {
                 "n_estimators": [100, 200, 300],
                 "num_leaves": [31, 63, 127],
@@ -313,75 +296,22 @@ def retrain_meta_learner(
             metric = roc_auc_score(y_val, val_probs)
             print(f"  ✔ {name} holdout AUC = {metric:.4f}")
 
-        if hasattr(clf, "feature_importances_"):
-            importances = pd.Series(clf.feature_importances_, index=X.columns)
-            print(f"  ✔ {name} top feature importances:")
-            print(importances.sort_values(ascending=False).head(10))
-
-    # Blended ensemble evaluation
-    from sklearn.metrics import f1_score, roc_auc_score
-    preds = []
-    for m in models.values():
-        preds.append(m.predict_proba(X_val)[:, 1])
+    # Ensemble blend
+    preds = [m.predict_proba(X_val)[:, 1] for m in models.values()]
     blended = np.mean(preds, axis=0)
     if scoring == "f1":
         blended_pred = (blended >= 0.5).astype(int)
         metric = f1_score(y_val, blended_pred)
         print(f"  ✔ Ensemble holdout F1 = {metric:.4f}")
     else:
-        codex/update-retrain.py-to-filter-features-by-importance
-        val_probs = clf.predict_proba(X_val)[:, 1]
-        metric = roc_auc_score(y_val, val_probs)
-        print(f"  ✔ Holdout AUC = {metric:.4f}")
-
-    importances = pd.Series(clf.feature_importances_, index=X.columns)
-    print("  ✔ Top feature importances:")
-    print(importances.sort_values(ascending=False).head(10))
-
-    # ─── Feature Selection ────────────────────────────────────────────────────
-    selected = importances[importances >= 0.005].index.tolist()
-    if len(selected) == 0:
-        print("  ⚠️ No features met the importance threshold; using all features.")
-        selected = list(X.columns)
-
-    print(f"  ✔ Selected {len(selected)} features with importance >= 0.005")
-    print("  ✔ Final feature list:")
-    print(selected)
-
-    # Retrain final model using only the selected features
-    X_train_sel = X_train[selected]
-    X_val_sel = X_val[selected]
-
-    final_clf = RandomForestClassifier(
-        class_weight="balanced",
-        random_state=42,
-        n_jobs=-1,
-        **search.best_params_,
-    )
-    final_clf.fit(X_train_sel, y_train)
-
-    if scoring == "f1":
-        val_pred = final_clf.predict(X_val_sel)
-        metric = f1_score(y_val, val_pred)
-        print(f"  ✔ Final Holdout F1 = {metric:.4f}")
-    else:
-        val_probs = final_clf.predict_proba(X_val_sel)[:, 1]
-        metric = roc_auc_score(y_val, val_probs)
-        print(f"  ✔ Final Holdout AUC = {metric:.4f}")
-
-    joblib.dump(final_clf, MODEL_PATH)
-    print(f"  ✔ Saved new meta‐learner to {MODEL_PATH}")
-
         metric = roc_auc_score(y_val, blended)
         print(f"  ✔ Ensemble holdout AUC = {metric:.4f}")
 
+    # Save models
     joblib.dump(models.get("rf"), MODEL_RF_PATH)
     joblib.dump(models.get("xgb"), MODEL_XGB_PATH)
     joblib.dump(models.get("lgb"), MODEL_LGB_PATH)
-    print(
-        f"  ✔ Saved models to {MODEL_RF_PATH}, {MODEL_XGB_PATH}, {MODEL_LGB_PATH}"
-    )
-        main
-    return True
+    print(f"  ✔ Saved models to {MODEL_RF_PATH}, {MODEL_XGB_PATH}, {MODEL_LGB_PATH}")
 
+    return True
 
