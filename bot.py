@@ -608,6 +608,65 @@ class TradeLogger:
             _STREAK_HALT_UNTIL = datetime.now(PACIFIC) + timedelta(minutes=60)
             logger.warning("STREAK_HALT_TRIGGERED", extra={"loss_streak": _LOSS_STREAK, "halt_until": _STREAK_HALT_UNTIL})
 
+def _parse_local_positions() -> Dict[str, int]:
+    """Return current local open positions from the trade log."""
+    positions: Dict[str, int] = {}
+    if not os.path.exists(TRADE_LOG_FILE):
+        return positions
+    df = pd.read_csv(TRADE_LOG_FILE)
+    for _, row in df.iterrows():
+        if str(row.get("exit_time", "")) != "":
+            continue
+        qty = int(row.qty)
+        qty = qty if row.side == "buy" else -qty
+        positions[row.symbol] = positions.get(row.symbol, 0) + qty
+    positions = {k: v for k, v in positions.items() if v != 0}
+    return positions
+
+def reconcile_positions(ctx: BotContext) -> None:
+    """Compare broker positions against local trade log and warn on discrepancies."""
+    local = _parse_local_positions()
+    try:
+        remote = {p.symbol: int(p.qty) for p in ctx.api.list_positions()}
+    except Exception as e:
+        logger.warning(f"[reconcile_positions] failed to fetch remote positions: {e}")
+        return
+    for sym, rq in remote.items():
+        lq = local.get(sym, 0)
+        if lq != rq:
+            logger.warning(
+                "POSITION_DISCREPANCY",
+                extra={"symbol": sym, "local_qty": lq, "broker_qty": rq},
+            )
+    for sym, lq in local.items():
+        if sym not in remote:
+            logger.warning(
+                "POSITION_DISCREPANCY",
+                extra={"symbol": sym, "local_qty": lq, "broker_qty": 0},
+            )
+
+def validate_open_orders(ctx: BotContext) -> None:
+    """Check for open orders stuck or mismatched with local positions."""
+    try:
+        open_orders = ctx.api.list_orders(status="open")
+    except Exception as e:
+        logger.warning(f"[validate_open_orders] list_orders failed: {e}")
+        return
+    now = datetime.now(timezone.utc)
+    for od in open_orders:
+        created = pd.to_datetime(getattr(od, "created_at", now))
+        age = (now - created).total_seconds() / 60.0
+        if age > 5 and getattr(od, "status", "") in {"new", "accepted"}:
+            logger.warning(
+                "ORDER_STUCK",
+                extra={"order_id": od.id, "symbol": od.symbol, "age_min": round(age, 1)},
+            )
+        logger.info(
+            "OPEN_ORDER",
+            extra={"order_id": od.id, "symbol": od.symbol, "status": od.status},
+        )
+    reconcile_positions(ctx)
+
 # ─── F. SIGNAL MANAGER & HELPER FUNCTIONS ─────────────────────────────────────
 _LAST_PRICE: Dict[str, float] = {}
 _SENTIMENT_CACHE: Dict[str, Tuple[float, float]] = {}  # {ticker: (timestamp, score)}
@@ -1338,17 +1397,45 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                 expected_price = limit_price
 
             try:
+                logger.info(
+                    "ORDER_SENT",
+                    extra={
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "symbol": symbol,
+                        "side": side,
+                        "qty": qty_slice,
+                        "order_type": order_kwargs.get("type", "market"),
+                    },
+                )
                 order = ctx.api.submit_order(**order_kwargs)
-                fill_price = float(getattr(order, "filled_avg_price", expected_price or 0) or 0)
+                if not getattr(order, "id", None):
+                    logger.error(
+                        "ORDER_SUBMISSION_NO_ID",
+                        extra={"symbol": symbol, "response": str(order)},
+                    )
+                fill_price = float(
+                    getattr(order, "filled_avg_price", expected_price or 0) or 0
+                )
                 slip = ((fill_price - expected_price) * 100) if expected_price else 0.0
                 slippage_total.inc(abs(slip))
                 slippage_count.inc()
                 _slippage_log.append((symbol, expected_price, fill_price, datetime.now(timezone.utc)))
-                logger.info("ORDER_SUBMITTED", extra={
-                    "symbol": symbol, "side": side, "qty": qty_slice,
-                    "expected_price": expected_price, "fill_price": fill_price,
-                    "slippage_cents": slip,
-                })
+                logger.info(
+                    "ORDER_ACK",
+                    extra={
+                        "symbol": symbol,
+                        "order_id": getattr(order, "id", ""),
+                        "status": getattr(order, "status", ""),
+                        "expected_price": expected_price,
+                        "fill_price": fill_price,
+                        "slippage_cents": slip,
+                    },
+                )
+                Thread(
+                    target=poll_order_fill_status,
+                    args=(ctx, getattr(order, "id", "")),
+                    daemon=True,
+                ).start()
                 orders_total.inc()
                 return order
             except APIError as e:
@@ -1360,9 +1447,27 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         # final fallback
         try:
             logger.warning(f"FALLBACK_MARKET_ORDER for {symbol}")
-            return ctx.api.submit_order(
-                symbol=symbol, qty=qty_slice, side=side, type="market", time_in_force="gtc"
+            order = ctx.api.submit_order(
+                symbol=symbol,
+                qty=qty_slice,
+                side=side,
+                type="market",
+                time_in_force="gtc",
             )
+            logger.info(
+                "ORDER_ACK",
+                extra={
+                    "symbol": symbol,
+                    "order_id": getattr(order, "id", ""),
+                    "status": getattr(order, "status", ""),
+                },
+            )
+            Thread(
+                target=poll_order_fill_status,
+                args=(ctx, getattr(order, "id", "")),
+                daemon=True,
+            ).start()
+            return order
         except Exception:
             return None
 
@@ -1380,6 +1485,25 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
         return last_order
     else:
         return _send(qty)
+
+def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -> None:
+    """Poll Alpaca for order fill status until it is no longer open."""
+    start = pytime.time()
+    while pytime.time() - start < timeout:
+        try:
+            od = ctx.api.get_order(order_id)
+            status = getattr(od, "status", "")
+            filled = getattr(od, "filled_qty", "0")
+            if status not in {"new", "accepted", "partially_filled"}:
+                logger.info(
+                    "ORDER_FINAL_STATUS",
+                    extra={"order_id": order_id, "status": status, "filled_qty": filled},
+                )
+                return
+        except Exception as e:
+            logger.warning(f"[poll_order_fill_status] failed for {order_id}: {e}")
+            return
+        pytime.sleep(3)
 
 def twap_submit(
     ctx: BotContext,
@@ -1423,25 +1547,55 @@ def vwap_pegged_submit(
             slice_qty = max(1, int((total_qty - placed) * 0.5))
         else:
             slice_qty = min(max(1, total_qty // 10), total_qty - placed)
-        try:
-            od = ctx.api.submit_order(
-                symbol=symbol,
-                qty=slice_qty,
-                side=side,
-                type="limit",
-                time_in_force="ioc",
-                limit_price=round(vwap_price, 2)
-            )
-            fill_price = float(getattr(od, "filled_avg_price", 0) or 0)
-            expected = vwap_price
-            if fill_price > 0:
-                slip = (fill_price - expected) * 100
-                slippage_total.inc(abs(slip))
-                slippage_count.inc()
-                _slippage_log.append((symbol, expected, fill_price, datetime.now(timezone.utc)))
-            orders_total.inc()
-        except Exception as e:
-            logger.exception(f"[VWAP] slice failed: {e}")
+        order = None
+        for attempt in range(3):
+            try:
+                logger.info(
+                    "ORDER_SENT",
+                    extra={
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "symbol": symbol,
+                        "side": side,
+                        "qty": slice_qty,
+                        "order_type": "limit",
+                    },
+                )
+                order = ctx.api.submit_order(
+                    symbol=symbol,
+                    qty=slice_qty,
+                    side=side,
+                    type="limit",
+                    time_in_force="ioc",
+                    limit_price=round(vwap_price, 2),
+                )
+                logger.info(
+                    "ORDER_ACK",
+                    extra={
+                        "symbol": symbol,
+                        "order_id": getattr(order, "id", ""),
+                        "status": getattr(order, "status", ""),
+                    },
+                )
+                Thread(
+                    target=poll_order_fill_status,
+                    args=(ctx, getattr(order, "id", "")),
+                    daemon=True,
+                ).start()
+                fill_price = float(getattr(order, "filled_avg_price", 0) or 0)
+                if fill_price > 0:
+                    slip = (fill_price - vwap_price) * 100
+                    slippage_total.inc(abs(slip))
+                    slippage_count.inc()
+                    _slippage_log.append((symbol, vwap_price, fill_price, datetime.now(timezone.utc)))
+                orders_total.inc()
+                break
+            except APIError as e:
+                logger.warning(f"[VWAP] APIError attempt {attempt+1} for {symbol}: {e}")
+                pytime.sleep(attempt + 1)
+            except Exception as e:
+                logger.exception(f"[VWAP] slice attempt {attempt+1} failed: {e}")
+                pytime.sleep(attempt + 1)
+        if order is None:
             break
         placed += slice_qty
         pytime.sleep(duration / 10)
@@ -1966,14 +2120,12 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
             continue
         target_shares = int(target_dollar / price)
         try:
-            ctx.api.submit_order(
-                symbol=sym,
-                qty=target_shares,
-                side="buy" if target_shares > 0 else "sell",
-                type="market",
-                time_in_force="day"
+            submit_order(
+                ctx,
+                sym,
+                abs(target_shares),
+                "buy" if target_shares > 0 else "sell",
             )
-            orders_total.inc()
         except Exception:
             logger.exception(f"Rebalance failed for {sym}")
     logger.info("PORTFOLIO_REBALANCED")
@@ -2622,14 +2774,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                 continue
             logger.info("INITIAL_REBALANCE_BUY", extra={"symbol": sym, "qty": qty, "price": price})
             try:
-                ctx.api.submit_order(
-                    symbol=sym,
-                    qty=qty,
-                    side="buy",
-                    type="market",
-                    time_in_force="day",
-                )
-                orders_total.inc()
+                submit_order(ctx, sym, qty, "buy")
             except APIError as e:
                 msg = str(e).lower()
                 if "insufficient" in msg or "day trading buying power" in msg:
@@ -2667,6 +2812,7 @@ if __name__ == "__main__":
 
         model = load_or_retrain_daily(ctx)
         logger.info("BOT_LAUNCHED")
+        reconcile_positions(ctx)
 
         # ─── WARM-CACHE SENTIMENT FOR ALL TICKERS ─────────────────────────────────────
         # This will prevent the initial burst of NewsAPI calls and 429s
@@ -2687,6 +2833,7 @@ if __name__ == "__main__":
 
         # Recurring jobs
         schedule.every(1).minutes.do(lambda: schedule_run_all_trades(model))
+        schedule.every(1).minutes.do(lambda: Thread(target=validate_open_orders, args=(ctx,), daemon=True).start())
         schedule.every(6).hours.do(lambda: Thread(target=update_signal_weights, daemon=True).start())
 
         # Scheduler loop
