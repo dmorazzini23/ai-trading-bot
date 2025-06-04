@@ -671,22 +671,15 @@ def audit_positions(ctx: "BotContext") -> None:
         remote_qty = remote.get(sym, 0)
         diff_qty = remote_qty - local_qty
         if diff_qty > 0:
-            # remote holds more shares than local – sell the excess
             try:
+                # Broker holds more than local ➔ sell the excess
                 ctx.api.submit_order(symbol=sym, qty=diff_qty, side="sell", type="market")
-                logger.warning(
-                    "POSITION_DISCREPANCY_FLATTENED",
-                    extra={"symbol": sym, "local_qty": local_qty, "broker_qty": remote_qty},
-                )
             except Exception as e:
                 logger.warning(f"[audit_positions] could not flatten remote overhang for {sym}: {e}")
         elif diff_qty < 0:
             try:
+                # Broker holds fewer shares than local ➔ buy the missing amount
                 ctx.api.submit_order(symbol=sym, qty=abs(diff_qty), side="buy", type="market")
-                logger.warning(
-                    "POSITION_DISCREPANCY_RESTORED",
-                    extra={"symbol": sym, "local_qty": local_qty, "broker_qty": remote_qty},
-                )
             except Exception as e:
                 logger.warning(f"[audit_positions] could not restore missing remote position for {sym}: {e}")
 
@@ -702,17 +695,12 @@ def validate_open_orders(ctx: "BotContext") -> None:
         created = pd.to_datetime(getattr(od, "created_at", now))
         age = (now - created).total_seconds() / 60.0
         if age > 5 and getattr(od, "status", "") in {"new", "accepted"}:
-            logger.warning(
-                "ORDER_STUCK",
-                extra={"order_id": od.id, "symbol": od.symbol, "age_min": round(age, 1)},
-            )
             try:
                 ctx.api.cancel_order(od.id)
                 qty = int(getattr(od, "qty", 0))
                 side = getattr(od, "side", "")
                 if qty > 0 and side in {"buy", "sell"}:
-                    opposite = "buy" if side == "buy" else "sell"
-                    ctx.api.submit_order(symbol=od.symbol, qty=qty, side=opposite, type="market")
+                    ctx.api.submit_order(symbol=od.symbol, qty=qty, side=side, type="market")
             except Exception as e:
                 logger.warning(f"[validate_open_orders] could not cancel/replace stuck order {od.id}: {e}")
 
