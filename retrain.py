@@ -9,6 +9,16 @@ from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
 
 import pandas_ta as ta
 
+# Existing helper for market regime detection
+from bot import detect_regime  # type: ignore
+
+# Output models for each regime
+MODEL_FILES = {
+    "bull": "model_bull.pkl",
+    "bear": "model_bear.pkl",
+    "chop": "model_chop.pkl",
+}
+
 # ─── COPY&PASTE of prepare_indicators (unchanged) ─────────────────
 def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.copy()
@@ -116,7 +126,6 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     return df
 # ──────────────────────────────────────────────────────────────────────────────
 
-MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
 
 def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.DataFrame]:
     """
@@ -164,6 +173,13 @@ def build_feature_label_df(
             print(f"[build_feature_label_df] – {sym} indicators empty after dropna")
             continue
 
+        # Determine regime series for this symbol's data
+        regime_info = detect_regime(raw)
+        if isinstance(regime_info, pd.Series):
+            regimes = regime_info.reset_index(drop=True)
+        else:
+            regimes = pd.Series([regime_info] * len(feat))
+
         closes = raw["Close"].values
         n = len(feat)
         for i in range(n - Δ_minutes):
@@ -173,6 +189,7 @@ def build_feature_label_df(
             label = 1 if ret_pct >= threshold_pct else 0
 
             row = feat.iloc[i].copy().to_dict()
+            row["regime"] = regimes.iloc[i] if len(regimes) > i else regimes.iloc[-1]
             row["label"] = label
             rows.append(row)
 
@@ -222,56 +239,64 @@ def retrain_meta_learner(
         print("  ⚠️ No usable rows after building (Δ, threshold) → skipping retrain.")
         return False
 
-    X = df_all.drop(columns=["label"])
-    y = df_all["label"]
+    trained_any = False
+    for regime, subset in df_all.groupby("regime"):
+        if subset.empty or regime not in MODEL_FILES:
+            continue
 
-    split_idx = int(len(df_all) * 0.8)
-    X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
-    y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
+        X = subset.drop(columns=["label", "regime"])
+        y = subset["label"]
 
-    pos_ratio = y_train.mean()
-    scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
-    print(f"  ✔ Using scoring='{scoring}' (positive ratio={pos_ratio:.3f})")
+        split_idx = int(len(subset) * 0.8)
+        X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
+        y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
 
-    base_clf = RandomForestClassifier(class_weight="balanced", random_state=42, n_jobs=-1)
-    param_dist = {
-        "n_estimators": [100, 200, 300, 400, 500],
-        "max_depth": [None, 4, 6, 8, 10],
-        "min_samples_split": [2, 5, 10],
-        "min_samples_leaf": [1, 2, 4],
-        "max_features": ["sqrt", "log2", 0.5],
-    }
-    tscv = TimeSeriesSplit(n_splits=5)
-    search = RandomizedSearchCV(
-        estimator=base_clf,
-        param_distributions=param_dist,
-        n_iter=20,
-        scoring=scoring,
-        cv=tscv,
-        random_state=42,
-        n_jobs=-1,
-        verbose=1,
-    )
-    search.fit(X_train, y_train)
-    clf = search.best_estimator_
-    print(f"  ✔ Best params: {search.best_params_}")
+        pos_ratio = y_train.mean()
+        scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
+        print(f"  ✔ Training {regime} model using scoring='{scoring}' (pos_ratio={pos_ratio:.3f})")
 
-    from sklearn.metrics import f1_score, roc_auc_score
-    if scoring == "f1":
-        val_pred = clf.predict(X_val)
-        metric = f1_score(y_val, val_pred)
-        print(f"  ✔ Holdout F1 = {metric:.4f}")
-    else:
-        val_probs = clf.predict_proba(X_val)[:, 1]
-        metric = roc_auc_score(y_val, val_probs)
-        print(f"  ✔ Holdout AUC = {metric:.4f}")
+        base_clf = RandomForestClassifier(class_weight="balanced", random_state=42, n_jobs=-1)
+        param_dist = {
+            "n_estimators": [100, 200, 300, 400, 500],
+            "max_depth": [None, 4, 6, 8, 10],
+            "min_samples_split": [2, 5, 10],
+            "min_samples_leaf": [1, 2, 4],
+            "max_features": ["sqrt", "log2", 0.5],
+        }
+        tscv = TimeSeriesSplit(n_splits=5)
+        search = RandomizedSearchCV(
+            estimator=base_clf,
+            param_distributions=param_dist,
+            n_iter=20,
+            scoring=scoring,
+            cv=tscv,
+            random_state=42,
+            n_jobs=-1,
+            verbose=1,
+        )
+        search.fit(X_train, y_train)
+        clf = search.best_estimator_
+        print(f"  ✔ {regime} best params: {search.best_params_}")
 
-    importances = pd.Series(clf.feature_importances_, index=X.columns)
-    print("  ✔ Top feature importances:")
-    print(importances.sort_values(ascending=False).head(10))
+        from sklearn.metrics import f1_score, roc_auc_score
+        if scoring == "f1":
+            val_pred = clf.predict(X_val)
+            metric = f1_score(y_val, val_pred)
+            print(f"  ✔ {regime} holdout F1 = {metric:.4f}")
+        else:
+            val_probs = clf.predict_proba(X_val)[:, 1]
+            metric = roc_auc_score(y_val, val_probs)
+            print(f"  ✔ {regime} holdout AUC = {metric:.4f}")
 
-    joblib.dump(clf, MODEL_PATH)
-    print(f"  ✔ Saved new meta‐learner to {MODEL_PATH}")
-    return True
+        importances = pd.Series(clf.feature_importances_, index=X.columns)
+        print("  ✔ Top feature importances:")
+        print(importances.sort_values(ascending=False).head(10))
+
+        path = MODEL_FILES[regime]
+        joblib.dump(clf, path)
+        print(f"  ✔ Saved {regime} model to {path}")
+        trained_any = True
+
+    return trained_any
 
 
