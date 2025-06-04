@@ -47,7 +47,6 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
             raw = yf.download(symbol, start=start, end=end, progress=False)
             raw.index = pd.to_datetime(raw.index)
             if not raw.empty:
-                # Keep only OHLCV columns
                 df_final = raw.rename(columns={
                     "Open": "Open", "High": "High", "Low": "Low", "Close": "Close", "Volume": "Volume"
                 })[["Open", "High", "Low", "Close", "Volume"]]
@@ -139,28 +138,48 @@ def run_backtest(symbols, start, end, params) -> dict:
 def optimize_hyperparams(ctx, symbols, backtest_data, param_grid: dict, metric: str = "sharpe") -> dict:
     """
     Grid search over hyperparameters.
-    If Sharpe is nan, treat it as a very low score (never wins).
+
+    1) Compute Sharpe for each combination.
+    2) If at least one combination yields a finite Sharpe, pick the highest‐Sharpe combo.
+    3) Otherwise, fall back to whichever combo gave the highest net_pnl.
     """
     keys = list(param_grid.keys())
     combos = list(product(*param_grid.values()))
-    best_params = None
-    best_score = -float("inf")
+
+    best_params_sharpe: dict = {}
+    best_score_sharpe = -float("inf")
+    best_params_pnl: dict = {}
+    best_score_pnl = -float("inf")
 
     for combo in combos:
         params = dict(zip(keys, combo))
         result = run_backtest(symbols, backtest_data["start"], backtest_data["end"], params)
-        score = result.get(metric, 0.0)
+        score_sh = result.get(metric, 0.0)
+        netp = result.get("net_pnl", 0.0)
 
-        # If score is nan, replace with very low number
-        if isinstance(score, float) and np.isnan(score):
-            score = -float("inf")
+        # If Sharpe is nan, treat it as extremely low
+        if isinstance(score_sh, float) and np.isnan(score_sh):
+            score_sh = -float("inf")
 
-        print(f"  ▶ Testing {params}  →  {metric}={score:.6f}")
-        if score > best_score:
-            best_score = score
-            best_params = params.copy()
+        print(f"  ▶ Testing {params}  →  {metric}={score_sh:.6f},  net_pnl={netp:.2f}")
 
-    return best_params or {}
+        # Track best by Sharpe
+        if score_sh > best_score_sharpe:
+            best_score_sharpe = score_sh
+            best_params_sharpe = params.copy()
+        # Track best by net_pnl (in case we need fallback)
+        if netp > best_score_pnl:
+            best_score_pnl = netp
+            best_params_pnl = params.copy()
+
+    if best_score_sharpe > -float("inf"):
+        # At least one combo had a finite Sharpe
+        print(f"\n✔ Selected by Sharpe (best Sharpe={best_score_sharpe:.6f})")
+        return best_params_sharpe
+    else:
+        # All Sharpe‐ratios were NaN → fallback to net_pnl
+        print(f"\n⚠ All Sharpe‐ratios = NaN → falling back to highest net_pnl ({best_score_pnl:.2f})")
+        return best_params_pnl or {}
 
 
 def main():
