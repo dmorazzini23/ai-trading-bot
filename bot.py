@@ -1084,8 +1084,10 @@ def check_daily_loss() -> bool:
     return loss >= limit
 
 def count_day_trades() -> int:
-    df = pd.read_csv(TRADE_LOG_FILE, parse_dates=["entry_time","exit_time"])
-    df = df.dropna(subset=["exit_time"])
+    df = pd.read_csv(TRADE_LOG_FILE)
+    df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
+    df["exit_time"] = pd.to_datetime(df["exit_time"], errors="coerce")
+    df = df.dropna(subset=["entry_time", "exit_time"])
     today_ts = pd.Timestamp.now().normalize()
     bdays = pd.bdate_range(end=today_ts, periods=5)
     df["entry_date"] = df["entry_time"].dt.normalize()
