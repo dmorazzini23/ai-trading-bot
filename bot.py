@@ -3,6 +3,7 @@ import os
 import csv
 import json
 import re
+import time
 import time as pytime
 import pathlib
 import random
@@ -44,6 +45,7 @@ import sentry_sdk
 
 from prometheus_client import start_http_server, Counter, Gauge, Histogram
 import finnhub
+from finnhub import FinnhubAPIException
 import pybreaker
 
 from tenacity import (
@@ -1254,7 +1256,7 @@ def too_correlated(sym: str) -> bool:
     open_syms = df.loc[df.exit_time == "", "symbol"].unique().tolist() + [sym]
     rets: Dict[str, pd.Series] = {}
     for s in open_syms:
-        d = fetch_data(ctx, [s], period="3mo", interval="1d")
+        d = ctx.data_fetcher.get_daily_df(ctx, s)
         if d is None or d.empty:
             continue
         # Handle DataFrame with MultiIndex columns (symbol, field) or single-level
@@ -1538,6 +1540,19 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
             return
         pytime.sleep(3)
 
+def send_exit_order(symbol: str, exit_qty: int, price: float, reason: str) -> None:
+    logger.info(f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price}")
+    try:
+        pos = api.get_position(symbol)
+        held_qty = int(pos.qty)
+    except Exception:
+        held_qty = 0
+
+    if held_qty >= exit_qty:
+        api.submit_order(symbol=symbol, qty=exit_qty, side="sell", type="limit", limit_price=price)
+    else:
+        logger.warning(f"No shares available to exit for {symbol} (requested {exit_qty}, have {held_qty})")
+
 def twap_submit(
     ctx: BotContext,
     symbol: str,
@@ -1803,9 +1818,9 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
 def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
     if qty <= 0:
         return
-    submit_order(ctx, symbol, qty, "sell")
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
     exit_price = raw["Close"].iloc[-1] if raw is not None and not raw.empty else 0.0
+    send_exit_order(symbol, qty, exit_price, "manual_exit")
     ctx.trade_logger.log_exit(symbol, exit_price)
     on_trade_exit_rebalance(ctx)
     with targets_lock:
@@ -1816,7 +1831,7 @@ def exit_all_positions() -> None:
     for pos in api.list_positions():
         qty = abs(int(pos.qty))
         if qty:
-            submit_order(ctx, pos.symbol, qty, "sell")
+            send_exit_order(pos.symbol, qty, 0.0, "eod_exit")
             logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
 
 # ─── L. SIGNAL & TRADE LOGIC ───────────────────────────────────────────────────
@@ -1976,7 +1991,7 @@ def trade_logic(
         logger.info(
             f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
         )
-        submit_order(ctx, symbol, current_qty, "sell")
+        send_exit_order(symbol, current_qty, price, "reversal")
         ctx.trade_logger.log_exit(symbol, price)
         with targets_lock:
             ctx.stop_targets.pop(symbol, None)
@@ -1989,7 +2004,7 @@ def trade_logic(
         logger.info(
             f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
         )
-        submit_order(ctx, symbol, abs(current_qty), "buy")
+        send_exit_order(symbol, abs(current_qty), price, "reversal")
         ctx.trade_logger.log_exit(symbol, price)
         with targets_lock:
             ctx.stop_targets.pop(symbol, None)
@@ -2104,8 +2119,7 @@ def trade_logic(
                 f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  "
                 f"exit_qty={exit_qty}  price={price:.4f}"
             )
-            side = "sell" if current_qty > 0 else "buy"
-            submit_order(ctx, symbol, exit_qty, side)
+            send_exit_order(symbol, exit_qty, price, reason)
             ctx.trade_logger.log_exit(symbol, price)
             try:
                 pos_after = ctx.api.get_position(symbol)
@@ -2181,19 +2195,18 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
     return ("no_signal", 0)
 
 # ─── M. UTILITIES ─────────────────────────────────────────────────────────────
-def fetch_data(ctx, symbols: List[str], period: str, interval: str) -> Optional[pd.DataFrame]:
-    dfs: List[pd.DataFrame] = []
-    for batch in chunked(symbols, 3):
-        try:
-            df = fh.fetch(batch, period=period, interval=interval)
-            if df is not None and not df.empty:
-                dfs.append(df)
-        except Exception as e:
-            logger.warning(f"[fetch_data] Finnhub chunk {batch} failed: {e}")
-        pytime.sleep(random.uniform(2, 5))
-    if not dfs:
-        return None
-    return pd.concat(dfs, axis=1, sort=True)
+def fetch_data(symbol_list: List[str]):
+    results = {}
+    for sym in symbol_list:
+        backoff = 1
+        while True:
+            try:
+                results[sym] = finnhub_client.quote(sym)
+                break
+            except FinnhubAPIException:
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 10)
+    return results
 
 class EnsembleModel:
     def __init__(self, models):
@@ -2396,7 +2409,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["cci"] = np.nan
 
     try:
-        df["mfi"] = ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=14)
+        df["mfi"] = ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=14).astype(float)
     except Exception:
         df["mfi"] = np.nan
 
