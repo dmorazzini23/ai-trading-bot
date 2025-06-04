@@ -665,7 +665,7 @@ def audit_positions(ctx: "BotContext") -> None:
     try:
         remote = {p.symbol: int(p.qty) for p in ctx.api.list_positions()}
     except Exception as e:
-        logger.warning(f"[reconcile_positions] failed to fetch remote positions: {e}")
+        logger.warning(f"[audit_positions] failed to fetch remote positions: {e}")
         return
     for sym, rq in remote.items():
         lq = local.get(sym, 0)
