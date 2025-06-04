@@ -2,7 +2,7 @@
 
 Usage::
 
-    python backtest.py --symbols SPY,AAPL --start 2023-01-01 --end 2023-06-30 --mode grid
+    python3 backtest.py --symbols SPY,AAPL --start 2023-01-01 --end 2023-06-30 --mode grid
 
 This will search over a default hyperparameter grid and write the best set to
 ``best_hyperparams.json``.
@@ -18,90 +18,69 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from yfinance import YFRateLimitError
 
 
-def load_price_data(symbols: list[str], start: str, end: str) -> dict[str, pd.DataFrame]:
+def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
     """
-    Download historical daily data for all `symbols` in one yfinance call (to minimize rate-limit errors),
-    cache each symbol to CSV, and return a dict mapping each symbol -> its DataFrame.
-
-    - If a cached file "cache_{symbol}_{start}_{end}.csv" exists, read from that instead of downloading.
-    - Otherwise, download all missing symbols in a single yf.download([...]) call,
-      split the combined DataFrame, save each to its cache CSV, and return them.
+    Load (or re‐use cached) historical daily data for `symbol` using yfinance.
+    Caches to "cache_{symbol}_{start}_{end}.csv" on disk, so future calls are instant.
+    Retries up to 3 times if YFRateLimitError is raised.
     """
-    out: dict[str, pd.DataFrame] = {}
-    missing: list[str] = []
-
-    # 1) Check for existing cache files
-    for s in symbols:
-        cache_fname = f"cache_{s}_{start}_{end}.csv"
-        if os.path.exists(cache_fname):
-            try:
-                df_cached = pd.read_csv(cache_fname, index_col=0, parse_dates=True)
-                out[s] = df_cached
-            except Exception:
-                # If reading fails, treat as missing
-                missing.append(s)
-        else:
-            missing.append(s)
-
-    # 2) Download any missing symbols in one batch
-    if missing:
+    cache_fname = f"cache_{symbol}_{start}_{end}.csv"
+    # 1) If cached file exists, load it and return
+    if os.path.exists(cache_fname):
         try:
-            combined = yf.download(
-                missing,
-                start=start,
-                end=end,
-                progress=False
-            )
+            df_cached = pd.read_csv(cache_fname, index_col=0, parse_dates=True)
+            return df_cached
         except Exception:
-            combined = pd.DataFrame()
-
-        # If combined is empty or missing columns, we’ll assign empty DataFrames below
-        for s in missing:
-            cache_fname = f"cache_{s}_{start}_{end}.csv"
-            df_s: pd.DataFrame
-
+            # if cache is corrupted, remove it and re‐download
             try:
-                # yfinance returns a MultiIndex if you passed a list of tickers
-                # Level 0 = OHLCV, Level 1 = symbol.
-                df_symbol = combined.xs(s, axis=1, level=1).copy()
-                df_symbol.index = pd.to_datetime(df_symbol.index)
-                # Keep only the standard columns if they exist
-                df_s = df_symbol.rename(
-                    columns={"Open": "Open", "High": "High", "Low": "Low", "Close": "Close", "Volume": "Volume"}
-                )[[ "Open", "High", "Low", "Close", "Volume" ]]
-            except Exception:
-                # If download failed or symbol not present, return an empty DataFrame
-                df_s = pd.DataFrame()
-
-            out[s] = df_s
-
-            # Write to cache for next time
-            try:
-                df_s.to_csv(cache_fname)
+                os.remove(cache_fname)
             except Exception:
                 pass
 
-        # Small pause to be polite, in case we re-run in a loop
-        time.sleep(1)
+    # 2) Otherwise, attempt to download with up to 3 retries
+    df_final = pd.DataFrame()
+    for attempt in range(1, 4):
+        try:
+            raw = yf.download(symbol, start=start, end=end, progress=False)
+            raw.index = pd.to_datetime(raw.index)
+            if not raw.empty:
+                # keep only OHLCV columns
+                df_final = raw.rename(columns={
+                    "Open": "Open", "High": "High", "Low": "Low", "Close": "Close", "Volume": "Volume"
+                })[["Open", "High", "Low", "Close", "Volume"]]
+            break
+        except YFRateLimitError:
+            if attempt < 3:
+                print(f"Rate‐limited on {symbol}, sleeping 2s (attempt {attempt}/3)…")
+                time.sleep(2)
+            else:
+                print(f"Rate‐limit persisted for {symbol}. Proceeding with empty DataFrame.")
+        except Exception:
+            # Any other failure: proceed with empty DataFrame
+            break
 
-    return out
+    # 3) Save to cache (even if empty)
+    try:
+        df_final.to_csv(cache_fname)
+    except Exception:
+        pass
+
+    # 4) Polite 1 sec pause before next symbol
+    time.sleep(1)
+    return df_final
 
 
-def run_backtest(symbols: list[str], start: str, end: str, params: dict) -> dict:
-    """
-    Run a very simple backtest over business days between `start` and `end`.
-    - symbols: list of tickers to backtest (e.g. ["SPY","AAPL"])
-    - params: dict with keys:
-        "BUY_THRESHOLD", "SCALING_FACTOR", "LIMIT_ORDER_SLIPPAGE",
-        "TAKE_PROFIT_FACTOR", "TRAILING_FACTOR"
-    Returns: {"net_pnl": <final equity - initial equity>, "sharpe": <annualized>}.
-    """
-    # 1) Load (or download+cache) all price data
-    data = load_price_data(symbols, start, end)
+def run_backtest(symbols, start, end, params) -> dict:
+    """Run a very small simulated backtest using cached yfinance data."""
+    # 1) Load (or download+cache) each symbol’s DataFrame
+    data: dict[str, pd.DataFrame] = {}
+    for s in symbols:
+        data[s] = load_price_data(s, start, end)
 
-    cash = 100_000.0
+    cash = 100000.0
     positions = {s: 0 for s in symbols}
     entry_price = {s: 0.0 for s in symbols}
     peak_price = {s: 0.0 for s in symbols}
@@ -109,81 +88,49 @@ def run_backtest(symbols: list[str], start: str, end: str, params: dict) -> dict
 
     dates = pd.date_range(start, end, freq="B")
     for d in dates:
-        # 2) For each symbol, decide whether to enter/exit
-        for sym in symbols:
-            df = data.get(sym, pd.DataFrame())
-            if df is None or df.empty or d not in df.index:
+        for sym, df in data.items():
+            if d not in df.index:
                 continue
+            price = df.loc[d, "Open"]
+            ret = df.loc[d, "Close"] / df.loc[d, "Open"] - 1
 
-            price_open = df.loc[d, "Open"]
-            price_close = df.loc[d, "Close"]
-            ret = price_close / price_open - 1
-
-            # If not currently holding: consider entering long if return > BUY_THRESHOLD
             if positions[sym] == 0:
+                # Entry logic
                 if ret > params["BUY_THRESHOLD"] and cash > 0:
-                    qty = int((cash * params["SCALING_FACTOR"]) / price_open)
+                    qty = int((cash * params["SCALING_FACTOR"]) / price)
                     if qty > 0:
-                        cost = qty * price_open * (1 + params["LIMIT_ORDER_SLIPPAGE"])
+                        cost = qty * price * (1 + params["LIMIT_ORDER_SLIPPAGE"])
                         cash -= cost
                         positions[sym] += qty
-                        entry_price[sym] = price_open
-                        peak_price[sym] = price_open
+                        entry_price[sym] = price
+                        peak_price[sym] = price
             else:
-                # If already holding, update peak price and check for TP or trailing stop
-                peak_price[sym] = max(peak_price[sym], price_close)
-                drawdown = (price_close - peak_price[sym]) / peak_price[sym]
-                gain = (price_close - entry_price[sym]) / entry_price[sym]
-                if (gain >= params["TAKE_PROFIT_FACTOR"]) or (abs(drawdown) >= params["TRAILING_FACTOR"]):
-                    proceeds = positions[sym] * price_close * (1 - params["LIMIT_ORDER_SLIPPAGE"])
-                    cash += proceeds
+                # Update peak, possibly exit
+                peak_price[sym] = max(peak_price[sym], price)
+                drawdown = (price - peak_price[sym]) / peak_price[sym]
+                gain = (price - entry_price[sym]) / entry_price[sym]
+                if gain >= params["TAKE_PROFIT_FACTOR"] or abs(drawdown) >= params["TRAILING_FACTOR"]:
+                    cash += positions[sym] * price * (1 - params["LIMIT_ORDER_SLIPPAGE"])
                     positions[sym] = 0
                     entry_price[sym] = 0
                     peak_price[sym] = 0
 
-        # 3) Compute total portfolio value at close of this date
+        # Compute portfolio value at close
         total_value = cash
-        for sym in symbols:
-            df = data.get(sym, pd.DataFrame())
-            if df is None or df.empty or d not in df.index:
-                continue
-            total_value += positions[sym] * df.loc[d, "Close"]
-
+        for sym, df in data.items():
+            if d in df.index:
+                total_value += positions[sym] * df.loc[d, "Close"]
         portfolio.append(total_value)
 
-    # 4) Compute sharpe
-    series = pd.Series(portfolio)
+    series = pd.Series(portfolio, index=dates)
     pct = series.pct_change().dropna()
-    if not pct.empty and pct.std() != 0:
-        sharpe = (pct.mean() / pct.std()) * np.sqrt(252)
-    else:
-        sharpe = 0.0
-
+    sharpe = (pct.mean() / pct.std()) * np.sqrt(252) if not pct.empty else 0.0
     net_pnl = portfolio[-1] - portfolio[0] if portfolio else 0.0
     return {"net_pnl": net_pnl, "sharpe": sharpe}
 
 
-def optimize_hyperparams(
-    ctx,
-    symbols: list[str],
-    backtest_data: dict,
-    param_grid: dict,
-    metric: str = "sharpe"
-) -> dict:
-    """
-    Grid search over hyperparameters in `param_grid`.
-    - symbols: list of tickers (e.g. ["SPY","AAPL"])
-    - backtest_data: {"start": "YYYY-MM-DD", "end": "YYYY-MM-DD"}
-    - param_grid: e.g.
-        {
-          "BUY_THRESHOLD": [0.15, 0.2, 0.25],
-          "TRAILING_FACTOR": [1.0, 1.2, 1.5],
-          "TAKE_PROFIT_FACTOR": [1.5, 1.8, 2.0],
-          "SCALING_FACTOR": [0.2, 0.3],
-          "LIMIT_ORDER_SLIPPAGE": [0.001, 0.005],
-        }
-    Returns the best‐scoring param set by the given metric (default="sharpe").
-    """
+def optimize_hyperparams(ctx, symbols, backtest_data, param_grid: dict, metric: str = "sharpe") -> dict:
+    """Grid search over hyperparameters."""
     keys = list(param_grid.keys())
     combos = list(product(*param_grid.values()))
     best_params = None
@@ -222,6 +169,7 @@ def main():
 
     with open("best_hyperparams.json", "w") as f:
         json.dump(best, f, indent=2)
+
     print("Best hyperparameters:", best)
 
 
