@@ -482,8 +482,24 @@ class DataFetcher:
                 raise DataFetchError(f"No daily data for {symbol}")
             daily_cache_hit.inc()
         except Exception as e:
-            logger.warning(f"[DataFetcher] daily fetch failed for {symbol}: {e}")
-            df = None
+            logger.warning(
+                f"[DataFetcher] daily fetch failed for {symbol}: {e}")
+            # Fallback to yfinance if Finnhub fails
+            try:
+                df_yf = yf.download(symbol, period="1mo", interval="1d", progress=False)
+                if not df_yf.empty:
+                    df_yf.index = pd.to_datetime(df_yf.index).tz_localize(None)
+                    df = df_yf.rename(columns=lambda c: c.title())[
+                        ["Open", "High", "Low", "Close", "Volume"]
+                    ]
+                    logger.warning(
+                        f"[DataFetcher] fallback to yfinance daily for {symbol}")
+                else:
+                    df = None
+            except Exception as e2:
+                logger.error(
+                    f"[DataFetcher] yfinance daily fallback failed for {symbol}: {e2}")
+                df = None
             daily_cache_miss.inc()
 
         with cache_lock:
@@ -536,6 +552,16 @@ class DataFetcher:
                     df = None
             except Exception:
                 df = None
+            # Fallback to yfinance if Finnhub fails too
+            if df is None:
+                try:
+                    df_yf = yf.download(symbol, period="5d", interval="1m", progress=False)
+                    if not df_yf.empty:
+                        df_yf.index = pd.to_datetime(df_yf.index).tz_localize(None)
+                        df = df_yf.rename(columns=lambda c: c.title())[["Open", "High", "Low", "Close", "Volume"]]
+                        logger.warning(f"[DataFetcher] fallback to yfinance 1-min for {symbol}")
+                except Exception as e2:
+                    logger.error(f"[DataFetcher] yfinance minute fallback failed for {symbol}: {e2}")
 
         with cache_lock:
             self._minute_cache[symbol] = df
