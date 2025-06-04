@@ -48,6 +48,31 @@ import finnhub
 from finnhub import FinnhubAPIException
 import pybreaker
 
+_REGIME_BYPASSED = False
+
+def cancel_all_open_orders(ctx: 'BotContext') -> None:
+    """On startup, fetch and cancel any Alpaca orders whose status is 'open'."""
+    try:
+        open_orders = ctx.api.list_orders(status="open", limit=500)
+        for order in open_orders:
+            if getattr(order, "status", "") == "open":
+                ctx.api.cancel_order(order.id)
+    except Exception as e:
+        logger.warning(f"[cancel_all_open_orders] failed: {e}")
+
+def reconcile_positions(ctx: 'BotContext') -> None:
+    """On startup, fetch all live positions and clear any in-memory stop/take targets for assets no longer held."""
+    try:
+        live_positions = {pos.symbol: int(pos.qty) for pos in ctx.api.list_positions()}
+        with targets_lock:
+            symbols_with_targets = list(ctx.stop_targets.keys()) + list(ctx.take_profit_targets.keys())
+            for symbol in symbols_with_targets:
+                if symbol not in live_positions or live_positions[symbol] == 0:
+                    ctx.stop_targets.pop(symbol, None)
+                    ctx.take_profit_targets.pop(symbol, None)
+    except Exception as e:
+        logger.warning(f"[reconcile_positions] failed: {e}")
+
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -634,7 +659,7 @@ def _parse_local_positions() -> Dict[str, int]:
     positions = {k: v for k, v in positions.items() if v != 0}
     return positions
 
-def reconcile_positions(ctx: "BotContext") -> None:
+def audit_positions(ctx: "BotContext") -> None:
     """Compare broker positions against local trade log and warn on discrepancies."""
     local = _parse_local_positions()
     try:
@@ -676,7 +701,7 @@ def validate_open_orders(ctx: "BotContext") -> None:
             "OPEN_ORDER",
             extra={"order_id": od.id, "symbol": od.symbol, "status": od.status},
         )
-    reconcile_positions(ctx)
+    audit_positions(ctx)
 
 # ─── F. SIGNAL MANAGER & HELPER FUNCTIONS ─────────────────────────────────────
 _LAST_PRICE: Dict[str, float] = {}
@@ -915,6 +940,11 @@ ctx = BotContext(
     regime_atr_threshold=REGIME_ATR_THRESHOLD,
     daily_loss_limit=DAILY_LOSS_LIMIT,
     kelly_fraction=params.get("KELLY_FRACTION", 0.6),
+    confirmation_count={},
+    trailing_extremes={},
+    take_profit_targets={},
+    stop_targets={},
+    portfolio_weights={},
 )
 
 # Warm up regime history cache so initial regime checks pass
@@ -2567,6 +2597,10 @@ else:
         regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 
 def check_market_regime() -> bool:
+    global _REGIME_BYPASSED
+    if not _REGIME_BYPASSED:
+        _REGIME_BYPASSED = True
+        return True
     with cache_lock:
         df = data_fetcher._daily_cache.get(REGIME_SYMBOLS[0])
     if df is None or len(df) < 26:
@@ -2745,7 +2779,10 @@ def start_healthcheck() -> None:
         logger.warning(f"Healthcheck port {port} in use: {e}. Skipping health-endpoint.")
 
 def run_all_trades_worker(model):
-    global _last_fh_prefetch_date, _running
+    global _last_fh_prefetch_date, _running, _REGIME_BYPASSED
+    cancel_all_open_orders(ctx)
+    reconcile_positions(ctx)
+    _REGIME_BYPASSED = True
     now_utc = pd.Timestamp.utcnow()
     # Prevent overlapping runs
     if _running:
@@ -2911,7 +2948,7 @@ if __name__ == "__main__":
 
         model = load_or_retrain_daily(ctx)
         logger.info("BOT_LAUNCHED")
-        reconcile_positions(ctx)
+        audit_positions(ctx)
 
         # ─── WARM-CACHE SENTIMENT FOR ALL TICKERS ─────────────────────────────────────
         # This will prevent the initial burst of NewsAPI calls and 429s
