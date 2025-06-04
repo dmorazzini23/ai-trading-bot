@@ -2512,6 +2512,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["cci"] = np.nan
 
     try:
+        df[["High", "Low", "Close", "Volume"]] = df[["High", "Low", "Close", "Volume"]].astype(float)
         df["mfi"] = ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=14).astype(float)
     except Exception:
         df["mfi"] = np.nan
