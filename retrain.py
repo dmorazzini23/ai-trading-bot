@@ -6,17 +6,15 @@ import numpy as np
 from datetime import datetime, date, time, timedelta
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
 
 import pandas_ta as ta
 from bot import detect_regime  # Import regime detection
 
 # Regime model file map
 MODEL_FILES = {
-    "bull": {"rf": "model_bull_rf.pkl", "xgb": "model_bull_xgb.pkl", "lgb": "model_bull_lgb.pkl"},
-    "bear": {"rf": "model_bear_rf.pkl", "xgb": "model_bear_xgb.pkl", "lgb": "model_bear_lgb.pkl"},
-    "chop": {"rf": "model_chop_rf.pkl", "xgb": "model_chop_xgb.pkl", "lgb": "model_chop_lgb.pkl"},
+    "bull": "model_bull.pkl",
+    "bear": "model_bear.pkl",
+    "chop": "model_chop.pkl",
 }
 
 # Full indicator preparation
@@ -171,34 +169,26 @@ def retrain_meta_learner(ctx, symbols, lookback_days=5, Δ_minutes=30, threshold
         scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
         print(f"Training {regime} regime model...")
 
-        models = {
-            "rf": (RandomForestClassifier(class_weight="balanced", random_state=42, n_jobs=-1), {
-                "n_estimators": [100, 200, 300], "max_depth": [None, 4, 8]
-            }),
-            "xgb": (XGBClassifier(objective="binary:logistic", eval_metric="logloss", use_label_encoder=False, random_state=42, n_jobs=-1), {
-                "n_estimators": [100, 200], "max_depth": [3, 5], "learning_rate": [0.01, 0.05]
-            }),
-            "lgb": (LGBMClassifier(objective="binary", random_state=42, n_jobs=-1), {
-                "n_estimators": [100, 200], "num_leaves": [31, 63], "max_depth": [-1, 8], "learning_rate": [0.01, 0.05]
-            })
-        }
-
         tscv = TimeSeriesSplit(n_splits=3)
-        for model_key, (base_model, param_grid) in models.items():
-            search = RandomizedSearchCV(base_model, param_grid, n_iter=10, scoring=scoring, cv=tscv, random_state=42, n_jobs=-1)
-            search.fit(X_train, y_train)
-            best_model = search.best_estimator_
+        param_grid = {
+            "n_estimators": [100, 200, 300],
+            "max_depth": [None, 4, 8],
+        }
+        base_model = RandomForestClassifier(class_weight="balanced", random_state=42, n_jobs=-1)
+        search = RandomizedSearchCV(base_model, param_grid, n_iter=10, scoring=scoring, cv=tscv, random_state=42, n_jobs=-1)
+        search.fit(X_train, y_train)
+        best_model = search.best_estimator_
 
-            from sklearn.metrics import f1_score, roc_auc_score
-            if scoring == "f1":
-                score = f1_score(y_val, best_model.predict(X_val))
-            else:
-                score = roc_auc_score(y_val, best_model.predict_proba(X_val)[:, 1])
+        from sklearn.metrics import f1_score, roc_auc_score
+        if scoring == "f1":
+            score = f1_score(y_val, best_model.predict(X_val))
+        else:
+            score = roc_auc_score(y_val, best_model.predict_proba(X_val)[:, 1])
 
-            print(f"{regime} {model_key} validation {scoring.upper()}: {score:.4f}")
-            model_path = MODEL_FILES[regime][model_key]
-            joblib.dump(best_model, model_path)
-            print(f"Saved {model_path}")
+        print(f"{regime} validation {scoring.upper()}: {score:.4f}")
+        model_path = MODEL_FILES[regime]
+        joblib.dump(best_model, model_path)
+        print(f"Saved {model_path}")
 
         trained_any = True
 
