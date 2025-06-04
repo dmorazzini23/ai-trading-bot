@@ -2407,11 +2407,8 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
         "adjusted": high_load_syms
     })
 
-try:
-    from retrain import retrain_meta_learner
-except ImportError:
-    retrain_meta_learner = None
-    logger.warning("retrain.py not found or retrain_meta_learner missing. Daily retraining disabled.")
+# At top‐level, define retrain_meta_learner = None so load_or_retrain_daily can reference it safely
+retrain_meta_learner = None
 
 def load_or_retrain_daily(ctx: BotContext) -> Any:
     """
@@ -2638,6 +2635,14 @@ if __name__ == "__main__":
         schedule.every().day.at("00:30").do(lambda: Thread(target=daily_summary, daemon=True).start())
         schedule.every().day.at("10:00").do(lambda: Thread(target=run_meta_learning_weight_optimizer, daemon=True).start())
         schedule.every().day.at("02:00").do(lambda: Thread(target=run_bayesian_meta_learning_optimizer, daemon=True).start())
+
+        # ⮕ Only now import retrain_meta_learner, to avoid circular import / duplicated metrics
+        try:
+            from retrain import retrain_meta_learner as _tmp_retrain
+            retrain_meta_learner = _tmp_retrain
+        except ImportError:
+            retrain_meta_learner = None
+            logger.warning("retrain.py not found or retrain_meta_learner missing. Daily retraining disabled.")
 
         model = load_or_retrain_daily(ctx)
         logger.info("BOT_LAUNCHED")
