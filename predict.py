@@ -3,7 +3,19 @@ import os
 import pandas as pd
 import joblib
 from retrain import prepare_indicators
-from bot import detect_regime
+
+
+def detect_regime(df: pd.DataFrame) -> str:
+    if df is None or df.empty or "Close" not in df:
+        return "chop"
+    close = df["Close"].astype(float)
+    sma50 = close.rolling(50).mean()
+    sma200 = close.rolling(200).mean()
+    if sma50.iloc[-1] > sma200.iloc[-1]:
+        return "bull"
+    if sma50.iloc[-1] < sma200.iloc[-1]:
+        return "bear"
+    return "chop"
 
 MODEL_FILES = {
     "bull": "model_bull.pkl",

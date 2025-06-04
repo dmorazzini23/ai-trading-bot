@@ -894,6 +894,9 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     Uses a simple in-memory TTL cache to avoid hitting NewsAPI too often.
     If FinBERT isn’t available, return neutral 0.0.
     """
+    if not NEWS_API_KEY:
+        return 0.0
+
     now_ts = pytime.time()
     with sentiment_lock:
         cached = _SENTIMENT_CACHE.get(ticker)
@@ -1084,6 +1087,8 @@ def check_daily_loss() -> bool:
     return loss >= limit
 
 def count_day_trades() -> int:
+    if not os.path.exists(TRADE_LOG_FILE):
+        return 0
     df = pd.read_csv(TRADE_LOG_FILE)
     df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
     df["exit_time"] = pd.to_datetime(df["exit_time"], errors="coerce")
@@ -1714,7 +1719,7 @@ def _safe_trade(
         logger.warning(f"[trade_logic] retries exhausted for {symbol}: {e}", extra={"symbol": symbol})
     except APIError as e:
         msg = str(e).lower()
-        if "insufficient buying power" in msg or "otential wash trade" in msg:
+        if "insufficient buying power" in msg or "potential wash trade" in msg:
             logger.warning(f"[trade_logic] skipping {symbol} due to APIError: {e}", extra={"symbol": symbol})
         else:
             logger.exception(f"[trade_logic] APIError for {symbol}: {e}")
@@ -2266,6 +2271,20 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     feat["macd"] = ta.macd(df["Close"], fast=12, slow=26, signal=9)["MACD_12_26_9"]
     feat["vol"]  = df["Close"].pct_change().rolling(14).std()
     return feat.dropna()
+
+
+def detect_regime(df: pd.DataFrame) -> str:
+    """Simple SMA-based market regime detection."""
+    if df is None or df.empty or "Close" not in df:
+        return "chop"
+    close = df["Close"].astype(float)
+    sma50 = close.rolling(50).mean()
+    sma200 = close.rolling(200).mean()
+    if sma50.iloc[-1] > sma200.iloc[-1]:
+        return "bull"
+    if sma50.iloc[-1] < sma200.iloc[-1]:
+        return "bear"
+    return "chop"
 
 # Train or load regime model
 if os.path.exists(REGIME_MODEL_PATH):

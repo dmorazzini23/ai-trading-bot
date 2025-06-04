@@ -15,15 +15,17 @@ import pandas_ta as ta
 # Inline `detect_regime` so we don’t import bot.py at module load time.
 # (Copy your real implementation from bot.py.)
 def detect_regime(df: pd.DataFrame) -> str:
-    """
-    Determine market regime ("bull", "bear", "chop").  
-    Copy the actual function body from bot.py here.
-    """
-    # Example placeholder logic—replace with your real code:
-    if df["Close"].iloc[-1] > df["Close"].rolling(50).mean().iloc[-1]:
+    """Simple SMA-based regime detection used by bot and predict scripts."""
+    if df is None or df.empty or "Close" not in df:
+        return "chop"
+    close = df["Close"].astype(float)
+    sma50 = close.rolling(50).mean()
+    sma200 = close.rolling(200).mean()
+    if sma50.iloc[-1] > sma200.iloc[-1]:
         return "bull"
-    else:
+    if sma50.iloc[-1] < sma200.iloc[-1]:
         return "bear"
+    return "chop"
 ##############################################################################
 
 # Output models for each regime
