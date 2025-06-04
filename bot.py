@@ -136,6 +136,9 @@ RETRAIN_MARKER_FILE = abspath("last_retrain.txt")
 
 # Main meta‐learner path: this is where retrain.py will dump the new sklearn model each day.
 MODEL_PATH          = abspath(os.getenv("MODEL_PATH", "meta_model.pkl"))
+MODEL_RF_PATH       = abspath(os.getenv("MODEL_RF_PATH", "model_rf.pkl"))
+MODEL_XGB_PATH      = abspath(os.getenv("MODEL_XGB_PATH", "model_xgb.pkl"))
+MODEL_LGB_PATH      = abspath(os.getenv("MODEL_LGB_PATH", "model_lgb.pkl"))
 
 REGIME_MODEL_PATH   = abspath("regime_model.pkl")
 # (We keep a separate meta‐model for signal‐weight learning, if you use Bayesian/Ridge, etc.)
@@ -2000,7 +2003,37 @@ def fetch_data(ctx, symbols: List[str], period: str, interval: str) -> Optional[
         return None
     return pd.concat(dfs, axis=1, sort=True)
 
+class EnsembleModel:
+    def __init__(self, models):
+        self.models = models
+
+    def predict_proba(self, X):
+        probs = [m.predict_proba(X) for m in self.models]
+        return np.mean(probs, axis=0)
+
+    def predict(self, X):
+        proba = self.predict_proba(X)
+        return np.argmax(proba, axis=1)
+
+
 def load_model(path: str = MODEL_PATH):
+    rf_exists = os.path.exists(MODEL_RF_PATH)
+    xgb_exists = os.path.exists(MODEL_XGB_PATH)
+    lgb_exists = os.path.exists(MODEL_LGB_PATH)
+    if rf_exists and xgb_exists and lgb_exists:
+        models = []
+        for p in [MODEL_RF_PATH, MODEL_XGB_PATH, MODEL_LGB_PATH]:
+            try:
+                models.append(joblib.load(p))
+            except Exception as e:
+                logger.exception(f"Failed to load model at {p}: {e}")
+                return None
+        logger.info(
+            "MODEL_LOADED",
+            extra={"path": f"{MODEL_RF_PATH}, {MODEL_XGB_PATH}, {MODEL_LGB_PATH}"},
+        )
+        return EnsembleModel(models)
+
     if not os.path.exists(path):
         logger.warning("MODEL_MISSING", extra={"path": path})
         return None

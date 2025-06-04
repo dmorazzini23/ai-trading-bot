@@ -6,6 +6,8 @@ import numpy as np
 from datetime import datetime, date, time, timedelta
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
 
 import pandas_ta as ta
 
@@ -116,7 +118,9 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     return df
 # ──────────────────────────────────────────────────────────────────────────────
 
-MODEL_PATH = os.getenv("MODEL_PATH", "meta_model.pkl")
+MODEL_RF_PATH = os.getenv("MODEL_RF_PATH", "model_rf.pkl")
+MODEL_XGB_PATH = os.getenv("MODEL_XGB_PATH", "model_xgb.pkl")
+MODEL_LGB_PATH = os.getenv("MODEL_LGB_PATH", "model_lgb.pkl")
 
 def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.DataFrame]:
     """
@@ -233,45 +237,105 @@ def retrain_meta_learner(
     scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
     print(f"  ✔ Using scoring='{scoring}' (positive ratio={pos_ratio:.3f})")
 
-    base_clf = RandomForestClassifier(class_weight="balanced", random_state=42, n_jobs=-1)
-    param_dist = {
-        "n_estimators": [100, 200, 300, 400, 500],
-        "max_depth": [None, 4, 6, 8, 10],
-        "min_samples_split": [2, 5, 10],
-        "min_samples_leaf": [1, 2, 4],
-        "max_features": ["sqrt", "log2", 0.5],
+    models = {}
+
+    configs = {
+        "rf": (
+            RandomForestClassifier(class_weight="balanced", random_state=42, n_jobs=-1),
+            {
+                "n_estimators": [100, 200, 300, 400, 500],
+                "max_depth": [None, 4, 6, 8, 10],
+                "min_samples_split": [2, 5, 10],
+                "min_samples_leaf": [1, 2, 4],
+                "max_features": ["sqrt", "log2", 0.5],
+            },
+        ),
+        "xgb": (
+            XGBClassifier(
+                objective="binary:logistic",
+                eval_metric="logloss",
+                use_label_encoder=False,
+                random_state=42,
+                n_jobs=-1,
+            ),
+            {
+                "n_estimators": [100, 200, 300],
+                "max_depth": [3, 5, 7],
+                "learning_rate": [0.01, 0.05, 0.1],
+                "subsample": [0.6, 0.8, 1.0],
+                "colsample_bytree": [0.6, 0.8, 1.0],
+            },
+        ),
+        "lgb": (
+            LGBMClassifier(
+                objective="binary",
+                random_state=42,
+                n_jobs=-1,
+            ),
+            {
+                "n_estimators": [100, 200, 300],
+                "num_leaves": [31, 63, 127],
+                "max_depth": [-1, 4, 8, 12],
+                "learning_rate": [0.01, 0.05, 0.1],
+                "subsample": [0.6, 0.8, 1.0],
+                "colsample_bytree": [0.6, 0.8, 1.0],
+            },
+        ),
     }
+
     tscv = TimeSeriesSplit(n_splits=5)
-    search = RandomizedSearchCV(
-        estimator=base_clf,
-        param_distributions=param_dist,
-        n_iter=20,
-        scoring=scoring,
-        cv=tscv,
-        random_state=42,
-        n_jobs=-1,
-        verbose=1,
-    )
-    search.fit(X_train, y_train)
-    clf = search.best_estimator_
-    print(f"  ✔ Best params: {search.best_params_}")
+    for name, (base_clf, param_dist) in configs.items():
+        print(f"  ▶ Training {name} model…")
+        search = RandomizedSearchCV(
+            estimator=base_clf,
+            param_distributions=param_dist,
+            n_iter=20,
+            scoring=scoring,
+            cv=tscv,
+            random_state=42,
+            n_jobs=-1,
+            verbose=1,
+        )
+        search.fit(X_train, y_train)
+        clf = search.best_estimator_
+        models[name] = clf
+        print(f"  ✔ {name} best params: {search.best_params_}")
 
+        from sklearn.metrics import f1_score, roc_auc_score
+        if scoring == "f1":
+            val_pred = clf.predict(X_val)
+            metric = f1_score(y_val, val_pred)
+            print(f"  ✔ {name} holdout F1 = {metric:.4f}")
+        else:
+            val_probs = clf.predict_proba(X_val)[:, 1]
+            metric = roc_auc_score(y_val, val_probs)
+            print(f"  ✔ {name} holdout AUC = {metric:.4f}")
+
+        if hasattr(clf, "feature_importances_"):
+            importances = pd.Series(clf.feature_importances_, index=X.columns)
+            print(f"  ✔ {name} top feature importances:")
+            print(importances.sort_values(ascending=False).head(10))
+
+    # Blended ensemble evaluation
     from sklearn.metrics import f1_score, roc_auc_score
+    preds = []
+    for m in models.values():
+        preds.append(m.predict_proba(X_val)[:, 1])
+    blended = np.mean(preds, axis=0)
     if scoring == "f1":
-        val_pred = clf.predict(X_val)
-        metric = f1_score(y_val, val_pred)
-        print(f"  ✔ Holdout F1 = {metric:.4f}")
+        blended_pred = (blended >= 0.5).astype(int)
+        metric = f1_score(y_val, blended_pred)
+        print(f"  ✔ Ensemble holdout F1 = {metric:.4f}")
     else:
-        val_probs = clf.predict_proba(X_val)[:, 1]
-        metric = roc_auc_score(y_val, val_probs)
-        print(f"  ✔ Holdout AUC = {metric:.4f}")
+        metric = roc_auc_score(y_val, blended)
+        print(f"  ✔ Ensemble holdout AUC = {metric:.4f}")
 
-    importances = pd.Series(clf.feature_importances_, index=X.columns)
-    print("  ✔ Top feature importances:")
-    print(importances.sort_values(ascending=False).head(10))
-
-    joblib.dump(clf, MODEL_PATH)
-    print(f"  ✔ Saved new meta‐learner to {MODEL_PATH}")
+    joblib.dump(models.get("rf"), MODEL_RF_PATH)
+    joblib.dump(models.get("xgb"), MODEL_XGB_PATH)
+    joblib.dump(models.get("lgb"), MODEL_LGB_PATH)
+    print(
+        f"  ✔ Saved models to {MODEL_RF_PATH}, {MODEL_XGB_PATH}, {MODEL_LGB_PATH}"
+    )
     return True
 
 
