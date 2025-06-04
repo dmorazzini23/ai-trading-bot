@@ -693,11 +693,12 @@ def audit_positions(ctx: "BotContext") -> None:
                 except Exception:
                     pass
 
-    # 4) For any symbol in local that is not in remote, buy at market to restore
+    # 4) For any symbol in local that is not in remote, submit order matching the local side
     for sym, lq in local.items():
         if sym not in remote:
             try:
-                ctx.api.submit_order(symbol=sym, qty=lq, side="buy", type="market")
+                side = "buy" if lq > 0 else "sell"
+                ctx.api.submit_order(symbol=sym, qty=abs(lq), side=side, type="market")
             except Exception:
                 pass
 
@@ -2252,9 +2253,13 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
 
 def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
     from statsmodels.tsa.stattools import coint
-    df1 = ctx.data_fetcher.get_daily_df(ctx, sym1)["Close"]
-    df2 = ctx.data_fetcher.get_daily_df(ctx, sym2)["Close"]
-    df  = pd.concat([df1, df2], axis=1).dropna()
+    df1 = ctx.data_fetcher.get_daily_df(ctx, sym1)
+    df2 = ctx.data_fetcher.get_daily_df(ctx, sym2)
+    if not hasattr(df1, "loc") or "Close" not in df1.columns:
+        raise ValueError(f"pair_trade_signal: df1 for {sym1} is invalid or missing 'Close'")
+    if not hasattr(df2, "loc") or "Close" not in df2.columns:
+        raise ValueError(f"pair_trade_signal: df2 for {sym2} is invalid or missing 'Close'")
+    df  = pd.concat([df1["Close"], df2["Close"]], axis=1).dropna()
     t_stat, p_value, _ = coint(df.iloc[:, 0], df.iloc[:, 1])
     if p_value < 0.05:
         beta = np.polyfit(df.iloc[:, 1], df.iloc[:, 0], 1)[0]
@@ -2511,11 +2516,13 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     except Exception:
         df["cci"] = np.nan
 
+    # Ensure numeric dtype before computing MFI
+    df[["High", "Low", "Close", "Volume"]] = df[["High", "Low", "Close", "Volume"]].astype(float)
     try:
-        df[["High", "Low", "Close", "Volume"]] = df[["High", "Low", "Close", "Volume"]].astype(float)
-        df["mfi"] = ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=14).astype(float)
-    except Exception:
-        df["mfi"] = np.nan
+        df["mfi"] = ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=14)
+    except Exception as e:
+        logger.warning(f"prepare_indicators: failed to compute MFI: {e}")
+        df["mfi"] = None
 
     try:
         df["tema"] = ta.tema(df["Close"], length=10)
@@ -2786,108 +2793,108 @@ def start_healthcheck() -> None:
 
 def run_all_trades_worker(model):
     global _last_fh_prefetch_date, _running
-    # On each run, clear open orders and correct any position mismatches
-    cancel_all_open_orders(ctx)
-    audit_positions(ctx)
-    now_utc = pd.Timestamp.utcnow()
-    # Prevent overlapping runs
     if _running:
         logger.warning("RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
     _running = True
+    try:
+        # On each run, clear open orders and correct any position mismatches
+        cancel_all_open_orders(ctx)
+        audit_positions(ctx)
+        now_utc = pd.Timestamp.utcnow()
 
-    # Update SPY vol stats first
-    compute_spy_vol_stats(ctx)
+        # Update SPY vol stats first
+        compute_spy_vol_stats(ctx)
 
-    logger.info("RUN_ALL_TRADES_START", extra={"timestamp": datetime.now(timezone.utc).isoformat()})
+        logger.info("RUN_ALL_TRADES_START", extra={"timestamp": datetime.now(timezone.utc).isoformat()})
 
-    candidates = load_tickers(TICKERS_FILE)
-    today_date = date.today()
-    if _last_fh_prefetch_date != today_date:
-        _last_fh_prefetch_date = today_date
-        # Bulk prefetch daily in batches of 10 to avoid rate limits
-        all_syms = [s for s in candidates if s not in REGIME_SYMBOLS]
-        for batch in chunked(all_syms, 10):
+        candidates = load_tickers(TICKERS_FILE)
+        today_date = date.today()
+        if _last_fh_prefetch_date != today_date:
+            _last_fh_prefetch_date = today_date
+            # Bulk prefetch daily in batches of 10 to avoid rate limits
+            all_syms = [s for s in candidates if s not in REGIME_SYMBOLS]
+            for batch in chunked(all_syms, 10):
+                try:
+                    start_str = (today_date - timedelta(days=30)).isoformat()
+                    end_str = today_date.isoformat()
+                    bars = ctx.api.get_bars(
+                        list(batch),
+                        TimeFrame.Day,
+                        start=start_str,
+                        end=end_str,
+                        limit=1000,
+                        feed="iex"
+                    ).df
+                    for sym, df_sym in bars.groupby("symbol"):
+                        df_df = df_sym.drop(columns=["symbol"], errors="ignore").copy()
+                        df_df = df_df.rename(columns={
+                            "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
+                        })
+                        df_df.index = pd.to_datetime(df_df.index).tz_localize(None)
+                        with cache_lock:
+                            data_fetcher._daily_cache[sym] = df_df
+                        daily_cache_hit.inc()
+                    logger.info("PREFETCH_ALPACA_BATCH", extra={"batch": batch})
+                except Exception as e:
+                    logger.warning(f"[prefetch] Alpaca bulk failed for {batch}: {e} — falling back to Finnhub")
+                    for sym in batch:
+                        try:
+                            df_sym = fh.fetch(sym, period="1mo", interval="1d")
+                            if df_sym is not None and not df_sym.empty:
+                                df_sym.index = pd.to_datetime(df_sym.index)
+                                with cache_lock:
+                                    data_fetcher._daily_cache[sym] = df_sym
+                                daily_cache_hit.inc()
+                                logger.info("PREFETCH_FINNHUB", extra={"symbol": sym})
+                                continue
+                        except Exception as e2:
+                            logger.warning(f"[prefetch] Finnhub fetch failed for {sym}: {e2}")
+                        dates = pd.date_range(start=(today_date - timedelta(days=30)), end=today_date, freq="D")
+                        dummy = pd.DataFrame(index=dates, columns=["Open", "High", "Low", "Close", "Volume"])
+                        dummy[["Open", "High", "Low", "Close"]] = np.nan
+                        dummy["Volume"] = 0
+                        with cache_lock:
+                            data_fetcher._daily_cache[sym] = dummy
+                        daily_cache_miss.inc()
+                        logger.warning("DUMMY_DAILY_INSERTED", extra={"symbol": sym})
+                pytime.sleep(1)  # avoid exceeding Alpaca rate
+
+            # Ensure regime symbols seeded
+            for sym in REGIME_SYMBOLS:
+                data_fetcher.get_daily_df(ctx, sym)
+
+        # Screen universe & compute weights
+        tickers = screen_universe(candidates, ctx)
+        logger.info("CANDIDATES_SCREENED", extra={"tickers": tickers})
+        ctx.portfolio_weights = compute_portfolio_weights(tickers)
+        if not tickers:
+            logger.error("NO_TICKERS_TO_TRADE")
+            return
+
+        if check_halt_flag():
+            logger.info("TRADING_HALTED_VIA_FLAG")
+            return
+
+        acct = ctx.api.get_account()
+        current_cash = float(acct.cash)
+        regime_ok = check_market_regime()
+
+        futures = []
+        for symbol in tickers:
+            futures.append(executor.submit(_safe_trade, ctx, symbol, current_cash, model, regime_ok))
+
+        # Wait for all trades to finish before allowing next run
+        for f in as_completed(futures):
             try:
-                start_str = (today_date - timedelta(days=30)).isoformat()
-                end_str = today_date.isoformat()
-                bars = ctx.api.get_bars(
-                    list(batch),
-                    TimeFrame.Day,
-                    start=start_str,
-                    end=end_str,
-                    limit=1000,
-                    feed="iex"
-                ).df
-                for sym, df_sym in bars.groupby("symbol"):
-                    df_df = df_sym.drop(columns=["symbol"], errors="ignore").copy()
-                    df_df = df_df.rename(columns={
-                        "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
-                    })
-                    df_df.index = pd.to_datetime(df_df.index).tz_localize(None)
-                    with cache_lock:
-                        data_fetcher._daily_cache[sym] = df_df
-                    daily_cache_hit.inc()
-                logger.info("PREFETCH_ALPACA_BATCH", extra={"batch": batch})
-            except Exception as e:
-                logger.warning(f"[prefetch] Alpaca bulk failed for {batch}: {e} — falling back to Finnhub")
-                for sym in batch:
-                    try:
-                        df_sym = fh.fetch(sym, period="1mo", interval="1d")
-                        if df_sym is not None and not df_sym.empty:
-                            df_sym.index = pd.to_datetime(df_sym.index)
-                            with cache_lock:
-                                data_fetcher._daily_cache[sym] = df_sym
-                            daily_cache_hit.inc()
-                            logger.info("PREFETCH_FINNHUB", extra={"symbol": sym})
-                            continue
-                    except Exception as e2:
-                        logger.warning(f"[prefetch] Finnhub fetch failed for {sym}: {e2}")
-                    dates = pd.date_range(start=(today_date - timedelta(days=30)), end=today_date, freq="D")
-                    dummy = pd.DataFrame(index=dates, columns=["Open", "High", "Low", "Close", "Volume"])
-                    dummy[["Open", "High", "Low", "Close"]] = np.nan
-                    dummy["Volume"] = 0
-                    with cache_lock:
-                        data_fetcher._daily_cache[sym] = dummy
-                    daily_cache_miss.inc()
-                    logger.warning("DUMMY_DAILY_INSERTED", extra={"symbol": sym})
-            pytime.sleep(1)  # avoid exceeding Alpaca rate
+                f.result()
+            except Exception:
+                pass
 
-        # Ensure regime symbols seeded
-        for sym in REGIME_SYMBOLS:
-            data_fetcher.get_daily_df(ctx, sym)
-
-    # Screen universe & compute weights
-    tickers = screen_universe(candidates, ctx)
-    logger.info("CANDIDATES_SCREENED", extra={"tickers": tickers})
-    ctx.portfolio_weights = compute_portfolio_weights(tickers)
-    if not tickers:
-        logger.error("NO_TICKERS_TO_TRADE")
+        logger.info("RUN_ALL_TRADES_COMPLETE")
+    finally:
+        # Always reset running flag
         _running = False
-        return
-
-    if check_halt_flag():
-        logger.info("TRADING_HALTED_VIA_FLAG")
-        _running = False
-        return
-
-    acct = ctx.api.get_account()
-    current_cash = float(acct.cash)
-    regime_ok = check_market_regime()
-
-    futures = []
-    for symbol in tickers:
-        futures.append(executor.submit(_safe_trade, ctx, symbol, current_cash, model, regime_ok))
-
-    # Wait for all trades to finish before allowing next run
-    for f in as_completed(futures):
-        try:
-            f.result()
-        except Exception:
-            pass
-
-    _running = False
-    logger.info("RUN_ALL_TRADES_COMPLETE")
 
 def schedule_run_all_trades(model):
     Thread(target=run_all_trades_worker, args=(model,), daemon=True).start()
