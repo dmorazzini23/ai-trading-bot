@@ -262,12 +262,6 @@ class DataFetchError(Exception):
 # ─── B. CLIENTS & SINGLETONS ─────────────────────────────────────────────────
 finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
 
-api = REST(
-    os.getenv("APCA_API_KEY_ID"),
-    os.getenv("APCA_API_SECRET_KEY"),
-    base_url=os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-)
-
 def ensure_alpaca_credentials() -> None:
     if not os.getenv("APCA_API_KEY_ID") or not os.getenv("APCA_API_SECRET_KEY"):
         raise RuntimeError("Missing Alpaca API credentials; please check .env")
@@ -275,8 +269,8 @@ ensure_alpaca_credentials()
 
 # Prometheus-safe account fetch
 @breaker
-def safe_alpaca_get_account():
-    return api.get_account()
+def safe_alpaca_get_account(ctx: 'BotContext'):
+    return ctx.api.get_account()
 
 # ─── C. HELPERS ────────────────────────────────────────────────────────────────
 def chunked(iterable: Sequence, n: int):
@@ -903,7 +897,11 @@ data_fetcher   = DataFetcher()
 signal_manager = SignalManager()
 trade_logger   = TradeLogger()
 ctx = BotContext(
-    api=api,
+    api=REST(
+        os.getenv("APCA_API_KEY_ID"),
+        os.getenv("APCA_API_SECRET_KEY"),
+        base_url=os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    ),
     data_fetcher=data_fetcher,
     signal_manager=signal_manager,
     trade_logger=trade_logger,
@@ -1144,9 +1142,9 @@ last_drawdown: float = 0.0
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
     retry=retry_if_exception_type(APIError)
 )
-def check_daily_loss() -> bool:
+def check_daily_loss(ctx: BotContext) -> bool:
     global day_start_equity, last_drawdown
-    acct = safe_alpaca_get_account()
+    acct = safe_alpaca_get_account(ctx)
     equity = float(acct.equity)
     today_date = date.today()
     limit = params.get("DAILY_LOSS_LIMIT", 0.07)
@@ -1196,7 +1194,7 @@ _running = False
     retry=retry_if_exception_type(APIError)
 )
 def check_pdt_rule(ctx: BotContext) -> bool:
-    acct = safe_alpaca_get_account()
+    acct = safe_alpaca_get_account(ctx)
     equity = float(acct.equity)
 
     api_day_trades = (
@@ -1242,9 +1240,9 @@ def check_halt_flag() -> bool:
     age = datetime.now(timezone.utc) - datetime.fromtimestamp(mtime, timezone.utc)
     return age < timedelta(hours=1)
 
-def too_many_positions() -> bool:
+def too_many_positions(ctx: BotContext) -> bool:
     try:
-        return len(api.list_positions()) >= MAX_PORTFOLIO_POSITIONS
+        return len(ctx.api.list_positions()) >= MAX_PORTFOLIO_POSITIONS
     except Exception:
         logger.warning("[too_many_positions] Could not fetch positions")
         return False
@@ -1540,18 +1538,43 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
             return
         pytime.sleep(3)
 
-def send_exit_order(symbol: str, exit_qty: int, price: float, reason: str) -> None:
-    logger.info(f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price}")
+def send_exit_order(ctx: BotContext, symbol: str, exit_qty: int, price: float, reason: str) -> None:
+    logger.info(
+        f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price}"
+    )
     try:
-        pos = api.get_position(symbol)
+        pos = ctx.api.get_position(symbol)
         held_qty = int(pos.qty)
     except Exception:
         held_qty = 0
 
-    if held_qty >= exit_qty:
-        api.submit_order(symbol=symbol, qty=exit_qty, side="sell", type="limit", limit_price=price)
-    else:
-        logger.warning(f"No shares available to exit for {symbol} (requested {exit_qty}, have {held_qty})")
+    if held_qty < exit_qty:
+        logger.warning(
+            f"No shares available to exit for {symbol} (requested {exit_qty}, have {held_qty})"
+        )
+        return
+
+    if price <= 0.0:
+        ctx.api.submit_order(symbol=symbol, qty=exit_qty, side="sell", type="market")
+        return
+
+    limit_order = ctx.api.submit_order(
+        symbol=symbol,
+        qty=exit_qty,
+        side="sell",
+        type="limit",
+        limit_price=price,
+    )
+    pytime.sleep(5)
+    try:
+        o2 = ctx.api.get_order(limit_order.id)
+        if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
+            ctx.api.cancel_order(limit_order.id)
+            ctx.api.submit_order(symbol=symbol, qty=exit_qty, side="sell", type="market")
+    except Exception as e:
+        logger.warning(
+            f"[send_exit_order] couldn\u2019t check/cancel order {getattr(limit_order, 'id', '')}: {e}"
+        )
 
 def twap_submit(
     ctx: BotContext,
@@ -1820,18 +1843,18 @@ def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
         return
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
     exit_price = raw["Close"].iloc[-1] if raw is not None and not raw.empty else 0.0
-    send_exit_order(symbol, qty, exit_price, "manual_exit")
+    send_exit_order(ctx, symbol, qty, exit_price, "manual_exit")
     ctx.trade_logger.log_exit(symbol, exit_price)
     on_trade_exit_rebalance(ctx)
     with targets_lock:
         ctx.take_profit_targets.pop(symbol, None)
         ctx.stop_targets.pop(symbol, None)
 
-def exit_all_positions() -> None:
-    for pos in api.list_positions():
+def exit_all_positions(ctx: BotContext) -> None:
+    for pos in ctx.api.list_positions():
         qty = abs(int(pos.qty))
         if qty:
-            send_exit_order(pos.symbol, qty, 0.0, "eod_exit")
+            send_exit_order(ctx, pos.symbol, qty, 0.0, "eod_exit")
             logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
 
 # ─── L. SIGNAL & TRADE LOGIC ───────────────────────────────────────────────────
@@ -1858,13 +1881,13 @@ def pre_trade_checks(
     if check_halt_flag():
         logger.info("SKIP_HALT_FLAG", extra={"symbol": symbol})
         return False
-    if check_daily_loss():
+    if check_daily_loss(ctx):
         logger.info("SKIP_DAILY_LOSS", extra={"symbol": symbol})
         return False
     if not regime_ok:
         logger.info("SKIP_MARKET_REGIME", extra={"symbol": symbol})
         return False
-    if too_many_positions():
+    if too_many_positions(ctx):
         logger.info("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol})
         return False
     if too_correlated(symbol):
@@ -1991,7 +2014,7 @@ def trade_logic(
         logger.info(
             f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
         )
-        send_exit_order(symbol, current_qty, price, "reversal")
+        send_exit_order(ctx, symbol, current_qty, price, "reversal")
         ctx.trade_logger.log_exit(symbol, price)
         with targets_lock:
             ctx.stop_targets.pop(symbol, None)
@@ -2004,7 +2027,7 @@ def trade_logic(
         logger.info(
             f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
         )
-        send_exit_order(symbol, abs(current_qty), price, "reversal")
+        send_exit_order(ctx, symbol, abs(current_qty), price, "reversal")
         ctx.trade_logger.log_exit(symbol, price)
         with targets_lock:
             ctx.stop_targets.pop(symbol, None)
@@ -2119,7 +2142,7 @@ def trade_logic(
                 f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  "
                 f"exit_qty={exit_qty}  price={price:.4f}"
             )
-            send_exit_order(symbol, exit_qty, price, reason)
+            send_exit_order(ctx, symbol, exit_qty, price, reason)
             ctx.trade_logger.log_exit(symbol, price)
             try:
                 pos_after = ctx.api.get_position(symbol)
@@ -2195,18 +2218,48 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
     return ("no_signal", 0)
 
 # ─── M. UTILITIES ─────────────────────────────────────────────────────────────
-def fetch_data(symbol_list: List[str]):
-    results = {}
-    for sym in symbol_list:
-        backoff = 1
-        while True:
+def fetch_data(ctx: BotContext, symbols: List[str], period: str, interval: str) -> Optional[pd.DataFrame]:
+    frames: List[pd.DataFrame] = []
+    now = datetime.utcnow()
+    if period.endswith("d"):
+        delta = timedelta(days=int(period[:-1]))
+    elif period.endswith("mo"):
+        delta = timedelta(days=30 * int(period[:-2]))
+    elif period.endswith("y"):
+        delta = timedelta(days=365 * int(period[:-1]))
+    else:
+        delta = timedelta(days=7)
+    unix_to = int(now.timestamp())
+    unix_from = int((now - delta).timestamp())
+
+    for batch in chunked(symbols, 3):
+        for sym in batch:
             try:
-                results[sym] = finnhub_client.quote(sym)
-                break
-            except FinnhubAPIException:
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 10)
-    return results
+                ohlc = finnhub_client.stock_candle(sym, resolution=interval, _from=unix_from, to=unix_to)
+            except FinnhubAPIException as e:
+                logger.warning(f"[fetch_data] {sym} error: {e}")
+                continue
+
+            if not ohlc or ohlc.get("s") != "ok":
+                continue
+
+            df_sym = pd.DataFrame({
+                "Open": ohlc.get("o", []),
+                "High": ohlc.get("h", []),
+                "Low": ohlc.get("l", []),
+                "Close": ohlc.get("c", []),
+                "Volume": ohlc.get("v", []),
+            }, index=pd.to_datetime(ohlc.get("t", []), unit="s"))
+
+            df_sym.columns = pd.MultiIndex.from_product([[sym], df_sym.columns])
+            frames.append(df_sym)
+
+        pytime.sleep(random.uniform(2, 5))
+
+    if not frames:
+        return None
+
+    return pd.concat(frames, axis=1)
 
 class EnsembleModel:
     def __init__(self, models):
@@ -2490,7 +2543,7 @@ if os.path.exists(REGIME_MODEL_PATH):
 else:
     today_date = date.today()
     start_date = (today_date - timedelta(days=365)).isoformat()
-    bars = api.get_bars(
+    bars = ctx.api.get_bars(
         REGIME_SYMBOLS[0], TimeFrame.Day,
         start=start_date, end=today_date.isoformat(),
         limit=1000, feed="iex"
@@ -2715,7 +2768,7 @@ def run_all_trades_worker(model):
             try:
                 start_str = (today_date - timedelta(days=30)).isoformat()
                 end_str = today_date.isoformat()
-                bars = api.get_bars(
+                bars = ctx.api.get_bars(
                     list(batch),
                     TimeFrame.Day,
                     start=start_str,
@@ -2775,7 +2828,7 @@ def run_all_trades_worker(model):
         _running = False
         return
 
-    acct = api.get_account()
+    acct = ctx.api.get_account()
     current_cash = float(acct.cash)
     regime_ok = check_market_regime()
 
