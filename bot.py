@@ -1,6 +1,7 @@
 import logging
 import os
 import csv
+import json
 import re
 import time as pytime
 import pathlib
@@ -131,6 +132,19 @@ EQUITY_FILE         = abspath("last_equity.txt")
 PEAK_EQUITY_FILE    = abspath("peak_equity.txt")
 HALT_FLAG_PATH      = abspath("halt.flag")
 
+# Hyperparameter files
+HYPERPARAMS_FILE     = abspath("hyperparams.json")
+BEST_HYPERPARAMS_FILE = abspath("best_hyperparams.json")
+
+def load_hyperparams() -> dict:
+    """Load hyperparameters from best_hyperparams.json if present, else default."""
+    path = BEST_HYPERPARAMS_FILE if os.path.exists(BEST_HYPERPARAMS_FILE) else HYPERPARAMS_FILE
+    if not os.path.exists(path):
+        logger.warning(f"Hyperparameter file {path} not found; using defaults")
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
 # <-- NEW: marker file for daily retraining -->
 RETRAIN_MARKER_FILE = abspath("last_retrain.txt")
 
@@ -177,39 +191,40 @@ BOT_MODE     = os.getenv("BOT_MODE", "balanced")
 mode_obj     = BotMode(BOT_MODE)
 logger.info(f"Trading mode is set to '{mode_obj.mode}'")
 params       = mode_obj.get_config()
+params.update(load_hyperparams())
 
 # Other constants
 NEWS_API_KEY            = os.getenv("NEWS_API_KEY")
-TRAILING_FACTOR         = params["TRAILING_FACTOR"]
+TRAILING_FACTOR         = params.get("TRAILING_FACTOR", 1.2)
 SECONDARY_TRAIL_FACTOR  = 1.0
-TAKE_PROFIT_FACTOR      = params["TAKE_PROFIT_FACTOR"]
-SCALING_FACTOR          = 0.3
+TAKE_PROFIT_FACTOR      = params.get("TAKE_PROFIT_FACTOR", 1.8)
+SCALING_FACTOR          = params.get("SCALING_FACTOR", 0.3)
 ORDER_TYPE              = 'market'
-LIMIT_ORDER_SLIPPAGE    = float(os.getenv("LIMIT_ORDER_SLIPPAGE", 0.005))
+LIMIT_ORDER_SLIPPAGE    = params.get("LIMIT_ORDER_SLIPPAGE", 0.005)
 MAX_POSITION_SIZE       = 1000
 SLICE_THRESHOLD         = 50
-POV_SLICE_PCT           = float(os.getenv("POV_SLICE_PCT", "0.05"))
-DAILY_LOSS_LIMIT        = params["DAILY_LOSS_LIMIT"]
+POV_SLICE_PCT           = params.get("POV_SLICE_PCT", 0.05)
+DAILY_LOSS_LIMIT        = params.get("DAILY_LOSS_LIMIT", 0.07)
 MAX_PORTFOLIO_POSITIONS = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD   = 0.60
 MARKET_OPEN             = dt_time(6, 30)
 MARKET_CLOSE            = dt_time(13, 0)
 VOLUME_THRESHOLD        = int(os.getenv("VOLUME_THRESHOLD", "50000"))
-ENTRY_START_OFFSET      = timedelta(minutes=30)
-ENTRY_END_OFFSET        = timedelta(minutes=15)
+ENTRY_START_OFFSET      = timedelta(minutes=params.get("ENTRY_START_OFFSET_MIN", 30))
+ENTRY_END_OFFSET        = timedelta(minutes=params.get("ENTRY_END_OFFSET_MIN", 15))
 REGIME_LOOKBACK         = 14
 REGIME_ATR_THRESHOLD    = 20.0
 RF_ESTIMATORS           = 300
 RF_MAX_DEPTH            = 3
 RF_MIN_SAMPLES_LEAF     = 5
 ATR_LENGTH              = 10
-CONF_THRESHOLD          = params["CONF_THRESHOLD"]
-CONFIRMATION_COUNT      = params["CONFIRMATION_COUNT"]
-CAPITAL_CAP             = params["CAPITAL_CAP"]
+CONF_THRESHOLD          = params.get("CONF_THRESHOLD", 0.75)
+CONFIRMATION_COUNT      = params.get("CONFIRMATION_COUNT", 2)
+CAPITAL_CAP             = params.get("CAPITAL_CAP", 0.08)
 PACIFIC                 = ZoneInfo("America/Los_Angeles")
-PDT_DAY_TRADE_LIMIT     = 3
-PDT_EQUITY_THRESHOLD    = 25_000.0
-BUY_THRESHOLD           = float(os.getenv("BUY_THRESHOLD", "0.2"))
+PDT_DAY_TRADE_LIMIT     = params.get("PDT_DAY_TRADE_LIMIT", 3)
+PDT_EQUITY_THRESHOLD    = params.get("PDT_EQUITY_THRESHOLD", 25_000.0)
+BUY_THRESHOLD           = params.get("BUY_THRESHOLD", 0.2)
 FINNHUB_RPM             = int(os.getenv("FINNHUB_RPM", "60"))
 
 # Regime symbols (makes SPY configurable)
@@ -899,7 +914,7 @@ ctx = BotContext(
     regime_lookback=REGIME_LOOKBACK,
     regime_atr_threshold=REGIME_ATR_THRESHOLD,
     daily_loss_limit=DAILY_LOSS_LIMIT,
-    kelly_fraction=params["KELLY_FRACTION"],
+    kelly_fraction=params.get("KELLY_FRACTION", 0.6),
 )
 
 # Warm up regime history cache so initial regime checks pass
@@ -1132,7 +1147,7 @@ def check_daily_loss() -> bool:
     acct = safe_alpaca_get_account()
     equity = float(acct.equity)
     today_date = date.today()
-    limit = params["DAILY_LOSS_LIMIT"]
+    limit = params.get("DAILY_LOSS_LIMIT", 0.07)
 
     if day_start_equity is None or day_start_equity[0] != today_date:
         if last_drawdown >= 0.05:
