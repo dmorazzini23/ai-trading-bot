@@ -154,8 +154,10 @@ def build_feature_label_df(
     threshold_pct: float = 0.002
 ) -> pd.DataFrame:
     """
-    Build a combined DataFrame of (feature_vector, label) for each minute‐slice.
-    If a symbol has fewer than Δ_minutes+1 rows, it is skipped with a notice.
+    Build a combined DataFrame of (feature_vector, label) for each minute-slice.
+    Labels are generated using a simulated trade with 0.05% buy slippage and
+    0.05% sell slippage. If a symbol has fewer than Δ_minutes+1 rows, it is
+    skipped with a notice.
     """
     rows = []
     for sym, raw in raw_store.items():
@@ -171,9 +173,9 @@ def build_feature_label_df(
         closes = raw["Close"].values
         n = len(feat)
         for i in range(n - Δ_minutes):
-            base_price = closes[i]
-            future_price = closes[i + Δ_minutes]
-            ret_pct = (future_price / base_price) - 1.0
+            buy_fill = closes[i] * (1 + 0.0005)
+            sell_fill = closes[i + Δ_minutes] * (1 - 0.0005)
+            ret_pct = (sell_fill / buy_fill) - 1.0
             label = 1 if ret_pct >= threshold_pct else 0
 
             row = feat.iloc[i].copy().to_dict()
