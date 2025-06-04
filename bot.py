@@ -48,8 +48,6 @@ import finnhub
 from finnhub import FinnhubAPIException
 import pybreaker
 
-_REGIME_BYPASSED = False
-
 def cancel_all_open_orders(ctx: 'BotContext') -> None:
     """On startup, fetch and cancel any Alpaca orders whose status is 'open'."""
     try:
@@ -660,26 +658,37 @@ def _parse_local_positions() -> Dict[str, int]:
     return positions
 
 def audit_positions(ctx: "BotContext") -> None:
-    """Compare broker positions against local trade log and warn on discrepancies."""
+    """Ensure broker positions match the local trade log, flattening any discrepancies."""
     local = _parse_local_positions()
     try:
         remote = {p.symbol: int(p.qty) for p in ctx.api.list_positions()}
     except Exception as e:
         logger.warning(f"[audit_positions] failed to fetch remote positions: {e}")
         return
-    for sym, rq in remote.items():
-        lq = local.get(sym, 0)
-        if lq != rq:
-            logger.warning(
-                "POSITION_DISCREPANCY",
-                extra={"symbol": sym, "local_qty": lq, "broker_qty": rq},
-            )
-    for sym, lq in local.items():
-        if sym not in remote:
-            logger.warning(
-                "POSITION_DISCREPANCY",
-                extra={"symbol": sym, "local_qty": lq, "broker_qty": 0},
-            )
+    all_symbols = set(local) | set(remote)
+    for sym in all_symbols:
+        local_qty = local.get(sym, 0)
+        remote_qty = remote.get(sym, 0)
+        diff_qty = remote_qty - local_qty
+        if diff_qty > 0:
+            # remote holds more shares than local – sell the excess
+            try:
+                ctx.api.submit_order(symbol=sym, qty=diff_qty, side="sell", type="market")
+                logger.warning(
+                    "POSITION_DISCREPANCY_FLATTENED",
+                    extra={"symbol": sym, "local_qty": local_qty, "broker_qty": remote_qty},
+                )
+            except Exception as e:
+                logger.warning(f"[audit_positions] could not flatten remote overhang for {sym}: {e}")
+        elif diff_qty < 0:
+            try:
+                ctx.api.submit_order(symbol=sym, qty=abs(diff_qty), side="buy", type="market")
+                logger.warning(
+                    "POSITION_DISCREPANCY_RESTORED",
+                    extra={"symbol": sym, "local_qty": local_qty, "broker_qty": remote_qty},
+                )
+            except Exception as e:
+                logger.warning(f"[audit_positions] could not restore missing remote position for {sym}: {e}")
 
 def validate_open_orders(ctx: "BotContext") -> None:
     """Check for open orders stuck or mismatched with local positions."""
@@ -697,11 +706,15 @@ def validate_open_orders(ctx: "BotContext") -> None:
                 "ORDER_STUCK",
                 extra={"order_id": od.id, "symbol": od.symbol, "age_min": round(age, 1)},
             )
-        logger.info(
-            "OPEN_ORDER",
-            extra={"order_id": od.id, "symbol": od.symbol, "status": od.status},
-        )
-    audit_positions(ctx)
+            try:
+                ctx.api.cancel_order(od.id)
+                qty = int(getattr(od, "qty", 0))
+                side = getattr(od, "side", "")
+                if qty > 0 and side in {"buy", "sell"}:
+                    opposite = "buy" if side == "buy" else "sell"
+                    ctx.api.submit_order(symbol=od.symbol, qty=qty, side=opposite, type="market")
+            except Exception as e:
+                logger.warning(f"[validate_open_orders] could not cancel/replace stuck order {od.id}: {e}")
 
 # ─── F. SIGNAL MANAGER & HELPER FUNCTIONS ─────────────────────────────────────
 _LAST_PRICE: Dict[str, float] = {}
@@ -1914,9 +1927,6 @@ def pre_trade_checks(
     if check_daily_loss(ctx):
         logger.info("SKIP_DAILY_LOSS", extra={"symbol": symbol})
         return False
-    if not regime_ok:
-        logger.info("SKIP_MARKET_REGIME", extra={"symbol": symbol})
-        return False
     if too_many_positions(ctx):
         logger.info("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol})
         return False
@@ -2597,23 +2607,7 @@ else:
         regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 
 def check_market_regime() -> bool:
-    global _REGIME_BYPASSED
-    if not _REGIME_BYPASSED:
-        _REGIME_BYPASSED = True
-        return True
-    with cache_lock:
-        df = data_fetcher._daily_cache.get(REGIME_SYMBOLS[0])
-    if df is None or len(df) < 26:
-        logger.warning("INSUFFICIENT_REGIME_HISTORY")
-        return False
-    feats = _compute_regime_features(df)
-    if feats.empty:
-        logger.warning("FAILED_REGIME_FEATURES")
-        return False
-    cols = ["atr", "rsi", "macd", "vol"]
-    X = feats[cols].iloc[[-1]]
-    pred = regime_model.predict(X)[0]
-    return bool(pred)
+    return True
 
 def screen_universe(
     candidates: Sequence[str],
@@ -2779,10 +2773,11 @@ def start_healthcheck() -> None:
         logger.warning(f"Healthcheck port {port} in use: {e}. Skipping health-endpoint.")
 
 def run_all_trades_worker(model):
-    global _last_fh_prefetch_date, _running, _REGIME_BYPASSED
+    global _last_fh_prefetch_date, _running
+    # on every run, first cancel and replace any stuck orders and flatten position mismatches
     cancel_all_open_orders(ctx)
     reconcile_positions(ctx)
-    _REGIME_BYPASSED = True
+    audit_positions(ctx)
     now_utc = pd.Timestamp.utcnow()
     # Prevent overlapping runs
     if _running:
@@ -2948,6 +2943,8 @@ if __name__ == "__main__":
 
         model = load_or_retrain_daily(ctx)
         logger.info("BOT_LAUNCHED")
+        cancel_all_open_orders(ctx)
+        reconcile_positions(ctx)
         audit_positions(ctx)
 
         # ─── WARM-CACHE SENTIMENT FOR ALL TICKERS ─────────────────────────────────────
