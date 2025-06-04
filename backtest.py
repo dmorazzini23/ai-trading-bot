@@ -18,23 +18,23 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from yfinance import YFRateLimitError
 
 
 def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
     """
     Load (or re‐use cached) historical daily data for `symbol` using yfinance.
     Caches to "cache_{symbol}_{start}_{end}.csv" on disk, so future calls are instant.
-    Retries up to 3 times if YFRateLimitError is raised.
+    Retries up to 3 times if any exception occurs during download.
     """
     cache_fname = f"cache_{symbol}_{start}_{end}.csv"
+
     # 1) If cached file exists, load it and return
     if os.path.exists(cache_fname):
         try:
             df_cached = pd.read_csv(cache_fname, index_col=0, parse_dates=True)
             return df_cached
         except Exception:
-            # if cache is corrupted, remove it and re‐download
+            # If cache is corrupted, remove it and re‐download
             try:
                 os.remove(cache_fname)
             except Exception:
@@ -47,20 +47,18 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
             raw = yf.download(symbol, start=start, end=end, progress=False)
             raw.index = pd.to_datetime(raw.index)
             if not raw.empty:
-                # keep only OHLCV columns
+                # Keep only OHLCV columns
                 df_final = raw.rename(columns={
                     "Open": "Open", "High": "High", "Low": "Low", "Close": "Close", "Volume": "Volume"
                 })[["Open", "High", "Low", "Close", "Volume"]]
             break
-        except YFRateLimitError:
+        except Exception as e:
+            # On any error (including rate‐limit), sleep and retry
             if attempt < 3:
-                print(f"Rate‐limited on {symbol}, sleeping 2s (attempt {attempt}/3)…")
+                print(f"  ▶ Failed to download {symbol} (attempt {attempt}/3): {e!r}. Sleeping 2s…")
                 time.sleep(2)
             else:
-                print(f"Rate‐limit persisted for {symbol}. Proceeding with empty DataFrame.")
-        except Exception:
-            # Any other failure: proceed with empty DataFrame
-            break
+                print(f"  ▶ Final attempt failed for {symbol}; proceeding with empty DataFrame.")
 
     # 3) Save to cache (even if empty)
     try:
@@ -68,7 +66,7 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
     except Exception:
         pass
 
-    # 4) Polite 1 sec pause before next symbol
+    # 4) Polite 1s pause before next symbol
     time.sleep(1)
     return df_final
 
@@ -167,6 +165,7 @@ def main():
     data_cfg = {"start": args.start, "end": args.end}
     best = optimize_hyperparams(None, symbols, data_cfg, param_grid, metric="sharpe")
 
+    # Write results
     with open("best_hyperparams.json", "w") as f:
         json.dump(best, f, indent=2)
 
