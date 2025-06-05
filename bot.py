@@ -564,12 +564,51 @@ class DataFetcher:
                 "volume": "Volume",
             })
         except APIError as e:
-            print(f">> DEBUG: ALPACA DAILY CATCH ERROR for {symbol}: {repr(e)}")
-            print(f">> DEBUG: NO DAILY DATA FOR {symbol} DUE TO SUBSCRIPTION")
-            df = pd.DataFrame()
+            err_msg = str(e).lower()
+            if "subscription does not permit querying recent sip data" in err_msg:
+                print(f">> DEBUG: ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
+                print(f">> DEBUG: ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
+                try:
+                    df_iex = client.get_bars(
+                        symbol,
+                        timeframe="1Day",
+                        start=start_ts.isoformat(),
+                        end=end_ts.isoformat(),
+                        adjustment="raw",
+                        feed="iex",
+                    ).df
+                    if isinstance(df_iex.columns, pd.MultiIndex):
+                        df_iex = df_iex.xs(symbol, level=0, axis=1)
+                    else:
+                        df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
+                    df_iex.index = pd.to_datetime(df_iex.index, utc=True)
+                    df_iex.index = df_iex.index.tz_convert(None)
+                    df = df_iex.rename(columns={
+                        "open": "Open",
+                        "high": "High",
+                        "low": "Low",
+                        "close": "Close",
+                        "volume": "Volume",
+                    })
+                except Exception as iex_err:
+                    print(f">> DEBUG: ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
+                    print(f">> DEBUG: INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}")
+                    dummy_date = pd.to_datetime(end_ts).tz_localize("UTC")
+                    df = pd.DataFrame([
+                        {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
+                    ], index=[dummy_date])
+            else:
+                print(f">> DEBUG: ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
+                dummy_date = pd.to_datetime(end_ts).tz_localize("UTC")
+                df = pd.DataFrame([
+                    {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
+                ], index=[dummy_date])
         except Exception as e:
-            print(f">> DEBUG: ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
-            df = pd.DataFrame()
+            print(f">> DEBUG: ALPACA DAILY FETCH EXCEPTION for {symbol}: {repr(e)}")
+            dummy_date = pd.to_datetime(end_ts).tz_localize("UTC")
+            df = pd.DataFrame([
+                {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
+            ], index=[dummy_date])
 
         with cache_lock:
             self._daily_cache[symbol] = df
@@ -721,7 +760,123 @@ class DataFetcher:
         combined = combined[~combined.index.duplicated(keep="first")]
         combined = combined.sort_index()
         return combined
-        
+
+# Helper to prefetch daily data in bulk with Alpaca, handling SIP subscription
+# issues and falling back to IEX delayed feed per symbol if needed.
+def prefetch_daily_data(symbols: List[str], start_date: date, end_date: date) -> Dict[str, pd.DataFrame]:
+    alpaca_key = os.getenv("APCA_API_KEY_ID")
+    alpaca_secret = os.getenv("APCA_API_SECRET_KEY")
+    base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    client = REST(alpaca_key, alpaca_secret, base_url, api_version="v2")
+
+    try:
+        bars = client.get_bars(
+            symbols,
+            timeframe="1Day",
+            start=start_date.isoformat(),
+            end=end_date.isoformat(),
+        ).df
+        if isinstance(bars.columns, pd.MultiIndex):
+            grouped_raw = {sym: bars.xs(sym, level=0, axis=1) for sym in symbols if sym in bars.columns.get_level_values(0)}
+        else:
+            grouped_raw = {sym: df for sym, df in bars.groupby("symbol")}
+        grouped = {}
+        for sym, df in grouped_raw.items():
+            df = df.drop(columns=["symbol"], errors="ignore")
+            df.index = pd.to_datetime(df.index).tz_localize(None)
+            df = df.rename(columns={
+                "open": "Open",
+                "high": "High",
+                "low": "Low",
+                "close": "Close",
+                "volume": "Volume",
+            })
+            grouped[sym] = df
+        return grouped
+    except APIError as e:
+        err_msg = str(e).lower()
+        if "subscription does not permit querying recent sip data" in err_msg:
+            print(f">> DEBUG: ALPACA SUBSCRIPTION ERROR in bulk for {symbols}: {repr(e)}")
+            print(f">> DEBUG: ATTEMPTING IEX-DELAYERED BULK FETCH FOR {symbols}")
+            try:
+                bars_iex = client.get_bars(
+                    symbols,
+                    timeframe="1Day",
+                    start=start_date.isoformat(),
+                    end=end_date.isoformat(),
+                    adjustment="raw",
+                    feed="iex",
+                ).df
+                if isinstance(bars_iex.columns, pd.MultiIndex):
+                    grouped_raw = {sym: bars_iex.xs(sym, level=0, axis=1) for sym in symbols if sym in bars_iex.columns.get_level_values(0)}
+                else:
+                    grouped_raw = {sym: df for sym, df in bars_iex.groupby("symbol")}
+                grouped = {}
+                for sym, df in grouped_raw.items():
+                    df = df.drop(columns=["symbol"], errors="ignore")
+                    df.index = pd.to_datetime(df.index).tz_localize(None)
+                    df = df.rename(columns={
+                        "open": "Open",
+                        "high": "High",
+                        "low": "Low",
+                        "close": "Close",
+                        "volume": "Volume",
+                    })
+                    grouped[sym] = df
+                return grouped
+            except Exception as iex_err:
+                print(f">> DEBUG: ALPACA IEX BULK ERROR for {symbols}: {repr(iex_err)}")
+                daily_dict = {}
+                for sym in symbols:
+                    try:
+                        df_sym = client.get_bars(
+                            sym,
+                            timeframe="1Day",
+                            start=start_date.isoformat(),
+                            end=end_date.isoformat(),
+                            adjustment="raw",
+                            feed="iex",
+                        ).df
+                        df_sym = df_sym.drop(columns=["symbol"], errors="ignore")
+                        df_sym.index = pd.to_datetime(df_sym.index).tz_localize(None)
+                        df_sym = df_sym.rename(columns={
+                            "open": "Open",
+                            "high": "High",
+                            "low": "Low",
+                            "close": "Close",
+                            "volume": "Volume",
+                        })
+                        daily_dict[sym] = df_sym
+                    except Exception as indiv_err:
+                        print(f">> DEBUG: ALPACA IEX ERROR for {sym}: {repr(indiv_err)}")
+                        print(f">> DEBUG: INSERTING DUMMY DAILY FOR {sym} ON {end_date.isoformat()}")
+                        dummy_date = pd.to_datetime(end_date).tz_localize("UTC")
+                        dummy_df = pd.DataFrame([
+                            {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
+                        ], index=[dummy_date])
+                        daily_dict[sym] = dummy_df
+                return daily_dict
+        else:
+            print(f">> DEBUG: ALPACA BULK FETCH UNKNOWN ERROR for {symbols}: {repr(e)}")
+            daily_dict = {}
+            for sym in symbols:
+                dummy_date = pd.to_datetime(end_date).tz_localize("UTC")
+                dummy_df = pd.DataFrame([
+                    {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
+                ], index=[dummy_date])
+                daily_dict[sym] = dummy_df
+            return daily_dict
+    except Exception as e:
+        print(f">> DEBUG: ALPACA BULK FETCH EXCEPTION for {symbols}: {repr(e)}")
+        daily_dict = {}
+        for sym in symbols:
+            dummy_date = pd.to_datetime(end_date).tz_localize("UTC")
+            dummy_df = pd.DataFrame([
+                {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
+            ], index=[dummy_date])
+            daily_dict[sym] = dummy_df
+        return daily_dict
+
 # ─── E. TRADE LOGGER ───────────────────────────────────────────────────────────
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
@@ -3321,57 +3476,22 @@ def run_all_trades_worker(model):
             # Bulk prefetch daily in batches of 10 to avoid rate limits
             all_syms = [s for s in candidates if s not in REGIME_SYMBOLS]
             for batch in chunked(all_syms, 10):
-                try:
-                    start_dt = datetime.combine(today_date - timedelta(days=30), dt_time.min, timezone.utc)
-                    end_dt = datetime.combine(today_date, dt_time.max, timezone.utc)
-                    if isinstance(start_dt, tuple):
-                        start_dt, _tmp = start_dt
-                    if isinstance(end_dt, tuple):
-                        _, end_dt = end_dt
-                    bars_req = StockBarsRequest(
-                        symbol_or_symbols=list(batch),
-                        timeframe=TimeFrame.Day,
-                        start=start_dt,
-                        end=end_dt,
-                        limit=1000
-                    )
-                    bars = ctx.data_client.get_stock_bars(bars_req).df
-                    if isinstance(bars.columns, pd.MultiIndex):
-                        grouped = {sym: bars.xs(sym, level=0, axis=1) for sym in batch if sym in bars.columns.get_level_values(0)}
-                    else:
-                        grouped = {sym: df for sym, df in bars.groupby("symbol")}
-                    for sym, df_sym in grouped.items():
-                        df_df = df_sym.drop(columns=["symbol"], errors="ignore").copy()
-                        df_df = df_df.rename(columns={
-                            "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
-                        })
-                        df_df.index = pd.to_datetime(df_df.index).tz_localize(None)
-                        with cache_lock:
-                            data_fetcher._daily_cache[sym] = df_df
-                        daily_cache_hit.inc()
-                    logger.info("PREFETCH_ALPACA_BATCH", extra={"batch": batch})
-                except Exception as e:
-                    logger.warning(f"[prefetch] Alpaca bulk failed for {batch} {start_dt}-{end_dt}: {e} — falling back to Finnhub")
-                    for sym in batch:
-                        try:
-                            df_sym = fh.fetch(sym, period="1mo", interval="1d")
-                            if df_sym is not None and not df_sym.empty:
-                                df_sym.index = pd.to_datetime(df_sym.index)
-                                with cache_lock:
-                                    data_fetcher._daily_cache[sym] = df_sym
-                                daily_cache_hit.inc()
-                                logger.info("PREFETCH_FINNHUB", extra={"symbol": sym})
-                                continue
-                        except Exception as e2:
-                            logger.warning(f"[prefetch] Finnhub fetch failed for {sym}: {e2}")
-                        dates = pd.date_range(start=(today_date - timedelta(days=30)), end=today_date, freq="D")
-                        dummy = pd.DataFrame(index=dates, columns=["Open", "High", "Low", "Close", "Volume"])
-                        dummy[["Open", "High", "Low", "Close"]] = np.nan
-                        dummy["Volume"] = 0
-                        with cache_lock:
-                            data_fetcher._daily_cache[sym] = dummy
+                start_date = today_date - timedelta(days=30)
+                end_date = today_date
+                df_dict = prefetch_daily_data(list(batch), start_date, end_date)
+                for sym in batch:
+                    df_sym = df_dict.get(sym)
+                    if df_sym is None:
+                        dummy_date = pd.to_datetime(end_date).tz_localize("UTC")
+                        df_sym = pd.DataFrame([
+                            {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
+                        ], index=[dummy_date])
+                        print(f">> DEBUG: INSERTED DUMMY DAILY FOR {sym} ON {end_date.isoformat()}")
                         daily_cache_miss.inc()
-                        logger.warning("DUMMY_DAILY_INSERTED", extra={"symbol": sym})
+                    else:
+                        daily_cache_hit.inc()
+                    with cache_lock:
+                        data_fetcher._daily_cache[sym] = df_sym
                 pytime.sleep(1)  # avoid exceeding Alpaca rate
 
             # Ensure regime symbols seeded
