@@ -13,7 +13,7 @@ from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.models import Order
 from alpaca.common.exceptions import APIError
-from alpaca.data.requests import QuoteRequest
+from alpaca.data.requests import StockLatestQuoteRequest
 
 class ExecutionEngine:
     """Institutional-grade execution engine for dynamic order routing."""
@@ -37,8 +37,7 @@ class ExecutionEngine:
 
     def _latest_quote(self, symbol: str) -> Tuple[float, float]:
         try:
-            # Modernized using QuoteRequest for alpaca-py >=0.16
-            req = QuoteRequest(symbols=[symbol])
+            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quote_data = self.ctx.data_client.get_stock_latest_quote(req)
             q = quote_data[symbol]
             bid = float(getattr(q, 'bid_price', 0) or 0)
@@ -85,8 +84,7 @@ class ExecutionEngine:
                 qty=slice_qty,
                 side=order_side,
                 time_in_force=TimeInForce.DAY,
-                limit_price=round(mid, 2),
-                post_only=True
+                limit_price=round(mid, 2)
             )
             expected = round(mid, 2)
         elif aggressive and spread < 0.02:
