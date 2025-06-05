@@ -51,6 +51,7 @@ from prometheus_client import start_http_server, Counter, Gauge, Histogram
 import finnhub
 from finnhub import FinnhubAPIException
 import pybreaker
+from trade_execution import ExecutionEngine
 
 def cancel_all_open_orders(ctx: "BotContext") -> None:
     """
@@ -1095,6 +1096,12 @@ ctx = BotContext(
     take_profit_targets={},
     stop_targets={},
     portfolio_weights={},
+) 
+exec_engine = ExecutionEngine(
+    ctx,
+    slippage_total=slippage_total,
+    slippage_count=slippage_count,
+    orders_total=orders_total,
 )
 
 # Warm up regime history cache so initial regime checks pass
@@ -1638,187 +1645,8 @@ def vol_target_position_size(
     retry=retry_if_exception_type(APIError),
 )
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
-    """Submit an order with microstructure-aware logic."""
-
-    def _send(qty_slice: int) -> Optional[Order]:
-        attempt = 0
-        while attempt < 3:
-            attempt += 1
-            try:
-                quote = ctx.api.get_latest_quote(symbol)
-                bid = float(getattr(quote, "bid_price", 0) or 0)
-                ask = float(getattr(quote, "ask_price", 0) or 0)
-            except Exception as e:
-                logger.warning(f"[submit_order] quote fetch failed (attempt {attempt}) for {symbol}: {e}")
-                bid = ask = 0.0
-
-            now_utc = pd.Timestamp.utcnow()
-            regular = in_trading_hours(now_utc)
-
-            order_kwargs: dict[str, Any] = {
-                "symbol": symbol,
-                "qty": qty_slice,
-                "side": side,
-            }
-            expected_price: Optional[float] = None
-
-            if regular:
-                spread = (ask - bid) if ask and bid else 0.0
-                mid = (ask + bid) / 2 if ask and bid else None
-                order_kwargs["time_in_force"] = "gtc"
-                if mid:
-                    if side.lower() == "buy":
-                        limit_price = round(min(mid + 0.01, ask or mid), 2)
-                    else:
-                        limit_price = round(max(mid - 0.01, bid or mid), 2)
-                else:
-                    limit_price = None
-
-                if spread > 0.03 and limit_price:
-                    order_kwargs.update({"type": "limit", "limit_price": limit_price})
-                    expected_price = limit_price
-                else:
-                    order_kwargs["type"] = "market"
-                    expected_price = ask if side.lower() == "buy" else bid
-            else:
-                px = bid if side.lower() == "buy" else ask
-                if px <= 0:
-                    logger.warning("OFF_HOURS_NO_PRICE", extra={"symbol": symbol})
-                    order_kwargs.update({"type": "market", "time_in_force": "opg"})
-                    expected_price = None
-                else:
-                    limit_price = round(px, 2)
-                    order_kwargs.update({
-                        "type": "limit",
-                        "limit_price": limit_price,
-                        "time_in_force": "day",
-                        "extended_hours": True,
-                    })
-                    expected_price = limit_price
-
-            try:
-                logger.info(
-                    "ORDER_SENT",
-                    extra={
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "symbol": symbol,
-                        "side": side,
-                        "qty": qty_slice,
-                        "order_type": order_kwargs.get("type", "market"),
-                    },
-                )
-                order = ctx.api.submit_order(**order_kwargs)
-                if order_kwargs.get("type") == "limit":
-                    pytime.sleep(5)
-                    try:
-                        od_check = ctx.api.get_order(order.id)
-                        status = getattr(od_check, "status", "")
-                        filled_q = int(float(getattr(od_check, "filled_qty", 0) or 0))
-                        if status in {"new", "accepted", "partially_filled"} and filled_q < qty_slice:
-                            ctx.api.cancel_order(order.id)
-                            order_kwargs.pop("limit_price", None)
-                            order_kwargs["type"] = "market"
-                            order = ctx.api.submit_order(**order_kwargs)
-                    except Exception:
-                        pass
-                if not getattr(order, "id", None):
-                    logger.error(
-                        "ORDER_SUBMISSION_NO_ID",
-                        extra={"symbol": symbol, "response": str(order)},
-                    )
-                fill_price = float(
-                    getattr(order, "filled_avg_price", expected_price or 0) or 0
-                )
-                slip = ((fill_price - expected_price) * 100) if expected_price else 0.0
-                slippage_total.inc(abs(slip))
-                slippage_count.inc()
-                _slippage_log.append((symbol, expected_price, fill_price, datetime.now(timezone.utc)))
-                with slippage_lock:
-                    with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
-                        csv.writer(sf).writerow([
-                            datetime.now(timezone.utc).isoformat(),
-                            symbol,
-                            expected_price,
-                            fill_price,
-                            slip,
-                        ])
-                logger.info(
-                    "ORDER_ACK",
-                    extra={
-                        "symbol": symbol,
-                        "order_id": getattr(order, "id", ""),
-                        "status": getattr(order, "status", ""),
-                        "expected_price": expected_price,
-                        "fill_price": fill_price,
-                        "slippage_cents": slip,
-                    },
-                )
-                filled_qty = int(float(getattr(order, "filled_qty", 0) or 0))
-                if filled_qty < qty_slice:
-                    logger.info(
-                        "ORDER_PARTIAL_FILL",
-                        extra={"symbol": symbol, "expected": qty_slice, "filled": filled_qty},
-                    )
-                Thread(
-                    target=poll_order_fill_status,
-                    args=(ctx, getattr(order, "id", "")),
-                    daemon=True,
-                ).start()
-                orders_total.inc()
-                return order
-            except APIError as e:
-                msg = str(e).lower()
-                logger.warning(f"[submit_order] APIError (attempt {attempt}) for {symbol}: {e}")
-                if "too many requests" in msg or "rate limit" in msg:
-                    sleep_time = 60
-                    logger.warning(f"[submit_order] rate limit hit; sleeping {sleep_time}s")
-                    pytime.sleep(sleep_time)
-                else:
-                    pytime.sleep(attempt)
-            except Exception as e:
-                logger.exception(f"[submit_order] unexpected error attempt {attempt} for {symbol}: {e}")
-                pytime.sleep(attempt)
-        # final fallback
-        try:
-            logger.warning(f"FALLBACK_MARKET_ORDER for {symbol}")
-            order = ctx.api.submit_order(
-                symbol=symbol,
-                qty=qty_slice,
-                side=side,
-                type="market",
-                time_in_force="gtc",
-            )
-            logger.info(
-                "ORDER_ACK",
-                extra={
-                    "symbol": symbol,
-                    "order_id": getattr(order, "id", ""),
-                    "status": getattr(order, "status", ""),
-                },
-            )
-            Thread(
-                target=poll_order_fill_status,
-                args=(ctx, getattr(order, "id", "")),
-                daemon=True,
-            ).start()
-            return order
-        except Exception:
-            return None
-
-    # Handle slicing
-    if qty > 50:
-        remaining = qty
-        last_order = None
-        while remaining > 0:
-            slice_qty = min(max(1, int(qty * random.uniform(0.1, 0.2))), remaining)
-            last_order = _send(slice_qty)
-            filled = int(float(getattr(last_order, "filled_qty", slice_qty) or slice_qty)) if last_order else 0
-            remaining -= filled
-            if remaining > 0:
-                pytime.sleep(random.uniform(2, 5))
-        return last_order
-    else:
-        return _send(qty)
+    """Submit an order using the institutional execution engine."""
+    return exec_engine.execute_order(symbol, qty, side)
 
 def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -> None:
     """Poll Alpaca for order fill status until it is no longer open."""
