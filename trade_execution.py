@@ -23,7 +23,7 @@ class ExecutionEngine:
         self.slippage_path = os.path.join(os.path.dirname(__file__), 'logs', 'slippage.csv')
         if not os.path.exists(self.slippage_path):
             with open(self.slippage_path, 'w', newline='') as f:
-                csv.writer(f).writerow(['timestamp', 'symbol', 'expected', 'actual', 'slippage_cents'])
+                csv.writer(f).writerow(['timestamp', 'symbol', 'expected', 'actual', 'slippage_cents', 'band'])
         self.slippage_total = slippage_total
         self.slippage_count = slippage_count
         self.orders_total = orders_total
@@ -59,7 +59,8 @@ class ExecutionEngine:
         vol, avg1m, momentum = self._minute_stats(symbol)
         adv = self._adv_volume(symbol)
 
-        max_adv = adv * 0.002 if adv else qty
+        adv_pct = getattr(self.ctx, 'adv_target_pct', 0.002)
+        max_adv = adv * adv_pct if adv else qty
         max_slice = int(vol * 0.1) if vol > 0 else qty
         slice_qty = max(1, min(qty, int(min(max_slice, max_adv))))
 
@@ -96,12 +97,13 @@ class ExecutionEngine:
                 expected,
                 actual,
                 slip,
+                getattr(self.ctx, 'capital_band', 'small'),
             ])
         if self.slippage_total is not None:
             self.slippage_total.inc(abs(slip))
         if self.slippage_count is not None:
             self.slippage_count.inc()
-        self.logger.info('SLIPPAGE', extra={'symbol': symbol, 'expected': expected, 'actual': actual, 'slippage_cents': slip})
+        self.logger.info('SLIPPAGE', extra={'symbol': symbol, 'expected': expected, 'actual': actual, 'slippage_cents': slip, 'band': getattr(self.ctx, 'capital_band', 'small')})
 
     def execute_order(self, symbol: str, qty: int, side: str) -> Optional[Order]:
         remaining = qty

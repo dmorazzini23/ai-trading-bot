@@ -27,6 +27,16 @@ HYPERPARAM_LOG_FILE = abspath("hyperparam_log.csv")
 MODELS_DIR = abspath("models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 
+REWARD_LOG_FILE = abspath("reward_log.csv")
+
+def load_reward_by_band(n: int = 200) -> dict:
+    if not os.path.exists(REWARD_LOG_FILE):
+        return {}
+    df = pd.read_csv(REWARD_LOG_FILE).tail(n)
+    if "band" not in df.columns:
+        return {}
+    return df.groupby("band")["reward"].mean().to_dict()
+
 def fetch_sentiment(symbol: str) -> float:
     """Lightweight sentiment score using NewsAPI headlines."""
     if not NEWS_API_KEY:
@@ -460,6 +470,13 @@ def retrain_meta_learner(
             current.difference_update(revived)
             with open(INACTIVE_FEATURES_FILE, 'w') as f:
                 json.dump(sorted(current), f)
+    except Exception:
+        pass
+
+    try:
+        band_rewards = load_reward_by_band()
+        if band_rewards:
+            print(f"  ✔ Avg rewards by band: {band_rewards}")
     except Exception:
         pass
 
