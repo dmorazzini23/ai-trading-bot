@@ -29,7 +29,6 @@ load_dotenv()
 _DATA_CLIENT = StockHistoricalDataClient(
     ALPACA_API_KEY,
     ALPACA_SECRET_KEY,
-    base_url=ALPACA_BASE_URL,
 )
 
 class DataFetchError(Exception):
