@@ -3390,9 +3390,6 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     if equity < PDT_EQUITY_THRESHOLD:
         logger.info("INITIAL_REBALANCE_SKIPPED_PDT", extra={"equity": equity})
         return
-    if ctx.api.paper != ALPACA_PAPER:
-        logger.error("INITIAL_REBALANCE_ACCOUNT_MISMATCH", extra={"endpoint": ALPACA_BASE_URL})
-        return
 
     cash = float(acct.cash)
     buying_power = float(getattr(acct, "buying_power", cash))
