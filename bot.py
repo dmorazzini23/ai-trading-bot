@@ -2627,16 +2627,27 @@ def trade_logic(
     )
     return
 
+def get_latest_close(df: pd.DataFrame) -> float:
+    """Return last close price or a $1.00 fallback for missing/zero data."""
+    if df is None or df.empty:
+        return 1.0
+    close = df["Close"].iloc[-1]
+    if pd.isna(close) or close == 0:
+        return 1.0
+    return float(close)
+
+
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
-    """
-    Equal-weight portfolio, but can be overridden by PCA-based factor exposure model.
-    """
+    """Equal-weight portfolio using a dummy-price fallback for missing data."""
     n = len(symbols)
     if n == 0:
         logger.warning("No tickers to weight—skipping.")
         return {}
-    equal_weight = 1.0 / n
-    weights = {s: equal_weight for s in symbols}
+
+    prices = [get_latest_close(ctx.data_fetcher.get_daily_df(ctx, s)) for s in symbols]
+    inv_prices = [1.0 / p if p > 0 else 1.0 for p in prices]
+    total_inv = sum(inv_prices)
+    weights = {s: inv / total_inv for s, inv in zip(symbols, inv_prices)}
     logger.info("PORTFOLIO_WEIGHTS", extra={"weights": weights})
     return weights
 
@@ -3500,12 +3511,13 @@ def run_all_trades_worker(model):
 
         # Screen universe & compute weights
         tickers = screen_universe(candidates, ctx)
+        if not tickers:
+            logger.warning("No tickers passed screening—using fallback watchlist.")
+            tickers = list(candidates)
+            logger.warning(f"Falling back to full watchlist: {tickers}")
         logger.info("CANDIDATES_SCREENED", extra={"tickers": tickers})
         ctx.tickers = tickers
         ctx.portfolio_weights = compute_portfolio_weights(tickers)
-        if not tickers:
-            logger.error("NO_TICKERS_TO_TRADE")
-            return
 
         if check_halt_flag():
             logger.info("TRADING_HALTED_VIA_FLAG")
