@@ -1,6 +1,12 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()   # ensure .env is loaded before using os.getenv
+print(">> DEBUG: APCA_API_KEY_ID =", os.getenv("APCA_API_KEY_ID"))
+print(">> DEBUG: APCA_API_SECRET_KEY =", os.getenv("APCA_API_SECRET_KEY"))
+print(">> DEBUG: FINNHUB_API_KEY =", os.getenv("FINNHUB_API_KEY"))
+
 import logging
 import logging.handlers
-import os
 import csv
 import json
 import re
@@ -47,6 +53,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame
+from alpaca_trade_api.rest import REST
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import Ridge, BayesianRidge
@@ -78,13 +85,6 @@ import pybreaker
 from trade_execution import ExecutionEngine
 from capital_scaling import CapitalScalingEngine
 from data_fetcher import fh, finnhub_client, DataFetchError
-
-# Load environment variables early
-load_dotenv()
-print(">> DEBUG: APCA_API_KEY_ID =", os.getenv("APCA_API_KEY_ID"))
-print(">> DEBUG: APCA_API_SECRET_KEY =", os.getenv("APCA_API_SECRET_KEY"))
-print(">> DEBUG: FINNHUB_API_KEY =", os.getenv("FINNHUB_API_KEY"))
-from dotenv import load_dotenv
 from strategy_allocator import StrategyAllocator
 from risk_engine import RiskEngine
 from strategies import MomentumStrategy, MeanReversionStrategy, TradeSignal
@@ -538,15 +538,18 @@ class DataFetcher:
                 daily_cache_hit.inc()
                 return self._daily_cache[symbol]
 
+        api_key = os.getenv("APCA_API_KEY_ID")
+        api_secret = os.getenv("APCA_API_SECRET_KEY")
+        base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        client = REST(api_key, api_secret, base_url, api_version="v2")
+
         try:
-            bars_req = StockBarsRequest(
-                symbol_or_symbols=[symbol],
-                timeframe=TimeFrame.Day,
-                start=start_ts,
-                end=end_ts,
-                limit=1000
-            )
-            bars = ctx.data_client.get_stock_bars(bars_req).df
+            bars = client.get_bars(
+                symbol,
+                timeframe="1Day",
+                start=start_ts.isoformat(),
+                end=end_ts.isoformat(),
+            ).df
             if isinstance(bars.columns, pd.MultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
@@ -569,7 +572,7 @@ class DataFetcher:
             try:
                 resp = fh_client.stock_candles(symbol, resolution="D", _from=from_ts, to=to_ts)
                 if resp.get("s") == "ok":
-                    df = pd.DataFrame({
+                    df_fh = pd.DataFrame({
                         "open": resp["o"],
                         "high": resp["h"],
                         "low": resp["l"],
@@ -577,10 +580,10 @@ class DataFetcher:
                         "volume": resp["v"],
                         "timestamp": resp["t"],
                     })
-                    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
-                    df.set_index("timestamp", inplace=True)
-                    df.index = df.index.tz_convert(None)
-                    df = df.rename(columns={
+                    df_fh["timestamp"] = pd.to_datetime(df_fh["timestamp"], unit="s", utc=True)
+                    df_fh.set_index("timestamp", inplace=True)
+                    df_fh.index = df_fh.index.tz_convert(None)
+                    df = df_fh.rename(columns={
                         "open": "Open",
                         "high": "High",
                         "low": "Low",
@@ -610,15 +613,18 @@ class DataFetcher:
                 return self._minute_cache[symbol]
 
         minute_cache_miss.inc()
+        api_key = os.getenv("APCA_API_KEY_ID")
+        api_secret = os.getenv("APCA_API_SECRET_KEY")
+        base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        client = REST(api_key, api_secret, base_url, api_version="v2")
+
         try:
-            bars_req = StockBarsRequest(
-                symbol_or_symbols=[symbol],
-                timeframe=TimeFrame.Minute,
-                start=start_minute,
-                end=last_closed_minute,
-                limit=lookback_minutes + 1,
-            )
-            bars = ctx.data_client.get_stock_bars(bars_req).df
+            bars = client.get_bars(
+                symbol,
+                timeframe="1Min",
+                start=start_minute.isoformat(),
+                end=last_closed_minute.isoformat(),
+            ).df
             if isinstance(bars.columns, pd.MultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
@@ -641,7 +647,7 @@ class DataFetcher:
             try:
                 resp = fh_client.stock_candles(symbol, resolution="1", _from=from_ts, to=to_ts)
                 if resp.get("s") == "ok":
-                    df = pd.DataFrame({
+                    df_fh = pd.DataFrame({
                         "open": resp["o"],
                         "high": resp["h"],
                         "low": resp["l"],
@@ -649,10 +655,10 @@ class DataFetcher:
                         "volume": resp["v"],
                         "timestamp": resp["t"],
                     })
-                    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
-                    df.set_index("timestamp", inplace=True)
-                    df.index = df.index.tz_convert(None)
-                    df = df.rename(columns={
+                    df_fh["timestamp"] = pd.to_datetime(df_fh["timestamp"], unit="s", utc=True)
+                    df_fh.set_index("timestamp", inplace=True)
+                    df_fh.index = df_fh.index.tz_convert(None)
+                    df = df_fh.rename(columns={
                         "open": "Open",
                         "high": "High",
                         "low": "Low",
@@ -3533,7 +3539,11 @@ if __name__ == "__main__":
             logger.warning(f"[REBALANCE] aborted due to error: {e}")
 
         # Recurring jobs
-        schedule.every(1).minutes.do(lambda: schedule_run_all_trades_with_delay(model))
+        def gather_minute_data_with_delay():
+            time.sleep(30)
+            schedule_run_all_trades(model)
+
+        schedule.every().minute.do(gather_minute_data_with_delay)
         schedule.every(1).minutes.do(lambda: Thread(target=validate_open_orders, args=(ctx,), daemon=True).start())
         schedule.every(6).hours.do(lambda: Thread(target=update_signal_weights, daemon=True).start())
         schedule.every(30).minutes.do(lambda: Thread(target=update_bot_mode, daemon=True).start())
