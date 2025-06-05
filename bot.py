@@ -516,13 +516,17 @@ class DataFetcherLegacy:
             start = (today_date - timedelta(days=365)).isoformat()
             end = today_date.isoformat()
             bars_req = StockBarsRequest(
-                symbol_or_symbols=symbol,
+                symbol_or_symbols=[symbol],
                 timeframe=TimeFrame.Day,
                 start=start,
                 end=end,
                 limit=1000
             )
             bars = ctx.data_client.get_stock_bars(bars_req).df
+            if isinstance(bars.columns, pd.MultiIndex):
+                bars = bars.xs(symbol, level=0, axis=1)
+            else:
+                bars = bars.drop(columns=["symbol"], errors="ignore")
             bars.index = pd.to_datetime(bars.index).tz_localize(None)
             df = bars.rename(columns={
                 "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
@@ -581,17 +585,19 @@ class DataFetcherLegacy:
         # 1) Alpaca IEX fetch
         try:
             bars_req = StockBarsRequest(
-                symbol_or_symbols=symbol,
+                symbol_or_symbols=[symbol],
                 timeframe=TimeFrame.Minute,
                 limit=390 * 5
             )
             bars = ctx.data_client.get_stock_bars(bars_req).df
+            if isinstance(bars.columns, pd.MultiIndex):
+                bars = bars.xs(symbol, level=0, axis=1)
+            else:
+                bars = bars.drop(columns=["symbol"], errors="ignore")
             if not bars.empty:
                 bars = bars.rename(columns={
                     "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
                 })
-                if "symbol" in bars.columns:
-                    bars = bars.drop(columns=["symbol"])
                 bars.index = pd.to_datetime(bars.index).tz_localize(None)
                 df = bars[["Open", "High", "Low", "Close", "Volume"]]
                 logger.debug(f"[DataFetcher] minute bars via Alpaca IEX for {symbol}")
@@ -651,13 +657,17 @@ class DataFetcherLegacy:
 
             try:
                 bars_req = StockBarsRequest(
-                    symbol_or_symbols=symbol,
+                    symbol_or_symbols=[symbol],
                     timeframe=TimeFrame.Minute,
                     start=day_start_iso,
                     end=day_end_iso,
                     limit=10000
                 )
                 bars_day = ctx.data_client.get_stock_bars(bars_req).df
+                if isinstance(bars_day.columns, pd.MultiIndex):
+                    bars_day = bars_day.xs(symbol, level=0, axis=1)
+                else:
+                    bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
             except Exception:
                 bars_day = None
 
@@ -2901,13 +2911,17 @@ else:
     today_date = date.today()
     start_date = (today_date - timedelta(days=365)).isoformat()
     bars_req = StockBarsRequest(
-        symbol_or_symbols=REGIME_SYMBOLS[0],
+        symbol_or_symbols=[REGIME_SYMBOLS[0]],
         timeframe=TimeFrame.Day,
         start=start_date,
         end=today_date.isoformat(),
         limit=1000
     )
     bars = ctx.data_client.get_stock_bars(bars_req).df
+    if isinstance(bars.columns, pd.MultiIndex):
+        bars = bars.xs(REGIME_SYMBOLS[0], level=0, axis=1)
+    else:
+        bars = bars.drop(columns=["symbol"], errors="ignore")
     bars.index = pd.to_datetime(bars.index).tz_localize(None)
     bars = bars.rename(columns={
         "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
@@ -3270,7 +3284,11 @@ def run_all_trades_worker(model):
                         limit=1000
                     )
                     bars = ctx.data_client.get_stock_bars(bars_req).df
-                    for sym, df_sym in bars.groupby("symbol"):
+                    if isinstance(bars.columns, pd.MultiIndex):
+                        grouped = {sym: bars.xs(sym, level=0, axis=1) for sym in batch if sym in bars.columns.get_level_values(0)}
+                    else:
+                        grouped = {sym: df for sym, df in bars.groupby("symbol")}
+                    for sym, df_sym in grouped.items():
                         df_df = df_sym.drop(columns=["symbol"], errors="ignore").copy()
                         df_df = df_df.rename(columns={
                             "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"

@@ -90,10 +90,15 @@ class DataFetcher:
         if symbol in self._daily_cache:
             return self._daily_cache[symbol]
         try:
-            req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, limit=1000)
+            # alpaca-py requires a list of symbols; handle resulting MultiIndex
+            req = StockBarsRequest(symbol_or_symbols=[symbol], timeframe=TimeFrame.Day, limit=1000)
             bars = ctx.data_client.get_stock_bars(req).df
+            if isinstance(bars.columns, pd.MultiIndex):
+                bars = bars.xs(symbol, level=0, axis=1)
+            else:
+                bars = bars.drop(columns=["symbol"], errors="ignore")
             bars.index = pd.to_datetime(bars.index).tz_localize(None)
-            df = bars.rename(columns={"open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"})
+            df = bars.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"})
         except Exception:
             try:
                 df = fh.fetch(symbol, period="1mo", interval="1d")
@@ -114,14 +119,16 @@ class DataFetcher:
             return self._minute_cache.get(symbol)
         df = None
         try:
-            req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Minute, limit=390)
+            req = StockBarsRequest(symbol_or_symbols=[symbol], timeframe=TimeFrame.Minute, limit=390)
             bars = ctx.data_client.get_stock_bars(req).df
+            if isinstance(bars.columns, pd.MultiIndex):
+                bars = bars.xs(symbol, level=0, axis=1)
+            else:
+                bars = bars.drop(columns=["symbol"], errors="ignore")
             if not bars.empty:
-                bars = bars.rename(columns={"open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"})
-                if "symbol" in bars.columns:
-                    bars = bars.drop(columns=["symbol"])
+                bars = bars.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"})
                 bars.index = pd.to_datetime(bars.index).tz_localize(None)
-                df = bars[["Open","High","Low","Close","Volume"]]
+                df = bars[["Open", "High", "Low", "Close", "Volume"]]
         except Exception:
             try:
                 df = fh.fetch(symbol, period="5d", interval="1m")
