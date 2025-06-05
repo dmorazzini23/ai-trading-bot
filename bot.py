@@ -524,8 +524,12 @@ class DataFetcherLegacy:
 
         if symbol in REGIME_SYMBOLS:
             today_date = date.today()
-            start = (today_date - timedelta(days=365)).isoformat()
-            end = today_date.isoformat()
+            start = datetime.combine(today_date - timedelta(days=365), dt_time.min, timezone.utc)
+            end = datetime.combine(today_date, dt_time.max, timezone.utc)
+            if isinstance(start, tuple):
+                start, _tmp = start
+            if isinstance(end, tuple):
+                _, end = end
             bars_req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=TimeFrame.Day,
@@ -559,7 +563,7 @@ class DataFetcherLegacy:
             daily_cache_hit.inc()
         except Exception as e:
             logger.warning(
-                f"[DataFetcher] daily fetch failed for {symbol}: {e}")
+                f"[DataFetcher] daily fetch failed for {symbol} {start}-{end}: {e}")
             # Fallback to yfinance if Finnhub fails
             try:
                 df_yf = yf.download(symbol, period="1mo", interval="1d", progress=False)
@@ -662,16 +666,19 @@ class DataFetcherLegacy:
         current_day = start_date
 
         while current_day <= end_date:
-            # Build ISO strings for that single day:
-            day_start_iso = f"{current_day.isoformat()}T00:00:00Z"
-            day_end_iso   = f"{current_day.isoformat()}T23:59:59Z"
+            day_start = datetime.combine(current_day, dt_time.min, timezone.utc)
+            day_end = datetime.combine(current_day, dt_time.max, timezone.utc)
+            if isinstance(day_start, tuple):
+                day_start, _tmp = day_start
+            if isinstance(day_end, tuple):
+                _, day_end = day_end
 
             try:
                 bars_req = StockBarsRequest(
                     symbol_or_symbols=[symbol],
                     timeframe=TimeFrame.Minute,
-                    start=day_start_iso,
-                    end=day_end_iso,
+                    start=day_start,
+                    end=day_end,
                     limit=10000
                 )
                 bars_day = ctx.data_client.get_stock_bars(bars_req).df
@@ -679,7 +686,8 @@ class DataFetcherLegacy:
                     bars_day = bars_day.xs(symbol, level=0, axis=1)
                 else:
                     bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[historic_minute] failed for {symbol} {day_start}-{day_end}: {e}")
                 bars_day = None
 
             if bars_day is not None and not bars_day.empty:
@@ -2913,12 +2921,17 @@ if os.path.exists(REGIME_MODEL_PATH):
     regime_model = pickle.load(open(REGIME_MODEL_PATH, "rb"))
 else:
     today_date = date.today()
-    start_date = (today_date - timedelta(days=365)).isoformat()
+    start_dt = datetime.combine(today_date - timedelta(days=365), dt_time.min, timezone.utc)
+    end_dt = datetime.combine(today_date, dt_time.max, timezone.utc)
+    if isinstance(start_dt, tuple):
+        start_dt, _tmp = start_dt
+    if isinstance(end_dt, tuple):
+        _, end_dt = end_dt
     bars_req = StockBarsRequest(
         symbol_or_symbols=[REGIME_SYMBOLS[0]],
         timeframe=TimeFrame.Day,
-        start=start_date,
-        end=today_date.isoformat(),
+        start=start_dt,
+        end=end_dt,
         limit=1000
     )
     bars = ctx.data_client.get_stock_bars(bars_req).df
@@ -3277,13 +3290,17 @@ def run_all_trades_worker(model):
             all_syms = [s for s in candidates if s not in REGIME_SYMBOLS]
             for batch in chunked(all_syms, 10):
                 try:
-                    start_str = (today_date - timedelta(days=30)).isoformat()
-                    end_str = today_date.isoformat()
+                    start_dt = datetime.combine(today_date - timedelta(days=30), dt_time.min, timezone.utc)
+                    end_dt = datetime.combine(today_date, dt_time.max, timezone.utc)
+                    if isinstance(start_dt, tuple):
+                        start_dt, _tmp = start_dt
+                    if isinstance(end_dt, tuple):
+                        _, end_dt = end_dt
                     bars_req = StockBarsRequest(
                         symbol_or_symbols=list(batch),
                         timeframe=TimeFrame.Day,
-                        start=start_str,
-                        end=end_str,
+                        start=start_dt,
+                        end=end_dt,
                         limit=1000
                     )
                     bars = ctx.data_client.get_stock_bars(bars_req).df
@@ -3302,7 +3319,7 @@ def run_all_trades_worker(model):
                         daily_cache_hit.inc()
                     logger.info("PREFETCH_ALPACA_BATCH", extra={"batch": batch})
                 except Exception as e:
-                    logger.warning(f"[prefetch] Alpaca bulk failed for {batch}: {e} — falling back to Finnhub")
+                    logger.warning(f"[prefetch] Alpaca bulk failed for {batch} {start_dt}-{end_dt}: {e} — falling back to Finnhub")
                     for sym in batch:
                         try:
                             df_sym = fh.fetch(sym, period="1mo", interval="1d")

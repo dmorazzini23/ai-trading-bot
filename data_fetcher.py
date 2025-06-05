@@ -99,7 +99,8 @@ class DataFetcher:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             bars.index = pd.to_datetime(bars.index).tz_localize(None)
             df = bars.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"})
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[get_daily_df] Alpaca fetch failed for {symbol}: {e}")
             try:
                 df = fh.fetch(symbol, period="1mo", interval="1d")
             except Exception:
@@ -129,7 +130,8 @@ class DataFetcher:
                 bars = bars.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"})
                 bars.index = pd.to_datetime(bars.index).tz_localize(None)
                 df = bars[["Open", "High", "Low", "Close", "Volume"]]
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[get_minute_df] Alpaca fetch failed for {symbol}: {e}")
             try:
                 df = fh.fetch(symbol, period="5d", interval="1m")
             except Exception:
