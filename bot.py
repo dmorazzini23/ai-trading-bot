@@ -31,8 +31,6 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask
 import schedule
-import yfinance as yf
-from yfinance.exceptions import YFRateLimitError
 import portalocker
 
 # Alpaca v3 SDK imports
@@ -59,10 +57,11 @@ import joblib
 import sentry_sdk
 
 from config import (
-    APCA_API_KEY_ID,
-    APCA_API_SECRET_KEY,
+    ALPACA_API_KEY,
+    ALPACA_SECRET_KEY,
     ALPACA_BASE_URL,
     ALPACA_PAPER,
+    validate_alpaca_credentials,
     NEWS_API_KEY as CONFIG_NEWS_API_KEY,
     FINNHUB_API_KEY,
     SENTRY_DSN,
@@ -358,8 +357,9 @@ class DataFetchErrorLegacy(Exception):
 # ─── B. CLIENTS & SINGLETONS ─────────────────────────────────────────────────
 
 def ensure_alpaca_credentials() -> None:
-    if not APCA_API_KEY_ID or not APCA_API_SECRET_KEY:
-        raise RuntimeError("Missing Alpaca API credentials; please check .env")
+    """Verify Alpaca credentials are present before starting."""
+    validate_alpaca_credentials()
+
 ensure_alpaca_credentials()
 
 # Prometheus-safe account fetch
@@ -569,24 +569,8 @@ class DataFetcherLegacy:
         except Exception as e:
             logger.warning(
                 f"[DataFetcher] daily fetch failed for {symbol} {start}-{end}: {e}")
-            # Fallback to yfinance if Finnhub fails
-            try:
-                df_yf = yf.download(symbol, period="1mo", interval="1d", progress=False)
-                if not df_yf.empty:
-                    df_yf.index = pd.to_datetime(df_yf.index).tz_localize(None)
-                    df = df_yf.rename(columns=lambda c: c.title())[
-                        ["Open", "High", "Low", "Close", "Volume"]
-                    ]
-                    logger.warning(
-                        f"[DataFetcher] fallback to yfinance daily for {symbol}")
-                else:
-                    df = None
-            except Exception as e2:
-                logger.error(
-                    f"[DataFetcher] yfinance daily fallback failed for {symbol}: {e2}")
-                df = None
             daily_cache_miss.inc()
-
+            
         with cache_lock:
             self._daily_cache[symbol] = df
         return df
@@ -629,7 +613,6 @@ class DataFetcherLegacy:
                     logger.warning(f"[DataFetcher] fallback to Finnhub 1-min for {symbol}")
         except Exception as e:
             logger.warning(f"[DataFetcher] Alpaca minute fetch failed for {symbol}: {e}")
-            # fallback to Finnhub if Alpaca fails
             try:
                 df_fh = fh.fetch(symbol, period="5d", interval="1m")
                 if df_fh is not None and not df_fh.empty:
@@ -639,16 +622,6 @@ class DataFetcherLegacy:
                     df = None
             except Exception:
                 df = None
-            # Fallback to yfinance if Finnhub fails too
-            if df is None:
-                try:
-                    df_yf = yf.download(symbol, period="5d", interval="1m", progress=False)
-                    if not df_yf.empty:
-                        df_yf.index = pd.to_datetime(df_yf.index).tz_localize(None)
-                        df = df_yf.rename(columns=lambda c: c.title())[["Open", "High", "Low", "Close", "Volume"]]
-                        logger.warning(f"[DataFetcher] fallback to yfinance 1-min for {symbol}")
-                except Exception as e2:
-                    logger.error(f"[DataFetcher] yfinance minute fallback failed for {symbol}: {e2}")
 
         with cache_lock:
             self._minute_cache[symbol] = df
@@ -1173,8 +1146,8 @@ trade_logger   = TradeLogger()
 risk_engine    = RiskEngine()
 allocator      = StrategyAllocator()
 strategies     = [MomentumStrategy(), MeanReversionStrategy()]
-API_KEY = APCA_API_KEY_ID
-SECRET_KEY = APCA_API_SECRET_KEY
+API_KEY = ALPACA_API_KEY
+SECRET_KEY = ALPACA_SECRET_KEY
 BASE_URL = ALPACA_BASE_URL
 paper = ALPACA_PAPER
 trading_client = TradingClient(API_KEY, SECRET_KEY, paper=paper)
@@ -3407,14 +3380,24 @@ def schedule_run_all_trades(model):
     Thread(target=run_all_trades_worker, args=(model,), daemon=True).start()
 
 def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
+    now_pac = datetime.now(PACIFIC)
+    if not in_trading_hours(now_pac):
+        logger.info("INITIAL_REBALANCE_MARKET_CLOSED")
+        return
+
     acct = ctx.api.get_account()
     equity = float(acct.equity)
     if equity < PDT_EQUITY_THRESHOLD:
         logger.info("INITIAL_REBALANCE_SKIPPED_PDT", extra={"equity": equity})
         return
+    if ctx.api.paper != ALPACA_PAPER:
+        logger.error("INITIAL_REBALANCE_ACCOUNT_MISMATCH", extra={"endpoint": ALPACA_BASE_URL})
+        return
+
     cash = float(acct.cash)
+    buying_power = float(getattr(acct, "buying_power", cash))
     n = len(symbols)
-    if n == 0 or cash <= 0:
+    if n == 0 or cash <= 0 or buying_power <= 0:
         logger.info("INITIAL_REBALANCE_NO_SYMBOLS_OR_NO_CASH")
         return
     per_symbol = cash / n
@@ -3443,7 +3426,9 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
             submit_order(ctx, sym, qty, "buy")
         except APIError as e:
             msg = str(e).lower()
-            if "insufficient" in msg or "day trading buying power" in msg:
+            if getattr(e, "status_code", None) == 403 or "forbidden" in msg:
+                logger.error("INITIAL_REBALANCE_FORBIDDEN", extra={"symbol": sym, "error": str(e)})
+            elif "insufficient" in msg or "buying power" in msg:
                 logger.warning("INITIAL_REBALANCE_SKIPPED_INSUFFICIENT", extra={"symbol": sym, "error": str(e)})
             else:
                 logger.exception("INITIAL_REBALANCE_ERROR", extra={"symbol": sym, "error": str(e)})

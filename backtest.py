@@ -17,15 +17,11 @@ from datetime import datetime
 
 import pandas as pd
 import numpy as np
-import yfinance as yf
+from data_fetcher import get_historical_data
 
 
 def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
-    """
-    Load (or re‐use cached) historical daily data for `symbol` using yfinance.
-    Caches to "cache_{symbol}_{start}_{end}.csv" on disk, so future calls are instant.
-    Retries up to 3 times if any exception occurs during download.
-    """
+    """Load (or fetch and cache) historical daily data via Alpaca."""
     cache_fname = f"cache_{symbol}_{start}_{end}.csv"
 
     # 1) If cached file exists, load it and return
@@ -40,20 +36,16 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
             except Exception:
                 pass
 
-    # 2) Otherwise, attempt to download with up to 3 retries
+    # 2) Otherwise, attempt to fetch from Alpaca with retries
     df_final = pd.DataFrame()
     for attempt in range(1, 4):
         try:
-            raw = yf.download(symbol, start=start, end=end, progress=False)
-            raw.index = pd.to_datetime(raw.index)
-            if not raw.empty:
-                df_final = raw.rename(columns={
-                    "Open": "Open", "High": "High", "Low": "Low", "Close": "Close", "Volume": "Volume"
-                })[["Open", "High", "Low", "Close", "Volume"]]
+            df_final = get_historical_data(symbol, datetime.fromisoformat(start).date(),
+                                          datetime.fromisoformat(end).date(), '1Day')
             break
         except Exception as e:
             if attempt < 3:
-                print(f"  ▶ Failed to download {symbol} (attempt {attempt}/3): {e!r}. Sleeping 2s…")
+                print(f"  ▶ Failed to fetch {symbol} (attempt {attempt}/3): {e!r}. Sleeping 2s…")
                 time.sleep(2)
             else:
                 print(f"  ▶ Final attempt failed for {symbol}; proceeding with empty DataFrame.")
@@ -70,7 +62,7 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
 
 def run_backtest(symbols, start, end, params) -> dict:
     """
-    Run a very small simulated backtest using cached yfinance data.
+    Run a very small simulated backtest using cached Alpaca data.
     Returns a dict with "net_pnl" and "sharpe".
     """
     # 1) Load (or download+cache) each symbol’s DataFrame
