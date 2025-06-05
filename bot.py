@@ -45,8 +45,9 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.models import Order
 from alpaca.common.exceptions import APIError
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
+from alpaca.common import APIConfig
+from alpaca.data.historical.stock import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest, QuoteRequest
 from alpaca.data.timeframe import TimeFrame
 
 from sklearn.ensemble import RandomForestClassifier
@@ -342,7 +343,7 @@ class DataFetchErrorLegacy(Exception):
 # ─── B. CLIENTS & SINGLETONS ─────────────────────────────────────────────────
 
 def ensure_alpaca_credentials() -> None:
-    if not os.getenv("APCA_API_KEY_ID") or not os.getenv("APCA_API_SECRET_KEY"):
+    if not os.getenv("ALPACA_API_KEY") or not os.getenv("ALPACA_SECRET_KEY"):
         raise RuntimeError("Missing Alpaca API credentials; please check .env")
 ensure_alpaca_credentials()
 
@@ -1149,17 +1150,13 @@ trade_logger   = TradeLogger()
 risk_engine    = RiskEngine()
 allocator      = StrategyAllocator()
 strategies     = [MomentumStrategy(), MeanReversionStrategy()]
-trading_client = TradingClient(
-    os.getenv("APCA_API_KEY_ID"),
-    os.getenv("APCA_API_SECRET_KEY"),
-    paper="paper" in os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),
+config = APIConfig(
+    api_key=os.getenv("ALPACA_API_KEY"),
+    secret_key=os.getenv("ALPACA_SECRET_KEY"),
     base_url=os.getenv("ALPACA_BASE_URL")
 )
-data_client = StockHistoricalDataClient(
-    os.getenv("APCA_API_KEY_ID"),
-    os.getenv("APCA_API_SECRET_KEY"),
-    base_url=os.getenv("APCA_DATA_BASE_URL", "https://data.alpaca.markets")
-)
+trading_client = TradingClient(config)
+data_client = StockHistoricalDataClient(config)
 ctx = BotContext(
     api=trading_client,
     data_client=data_client,
@@ -1673,7 +1670,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
         return 0.0
     avg_vol = df["Volume"].tail(30).mean()
     try:
-        req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+        req = QuoteRequest(symbol_or_symbols=symbol)
         quote_data = ctx.data_client.get_stock_latest_quote(req)
         quote = quote_data[symbol]
         spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
@@ -1860,7 +1857,7 @@ def vwap_pegged_submit(
             break
         vwap_price = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
         try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+            req = QuoteRequest(symbol_or_symbols=symbol)
             quote_data = ctx.data_client.get_stock_latest_quote(req)
             quote = quote_data[symbol]
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
@@ -1975,7 +1972,7 @@ def pov_submit(
         interval = cfg.sleep_interval
 
         try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
+            req = QuoteRequest(symbol_or_symbols=symbol)
             quote_data = ctx.data_client.get_stock_latest_quote(req)
             quote = quote_data[symbol]
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
@@ -3240,7 +3237,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
     acct = ctx.api.get_account()
     cash = float(getattr(acct, "cash", 0))
     for sig in final:
-        req = StockLatestQuoteRequest(symbol_or_symbols=[sig.symbol])
+        req = QuoteRequest(symbol_or_symbols=sig.symbol)
         quote_data = ctx.data_client.get_stock_latest_quote(req)
         quote = quote_data[sig.symbol]
         price = float(getattr(quote, "ask_price", 0) or 0)
@@ -3383,7 +3380,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     per_symbol = cash / n
     for sym in symbols:
         try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=[sym])
+            req = QuoteRequest(symbol_or_symbols=sym)
             quote_data = ctx.data_client.get_stock_latest_quote(req)
             quote = quote_data[sym]
             price = float(getattr(quote, "ask_price", 0) or 0)
