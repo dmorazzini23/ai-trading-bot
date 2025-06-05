@@ -6,6 +6,9 @@ from collections import deque
 from typing import Optional, Sequence
 
 from config import FINNHUB_API_KEY
+import logging
+
+logger = logging.getLogger(__name__)
 
 import pandas as pd
 import yfinance as yf

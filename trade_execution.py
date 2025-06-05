@@ -38,7 +38,7 @@ class ExecutionEngine:
 
     def _latest_quote(self, symbol: str) -> Tuple[float, float]:
         try:
-            req = StockLatestQuoteRequest(symbol=symbol)
+            req = StockLatestQuoteRequest(symbol_or_symbols=symbol)
             q: Quote = self.ctx.data_client.get_stock_latest_quote(req)
             bid = float(getattr(q, 'bid_price', 0) or 0)
             ask = float(getattr(q, 'ask_price', 0) or 0)
