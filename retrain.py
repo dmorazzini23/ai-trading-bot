@@ -139,6 +139,18 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     except Exception:
         df["stochrsi"] = np.nan
 
+    # --- Multi-timeframe fusion ---
+    try:
+        df["ret_5m"] = df["Close"].pct_change(5)
+        df["ret_1h"] = df["Close"].pct_change(60)
+        df["ret_d"] = df["Close"].pct_change(390)
+        df["ret_w"] = df["Close"].pct_change(1950)
+        df["vol_norm"] = df["Volume"].rolling(60).mean() / df["Volume"].rolling(5).mean()
+        df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
+    except Exception:
+        df["ret_5m"] = df["ret_1h"] = df["ret_d"] = df["ret_w"] = np.nan
+        df["vol_norm"] = df["5m_vs_1h"] = np.nan
+
     df.ffill(inplace=True)
     df.bfill(inplace=True)
 

@@ -159,6 +159,7 @@ daily_cache_miss        = Counter('bot_daily_cache_misses', 'Daily bar cache mis
 event_cooldown_hits     = Counter('bot_event_cooldown_hits', 'Event cooldown hits')
 slippage_total          = Counter('bot_slippage_total', 'Cumulative slippage in cents')
 slippage_count          = Counter('bot_slippage_count', 'Number of orders with slippage logged')
+weekly_drawdown         = Gauge('bot_weekly_drawdown', 'Current weekly drawdown fraction')
 
 # Paths
 BASE_DIR            = os.path.dirname(os.path.abspath(__file__))
@@ -248,6 +249,9 @@ POV_SLICE_PCT           = params.get("POV_SLICE_PCT", 0.05)
 DAILY_LOSS_LIMIT        = params.get("DAILY_LOSS_LIMIT", 0.07)
 MAX_PORTFOLIO_POSITIONS = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD   = 0.60
+SECTOR_EXPOSURE_CAP     = float(os.getenv("SECTOR_EXPOSURE_CAP", "0.4"))
+MAX_OPEN_POSITIONS      = int(os.getenv("MAX_OPEN_POSITIONS", "10"))
+WEEKLY_DRAWDOWN_LIMIT   = float(os.getenv("WEEKLY_DRAWDOWN_LIMIT", "0.15"))
 MARKET_OPEN             = dt_time(6, 30)
 MARKET_CLOSE            = dt_time(13, 0)
 VOLUME_THRESHOLD        = int(os.getenv("VOLUME_THRESHOLD", "50000"))
@@ -299,6 +303,12 @@ _slippage_log: List[Tuple[str, float, float, datetime]] = []  # (symbol, expecte
 if not os.path.exists(SLIPPAGE_LOG_FILE):
     with open(SLIPPAGE_LOG_FILE, "w", newline="") as f:
         csv.writer(f).writerow(["timestamp", "symbol", "expected", "actual", "slippage_cents"])
+
+# Sector cache for portfolio exposure calculations
+_SECTOR_CACHE: Dict[str, str] = {}
+
+# Weekly drawdown tracking
+week_start_equity: Optional[Tuple[date, float]] = None
 
 # ─── TYPED EXCEPTION ─────────────────────────────────────────────────────────
 class DataFetchError(Exception):
@@ -907,6 +917,7 @@ class SignalManager:
             _LAST_PRICE[ticker] = latest_close
             _SENTIMENT_CACHE[ticker] = (pytime.time(), score)
 
+        score = max(-1.0, min(1.0, score))
         s = 1 if score > 0 else -1 if score < 0 else -1
         return s, abs(score), 'sentiment'
 
@@ -1132,6 +1143,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
         logger.warning(f"[fetch_sentiment] Form4 fetch failed for {ticker}: {e}")
 
     final_score = 0.8 * news_score + 0.2 * form4_score
+    final_score = max(-1.0, min(1.0, final_score))
     with sentiment_lock:
         _SENTIMENT_CACHE[ticker] = (now_ts, final_score)
     return final_score
@@ -1273,6 +1285,23 @@ def check_daily_loss(ctx: BotContext) -> bool:
         sentry_sdk.capture_message(f"[WARNING] Daily drawdown = {loss:.2%}")
     return loss >= limit
 
+def check_weekly_loss(ctx: BotContext) -> bool:
+    """Weekly portfolio drawdown guard."""
+    global week_start_equity
+    acct = safe_alpaca_get_account(ctx)
+    equity = float(acct.equity)
+    today_date = date.today()
+    week_start = today_date - timedelta(days=today_date.weekday())
+
+    if week_start_equity is None or week_start_equity[0] != week_start:
+        week_start_equity = (week_start, equity)
+        weekly_drawdown.set(0.0)
+        return False
+
+    loss = (week_start_equity[1] - equity) / week_start_equity[1]
+    weekly_drawdown.set(loss)
+    return loss >= WEEKLY_DRAWDOWN_LIMIT
+
 def count_day_trades() -> int:
     if not os.path.exists(TRADE_LOG_FILE):
         return 0
@@ -1386,6 +1415,48 @@ def too_correlated(sym: str) -> bool:
     corr_matrix = mat.corr().abs()
     avg_corr = corr_matrix.where(~np.eye(len(good_syms), dtype=bool)).stack().mean()
     return avg_corr > CORRELATION_THRESHOLD
+
+def get_sector(symbol: str) -> str:
+    if symbol in _SECTOR_CACHE:
+        return _SECTOR_CACHE[symbol]
+    try:
+        sector = yf.Ticker(symbol).info.get("sector", "Unknown")
+    except Exception:
+        sector = "Unknown"
+    _SECTOR_CACHE[symbol] = sector
+    return sector
+
+def sector_exposure(ctx: BotContext) -> Dict[str, float]:
+    """Return current portfolio exposure by sector as fraction of equity."""
+    try:
+        positions = ctx.api.list_positions()
+    except Exception:
+        return {}
+    try:
+        total = float(ctx.api.get_account().portfolio_value)
+    except Exception:
+        total = 0.0
+    exposure: Dict[str, float] = {}
+    for pos in positions:
+        qty = abs(int(getattr(pos, "qty", 0)))
+        price = float(getattr(pos, "current_price", 0) or getattr(pos, "avg_entry_price", 0) or 0)
+        sec = get_sector(getattr(pos, "symbol", ""))
+        val = qty * price
+        exposure[sec] = exposure.get(sec, 0.0) + val
+    if total <= 0:
+        return {k: 0.0 for k in exposure}
+    return {k: v / total for k, v in exposure.items()}
+
+def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> bool:
+    """Return True if adding qty*price of symbol keeps sector exposure within cap."""
+    sec = get_sector(symbol)
+    exposures = sector_exposure(ctx)
+    try:
+        total = float(ctx.api.get_account().portfolio_value)
+    except Exception:
+        total = 0.0
+    projected = exposures.get(sec, 0.0) + ((qty * price) / total if total > 0 else 0.0)
+    return projected <= SECTOR_EXPOSURE_CAP
 
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext) -> bool:
@@ -1513,8 +1584,15 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                 spread = (ask - bid) if ask and bid else 0.0
                 mid = (ask + bid) / 2 if ask and bid else None
                 order_kwargs["time_in_force"] = "gtc"
-                if spread > 0.03 and mid:
-                    limit_price = round(mid, 2)
+                if mid:
+                    if side.lower() == "buy":
+                        limit_price = round(min(mid + 0.01, ask or mid), 2)
+                    else:
+                        limit_price = round(max(mid - 0.01, bid or mid), 2)
+                else:
+                    limit_price = None
+
+                if spread > 0.03 and limit_price:
                     order_kwargs.update({"type": "limit", "limit_price": limit_price})
                     expected_price = limit_price
                 else:
@@ -1580,6 +1658,12 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                         "slippage_cents": slip,
                     },
                 )
+                filled_qty = int(float(getattr(order, "filled_qty", 0) or 0))
+                if filled_qty < qty_slice:
+                    logger.info(
+                        "ORDER_PARTIAL_FILL",
+                        extra={"symbol": symbol, "expected": qty_slice, "filled": filled_qty},
+                    )
                 Thread(
                     target=poll_order_fill_status,
                     args=(ctx, getattr(order, "id", "")),
@@ -1919,7 +2003,9 @@ def calculate_entry_size(
     rets = df["Close"].pct_change().dropna().values if df is not None and not df.empty else np.array([0.0])
     kelly_sz = fractional_kelly_size(ctx, cash, price, atr, win_prob)
     vol_sz = vol_target_position_size(cash, price, rets, target_vol=0.02)
-    size = int(min(kelly_sz, vol_sz, cap_sz, MAX_POSITION_SIZE))
+    base = int(min(kelly_sz, vol_sz, cap_sz, MAX_POSITION_SIZE))
+    factor = max(0.5, min(1.5, 1 + (win_prob - 0.5)))
+    size = int(base * factor)
     return max(size, 1)
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
@@ -2014,6 +2100,9 @@ def pre_trade_checks(
         return False
     if check_daily_loss(ctx):
         logger.info("SKIP_DAILY_LOSS", extra={"symbol": symbol})
+        return False
+    if check_weekly_loss(ctx):
+        logger.info("SKIP_WEEKLY_LOSS", extra={"symbol": symbol})
         return False
     if too_many_positions(ctx):
         logger.info("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol})
@@ -2177,6 +2266,10 @@ def trade_logic(
             f"confidence={conf:.4f}  qty={raw_qty}"
         )
 
+        if not sector_exposure_ok(ctx, symbol, raw_qty, current_price):
+            logger.info("SKIP_SECTOR_CAP", extra={"symbol": symbol})
+            return
+
         order = submit_order(ctx, symbol, raw_qty, "buy")
         if order is None:
             logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
@@ -2230,6 +2323,9 @@ def trade_logic(
             f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  "
             f"confidence={conf:.4f}  qty={qty}"
         )
+        if not sector_exposure_ok(ctx, symbol, qty, current_price):
+            logger.info("SKIP_SECTOR_CAP", extra={"symbol": symbol})
+            return
 
         order = submit_order(ctx, symbol, qty, "sell")
         if order is None:
@@ -2662,6 +2758,18 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
     except Exception:
         df["stochrsi"] = np.nan
+
+    # --- Multi-timeframe fusion ---
+    try:
+        df["ret_5m"] = df["Close"].pct_change(5)
+        df["ret_1h"] = df["Close"].pct_change(60)
+        df["ret_d"] = df["Close"].pct_change(390)
+        df["ret_w"] = df["Close"].pct_change(1950)
+        df["vol_norm"] = df["Volume"].rolling(60).mean() / df["Volume"].rolling(5).mean()
+        df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
+    except Exception:
+        df["ret_5m"] = df["ret_1h"] = df["ret_d"] = df["ret_w"] = np.nan
+        df["vol_norm"] = df["5m_vs_1h"] = np.nan
 
     df.ffill(inplace=True)
     df.bfill(inplace=True)
