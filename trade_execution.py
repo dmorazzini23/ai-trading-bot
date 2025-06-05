@@ -105,16 +105,24 @@ class ExecutionEngine:
             self.slippage_count.inc()
         self.logger.info('SLIPPAGE', extra={'symbol': symbol, 'expected': expected, 'actual': actual, 'slippage_cents': slip, 'band': getattr(self.ctx, 'capital_band', 'small')})
 
-    def execute_order(self, symbol: str, qty: int, side: str) -> Optional[Order]:
+    def execute_order(self, symbol: str, qty: int, side: str, asset_class: str = "equity") -> Optional[Order]:
+        """Execute an order for the given asset class."""
         remaining = qty
         last_order = None
+        api = self.api
+        if asset_class == "crypto" and hasattr(self.ctx, "crypto_api"):
+            api = self.ctx.crypto_api
+        elif asset_class == "forex" and hasattr(self.ctx, "forex_api"):
+            api = self.ctx.forex_api
+        elif asset_class == "commodity" and hasattr(self.ctx, "commodity_api"):
+            api = self.ctx.commodity_api
         while remaining > 0:
             order_kwargs, expected_price = self._prepare_order(symbol, side, remaining)
             slice_qty = order_kwargs['qty']
             start = time.monotonic()
             try:
                 self.logger.info('ORDER_SENT', extra={'symbol': symbol, 'side': side, 'qty': slice_qty, 'type': order_kwargs.get('type')})
-                order = self.api.submit_order(**order_kwargs)
+                order = api.submit_order(**order_kwargs)
                 fill_price = float(getattr(order, 'filled_avg_price', expected_price or 0) or 0)
                 latency = (time.monotonic() - start) * 1000.0
                 self._log_slippage(symbol, expected_price, fill_price)
