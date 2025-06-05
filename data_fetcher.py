@@ -1,10 +1,14 @@
 import os
+from dotenv import load_dotenv
 import random
 import time as pytime
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta, timezone
 from collections import deque
 from typing import Optional, Sequence
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(dotenv_path=os.path.join(BASE_DIR, '.env'))
 
 import pandas as pd
 import yfinance as yf

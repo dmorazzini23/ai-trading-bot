@@ -1,13 +1,11 @@
 import os
+from dotenv import load_dotenv
 import json
 import csv
 import random
 import joblib
 import pandas as pd
 import numpy as np
-import requests
-from dotenv import load_dotenv
-
 from datetime import datetime, date, time, timedelta
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit, ParameterSampler, cross_val_score
 from sklearn.pipeline import make_pipeline
@@ -16,9 +14,9 @@ from lightgbm import LGBMClassifier
 
 import pandas_ta as ta
 
-load_dotenv()
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(dotenv_path=os.path.join(BASE_DIR, '.env'))
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 def abspath(p: str) -> str:
     return os.path.join(BASE_DIR, p)
 FEATURE_PERF_FILE = abspath("feature_perf.csv")

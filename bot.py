@@ -59,6 +59,9 @@ import joblib
 from dotenv import load_dotenv
 import sentry_sdk
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(dotenv_path=os.path.join(BASE_DIR, '.env'))
+
 from prometheus_client import start_http_server, Counter, Gauge, Histogram
 import finnhub
 from finnhub import FinnhubAPIException
@@ -112,7 +115,6 @@ from ratelimit import limits, sleep_and_retry
 import warnings
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
-load_dotenv()
 RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
 
 # Logging: set root logger to INFO, send to both stderr and a log file
