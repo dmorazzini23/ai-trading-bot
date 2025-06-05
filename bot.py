@@ -161,6 +161,8 @@ slippage_total          = Counter('bot_slippage_total', 'Cumulative slippage in 
 slippage_count          = Counter('bot_slippage_count', 'Number of orders with slippage logged')
 weekly_drawdown         = Gauge('bot_weekly_drawdown', 'Current weekly drawdown fraction')
 
+DISASTER_DD_LIMIT      = float(os.getenv('DISASTER_DD_LIMIT', '0.2'))
+
 # Paths
 BASE_DIR            = os.path.dirname(os.path.abspath(__file__))
 def abspath(fname: str) -> str:
@@ -299,7 +301,7 @@ _LOSS_STREAK = 0
 _STREAK_HALT_UNTIL: Optional[datetime] = None
 
 # Volatility stats (for SPY ATR mean/std)
-_VOL_STATS = {"mean": None, "std": None, "last_update": None}
+_VOL_STATS = {"mean": None, "std": None, "last_update": None, "last": None}
 CURRENT_REGIME = "sideways"
 
 # Slippage logs (in-memory for quick access)
@@ -362,13 +364,15 @@ def compute_spy_vol_stats(ctx: 'BotContext') -> None:
     recent = atr_series.iloc[-252:]
     mean_val = float(recent.mean())
     std_val = float(recent.std())
+    last_val = float(atr_series.iloc[-1]) if not atr_series.empty else 0.0
 
     with vol_lock:
         _VOL_STATS["mean"] = mean_val
         _VOL_STATS["std"] = std_val
         _VOL_STATS["last_update"] = today
+        _VOL_STATS["last"] = last_val
 
-    logger.info("SPY_VOL_STATS_UPDATED", extra={"mean": mean_val, "std": std_val})
+    logger.info("SPY_VOL_STATS_UPDATED", extra={"mean": mean_val, "std": std_val, "atr": last_val})
 
 def is_high_vol_thr_spy() -> bool:
     """Return True if SPY ATR > mean + 2*std."""
@@ -1432,7 +1436,12 @@ def check_halt_flag() -> bool:
         return False
     mtime = os.path.getmtime(HALT_FLAG_PATH)
     age = datetime.now(timezone.utc) - datetime.fromtimestamp(mtime, timezone.utc)
-    return age < timedelta(hours=1)
+    try:
+        content = open(HALT_FLAG_PATH).read().strip()
+    except Exception:
+        content = ""
+    max_age = timedelta(hours=24) if content.startswith("DISASTER") else timedelta(hours=1)
+    return age < max_age
 
 def too_many_positions(ctx: BotContext) -> bool:
     try:
@@ -3155,6 +3164,30 @@ def update_bot_mode() -> None:
         ctx.kelly_fraction = params.get('KELLY_FRACTION', 0.6)
         logger.info('MODE_SWITCH', extra={'new_mode': new_mode, 'avg_reward': avg_r, 'drawdown': dd, 'regime': regime})
 
+def adaptive_risk_scaling(ctx: BotContext) -> None:
+    """Adjust risk parameters based on volatility, rewards and drawdown."""
+    vol = _VOL_STATS.get("mean", 0)
+    spy_atr = _VOL_STATS.get("last", 0)
+    avg_r = _average_reward(30)
+    dd = _current_drawdown()
+    frac = params.get('KELLY_FRACTION', 0.6)
+    if spy_atr and vol and spy_atr > vol * 1.5:
+        frac *= 0.5
+    if avg_r < -0.02:
+        frac *= 0.7
+    if dd > 0.1:
+        frac *= 0.5
+    ctx.kelly_fraction = round(max(0.2, min(frac, 1.0)), 2)
+    params['CAPITAL_CAP'] = round(max(0.02, min(0.1, params.get('CAPITAL_CAP', 0.08) * (1 - dd))), 3)
+    logger.info('RISK_SCALED', extra={'kelly_fraction': ctx.kelly_fraction, 'dd': dd, 'atr': spy_atr, 'avg_reward': avg_r})
+
+def check_disaster_halt() -> None:
+    dd = _current_drawdown()
+    if dd >= DISASTER_DD_LIMIT:
+        with open(HALT_FLAG_PATH, 'w') as f:
+            f.write("DISASTER " + datetime.utcnow().isoformat())
+        logger.error('DISASTER_HALT_TRIGGERED', extra={'drawdown': dd})
+
 # At top‐level, define retrain_meta_learner = None so load_or_retrain_daily can reference it safely
 retrain_meta_learner = None
 
@@ -3429,6 +3462,8 @@ if __name__ == "__main__":
         schedule.every(1).minutes.do(lambda: Thread(target=validate_open_orders, args=(ctx,), daemon=True).start())
         schedule.every(6).hours.do(lambda: Thread(target=update_signal_weights, daemon=True).start())
         schedule.every(30).minutes.do(lambda: Thread(target=update_bot_mode, daemon=True).start())
+        schedule.every(30).minutes.do(lambda: Thread(target=adaptive_risk_scaling, args=(ctx,), daemon=True).start())
+        schedule.every().day.at("23:55").do(lambda: Thread(target=check_disaster_halt, daemon=True).start())
 
         # Scheduler loop
         while True:

@@ -1,5 +1,7 @@
 import os
 import json
+import csv
+import random
 import joblib
 import pandas as pd
 import numpy as np
@@ -7,7 +9,7 @@ import requests
 from dotenv import load_dotenv
 
 from datetime import datetime, date, time, timedelta
-from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
+from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit, ParameterSampler, cross_val_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
@@ -21,6 +23,9 @@ def abspath(p: str) -> str:
     return os.path.join(BASE_DIR, p)
 FEATURE_PERF_FILE = abspath("feature_perf.csv")
 INACTIVE_FEATURES_FILE = abspath("inactive_features.json")
+HYPERPARAM_LOG_FILE = abspath("hyperparam_log.csv")
+MODELS_DIR = abspath("models")
+os.makedirs(MODELS_DIR, exist_ok=True)
 
 def fetch_sentiment(symbol: str) -> float:
     """Lightweight sentiment score using NewsAPI headlines."""
@@ -59,9 +64,9 @@ def detect_regime(df: pd.DataFrame) -> str:
 
 # Output models for each regime
 MODEL_FILES = {
-    "bull": "model_bull.pkl",
-    "bear": "model_bear.pkl",
-    "chop": "model_chop.pkl",
+    "bull": os.path.join(MODELS_DIR, "model_bull.pkl"),
+    "bear": os.path.join(MODELS_DIR, "model_bear.pkl"),
+    "chop": os.path.join(MODELS_DIR, "model_chop.pkl"),
 }
 
 # ─── COPY&PASTE of prepare_indicators (unchanged) ─────────────────
@@ -285,6 +290,65 @@ def build_feature_label_df(
     df_all = pd.DataFrame(rows).dropna()
     return df_all
 
+
+def log_hyperparam_result(regime: str, generation: int, params: dict, score: float) -> None:
+    row = [datetime.utcnow().isoformat(), regime, generation, json.dumps(params), score]
+    header = ["timestamp", "regime", "generation", "params", "score"]
+    write_header = not os.path.exists(HYPERPARAM_LOG_FILE)
+    with open(HYPERPARAM_LOG_FILE, "a", newline="") as f:
+        w = csv.writer(f)
+        if write_header:
+            w.writerow(header)
+        w.writerow(row)
+
+
+def save_model_version(clf, regime: str) -> str:
+    ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    filename = f"model_{regime}_{ts}.pkl"
+    path = os.path.join(MODELS_DIR, filename)
+    joblib.dump(clf, path)
+    log_hyperparam_result(regime, -1, {"model_path": filename}, 0.0)
+    link_path = MODEL_FILES.get(regime, os.path.join(MODELS_DIR, f"model_{regime}.pkl"))
+    try:
+        if os.path.islink(link_path) or os.path.exists(link_path):
+            os.remove(link_path)
+        os.symlink(filename, link_path)
+    except Exception:
+        pass
+    return path
+
+
+def evolutionary_search(X, y, base_params: dict, param_space: dict, generations: int = 3, population: int = 10, elite: int = 3, scoring: str = "roc_auc") -> dict:
+    """Simple evolutionary hyperparameter search."""
+    best_params = base_params.copy()
+    best_score = -np.inf
+    population_params = list(ParameterSampler(param_space, n_iter=population, random_state=42))
+    for gen in range(generations):
+        scores = []
+        for params in population_params:
+            cfg = base_params.copy()
+            cfg.update(params)
+            clf = LGBMClassifier(**cfg)
+            cv_scores = cross_val_score(clf, X, y, cv=3, scoring=scoring)
+            score = float(cv_scores.mean())
+            scores.append(score)
+        ranked = sorted(zip(scores, population_params), key=lambda t: t[0], reverse=True)
+        for rank, (scr, pr) in enumerate(ranked):
+            log_hyperparam_result("", gen, pr, scr)
+        if ranked[0][0] > best_score:
+            best_score = ranked[0][0]
+            best_params = {**base_params, **ranked[0][1]}
+        # next generation mutate top elite
+        new_pop = [ranked[i][1].copy() for i in range(min(elite, len(ranked)))]
+        while len(new_pop) < population:
+            parent = random.choice(new_pop).copy()
+            for k, values in param_space.items():
+                if random.random() < 0.3:
+                    parent[k] = random.choice(values)
+            new_pop.append(parent)
+        population_params = new_pop
+    return best_params
+
 def retrain_meta_learner(
     ctx,
     symbols,
@@ -331,44 +395,34 @@ def retrain_meta_learner(
         scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
         print(f"  ✔ Training {regime} model using scoring='{scoring}' (pos_ratio={pos_ratio:.3f})")
 
-        base_clf = LGBMClassifier(objective="binary", n_jobs=-1, random_state=42)
-        param_dist = {
-            "lgbmclassifier__n_estimators": [100, 200, 300, 500],
-            "lgbmclassifier__max_depth": [-1, 4, 6, 8],
-            "lgbmclassifier__learning_rate": [0.05, 0.1, 0.15],
-            "lgbmclassifier__num_leaves": [31, 50, 75],
-            "lgbmclassifier__subsample": [0.8, 1.0],
-            "lgbmclassifier__colsample_bytree": [0.8, 1.0],
+        base_params = dict(objective="binary", n_jobs=-1, random_state=42)
+        search_space = {
+            "n_estimators": [100, 200, 300, 500],
+            "max_depth": [-1, 4, 6, 8],
+            "learning_rate": [0.05, 0.1, 0.15],
+            "num_leaves": [31, 50, 75],
+            "subsample": [0.8, 1.0],
+            "colsample_bytree": [0.8, 1.0],
         }
-        pipe = make_pipeline(StandardScaler(), base_clf)
-        tscv = TimeSeriesSplit(n_splits=5)
-        search = RandomizedSearchCV(
-            estimator=pipe,
-            param_distributions=param_dist,
-            n_iter=20,
-            scoring=scoring,
-            cv=tscv,
-            random_state=42,
-            n_jobs=-1,
-            verbose=1,
-        )
-        search.fit(X_train, y_train)
-        clf = search.best_estimator_
-        print(f"  ✔ {regime} best params: {search.best_params_}")
+        best_hyper = evolutionary_search(X_train, y_train, base_params, search_space, generations=3, population=8, scoring=scoring)
+        clf = LGBMClassifier(**best_hyper)
+        pipe = make_pipeline(StandardScaler(), clf)
+        pipe.fit(X_train, y_train)
+        print(f"  ✔ {regime} best params: {best_hyper}")
 
         from sklearn.metrics import f1_score, roc_auc_score
         if scoring == "f1":
-            val_pred = clf.predict(X_val)
+            val_pred = pipe.predict(X_val)
             metric = f1_score(y_val, val_pred)
             print(f"  ✔ {regime} holdout F1 = {metric:.4f}")
         else:
-            val_probs = clf.predict_proba(X_val)[:, 1]
+            val_probs = pipe.predict_proba(X_val)[:, 1]
             metric = roc_auc_score(y_val, val_probs)
             print(f"  ✔ {regime} holdout AUC = {metric:.4f}")
 
         try:
             importances = pd.Series(
-                clf.named_steps["lgbmclassifier"].feature_importances_,
+                pipe.named_steps["lgbmclassifier"].feature_importances_,
                 index=X.columns,
             )
             print("  ✔ Top feature importances:")
@@ -385,8 +439,7 @@ def retrain_meta_learner(
         except Exception:
             pass
 
-        path = MODEL_FILES[regime]
-        joblib.dump(clf, path)
+        path = save_model_version(pipe, regime)
         print(f"  ✔ Saved {regime} model to {path}")
         trained_any = True
 

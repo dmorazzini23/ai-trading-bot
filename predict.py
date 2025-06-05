@@ -3,7 +3,6 @@ import os
 import pandas as pd
 import joblib
 import requests
-import os
 import json
 from dotenv import load_dotenv
 from retrain import prepare_indicators
@@ -12,6 +11,7 @@ load_dotenv()
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INACTIVE_FEATURES_FILE = os.path.join(BASE_DIR, "inactive_features.json")
+MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 def fetch_sentiment(symbol: str) -> float:
     if not NEWS_API_KEY:
@@ -44,9 +44,9 @@ def detect_regime(df: pd.DataFrame) -> str:
     return "chop"
 
 MODEL_FILES = {
-    "bull": "model_bull.pkl",
-    "bear": "model_bear.pkl",
-    "chop": "model_chop.pkl",
+    "bull": os.path.join(MODELS_DIR, "model_bull.pkl"),
+    "bear": os.path.join(MODELS_DIR, "model_bear.pkl"),
+    "chop": os.path.join(MODELS_DIR, "model_chop.pkl"),
 }
 
 
