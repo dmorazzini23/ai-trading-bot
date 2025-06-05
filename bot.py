@@ -49,7 +49,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
-from alpaca.common import URL
+from alpaca.common.types import URL
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import Ridge, BayesianRidge
