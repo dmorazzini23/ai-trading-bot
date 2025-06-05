@@ -47,7 +47,7 @@ from alpaca.trading.models import Order
 from alpaca.common.exceptions import APIError
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
-from alpaca.data.requests import StockBarsRequest
+from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame
 
 from sklearn.ensemble import RandomForestClassifier
@@ -62,6 +62,7 @@ from config import (
     APCA_API_KEY_ID,
     APCA_API_SECRET_KEY,
     ALPACA_BASE_URL,
+    ALPACA_PAPER,
     NEWS_API_KEY as CONFIG_NEWS_API_KEY,
     FINNHUB_API_KEY,
     SENTRY_DSN,
@@ -1171,8 +1172,9 @@ strategies     = [MomentumStrategy(), MeanReversionStrategy()]
 API_KEY = APCA_API_KEY_ID
 SECRET_KEY = APCA_API_SECRET_KEY
 BASE_URL = ALPACA_BASE_URL
-trading_client = TradingClient(API_KEY, SECRET_KEY, paper=True)
-data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
+paper = ALPACA_PAPER
+trading_client = TradingClient(API_KEY, SECRET_KEY, paper=paper)
+data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY, paper=paper)
 ctx = BotContext(
     api=trading_client,
     data_client=data_client,
@@ -1686,8 +1688,12 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
         return 0.0
     avg_vol = df["Volume"].tail(30).mean()
     try:
-        quote: Quote = ctx.data_client.get_stock_latest_quote(symbol)
+        req = StockLatestQuoteRequest(symbol=symbol)
+        quote: Quote = ctx.data_client.get_stock_latest_quote(req)
         spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
+    except APIError as e:
+        logger.warning(f"[liquidity_factor] Alpaca quote failed for {symbol}: {e}")
+        spread = 0.0
     except Exception:
         spread = 0.0
     vol_score = min(1.0, avg_vol / ctx.volume_threshold) if avg_vol else 0.0
@@ -1871,8 +1877,12 @@ def vwap_pegged_submit(
             break
         vwap_price = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
         try:
-            quote: Quote = ctx.data_client.get_stock_latest_quote(symbol)
+            req = StockLatestQuoteRequest(symbol=symbol)
+            quote: Quote = ctx.data_client.get_stock_latest_quote(req)
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
+        except APIError as e:
+            logger.warning(f"[vwap_slice] Alpaca quote failed for {symbol}: {e}")
+            spread = 0.0
         except Exception:
             spread = 0.0
         if spread > 0.05:
@@ -1984,8 +1994,12 @@ def pov_submit(
         interval = cfg.sleep_interval
 
         try:
-            quote: Quote = ctx.data_client.get_stock_latest_quote(symbol)
+            req = StockLatestQuoteRequest(symbol=symbol)
+            quote: Quote = ctx.data_client.get_stock_latest_quote(req)
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
+        except APIError as e:
+            logger.warning(f"[pov_submit] Alpaca quote failed for {symbol}: {e}")
+            spread = 0.0
         except Exception:
             spread = 0.0
 
@@ -3252,8 +3266,13 @@ def run_multi_strategy(ctx: BotContext) -> None:
     acct = ctx.api.get_account()
     cash = float(getattr(acct, "cash", 0))
     for sig in final:
-        quote: Quote = ctx.data_client.get_stock_latest_quote(sig.symbol)
-        price = float(getattr(quote, "ask_price", 0) or 0)
+        try:
+            req = StockLatestQuoteRequest(symbol=sig.symbol)
+            quote: Quote = ctx.data_client.get_stock_latest_quote(req)
+            price = float(getattr(quote, "ask_price", 0) or 0)
+        except APIError as e:
+            logger.warning(f"[run_all_trades] quote failed for {sig.symbol}: {e}")
+            continue
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty > 0:
             ctx.execution_engine.execute_order(sig.symbol, qty, sig.side, asset_class=sig.asset_class)
@@ -3397,25 +3416,33 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     per_symbol = cash / n
     for sym in symbols:
         try:
-            quote: Quote = ctx.data_client.get_stock_latest_quote(sym)
+            req = StockLatestQuoteRequest(symbol=sym)
+            quote: Quote = ctx.data_client.get_stock_latest_quote(req)
             price = float(getattr(quote, "ask_price", 0) or 0)
-            if price <= 0:
-                logger.warning("INITIAL_REBALANCE_INVALID_PRICE", extra={"symbol": sym, "price": price})
-                continue
-            qty = int(per_symbol // price)
-            if qty <= 0:
-                continue
-            logger.info("INITIAL_REBALANCE_BUY", extra={"symbol": sym, "qty": qty, "price": price})
-            try:
-                submit_order(ctx, sym, qty, "buy")
-            except APIError as e:
-                msg = str(e).lower()
-                if "insufficient" in msg or "day trading buying power" in msg:
-                    logger.warning("INITIAL_REBALANCE_SKIPPED_INSUFFICIENT", extra={"symbol": sym, "error": str(e)})
-                else:
-                    logger.exception("INITIAL_REBALANCE_ERROR", extra={"symbol": sym, "error": str(e)})
+        except APIError as e:
+            logger.warning("INITIAL_REBALANCE_QUOTE_FAILED", extra={"symbol": sym, "error": str(e)})
+            continue
         except Exception as e:
             logger.exception("INITIAL_REBALANCE_FETCH_ERROR", extra={"symbol": sym, "error": str(e)})
+            continue
+
+        if price <= 0:
+            logger.warning("INITIAL_REBALANCE_INVALID_PRICE", extra={"symbol": sym, "price": price})
+            continue
+
+        qty = int(per_symbol // price)
+        if qty <= 0:
+            continue
+
+        logger.info("INITIAL_REBALANCE_BUY", extra={"symbol": sym, "qty": qty, "price": price})
+        try:
+            submit_order(ctx, sym, qty, "buy")
+        except APIError as e:
+            msg = str(e).lower()
+            if "insufficient" in msg or "day trading buying power" in msg:
+                logger.warning("INITIAL_REBALANCE_SKIPPED_INSUFFICIENT", extra={"symbol": sym, "error": str(e)})
+            else:
+                logger.exception("INITIAL_REBALANCE_ERROR", extra={"symbol": sym, "error": str(e)})
 
 if __name__ == "__main__":
     def _handle_term(signum, frame):

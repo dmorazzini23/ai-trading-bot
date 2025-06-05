@@ -14,6 +14,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.models import Order
 from alpaca.common.exceptions import APIError
 from alpaca.data.models import Quote
+from alpaca.data.requests import StockLatestQuoteRequest
 
 class ExecutionEngine:
     """Institutional-grade execution engine for dynamic order routing."""
@@ -37,10 +38,14 @@ class ExecutionEngine:
 
     def _latest_quote(self, symbol: str) -> Tuple[float, float]:
         try:
-            q: Quote = self.ctx.data_client.get_stock_latest_quote(symbol)
+            req = StockLatestQuoteRequest(symbol=symbol)
+            q: Quote = self.ctx.data_client.get_stock_latest_quote(req)
             bid = float(getattr(q, 'bid_price', 0) or 0)
             ask = float(getattr(q, 'ask_price', 0) or 0)
             return bid, ask
+        except APIError as e:
+            self.logger.warning(f"_latest_quote APIError for {symbol}: {e}")
+            return 0.0, 0.0
         except Exception:
             return 0.0, 0.0
 
