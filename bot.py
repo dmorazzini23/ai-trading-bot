@@ -35,8 +35,19 @@ import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
 import portalocker
 
-from alpaca_trade_api.rest import REST, APIError, TimeFrame
-from alpaca_trade_api.entity import Order
+# Alpaca v3 SDK imports
+from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    MarketOrderRequest,
+    LimitOrderRequest,
+)
+from alpaca.trading.models import Order
+from alpaca.common.exceptions import APIError
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import Ridge, BayesianRidge
@@ -63,11 +74,12 @@ def cancel_all_open_orders(ctx: "BotContext") -> None:
     On startup or each run, cancel every Alpaca order whose status is 'open'.
     """
     try:
-        open_orders = ctx.api.list_orders(status="open", limit=500)
+        req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+        open_orders = ctx.api.get_orders(req)
         for od in open_orders:
             if getattr(od, "status", "").lower() == "open":
                 try:
-                    ctx.api.cancel_order(od.id)
+                    ctx.api.cancel_order_by_id(od.id)
                 except Exception:
                     pass
     except Exception:
@@ -76,7 +88,7 @@ def cancel_all_open_orders(ctx: "BotContext") -> None:
 def reconcile_positions(ctx: 'BotContext') -> None:
     """On startup, fetch all live positions and clear any in-memory stop/take targets for assets no longer held."""
     try:
-        live_positions = {pos.symbol: int(pos.qty) for pos in ctx.api.list_positions()}
+        live_positions = {pos.symbol: int(pos.qty) for pos in ctx.api.get_all_positions()}
         with targets_lock:
             symbols_with_targets = list(ctx.stop_targets.keys()) + list(ctx.take_profit_targets.keys())
             for symbol in symbols_with_targets:
@@ -503,14 +515,14 @@ class DataFetcherLegacy:
             today_date = date.today()
             start = (today_date - timedelta(days=365)).isoformat()
             end = today_date.isoformat()
-            bars = ctx.api.get_bars(
-                symbol,
-                TimeFrame.Day,
+            bars_req = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame.Day,
                 start=start,
                 end=end,
-                limit=1000,
-                feed="iex"
-            ).df
+                limit=1000
+            )
+            bars = ctx.data_client.get_stock_bars(bars_req).df
             bars.index = pd.to_datetime(bars.index).tz_localize(None)
             df = bars.rename(columns={
                 "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
@@ -568,12 +580,12 @@ class DataFetcherLegacy:
 
         # 1) Alpaca IEX fetch
         try:
-            bars = ctx.api.get_bars(
-                symbol,
-                TimeFrame.Minute,
-                limit=390 * 5,
-                feed="iex"
-            ).df
+            bars_req = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame.Minute,
+                limit=390 * 5
+            )
+            bars = ctx.data_client.get_stock_bars(bars_req).df
             if not bars.empty:
                 bars = bars.rename(columns={
                     "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
@@ -638,13 +650,14 @@ class DataFetcherLegacy:
             day_end_iso   = f"{current_day.isoformat()}T23:59:59Z"
 
             try:
-                bars_day = ctx.api.get_bars(
-                    symbol,
-                    TimeFrame.Minute,
+                bars_req = StockBarsRequest(
+                    symbol_or_symbols=symbol,
+                    timeframe=TimeFrame.Minute,
                     start=day_start_iso,
                     end=day_end_iso,
                     limit=10000
-                ).df
+                )
+                bars_day = ctx.data_client.get_stock_bars(bars_req).df
             except Exception:
                 bars_day = None
 
@@ -779,7 +792,7 @@ def audit_positions(ctx: "BotContext") -> None:
 
     # 2) Fetch remote (broker) positions
     try:
-        remote = {p.symbol: int(p.qty) for p in ctx.api.list_positions()}
+        remote = {p.symbol: int(p.qty) for p in ctx.api.get_all_positions()}
     except Exception:
         return
 
@@ -791,13 +804,25 @@ def audit_positions(ctx: "BotContext") -> None:
             if diff > 0:
                 # Broker has more shares than local: sell off the excess
                 try:
-                    ctx.api.submit_order(symbol=sym, qty=diff, side="sell", type="market")
+                    req = MarketOrderRequest(
+                        symbol=sym,
+                        qty=diff,
+                        side=OrderSide.SELL,
+                        time_in_force=TimeInForce.DAY
+                    )
+                    ctx.api.submit_order(order_data=req)
                 except Exception:
                     pass
             else:
                 # Broker has fewer shares than local: buy back the missing shares
                 try:
-                    ctx.api.submit_order(symbol=sym, qty=abs(diff), side="buy", type="market")
+                    req = MarketOrderRequest(
+                        symbol=sym,
+                        qty=abs(diff),
+                        side=OrderSide.BUY,
+                        time_in_force=TimeInForce.DAY
+                    )
+                    ctx.api.submit_order(order_data=req)
                 except Exception:
                     pass
 
@@ -805,14 +830,20 @@ def audit_positions(ctx: "BotContext") -> None:
     for sym, lq in local.items():
         if sym not in remote:
             try:
-                side = "buy" if lq > 0 else "sell"
-                ctx.api.submit_order(symbol=sym, qty=abs(lq), side=side, type="market")
+                side = OrderSide.BUY if lq > 0 else OrderSide.SELL
+                req = MarketOrderRequest(
+                    symbol=sym,
+                    qty=abs(lq),
+                    side=side,
+                    time_in_force=TimeInForce.DAY
+                )
+                ctx.api.submit_order(order_data=req)
             except Exception:
                 pass
 
 def validate_open_orders(ctx: "BotContext") -> None:
     try:
-        open_orders = ctx.api.list_orders(status="open")
+        open_orders = ctx.api.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
     except Exception:
         return
 
@@ -823,12 +854,17 @@ def validate_open_orders(ctx: "BotContext") -> None:
 
         if age > 5 and getattr(od, "status", "").lower() in {"new", "accepted"}:
             try:
-                ctx.api.cancel_order(od.id)
+                ctx.api.cancel_order_by_id(od.id)
                 qty = int(getattr(od, "qty", 0))
                 side = getattr(od, "side", "")
                 if qty > 0 and side in {"buy", "sell"}:
-                    # Resubmit exactly the same size and side as a market order
-                    ctx.api.submit_order(symbol=od.symbol, qty=qty, side=side, type="market")
+                    req = MarketOrderRequest(
+                        symbol=od.symbol,
+                        qty=qty,
+                        side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
+                        time_in_force=TimeInForce.DAY
+                    )
+                    ctx.api.submit_order(order_data=req)
             except Exception:
                 pass
 
@@ -1062,7 +1098,10 @@ class SignalManager:
 # ─── G. BOT CONTEXT ───────────────────────────────────────────────────────────
 @dataclass
 class BotContext:
-    api: REST
+    # Trading client using the new Alpaca SDK
+    api: TradingClient
+    # Separate market data client
+    data_client: StockHistoricalDataClient
     data_fetcher: DataFetcher
     signal_manager: SignalManager
     trade_logger: TradeLogger
@@ -1100,12 +1139,18 @@ trade_logger   = TradeLogger()
 risk_engine    = RiskEngine()
 allocator      = StrategyAllocator()
 strategies     = [MomentumStrategy(), MeanReversionStrategy()]
+trading_client = TradingClient(
+    os.getenv("APCA_API_KEY_ID"),
+    os.getenv("APCA_API_SECRET_KEY"),
+    paper="paper" in os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+)
+data_client = StockHistoricalDataClient(
+    os.getenv("APCA_API_KEY_ID"),
+    os.getenv("APCA_API_SECRET_KEY")
+)
 ctx = BotContext(
-    api=REST(
-        os.getenv("APCA_API_KEY_ID"),
-        os.getenv("APCA_API_SECRET_KEY"),
-        base_url=os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-    ),
+    api=trading_client,
+    data_client=data_client,
     data_fetcher=data_fetcher,
     signal_manager=signal_manager,
     trade_logger=trade_logger,
@@ -1494,7 +1539,7 @@ def check_halt_flag() -> bool:
 
 def too_many_positions(ctx: BotContext) -> bool:
     try:
-        return len(ctx.api.list_positions()) >= MAX_PORTFOLIO_POSITIONS
+        return len(ctx.api.get_all_positions()) >= MAX_PORTFOLIO_POSITIONS
     except Exception:
         logger.warning("[too_many_positions] Could not fetch positions")
         return False
@@ -1546,7 +1591,7 @@ def get_sector(symbol: str) -> str:
 def sector_exposure(ctx: BotContext) -> Dict[str, float]:
     """Return current portfolio exposure by sector as fraction of equity."""
     try:
-        positions = ctx.api.list_positions()
+        positions = ctx.api.get_all_positions()
     except Exception:
         return {}
     try:
@@ -1616,7 +1661,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
         return 0.0
     avg_vol = df["Volume"].tail(30).mean()
     try:
-        quote = ctx.api.get_latest_quote(symbol)
+        quote = ctx.data_client.get_stock_latest_quote(symbol)
         spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
     except Exception:
         spread = 0.0
@@ -1700,7 +1745,7 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
     start = pytime.time()
     while pytime.time() - start < timeout:
         try:
-            od = ctx.api.get_order(order_id)
+            od = ctx.api.get_order_by_id(order_id)
             status = getattr(od, "status", "")
             filled = getattr(od, "filled_qty", "0")
             if status not in {"new", "accepted", "partially_filled"}:
@@ -1719,7 +1764,7 @@ def send_exit_order(ctx: BotContext, symbol: str, exit_qty: int, price: float, r
         f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price}"
     )
     try:
-        pos = ctx.api.get_position(symbol)
+        pos = ctx.api.get_open_position(symbol)
         held_qty = int(pos.qty)
     except Exception:
         held_qty = 0
@@ -1731,22 +1776,37 @@ def send_exit_order(ctx: BotContext, symbol: str, exit_qty: int, price: float, r
         return
 
     if price <= 0.0:
-        ctx.api.submit_order(symbol=symbol, qty=exit_qty, side="sell", type="market")
+        req = MarketOrderRequest(
+            symbol=symbol,
+            qty=exit_qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.DAY
+        )
+        ctx.api.submit_order(order_data=req)
         return
 
     limit_order = ctx.api.submit_order(
-        symbol=symbol,
-        qty=exit_qty,
-        side="sell",
-        type="limit",
-        limit_price=price,
+        order_data=LimitOrderRequest(
+            symbol=symbol,
+            qty=exit_qty,
+            side=OrderSide.SELL,
+            time_in_force=TimeInForce.DAY,
+            limit_price=price
+        )
     )
     pytime.sleep(5)
     try:
-        o2 = ctx.api.get_order(limit_order.id)
+        o2 = ctx.api.get_order_by_id(limit_order.id)
         if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
-            ctx.api.cancel_order(limit_order.id)
-            ctx.api.submit_order(symbol=symbol, qty=exit_qty, side="sell", type="market")
+            ctx.api.cancel_order_by_id(limit_order.id)
+            ctx.api.submit_order(
+                order_data=MarketOrderRequest(
+                    symbol=symbol,
+                    qty=exit_qty,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY
+                )
+            )
     except Exception as e:
         logger.warning(
             f"[send_exit_order] couldn\u2019t check/cancel order {getattr(limit_order, 'id', '')}: {e}"
@@ -1786,7 +1846,7 @@ def vwap_pegged_submit(
             break
         vwap_price = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
         try:
-            quote = ctx.api.get_latest_quote(symbol)
+            quote = ctx.data_client.get_stock_latest_quote(symbol)
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
         except Exception:
             spread = 0.0
@@ -1808,12 +1868,13 @@ def vwap_pegged_submit(
                     },
                 )
                 order = ctx.api.submit_order(
-                    symbol=symbol,
-                    qty=slice_qty,
-                    side=side,
-                    type="limit",
-                    time_in_force="ioc",
-                    limit_price=round(vwap_price, 2),
+                    order_data=LimitOrderRequest(
+                        symbol=symbol,
+                        qty=slice_qty,
+                        side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
+                        time_in_force=TimeInForce.IOC,
+                        limit_price=round(vwap_price, 2),
+                    )
                 )
                 logger.info(
                     "ORDER_ACK",
@@ -1898,7 +1959,7 @@ def pov_submit(
         interval = cfg.sleep_interval
 
         try:
-            quote = ctx.api.get_latest_quote(symbol)
+            quote = ctx.data_client.get_stock_latest_quote(symbol)
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
         except Exception:
             spread = 0.0
@@ -1929,7 +1990,7 @@ def maybe_pyramid(ctx: BotContext, symbol: str, entry_price: float, current_pric
     profit = (current_price - entry_price) if entry_price else 0
     if profit > 2 * atr and prob >= 0.75:
         try:
-            pos = ctx.api.get_position(symbol)
+            pos = ctx.api.get_open_position(symbol)
             qty = int(abs(int(pos.qty)) * 0.5)
             if qty > 0:
                 submit_order(ctx, symbol, qty, "buy")
@@ -2043,7 +2104,7 @@ def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
         ctx.stop_targets.pop(symbol, None)
 
 def exit_all_positions(ctx: BotContext) -> None:
-    for pos in ctx.api.list_positions():
+    for pos in ctx.api.get_all_positions():
         qty = abs(int(pos.qty))
         if qty:
             send_exit_order(ctx, pos.symbol, qty, 0.0, "eod_exit")
@@ -2097,7 +2158,7 @@ def should_enter(
 
 def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple[bool, int, str]:
     try:
-        pos = ctx.api.get_position(symbol)
+        pos = ctx.api.get_open_position(symbol)
         current_qty = int(pos.qty)
     except Exception:
         current_qty = 0
@@ -2195,7 +2256,7 @@ def trade_logic(
     )
 
     try:
-        pos = ctx.api.get_position(symbol)
+        pos = ctx.api.get_open_position(symbol)
         current_qty = int(pos.qty)
     except Exception:
         current_qty = 0
@@ -2344,7 +2405,7 @@ def trade_logic(
             send_exit_order(ctx, symbol, exit_qty, price, reason)
             ctx.trade_logger.log_exit(symbol, price)
             try:
-                pos_after = ctx.api.get_position(symbol)
+                pos_after = ctx.api.get_open_position(symbol)
                 if int(pos_after.qty) == 0:
                     with targets_lock:
                         ctx.stop_targets.pop(symbol, None)
@@ -2353,7 +2414,7 @@ def trade_logic(
                 pass
         else:
             try:
-                pos = ctx.api.get_position(symbol)
+                pos = ctx.api.get_open_position(symbol)
                 entry_price = float(pos.avg_entry_price)
                 maybe_pyramid(ctx, symbol, entry_price, price, atr, conf)
             except Exception:
@@ -2836,11 +2897,14 @@ if os.path.exists(REGIME_MODEL_PATH):
 else:
     today_date = date.today()
     start_date = (today_date - timedelta(days=365)).isoformat()
-    bars = ctx.api.get_bars(
-        REGIME_SYMBOLS[0], TimeFrame.Day,
-        start=start_date, end=today_date.isoformat(),
-        limit=1000, feed="iex"
-    ).df
+    bars_req = StockBarsRequest(
+        symbol_or_symbols=REGIME_SYMBOLS[0],
+        timeframe=TimeFrame.Day,
+        start=start_date,
+        end=today_date.isoformat(),
+        limit=1000
+    )
+    bars = ctx.data_client.get_stock_bars(bars_req).df
     bars.index = pd.to_datetime(bars.index).tz_localize(None)
     bars = bars.rename(columns={
         "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
@@ -3154,7 +3218,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
     acct = ctx.api.get_account()
     cash = float(getattr(acct, "cash", 0))
     for sig in final:
-        quote = ctx.api.get_latest_quote(sig.symbol)
+        quote = ctx.data_client.get_stock_latest_quote(sig.symbol)
         price = float(getattr(quote, "ask_price", 0) or 0)
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty > 0:
@@ -3194,14 +3258,14 @@ def run_all_trades_worker(model):
                 try:
                     start_str = (today_date - timedelta(days=30)).isoformat()
                     end_str = today_date.isoformat()
-                    bars = ctx.api.get_bars(
-                        list(batch),
-                        TimeFrame.Day,
+                    bars_req = StockBarsRequest(
+                        symbol_or_symbols=list(batch),
+                        timeframe=TimeFrame.Day,
                         start=start_str,
                         end=end_str,
-                        limit=1000,
-                        feed="iex"
-                    ).df
+                        limit=1000
+                    )
+                    bars = ctx.data_client.get_stock_bars(bars_req).df
                     for sym, df_sym in bars.groupby("symbol"):
                         df_df = df_sym.drop(columns=["symbol"], errors="ignore").copy()
                         df_df = df_df.rename(columns={
@@ -3291,7 +3355,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     per_symbol = cash / n
     for sym in symbols:
         try:
-            quote = ctx.api.get_latest_quote(sym)
+            quote = ctx.data_client.get_stock_latest_quote(sym)
             price = float(getattr(quote, "ask_price", 0) or 0)
             if price <= 0:
                 logger.warning("INITIAL_REBALANCE_INVALID_PRICE", extra={"symbol": sym, "price": price})

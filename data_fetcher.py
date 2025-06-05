@@ -8,7 +8,10 @@ from typing import Optional, Sequence
 
 import pandas as pd
 import yfinance as yf
-from alpaca_trade_api.rest import REST, TimeFrame, APIError
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+from alpaca.common.exceptions import APIError
 from tenacity import retry, stop_after_attempt, wait_exponential, wait_random, retry_if_exception_type
 import finnhub
 
@@ -87,7 +90,8 @@ class DataFetcher:
         if symbol in self._daily_cache:
             return self._daily_cache[symbol]
         try:
-            bars = ctx.api.get_bars(symbol, TimeFrame.Day, limit=1000, feed="iex").df
+            req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Day, limit=1000)
+            bars = ctx.data_client.get_stock_bars(req).df
             bars.index = pd.to_datetime(bars.index).tz_localize(None)
             df = bars.rename(columns={"open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"})
         except Exception:
@@ -110,7 +114,8 @@ class DataFetcher:
             return self._minute_cache.get(symbol)
         df = None
         try:
-            bars = ctx.api.get_bars(symbol, TimeFrame.Minute, limit=390, feed="iex").df
+            req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=TimeFrame.Minute, limit=390)
+            bars = ctx.data_client.get_stock_bars(req).df
             if not bars.empty:
                 bars = bars.rename(columns={"open":"Open","high":"High","low":"Low","close":"Close","volume":"Volume"})
                 if "symbol" in bars.columns:

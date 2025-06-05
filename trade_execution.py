@@ -7,14 +7,20 @@ import logging.handlers
 from datetime import datetime, timezone
 from typing import Optional, Tuple, Any
 
-from alpaca_trade_api.rest import REST, APIError, Order
+# Updated Alpaca SDK imports
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
+from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.models import Order
+from alpaca.common.exceptions import APIError
 
 class ExecutionEngine:
     """Institutional-grade execution engine for dynamic order routing."""
 
     def __init__(self, ctx: Any, *, slippage_total=None, slippage_count=None, orders_total=None) -> None:
         self.ctx = ctx
-        self.api: REST = ctx.api
+        # Trading client from the new Alpaca SDK
+        self.api: TradingClient = ctx.api
         log_path = os.path.join(os.path.dirname(__file__), 'logs', 'execution.log')
         handler = logging.handlers.RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=2)
         self.logger = logging.getLogger('execution')
@@ -30,7 +36,7 @@ class ExecutionEngine:
 
     def _latest_quote(self, symbol: str) -> Tuple[float, float]:
         try:
-            q = self.api.get_latest_quote(symbol)
+            q = self.ctx.data_client.get_stock_latest_quote(symbol)
             bid = float(getattr(q, 'bid_price', 0) or 0)
             ask = float(getattr(q, 'ask_price', 0) or 0)
             return bid, ask
@@ -52,7 +58,7 @@ class ExecutionEngine:
         momentum = float(df['Close'].iloc[-1] - df['Close'].iloc[-5])
         return vol, avg1m, momentum
 
-    def _prepare_order(self, symbol: str, side: str, qty: int) -> Tuple[dict, Optional[float]]:
+    def _prepare_order(self, symbol: str, side: str, qty: int) -> Tuple[object, Optional[float]]:
         bid, ask = self._latest_quote(symbol)
         spread = (ask - bid) if ask and bid else 0.0
         mid = (ask + bid) / 2 if ask and bid else None
@@ -64,29 +70,48 @@ class ExecutionEngine:
         max_slice = int(vol * 0.1) if vol > 0 else qty
         slice_qty = max(1, min(qty, int(min(max_slice, max_adv))))
 
-        order_kwargs: dict[str, Any] = {
-            'symbol': symbol,
-            'qty': slice_qty,
-            'side': side,
-            'time_in_force': 'day'
-        }
         expected = None
+        order_request: object
+        order_side = OrderSide.BUY if side.lower() == 'buy' else OrderSide.SELL
         aggressive = momentum > 0 if side == 'buy' else momentum < 0
 
         if spread > 0.05 and mid:
-            order_kwargs.update({'type': 'limit', 'limit_price': round(mid, 2), 'post_only': True})
+            order_request = LimitOrderRequest(
+                symbol=symbol,
+                qty=slice_qty,
+                side=order_side,
+                time_in_force=TimeInForce.DAY,
+                limit_price=round(mid, 2),
+                post_only=True
+            )
             expected = round(mid, 2)
         elif aggressive and spread < 0.02:
-            order_kwargs['type'] = 'market'
+            order_request = MarketOrderRequest(
+                symbol=symbol,
+                qty=slice_qty,
+                side=order_side,
+                time_in_force=TimeInForce.DAY
+            )
             expected = ask if side == 'buy' else bid
         elif mid:
-            order_kwargs.update({'type': 'limit', 'limit_price': round(mid, 2)})
+            order_request = LimitOrderRequest(
+                symbol=symbol,
+                qty=slice_qty,
+                side=order_side,
+                time_in_force=TimeInForce.DAY,
+                limit_price=round(mid, 2)
+            )
             expected = round(mid, 2)
         else:
-            order_kwargs['type'] = 'market'
+            order_request = MarketOrderRequest(
+                symbol=symbol,
+                qty=slice_qty,
+                side=order_side,
+                time_in_force=TimeInForce.DAY
+            )
             expected = ask if side == 'buy' else bid
 
-        return order_kwargs, expected
+        return order_request, expected
 
     def _log_slippage(self, symbol: str, expected: Optional[float], actual: float) -> None:
         slip = ((actual - expected) * 100) if expected else 0.0
@@ -117,12 +142,20 @@ class ExecutionEngine:
         elif asset_class == "commodity" and hasattr(self.ctx, "commodity_api"):
             api = self.ctx.commodity_api
         while remaining > 0:
-            order_kwargs, expected_price = self._prepare_order(symbol, side, remaining)
-            slice_qty = order_kwargs['qty']
+            order_req, expected_price = self._prepare_order(symbol, side, remaining)
+            slice_qty = getattr(order_req, 'qty', remaining)
             start = time.monotonic()
             try:
-                self.logger.info('ORDER_SENT', extra={'symbol': symbol, 'side': side, 'qty': slice_qty, 'type': order_kwargs.get('type')})
-                order = api.submit_order(**order_kwargs)
+                self.logger.info(
+                    'ORDER_SENT',
+                    extra={
+                        'symbol': symbol,
+                        'side': side,
+                        'qty': slice_qty,
+                        'type': order_req.__class__.__name__
+                    }
+                )
+                order = api.submit_order(order_data=order_req)
                 fill_price = float(getattr(order, 'filled_avg_price', expected_price or 0) or 0)
                 latency = (time.monotonic() - start) * 1000.0
                 self._log_slippage(symbol, expected_price, fill_price)
