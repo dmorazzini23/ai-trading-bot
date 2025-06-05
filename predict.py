@@ -1,15 +1,13 @@
 import argparse
 import os
-from dotenv import load_dotenv
 import pandas as pd
 import joblib
 import requests
 import json
 from retrain import prepare_indicators
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(dotenv_path=os.path.join(BASE_DIR, '.env'))
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+from config import NEWS_API_KEY
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INACTIVE_FEATURES_FILE = os.path.join(BASE_DIR, "inactive_features.json")
 MODELS_DIR = os.path.join(BASE_DIR, "models")

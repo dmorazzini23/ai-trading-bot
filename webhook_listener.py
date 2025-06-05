@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 import os
-from dotenv import load_dotenv
 import hmac
 import hashlib
 import subprocess
 from flask import Flask, request, abort
 
+from config import WEBHOOK_SECRET, WEBHOOK_PORT
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(dotenv_path=os.path.join(BASE_DIR, '.env'))
 
 app = Flask(__name__)
-SECRET = os.environ.get("WEBHOOK_SECRET", "").encode()
+SECRET = WEBHOOK_SECRET.encode()
 
 
 def verify_sig(data: bytes, signature: str) -> bool:
@@ -35,5 +35,4 @@ def hook():
 
 
 if __name__ == "__main__":
-    port = int(os.getenv("WEBHOOK_PORT", "9000"))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=WEBHOOK_PORT)
