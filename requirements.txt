@@ -3,7 +3,6 @@ tenacity>=8.2.0
 ratelimit>=2.2.1
 pandas>=1.4.0
 pandas_ta>=0.3.14b0
-yfinance>=0.2.4
 requests>=2.27.1
 beautifulsoup4>=4.11.1
 flask>=2.1.0
