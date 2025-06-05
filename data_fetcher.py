@@ -40,7 +40,6 @@ class DataFetchError(Exception):
     retry=retry_if_exception_type(Exception),
 )
 def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe: str) -> pd.DataFrame:
-    """Fetch historical bars for a symbol from Alpaca."""
     tf_map = {
         '1Min': TimeFrame.Minute,
         '5Min': TimeFrame(5, TimeFrameUnit.Minute),
@@ -56,6 +55,7 @@ def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe
         start=datetime.combine(start_date, datetime.min.time(), timezone.utc),
         end=datetime.combine(end_date, datetime.max.time(), timezone.utc),
         timeframe=tf,
+        feed='iex'  # ✅ PATCHED HERE
     )
     try:
         bars = _DATA_CLIENT.get_stock_bars(req).df
