@@ -30,6 +30,7 @@ load_dotenv()
 _DATA_CLIENT = StockHistoricalDataClient(
     api_key=ALPACA_API_KEY,
     secret_key=ALPACA_SECRET_KEY,
+    feed='iex'  # <-- ADD THIS
 )
 
 class DataFetchError(Exception):
