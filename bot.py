@@ -173,6 +173,9 @@ EQUITY_FILE         = abspath("last_equity.txt")
 PEAK_EQUITY_FILE    = abspath("peak_equity.txt")
 HALT_FLAG_PATH      = abspath("halt.flag")
 SLIPPAGE_LOG_FILE   = abspath("slippage.csv")
+REWARD_LOG_FILE     = abspath("reward_log.csv")
+FEATURE_PERF_FILE   = abspath("feature_perf.csv")
+INACTIVE_FEATURES_FILE = abspath("inactive_features.json")
 
 # Hyperparameter files
 HYPERPARAMS_FILE     = abspath("hyperparams.json")
@@ -297,6 +300,7 @@ _STREAK_HALT_UNTIL: Optional[datetime] = None
 
 # Volatility stats (for SPY ATR mean/std)
 _VOL_STATS = {"mean": None, "std": None, "last_update": None}
+CURRENT_REGIME = "sideways"
 
 # Slippage logs (in-memory for quick access)
 _slippage_log: List[Tuple[str, float, float, datetime]] = []  # (symbol, expected, actual, timestamp)
@@ -662,13 +666,21 @@ class TradeLogger:
                 csv.writer(f).writerow([
                     "symbol","entry_time","entry_price",
                     "exit_time","exit_price","qty","side",
-                    "strategy","classification","signal_tags"
+                    "strategy","classification","signal_tags",
+                    "confidence","reward"
                 ])
+        if not os.path.exists(REWARD_LOG_FILE):
+            with open(REWARD_LOG_FILE, 'w', newline='') as rf:
+                csv.writer(rf).writerow(["timestamp","symbol","reward","pnl","confidence"])
 
-    def log_entry(self, symbol: str, price: float, qty: int, side: str, strategy: str, signal_tags: str="") -> None:
+    def log_entry(self, symbol: str, price: float, qty: int, side: str,
+                  strategy: str, signal_tags: str="", confidence: float = 0.0) -> None:
         now_iso = datetime.now(timezone.utc).isoformat()
         with portalocker.Lock(self.path, 'a', timeout=5) as f:
-            csv.writer(f).writerow([symbol, now_iso, price, "","", qty, side, strategy, "", signal_tags])
+            csv.writer(f).writerow([
+                symbol, now_iso, price, "", "", qty, side, strategy,
+                "", signal_tags, confidence, ""
+            ])
 
     def log_exit(self, symbol: str, exit_price: float) -> None:
         global _LOSS_STREAK, _STREAK_HALT_UNTIL
@@ -676,6 +688,7 @@ class TradeLogger:
             rows = list(csv.reader(f))
             header, data = rows[0], rows[1:]
             pnl = 0.0
+            conf = 0.0
             for row in data:
                 if row[0] == symbol and row[3] == "":
                     entry_t = datetime.fromisoformat(row[1])
@@ -687,10 +700,33 @@ class TradeLogger:
                     # Compute PnL
                     entry_price = float(row[2])
                     pnl = (exit_price - entry_price) * (1 if row[6] == "buy" else -1)
+                    if len(row) >= 11:
+                        try:
+                            conf = float(row[10])
+                        except Exception:
+                            conf = 0.0
+                    if len(row) >= 12:
+                        row[11] = pnl * conf
+                    else:
+                        row.append(conf)
+                        row.append(pnl * conf)
                     break
             f.seek(0); f.truncate()
             w = csv.writer(f)
             w.writerow(header); w.writerows(data)
+
+        # log reward
+        try:
+            with open(REWARD_LOG_FILE, 'a', newline='') as rf:
+                csv.writer(rf).writerow([
+                    datetime.now(timezone.utc).isoformat(),
+                    symbol,
+                    pnl * conf,
+                    pnl,
+                    conf,
+                ])
+        except Exception:
+            pass
 
         # Update streak-based kill-switch
         if pnl < 0:
@@ -968,7 +1004,16 @@ class SignalManager:
                 if allowed_tags and lab not in allowed_tags:
                     continue
                 if s in (-1, 1):
-                    signals.append((s, weights.get(lab, w), lab))
+                    weight = weights.get(lab, w)
+                    regime_adj = {
+                        'trending': {'momentum':1.2, 'mean_reversion':0.8},
+                        'mean_reversion': {'momentum':0.8, 'mean_reversion':1.2},
+                        'high_volatility': {'sentiment':1.1},
+                        'sideways': {'momentum':0.9, 'mean_reversion':1.1},
+                    }
+                    if CURRENT_REGIME in regime_adj and lab in regime_adj[CURRENT_REGIME]:
+                        weight *= regime_adj[CURRENT_REGIME][lab]
+                    signals.append((s, weight, lab))
             except Exception:
                 continue
 
@@ -1505,6 +1550,20 @@ def scaled_atr_stop(
     take = entry_price + factor * atr
     return stop, take
 
+def liquidity_factor(ctx: BotContext, symbol: str) -> float:
+    df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+    if df is None or df.empty:
+        return 0.0
+    avg_vol = df["Volume"].tail(30).mean()
+    try:
+        quote = ctx.api.get_latest_quote(symbol)
+        spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
+    except Exception:
+        spread = 0.0
+    vol_score = min(1.0, avg_vol / ctx.volume_threshold) if avg_vol else 0.0
+    spread_score = max(0.0, 1 - spread / 0.05)
+    return max(0.0, min(1.0, vol_score * spread_score))
+
 def fractional_kelly_size(
     ctx: BotContext,
     balance: float,
@@ -2033,7 +2092,10 @@ def calculate_entry_size(
     vol_sz = vol_target_position_size(cash, price, rets, target_vol=0.02)
     base = int(min(kelly_sz, vol_sz, cap_sz, MAX_POSITION_SIZE))
     factor = max(0.5, min(1.5, 1 + (win_prob - 0.5)))
-    size = int(base * factor)
+    liq = liquidity_factor(ctx, symbol)
+    if liq < 0.2:
+        return 0
+    size = int(base * factor * liq)
     return max(size, 1)
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
@@ -2063,7 +2125,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
         logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
         return
     entry_price = df_ind["Close"].iloc[-1]
-    ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "")
+    ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "", confidence=0.5)
 
     now_pac = datetime.now(PACIFIC)
     mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
@@ -2303,7 +2365,7 @@ def trade_logic(
             logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
         else:
             logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
-            ctx.trade_logger.log_entry(symbol, current_price, raw_qty, "buy", strat)
+            ctx.trade_logger.log_entry(symbol, current_price, raw_qty, "buy", strat, signal_tags=strat, confidence=conf)
 
             now_pac = datetime.now(PACIFIC)
             mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
@@ -2360,7 +2422,7 @@ def trade_logic(
             logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
         else:
             logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
-            ctx.trade_logger.log_entry(symbol, current_price, qty, "sell", strat)
+            ctx.trade_logger.log_entry(symbol, current_price, qty, "sell", strat, signal_tags=strat, confidence=conf)
 
             now_pac = datetime.now(PACIFIC)
             mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
@@ -2572,6 +2634,8 @@ def update_signal_weights() -> None:
         return
     df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["entry_price","exit_price","signal_tags"])
     df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].apply(lambda s: 1 if s == "buy" else -1)
+    df["confidence"] = df.get("confidence", 0.5)
+    df["reward"] = df["pnl"] * df["confidence"]
     recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
     recent_mask = recent_cut >= (datetime.now(timezone.utc) - timedelta(days=30))
     df_recent = df[recent_mask]
@@ -2580,10 +2644,10 @@ def update_signal_weights() -> None:
     stats_recent: Dict[str, List[float]] = {}
     for _, row in df.iterrows():
         for tag in row["signal_tags"].split("+"):
-            stats_all.setdefault(tag, []).append(row["pnl"])
+            stats_all.setdefault(tag, []).append(row["reward"])
     for _, row in df_recent.iterrows():
         for tag in row["signal_tags"].split("+"):
-            stats_recent.setdefault(tag, []).append(row["pnl"])
+            stats_recent.setdefault(tag, []).append(row["reward"])
 
     new_weights = {}
     for tag, pnls in stats_all.items():
@@ -2624,6 +2688,8 @@ def run_meta_learning_weight_optimizer(
             return
 
         df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map({"buy": 1, "sell": -1})
+        df["confidence"] = df.get("confidence", 0.5)
+        df["reward"] = df["pnl"] * df["confidence"]
         df["outcome"] = (df["pnl"] > 0).astype(int)
 
         tags = sorted(set(tag for row in df["signal_tags"] for tag in row.split("+")))
@@ -2634,8 +2700,9 @@ def run_meta_learning_weight_optimizer(
             logger.warning("METALEARN_TOO_FEW_SAMPLES")
             return
 
+        sample_w = df["reward"].abs() + 1e-3
         model = Ridge(alpha=alpha, fit_intercept=True)
-        model.fit(X, y)
+        model.fit(X, y, sample_weight=sample_w)
         joblib.dump(model, META_MODEL_PATH)
         logger.info("META_MODEL_TRAINED", extra={"samples": len(y)})
 
@@ -2846,6 +2913,14 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df.dropna(subset=required, how="all", inplace=True)
         df.reset_index(drop=True, inplace=True)
 
+    if os.path.exists(INACTIVE_FEATURES_FILE):
+        try:
+            with open(INACTIVE_FEATURES_FILE) as f:
+                inactive = set(json.load(f))
+            df.drop(columns=[c for c in inactive if c in df.columns], inplace=True, errors="ignore")
+        except Exception:
+            pass
+
     return df
 
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -2899,8 +2974,43 @@ else:
         logger.error(f"Not enough valid rows ({len(training)}) to train regime model; using dummy fallback")
         regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 
+def _market_breadth(ctx: BotContext) -> float:
+    syms = load_tickers(TICKERS_FILE)[:20]
+    up = 0
+    total = 0
+    for sym in syms:
+        df = ctx.data_fetcher.get_daily_df(ctx, sym)
+        if df is None or len(df) < 2:
+            continue
+        total += 1
+        if df['Close'].iloc[-1] > df['Close'].iloc[-2]:
+            up += 1
+    return up / total if total else 0.5
+
+def detect_regime_state(ctx: BotContext) -> str:
+    df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
+    if df is None or len(df) < 200:
+        return "sideways"
+    atr14 = ta.atr(df["High"], df["Low"], df["Close"], length=14).iloc[-1]
+    atr50 = ta.atr(df["High"], df["Low"], df["Close"], length=50).iloc[-1]
+    high_vol = atr50 > 0 and atr14 / atr50 > 1.5
+    sma50 = df["Close"].rolling(50).mean().iloc[-1]
+    sma200 = df["Close"].rolling(200).mean().iloc[-1]
+    trend = sma50 - sma200
+    breadth = _market_breadth(ctx)
+    if high_vol:
+        return "high_volatility"
+    if abs(trend) / sma200 < 0.005:
+        return "sideways"
+    if trend > 0 and breadth > 0.55:
+        return "trending"
+    if trend < 0 and breadth < 0.45:
+        return "mean_reversion"
+    return "sideways"
+
 def check_market_regime() -> bool:
-    # Always return True; never skip any symbol due to regime filtering.
+    global CURRENT_REGIME
+    CURRENT_REGIME = detect_regime_state(ctx)
     return True
 
 def screen_universe(
@@ -3007,6 +3117,43 @@ def daily_reset() -> None:
     _slippage_log.clear()
     _LOSS_STREAK = 0
     logger.info("DAILY_STATE_RESET")
+
+def _average_reward(n: int = 20) -> float:
+    if not os.path.exists(REWARD_LOG_FILE):
+        return 0.0
+    df = pd.read_csv(REWARD_LOG_FILE).tail(n)
+    if df.empty or 'reward' not in df.columns:
+        return 0.0
+    return float(df['reward'].mean())
+
+def _current_drawdown() -> float:
+    try:
+        with open(PEAK_EQUITY_FILE) as pf:
+            peak = float(pf.read().strip() or 0)
+        with open(EQUITY_FILE) as ef:
+            eq = float(ef.read().strip() or 0)
+    except Exception:
+        return 0.0
+    if peak <= 0:
+        return 0.0
+    return max(0.0, (peak - eq) / peak)
+
+def update_bot_mode() -> None:
+    global mode_obj, params, ctx
+    avg_r = _average_reward()
+    dd = _current_drawdown()
+    regime = CURRENT_REGIME
+    if dd > 0.05 or avg_r < -0.01:
+        new_mode = 'conservative'
+    elif avg_r > 0.05 and regime == 'trending':
+        new_mode = 'aggressive'
+    else:
+        new_mode = 'balanced'
+    if new_mode != mode_obj.mode:
+        mode_obj = BotMode(new_mode)
+        params.update(mode_obj.get_config())
+        ctx.kelly_fraction = params.get('KELLY_FRACTION', 0.6)
+        logger.info('MODE_SWITCH', extra={'new_mode': new_mode, 'avg_reward': avg_r, 'drawdown': dd, 'regime': regime})
 
 # At top‐level, define retrain_meta_learner = None so load_or_retrain_daily can reference it safely
 retrain_meta_learner = None
@@ -3281,6 +3428,7 @@ if __name__ == "__main__":
         schedule.every(1).minutes.do(lambda: schedule_run_all_trades(model))
         schedule.every(1).minutes.do(lambda: Thread(target=validate_open_orders, args=(ctx,), daemon=True).start())
         schedule.every(6).hours.do(lambda: Thread(target=update_signal_weights, daemon=True).start())
+        schedule.every(30).minutes.do(lambda: Thread(target=update_bot_mode, daemon=True).start())
 
         # Scheduler loop
         while True:
