@@ -854,14 +854,24 @@ class SignalManager:
             return -1, 0.0, 'vsa'
 
     def signal_ml(self, df: pd.DataFrame, model: Any=None) -> Tuple[int, float, str]:
+        """Machine learning prediction signal with probability logging."""
         try:
-            feat = ['rsi','macd','atr','vwap','sma_50','sma_200']
+            if hasattr(model, "feature_names_in_"):
+                feat = list(model.feature_names_in_)
+            else:
+                feat = ['rsi', 'macd', 'atr', 'vwap', 'sma_50', 'sma_200']
+
             X = df[feat].iloc[-1].values.reshape(1, -1)
             pred = model.predict(X)[0]
-            proba = model.predict_proba(X)[0][pred]
+            proba = float(model.predict_proba(X)[0][pred])
             s = 1 if pred == 1 else -1
+            logger.info(
+                "ML_SIGNAL",
+                extra={"prediction": int(pred), "probability": proba}
+            )
             return s, proba, 'ml'
-        except Exception:
+        except Exception as e:
+            logger.exception(f"signal_ml failed: {e}")
             return -1, 0.0, 'ml'
 
     def signal_sentiment(self, ctx: 'BotContext', ticker: str, df: pd.DataFrame=None, model: Any=None) -> Tuple[int, float, str]:
@@ -2558,6 +2568,22 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
     df["rsi"]  = ta.rsi(df["Close"], length=14)
     df["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+
+    # ── New advanced indicators ───────────────────────────────────────────
+    try:
+        kc = ta.kc(df["High"], df["Low"], df["Close"], length=20)
+        df["kc_lower"] = kc.iloc[:, 0]
+        df["kc_mid"]   = kc.iloc[:, 1]
+        df["kc_upper"] = kc.iloc[:, 2]
+    except Exception:
+        df["kc_lower"] = np.nan
+        df["kc_mid"]   = np.nan
+        df["kc_upper"] = np.nan
+
+    df["atr_band_upper"] = df["Close"] + 1.5 * df["atr"]
+    df["atr_band_lower"] = df["Close"] - 1.5 * df["atr"]
+    df["avg_vol_20"]      = df["Volume"].rolling(20).mean()
+    df["dow"]             = df.index.dayofweek
 
     try:
         macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)

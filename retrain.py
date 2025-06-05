@@ -4,9 +4,9 @@ import pandas as pd
 import numpy as np
 
 from datetime import datetime, date, time, timedelta
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
-from xgboost import XGBClassifier
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 
 import pandas_ta as ta
@@ -49,6 +49,22 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
     df["rsi"] = ta.rsi(df["Close"], length=14)
     df["atr"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+
+    # ── New advanced indicators ───────────────────────────────────────────
+    try:
+        kc = ta.kc(df["High"], df["Low"], df["Close"], length=20)
+        df["kc_lower"] = kc.iloc[:, 0]
+        df["kc_mid"]   = kc.iloc[:, 1]
+        df["kc_upper"] = kc.iloc[:, 2]
+    except Exception:
+        df["kc_lower"] = np.nan
+        df["kc_mid"]   = np.nan
+        df["kc_upper"] = np.nan
+
+    df["atr_band_upper"] = df["Close"] + 1.5 * df["atr"]
+    df["atr_band_lower"] = df["Close"] - 1.5 * df["atr"]
+    df["avg_vol_20"]      = df["Volume"].rolling(20).mean()
+    df["dow"]             = df.index.dayofweek
 
     try:
         macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
@@ -261,17 +277,19 @@ def retrain_meta_learner(
         scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
         print(f"  ✔ Training {regime} model using scoring='{scoring}' (pos_ratio={pos_ratio:.3f})")
 
-        base_clf = RandomForestClassifier(class_weight="balanced", random_state=42, n_jobs=-1)
+        base_clf = LGBMClassifier(objective="binary", n_jobs=-1, random_state=42)
         param_dist = {
-            "n_estimators": [100, 200, 300, 400, 500],
-            "max_depth": [None, 4, 6, 8, 10],
-            "min_samples_split": [2, 5, 10],
-            "min_samples_leaf": [1, 2, 4],
-            "max_features": ["sqrt", "log2", 0.5],
+            "lgbmclassifier__n_estimators": [100, 200, 300, 500],
+            "lgbmclassifier__max_depth": [-1, 4, 6, 8],
+            "lgbmclassifier__learning_rate": [0.05, 0.1, 0.15],
+            "lgbmclassifier__num_leaves": [31, 50, 75],
+            "lgbmclassifier__subsample": [0.8, 1.0],
+            "lgbmclassifier__colsample_bytree": [0.8, 1.0],
         }
+        pipe = make_pipeline(StandardScaler(), base_clf)
         tscv = TimeSeriesSplit(n_splits=5)
         search = RandomizedSearchCV(
-            estimator=base_clf,
+            estimator=pipe,
             param_distributions=param_dist,
             n_iter=20,
             scoring=scoring,
@@ -294,9 +312,15 @@ def retrain_meta_learner(
             metric = roc_auc_score(y_val, val_probs)
             print(f"  ✔ {regime} holdout AUC = {metric:.4f}")
 
-        importances = pd.Series(clf.feature_importances_, index=X.columns)
-        print("  ✔ Top feature importances:")
-        print(importances.sort_values(ascending=False).head(10))
+        try:
+            importances = pd.Series(
+                clf.named_steps["lgbmclassifier"].feature_importances_,
+                index=X.columns,
+            )
+            print("  ✔ Top feature importances:")
+            print(importances.sort_values(ascending=False).head(10))
+        except Exception:
+            pass
 
         path = MODEL_FILES[regime]
         joblib.dump(clf, path)
