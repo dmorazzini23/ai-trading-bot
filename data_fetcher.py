@@ -10,7 +10,6 @@ from config import (
     FINNHUB_API_KEY,
     ALPACA_API_KEY,
     ALPACA_SECRET_KEY,
-    ALPACA_BASE_URL,
 )
 import logging
 
@@ -26,15 +25,14 @@ import finnhub
 
 load_dotenv()
 
+# ✅ FIXED — v1.x compatible client creation (no base_url or feed)
 _DATA_CLIENT = StockHistoricalDataClient(
-    api_key=ALPACA_API_KEY,
-    secret_key=ALPACA_SECRET_KEY,
-    feed="iex",
+    ALPACA_API_KEY,
+    ALPACA_SECRET_KEY
 )
 
 class DataFetchError(Exception):
     pass
-
 
 @retry(
     stop=stop_after_attempt(3),
