@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import os
+from dotenv import load_dotenv
 import hmac
 import hashlib
 import subprocess
 from flask import Flask, request, abort
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(dotenv_path=os.path.join(BASE_DIR, '.env'))
 
 app = Flask(__name__)
 SECRET = os.environ.get("WEBHOOK_SECRET", "").encode()
