@@ -99,6 +99,17 @@ class DataFetcher:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             bars.index = pd.to_datetime(bars.index).tz_localize(None)
             df = bars.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"})
+        except APIError as e:
+            logger.warning(f"[get_daily_df] Alpaca fetch failed for {symbol}: {e}")
+            try:
+                df = fh.fetch(symbol, period="1mo", interval="1d")
+            except Exception:
+                df_yf = yf.download(symbol, period="1mo", interval="1d", progress=False)
+                if df_yf.empty:
+                    df = None
+                else:
+                    df_yf.index = pd.to_datetime(df_yf.index).tz_localize(None)
+                    df = df_yf.rename(columns=lambda c: c.title())[ ["Open","High","Low","Close","Volume"] ]
         except Exception as e:
             logger.warning(f"[get_daily_df] Alpaca fetch failed for {symbol}: {e}")
             try:
@@ -130,6 +141,15 @@ class DataFetcher:
                 bars = bars.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"})
                 bars.index = pd.to_datetime(bars.index).tz_localize(None)
                 df = bars[["Open", "High", "Low", "Close", "Volume"]]
+        except APIError as e:
+            logger.warning(f"[get_minute_df] Alpaca fetch failed for {symbol}: {e}")
+            try:
+                df = fh.fetch(symbol, period="5d", interval="1m")
+            except Exception:
+                df_yf = yf.download(symbol, period="5d", interval="1m", progress=False)
+                if not df_yf.empty:
+                    df_yf.index = pd.to_datetime(df_yf.index).tz_localize(None)
+                    df = df_yf.rename(columns=lambda c: c.title())[ ["Open","High","Low","Close","Volume"] ]
         except Exception as e:
             logger.warning(f"[get_minute_df] Alpaca fetch failed for {symbol}: {e}")
             try:
