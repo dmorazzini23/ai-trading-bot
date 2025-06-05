@@ -52,6 +52,7 @@ import finnhub
 from finnhub import FinnhubAPIException
 import pybreaker
 from trade_execution import ExecutionEngine
+from capital_scaling import CapitalScalingEngine
 
 def cancel_all_open_orders(ctx: "BotContext") -> None:
     """
@@ -676,7 +677,7 @@ class TradeLogger:
                 ])
         if not os.path.exists(REWARD_LOG_FILE):
             with open(REWARD_LOG_FILE, 'w', newline='') as rf:
-                csv.writer(rf).writerow(["timestamp","symbol","reward","pnl","confidence"])
+                csv.writer(rf).writerow(["timestamp","symbol","reward","pnl","confidence","band"])
 
     def log_entry(self, symbol: str, price: float, qty: int, side: str,
                   strategy: str, signal_tags: str="", confidence: float = 0.0) -> None:
@@ -729,6 +730,7 @@ class TradeLogger:
                     pnl * conf,
                     pnl,
                     conf,
+                    ctx.capital_band,
                 ])
         except Exception:
             pass
@@ -1063,6 +1065,13 @@ class BotContext:
     regime_atr_threshold: float
     daily_loss_limit: float
     kelly_fraction: float
+    capital_scaler: CapitalScalingEngine
+    adv_target_pct: float
+    max_position_dollars: float
+    params: dict
+    sector_cap: float = SECTOR_EXPOSURE_CAP
+    correlation_limit: float = CORRELATION_THRESHOLD
+    capital_band: str = "small"
     confirmation_count: dict[str, int] = field(default_factory=dict)
     trailing_extremes: dict[str, float] = field(default_factory=dict)
     take_profit_targets: dict[str, float] = field(default_factory=dict)
@@ -1091,18 +1100,28 @@ ctx = BotContext(
     regime_atr_threshold=REGIME_ATR_THRESHOLD,
     daily_loss_limit=DAILY_LOSS_LIMIT,
     kelly_fraction=params.get("KELLY_FRACTION", 0.6),
+    capital_scaler=CapitalScalingEngine(),
+    adv_target_pct=0.002,
+    max_position_dollars=10_000,
+    params=params,
     confirmation_count={},
     trailing_extremes={},
     take_profit_targets={},
     stop_targets={},
     portfolio_weights={},
-) 
+)
 exec_engine = ExecutionEngine(
     ctx,
     slippage_total=slippage_total,
     slippage_count=slippage_count,
     orders_total=orders_total,
 )
+
+try:
+    equity_init = float(ctx.api.get_account().equity)
+except Exception:
+    equity_init = 0.0
+ctx.capital_scaler.update(ctx, equity_init)
 
 # Warm up regime history cache so initial regime checks pass
 try:
@@ -1457,7 +1476,7 @@ def too_many_positions(ctx: BotContext) -> bool:
         logger.warning("[too_many_positions] Could not fetch positions")
         return False
 
-def too_correlated(sym: str) -> bool:
+def too_correlated(ctx: BotContext, sym: str) -> bool:
     if not os.path.exists(TRADE_LOG_FILE):
         return False
     df = pd.read_csv(TRADE_LOG_FILE)
@@ -1488,7 +1507,8 @@ def too_correlated(sym: str) -> bool:
     mat = pd.DataFrame({s: rets[s].tail(min_len).values for s in good_syms}, index=idx)
     corr_matrix = mat.corr().abs()
     avg_corr = corr_matrix.where(~np.eye(len(good_syms), dtype=bool)).stack().mean()
-    return avg_corr > CORRELATION_THRESHOLD
+    limit = getattr(ctx, 'correlation_limit', CORRELATION_THRESHOLD)
+    return avg_corr > limit
 
 def get_sector(symbol: str) -> str:
     if symbol in _SECTOR_CACHE:
@@ -1530,7 +1550,8 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
     except Exception:
         total = 0.0
     projected = exposures.get(sec, 0.0) + ((qty * price) / total if total > 0 else 0.0)
-    return projected <= SECTOR_EXPOSURE_CAP
+    cap = getattr(ctx, 'sector_cap', SECTOR_EXPOSURE_CAP)
+    return projected <= cap
 
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext) -> bool:
@@ -1593,6 +1614,8 @@ def fractional_kelly_size(
         base_frac = ctx.kelly_fraction * 0.5
     else:
         base_frac = ctx.kelly_fraction
+    comp = ctx.capital_scaler.compression_factor(balance)
+    base_frac *= comp
 
     if not os.path.exists(PEAK_EQUITY_FILE):
         with portalocker.Lock(PEAK_EQUITY_FILE, 'w', timeout=5) as f:
@@ -1623,7 +1646,8 @@ def fractional_kelly_size(
     raw_pos = dollars_to_risk / atr
     cap_pos = (balance * CAPITAL_CAP) / price if price > 0 else 0
     risk_cap = (balance * DOLLAR_RISK_LIMIT) / atr if atr > 0 else raw_pos
-    size = int(min(raw_pos, cap_pos, risk_cap, MAX_POSITION_SIZE))
+    dollar_cap = ctx.max_position_dollars / price if price > 0 else raw_pos
+    size = int(min(raw_pos, cap_pos, risk_cap, dollar_cap, MAX_POSITION_SIZE))
     return max(size, 1)
 
 def vol_target_position_size(
@@ -1921,13 +1945,14 @@ def calculate_entry_size(
     cash = float(ctx.api.get_account().cash)
     df_daily = ctx.data_fetcher.get_daily_df(ctx, symbol)
     avg_vol = df_daily["Volume"].tail(20).mean() if df_daily is not None else 0
-    cap_pct = 0.05 if avg_vol > 1e7 else 0.03
+    cap_pct = ctx.params.get('CAPITAL_CAP', CAPITAL_CAP)
     cap_sz = int((cash * cap_pct) / price) if price > 0 else 0
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
     rets = df["Close"].pct_change().dropna().values if df is not None and not df.empty else np.array([0.0])
     kelly_sz = fractional_kelly_size(ctx, cash, price, atr, win_prob)
     vol_sz = vol_target_position_size(cash, price, rets, target_vol=0.02)
-    base = int(min(kelly_sz, vol_sz, cap_sz, MAX_POSITION_SIZE))
+    dollar_cap = ctx.max_position_dollars / price if price > 0 else kelly_sz
+    base = int(min(kelly_sz, vol_sz, cap_sz, dollar_cap, MAX_POSITION_SIZE))
     factor = max(0.5, min(1.5, 1 + (win_prob - 0.5)))
     liq = liquidity_factor(ctx, symbol)
     if liq < 0.2:
@@ -2034,7 +2059,7 @@ def pre_trade_checks(
     if too_many_positions(ctx):
         logger.info("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol})
         return False
-    if too_correlated(symbol):
+    if too_correlated(ctx, symbol):
         logger.info("SKIP_HIGH_CORRELATION", extra={"symbol": symbol})
         return False
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
@@ -2998,6 +3023,12 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
     spy_atr = _VOL_STATS.get("last", 0)
     avg_r = _average_reward(30)
     dd = _current_drawdown()
+    try:
+        equity = float(ctx.api.get_account().equity)
+    except Exception:
+        equity = 0.0
+    ctx.capital_scaler.update(ctx, equity)
+    params['CAPITAL_CAP'] = ctx.params['CAPITAL_CAP']
     frac = params.get('KELLY_FRACTION', 0.6)
     if spy_atr and vol and spy_atr > vol * 1.5:
         frac *= 0.5
@@ -3097,6 +3128,12 @@ def run_all_trades_worker(model):
         # On each run, clear open orders and correct any position mismatches
         cancel_all_open_orders(ctx)
         audit_positions(ctx)
+        try:
+            equity = float(ctx.api.get_account().equity)
+        except Exception:
+            equity = 0.0
+        ctx.capital_scaler.update(ctx, equity)
+        params['CAPITAL_CAP'] = ctx.params['CAPITAL_CAP']
         now_utc = pd.Timestamp.utcnow()
 
         # Update SPY vol stats first
