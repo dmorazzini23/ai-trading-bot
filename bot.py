@@ -266,6 +266,7 @@ ATR_LENGTH              = 10
 CONF_THRESHOLD          = params.get("CONF_THRESHOLD", 0.75)
 CONFIRMATION_COUNT      = params.get("CONFIRMATION_COUNT", 2)
 CAPITAL_CAP             = params.get("CAPITAL_CAP", 0.08)
+DOLLAR_RISK_LIMIT       = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
 PACIFIC                 = ZoneInfo("America/Los_Angeles")
 PDT_DAY_TRADE_LIMIT     = params.get("PDT_DAY_TRADE_LIMIT", 3)
 PDT_EQUITY_THRESHOLD    = params.get("PDT_EQUITY_THRESHOLD", 25_000.0)
@@ -919,7 +920,10 @@ class SignalManager:
 
         score = max(-1.0, min(1.0, score))
         s = 1 if score > 0 else -1 if score < 0 else -1
-        return s, abs(score), 'sentiment'
+        weight = abs(score)
+        if is_high_vol_regime():
+            weight *= 1.5
+        return s, weight, 'sentiment'
 
     def signal_regime(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
         ok = check_market_regime()
@@ -972,7 +976,16 @@ class SignalManager:
             return -1, 0.0, 'no_signal'
 
         self.last_components = signals
-        score = sum(s * w for s, w, _ in signals)
+
+        ml_prob = next((w for s, w, l in signals if l == 'ml'), 0.5)
+        adj = []
+        for s, w, l in signals:
+            if l != 'ml':
+                adj.append((s, w * ml_prob, l))
+            else:
+                adj.append((s, w, l))
+
+        score = sum(s * w for s, w, _ in adj)
         conf = min(abs(score), 1.0)
         if score > 0.5:
             final = 1
@@ -980,7 +993,7 @@ class SignalManager:
             final = -1
         else:
             final = -1
-        label = "+".join(lab for _, _, lab in signals)
+        label = "+".join(lab for _, _, lab in adj)
         return final, conf, label
 
 # ─── G. BOT CONTEXT ───────────────────────────────────────────────────────────
@@ -1534,7 +1547,8 @@ def fractional_kelly_size(
 
     raw_pos = dollars_to_risk / atr
     cap_pos = (balance * CAPITAL_CAP) / price if price > 0 else 0
-    size = int(min(raw_pos, cap_pos, MAX_POSITION_SIZE))
+    risk_cap = (balance * DOLLAR_RISK_LIMIT) / atr if atr > 0 else raw_pos
+    size = int(min(raw_pos, cap_pos, risk_cap, MAX_POSITION_SIZE))
     return max(size, 1)
 
 def vol_target_position_size(
@@ -1626,6 +1640,19 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
                     },
                 )
                 order = ctx.api.submit_order(**order_kwargs)
+                if order_kwargs.get("type") == "limit":
+                    pytime.sleep(5)
+                    try:
+                        od_check = ctx.api.get_order(order.id)
+                        status = getattr(od_check, "status", "")
+                        filled_q = int(float(getattr(od_check, "filled_qty", 0) or 0))
+                        if status in {"new", "accepted", "partially_filled"} and filled_q < qty_slice:
+                            ctx.api.cancel_order(order.id)
+                            order_kwargs.pop("limit_price", None)
+                            order_kwargs["type"] = "market"
+                            order = ctx.api.submit_order(**order_kwargs)
+                    except Exception:
+                        pass
                 if not getattr(order, "id", None):
                     logger.error(
                         "ORDER_SUBMISSION_NO_ID",
@@ -1954,9 +1981,10 @@ def pov_submit(
     logger.info("POV_SUBMIT_COMPLETE", extra={"symbol": symbol, "placed": placed})
     return True
 
-def maybe_pyramid(ctx: BotContext, symbol: str, entry_price: float, current_price: float, atr: float):
+def maybe_pyramid(ctx: BotContext, symbol: str, entry_price: float, current_price: float, atr: float, prob: float):
+    """Add to a winning position when probability remains high."""
     profit = (current_price - entry_price) if entry_price else 0
-    if profit > 2 * atr:
+    if profit > 2 * atr and prob >= 0.75:
         try:
             pos = ctx.api.get_position(symbol)
             qty = int(abs(int(pos.qty)) * 0.5)
@@ -2376,6 +2404,13 @@ def trade_logic(
                         ctx.take_profit_targets.pop(symbol, None)
             except Exception:
                 pass
+        else:
+            try:
+                pos = ctx.api.get_position(symbol)
+                entry_price = float(pos.avg_entry_price)
+                maybe_pyramid(ctx, symbol, entry_price, price, atr, conf)
+            except Exception:
+                pass
         return
 
     # Else hold / no action
@@ -2537,11 +2572,28 @@ def update_signal_weights() -> None:
         return
     df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["entry_price","exit_price","signal_tags"])
     df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].apply(lambda s: 1 if s == "buy" else -1)
-    stats: Dict[str, List[float]] = {}
+    recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
+    recent_mask = recent_cut >= (datetime.now(timezone.utc) - timedelta(days=30))
+    df_recent = df[recent_mask]
+
+    stats_all: Dict[str, List[float]] = {}
+    stats_recent: Dict[str, List[float]] = {}
     for _, row in df.iterrows():
         for tag in row["signal_tags"].split("+"):
-            stats.setdefault(tag, []).append(row["pnl"])
-    new_weights = {tag: round(np.mean([1 if p > 0 else 0 for p in pnls]), 3) for tag, pnls in stats.items()}
+            stats_all.setdefault(tag, []).append(row["pnl"])
+    for _, row in df_recent.iterrows():
+        for tag in row["signal_tags"].split("+"):
+            stats_recent.setdefault(tag, []).append(row["pnl"])
+
+    new_weights = {}
+    for tag, pnls in stats_all.items():
+        overall_wr = np.mean([1 if p > 0 else 0 for p in pnls]) if pnls else 0.0
+        recent_wr = np.mean([1 if p > 0 else 0 for p in stats_recent.get(tag, [])]) if stats_recent.get(tag) else overall_wr
+        weight = 0.7 * recent_wr + 0.3 * overall_wr
+        if recent_wr < 0.4:
+            weight *= 0.5
+        new_weights[tag] = round(weight, 3)
+
     ALPHA = 0.2
     if os.path.exists(SIGNAL_WEIGHTS_FILE):
         old = pd.read_csv(SIGNAL_WEIGHTS_FILE).set_index("signal")["weight"].to_dict()
@@ -2767,9 +2819,19 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ret_w"] = df["Close"].pct_change(1950)
         df["vol_norm"] = df["Volume"].rolling(60).mean() / df["Volume"].rolling(5).mean()
         df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
+        df["vol_5m"]  = df["Close"].pct_change().rolling(5).std()
+        df["vol_1h"]  = df["Close"].pct_change().rolling(60).std()
+        df["vol_d"]   = df["Close"].pct_change().rolling(390).std()
+        df["vol_w"]   = df["Close"].pct_change().rolling(1950).std()
+        df["vol_ratio"] = df["vol_5m"] / df["vol_1h"]
+        df["mom_agg"] = df["ret_5m"] + df["ret_1h"] + df["ret_d"]
+        df["lag_close_1"] = df["Close"].shift(1)
+        df["lag_close_3"] = df["Close"].shift(3)
     except Exception:
         df["ret_5m"] = df["ret_1h"] = df["ret_d"] = df["ret_w"] = np.nan
         df["vol_norm"] = df["5m_vs_1h"] = np.nan
+        df["vol_5m"] = df["vol_1h"] = df["vol_d"] = df["vol_w"] = np.nan
+        df["vol_ratio"] = df["mom_agg"] = df["lag_close_1"] = df["lag_close_3"] = np.nan
 
     df.ffill(inplace=True)
     df.bfill(inplace=True)

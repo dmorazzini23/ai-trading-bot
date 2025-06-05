@@ -2,6 +2,8 @@ import os
 import joblib
 import pandas as pd
 import numpy as np
+import requests
+from dotenv import load_dotenv
 
 from datetime import datetime, date, time, timedelta
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
@@ -10,6 +12,27 @@ from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 
 import pandas_ta as ta
+
+load_dotenv()
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+
+def fetch_sentiment(symbol: str) -> float:
+    """Lightweight sentiment score using NewsAPI headlines."""
+    if not NEWS_API_KEY:
+        return 0.0
+    try:
+        url = (
+            f"https://newsapi.org/v2/everything?q={symbol}&pageSize=5&sortBy=publishedAt&apiKey={NEWS_API_KEY}"
+        )
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        articles = resp.json().get("articles", [])
+        if not articles:
+            return 0.0
+        score = sum(1 for a in articles if "positive" in (a.get("title") or "").lower()) / len(articles)
+        return float(score)
+    except Exception:
+        return 0.0
 
 ##############################################################################
 # Inline `detect_regime` so we don’t import bot.py at module load time.
@@ -147,9 +170,19 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ret_w"] = df["Close"].pct_change(1950)
         df["vol_norm"] = df["Volume"].rolling(60).mean() / df["Volume"].rolling(5).mean()
         df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
+        df["vol_5m"]  = df["Close"].pct_change().rolling(5).std()
+        df["vol_1h"]  = df["Close"].pct_change().rolling(60).std()
+        df["vol_d"]   = df["Close"].pct_change().rolling(390).std()
+        df["vol_w"]   = df["Close"].pct_change().rolling(1950).std()
+        df["vol_ratio"] = df["vol_5m"] / df["vol_1h"]
+        df["mom_agg"] = df["ret_5m"] + df["ret_1h"] + df["ret_d"]
+        df["lag_close_1"] = df["Close"].shift(1)
+        df["lag_close_3"] = df["Close"].shift(3)
     except Exception:
         df["ret_5m"] = df["ret_1h"] = df["ret_d"] = df["ret_w"] = np.nan
         df["vol_norm"] = df["5m_vs_1h"] = np.nan
+        df["vol_5m"] = df["vol_1h"] = df["vol_d"] = df["vol_w"] = np.nan
+        df["vol_ratio"] = df["mom_agg"] = df["lag_close_1"] = df["lag_close_3"] = np.nan
 
     df.ffill(inplace=True)
     df.bfill(inplace=True)
@@ -219,6 +252,9 @@ def build_feature_label_df(
         if feat.empty:
             print(f"[build_feature_label_df] – {sym} indicators empty after dropna")
             continue
+
+        sent = fetch_sentiment(sym)
+        feat["sentiment"] = sent
 
         # Determine regime series for this symbol's data
         regime_info = detect_regime(raw)
