@@ -4,6 +4,7 @@ import time
 import random
 import logging
 import logging.handlers
+from tenacity import retry, stop_after_attempt, wait_exponential, wait_random, retry_if_exception_type
 from datetime import datetime, timezone
 from typing import Optional, Tuple, Any
 
@@ -36,18 +37,21 @@ class ExecutionEngine:
         self.slippage_count = slippage_count
         self.orders_total = orders_total
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=5) + wait_random(0.1, 0.5),
+        retry=retry_if_exception_type(Exception),
+    )
     def _latest_quote(self, symbol: str) -> Tuple[float, float]:
         try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=symbol)
+            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             q: Quote = self.ctx.data_client.get_stock_latest_quote(req)
             bid = float(getattr(q, 'bid_price', 0) or 0)
             ask = float(getattr(q, 'ask_price', 0) or 0)
             return bid, ask
         except APIError as e:
             self.logger.warning(f"_latest_quote APIError for {symbol}: {e}")
-            return 0.0, 0.0
-        except Exception:
-            return 0.0, 0.0
+            raise
 
     def _adv_volume(self, symbol: str) -> Optional[float]:
         df = self.ctx.data_fetcher.get_daily_df(self.ctx, symbol)

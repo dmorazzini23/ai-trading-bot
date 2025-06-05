@@ -3,6 +3,7 @@ import json
 import csv
 import random
 import joblib
+import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, date, time, timedelta
@@ -14,6 +15,8 @@ from lightgbm import LGBMClassifier
 import pandas_ta as ta
 
 from config import NEWS_API_KEY
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 def abspath(p: str) -> str:
@@ -367,18 +370,24 @@ def retrain_meta_learner(
     now = datetime.now()
     if not force:
         if now.weekday() >= 5:
-            print(f"[retrain_meta_learner] Weekend detected (weekday={now.weekday()}). Skipping retrain.")
+            logger.info(
+                "[retrain_meta_learner] Weekend detected; skipping",
+                extra={"weekday": now.weekday()},
+            )
             return False
         market_open = time(9, 30)
         market_close = time(16, 0)
         if not (market_open <= now.time() <= market_close):
-            print(f"[retrain_meta_learner] Outside market hours ({now.time().strftime('%H:%M')}). Skipping retrain.")
+            logger.info(
+                "[retrain_meta_learner] Outside market hours; skipping",
+                extra={"time": now.time().strftime('%H:%M')},
+            )
             return False
 
-    print(f"[{now:%Y-%m-%d %H:%M:%S}] ▶ Starting meta‐learner retraining…")
+    logger.info(f"Starting meta-learner retraining at {now:%Y-%m-%d %H:%M:%S}")
     raw_store = gather_minute_data(ctx, symbols, lookback_days=lookback_days)
     if not raw_store:
-        print("  ⚠️ No symbol returned any minute bars → skipping retrain.")
+        logger.warning("No minute bars returned; skipping retrain")
         return False
 
     df_all = build_feature_label_df(raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct)

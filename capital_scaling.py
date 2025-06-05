@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from typing import Optional, Sequence, Any
 
 import pandas as pd
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,7 +46,7 @@ class CapitalScalingEngine:
     def update(self, ctx: Any, equity: float) -> None:
         band = self.band_for_equity(equity)
         if band.name != self.current.name:
-            ctx.logger.info("CAPITAL_BAND_SWITCH", extra={"band": band.name})
+            logger.info("CAPITAL_BAND_SWITCH", extra={"band": band.name})
         self.current = band
         ctx.capital_band = band.name
         ctx.kelly_fraction = band.kelly_frac

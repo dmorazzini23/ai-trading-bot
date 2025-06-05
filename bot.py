@@ -1692,7 +1692,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
         return 0.0
     avg_vol = df["Volume"].tail(30).mean()
     try:
-        req = StockLatestQuoteRequest(symbol_or_symbols=symbol)
+        req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
         quote: Quote = ctx.data_client.get_stock_latest_quote(req)
         spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
     except APIError as e:
@@ -1881,7 +1881,7 @@ def vwap_pegged_submit(
             break
         vwap_price = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
         try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=symbol)
+            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quote: Quote = ctx.data_client.get_stock_latest_quote(req)
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
         except APIError as e:
@@ -1998,7 +1998,7 @@ def pov_submit(
         interval = cfg.sleep_interval
 
         try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=symbol)
+            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quote: Quote = ctx.data_client.get_stock_latest_quote(req)
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
         except APIError as e:
@@ -3271,7 +3271,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
     cash = float(getattr(acct, "cash", 0))
     for sig in final:
         try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=sig.symbol)
+            req = StockLatestQuoteRequest(symbol_or_symbols=[sig.symbol])
             quote: Quote = ctx.data_client.get_stock_latest_quote(req)
             price = float(getattr(quote, "ask_price", 0) or 0)
         except APIError as e:
@@ -3420,7 +3420,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     per_symbol = cash / n
     for sym in symbols:
         try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=sym)
+            req = StockLatestQuoteRequest(symbol_or_symbols=[sym])
             quote: Quote = ctx.data_client.get_stock_latest_quote(req)
             price = float(getattr(quote, "ask_price", 0) or 0)
         except APIError as e:
