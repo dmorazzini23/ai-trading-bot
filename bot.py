@@ -406,7 +406,7 @@ def compute_spy_vol_stats(ctx: 'BotContext') -> None:
         return
 
     # Compute ATR series for last 252 trading days
-    atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH).dropna()
+    atr_series = ta.atr(df["High"], df["Low"], df["close"], length=ATR_LENGTH).dropna()
     if len(atr_series) < 252:
         return
 
@@ -436,7 +436,7 @@ def is_high_vol_thr_spy() -> bool:
     if spy_df is None or len(spy_df) < ATR_LENGTH:
         return False
 
-    atr_series = ta.atr(spy_df["High"], spy_df["Low"], spy_df["Close"], length=ATR_LENGTH)
+    atr_series = ta.atr(spy_df["High"], spy_df["Low"], spy_df["close"], length=ATR_LENGTH)
     if atr_series.empty:
         return False
 
@@ -1172,7 +1172,7 @@ class SignalManager:
         if df is None or df.empty:
             return -1, 0.0, "sentiment"
 
-        latest_close = float(df["Close"].iloc[-1])
+        latest_close = float(get_latest_close(df))
         with sentiment_lock:
             prev_close = _LAST_PRICE.get(ticker, None)
 
@@ -1743,12 +1743,12 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
             continue
         # Handle DataFrame with MultiIndex columns (symbol, field) or single-level
         if isinstance(d.columns, pd.MultiIndex):
-            if (s, "Close") in d.columns:
-                series = d[(s, "Close")].pct_change().dropna()
+            if (s, "close") in d.columns:
+                series = d[(s, "close")].pct_change().dropna()
             else:
                 continue
         else:
-            series = d["Close"].pct_change().dropna()
+            series = d["close"].pct_change().dropna()
         if not series.empty:
             rets[s] = series
 
@@ -2035,7 +2035,7 @@ def vwap_pegged_submit(
         if df is None or df.empty:
             logger.warning("[VWAP] missing bars, aborting VWAP slice", extra={"symbol": symbol})
             break
-        vwap_price = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
+        vwap_price = ta.vwap(df["High"], df["Low"], df["close"], df["Volume"]).iloc[-1]
         try:
             req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quote: Quote = ctx.data_client.get_stock_latest_quote(req)
@@ -2231,7 +2231,7 @@ def calculate_entry_size(
     cap_pct = ctx.params.get('CAPITAL_CAP', CAPITAL_CAP)
     cap_sz = int((cash * cap_pct) / price) if price > 0 else 0
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
-    rets = df["Close"].pct_change().dropna().values if df is not None and not df.empty else np.array([0.0])
+    rets = df["close"].pct_change().dropna().values if df is not None and not df.empty else np.array([0.0])
     kelly_sz = fractional_kelly_size(ctx, cash, price, atr, win_prob)
     vol_sz = vol_target_position_size(cash, price, rets, target_vol=0.02)
     dollar_cap = ctx.max_position_dollars / price if price > 0 else kelly_sz
@@ -2269,7 +2269,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     if df_ind.empty:
         logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
         return
-    entry_price = df_ind["Close"].iloc[-1]
+    entry_price = get_latest_close(df_ind)
     ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "", confidence=0.5)
 
     now_pac = datetime.now(PACIFIC)
@@ -2294,7 +2294,7 @@ def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
     if qty <= 0:
         return
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
-    exit_price = raw["Close"].iloc[-1] if raw is not None and not raw.empty else 0.0
+    exit_price = get_latest_close(raw) if raw is not None else 1.0
     send_exit_order(ctx, symbol, qty, exit_price, "manual_exit")
     ctx.trade_logger.log_exit(symbol, exit_price)
     on_trade_exit_rebalance(ctx)
@@ -2462,7 +2462,7 @@ def trade_logic(
 
     # Exit: bearish reversal for longs
     if final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
-        price = feat_df["Close"].iloc[-1]
+        price = get_latest_close(feat_df)
         logger.info(
             f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
         )
@@ -2475,7 +2475,7 @@ def trade_logic(
 
     # Exit: bullish reversal for shorts
     if final_score > 0 and current_qty < 0 and abs(conf) >= CONF_THRESHOLD:
-        price = feat_df["Close"].iloc[-1]
+        price = get_latest_close(feat_df)
         logger.info(
             f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
         )
@@ -2488,7 +2488,7 @@ def trade_logic(
 
     # Entry: bullish
     if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
-        current_price = feat_df["Close"].iloc[-1]
+        current_price = get_latest_close(feat_df)
         target_weight = ctx.portfolio_weights.get(symbol, 0.0)
         raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
 
@@ -2535,7 +2535,7 @@ def trade_logic(
 
     # Entry: bearish short
     if final_score < 0 and conf >= BUY_THRESHOLD and current_qty == 0:
-        current_price = feat_df["Close"].iloc[-1]
+        current_price = get_latest_close(feat_df)
         atr = feat_df["atr"].iloc[-1]
         qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
 
@@ -2593,7 +2593,7 @@ def trade_logic(
 
     # If holding, check for stops/take/trailing
     if current_qty != 0:
-        price = feat_df["Close"].iloc[-1]
+        price = get_latest_close(feat_df)
         atr   = feat_df["atr"].iloc[-1]
         should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
         if should_exit_flag and exit_qty > 0:
@@ -2631,10 +2631,16 @@ def get_latest_close(df: pd.DataFrame) -> float:
     """Return last close price or a $1.00 fallback for missing/zero data."""
     if df is None or df.empty:
         return 1.0
-    close = df["Close"].iloc[-1]
-    if pd.isna(close) or close == 0:
+    # Use lowercase column if available, else fallback to title case
+    if "close" in df.columns:
+        last_close = df["close"].iloc[-1]
+    elif "Close" in df.columns:
+        last_close = df["Close"].iloc[-1]
+    else:
+        last_close = 1.0
+    if last_close == 0 or pd.isna(last_close):
         return 1.0
-    return float(close)
+    return float(last_close)
 
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
@@ -2662,7 +2668,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     for sym, w in current.items():
         target_dollar = w * total_value
         raw = ctx.data_fetcher.get_minute_df(ctx, sym)
-        price = raw["Close"].iloc[-1] if raw is not None and not raw.empty else 0.0
+        price = get_latest_close(raw) if raw is not None else 1.0
         if price <= 0:
             continue
         target_shares = int(target_dollar / price)
@@ -2681,11 +2687,11 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
     from statsmodels.tsa.stattools import coint
     df1 = ctx.data_fetcher.get_daily_df(ctx, sym1)
     df2 = ctx.data_fetcher.get_daily_df(ctx, sym2)
-    if not hasattr(df1, "loc") or "Close" not in df1.columns:
-        raise ValueError(f"pair_trade_signal: df1 for {sym1} is invalid or missing 'Close'")
-    if not hasattr(df2, "loc") or "Close" not in df2.columns:
-        raise ValueError(f"pair_trade_signal: df2 for {sym2} is invalid or missing 'Close'")
-    df  = pd.concat([df1["Close"], df2["Close"]], axis=1).dropna()
+    if not hasattr(df1, "loc") or "close" not in df1.columns:
+        raise ValueError(f"pair_trade_signal: df1 for {sym1} is invalid or missing 'close'")
+    if not hasattr(df2, "loc") or "close" not in df2.columns:
+        raise ValueError(f"pair_trade_signal: df2 for {sym2} is invalid or missing 'close'")
+    df  = pd.concat([df1["close"], df2["close"]], axis=1).dropna()
     t_stat, p_value, _ = coint(df.iloc[:, 0], df.iloc[:, 1])
     if p_value < 0.05:
         beta = np.polyfit(df.iloc[:, 1], df.iloc[:, 0], 1)[0]
@@ -2936,13 +2942,13 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").set_index("Date")
 
-    df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
-    df["rsi"]  = ta.rsi(df["Close"], length=14)
-    df["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+    df["vwap"] = ta.vwap(df["High"], df["Low"], df["close"], df["Volume"])
+    df["rsi"]  = ta.rsi(df["close"], length=14)
+    df["atr"]  = ta.atr(df["High"], df["Low"], df["close"], length=14)
 
     # ── New advanced indicators ───────────────────────────────────────────
     try:
-        kc = ta.kc(df["High"], df["Low"], df["Close"], length=20)
+        kc = ta.kc(df["High"], df["Low"], df["close"], length=20)
         df["kc_lower"] = kc.iloc[:, 0]
         df["kc_mid"]   = kc.iloc[:, 1]
         df["kc_upper"] = kc.iloc[:, 2]
@@ -2951,13 +2957,13 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["kc_mid"]   = np.nan
         df["kc_upper"] = np.nan
 
-    df["atr_band_upper"] = df["Close"] + 1.5 * df["atr"]
-    df["atr_band_lower"] = df["Close"] - 1.5 * df["atr"]
+    df["atr_band_upper"] = df["close"] + 1.5 * df["atr"]
+    df["atr_band_lower"] = df["close"] - 1.5 * df["atr"]
     df["avg_vol_20"]      = df["Volume"].rolling(20).mean()
     df["dow"]             = df.index.dayofweek
 
     try:
-        macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
+        macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
         if macd is None or not isinstance(macd, pd.DataFrame):
             raise ValueError("MACD returned None")
         df["macd"]  = macd["MACD_12_26_9"]
@@ -2968,7 +2974,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     # Additional indicators for richer ML features
     try:
-        bb = ta.bbands(df["Close"], length=20)
+        bb = ta.bbands(df["close"], length=20)
         df["bb_upper"]   = bb["BBU_20_2.0"]
         df["bb_lower"]   = bb["BBL_20_2.0"]
         df["bb_percent"] = bb["BBP_20_2.0"]
@@ -2978,7 +2984,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["bb_percent"] = np.nan
 
     try:
-        adx = ta.adx(df["High"], df["Low"], df["Close"], length=14)
+        adx = ta.adx(df["High"], df["Low"], df["close"], length=14)
         df["adx"] = adx["ADX_14"]
         df["dmp"] = adx["DMP_14"]
         df["dmn"] = adx["DMN_14"]
@@ -2988,30 +2994,30 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["dmn"] = np.nan
 
     try:
-        df["cci"] = ta.cci(df["High"], df["Low"], df["Close"], length=20)
+        df["cci"] = ta.cci(df["High"], df["Low"], df["close"], length=20)
     except Exception:
         df["cci"] = np.nan
 
     # Ensure numeric dtype before computing MFI
-    df[["High", "Low", "Close", "Volume"]] = df[["High", "Low", "Close", "Volume"]].astype(float)
+    df[["High", "Low", "close", "Volume"]] = df[["High", "Low", "close", "Volume"]].astype(float)
     try:
-        df["mfi"] = ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=14)
+        df["mfi"] = ta.mfi(df["High"], df["Low"], df["close"], df["Volume"], length=14)
     except Exception as e:
         logger.warning(f"prepare_indicators: failed to compute MFI: {e}")
         df["mfi"] = None
 
     try:
-        df["tema"] = ta.tema(df["Close"], length=10)
+        df["tema"] = ta.tema(df["close"], length=10)
     except Exception:
         df["tema"] = np.nan
 
     try:
-        df["willr"] = ta.willr(df["High"], df["Low"], df["Close"], length=14)
+        df["willr"] = ta.willr(df["High"], df["Low"], df["close"], length=14)
     except Exception:
         df["willr"] = np.nan
 
     try:
-        psar = ta.psar(df["High"], df["Low"], df["Close"])
+        psar = ta.psar(df["High"], df["Low"], df["close"])
         df["psar_long"]  = psar["PSARl_0.02_0.2"]
         df["psar_short"] = psar["PSARs_0.02_0.2"]
     except Exception:
@@ -3019,7 +3025,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["psar_short"] = np.nan
 
     try:
-        ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
+        ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["close"])
         conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
         base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
         df["ichimoku_conv"] = conv.iloc[:, 0] if hasattr(conv, "iloc") else conv
@@ -3029,27 +3035,27 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ichimoku_base"] = np.nan
 
     try:
-        st = ta.stochrsi(df["Close"])
+        st = ta.stochrsi(df["close"])
         df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
     except Exception:
         df["stochrsi"] = np.nan
 
     # --- Multi-timeframe fusion ---
     try:
-        df["ret_5m"] = df["Close"].pct_change(5)
-        df["ret_1h"] = df["Close"].pct_change(60)
-        df["ret_d"] = df["Close"].pct_change(390)
-        df["ret_w"] = df["Close"].pct_change(1950)
+        df["ret_5m"] = df["close"].pct_change(5)
+        df["ret_1h"] = df["close"].pct_change(60)
+        df["ret_d"] = df["close"].pct_change(390)
+        df["ret_w"] = df["close"].pct_change(1950)
         df["vol_norm"] = df["Volume"].rolling(60).mean() / df["Volume"].rolling(5).mean()
         df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
-        df["vol_5m"]  = df["Close"].pct_change().rolling(5).std()
-        df["vol_1h"]  = df["Close"].pct_change().rolling(60).std()
-        df["vol_d"]   = df["Close"].pct_change().rolling(390).std()
-        df["vol_w"]   = df["Close"].pct_change().rolling(1950).std()
+        df["vol_5m"]  = df["close"].pct_change().rolling(5).std()
+        df["vol_1h"]  = df["close"].pct_change().rolling(60).std()
+        df["vol_d"]   = df["close"].pct_change().rolling(390).std()
+        df["vol_w"]   = df["close"].pct_change().rolling(1950).std()
         df["vol_ratio"] = df["vol_5m"] / df["vol_1h"]
         df["mom_agg"] = df["ret_5m"] + df["ret_1h"] + df["ret_d"]
-        df["lag_close_1"] = df["Close"].shift(1)
-        df["lag_close_3"] = df["Close"].shift(3)
+        df["lag_close_1"] = df["close"].shift(1)
+        df["lag_close_3"] = df["close"].shift(3)
     except Exception:
         df["ret_5m"] = df["ret_1h"] = df["ret_d"] = df["ret_w"] = np.nan
         df["vol_norm"] = df["5m_vs_1h"] = np.nan
@@ -3061,8 +3067,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     required = ["vwap", "rsi", "atr", "macd", "macds", "ichimoku_conv", "ichimoku_base", "stochrsi"]
     if freq == "daily":
-        df["sma_50"]  = ta.sma(df["Close"], length=50)
-        df["sma_200"] = ta.sma(df["Close"], length=200)
+        df["sma_50"]  = ta.sma(df["close"], length=50)
+        df["sma_200"] = ta.sma(df["close"], length=200)
         required += ["sma_50", "sma_200"]
         df.dropna(subset=required, how="any", inplace=True)
     else:  # intraday
@@ -3081,18 +3087,18 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     feat = pd.DataFrame(index=df.index)
-    feat["atr"]  = ta.atr(df["High"], df["Low"], df["Close"], length=14)
-    feat["rsi"]  = ta.rsi(df["Close"], length=14)
-    feat["macd"] = ta.macd(df["Close"], fast=12, slow=26, signal=9)["MACD_12_26_9"]
-    feat["vol"]  = df["Close"].pct_change().rolling(14).std()
+    feat["atr"]  = ta.atr(df["High"], df["Low"], df["close"], length=14)
+    feat["rsi"]  = ta.rsi(df["close"], length=14)
+    feat["macd"] = ta.macd(df["close"], fast=12, slow=26, signal=9)["MACD_12_26_9"]
+    feat["vol"]  = df["close"].pct_change().rolling(14).std()
     return feat.dropna()
 
 
 def detect_regime(df: pd.DataFrame) -> str:
     """Simple SMA-based market regime detection."""
-    if df is None or df.empty or "Close" not in df:
+    if df is None or df.empty or "close" not in df:
         return "chop"
-    close = df["Close"].astype(float)
+    close = df["close"].astype(float)
     sma50 = close.rolling(50).mean()
     sma200 = close.rolling(200).mean()
     if sma50.iloc[-1] > sma200.iloc[-1]:
@@ -3129,7 +3135,7 @@ else:
         "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
     })
     feats = _compute_regime_features(bars)
-    labels = (bars["Close"] > bars["Close"].rolling(200).mean()).loc[feats.index].astype(int).rename("label")
+    labels = (bars["close"] > bars["close"].rolling(200).mean()).loc[feats.index].astype(int).rename("label")
     training = feats.join(labels, how="inner").dropna()
     if len(training) >= 50:
         X = training[["atr", "rsi", "macd", "vol"]]
@@ -3151,7 +3157,7 @@ def _market_breadth(ctx: BotContext) -> float:
         if df is None or len(df) < 2:
             continue
         total += 1
-        if df['Close'].iloc[-1] > df['Close'].iloc[-2]:
+        if df['close'].iloc[-1] > df['close'].iloc[-2]:
             up += 1
     return up / total if total else 0.5
 
@@ -3159,11 +3165,11 @@ def detect_regime_state(ctx: BotContext) -> str:
     df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
     if df is None or len(df) < 200:
         return "sideways"
-    atr14 = ta.atr(df["High"], df["Low"], df["Close"], length=14).iloc[-1]
-    atr50 = ta.atr(df["High"], df["Low"], df["Close"], length=50).iloc[-1]
+    atr14 = ta.atr(df["High"], df["Low"], df["close"], length=14).iloc[-1]
+    atr50 = ta.atr(df["High"], df["Low"], df["close"], length=50).iloc[-1]
     high_vol = atr50 > 0 and atr14 / atr50 > 1.5
-    sma50 = df["Close"].rolling(50).mean().iloc[-1]
-    sma200 = df["Close"].rolling(200).mean().iloc[-1]
+    sma50 = df["close"].rolling(50).mean().iloc[-1]
+    sma200 = df["close"].rolling(200).mean().iloc[-1]
     trend = sma50 - sma200
     breadth = _market_breadth(ctx)
     if high_vol:
@@ -3193,7 +3199,7 @@ def screen_universe(
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
         if df is None or len(df) < ATR_LENGTH:
             continue
-        series = ta.atr(df["High"], df["Low"], df["Close"], length=ATR_LENGTH)
+        series = ta.atr(df["High"], df["Low"], df["close"], length=ATR_LENGTH)
         atr_val = series.iloc[-1] if not series.empty else np.nan
         if not pd.isna(atr_val):
             atrs[sym] = float(atr_val)
@@ -3249,7 +3255,7 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
         if df is None or len(df) < 90:
             continue
-        rts = df["Close"].pct_change().tail(90).reset_index(drop=True)
+        rts = df["close"].pct_change().tail(90).reset_index(drop=True)
         returns_df[sym] = rts
     returns_df = returns_df.dropna(axis=1, how="any")
     if returns_df.shape[1] < 2:
