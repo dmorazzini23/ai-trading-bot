@@ -1661,7 +1661,8 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
         return 0.0
     avg_vol = df["Volume"].tail(30).mean()
     try:
-        quote = ctx.data_client.get_stock_latest_quote(symbol)
+        quote_data = ctx.data_client.get_stock_latest_quote([symbol])  # Updated for alpaca-py 0.16+
+        quote = quote_data[symbol]
         spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
     except Exception:
         spread = 0.0
@@ -1846,7 +1847,8 @@ def vwap_pegged_submit(
             break
         vwap_price = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
         try:
-            quote = ctx.data_client.get_stock_latest_quote(symbol)
+            quote_data = ctx.data_client.get_stock_latest_quote([symbol])  # Updated for alpaca-py 0.16+
+            quote = quote_data[symbol]
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
         except Exception:
             spread = 0.0
@@ -1959,7 +1961,8 @@ def pov_submit(
         interval = cfg.sleep_interval
 
         try:
-            quote = ctx.data_client.get_stock_latest_quote(symbol)
+            quote_data = ctx.data_client.get_stock_latest_quote([symbol])  # Updated for alpaca-py 0.16+
+            quote = quote_data[symbol]
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
         except Exception:
             spread = 0.0
@@ -3218,7 +3221,8 @@ def run_multi_strategy(ctx: BotContext) -> None:
     acct = ctx.api.get_account()
     cash = float(getattr(acct, "cash", 0))
     for sig in final:
-        quote = ctx.data_client.get_stock_latest_quote(sig.symbol)
+        quote_data = ctx.data_client.get_stock_latest_quote([sig.symbol])  # Updated for alpaca-py 0.16+
+        quote = quote_data[sig.symbol]
         price = float(getattr(quote, "ask_price", 0) or 0)
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty > 0:
@@ -3355,7 +3359,8 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     per_symbol = cash / n
     for sym in symbols:
         try:
-            quote = ctx.data_client.get_stock_latest_quote(sym)
+            quote_data = ctx.data_client.get_stock_latest_quote([sym])  # Updated for alpaca-py 0.16+
+            quote = quote_data[sym]
             price = float(getattr(quote, "ask_price", 0) or 0)
             if price <= 0:
                 logger.warning("INITIAL_REBALANCE_INVALID_PRICE", extra={"symbol": sym, "price": price})

@@ -36,7 +36,8 @@ class ExecutionEngine:
 
     def _latest_quote(self, symbol: str) -> Tuple[float, float]:
         try:
-            q = self.ctx.data_client.get_stock_latest_quote(symbol)
+            quote_data = self.ctx.data_client.get_stock_latest_quote([symbol])  # Updated for alpaca-py 0.16+
+            q = quote_data[symbol]
             bid = float(getattr(q, 'bid_price', 0) or 0)
             ask = float(getattr(q, 'ask_price', 0) or 0)
             return bid, ask
