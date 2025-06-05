@@ -26,7 +26,7 @@ import finnhub
 
 load_dotenv()
 
-# ✅ FORCE IEX feed compatibility
+# Alpaca historical data client
 _DATA_CLIENT = StockHistoricalDataClient(
     api_key=ALPACA_API_KEY,
     secret_key=ALPACA_SECRET_KEY,
@@ -59,7 +59,7 @@ def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe
         timeframe=tf,
     )
     try:
-        bars = _DATA_CLIENT.get_stock_bars(req, feed="iex").df  # ✅ Explicit IEX feed usage
+        bars = _DATA_CLIENT.get_stock_bars(req).df
     except Exception as e:
         logger.warning(f"[get_historical_data] API error for {symbol}: {e}")
         raise
