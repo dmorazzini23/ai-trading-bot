@@ -8,7 +8,7 @@ from typing import Optional, Sequence
 
 import pandas as pd
 import yfinance as yf
-from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.historical.stock import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.common.exceptions import APIError
