@@ -56,11 +56,20 @@ from sklearn.decomposition import PCA
 import pickle
 import joblib
 
-from dotenv import load_dotenv
 import sentry_sdk
 
+from config import (
+    APCA_API_KEY_ID,
+    APCA_API_SECRET_KEY,
+    ALPACA_BASE_URL,
+    NEWS_API_KEY as CONFIG_NEWS_API_KEY,
+    FINNHUB_API_KEY,
+    SENTRY_DSN,
+    BOT_MODE as BOT_MODE_ENV,
+    RUN_HEALTHCHECK,
+)
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(dotenv_path=os.path.join(BASE_DIR, '.env'))
 
 from prometheus_client import start_http_server, Counter, Gauge, Histogram
 import finnhub
@@ -115,7 +124,7 @@ from ratelimit import limits, sleep_and_retry
 import warnings
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
-RUN_HEALTH = os.getenv("RUN_HEALTHCHECK", "1") == "1"
+RUN_HEALTH = RUN_HEALTHCHECK == "1"
 
 # Logging: set root logger to INFO, send to both stderr and a log file
 default_log_path = "/var/log/ai-trading-bot.log"
@@ -140,9 +149,9 @@ logging.getLogger("requests").setLevel(logging.WARNING)
 
 # Sentry
 sentry_sdk.init(
-    dsn=os.getenv("SENTRY_DSN"),
+    dsn=SENTRY_DSN,
     traces_sample_rate=0.1,
-    environment=os.getenv("BOT_MODE", "live"),
+    environment=BOT_MODE_ENV,
 )
 
 # Suppress specific pandas_ta warnings
@@ -255,14 +264,13 @@ class BotMode:
     def get_config(self) -> dict[str, float]:
         return self.params
 
-BOT_MODE     = os.getenv("BOT_MODE", "balanced")
-mode_obj     = BotMode(BOT_MODE)
+mode_obj     = BotMode(BOT_MODE_ENV)
 logger.info(f"Trading mode is set to '{mode_obj.mode}'")
 params       = mode_obj.get_config()
 params.update(load_hyperparams())
 
 # Other constants
-NEWS_API_KEY            = os.getenv("NEWS_API_KEY")
+NEWS_API_KEY            = CONFIG_NEWS_API_KEY
 TRAILING_FACTOR         = params.get("TRAILING_FACTOR", 1.2)
 SECONDARY_TRAIL_FACTOR  = 1.0
 TAKE_PROFIT_FACTOR      = params.get("TAKE_PROFIT_FACTOR", 1.8)
@@ -345,7 +353,7 @@ class DataFetchErrorLegacy(Exception):
 # ─── B. CLIENTS & SINGLETONS ─────────────────────────────────────────────────
 
 def ensure_alpaca_credentials() -> None:
-    if not os.getenv("ALPACA_API_KEY") or not os.getenv("ALPACA_SECRET_KEY"):
+    if not APCA_API_KEY_ID or not APCA_API_SECRET_KEY:
         raise RuntimeError("Missing Alpaca API credentials; please check .env")
 ensure_alpaca_credentials()
 
@@ -1152,9 +1160,9 @@ trade_logger   = TradeLogger()
 risk_engine    = RiskEngine()
 allocator      = StrategyAllocator()
 strategies     = [MomentumStrategy(), MeanReversionStrategy()]
-API_KEY = os.getenv("ALPACA_API_KEY")
-SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-BASE_URL = os.getenv("ALPACA_BASE_URL")
+API_KEY = APCA_API_KEY_ID
+SECRET_KEY = APCA_API_SECRET_KEY
+BASE_URL = ALPACA_BASE_URL
 trading_client = TradingClient(API_KEY, SECRET_KEY, base_url=BASE_URL)
 data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY, base_url=BASE_URL)
 ctx = BotContext(

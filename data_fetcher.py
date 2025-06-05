@@ -1,5 +1,3 @@
-import os
-from dotenv import load_dotenv
 import random
 import time as pytime
 from dataclasses import dataclass
@@ -7,8 +5,7 @@ from datetime import datetime, date, timedelta, timezone
 from collections import deque
 from typing import Optional, Sequence
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-load_dotenv(dotenv_path=os.path.join(BASE_DIR, '.env'))
+from config import FINNHUB_API_KEY
 
 import pandas as pd
 import yfinance as yf
@@ -21,7 +18,7 @@ import finnhub
 class DataFetchError(Exception):
     pass
 
-finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
+finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 
 class FinnhubFetcher:
     def __init__(self, calls_per_minute: int = 60) -> None:
