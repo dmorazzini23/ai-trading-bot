@@ -49,6 +49,7 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
+from alpaca.common import URL
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import Ridge, BayesianRidge
@@ -1163,8 +1164,8 @@ strategies     = [MomentumStrategy(), MeanReversionStrategy()]
 API_KEY = APCA_API_KEY_ID
 SECRET_KEY = APCA_API_SECRET_KEY
 BASE_URL = ALPACA_BASE_URL
-trading_client = TradingClient(API_KEY, SECRET_KEY, base_url=BASE_URL)
-data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY, base_url=BASE_URL)
+trading_client = TradingClient(API_KEY, SECRET_KEY, base_url=URL(BASE_URL))
+data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY, base_url=URL(BASE_URL))
 ctx = BotContext(
     api=trading_client,
     data_client=data_client,
