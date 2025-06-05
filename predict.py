@@ -2,7 +2,29 @@ import argparse
 import os
 import pandas as pd
 import joblib
+import requests
+from dotenv import load_dotenv
 from retrain import prepare_indicators
+
+load_dotenv()
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+
+def fetch_sentiment(symbol: str) -> float:
+    if not NEWS_API_KEY:
+        return 0.0
+    try:
+        url = (
+            f"https://newsapi.org/v2/everything?q={symbol}&pageSize=5&sortBy=publishedAt&apiKey={NEWS_API_KEY}"
+        )
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        arts = resp.json().get("articles", [])
+        if not arts:
+            return 0.0
+        score = sum(1 for a in arts if "positive" in (a.get("title") or "").lower()) / len(arts)
+        return float(score)
+    except Exception:
+        return 0.0
 
 
 def detect_regime(df: pd.DataFrame) -> str:
@@ -34,6 +56,8 @@ def load_model(regime: str):
 def predict(csv_path: str, freq: str = "intraday"):
     df = pd.read_csv(csv_path)
     feat = prepare_indicators(df, freq=freq)
+    symbol = os.path.splitext(os.path.basename(csv_path))[0]
+    feat["sentiment"] = fetch_sentiment(symbol)
     regime = detect_regime(df)
     if isinstance(regime, pd.Series):
         regime = regime.iloc[-1]
