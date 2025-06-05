@@ -13,7 +13,7 @@ from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.models import Order
 from alpaca.common.exceptions import APIError
-from alpaca.data.requests import QuoteRequest
+from alpaca.data.models import Quote
 
 class ExecutionEngine:
     """Institutional-grade execution engine for dynamic order routing."""
@@ -37,9 +37,7 @@ class ExecutionEngine:
 
     def _latest_quote(self, symbol: str) -> Tuple[float, float]:
         try:
-            req = QuoteRequest(symbol_or_symbols=symbol)
-            quote_data = self.ctx.data_client.get_stock_latest_quote(req)
-            q = quote_data[symbol]
+            q: Quote = self.ctx.data_client.get_stock_latest_quote(symbol)
             bid = float(getattr(q, 'bid_price', 0) or 0)
             ask = float(getattr(q, 'ask_price', 0) or 0)
             return bid, ask
