@@ -563,38 +563,13 @@ class DataFetcher:
                 "close": "Close",
                 "volume": "Volume",
             })
+        except APIError as e:
+            print(f">> DEBUG: ALPACA DAILY CATCH ERROR for {symbol}: {repr(e)}")
+            print(f">> DEBUG: NO DAILY DATA FOR {symbol} DUE TO SUBSCRIPTION")
+            df = pd.DataFrame()
         except Exception as e:
-            print(f">> DEBUG: ALPACA ERROR for {symbol}:", repr(e))
-            print(">>> Falling back to Finnhub for daily data")
-            fh_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
-            from_ts = int(start_ts.timestamp())
-            to_ts = int(end_ts.timestamp())
-            try:
-                resp = fh_client.stock_candles(symbol, resolution="D", _from=from_ts, to=to_ts)
-                if resp.get("s") == "ok":
-                    df_fh = pd.DataFrame({
-                        "open": resp["o"],
-                        "high": resp["h"],
-                        "low": resp["l"],
-                        "close": resp["c"],
-                        "volume": resp["v"],
-                        "timestamp": resp["t"],
-                    })
-                    df_fh["timestamp"] = pd.to_datetime(df_fh["timestamp"], unit="s", utc=True)
-                    df_fh.set_index("timestamp", inplace=True)
-                    df_fh.index = df_fh.index.tz_convert(None)
-                    df = df_fh.rename(columns={
-                        "open": "Open",
-                        "high": "High",
-                        "low": "Low",
-                        "close": "Close",
-                        "volume": "Volume",
-                    })
-                else:
-                    raise RuntimeError(f"Finnhub returned status {resp.get('s')} for {symbol}")
-            except Exception as fe:
-                print(f">> DEBUG: FINNHUB ERROR for {symbol}:", repr(fe))
-                df = pd.DataFrame()
+            print(f">> DEBUG: ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
+            df = pd.DataFrame()
 
         with cache_lock:
             self._daily_cache[symbol] = df
@@ -638,38 +613,43 @@ class DataFetcher:
                 "close": "Close",
                 "volume": "Volume",
             })[["Open", "High", "Low", "Close", "Volume"]]
-        except Exception as e:
-            print(f">> DEBUG: ALPACA MINUTE FETCH ERROR for {symbol}:", repr(e))
-            print(">>> Falling back to Finnhub for minute data")
-            fh_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
-            from_ts = int(start_minute.timestamp())
-            to_ts = int(last_closed_minute.timestamp())
-            try:
-                resp = fh_client.stock_candles(symbol, resolution="1", _from=from_ts, to=to_ts)
-                if resp.get("s") == "ok":
-                    df_fh = pd.DataFrame({
-                        "open": resp["o"],
-                        "high": resp["h"],
-                        "low": resp["l"],
-                        "close": resp["c"],
-                        "volume": resp["v"],
-                        "timestamp": resp["t"],
-                    })
-                    df_fh["timestamp"] = pd.to_datetime(df_fh["timestamp"], unit="s", utc=True)
-                    df_fh.set_index("timestamp", inplace=True)
-                    df_fh.index = df_fh.index.tz_convert(None)
-                    df = df_fh.rename(columns={
+        except APIError as e:
+            err_msg = str(e)
+            if "subscription does not permit querying recent sip data" in err_msg.lower():
+                print(f">> DEBUG: ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
+                print(f">> DEBUG: ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
+                try:
+                    df_iex = client.get_bars(
+                        symbol,
+                        timeframe="1Min",
+                        start=start_minute.isoformat(),
+                        end=last_closed_minute.isoformat(),
+                        adjustment="raw",
+                        feed="iex",
+                    ).df
+                    if isinstance(df_iex.columns, pd.MultiIndex):
+                        df_iex = df_iex.xs(symbol, level=0, axis=1)
+                    else:
+                        df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
+                    df_iex.index = pd.to_datetime(df_iex.index, utc=True)
+                    df_iex.index = df_iex.index.tz_convert(None)
+                    df = df_iex.rename(columns={
                         "open": "Open",
                         "high": "High",
                         "low": "Low",
                         "close": "Close",
                         "volume": "Volume",
-                    })
-                else:
-                    raise RuntimeError(f"Finnhub returned status {resp.get('s')} for {symbol}")
-            except Exception as fe:
-                print(f">> DEBUG: FINNHUB MINUTE FETCH ERROR for {symbol}:", repr(fe))
+                    })[["Open", "High", "Low", "Close", "Volume"]]
+                except Exception as iex_err:
+                    print(f">> DEBUG: ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
+                    print(f">> DEBUG: NO ALTERNATIVE MINUTE DATA FOR {symbol}")
+                    df = pd.DataFrame()
+            else:
+                print(f">> DEBUG: ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
                 df = pd.DataFrame()
+        except Exception as e:
+            print(f">> DEBUG: ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
+            df = pd.DataFrame()
 
         with cache_lock:
             self._minute_cache[symbol] = df
@@ -3242,19 +3222,27 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
             else:
                 try:
                     symbols = load_tickers(TICKERS_FILE)
-                    logger.info(
-                        f"▶ Starting meta-learner retraining for {today_str} on {len(symbols)} tickers..."
-                    )
-                    force_train = not os.path.exists(MODEL_PATH)
-                    success = retrain_meta_learner(ctx, symbols, force=force_train)
-                    if success:
-                        try:
-                            with open(marker, "w") as f:
-                                f.write(today_str)
-                        except Exception as e:
-                            logger.warning(f"Failed to write retrain marker file: {e}")
+                    print(f">> DEBUG: RETRAINING START for {today_str} on {len(symbols)} tickers...")
+                    valid_symbols = []
+                    for symbol in symbols:
+                        df_min = ctx.data_fetcher.get_minute_df(ctx, symbol, lookback_minutes=30)
+                        if df_min is None or df_min.empty:
+                            print(f">> DEBUG: {symbol} returned no minute data; skipping symbol.")
+                            continue
+                        valid_symbols.append(symbol)
+                    if not valid_symbols:
+                        print(">> WARNING: No symbols returned valid minute data; skipping retraining entirely.")
                     else:
-                        logger.warning("Retraining failed; continuing with existing model.")
+                        force_train = not os.path.exists(MODEL_PATH)
+                        success = retrain_meta_learner(ctx, valid_symbols, force=force_train)
+                        if success:
+                            try:
+                                with open(marker, "w") as f:
+                                    f.write(today_str)
+                            except Exception as e:
+                                logger.warning(f"Failed to write retrain marker file: {e}")
+                        else:
+                            logger.warning("Retraining failed; continuing with existing model.")
                 finally:
                     meta_lock.release()
 
