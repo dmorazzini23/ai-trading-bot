@@ -27,8 +27,9 @@ import finnhub
 load_dotenv()
 
 _DATA_CLIENT = StockHistoricalDataClient(
-    ALPACA_API_KEY,
-    ALPACA_SECRET_KEY,
+    api_key=ALPACA_API_KEY,
+    secret_key=ALPACA_SECRET_KEY,
+    feed="iex",
 )
 
 class DataFetchError(Exception):
