@@ -3,11 +3,15 @@ import os
 import pandas as pd
 import joblib
 import requests
+import os
+import json
 from dotenv import load_dotenv
 from retrain import prepare_indicators
 
 load_dotenv()
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+INACTIVE_FEATURES_FILE = os.path.join(BASE_DIR, "inactive_features.json")
 
 def fetch_sentiment(symbol: str) -> float:
     if not NEWS_API_KEY:
@@ -56,6 +60,12 @@ def load_model(regime: str):
 def predict(csv_path: str, freq: str = "intraday"):
     df = pd.read_csv(csv_path)
     feat = prepare_indicators(df, freq=freq)
+    if os.path.exists(INACTIVE_FEATURES_FILE):
+        try:
+            inactive = set(json.load(open(INACTIVE_FEATURES_FILE)))
+            feat = feat.drop(columns=[c for c in inactive if c in feat.columns], errors='ignore')
+        except Exception:
+            pass
     symbol = os.path.splitext(os.path.basename(csv_path))[0]
     feat["sentiment"] = fetch_sentiment(symbol)
     regime = detect_regime(df)

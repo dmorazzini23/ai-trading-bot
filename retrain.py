@@ -1,4 +1,5 @@
 import os
+import json
 import joblib
 import pandas as pd
 import numpy as np
@@ -15,6 +16,11 @@ import pandas_ta as ta
 
 load_dotenv()
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+def abspath(p: str) -> str:
+    return os.path.join(BASE_DIR, p)
+FEATURE_PERF_FILE = abspath("feature_perf.csv")
+INACTIVE_FEATURES_FILE = abspath("inactive_features.json")
 
 def fetch_sentiment(symbol: str) -> float:
     """Lightweight sentiment score using NewsAPI headlines."""
@@ -367,6 +373,15 @@ def retrain_meta_learner(
             )
             print("  ✔ Top feature importances:")
             print(importances.sort_values(ascending=False).head(10))
+            imp_df = pd.DataFrame({
+                'timestamp': [datetime.utcnow().isoformat()] * len(importances),
+                'feature': importances.index,
+                'importance': importances.values
+            })
+            if os.path.exists(FEATURE_PERF_FILE):
+                imp_df.to_csv(FEATURE_PERF_FILE, mode='a', header=False, index=False)
+            else:
+                imp_df.to_csv(FEATURE_PERF_FILE, index=False)
         except Exception:
             pass
 
@@ -374,5 +389,25 @@ def retrain_meta_learner(
         joblib.dump(clf, path)
         print(f"  ✔ Saved {regime} model to {path}")
         trained_any = True
+
+    try:
+        if os.path.exists(FEATURE_PERF_FILE):
+            perf = pd.read_csv(FEATURE_PERF_FILE)
+            recent = perf.groupby('feature').tail(5)
+            means = recent.groupby('feature')['importance'].mean()
+            threshold = means.quantile(0.1)
+            inactive = means[means < threshold].index.tolist()
+            if os.path.exists(INACTIVE_FEATURES_FILE):
+                with open(INACTIVE_FEATURES_FILE) as f:
+                    current = set(json.load(f))
+            else:
+                current = set()
+            current.update(inactive)
+            revived = means[means >= threshold].index.tolist()
+            current.difference_update(revived)
+            with open(INACTIVE_FEATURES_FILE, 'w') as f:
+                json.dump(sorted(current), f)
+    except Exception:
+        pass
 
     return trained_any
