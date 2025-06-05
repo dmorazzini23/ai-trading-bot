@@ -46,7 +46,7 @@ from alpaca.trading.requests import (
 from alpaca.trading.models import Order
 from alpaca.common.exceptions import APIError
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest, QuoteRequest
+from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame
 
 from sklearn.ensemble import RandomForestClassifier
@@ -1152,11 +1152,13 @@ strategies     = [MomentumStrategy(), MeanReversionStrategy()]
 trading_client = TradingClient(
     os.getenv("APCA_API_KEY_ID"),
     os.getenv("APCA_API_SECRET_KEY"),
-    paper="paper" in os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    paper="paper" in os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"),
+    base_url=os.getenv("ALPACA_BASE_URL")
 )
 data_client = StockHistoricalDataClient(
     os.getenv("APCA_API_KEY_ID"),
-    os.getenv("APCA_API_SECRET_KEY")
+    os.getenv("APCA_API_SECRET_KEY"),
+    base_url=os.getenv("APCA_DATA_BASE_URL", "https://data.alpaca.markets")
 )
 ctx = BotContext(
     api=trading_client,
@@ -1671,8 +1673,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
         return 0.0
     avg_vol = df["Volume"].tail(30).mean()
     try:
-        # Modernized using QuoteRequest for alpaca-py >=0.16
-        req = QuoteRequest(symbols=[symbol])
+        req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
         quote_data = ctx.data_client.get_stock_latest_quote(req)
         quote = quote_data[symbol]
         spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
@@ -1859,8 +1860,7 @@ def vwap_pegged_submit(
             break
         vwap_price = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"]).iloc[-1]
         try:
-            # Modernized using QuoteRequest for alpaca-py >=0.16
-            req = QuoteRequest(symbols=[symbol])
+            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quote_data = ctx.data_client.get_stock_latest_quote(req)
             quote = quote_data[symbol]
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
@@ -1975,8 +1975,7 @@ def pov_submit(
         interval = cfg.sleep_interval
 
         try:
-            # Modernized using QuoteRequest for alpaca-py >=0.16
-            req = QuoteRequest(symbols=[symbol])
+            req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quote_data = ctx.data_client.get_stock_latest_quote(req)
             quote = quote_data[symbol]
             spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
@@ -3241,8 +3240,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
     acct = ctx.api.get_account()
     cash = float(getattr(acct, "cash", 0))
     for sig in final:
-        # Modernized using QuoteRequest for alpaca-py >=0.16
-        req = QuoteRequest(symbols=[sig.symbol])
+        req = StockLatestQuoteRequest(symbol_or_symbols=[sig.symbol])
         quote_data = ctx.data_client.get_stock_latest_quote(req)
         quote = quote_data[sig.symbol]
         price = float(getattr(quote, "ask_price", 0) or 0)
@@ -3385,8 +3383,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     per_symbol = cash / n
     for sym in symbols:
         try:
-            # Modernized using QuoteRequest for alpaca-py >=0.16
-            req = QuoteRequest(symbols=[sym])
+            req = StockLatestQuoteRequest(symbol_or_symbols=[sym])
             quote_data = ctx.data_client.get_stock_latest_quote(req)
             quote = quote_data[sym]
             price = float(getattr(quote, "ask_price", 0) or 0)
