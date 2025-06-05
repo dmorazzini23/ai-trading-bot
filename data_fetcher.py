@@ -58,6 +58,7 @@ def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe
         start=datetime.combine(start_date, datetime.min.time(), timezone.utc),
         end=datetime.combine(end_date, datetime.max.time(), timezone.utc),
         timeframe=tf,
+        feed='iex'
     )
     try:
         bars = _DATA_CLIENT.get_stock_bars(req).df
