@@ -1163,8 +1163,8 @@ strategies     = [MomentumStrategy(), MeanReversionStrategy()]
 API_KEY = APCA_API_KEY_ID
 SECRET_KEY = APCA_API_SECRET_KEY
 BASE_URL = ALPACA_BASE_URL
-trading_client = TradingClient(API_KEY, SECRET_KEY, base_url=ALPACA_BASE_URL)
-data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY, base_url=ALPACA_BASE_URL)
+trading_client = TradingClient(API_KEY, SECRET_KEY, paper=True)
+data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY, paper=True)
 ctx = BotContext(
     api=trading_client,
     data_client=data_client,
