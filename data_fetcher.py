@@ -10,6 +10,7 @@ from config import (
     FINNHUB_API_KEY,
     ALPACA_API_KEY,
     ALPACA_SECRET_KEY,
+    ALPACA_BASE_URL,
 )
 import logging
 
@@ -25,10 +26,10 @@ import finnhub
 
 load_dotenv()
 
-# ✅ FIXED — v1.x compatible client creation (no base_url or feed)
+# ✅ FORCE IEX feed compatibility
 _DATA_CLIENT = StockHistoricalDataClient(
-    ALPACA_API_KEY,
-    ALPACA_SECRET_KEY
+    api_key=ALPACA_API_KEY,
+    secret_key=ALPACA_SECRET_KEY,
 )
 
 class DataFetchError(Exception):
@@ -40,6 +41,7 @@ class DataFetchError(Exception):
     retry=retry_if_exception_type(Exception),
 )
 def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe: str) -> pd.DataFrame:
+    """Fetch historical bars for a symbol from Alpaca using IEX feed."""
     tf_map = {
         '1Min': TimeFrame.Minute,
         '5Min': TimeFrame(5, TimeFrameUnit.Minute),
@@ -57,7 +59,7 @@ def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe
         timeframe=tf,
     )
     try:
-        bars = _DATA_CLIENT.get_stock_bars(req).df
+        bars = _DATA_CLIENT.get_stock_bars(req, feed="iex").df  # ✅ Explicit IEX feed usage
     except Exception as e:
         logger.warning(f"[get_historical_data] API error for {symbol}: {e}")
         raise
@@ -77,7 +79,7 @@ def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 
 class FinnhubFetcher:
-    def __init__(self, calls_per_minute: int = 60) -> None:
+    def __init__(self, calls_per_minute: int = 30) -> None:
         self.max_calls = calls_per_minute
         self._timestamps = deque()
         self.client = finnhub_client
@@ -149,17 +151,12 @@ class DataFetcher:
             end = date.today()
             start = end - timedelta(days=365)
             df = get_historical_data(symbol, start, end, '1Day')
-        except APIError as e:
-            logger.warning(f"[get_daily_df] Alpaca fetch failed for {symbol}: {e}")
-            try:
-                df = fh.fetch(symbol, period="1mo", interval="1d")
-            except Exception:
-                df = None
         except Exception as e:
-            logger.warning(f"[get_daily_df] Alpaca fetch failed for {symbol}: {e}")
+            logger.warning(f"[get_daily_df] Primary Alpaca fetch failed for {symbol}: {e}")
             try:
-                df = fh.fetch(symbol, period="1mo", interval="1d")
-            except Exception:
+                df = fh.fetch(symbol, period="12mo", interval="1d")
+            except Exception as fallback_e:
+                logger.warning(f"[get_daily_df] Finnhub fallback failed for {symbol}: {fallback_e}")
                 df = None
         self._daily_cache[symbol] = df
         return df
@@ -177,12 +174,13 @@ class DataFetcher:
             if df is not None and not df.empty:
                 df = df[["Open", "High", "Low", "Close", "Volume"]]
         except Exception as e:
-            logger.warning(f"[get_minute_df] Primary fetch failed for {symbol}: {e}")
+            logger.warning(f"[get_minute_df] Primary Alpaca fetch failed for {symbol}: {e}")
             try:
                 df = fh.fetch(symbol, period="5d", interval="1m")
-            except Exception as fe:
-                logger.warning(f"[get_minute_df] Finnhub fallback failed for {symbol}: {fe}")
+            except Exception as fallback_e:
+                logger.warning(f"[get_minute_df] Finnhub fallback failed for {symbol}: {fallback_e}")
                 df = None
         self._minute_cache[symbol] = df
         self._minute_timestamps[symbol] = now
         return df
+
