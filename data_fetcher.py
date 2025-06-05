@@ -51,7 +51,7 @@ def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe
         raise ValueError(f"Unsupported timeframe: {timeframe}")
 
     req = StockBarsRequest(
-        symbol_or_symbols=[symbol],
+        symbol_or_symbols=symbol,
         start=datetime.combine(start_date, datetime.min.time(), timezone.utc),
         end=datetime.combine(end_date, datetime.max.time(), timezone.utc),
         timeframe=tf,
