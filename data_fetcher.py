@@ -176,17 +176,12 @@ class DataFetcher:
             df = get_historical_data(symbol, start, end, '1Min')
             if df is not None and not df.empty:
                 df = df[["Open", "High", "Low", "Close", "Volume"]]
-        except APIError as e:
-            logger.warning(f"[get_minute_df] Alpaca fetch failed for {symbol}: {e}")
-            try:
-                df = fh.fetch(symbol, period="5d", interval="1m")
-            except Exception:
-                df = None
         except Exception as e:
-            logger.warning(f"[get_minute_df] Alpaca fetch failed for {symbol}: {e}")
+            logger.warning(f"[get_minute_df] Primary fetch failed for {symbol}: {e}")
             try:
                 df = fh.fetch(symbol, period="5d", interval="1m")
-            except Exception:
+            except Exception as fe:
+                logger.warning(f"[get_minute_df] Finnhub fallback failed for {symbol}: {fe}")
                 df = None
         self._minute_cache[symbol] = df
         self._minute_timestamps[symbol] = now

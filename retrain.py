@@ -239,7 +239,7 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.Dat
     for sym in symbols:
         bars = None
         try:
-            bars = ctx.data_fetcher.get_historical_minute(ctx, sym, start_dt, end_dt)
+            bars = ctx.data_fetcher.get_minute_df(ctx, sym)
         except Exception as e:
             bars = None
             print(f"[gather_minute_data] ✗ {sym} → exception {start_dt}→{end_dt}: {e}")
