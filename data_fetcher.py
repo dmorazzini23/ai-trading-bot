@@ -59,7 +59,7 @@ def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe
         timeframe=tf,
     )
     try:
-        bars = _DATA_CLIENT.get_stock_bars(req).df
+        bars = _DATA_CLIENT.get_stock_bars(req, adjustment=None).df
     except Exception as e:
         logger.warning(f"[get_historical_data] API error for {symbol}: {e}")
         raise
