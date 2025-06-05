@@ -77,7 +77,14 @@ from finnhub import FinnhubAPIException
 import pybreaker
 from trade_execution import ExecutionEngine
 from capital_scaling import CapitalScalingEngine
-from data_fetcher import DataFetcher, fh, finnhub_client, DataFetchError
+from data_fetcher import fh, finnhub_client, DataFetchError
+
+# Load environment variables early
+load_dotenv()
+print(">> DEBUG: APCA_API_KEY_ID =", os.getenv("APCA_API_KEY_ID"))
+print(">> DEBUG: APCA_API_SECRET_KEY =", os.getenv("APCA_API_SECRET_KEY"))
+print(">> DEBUG: FINNHUB_API_KEY =", os.getenv("FINNHUB_API_KEY"))
+from dotenv import load_dotenv
 from strategy_allocator import StrategyAllocator
 from risk_engine import RiskEngine
 from strategies import MomentumStrategy, MeanReversionStrategy, TradeSignal
@@ -514,47 +521,17 @@ class FinnhubFetcherLegacy:
 _last_fh_prefetch_date: Optional[date] = None
 
 @dataclass
-class DataFetcherLegacy:
+class DataFetcher:
     def __post_init__(self):
         self._daily_cache: dict[str, Optional[pd.DataFrame]] = {}
         self._minute_cache: dict[str, Optional[pd.DataFrame]] = {}
         self._minute_timestamps: dict[str, datetime] = {}
 
     def get_daily_df(self, ctx: 'BotContext', symbol: str) -> Optional[pd.DataFrame]:
-        # Regime-based fetch symbols
-        with cache_lock:
-            if symbol in self._daily_cache and symbol in REGIME_SYMBOLS:
-                daily_cache_hit.inc()
-                return self._daily_cache[symbol]
-
-        if symbol in REGIME_SYMBOLS:
-            today_date = date.today()
-            start = datetime.combine(today_date - timedelta(days=365), dt_time.min, timezone.utc)
-            end = datetime.combine(today_date, dt_time.max, timezone.utc)
-            if isinstance(start, tuple):
-                start, _tmp = start
-            if isinstance(end, tuple):
-                _, end = end
-            bars_req = StockBarsRequest(
-                symbol_or_symbols=[symbol],
-                timeframe=TimeFrame.Day,
-                start=start,
-                end=end,
-                limit=1000
-            )
-            bars = ctx.data_client.get_stock_bars(bars_req).df
-            if isinstance(bars.columns, pd.MultiIndex):
-                bars = bars.xs(symbol, level=0, axis=1)
-            else:
-                bars = bars.drop(columns=["symbol"], errors="ignore")
-            bars.index = pd.to_datetime(bars.index).tz_localize(None)
-            df = bars.rename(columns={
-                "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
-            })
-            with cache_lock:
-                self._daily_cache[symbol] = df
-            daily_cache_hit.inc()
-            return df
+        symbol = symbol.upper()
+        now_utc = datetime.now(timezone.utc)
+        end_ts = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_ts = end_ts - timedelta(days=5)
 
         with cache_lock:
             if symbol in self._daily_cache:
@@ -562,21 +539,70 @@ class DataFetcherLegacy:
                 return self._daily_cache[symbol]
 
         try:
-            df = fh.fetch(symbol, period="1mo", interval="1d")
-            if df is None or df.empty:
-                raise DataFetchErrorLegacy(f"No daily data for {symbol}")
-            daily_cache_hit.inc()
+            bars_req = StockBarsRequest(
+                symbol_or_symbols=[symbol],
+                timeframe=TimeFrame.Day,
+                start=start_ts,
+                end=end_ts,
+                limit=1000
+            )
+            bars = ctx.data_client.get_stock_bars(bars_req).df
+            if isinstance(bars.columns, pd.MultiIndex):
+                bars = bars.xs(symbol, level=0, axis=1)
+            else:
+                bars = bars.drop(columns=["symbol"], errors="ignore")
+            bars.index = pd.to_datetime(bars.index, utc=True)
+            bars.index = bars.index.tz_convert(None)
+            df = bars.rename(columns={
+                "open": "Open",
+                "high": "High",
+                "low": "Low",
+                "close": "Close",
+                "volume": "Volume",
+            })
         except Exception as e:
-            logger.warning(
-                f"[DataFetcher] daily fetch failed for {symbol} {start}-{end}: {e}")
-            daily_cache_miss.inc()
-            
+            print(f">> DEBUG: ALPACA ERROR for {symbol}:", repr(e))
+            print(">>> Falling back to Finnhub for daily data")
+            fh_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
+            from_ts = int(start_ts.timestamp())
+            to_ts = int(end_ts.timestamp())
+            try:
+                resp = fh_client.stock_candles(symbol, resolution="D", _from=from_ts, to=to_ts)
+                if resp.get("s") == "ok":
+                    df = pd.DataFrame({
+                        "open": resp["o"],
+                        "high": resp["h"],
+                        "low": resp["l"],
+                        "close": resp["c"],
+                        "volume": resp["v"],
+                        "timestamp": resp["t"],
+                    })
+                    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+                    df.set_index("timestamp", inplace=True)
+                    df.index = df.index.tz_convert(None)
+                    df = df.rename(columns={
+                        "open": "Open",
+                        "high": "High",
+                        "low": "Low",
+                        "close": "Close",
+                        "volume": "Volume",
+                    })
+                else:
+                    raise RuntimeError(f"Finnhub returned status {resp.get('s')} for {symbol}")
+            except Exception as fe:
+                print(f">> DEBUG: FINNHUB ERROR for {symbol}:", repr(fe))
+                df = pd.DataFrame()
+
         with cache_lock:
             self._daily_cache[symbol] = df
         return df
 
-    def get_minute_df(self, ctx: 'BotContext', symbol: str) -> Optional[pd.DataFrame]:
+    def get_minute_df(self, ctx: 'BotContext', symbol: str, lookback_minutes: int = 30) -> Optional[pd.DataFrame]:
+        symbol = symbol.upper()
         now_utc = datetime.now(timezone.utc)
+        last_closed_minute = now_utc.replace(second=0, microsecond=0) - timedelta(minutes=1)
+        start_minute = last_closed_minute - timedelta(minutes=lookback_minutes)
+
         with cache_lock:
             last_ts = self._minute_timestamps.get(symbol)
             if last_ts and last_ts > now_utc - timedelta(seconds=ttl_seconds()):
@@ -584,44 +610,60 @@ class DataFetcherLegacy:
                 return self._minute_cache[symbol]
 
         minute_cache_miss.inc()
-        df: Optional[pd.DataFrame] = None
-
-        # 1) Alpaca IEX fetch
         try:
             bars_req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=TimeFrame.Minute,
-                limit=390 * 5
+                start=start_minute,
+                end=last_closed_minute,
+                limit=lookback_minutes + 1,
             )
             bars = ctx.data_client.get_stock_bars(bars_req).df
             if isinstance(bars.columns, pd.MultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
-            if not bars.empty:
-                bars = bars.rename(columns={
-                    "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
-                })
-                bars.index = pd.to_datetime(bars.index).tz_localize(None)
-                df = bars[["Open", "High", "Low", "Close", "Volume"]]
-                logger.debug(f"[DataFetcher] minute bars via Alpaca IEX for {symbol}")
-            else:
-                # If empty, fall back to Finnhub 1-min
-                df_fh = fh.fetch(symbol, period="5d", interval="1m")
-                if df_fh is not None and not df_fh.empty:
-                    df = df_fh.rename(columns=lambda c: c if c in ["Open", "High", "Low", "Close", "Volume"] else c)
-                    logger.warning(f"[DataFetcher] fallback to Finnhub 1-min for {symbol}")
+            bars.index = pd.to_datetime(bars.index, utc=True)
+            bars.index = bars.index.tz_convert(None)
+            df = bars.rename(columns={
+                "open": "Open",
+                "high": "High",
+                "low": "Low",
+                "close": "Close",
+                "volume": "Volume",
+            })[["Open", "High", "Low", "Close", "Volume"]]
         except Exception as e:
-            logger.warning(f"[DataFetcher] Alpaca minute fetch failed for {symbol}: {e}")
+            print(f">> DEBUG: ALPACA MINUTE FETCH ERROR for {symbol}:", repr(e))
+            print(">>> Falling back to Finnhub for minute data")
+            fh_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
+            from_ts = int(start_minute.timestamp())
+            to_ts = int(last_closed_minute.timestamp())
             try:
-                df_fh = fh.fetch(symbol, period="5d", interval="1m")
-                if df_fh is not None and not df_fh.empty:
-                    df = df_fh.rename(columns=lambda c: c if c in ["Open", "High", "Low", "Close", "Volume"] else c)
-                    logger.warning(f"[DataFetcher] fallback to Finnhub 1-min for {symbol}")
+                resp = fh_client.stock_candles(symbol, resolution="1", _from=from_ts, to=to_ts)
+                if resp.get("s") == "ok":
+                    df = pd.DataFrame({
+                        "open": resp["o"],
+                        "high": resp["h"],
+                        "low": resp["l"],
+                        "close": resp["c"],
+                        "volume": resp["v"],
+                        "timestamp": resp["t"],
+                    })
+                    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s", utc=True)
+                    df.set_index("timestamp", inplace=True)
+                    df.index = df.index.tz_convert(None)
+                    df = df.rename(columns={
+                        "open": "Open",
+                        "high": "High",
+                        "low": "Low",
+                        "close": "Close",
+                        "volume": "Volume",
+                    })
                 else:
-                    df = None
-            except Exception:
-                df = None
+                    raise RuntimeError(f"Finnhub returned status {resp.get('s')} for {symbol}")
+            except Exception as fe:
+                print(f">> DEBUG: FINNHUB MINUTE FETCH ERROR for {symbol}:", repr(fe))
+                df = pd.DataFrame()
 
         with cache_lock:
             self._minute_cache[symbol] = df
@@ -3379,6 +3421,10 @@ def run_all_trades_worker(model):
 def schedule_run_all_trades(model):
     Thread(target=run_all_trades_worker, args=(model,), daemon=True).start()
 
+def schedule_run_all_trades_with_delay(model):
+    time.sleep(30)
+    schedule_run_all_trades(model)
+
 def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     now_pac = datetime.now(PACIFIC)
     if not in_trading_hours(now_pac):
@@ -3487,7 +3533,7 @@ if __name__ == "__main__":
             logger.warning(f"[REBALANCE] aborted due to error: {e}")
 
         # Recurring jobs
-        schedule.every(1).minutes.do(lambda: schedule_run_all_trades(model))
+        schedule.every(1).minutes.do(lambda: schedule_run_all_trades_with_delay(model))
         schedule.every(1).minutes.do(lambda: Thread(target=validate_open_orders, args=(ctx,), daemon=True).start())
         schedule.every(6).hours.do(lambda: Thread(target=update_signal_weights, daemon=True).start())
         schedule.every(30).minutes.do(lambda: Thread(target=update_bot_mode, daemon=True).start())
