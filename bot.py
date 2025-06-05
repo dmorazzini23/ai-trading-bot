@@ -53,6 +53,10 @@ from finnhub import FinnhubAPIException
 import pybreaker
 from trade_execution import ExecutionEngine
 from capital_scaling import CapitalScalingEngine
+from data_fetcher import DataFetcher, fh, finnhub_client, DataFetchError
+from strategy_allocator import StrategyAllocator
+from risk_engine import RiskEngine
+from strategies import MomentumStrategy, MeanReversionStrategy, TradeSignal
 
 def cancel_all_open_orders(ctx: "BotContext") -> None:
     """
@@ -320,11 +324,10 @@ _SECTOR_CACHE: Dict[str, str] = {}
 week_start_equity: Optional[Tuple[date, float]] = None
 
 # ─── TYPED EXCEPTION ─────────────────────────────────────────────────────────
-class DataFetchError(Exception):
+class DataFetchErrorLegacy(Exception):
     pass
 
 # ─── B. CLIENTS & SINGLETONS ─────────────────────────────────────────────────
-finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
 
 def ensure_alpaca_credentials() -> None:
     if not os.getenv("APCA_API_KEY_ID") or not os.getenv("APCA_API_SECRET_KEY"):
@@ -345,6 +348,15 @@ def chunked(iterable: Sequence, n: int):
 def ttl_seconds() -> int:
     """Configurable TTL for minute-bar cache (default 60s)."""
     return int(os.getenv("MINUTE_CACHE_TTL", "60"))
+
+def asset_class_for(symbol: str) -> str:
+    """Very small heuristic to map tickers to asset classes."""
+    sym = symbol.upper()
+    if sym.endswith("USD") and len(sym) == 6:
+        return "forex"
+    if sym.startswith("BTC") or sym.startswith("ETH"):
+        return "crypto"
+    return "equity"
 
 def compute_spy_vol_stats(ctx: 'BotContext') -> None:
     """Compute daily ATR mean/std on SPY for the past 1 year."""
@@ -404,7 +416,7 @@ def is_high_vol_regime() -> bool:
     return is_high_vol_thr_spy()
 
 # ─── D. DATA FETCHERS ─────────────────────────────────────────────────────────
-class FinnhubFetcher:
+class FinnhubFetcherLegacy:
     def __init__(self, calls_per_minute: int = FINNHUB_RPM):
         self.max_calls = calls_per_minute
         self._timestamps = deque()
@@ -469,13 +481,12 @@ class FinnhubFetcher:
             return frames[0]
         return pd.concat(frames, axis=1, keys=syms, names=['Symbol','Field'])
 
-# Instantiate FinnhubFetcher singleton
-fh = FinnhubFetcher()
+
 
 _last_fh_prefetch_date: Optional[date] = None
 
 @dataclass
-class DataFetcher:
+class DataFetcherLegacy:
     def __post_init__(self):
         self._daily_cache: dict[str, Optional[pd.DataFrame]] = {}
         self._minute_cache: dict[str, Optional[pd.DataFrame]] = {}
@@ -517,7 +528,7 @@ class DataFetcher:
         try:
             df = fh.fetch(symbol, period="1mo", interval="1d")
             if df is None or df.empty:
-                raise DataFetchError(f"No daily data for {symbol}")
+                raise DataFetchErrorLegacy(f"No daily data for {symbol}")
             daily_cache_hit.inc()
         except Exception as e:
             logger.warning(
@@ -1077,10 +1088,18 @@ class BotContext:
     take_profit_targets: dict[str, float] = field(default_factory=dict)
     stop_targets: dict[str, float] = field(default_factory=dict)
     portfolio_weights: dict[str, float] = field(default_factory=dict)
+    tickers: List[str] = field(default_factory=list)
+    risk_engine: RiskEngine | None = None
+    allocator: StrategyAllocator | None = None
+    strategies: List[Any] = field(default_factory=list)
+    execution_engine: ExecutionEngine | None = None
 
 data_fetcher   = DataFetcher()
 signal_manager = SignalManager()
 trade_logger   = TradeLogger()
+risk_engine    = RiskEngine()
+allocator      = StrategyAllocator()
+strategies     = [MomentumStrategy(), MeanReversionStrategy()]
 ctx = BotContext(
     api=REST(
         os.getenv("APCA_API_KEY_ID"),
@@ -1109,6 +1128,9 @@ ctx = BotContext(
     take_profit_targets={},
     stop_targets={},
     portfolio_weights={},
+    risk_engine=risk_engine,
+    allocator=allocator,
+    strategies=strategies,
 )
 exec_engine = ExecutionEngine(
     ctx,
@@ -1116,6 +1138,7 @@ exec_engine = ExecutionEngine(
     slippage_count=slippage_count,
     orders_total=orders_total,
 )
+ctx.execution_engine = exec_engine
 
 try:
     equity_init = float(ctx.api.get_account().equity)
@@ -3118,6 +3141,26 @@ def start_healthcheck() -> None:
     except OSError as e:
         logger.warning(f"Healthcheck port {port} in use: {e}. Skipping health-endpoint.")
 
+def run_multi_strategy(ctx: BotContext) -> None:
+    """Execute all modular strategies via allocator and risk engine."""
+    signals_by_strategy: Dict[str, List[TradeSignal]] = {}
+    for strat in ctx.strategies:
+        try:
+            sigs = strat.generate(ctx)
+            signals_by_strategy[strat.name] = sigs
+        except Exception as e:
+            logger.warning(f"Strategy {strat.name} failed: {e}")
+    final = ctx.allocator.allocate(signals_by_strategy)
+    acct = ctx.api.get_account()
+    cash = float(getattr(acct, "cash", 0))
+    for sig in final:
+        quote = ctx.api.get_latest_quote(sig.symbol)
+        price = float(getattr(quote, "ask_price", 0) or 0)
+        qty = ctx.risk_engine.position_size(sig, cash, price)
+        if qty > 0:
+            ctx.execution_engine.execute_order(sig.symbol, qty, sig.side, asset_class=sig.asset_class)
+            ctx.risk_engine.register_fill(sig)
+
 def run_all_trades_worker(model):
     global _last_fh_prefetch_date, _running
     if _running:
@@ -3200,6 +3243,7 @@ def run_all_trades_worker(model):
         # Screen universe & compute weights
         tickers = screen_universe(candidates, ctx)
         logger.info("CANDIDATES_SCREENED", extra={"tickers": tickers})
+        ctx.tickers = tickers
         ctx.portfolio_weights = compute_portfolio_weights(tickers)
         if not tickers:
             logger.error("NO_TICKERS_TO_TRADE")
@@ -3224,6 +3268,7 @@ def run_all_trades_worker(model):
             except Exception:
                 pass
 
+        run_multi_strategy(ctx)
         logger.info("RUN_ALL_TRADES_COMPLETE")
     finally:
         # Always reset running flag
