@@ -22,7 +22,14 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca_trade_api.rest import APIError
-from tenacity import retry, stop_after_attempt, wait_exponential, wait_random, retry_if_exception_type
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random,
+    retry_if_exception_type,
+    wait_fixed,
+)
 import finnhub
 
 load_dotenv()
@@ -36,11 +43,7 @@ _DATA_CLIENT = StockHistoricalDataClient(
 class DataFetchError(Exception):
     pass
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 0.5),
-    retry=retry_if_exception_type(Exception),
-)
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
 def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe: str) -> pd.DataFrame:
     """Fetch historical bars for a symbol from Alpaca using IEX feed."""
     tf_map = {
@@ -69,7 +72,15 @@ def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe
         bars = bars.xs(symbol, level=0, axis=1)
     else:
         bars = bars.drop(columns=["symbol"], errors="ignore")
-    bars.index = pd.to_datetime(bars.index).tz_localize(None)
+    try:
+        if isinstance(bars.index[0], tuple):
+            raw_ts = [ts[0] for ts in bars.index]
+            bars.index = pd.to_datetime(raw_ts)
+        else:
+            bars.index = pd.to_datetime(bars.index)
+        bars.index = bars.index.tz_localize(None)
+    except Exception:
+        return pd.DataFrame()
     return bars.rename(columns={
         'open': 'Open',
         'high': 'High',
