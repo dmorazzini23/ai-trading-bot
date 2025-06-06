@@ -196,7 +196,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
             df["close"],
             df["volume"],
             length=MFI_PERIOD,
-        ).astype(float)
+        )
+        mfi_vals = mfi_vals.astype(float)
         df["mfi_14"] = mfi_vals
         df.dropna(subset=["mfi_14"], inplace=True)
     except Exception:
