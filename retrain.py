@@ -474,6 +474,17 @@ def retrain_meta_learner(
         logger.warning("No minute bars returned; skipping retrain")
         return False
 
+    filtered: dict[str, pd.DataFrame] = {}
+    for sym, df in raw_store.items():
+        if df is None or df.empty:
+            logger.warning(f"[retrain_meta_learner] {sym} empty minute df; skipping")
+            continue
+        filtered[sym] = df
+    raw_store = filtered
+    if not raw_store:
+        logger.warning("All minute DataFrames empty; skipping retrain")
+        return False
+
     df_all = build_feature_label_df(raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct)
     if df_all.empty:
         print("  ⚠️ No usable rows after building (Δ, threshold) → skipping retrain.")
