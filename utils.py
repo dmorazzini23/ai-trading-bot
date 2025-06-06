@@ -1,7 +1,6 @@
 """Utility functions for common operations across the bot."""
 
 import pandas as pd
-import datetime
 from datetime import datetime, time
 
 
@@ -22,7 +21,7 @@ def get_latest_close(df: pd.DataFrame) -> float:
 
 def is_market_open() -> bool:
     """Return True if current local time is between 9:30 and 16:00."""
-    now = datetime.datetime.now().time()
-    start = time(9, 30)
-    end = time(16, 0)
-    return start <= now <= end
+    now = datetime.now().time()
+    open_time = time(hour=9, minute=30)
+    close_time = time(hour=16, minute=0)
+    return open_time <= now <= close_time

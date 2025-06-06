@@ -3446,7 +3446,11 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                         print(">> WARNING: No symbols returned valid minute data; skipping retraining entirely.")
                     else:
                         force_train = not os.path.exists(MODEL_PATH)
-                        success = retrain_meta_learner(ctx, valid_symbols, force=force_train)
+                        if is_market_open():
+                            success = retrain_meta_learner(ctx, valid_symbols, force=force_train)
+                        else:
+                            logger.info("[retrain_meta_learner] Outside market hours; skipping")
+                            success = False
                         if success:
                             try:
                                 with open(marker, "w") as f:
