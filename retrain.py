@@ -101,7 +101,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     for col in ["high", "low", "close", "volume"]:
         if col not in df.columns:
-            raise KeyError(f"Missing column '{col}' in prepare_indicators")
+            raise KeyError(f"Column '{col}' not found in DataFrame in prepare_indicators")
         df[col] = df[col].astype(float)
     if "open" in df.columns:
         df["open"] = df["open"].astype(float)
@@ -271,8 +271,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     if freq == "daily":
         df["sma_50"] = np.nan
         df["sma_200"] = np.nan
-        df["sma_50"] = ta.sma(df["close"], length=50)
-        df["sma_200"] = ta.sma(df["close"], length=200)
+        df["sma_50"] = ta.sma(df["close"], length=50).astype(float)
+        df["sma_200"] = ta.sma(df["close"], length=200).astype(float)
         required += ["sma_50", "sma_200"]
         df.dropna(subset=required, how="any", inplace=True)
     else:  # intraday
@@ -328,14 +328,18 @@ def build_feature_label_df(
                 print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {Δ_minutes + 1}")
                 continue
 
-            for col in ["High", "LOW", "Close", "Volume"]:
-                if col in raw.columns:
+            for col in list(raw.columns):
+                if col.lower() in ["high", "low", "close", "volume"]:
                     raw = raw.rename(columns={col: col.lower()})
-            if "close" not in raw.columns:
-                print(f">> DEBUG: Skipping {sym}: 'close' column not found")
+            if ("close" not in raw.columns or "high" not in raw.columns or
+                    "low" not in raw.columns or "volume" not in raw.columns):
+                print(f"[build_feature_label_df] – skipping {sym}, missing price/volume columns")
                 continue
 
-            closes = raw["close"].astype(float).values
+            for col in ["high", "low", "close", "volume"]:
+                raw[col] = raw[col].astype(float)
+
+            closes = raw["close"].values
 
             feat = prepare_indicators(raw, freq="intraday")
             if feat.empty:
@@ -363,7 +367,7 @@ def build_feature_label_df(
                 row["label"] = label
                 rows.append(row)
         except KeyError as e:
-            print(f">> DEBUG: Skipping {sym}: missing {e}")
+            print(f"[build_feature_label_df] – skipping {sym}, KeyError: {e}")
             continue
 
     df_all = pd.DataFrame(rows).dropna()
