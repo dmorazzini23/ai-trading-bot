@@ -7,12 +7,11 @@ from typing import Optional, Sequence
 import warnings
 
 from dotenv import load_dotenv
-from config import (
-    FINNHUB_API_KEY,
-    ALPACA_API_KEY,
-    ALPACA_SECRET_KEY,
-    ALPACA_BASE_URL,
-)
+import config
+FINNHUB_API_KEY = config.FINNHUB_API_KEY
+ALPACA_API_KEY = config.ALPACA_API_KEY
+ALPACA_SECRET_KEY = config.ALPACA_SECRET_KEY
+ALPACA_BASE_URL = config.ALPACA_BASE_URL
 
 MINUTES_REQUIRED = 31
 HISTORICAL_START = "2025-06-01"
@@ -133,11 +132,9 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
         df = df.drop(columns=["symbol"], errors="ignore")
 
     if isinstance(df.index, pd.MultiIndex):
-        df = df.reset_index(level=0, drop=True)
-    elif len(df.index) and isinstance(df.index[0], tuple):
-        df.index = [idx[-1] for idx in df.index]
-
-    df.index = pd.to_datetime(df.index).tz_localize(None)
+        df.index = df.index.get_level_values(0)
+    df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
+    df.index = pd.to_datetime(df.index, errors="coerce").tz_localize(None)
     df["timestamp"] = df.index
 
     rename_map = {}
@@ -202,11 +199,9 @@ def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
         df = df.drop(columns=["symbol"], errors="ignore")
 
     if isinstance(df.index, pd.MultiIndex):
-        df = df.reset_index(level=0, drop=True)
-    elif len(df.index) and isinstance(df.index[0], tuple):
-        df.index = [idx[-1] for idx in df.index]
-
-    df.index = pd.to_datetime(df.index).tz_localize(None)
+        df.index = df.index.get_level_values(0)
+    df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
+    df.index = pd.to_datetime(df.index, errors="coerce").tz_localize(None)
     df["timestamp"] = df.index
 
     rename_map = {}
