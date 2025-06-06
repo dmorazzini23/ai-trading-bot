@@ -50,7 +50,6 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.models import Order
 from alpaca_trade_api.rest import REST, APIError
-from alpaca_trade_api.exceptions import APIConnectionError
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
@@ -1979,7 +1978,7 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
             else:
                 logger.error(f"Order for {req.symbol} status={status}: {getattr(order, 'reject_reason', '')}")
             return order
-        except (APIConnectionError, APIError, TimeoutError) as e:
+        except Exception as e:
             time.sleep(1)
             if attempt == 1:
                 logger.warning(f"submit_order failed for {req.symbol}: {e}")
