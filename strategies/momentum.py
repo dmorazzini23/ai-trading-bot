@@ -17,7 +17,7 @@ class MomentumStrategy(Strategy):
             df = ctx.data_fetcher.get_daily_df(ctx, sym)
             if df is None or len(df) <= self.lookback:
                 continue
-            ret = df["Close"].pct_change(self.lookback).iloc[-1]
+            ret = df["close"].pct_change(self.lookback).iloc[-1]
             if pd.isna(ret):
                 continue
             side = "buy" if ret > 0 else "sell"

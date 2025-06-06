@@ -18,11 +18,11 @@ class MeanReversionStrategy(Strategy):
             df = ctx.data_fetcher.get_daily_df(ctx, sym)
             if df is None or len(df) <= self.lookback:
                 continue
-            ma = df["Close"].rolling(self.lookback).mean().iloc[-1]
-            sd = df["Close"].rolling(self.lookback).std().iloc[-1]
+            ma = df["close"].rolling(self.lookback).mean().iloc[-1]
+            sd = df["close"].rolling(self.lookback).std().iloc[-1]
             if pd.isna(ma) or pd.isna(sd) or sd == 0:
                 continue
-            z = (df["Close"].iloc[-1] - ma) / sd
+            z = (df["close"].iloc[-1] - ma) / sd
             if z > self.z:
                 signals.append(TradeSignal(symbol=sym, side="sell", confidence=abs(z), strategy=self.name, asset_class=asset_class_for(sym)))
             elif z < -self.z:

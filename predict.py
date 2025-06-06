@@ -5,6 +5,7 @@ import joblib
 import requests
 import json
 from retrain import prepare_indicators
+from utils import get_latest_close
 
 from config import NEWS_API_KEY
 
@@ -31,9 +32,9 @@ def fetch_sentiment(symbol: str) -> float:
 
 
 def detect_regime(df: pd.DataFrame) -> str:
-    if df is None or df.empty or "Close" not in df:
+    if df is None or df.empty or "close" not in df:
         return "chop"
-    close = df["Close"].astype(float)
+    close = df["close"].astype(float)
     sma50 = close.rolling(50).mean()
     sma200 = close.rolling(200).mean()
     if sma50.iloc[-1] > sma200.iloc[-1]:
