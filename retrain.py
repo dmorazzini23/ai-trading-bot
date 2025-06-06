@@ -6,6 +6,7 @@ import joblib
 import logging
 import pandas as pd
 import numpy as np
+import requests
 from datetime import datetime, date, time, timedelta
 from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit, ParameterSampler, cross_val_score
 from sklearn.pipeline import make_pipeline
@@ -60,9 +61,9 @@ def fetch_sentiment(symbol: str) -> float:
 # (Copy your real implementation from bot.py.)
 def detect_regime(df: pd.DataFrame) -> str:
     """Simple SMA-based regime detection used by bot and predict scripts."""
-    if df is None or df.empty or "Close" not in df:
+    if df is None or df.empty or "close" not in df:
         return "chop"
-    close = df["Close"].astype(float)
+    close = df["close"].astype(float)
     sma50 = close.rolling(50).mean()
     sma200 = close.rolling(200).mean()
     if sma50.iloc[-1] > sma200.iloc[-1]:
@@ -90,13 +91,13 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.sort_values("Date").set_index("Date")
 
     # Calculate basic TA indicators
-    df["vwap"] = ta.vwap(df["High"], df["Low"], df["Close"], df["Volume"])
-    df["rsi"] = ta.rsi(df["Close"], length=14)
-    df["atr"] = ta.atr(df["High"], df["Low"], df["Close"], length=14)
+    df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
+    df["rsi"] = ta.rsi(df["close"], length=14)
+    df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
 
     # ── New advanced indicators ───────────────────────────────────────────
     try:
-        kc = ta.kc(df["High"], df["Low"], df["Close"], length=20)
+        kc = ta.kc(df["high"], df["low"], df["close"], length=20)
         df["kc_lower"] = kc.iloc[:, 0]
         df["kc_mid"]   = kc.iloc[:, 1]
         df["kc_upper"] = kc.iloc[:, 2]
@@ -105,13 +106,13 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["kc_mid"]   = np.nan
         df["kc_upper"] = np.nan
 
-    df["atr_band_upper"] = df["Close"] + 1.5 * df["atr"]
-    df["atr_band_lower"] = df["Close"] - 1.5 * df["atr"]
-    df["avg_vol_20"]      = df["Volume"].rolling(20).mean()
+    df["atr_band_upper"] = df["close"] + 1.5 * df["atr"]
+    df["atr_band_lower"] = df["close"] - 1.5 * df["atr"]
+    df["avg_vol_20"]      = df["volume"].rolling(20).mean()
     df["dow"]             = df.index.dayofweek
 
     try:
-        macd = ta.macd(df["Close"], fast=12, slow=26, signal=9)
+        macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
         df["macd"] = macd["MACD_12_26_9"]
         df["macds"] = macd["MACDs_12_26_9"]
     except Exception:
@@ -120,7 +121,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     # Additional indicators for richer ML features
     try:
-        bb = ta.bbands(df["Close"], length=20)
+        bb = ta.bbands(df["close"], length=20)
         df["bb_upper"]   = bb["BBU_20_2.0"]
         df["bb_lower"]   = bb["BBL_20_2.0"]
         df["bb_percent"] = bb["BBP_20_2.0"]
@@ -130,7 +131,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["bb_percent"] = np.nan
 
     try:
-        adx = ta.adx(df["High"], df["Low"], df["Close"], length=14)
+        adx = ta.adx(df["high"], df["low"], df["close"], length=14)
         df["adx"] = adx["ADX_14"]
         df["dmp"] = adx["DMP_14"]
         df["dmn"] = adx["DMN_14"]
@@ -140,27 +141,27 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["dmn"] = np.nan
 
     try:
-        df["cci"] = ta.cci(df["High"], df["Low"], df["Close"], length=20)
+        df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20)
     except Exception:
         df["cci"] = np.nan
 
     try:
-        df["mfi"] = ta.mfi(df["High"], df["Low"], df["Close"], df["Volume"], length=14)
+        df["mfi"] = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
     except Exception:
         df["mfi"] = np.nan
 
     try:
-        df["tema"] = ta.tema(df["Close"], length=10)
+        df["tema"] = ta.tema(df["close"], length=10)
     except Exception:
         df["tema"] = np.nan
 
     try:
-        df["willr"] = ta.willr(df["High"], df["Low"], df["Close"], length=14)
+        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14)
     except Exception:
         df["willr"] = np.nan
 
     try:
-        psar = ta.psar(df["High"], df["Low"], df["Close"])
+        psar = ta.psar(df["high"], df["low"], df["close"])
         df["psar_long"]  = psar["PSARl_0.02_0.2"]
         df["psar_short"] = psar["PSARs_0.02_0.2"]
     except Exception:
@@ -168,7 +169,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["psar_short"] = np.nan
 
     try:
-        ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["Close"])
+        ich = ta.ichimoku(high=df["high"], low=df["low"], close=df["close"])
         conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
         base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
         df["ichimoku_conv"] = conv.iloc[:, 0] if hasattr(conv, "iloc") else conv
@@ -178,27 +179,27 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ichimoku_base"] = np.nan
 
     try:
-        st = ta.stochrsi(df["Close"])
+        st = ta.stochrsi(df["close"])
         df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
     except Exception:
         df["stochrsi"] = np.nan
 
     # --- Multi-timeframe fusion ---
     try:
-        df["ret_5m"] = df["Close"].pct_change(5)
-        df["ret_1h"] = df["Close"].pct_change(60)
-        df["ret_d"] = df["Close"].pct_change(390)
-        df["ret_w"] = df["Close"].pct_change(1950)
-        df["vol_norm"] = df["Volume"].rolling(60).mean() / df["Volume"].rolling(5).mean()
+        df["ret_5m"] = df["close"].pct_change(5)
+        df["ret_1h"] = df["close"].pct_change(60)
+        df["ret_d"] = df["close"].pct_change(390)
+        df["ret_w"] = df["close"].pct_change(1950)
+        df["vol_norm"] = df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
         df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
-        df["vol_5m"]  = df["Close"].pct_change().rolling(5).std()
-        df["vol_1h"]  = df["Close"].pct_change().rolling(60).std()
-        df["vol_d"]   = df["Close"].pct_change().rolling(390).std()
-        df["vol_w"]   = df["Close"].pct_change().rolling(1950).std()
+        df["vol_5m"]  = df["close"].pct_change().rolling(5).std()
+        df["vol_1h"]  = df["close"].pct_change().rolling(60).std()
+        df["vol_d"]   = df["close"].pct_change().rolling(390).std()
+        df["vol_w"]   = df["close"].pct_change().rolling(1950).std()
         df["vol_ratio"] = df["vol_5m"] / df["vol_1h"]
         df["mom_agg"] = df["ret_5m"] + df["ret_1h"] + df["ret_d"]
-        df["lag_close_1"] = df["Close"].shift(1)
-        df["lag_close_3"] = df["Close"].shift(3)
+        df["lag_close_1"] = df["close"].shift(1)
+        df["lag_close_3"] = df["close"].shift(3)
     except Exception:
         df["ret_5m"] = df["ret_1h"] = df["ret_d"] = df["ret_w"] = np.nan
         df["vol_norm"] = df["5m_vs_1h"] = np.nan
@@ -213,8 +214,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         "ichimoku_conv", "ichimoku_base", "stochrsi"
     ]
     if freq == "daily":
-        df["sma_50"] = ta.sma(df["Close"], length=50)
-        df["sma_200"] = ta.sma(df["Close"], length=200)
+        df["sma_50"] = ta.sma(df["close"], length=50)
+        df["sma_200"] = ta.sma(df["close"], length=200)
         required += ["sma_50", "sma_200"]
         df.dropna(subset=required, how="any", inplace=True)
     else:  # intraday
@@ -284,7 +285,7 @@ def build_feature_label_df(
         else:
             regimes = pd.Series([regime_info] * len(feat))
 
-        closes = raw["Close"].values
+        closes = raw["close"].values
         n = len(feat)
         for i in range(n - Δ_minutes):
             buy_fill = closes[i] * (1 + 0.0005)

@@ -55,17 +55,17 @@ class ExecutionEngine:
 
     def _adv_volume(self, symbol: str) -> Optional[float]:
         df = self.ctx.data_fetcher.get_daily_df(self.ctx, symbol)
-        if df is None or df.empty or 'Volume' not in df.columns:
+        if df is None or df.empty or 'volume' not in df.columns:
             return None
-        return float(df['Volume'].tail(20).mean())
+        return float(df['volume'].tail(20).mean())
 
     def _minute_stats(self, symbol: str) -> Tuple[float, float, float]:
         df = self.ctx.data_fetcher.get_minute_df(self.ctx, symbol)
-        if df is None or df.empty or 'Volume' not in df.columns:
+        if df is None or df.empty or 'volume' not in df.columns:
             return 0.0, 0.0, 0.0
-        vol = float(df['Volume'].iloc[-1])
-        avg1m = float(df['Volume'].tail(5).mean())
-        momentum = float(df['Close'].iloc[-1] - df['Close'].iloc[-5])
+        vol = float(df['volume'].iloc[-1])
+        avg1m = float(df['volume'].tail(5).mean())
+        momentum = float(df['close'].iloc[-1] - df['close'].iloc[-5])
         return vol, avg1m, momentum
 
     def _prepare_order(self, symbol: str, side: str, qty: int) -> Tuple[object, Optional[float]]:
