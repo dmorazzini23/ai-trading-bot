@@ -1,9 +1,6 @@
 import os
 from dotenv import load_dotenv
 load_dotenv()   # ensure .env is loaded before using os.getenv
-print(">> DEBUG: APCA_API_KEY_ID =", os.getenv("APCA_API_KEY_ID"))
-print(">> DEBUG: APCA_API_SECRET_KEY =", os.getenv("APCA_API_SECRET_KEY"))
-print(">> DEBUG: FINNHUB_API_KEY =", os.getenv("FINNHUB_API_KEY"))
 
 import logging
 import logging.handlers
@@ -121,7 +118,7 @@ def get_latest_close(df: pd.DataFrame) -> float:
 
 def compute_time_range(minutes: int = 30) -> tuple[datetime, datetime]:
     """Return start and end timestamps for the last `minutes` minutes."""
-    end = datetime.utcnow()
+    end = datetime.now(timezone.utc)
     start = end - timedelta(minutes=minutes)
     return start, end
 
@@ -2766,7 +2763,7 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
 # ─── M. UTILITIES ─────────────────────────────────────────────────────────────
 def fetch_data(ctx: BotContext, symbols: List[str], period: str, interval: str) -> Optional[pd.DataFrame]:
     frames: List[pd.DataFrame] = []
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if period.endswith("d"):
         delta = timedelta(days=int(period[:-1]))
     elif period.endswith("mo"):
@@ -3421,7 +3418,7 @@ def check_disaster_halt() -> None:
     dd = _current_drawdown()
     if dd >= DISASTER_DD_LIMIT:
         with open(HALT_FLAG_PATH, 'w') as f:
-            f.write("DISASTER " + datetime.utcnow().isoformat())
+            f.write("DISASTER " + datetime.now(timezone.utc).isoformat())
         logger.error('DISASTER_HALT_TRIGGERED', extra={'drawdown': dd})
 
 # At top‐level, define retrain_meta_learner = None so load_or_retrain_daily can reference it safely
@@ -3650,21 +3647,32 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
             total_capital = cash
             weight_per = 1.0 / len(valid_symbols)
 
+            positions = {p.symbol: int(p.qty) for p in ctx.api.get_all_positions()}
+
             for sym in valid_symbols:
                 price = valid_prices[sym]
-                # compute integer share quantity
-                quantity = int((total_capital * weight_per) // price)
-                if quantity < 1:
-                    logger.warning(
-                        f"INITIAL_REBALANCE: Computed <1 share for {sym} at price {price:.2f}, skipping."
-                    )
-                    continue
-                try:
-                    submit_order(ctx, sym, quantity, "buy")
-                    logger.info(f"INITIAL_REBALANCE: Placed order for {sym} @ {quantity} shares.")
-                    ctx.rebalance_buys[sym] = datetime.now(timezone.utc)
-                except Exception as e:
-                    logger.error(f"INITIAL_REBALANCE: Order failed for {sym}: {repr(e)}")
+                target_qty = int((total_capital * weight_per) // price)
+                current_qty = int(positions.get(sym, 0))
+
+                if current_qty < target_qty:
+                    qty_to_buy = target_qty - current_qty
+                    if qty_to_buy < 1:
+                        continue
+                    try:
+                        submit_order(ctx, sym, qty_to_buy, "buy")
+                        logger.info(f"INITIAL_REBALANCE: Bought {qty_to_buy} {sym}")
+                        ctx.rebalance_buys[sym] = datetime.now(timezone.utc)
+                    except Exception as e:
+                        logger.error(f"INITIAL_REBALANCE: Buy failed for {sym}: {repr(e)}")
+                elif current_qty > target_qty:
+                    qty_to_sell = current_qty - target_qty
+                    if qty_to_sell < 1:
+                        continue
+                    try:
+                        submit_order(ctx, sym, qty_to_sell, "sell")
+                        logger.info(f"INITIAL_REBALANCE: Sold {qty_to_sell} {sym}")
+                    except Exception as e:
+                        logger.error(f"INITIAL_REBALANCE: Sell failed for {sym}: {repr(e)}")
 
 if __name__ == "__main__":
     def _handle_term(signum, frame):
