@@ -4,6 +4,7 @@ import time
 import random
 import logging
 import logging.handlers
+import warnings
 from tenacity import retry, stop_after_attempt, wait_exponential, wait_random, retry_if_exception_type
 from datetime import datetime, timezone
 from typing import Optional, Tuple, Any
@@ -13,10 +14,11 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.models import Order
-from alpaca.common.exceptions import APIError
+from alpaca.common.exceptions import APIError, APIConnectionError
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockLatestQuoteRequest
 
+warnings.filterwarnings("ignore", category=FutureWarning)
 class ExecutionEngine:
     """Institutional-grade execution engine for dynamic order routing."""
 
@@ -153,31 +155,63 @@ class ExecutionEngine:
         while remaining > 0:
             order_req, expected_price = self._prepare_order(symbol, side, remaining)
             slice_qty = getattr(order_req, 'qty', remaining)
-            start = time.monotonic()
             try:
-                self.logger.info(
-                    'ORDER_SENT',
-                    extra={
-                        'symbol': symbol,
-                        'side': side,
-                        'qty': slice_qty,
-                        'type': order_req.__class__.__name__
-                    }
-                )
-                order = api.submit_order(order_data=order_req)
-                fill_price = float(getattr(order, 'filled_avg_price', expected_price or 0) or 0)
-                latency = (time.monotonic() - start) * 1000.0
-                self._log_slippage(symbol, expected_price, fill_price)
+                acct = api.get_account()
+            except Exception:
+                acct = None
+            if side.lower() == 'buy' and acct:
+                need = slice_qty * (expected_price or 0)
+                if float(acct.cash) < need:
+                    self.logger.error(f"Insufficient buying power for {symbol}: need {need}, have {acct.cash}")
+                    break
+            if side.lower() == 'sell':
+                try:
+                    api.get_position(symbol)
+                except Exception:
+                    self.logger.error(f"No position to sell for {symbol}")
+                    break
+            start = time.monotonic()
+            order = None
+            for attempt in range(2):
+                try:
+                    self.logger.info(
+                        'ORDER_SENT',
+                        extra={
+                            'symbol': symbol,
+                            'side': side,
+                            'qty': slice_qty,
+                            'type': order_req.__class__.__name__
+                        }
+                    )
+                    order = api.submit_order(order_data=order_req)
+                    break
+                except (APIConnectionError, TimeoutError) as e:
+                    time.sleep(1)
+                    if attempt == 1:
+                        self.logger.warning(f'submit_order failed for {symbol}: {e}')
+                        return last_order
+                except APIError as e:
+                    self.logger.warning(f'APIError placing order for {symbol}: {e}')
+                    return last_order
+                except Exception as e:
+                    self.logger.exception(f'Unexpected error placing order for {symbol}: {e}')
+                    return last_order
+            if order is None:
+                break
+            status = getattr(order, 'status', '')
+            if status in ('rejected', 'canceled'):
+                self.logger.error(f"Order for {symbol} was {status}: {getattr(order, 'reject_reason', '')}")
+                break
+            fill_price = float(getattr(order, 'filled_avg_price', expected_price or 0) or 0)
+            latency = (time.monotonic() - start) * 1000.0
+            self._log_slippage(symbol, expected_price, fill_price)
+            if status == 'filled':
                 self.logger.info('ORDER_ACK', extra={'symbol': symbol, 'order_id': getattr(order, 'id', ''), 'latency_ms': latency})
-                if self.orders_total is not None:
-                    self.orders_total.inc()
-                last_order = order
-            except APIError as e:
-                self.logger.warning(f'APIError placing order for {symbol}: {e}')
-                return last_order
-            except Exception as e:
-                self.logger.exception(f'Unexpected error placing order for {symbol}: {e}')
-                return last_order
+            else:
+                self.logger.error(f"Order for {symbol} status={status}: {getattr(order, 'reject_reason', '')}")
+            if self.orders_total is not None:
+                self.orders_total.inc()
+            last_order = order
             remaining -= slice_qty
             if remaining > 0:
                 time.sleep(random.uniform(0.05, 0.15))
