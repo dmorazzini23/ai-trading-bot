@@ -183,9 +183,10 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     except Exception:
         pass
 
-    df["mfi"] = np.nan
+    df["mfi"] = pd.Series(np.nan, index=df.index, dtype=float)
     try:
-        df["mfi"] = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14).astype(float)
+        mfi_vals = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
+        df["mfi"] = mfi_vals.astype(float)
     except Exception:
         pass
 

@@ -44,7 +44,7 @@ _DATA_CLIENT = StockHistoricalDataClient(
 class DataFetchError(Exception):
     pass
 
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(1))
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
 def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd.DataFrame:
     """Fetch historical bars from Alpaca and ensure OHLCV float columns."""
 
@@ -75,9 +75,14 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
         bars = _fetch("sip")
     except APIError as e:
         if "subscription does not permit querying recent sip data" in str(e).lower():
-            bars = _fetch("iex")
+            try:
+                bars = _fetch("iex")
+            except Exception as iex_err:
+                raise DataFetchError(f"IEX fallback failed for {symbol}: {iex_err}") from iex_err
         else:
             raise
+    except Exception as e:
+        raise DataFetchError(f"Historical fetch failed for {symbol}: {e}") from e
 
     df = pd.DataFrame(bars)
     if isinstance(df.columns, pd.MultiIndex):
@@ -208,32 +213,28 @@ class DataFetcher:
             return self._minute_cache.get(symbol)
 
         end = date.today()
-        start = end - timedelta(days=5)
+        lookback = 5
         df: Optional[pd.DataFrame] = None
 
-        try:
-            df = get_historical_data(symbol, start, end, '1Min')
-            if df is not None and not df.empty:
-                df = df[["timestamp", "open", "high", "low", "close", "volume"]]
-        except APIError as e:
-            msg = str(e).lower()
-            if "subscription does not permit querying recent sip data" in msg:
-                logger.debug(f"{symbol}: minute fetch failed, falling back to daily.")
-                try:
-                    df = self.get_daily_df(ctx, symbol)
-                except Exception:
-                    df = None
-                if df is None or df.empty:
-                    return None
-            else:
-                raise
-        except Exception as e:
-            logger.warning(f"[get_minute_df] Primary Alpaca fetch failed for {symbol}: {e}")
+        while lookback <= 10:
+            start = end - timedelta(days=lookback)
             try:
-                df = fh.fetch(symbol, period="5d", interval="1m")
-            except Exception as fallback_e:
-                logger.warning(f"[get_minute_df] Finnhub fallback failed for {symbol}: {fallback_e}")
+                df = get_historical_data(symbol, start, end, '1Min')
+                if df is not None and not df.empty:
+                    df = df[["timestamp", "open", "high", "low", "close", "volume"]]
+            except APIError:
                 df = None
+            except Exception as e:
+                logger.warning(f"[get_minute_df] Primary Alpaca fetch failed for {symbol}: {e}")
+                try:
+                    df = fh.fetch(symbol, period=f"{lookback}d", interval="1m")
+                except Exception as fallback_e:
+                    logger.warning(f"[get_minute_df] Finnhub fallback failed for {symbol}: {fallback_e}")
+                    df = None
+
+            if df is not None and len(df) >= 31:
+                break
+            lookback += 5
 
         self._minute_cache[symbol] = df
         self._minute_timestamps[symbol] = now
