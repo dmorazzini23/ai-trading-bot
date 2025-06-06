@@ -3082,7 +3082,10 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     # Ensure numeric dtype before computing MFI
     df[["High", "Low", "close", "Volume"]] = df[["High", "Low", "close", "Volume"]].astype(float)
     try:
-        df["mfi"] = ta.mfi(df["High"], df["Low"], df["close"], df["Volume"], length=14)
+        mfi_vals = ta.mfi(
+            df["High"], df["Low"], df["close"], df["Volume"], length=14
+        )
+        df["mfi"] = mfi_vals.astype(float)
     except Exception as e:
         logger.warning(f"prepare_indicators: failed to compute MFI: {e}")
         df["mfi"] = None

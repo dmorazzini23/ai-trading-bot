@@ -23,7 +23,6 @@ import pandas as pd
 import numpy as np
 from data_fetcher import get_historical_data, DataFetchError
 from alpaca_trade_api.rest import APIError
-from alpaca_trade_api.exceptions import APIConnectionError
 from tenacity import RetryError
 
 
@@ -50,7 +49,7 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
             df_final = get_historical_data(symbol, datetime.fromisoformat(start).date(),
                                           datetime.fromisoformat(end).date(), '1Day')
             break
-        except (APIError, APIConnectionError, DataFetchError, RetryError) as e:
+        except (APIError, DataFetchError, RetryError) as e:
             if attempt < 3:
                 print(f"  ▶ Failed to fetch {symbol} (attempt {attempt}/3): {e!r}. Sleeping 2s…")
                 time.sleep(2)
