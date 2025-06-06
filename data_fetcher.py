@@ -167,13 +167,22 @@ class DataFetcher:
         ts = self._minute_timestamps.get(symbol)
         if ts and (now - ts) < timedelta(seconds=60):
             return self._minute_cache.get(symbol)
-        df = None
+
+        end = date.today()
+        start = end - timedelta(days=5)
+        df: Optional[pd.DataFrame] = None
+
         try:
-            end = date.today()
-            start = end - timedelta(days=5)
             df = get_historical_data(symbol, start, end, '1Min')
             if df is not None and not df.empty:
                 df = df[["Open", "High", "Low", "Close", "Volume"]]
+        except APIError as e:
+            msg = str(e).lower()
+            if "subscription does not permit querying recent sip data" in msg:
+                logger.debug(f"{symbol}: minute fetch failed, falling back to daily.")
+                df = self.get_daily_df(ctx, symbol)
+            else:
+                raise
         except Exception as e:
             logger.warning(f"[get_minute_df] Primary Alpaca fetch failed for {symbol}: {e}")
             try:
@@ -181,6 +190,7 @@ class DataFetcher:
             except Exception as fallback_e:
                 logger.warning(f"[get_minute_df] Finnhub fallback failed for {symbol}: {fallback_e}")
                 df = None
+
         self._minute_cache[symbol] = df
         self._minute_timestamps[symbol] = now
         return df
