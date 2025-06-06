@@ -332,6 +332,9 @@ def build_feature_label_df(
     rows = []
     for sym, raw in raw_store.items():
         try:
+            if raw is None or raw.empty:
+                print(f"[build_feature_label_df] – {sym} returned no minute data; skipping symbol.")
+                continue
             if raw.shape[0] < MINUTES_REQUIRED:
                 print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {MINUTES_REQUIRED}")
                 continue

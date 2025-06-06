@@ -133,7 +133,16 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
         df = df.drop(columns=["symbol"], errors="ignore")
     df.index = pd.to_datetime(df.index).tz_localize(None)
     df["timestamp"] = df.index
-    return df[["timestamp", "open", "high", "low", "close", "volume"]]
+
+    rename_map = {c: c.lower() for c in df.columns if c.lower() in {"open", "high", "low", "close", "volume"}}
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
+    try:
+        return df[["timestamp", "open", "high", "low", "close", "volume"]]
+    except KeyError:
+        logger.warning(f"Missing OHLCV columns for {symbol}; returning empty DataFrame")
+        return pd.DataFrame()
 
 
 def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
@@ -160,9 +169,16 @@ def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
         df = df.drop(columns=["symbol"], errors="ignore")
     df.index = pd.to_datetime(df.index).tz_localize(None)
     df["timestamp"] = df.index
-    if df.empty or "close" not in df.columns:
+
+    rename_map = {c: c.lower() for c in df.columns if c.lower() in {"open", "high", "low", "close", "volume"}}
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
+    try:
+        return df[["timestamp", "open", "high", "low", "close", "volume"]]
+    except KeyError:
+        logger.warning(f"Missing OHLCV columns for {symbol}; returning empty DataFrame")
         return pd.DataFrame()
-    return df[["timestamp", "open", "high", "low", "close", "volume"]]
 
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 
