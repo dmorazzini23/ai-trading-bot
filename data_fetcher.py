@@ -28,7 +28,8 @@ import numpy as np
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-from alpaca_trade_api.rest import APIError, APIConnectionError
+from alpaca_trade_api.rest import APIError
+from alpaca_trade_api.exceptions import APIConnectionError
 from tenacity import (
     retry,
     stop_after_attempt,

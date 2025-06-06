@@ -49,7 +49,8 @@ from alpaca.trading.requests import (
     LimitOrderRequest,
 )
 from alpaca.trading.models import Order
-from alpaca_trade_api.rest import REST, APIError, APIConnectionError
+from alpaca_trade_api.rest import REST, APIError
+from alpaca_trade_api.exceptions import APIConnectionError
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
