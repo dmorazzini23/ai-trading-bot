@@ -92,12 +92,13 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
 
     df = pd.DataFrame(bars)
     if isinstance(df.columns, pd.MultiIndex):
-        df = df.xs(symbol, level=0, axis=1)
-    else:
-        df = df.drop(columns=["symbol"], errors="ignore")
+        df.columns = df.columns.get_level_values(-1)
+    df = df.drop(columns=["symbol"], errors="ignore")
 
-    df.index = pd.to_datetime(df.index)
-    df.index = df.index.tz_localize(None)
+    df.columns = df.columns.str.lower()
+
+    df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
+    df.index = pd.to_datetime(df.index, errors="coerce").tz_localize(None)
 
     df["timestamp"] = df.index
 
@@ -127,9 +128,10 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
             logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
             return pd.DataFrame()
     if isinstance(df.columns, pd.MultiIndex):
-        df = df.xs(symbol, level=0, axis=1)
-    else:
-        df = df.drop(columns=["symbol"], errors="ignore")
+        df.columns = df.columns.get_level_values(-1)
+    df = df.drop(columns=["symbol"], errors="ignore")
+
+    df.columns = df.columns.str.lower()
 
     if isinstance(df.index, pd.MultiIndex):
         df.index = df.index.get_level_values(0)
@@ -137,16 +139,8 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
     df.index = pd.to_datetime(df.index, errors="coerce").tz_localize(None)
     df["timestamp"] = df.index
 
-    rename_map = {}
-    for c in df.columns:
-        lc = c.lower()
-        if lc in {"open", "high", "low", "close", "volume"}:
-            rename_map[c] = lc.capitalize() if lc != "close" else "Close"
-    if rename_map:
-        df = df.rename(columns=rename_map)
-
     try:
-        return df[["timestamp", "Open", "High", "Low", "Close", "Volume"]]
+        return df[["timestamp", "open", "high", "low", "close", "volume"]]
     except KeyError:
         logger.warning(f"Missing OHLCV columns for {symbol}; returning empty DataFrame")
         return pd.DataFrame()
@@ -176,15 +170,13 @@ def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
             )
             df = _DATA_CLIENT.get_stock_bars(req).df
             if isinstance(df.columns, pd.MultiIndex):
-                df = df.xs(symbol, level=0, axis=1)
-            else:
-                df = df.drop(columns=["symbol"], errors="ignore")
+                df.columns = df.columns.get_level_values(-1)
+            df = df.drop(columns=["symbol"], errors="ignore")
             if isinstance(df.index, pd.MultiIndex):
                 df = df.reset_index(level=0, drop=True)
-            rename_map = {c: c.capitalize() for c in df.columns}
-            df = df.rename(columns=rename_map)
+            df.columns = df.columns.str.lower()
             try:
-                df = df[["Open", "High", "Low", "Close", "Volume"]]
+                df = df[["open", "high", "low", "close", "volume"]]
             except KeyError:
                 logger.warning(
                     f"NO ALTERNATIVE MINUTE DATA FOR {symbol}"
@@ -194,26 +186,18 @@ def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
             logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
             return pd.DataFrame()
     if isinstance(df.columns, pd.MultiIndex):
-        df = df.xs(symbol, level=0, axis=1)
-    else:
-        df = df.drop(columns=["symbol"], errors="ignore")
+        df.columns = df.columns.get_level_values(-1)
+    df = df.drop(columns=["symbol"], errors="ignore")
 
     if isinstance(df.index, pd.MultiIndex):
         df.index = df.index.get_level_values(0)
     df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
     df.index = pd.to_datetime(df.index, errors="coerce").tz_localize(None)
+    df.columns = df.columns.str.lower()
     df["timestamp"] = df.index
 
-    rename_map = {}
-    for c in df.columns:
-        lc = c.lower()
-        if lc in {"open", "high", "low", "close", "volume"}:
-            rename_map[c] = lc.capitalize() if lc != "close" else "Close"
-    if rename_map:
-        df = df.rename(columns=rename_map)
-
     try:
-        return df[["timestamp", "Open", "High", "Low", "Close", "Volume"]]
+        return df[["timestamp", "open", "high", "low", "close", "volume"]]
     except KeyError:
         logger.warning(
             f"Missing OHLCV columns for {symbol}; returning empty DataFrame"

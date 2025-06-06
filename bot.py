@@ -438,7 +438,7 @@ def compute_spy_vol_stats(ctx: 'BotContext') -> None:
         return True
 
     # Compute ATR series for last 252 trading days
-    atr_series = ta.atr(df["High"], df["Low"], df["close"], length=ATR_LENGTH).dropna()
+    atr_series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH).dropna()
     if len(atr_series) < 252:
         return True
 
@@ -468,7 +468,7 @@ def is_high_vol_thr_spy() -> bool:
     if spy_df is None or len(spy_df) < ATR_LENGTH:
         return False
 
-    atr_series = ta.atr(spy_df["High"], spy_df["Low"], spy_df["close"], length=ATR_LENGTH)
+    atr_series = ta.atr(spy_df["high"], spy_df["low"], spy_df["close"], length=ATR_LENGTH)
     if atr_series.empty:
         return False
 
@@ -588,13 +588,7 @@ class DataFetcher:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             bars.index = pd.to_datetime(bars.index, utc=True)
             bars.index = bars.index.tz_convert(None)
-            df = bars.rename(columns={
-                "open": "Open",
-                "high": "High",
-                "low": "Low",
-                "close": "Close",
-                "volume": "Volume",
-            })
+            df = bars.rename(columns=lambda c: c.lower()).drop(columns=["symbol"], errors="ignore")
         except APIError as e:
             err_msg = str(e).lower()
             if "subscription does not permit querying recent sip data" in err_msg:
@@ -615,13 +609,7 @@ class DataFetcher:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
                     df_iex.index = pd.to_datetime(df_iex.index, utc=True)
                     df_iex.index = df_iex.index.tz_convert(None)
-                    df = df_iex.rename(columns={
-                        "open": "Open",
-                        "high": "High",
-                        "low": "Low",
-                        "close": "Close",
-                        "volume": "Volume",
-                    })
+                    df = df_iex.rename(columns=lambda c: c.lower())
                 except Exception as iex_err:
                     print(f">> DEBUG: ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
                     print(f">> DEBUG: INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}")
@@ -677,13 +665,7 @@ class DataFetcher:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             bars.index = pd.to_datetime(bars.index, utc=True)
             bars.index = bars.index.tz_convert(None)
-            df = bars.rename(columns={
-                "open": "Open",
-                "high": "High",
-                "low": "Low",
-                "close": "Close",
-                "volume": "Volume",
-            })[["Open", "High", "Low", "Close", "Volume"]]
+            df = bars.rename(columns=lambda c: c.lower()).drop(columns=["symbol"], errors="ignore")[["open", "high", "low", "close", "volume"]]
         except APIError as e:
             err_msg = str(e)
             if "subscription does not permit querying recent sip data" in err_msg.lower():
@@ -704,13 +686,7 @@ class DataFetcher:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
                     df_iex.index = pd.to_datetime(df_iex.index, utc=True)
                     df_iex.index = df_iex.index.tz_convert(None)
-                    df = df_iex.rename(columns={
-                        "open": "Open",
-                        "high": "High",
-                        "low": "Low",
-                        "close": "Close",
-                        "volume": "Volume",
-                    })[["Open", "High", "Low", "Close", "Volume"]]
+                    df = df_iex.rename(columns=lambda c: c.lower())[["open", "high", "low", "close", "volume"]]
                 except Exception as iex_err:
                     print(f">> DEBUG: ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
                     print(f">> DEBUG: NO ALTERNATIVE MINUTE DATA FOR {symbol}")
@@ -768,19 +744,12 @@ class DataFetcher:
                 bars_day = None
 
             if bars_day is not None and not bars_day.empty:
-                # Drop "symbol" column if present, rename to Title-case, drop tz, keep only OHLCV
                 if "symbol" in bars_day.columns:
                     bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
 
                 bars_day.index = pd.to_datetime(bars_day.index).tz_localize(None)
-                bars_day = bars_day.rename(columns={
-                    "open":   "Open",
-                    "high":   "High",
-                    "low":    "Low",
-                    "close":  "Close",
-                    "volume": "Volume",
-                })
-                bars_day = bars_day[["Open", "High", "Low", "Close", "Volume"]]
+                bars_day = bars_day.rename(columns=lambda c: c.lower())
+                bars_day = bars_day[["open", "high", "low", "close", "volume"]]
                 all_days.append(bars_day)
 
             current_day += timedelta(days=1)
@@ -816,13 +785,7 @@ def prefetch_daily_data(symbols: List[str], start_date: date, end_date: date) ->
         for sym, df in grouped_raw.items():
             df = df.drop(columns=["symbol"], errors="ignore")
             df.index = pd.to_datetime(df.index).tz_localize(None)
-            df = df.rename(columns={
-                "open": "Open",
-                "high": "High",
-                "low": "Low",
-                "close": "Close",
-                "volume": "Volume",
-            })
+            df = df.rename(columns=lambda c: c.lower())
             grouped[sym] = df
         return grouped
     except APIError as e:
@@ -847,13 +810,7 @@ def prefetch_daily_data(symbols: List[str], start_date: date, end_date: date) ->
                 for sym, df in grouped_raw.items():
                     df = df.drop(columns=["symbol"], errors="ignore")
                     df.index = pd.to_datetime(df.index).tz_localize(None)
-                    df = df.rename(columns={
-                        "open": "Open",
-                        "high": "High",
-                        "low": "Low",
-                        "close": "Close",
-                        "volume": "Volume",
-                    })
+                    df = df.rename(columns=lambda c: c.lower())
                     grouped[sym] = df
                 return grouped
             except Exception as iex_err:
@@ -871,13 +828,7 @@ def prefetch_daily_data(symbols: List[str], start_date: date, end_date: date) ->
                         ).df
                         df_sym = df_sym.drop(columns=["symbol"], errors="ignore")
                         df_sym.index = pd.to_datetime(df_sym.index).tz_localize(None)
-                        df_sym = df_sym.rename(columns={
-                            "open": "Open",
-                            "high": "High",
-                            "low": "Low",
-                            "close": "Close",
-                            "volume": "Volume",
-                        })
+                        df_sym = df_sym.rename(columns=lambda c: c.lower())
                         daily_dict[sym] = df_sym
                     except Exception as indiv_err:
                         print(f">> DEBUG: ALPACA IEX ERROR for {sym}: {repr(indiv_err)}")
@@ -1111,7 +1062,7 @@ class SignalManager:
         if df is None or len(df) <= self.momentum_lookback:
             return -1, 0.0, 'momentum'
         try:
-            df['momentum'] = df['Close'].pct_change(self.momentum_lookback)
+            df['momentum'] = df['close'].pct_change(self.momentum_lookback)
             val = df['momentum'].iloc[-1]
             s = 1 if val > 0 else -1 if val < 0 else -1
             w = min(abs(val) * 10, 1.0)
@@ -1124,9 +1075,9 @@ class SignalManager:
         if df is None or len(df) < self.mean_rev_lookback:
             return -1, 0.0, 'mean_reversion'
         try:
-            ma = df['Close'].rolling(self.mean_rev_lookback).mean()
-            sd = df['Close'].rolling(self.mean_rev_lookback).std()
-            df['zscore'] = (df['Close'] - ma) / sd
+            ma = df['close'].rolling(self.mean_rev_lookback).mean()
+            sd = df['close'].rolling(self.mean_rev_lookback).std()
+            df['zscore'] = (df['close'] - ma) / sd
             val = df['zscore'].iloc[-1]
             s = -1 if val > self.mean_rev_zscore_threshold else 1 if val < -self.mean_rev_zscore_threshold else -1
             w = min(abs(val) / 3, 1.0)
@@ -1150,7 +1101,7 @@ class SignalManager:
         if df is None or len(df) < 6:
             return -1, 0.0, 'obv'
         try:
-            obv = pd.Series(ta.obv(df['Close'], df['Volume']).values)
+            obv = pd.Series(ta.obv(df['close'], df['volume']).values)
             if len(obv) < 5:
                 return -1, 0.0, 'obv'
             slope = np.polyfit(range(5), obv.tail(5), 1)[0]
@@ -1165,11 +1116,11 @@ class SignalManager:
         if df is None or len(df) < 20:
             return -1, 0.0, 'vsa'
         try:
-            body = abs(df['Close'] - df['Open'])
-            vsa = df['Volume'] * body
+            body = abs(df['close'] - df['open'])
+            vsa = df['volume'] * body
             score = vsa.iloc[-1]
             avg = vsa.rolling(20).mean().iloc[-1]
-            s = 1 if df['Close'].iloc[-1] > df['Open'].iloc[-1] else -1 if df['Close'].iloc[-1] < df['Open'].iloc[-1] else -1
+            s = 1 if df['close'].iloc[-1] > df['open'].iloc[-1] else -1 if df['close'].iloc[-1] < df['open'].iloc[-1] else -1
             w = min(score / avg, 1.0)
             return s, w, 'vsa'
         except Exception:
@@ -1880,7 +1831,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     df = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if df is None or df.empty:
         return 0.0
-    avg_vol = df["Volume"].tail(30).mean()
+    avg_vol = df["volume"].tail(30).mean()
     try:
         req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
         quote: Quote = ctx.data_client.get_stock_latest_quote(req)
@@ -2090,7 +2041,7 @@ def vwap_pegged_submit(
         if df is None or df.empty:
             logger.warning("[VWAP] missing bars, aborting VWAP slice", extra={"symbol": symbol})
             break
-        vwap_price = ta.vwap(df["High"], df["Low"], df["close"], df["Volume"]).iloc[-1]
+        vwap_price = ta.vwap(df["high"], df["low"], df["close"], df["volume"]).iloc[-1]
         try:
             req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quote: Quote = ctx.data_client.get_stock_latest_quote(req)
@@ -2219,7 +2170,7 @@ def pov_submit(
         except Exception:
             spread = 0.0
 
-        vol = df["Volume"].iloc[-1]
+        vol = df["volume"].iloc[-1]
         if spread > 0.05:
             slice_qty = min(int(vol * cfg.pct * 0.5), total_qty - placed)
         else:
@@ -2283,7 +2234,7 @@ def calculate_entry_size(
 ) -> int:
     cash = float(ctx.api.get_account().cash)
     df_daily = ctx.data_fetcher.get_daily_df(ctx, symbol)
-    avg_vol = df_daily["Volume"].tail(20).mean() if df_daily is not None else 0
+    avg_vol = df_daily["volume"].tail(20).mean() if df_daily is not None else 0
     cap_pct = ctx.params.get('CAPITAL_CAP', CAPITAL_CAP)
     cap_sz = int((cash * cap_pct) / price) if price > 0 else 0
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
@@ -2811,11 +2762,11 @@ def fetch_data(ctx: BotContext, symbols: List[str], period: str, interval: str) 
                 continue
 
             df_sym = pd.DataFrame({
-                "Open": ohlc.get("o", []),
-                "High": ohlc.get("h", []),
-                "Low": ohlc.get("l", []),
-                "Close": ohlc.get("c", []),
-                "Volume": ohlc.get("v", []),
+                "open": ohlc.get("o", []),
+                "high": ohlc.get("h", []),
+                "low": ohlc.get("l", []),
+                "close": ohlc.get("c", []),
+                "volume": ohlc.get("v", []),
             }, index=pd.to_datetime(ohlc.get("t", []), unit="s"))
 
             df_sym.columns = pd.MultiIndex.from_product([[sym], df_sym.columns])
@@ -3022,13 +2973,13 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").set_index("Date")
 
-    df["vwap"] = ta.vwap(df["High"], df["Low"], df["close"], df["Volume"])
+    df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
     df["rsi"]  = ta.rsi(df["close"], length=14)
-    df["atr"]  = ta.atr(df["High"], df["Low"], df["close"], length=14)
+    df["atr"]  = ta.atr(df["high"], df["low"], df["close"], length=14)
 
     # ── New advanced indicators ───────────────────────────────────────────
     try:
-        kc = ta.kc(df["High"], df["Low"], df["close"], length=20)
+        kc = ta.kc(df["high"], df["low"], df["close"], length=20)
         df["kc_lower"] = kc.iloc[:, 0]
         df["kc_mid"]   = kc.iloc[:, 1]
         df["kc_upper"] = kc.iloc[:, 2]
@@ -3039,7 +2990,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     df["atr_band_upper"] = df["close"] + 1.5 * df["atr"]
     df["atr_band_lower"] = df["close"] - 1.5 * df["atr"]
-    df["avg_vol_20"]      = df["Volume"].rolling(20).mean()
+    df["avg_vol_20"]      = df["volume"].rolling(20).mean()
     df["dow"]             = df.index.dayofweek
 
     try:
@@ -3064,7 +3015,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["bb_percent"] = np.nan
 
     try:
-        adx = ta.adx(df["High"], df["Low"], df["close"], length=14)
+        adx = ta.adx(df["high"], df["low"], df["close"], length=14)
         df["adx"] = adx["ADX_14"]
         df["dmp"] = adx["DMP_14"]
         df["dmn"] = adx["DMN_14"]
@@ -3074,15 +3025,15 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["dmn"] = np.nan
 
     try:
-        df["cci"] = ta.cci(df["High"], df["Low"], df["close"], length=20)
+        df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20)
     except Exception:
         df["cci"] = np.nan
 
     # Ensure numeric dtype before computing MFI
-    df[["High", "Low", "close", "Volume"]] = df[["High", "Low", "close", "Volume"]].astype(float)
+    df[["high", "low", "close", "volume"]] = df[["high", "low", "close", "volume"]].astype(float)
     try:
         mfi_vals = ta.mfi(
-            df["High"], df["Low"], df["close"], df["Volume"], length=14
+            df["high"], df["low"], df["close"], df["volume"], length=14
         )
         df["mfi"] = mfi_vals.astype(float)
     except Exception as e:
@@ -3095,12 +3046,12 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["tema"] = np.nan
 
     try:
-        df["willr"] = ta.willr(df["High"], df["Low"], df["close"], length=14)
+        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14)
     except Exception:
         df["willr"] = np.nan
 
     try:
-        psar = ta.psar(df["High"], df["Low"], df["close"])
+        psar = ta.psar(df["high"], df["low"], df["close"])
         df["psar_long"]  = psar["PSARl_0.02_0.2"]
         df["psar_short"] = psar["PSARs_0.02_0.2"]
     except Exception:
@@ -3108,7 +3059,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["psar_short"] = np.nan
 
     try:
-        ich = ta.ichimoku(high=df["High"], low=df["Low"], close=df["close"])
+        ich = ta.ichimoku(high=df["high"], low=df["low"], close=df["close"])
         conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
         base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
         df["ichimoku_conv"] = conv.iloc[:, 0] if hasattr(conv, "iloc") else conv
@@ -3129,7 +3080,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ret_1h"] = df["close"].pct_change(60)
         df["ret_d"] = df["close"].pct_change(390)
         df["ret_w"] = df["close"].pct_change(1950)
-        df["vol_norm"] = df["Volume"].rolling(60).mean() / df["Volume"].rolling(5).mean()
+        df["vol_norm"] = df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
         df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
         df["vol_5m"]  = df["close"].pct_change().rolling(5).std()
         df["vol_1h"]  = df["close"].pct_change().rolling(60).std()
@@ -3170,7 +3121,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     feat = pd.DataFrame(index=df.index)
-    feat["atr"]  = ta.atr(df["High"], df["Low"], df["close"], length=14)
+    feat["atr"]  = ta.atr(df["high"], df["low"], df["close"], length=14)
     feat["rsi"]  = ta.rsi(df["close"], length=14)
     feat["macd"] = ta.macd(df["close"], fast=12, slow=26, signal=9)["MACD_12_26_9"]
     feat["vol"]  = df["close"].pct_change().rolling(14).std()
@@ -3214,9 +3165,7 @@ else:
     else:
         bars = bars.drop(columns=["symbol"], errors="ignore")
     bars.index = pd.to_datetime(bars.index).tz_localize(None)
-    bars = bars.rename(columns={
-        "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"
-    })
+    bars = bars.rename(columns=lambda c: c.lower())
     feats = _compute_regime_features(bars)
     labels = (bars["close"] > bars["close"].rolling(200).mean()).loc[feats.index].astype(int).rename("label")
     training = feats.join(labels, how="inner").dropna()
@@ -3248,8 +3197,8 @@ def detect_regime_state(ctx: BotContext) -> str:
     df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
     if df is None or len(df) < 200:
         return "sideways"
-    atr14 = ta.atr(df["High"], df["Low"], df["close"], length=14).iloc[-1]
-    atr50 = ta.atr(df["High"], df["Low"], df["close"], length=50).iloc[-1]
+    atr14 = ta.atr(df["high"], df["low"], df["close"], length=14).iloc[-1]
+    atr50 = ta.atr(df["high"], df["low"], df["close"], length=50).iloc[-1]
     high_vol = atr50 > 0 and atr14 / atr50 > 1.5
     sma50 = df["close"].rolling(50).mean().iloc[-1]
     sma200 = df["close"].rolling(200).mean().iloc[-1]
@@ -3282,7 +3231,7 @@ def screen_universe(
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
         if df is None or len(df) < ATR_LENGTH:
             continue
-        series = ta.atr(df["High"], df["Low"], df["close"], length=ATR_LENGTH)
+        series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH)
         atr_val = series.iloc[-1] if not series.empty else np.nan
         if not pd.isna(atr_val):
             atrs[sym] = float(atr_val)
