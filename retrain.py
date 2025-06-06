@@ -189,9 +189,10 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         pass
 
     try:
-        df["mfi"] = ta.mfi(
+        mfi_vals = ta.mfi(
             df["high"], df["low"], df["close"], df["volume"], length=MFI_PERIOD
-        ).astype("float64")
+        )
+        df["mfi"] = mfi_vals.astype(float)
         df.dropna(subset=["mfi"], inplace=True)
     except Exception:
         df["mfi"] = np.nan
