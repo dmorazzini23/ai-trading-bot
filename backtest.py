@@ -21,7 +21,9 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 BACKTEST_WINDOW_DAYS = 365
 import pandas as pd
 import numpy as np
-from data_fetcher import get_historical_data
+from data_fetcher import get_historical_data, DataFetchError
+from alpaca_trade_api.rest import APIError, APIConnectionError
+from tenacity import RetryError
 
 
 def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
@@ -33,11 +35,11 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
         try:
             df_cached = pd.read_csv(cache_fname, index_col=0, parse_dates=True)
             return df_cached
-        except Exception:
+        except (OSError, pd.errors.ParserError, ValueError):
             # If cache is corrupted, remove it and re‐download
             try:
                 os.remove(cache_fname)
-            except Exception:
+            except OSError:
                 pass
 
     # 2) Otherwise, attempt to fetch from Alpaca with retries
@@ -47,7 +49,7 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
             df_final = get_historical_data(symbol, datetime.fromisoformat(start).date(),
                                           datetime.fromisoformat(end).date(), '1Day')
             break
-        except Exception as e:
+        except (APIError, APIConnectionError, DataFetchError, RetryError) as e:
             if attempt < 3:
                 print(f"  ▶ Failed to fetch {symbol} (attempt {attempt}/3): {e!r}. Sleeping 2s…")
                 time.sleep(2)
@@ -56,7 +58,7 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
     # 3) Save to cache (even if empty)
     try:
         df_final.to_csv(cache_fname)
-    except Exception:
+    except OSError:
         pass
 
     # 4) Polite 1s pause before next symbol

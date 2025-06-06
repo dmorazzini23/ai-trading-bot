@@ -5,6 +5,7 @@ from argparse import ArgumentParser
 
 import logging
 import logging.handlers
+import warnings
 import csv
 import json
 import re
@@ -31,6 +32,8 @@ import pandas as pd
 import pandas_ta as ta
 import pandas_market_calendars as mcal
 
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask
@@ -46,8 +49,7 @@ from alpaca.trading.requests import (
     LimitOrderRequest,
 )
 from alpaca.trading.models import Order
-from alpaca_trade_api.rest import REST, APIError
-from alpaca.common.exceptions import APIConnectionError
+from alpaca_trade_api.rest import REST, APIError, APIConnectionError
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
@@ -1976,7 +1978,7 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
             else:
                 logger.error(f"Order for {req.symbol} status={status}: {getattr(order, 'reject_reason', '')}")
             return order
-        except (APIConnectionError, TimeoutError) as e:
+        except (APIConnectionError, APIError, TimeoutError) as e:
             time.sleep(1)
             if attempt == 1:
                 logger.warning(f"submit_order failed for {req.symbol}: {e}")

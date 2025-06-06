@@ -12,6 +12,7 @@ ALPACA_BASE_URL = os.environ.get('ALPACA_BASE_URL', 'https://paper-api.alpaca.ma
 ALPACA_PAPER = 'paper' in ALPACA_BASE_URL.lower()
 FINNHUB_API_KEY = os.environ.get('FINNHUB_API_KEY')
 NEWS_API_KEY = os.environ.get('NEWS_API_KEY')
+IEX_API_TOKEN = os.environ.get('IEX_API_TOKEN')
 SENTRY_DSN = os.environ.get('SENTRY_DSN')
 BOT_MODE = os.environ.get('BOT_MODE', 'balanced')
 MODEL_PATH = os.environ.get('MODEL_PATH', 'trained_model.pkl')

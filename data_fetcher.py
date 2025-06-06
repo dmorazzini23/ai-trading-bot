@@ -28,7 +28,7 @@ import numpy as np
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-from alpaca_trade_api.rest import APIError
+from alpaca_trade_api.rest import APIError, APIConnectionError
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -80,15 +80,15 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
 
     try:
         bars = _fetch("sip")
-    except APIError as e:
+    except (APIError, APIConnectionError) as e:
         if "subscription does not permit querying recent sip data" in str(e).lower():
             try:
                 bars = _fetch("iex")
-            except Exception as iex_err:
+            except (APIError, APIConnectionError) as iex_err:
                 raise DataFetchError(f"IEX fallback failed for {symbol}: {iex_err}") from iex_err
         else:
             raise
-    except Exception as e:
+    except RetryError as e:
         raise DataFetchError(f"Historical fetch failed for {symbol}: {e}") from e
 
     df = pd.DataFrame(bars)
@@ -117,14 +117,14 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
         try:
             df = get_historical_data(symbol, start, end, "1Day")
             break
-        except (APIError, RetryError) as e:
+        except (APIError, APIConnectionError, RetryError) as e:
             logger.debug(f"get_daily_df attempt {attempt+1} failed for {symbol}: {e}")
             pytime.sleep(1)
     else:
         try:
             req = StockBarsRequest(symbol_or_symbols=[symbol], start=start, end=end, timeframe=TimeFrame.Day, feed="iex")
             df = _DATA_CLIENT.get_stock_bars(req).df
-        except Exception:
+        except (APIError, APIConnectionError, RetryError):
             logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
             return pd.DataFrame()
     if isinstance(df.columns, pd.MultiIndex):
@@ -144,14 +144,14 @@ def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
         try:
             df = get_historical_data(symbol, start_dt, end_dt, "1Min")
             break
-        except (APIError, RetryError) as e:
+        except (APIError, APIConnectionError, RetryError) as e:
             logger.debug(f"get_minute_df attempt {attempt+1} failed for {symbol}: {e}")
             pytime.sleep(1)
     else:
         try:
             req = StockBarsRequest(symbol_or_symbols=[symbol], start=start_dt, end=end_dt, timeframe=TimeFrame.Minute, feed="iex")
             df = _DATA_CLIENT.get_stock_bars(req).df
-        except Exception:
+        except (APIError, APIConnectionError, RetryError):
             logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
             return pd.DataFrame()
     if isinstance(df.columns, pd.MultiIndex):
