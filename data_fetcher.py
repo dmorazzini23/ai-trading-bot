@@ -15,12 +15,13 @@ from config import (
 import logging
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 import pandas as pd
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-from alpaca.common.exceptions import APIError
+from alpaca_trade_api.rest import APIError
 from tenacity import retry, stop_after_attempt, wait_exponential, wait_random, retry_if_exception_type
 import finnhub
 
@@ -76,6 +77,30 @@ def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe
         'close': 'Close',
         'volume': 'Volume',
     })
+
+
+def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
+    """Fetch daily bars for symbol between start and end."""
+    return get_historical_data(symbol, start, end, '1Day')
+
+
+def get_minute_df(symbol: str, start: date, end: date) -> Optional[pd.DataFrame]:
+    """Fetch minute bars and fallback to daily on SIP access errors."""
+    try:
+        df = get_historical_data(symbol, start, end, '1Min')
+    except APIError as e:
+        msg = str(e)
+        if 'subscription does not permit querying recent sip data' in msg.lower():
+            logger.debug(f"{symbol}: minute fetch failed, falling back to daily.")
+            try:
+                df = get_daily_df(symbol, start, end)
+            except Exception:
+                return None
+            if df is None or df.empty:
+                return None
+        else:
+            raise
+    return df
 
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 
@@ -180,7 +205,12 @@ class DataFetcher:
             msg = str(e).lower()
             if "subscription does not permit querying recent sip data" in msg:
                 logger.debug(f"{symbol}: minute fetch failed, falling back to daily.")
-                df = self.get_daily_df(ctx, symbol)
+                try:
+                    df = self.get_daily_df(ctx, symbol)
+                except Exception:
+                    df = None
+                if df is None or df.empty:
+                    return None
             else:
                 raise
         except Exception as e:

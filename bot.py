@@ -48,12 +48,11 @@ from alpaca.trading.requests import (
     LimitOrderRequest,
 )
 from alpaca.trading.models import Order
-from alpaca.common.exceptions import APIError
+from alpaca_trade_api.rest import REST, APIError
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame
-from alpaca_trade_api.rest import REST
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import Ridge, BayesianRidge
@@ -84,14 +83,20 @@ from finnhub import FinnhubAPIException
 import pybreaker
 from trade_execution import ExecutionEngine
 from capital_scaling import CapitalScalingEngine
-from data_fetcher import fh, finnhub_client, DataFetchError
+from data_fetcher import (
+    fh,
+    finnhub_client,
+    DataFetchError,
+    get_minute_df,
+    get_daily_df,
+)
 from strategy_allocator import StrategyAllocator
 from risk_engine import RiskEngine
 from utils import is_market_open
 from strategies import MomentumStrategy, MeanReversionStrategy, TradeSignal
 
 # Basic logger setup so early code can log before full configuration below
-logger = logging.getLogger("AITradingBot")
+logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 def get_latest_close(df: pd.DataFrame) -> float:
@@ -112,6 +117,13 @@ def get_latest_close(df: pd.DataFrame) -> float:
     if pd.isna(last) or last <= 0:
         return 0.0
     return float(last)
+
+
+def compute_time_range(minutes: int = 30) -> tuple[datetime, datetime]:
+    """Return start and end timestamps for the last `minutes` minutes."""
+    end = datetime.utcnow()
+    start = end - timedelta(minutes=minutes)
+    return start, end
 
 def cancel_all_open_orders(ctx: "BotContext") -> None:
     """
@@ -3228,6 +3240,12 @@ def screen_universe(
     ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
     return [sym for sym, _ in ranked[:top_n]]
 
+
+def screen_candidates() -> list[str]:
+    """Load tickers and apply universe screening."""
+    candidates = load_tickers(TICKERS_FILE)
+    return screen_universe(candidates, ctx)
+
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
     tickers: List[str] = []
     try:
@@ -3511,43 +3529,14 @@ def run_all_trades_worker(model):
 
         logger.info("RUN_ALL_TRADES_START", extra={"timestamp": datetime.now(timezone.utc).isoformat()})
 
-        candidates = load_tickers(TICKERS_FILE)
-        today_date = date.today()
-        if _last_fh_prefetch_date != today_date:
-            _last_fh_prefetch_date = today_date
-            # Bulk prefetch daily in batches of 10 to avoid rate limits
-            all_syms = [s for s in candidates if s not in REGIME_SYMBOLS]
-            for batch in chunked(all_syms, 10):
-                start_date = today_date - timedelta(days=30)
-                end_date = today_date
-                df_dict = prefetch_daily_data(list(batch), start_date, end_date)
-                for sym in batch:
-                    df_sym = df_dict.get(sym)
-                    if df_sym is None:
-                        dummy_date = pd.to_datetime(end_date).tz_localize("UTC")
-                        df_sym = pd.DataFrame([
-                            {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
-                        ], index=[dummy_date])
-                        print(f">> DEBUG: INSERTED DUMMY DAILY FOR {sym} ON {end_date.isoformat()}")
-                        daily_cache_miss.inc()
-                    else:
-                        daily_cache_hit.inc()
-                    with cache_lock:
-                        data_fetcher._daily_cache[sym] = df_sym
-                pytime.sleep(1)  # avoid exceeding Alpaca rate
-
-            # Ensure regime symbols seeded
-            for sym in REGIME_SYMBOLS:
-                data_fetcher.get_daily_df(ctx, sym)
-
-        # Screen universe & compute weights
-        tickers = screen_universe(candidates, ctx)
-        if not tickers:
+        full_watchlist = load_tickers(TICKERS_FILE)
+        symbols = screen_candidates()
+        if not symbols:
             logger.warning("No tickers passed screening—using fallback watchlist.")
-            tickers = list(candidates)
-        logger.info("CANDIDATES_SCREENED", extra={"tickers": tickers})
-        ctx.tickers = tickers
-        ctx.portfolio_weights = compute_portfolio_weights(tickers)
+            symbols = full_watchlist
+        logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
+        ctx.tickers = symbols
+        ctx.portfolio_weights = compute_portfolio_weights(symbols)
 
         if check_halt_flag():
             logger.info("TRADING_HALTED_VIA_FLAG")
@@ -3558,9 +3547,19 @@ def run_all_trades_worker(model):
         regime_ok = check_market_regime()
 
         had_data = False
-        for symbol in tickers:
-            if _safe_trade(ctx, symbol, current_cash, model, regime_ok):
-                had_data = True
+        for symbol in symbols:
+            logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
+            start, end = compute_time_range()
+            df = None
+            try:
+                df = get_minute_df(symbol, start.date(), end.date())
+            except APIError:
+                raise
+            if df is None or df.empty:
+                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+                continue
+            had_data = True
+            _safe_trade(ctx, symbol, current_cash, model, regime_ok)
 
         if not had_data:
             logger.warning("no symbols returned any price data; skipping strategy computation.")
