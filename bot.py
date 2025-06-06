@@ -87,6 +87,7 @@ from capital_scaling import CapitalScalingEngine
 from data_fetcher import fh, finnhub_client, DataFetchError
 from strategy_allocator import StrategyAllocator
 from risk_engine import RiskEngine
+from utils import is_market_open
 from strategies import MomentumStrategy, MeanReversionStrategy, TradeSignal
 
 # Basic logger setup so early code can log before full configuration below
@@ -422,12 +423,12 @@ def compute_spy_vol_stats(ctx: 'BotContext') -> None:
 
     df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
     if df is None or len(df) < 252 + ATR_LENGTH:
-        return
+        return True
 
     # Compute ATR series for last 252 trading days
     atr_series = ta.atr(df["High"], df["Low"], df["close"], length=ATR_LENGTH).dropna()
     if len(atr_series) < 252:
-        return
+        return True
 
     recent = atr_series.iloc[-252:]
     mean_val = float(recent.mean())
@@ -2372,7 +2373,7 @@ def should_enter(
     balance: float,
     regime_ok: bool
 ) -> bool:
-    return pre_trade_checks(ctx, symbol, balance, regime_ok) and is_within_entry_window(ctx)
+    return pre_trade_checks(ctx, symbol, balance, regime_ok)
 
 def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple[bool, int, str]:
     try:
@@ -2408,19 +2409,23 @@ def _safe_trade(
     balance: float,
     model: RandomForestClassifier,
     regime_ok: bool
-) -> None:
+) -> bool:
     try:
-        trade_logic(ctx, symbol, balance, model, regime_ok)
+        return trade_logic(ctx, symbol, balance, model, regime_ok)
     except RetryError as e:
         logger.warning(f"[trade_logic] retries exhausted for {symbol}: {e}", extra={"symbol": symbol})
+        return False
     except APIError as e:
         msg = str(e).lower()
         if "insufficient buying power" in msg or "potential wash trade" in msg:
             logger.warning(f"[trade_logic] skipping {symbol} due to APIError: {e}", extra={"symbol": symbol})
+            return False
         else:
             logger.exception(f"[trade_logic] APIError for {symbol}: {e}")
+            return False
     except Exception:
         logger.exception(f"[trade_logic] unhandled exception for {symbol}")
+        return False
 
 def trade_logic(
     ctx: BotContext,
@@ -2428,26 +2433,38 @@ def trade_logic(
     balance: float,
     model,
     regime_ok: bool
-) -> None:
+) -> bool:
     """
     Core per-symbol logic: fetch data, compute features, evaluate signals, enter/exit orders.
     """
     logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
 
     # Run pre-trade checks that enforce PDT, halt flags, market regime, etc.
-    if not should_enter(ctx, symbol, balance, regime_ok):
+    if not pre_trade_checks(ctx, symbol, balance, regime_ok):
         logger.debug("SKIP_PRE_TRADE_CHECKS", extra={"symbol": symbol})
-        return
+        return False
 
-    raw_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+    try:
+        raw_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+    except APIError as e:
+        msg = str(e).lower()
+        if "subscription does not permit querying recent sip data" in msg:
+            logger.debug(f"{symbol}: minute fetch failed, falling back to daily.")
+            raw_df = ctx.data_fetcher.get_daily_df(ctx, symbol)
+            if raw_df is None or raw_df.empty:
+                logger.debug(f"{symbol}: no daily data either; skipping.")
+                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+                return False
+        else:
+            raise
     if raw_df is None or raw_df.empty:
-        logger.info(f"SKIP_NO_RAW_DATA | symbol={symbol}")
-        return
+        logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+        return False
 
     feat_df = prepare_indicators(raw_df, freq="intraday")
     if feat_df.empty:
         logger.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
-        return
+        return True
 
     if hasattr(model, "feature_names_in_"):
         feature_names = list(model.feature_names_in_)
@@ -2458,7 +2475,7 @@ def trade_logic(
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
         logger.info(f"SKIP_MISSING_FEATURES | symbol={symbol}  missing={missing}")
-        return
+        return True
 
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, feat_df, symbol, model)
     comp_list = [
@@ -2513,7 +2530,7 @@ def trade_logic(
 
         if raw_qty <= 0:
             logger.debug(f"SKIP_NO_QTY | symbol={symbol}")
-            return
+            return True
 
         logger.info(
             f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  "
@@ -2522,7 +2539,7 @@ def trade_logic(
 
         if not sector_exposure_ok(ctx, symbol, raw_qty, current_price):
             logger.info("SKIP_SECTOR_CAP", extra={"symbol": symbol})
-            return
+            return True
 
         order = submit_order(ctx, symbol, raw_qty, "buy")
         if order is None:
@@ -2550,7 +2567,7 @@ def trade_logic(
                 ctx.stop_targets[symbol] = stop
                 ctx.take_profit_targets[symbol] = take
 
-        return
+        return True
 
     # Entry: bearish short
     if final_score < 0 and conf >= BUY_THRESHOLD and current_qty == 0:
@@ -2562,7 +2579,7 @@ def trade_logic(
             asset = ctx.api.get_asset(symbol)
             if hasattr(asset, "shortable") and not asset.shortable:
                 logger.info(f"SKIP_NOT_SHORTABLE | symbol={symbol}")
-                return
+                return True
             avail = getattr(asset, "shortable_shares", None)
             if avail is not None:
                 qty = min(qty, int(avail))
@@ -2571,7 +2588,7 @@ def trade_logic(
 
         if qty <= 0:
             logger.debug(f"SKIP_NO_QTY | symbol={symbol}")
-            return
+            return True
 
         logger.info(
             f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  "
@@ -2579,7 +2596,7 @@ def trade_logic(
         )
         if not sector_exposure_ok(ctx, symbol, qty, current_price):
             logger.info("SKIP_SECTOR_CAP", extra={"symbol": symbol})
-            return
+            return True
 
         order = submit_order(ctx, symbol, qty, "sell")
         if order is None:
@@ -2608,7 +2625,7 @@ def trade_logic(
                 ctx.stop_targets[symbol] = stop
                 ctx.take_profit_targets[symbol] = take
 
-        return
+        return True
 
     # If holding, check for stops/take/trailing
     if current_qty != 0:
@@ -2637,14 +2654,14 @@ def trade_logic(
                 maybe_pyramid(ctx, symbol, entry_price, price, atr, conf)
             except Exception:
                 pass
-        return
+        return True
 
     # Else hold / no action
     logger.info(
         f"SKIP_LOW_OR_NO_SIGNAL | symbol={symbol}  "
         f"final_score={final_score:.4f}  confidence={conf:.4f}"
     )
-    return
+    return True
 
 
 
@@ -2667,7 +2684,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     old = ctx.portfolio_weights
     drift = max(abs(current[s] - old.get(s, 0)) for s in current) if current else 0
     if drift <= 0.1:
-        return
+        return True
     ctx.portfolio_weights = current
     total_value = float(ctx.api.get_account().portfolio_value)
     for sym, w in current.items():
@@ -3473,6 +3490,9 @@ def run_all_trades_worker(model):
     if _running:
         logger.warning("RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
+    if not is_market_open():
+        logger.info("MARKET_CLOSED_NO_FETCH")
+        return
     _running = True
     try:
         # On each run, clear open orders and correct any position mismatches
@@ -3525,7 +3545,6 @@ def run_all_trades_worker(model):
         if not tickers:
             logger.warning("No tickers passed screening—using fallback watchlist.")
             tickers = list(candidates)
-            logger.warning(f"Falling back to full watchlist: {tickers}")
         logger.info("CANDIDATES_SCREENED", extra={"tickers": tickers})
         ctx.tickers = tickers
         ctx.portfolio_weights = compute_portfolio_weights(tickers)
@@ -3538,16 +3557,14 @@ def run_all_trades_worker(model):
         current_cash = float(acct.cash)
         regime_ok = check_market_regime()
 
-        futures = []
+        had_data = False
         for symbol in tickers:
-            futures.append(executor.submit(_safe_trade, ctx, symbol, current_cash, model, regime_ok))
+            if _safe_trade(ctx, symbol, current_cash, model, regime_ok):
+                had_data = True
 
-        # Wait for all trades to finish before allowing next run
-        for f in as_completed(futures):
-            try:
-                f.result()
-            except Exception:
-                pass
+        if not had_data:
+            logger.warning("no symbols returned any price data; skipping strategy computation.")
+            return
 
         run_multi_strategy(ctx)
         logger.info("RUN_ALL_TRADES_COMPLETE")
