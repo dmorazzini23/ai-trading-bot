@@ -47,10 +47,10 @@ class DataFetchError(Exception):
 def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe: str) -> pd.DataFrame:
     """Fetch historical bars for a symbol from Alpaca using IEX feed."""
     tf_map = {
-        '1Min': TimeFrame.Minute,
-        '5Min': TimeFrame(5, TimeFrameUnit.Minute),
-        '1Hour': TimeFrame.Hour,
-        '1Day': TimeFrame.Day,
+        "1Min": TimeFrame.Minute,
+        "5Min": TimeFrame(5, TimeFrameUnit.Minute),
+        "1Hour": TimeFrame.Hour,
+        "1Day": TimeFrame.Day,
     }
     tf = tf_map.get(timeframe)
     if tf is None:
@@ -61,17 +61,55 @@ def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe
         start=datetime.combine(start_date, datetime.min.time(), timezone.utc),
         end=datetime.combine(end_date, datetime.max.time(), timezone.utc),
         timeframe=tf,
-        feed='iex'
+        feed="iex",
     )
     try:
         bars = _DATA_CLIENT.get_stock_bars(req).df
     except Exception as e:
         logger.warning(f"[get_historical_data] API error for {symbol}: {e}")
         raise
+
     if isinstance(bars.columns, pd.MultiIndex):
         bars = bars.xs(symbol, level=0, axis=1)
     else:
         bars = bars.drop(columns=["symbol"], errors="ignore")
+
+    bars = pd.DataFrame(bars)
+
+    rename_map = {}
+    if "H" in bars.columns:
+        rename_map["H"] = "high"
+    if "High" in bars.columns:
+        rename_map["High"] = "high"
+    if "h" in bars.columns:
+        rename_map["h"] = "high"
+    if "L" in bars.columns:
+        rename_map["L"] = "low"
+    if "Low" in bars.columns:
+        rename_map["Low"] = "low"
+    if "l" in bars.columns:
+        rename_map["l"] = "low"
+    if "C" in bars.columns:
+        rename_map["C"] = "close"
+    if "Close" in bars.columns:
+        rename_map["Close"] = "close"
+    if "c" in bars.columns:
+        rename_map["c"] = "close"
+    if "V" in bars.columns:
+        rename_map["V"] = "volume"
+    if "Volume" in bars.columns:
+        rename_map["Volume"] = "volume"
+    if "v" in bars.columns:
+        rename_map["v"] = "volume"
+    if "O" in bars.columns:
+        rename_map["O"] = "open"
+    if "Open" in bars.columns:
+        rename_map["Open"] = "open"
+    if "o" in bars.columns:
+        rename_map["o"] = "open"
+    if rename_map:
+        bars = bars.rename(columns=rename_map)
+
     try:
         if isinstance(bars.index[0], tuple):
             raw_ts = [ts[0] for ts in bars.index]
@@ -81,13 +119,14 @@ def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe
         bars.index = bars.index.tz_localize(None)
     except Exception:
         return pd.DataFrame()
-    return bars.rename(columns={
-        'open': 'Open',
-        'high': 'High',
-        'low': 'Low',
-        'close': 'Close',
-        'volume': 'Volume',
-    })
+
+    bars["timestamp"] = bars.index
+
+    for col in ["open", "high", "low", "close", "volume"]:
+        if col not in bars.columns:
+            bars[col] = np.nan
+
+    return bars[["timestamp", "open", "high", "low", "close", "volume"]]
 
 
 def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
@@ -152,23 +191,24 @@ class FinnhubFetcher:
         for sym in syms:
             self._throttle()
             resp = self.client.stock_candles(sym, resolution, _from=start_ts, to=now_ts)
-            if resp.get('s') != 'ok':
+            if resp.get("s") != "ok":
                 frames.append(pd.DataFrame())
                 continue
             df = pd.DataFrame({
-                'Open': resp['o'],
-                'High': resp['h'],
-                'Low': resp['l'],
-                'Close': resp['c'],
-                'Volume': resp['v'],
-            }, index=pd.to_datetime(resp['t'], unit='s', utc=True))
+                "open": resp["o"],
+                "high": resp["h"],
+                "low": resp["l"],
+                "close": resp["c"],
+                "volume": resp["v"],
+            }, index=pd.to_datetime(resp["t"], unit="s", utc=True))
             df.index = df.index.tz_convert(None)
+            df["timestamp"] = df.index
             frames.append(df)
         if not frames:
             return pd.DataFrame()
         if len(frames) == 1:
             return frames[0]
-        return pd.concat(frames, axis=1, keys=syms, names=['Symbol','Field'])
+        return pd.concat(frames, axis=0, keys=syms, names=["symbol"]).reset_index(level=0)
 
 fh = FinnhubFetcher()
 
@@ -211,7 +251,7 @@ class DataFetcher:
         try:
             df = get_historical_data(symbol, start, end, '1Min')
             if df is not None and not df.empty:
-                df = df[["Open", "High", "Low", "Close", "Volume"]]
+                df = df[["timestamp", "open", "high", "low", "close", "volume"]]
         except APIError as e:
             msg = str(e).lower()
             if "subscription does not permit querying recent sip data" in msg:

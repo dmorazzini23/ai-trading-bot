@@ -83,11 +83,34 @@ MODEL_FILES = {
 # ─── COPY&PASTE of prepare_indicators (unchanged) ─────────────────
 def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.copy()
+
+    rename_map = {}
+    if "High" in df.columns:
+        rename_map["High"] = "high"
+    if "Low" in df.columns:
+        rename_map["Low"] = "low"
+    if "Close" in df.columns:
+        rename_map["Close"] = "close"
+    if "Open" in df.columns:
+        rename_map["Open"] = "open"
+    if "Volume" in df.columns:
+        rename_map["Volume"] = "volume"
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
+    required = ["high", "low", "close", "volume"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise KeyError(f"Missing columns in prepare_indicators(): {missing}")
+
     if df.index.name:
         df = df.reset_index().rename(columns={df.index.name: "Date"})
     else:
         df = df.reset_index().rename(columns={"index": "Date"})
-    df["Date"] = pd.to_datetime(df["Date"])
+    if "timestamp" in df.columns and df["Date"].dtype == object:
+        df["Date"] = pd.to_datetime(df["timestamp"])
+    else:
+        df["Date"] = pd.to_datetime(df["Date"])
     df = df.sort_values("Date").set_index("Date")
 
     # Calculate basic TA indicators
@@ -270,7 +293,11 @@ def build_feature_label_df(
             print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {Δ_minutes + 1}")
             continue
 
-        feat = prepare_indicators(raw, freq="intraday")
+        try:
+            feat = prepare_indicators(raw, freq="intraday")
+        except KeyError as e:
+            print(f">> DEBUG: Skipping {sym} in build_feature_label_df(): {e}")
+            continue
         if feat.empty:
             print(f"[build_feature_label_df] – {sym} indicators empty after dropna")
             continue
