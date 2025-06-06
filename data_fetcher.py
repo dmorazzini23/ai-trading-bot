@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 import pandas as pd
+import numpy as np
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
@@ -125,6 +126,10 @@ def get_historical_data(symbol: str, start_date: date, end_date: date, timeframe
     for col in ["open", "high", "low", "close", "volume"]:
         if col not in bars.columns:
             bars[col] = np.nan
+
+    bars[["open", "high", "low", "close", "volume"]] = (
+        bars[["open", "high", "low", "close", "volume"]].astype(float)
+    )
 
     return bars[["timestamp", "open", "high", "low", "close", "volume"]]
 

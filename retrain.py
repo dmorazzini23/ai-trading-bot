@@ -85,16 +85,17 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.copy()
 
     rename_map = {}
-    if "High" in df.columns:
-        rename_map["High"] = "high"
-    if "Low" in df.columns:
-        rename_map["Low"] = "low"
-    if "Close" in df.columns:
-        rename_map["Close"] = "close"
-    if "Open" in df.columns:
-        rename_map["Open"] = "open"
-    if "Volume" in df.columns:
-        rename_map["Volume"] = "volume"
+    variants = {
+        "high": ["High", "HIGH", "H", "h"],
+        "low": ["Low", "LOW", "L", "l"],
+        "close": ["Close", "CLOSE", "C", "c"],
+        "open": ["Open", "OPEN", "O", "o"],
+        "volume": ["Volume", "VOLUME", "V", "v"],
+    }
+    for std, cols in variants.items():
+        for col in cols:
+            if col in df.columns:
+                rename_map[col] = std
     if rename_map:
         df = df.rename(columns=rename_map)
 
@@ -102,6 +103,10 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise KeyError(f"Missing columns in prepare_indicators(): {missing}")
+
+    for col in ["open", "high", "low", "close", "volume"]:
+        if col in df.columns:
+            df[col] = df[col].astype(float)
 
     if df.index.name:
         df = df.reset_index().rename(columns={df.index.name: "Date"})
@@ -114,30 +119,30 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.sort_values("Date").set_index("Date")
 
     # Calculate basic TA indicators
-    df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
-    df["rsi"] = ta.rsi(df["close"], length=14)
-    df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+    df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"]).astype(float)
+    df["rsi"] = ta.rsi(df["close"], length=14).astype(float)
+    df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14).astype(float)
 
     # ── New advanced indicators ───────────────────────────────────────────
     try:
         kc = ta.kc(df["high"], df["low"], df["close"], length=20)
-        df["kc_lower"] = kc.iloc[:, 0]
-        df["kc_mid"]   = kc.iloc[:, 1]
-        df["kc_upper"] = kc.iloc[:, 2]
+        df["kc_lower"] = kc.iloc[:, 0].astype(float)
+        df["kc_mid"]   = kc.iloc[:, 1].astype(float)
+        df["kc_upper"] = kc.iloc[:, 2].astype(float)
     except Exception:
         df["kc_lower"] = np.nan
         df["kc_mid"]   = np.nan
         df["kc_upper"] = np.nan
 
-    df["atr_band_upper"] = df["close"] + 1.5 * df["atr"]
-    df["atr_band_lower"] = df["close"] - 1.5 * df["atr"]
-    df["avg_vol_20"]      = df["volume"].rolling(20).mean()
-    df["dow"]             = df.index.dayofweek
+    df["atr_band_upper"] = (df["close"] + 1.5 * df["atr"]).astype(float)
+    df["atr_band_lower"] = (df["close"] - 1.5 * df["atr"]).astype(float)
+    df["avg_vol_20"]      = df["volume"].rolling(20).mean().astype(float)
+    df["dow"]             = df.index.dayofweek.astype(float)
 
     try:
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-        df["macd"] = macd["MACD_12_26_9"]
-        df["macds"] = macd["MACDs_12_26_9"]
+        df["macd"] = macd["MACD_12_26_9"].astype(float)
+        df["macds"] = macd["MACDs_12_26_9"].astype(float)
     except Exception:
         df["macd"] = np.nan
         df["macds"] = np.nan
@@ -145,9 +150,9 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     # Additional indicators for richer ML features
     try:
         bb = ta.bbands(df["close"], length=20)
-        df["bb_upper"]   = bb["BBU_20_2.0"]
-        df["bb_lower"]   = bb["BBL_20_2.0"]
-        df["bb_percent"] = bb["BBP_20_2.0"]
+        df["bb_upper"]   = bb["BBU_20_2.0"].astype(float)
+        df["bb_lower"]   = bb["BBL_20_2.0"].astype(float)
+        df["bb_percent"] = bb["BBP_20_2.0"].astype(float)
     except Exception:
         df["bb_upper"] = np.nan
         df["bb_lower"] = np.nan
@@ -155,38 +160,38 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     try:
         adx = ta.adx(df["high"], df["low"], df["close"], length=14)
-        df["adx"] = adx["ADX_14"]
-        df["dmp"] = adx["DMP_14"]
-        df["dmn"] = adx["DMN_14"]
+        df["adx"] = adx["ADX_14"].astype(float)
+        df["dmp"] = adx["DMP_14"].astype(float)
+        df["dmn"] = adx["DMN_14"].astype(float)
     except Exception:
         df["adx"] = np.nan
         df["dmp"] = np.nan
         df["dmn"] = np.nan
 
     try:
-        df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20)
+        df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20).astype(float)
     except Exception:
         df["cci"] = np.nan
 
     try:
-        df["mfi"] = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
+        df["mfi"] = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14).astype(float)
     except Exception:
         df["mfi"] = np.nan
 
     try:
-        df["tema"] = ta.tema(df["close"], length=10)
+        df["tema"] = ta.tema(df["close"], length=10).astype(float)
     except Exception:
         df["tema"] = np.nan
 
     try:
-        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14)
+        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14).astype(float)
     except Exception:
         df["willr"] = np.nan
 
     try:
         psar = ta.psar(df["high"], df["low"], df["close"])
-        df["psar_long"]  = psar["PSARl_0.02_0.2"]
-        df["psar_short"] = psar["PSARs_0.02_0.2"]
+        df["psar_long"]  = psar["PSARl_0.02_0.2"].astype(float)
+        df["psar_short"] = psar["PSARs_0.02_0.2"].astype(float)
     except Exception:
         df["psar_long"] = np.nan
         df["psar_short"] = np.nan
@@ -195,34 +200,34 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         ich = ta.ichimoku(high=df["high"], low=df["low"], close=df["close"])
         conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
         base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
-        df["ichimoku_conv"] = conv.iloc[:, 0] if hasattr(conv, "iloc") else conv
-        df["ichimoku_base"] = base.iloc[:, 0] if hasattr(base, "iloc") else base
+        df["ichimoku_conv"] = (conv.iloc[:, 0] if hasattr(conv, "iloc") else conv).astype(float)
+        df["ichimoku_base"] = (base.iloc[:, 0] if hasattr(base, "iloc") else base).astype(float)
     except Exception:
         df["ichimoku_conv"] = np.nan
         df["ichimoku_base"] = np.nan
 
     try:
         st = ta.stochrsi(df["close"])
-        df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
+        df["stochrsi"] = st["STOCHRSIk_14_14_3_3"].astype(float)
     except Exception:
         df["stochrsi"] = np.nan
 
     # --- Multi-timeframe fusion ---
     try:
-        df["ret_5m"] = df["close"].pct_change(5)
-        df["ret_1h"] = df["close"].pct_change(60)
-        df["ret_d"] = df["close"].pct_change(390)
-        df["ret_w"] = df["close"].pct_change(1950)
-        df["vol_norm"] = df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
-        df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
-        df["vol_5m"]  = df["close"].pct_change().rolling(5).std()
-        df["vol_1h"]  = df["close"].pct_change().rolling(60).std()
-        df["vol_d"]   = df["close"].pct_change().rolling(390).std()
-        df["vol_w"]   = df["close"].pct_change().rolling(1950).std()
-        df["vol_ratio"] = df["vol_5m"] / df["vol_1h"]
-        df["mom_agg"] = df["ret_5m"] + df["ret_1h"] + df["ret_d"]
-        df["lag_close_1"] = df["close"].shift(1)
-        df["lag_close_3"] = df["close"].shift(3)
+        df["ret_5m"] = df["close"].pct_change(5).astype(float)
+        df["ret_1h"] = df["close"].pct_change(60).astype(float)
+        df["ret_d"] = df["close"].pct_change(390).astype(float)
+        df["ret_w"] = df["close"].pct_change(1950).astype(float)
+        df["vol_norm"] = (df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()).astype(float)
+        df["5m_vs_1h"] = (df["ret_5m"] - df["ret_1h"]).astype(float)
+        df["vol_5m"]  = df["close"].pct_change().rolling(5).std().astype(float)
+        df["vol_1h"]  = df["close"].pct_change().rolling(60).std().astype(float)
+        df["vol_d"]   = df["close"].pct_change().rolling(390).std().astype(float)
+        df["vol_w"]   = df["close"].pct_change().rolling(1950).std().astype(float)
+        df["vol_ratio"] = (df["vol_5m"] / df["vol_1h"]).astype(float)
+        df["mom_agg"] = (df["ret_5m"] + df["ret_1h"] + df["ret_d"]).astype(float)
+        df["lag_close_1"] = df["close"].shift(1).astype(float)
+        df["lag_close_3"] = df["close"].shift(3).astype(float)
     except Exception:
         df["ret_5m"] = df["ret_1h"] = df["ret_d"] = df["ret_w"] = np.nan
         df["vol_norm"] = df["5m_vs_1h"] = np.nan
@@ -312,7 +317,14 @@ def build_feature_label_df(
         else:
             regimes = pd.Series([regime_info] * len(feat))
 
-        closes = raw["close"].values
+        if "close" not in raw.columns:
+            rename_candidates = {"Close": "close", "C": "close", "c": "close"}
+            raw = raw.rename(columns={k: v for k, v in rename_candidates.items() if k in raw.columns})
+        try:
+            closes = raw["close"].values
+        except KeyError:
+            print(f">> DEBUG: Skipping {sym}: 'close' column missing")
+            continue
         n = len(feat)
         for i in range(n - Δ_minutes):
             buy_fill = closes[i] * (1 + 0.0005)
