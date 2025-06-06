@@ -3548,6 +3548,8 @@ def run_all_trades_worker(model):
         ctx.capital_scaler.update(ctx, equity)
         params['CAPITAL_CAP'] = ctx.params['CAPITAL_CAP']
         now_utc = pd.Timestamp.utcnow()
+        start_date = (now_utc - timedelta(days=5)).date()
+        end_date = now_utc.date()
 
         # Update SPY vol stats first
         compute_spy_vol_stats(ctx)
@@ -3571,23 +3573,18 @@ def run_all_trades_worker(model):
         current_cash = float(acct.cash)
         regime_ok = check_market_regime()
 
-        had_data = False
+        processed = []
         for symbol in symbols:
             logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
-            start, end = compute_time_range()
-            df = None
-            try:
-                df = get_minute_df(symbol, start.date(), end.date())
-            except APIError:
-                raise
-            if df is None or df.empty:
-                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+            price_df = get_minute_df(symbol, start_date, end_date)
+            if price_df.empty or 'close' not in price_df.columns:
+                print(f"INFO SKIP_NO_PRICE_DATA | {symbol}")
                 continue
-            had_data = True
+            processed.append(symbol)
             _safe_trade(ctx, symbol, current_cash, model, regime_ok)
 
-        if not had_data:
-            logger.warning("no symbols returned any price data; skipping strategy computation.")
+        if not processed:
+            print("WARNING no symbols returned any price data; skipping strategy computation.")
             return
 
         run_multi_strategy(ctx)
