@@ -367,6 +367,7 @@ executor = ThreadPoolExecutor(max_workers=4)
 # EVENT cooldown
 _LAST_EVENT_TS = {}
 EVENT_COOLDOWN = 15.0  # seconds
+REBALANCE_HOLD_SECONDS = 600  # skip selling shortly after rebalance buys
 
 # Loss streak kill-switch
 _LOSS_STREAK = 0
@@ -1350,6 +1351,7 @@ class BotContext:
     stop_targets: dict[str, float] = field(default_factory=dict)
     portfolio_weights: dict[str, float] = field(default_factory=dict)
     tickers: List[str] = field(default_factory=list)
+    rebalance_buys: dict[str, datetime] = field(default_factory=dict)
     risk_engine: RiskEngine | None = None
     allocator: StrategyAllocator | None = None
     strategies: List[Any] = field(default_factory=list)
@@ -1392,6 +1394,7 @@ ctx = BotContext(
     take_profit_targets={},
     stop_targets={},
     portfolio_weights={},
+    rebalance_buys={},
     risk_engine=risk_engine,
     allocator=allocator,
     strategies=strategies,
@@ -2394,6 +2397,17 @@ def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple
     except Exception:
         current_qty = 0
 
+    rebalance_time = ctx.rebalance_buys.get(symbol)
+    recent_rebalance = False
+    if rebalance_time:
+        if datetime.now(timezone.utc) - rebalance_time < timedelta(seconds=REBALANCE_HOLD_SECONDS):
+            recent_rebalance = True
+        else:
+            ctx.rebalance_buys.pop(symbol, None)
+
+    if recent_rebalance:
+        return False, 0, ""
+
     stop = ctx.stop_targets.get(symbol)
     if stop is not None:
         if current_qty > 0 and price <= stop:
@@ -2508,8 +2522,16 @@ def trade_logic(
     except Exception:
         current_qty = 0
 
+    reb_time = ctx.rebalance_buys.get(symbol)
+    recent_rebal = False
+    if reb_time:
+        if datetime.now(timezone.utc) - reb_time < timedelta(seconds=REBALANCE_HOLD_SECONDS):
+            recent_rebal = True
+        else:
+            ctx.rebalance_buys.pop(symbol, None)
+
     # Exit: bearish reversal for longs
-    if final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
+    if not recent_rebal and final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
         price = get_latest_close(feat_df)
         logger.info(
             f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
@@ -2522,7 +2544,7 @@ def trade_logic(
         return
 
     # Exit: bullish reversal for shorts
-    if final_score > 0 and current_qty < 0 and abs(conf) >= CONF_THRESHOLD:
+    if not recent_rebal and final_score > 0 and current_qty < 0 and abs(conf) >= CONF_THRESHOLD:
         price = get_latest_close(feat_df)
         logger.info(
             f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
@@ -2643,7 +2665,10 @@ def trade_logic(
     if current_qty != 0:
         price = get_latest_close(feat_df)
         atr   = feat_df["atr"].iloc[-1]
-        should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
+        if not recent_rebal:
+            should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
+        else:
+            should_exit_flag, exit_qty, reason = False, 0, ""
         if should_exit_flag and exit_qty > 0:
             logger.info(
                 f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  "
@@ -3514,7 +3539,6 @@ def run_all_trades_worker(model):
         return
     if not is_market_open():
         logger.info("MARKET_CLOSED_NO_FETCH")
-        return
     _running = True
     try:
         # On each run, clear open orders and correct any position mismatches
@@ -3638,6 +3662,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                 try:
                     submit_order(ctx, sym, quantity, "buy")
                     logger.info(f"INITIAL_REBALANCE: Placed order for {sym} @ {quantity} shares.")
+                    ctx.rebalance_buys[sym] = datetime.now(timezone.utc)
                 except Exception as e:
                     logger.error(f"INITIAL_REBALANCE: Order failed for {sym}: {repr(e)}")
 
