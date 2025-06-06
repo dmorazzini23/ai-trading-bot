@@ -93,6 +93,25 @@ from strategies import MomentumStrategy, MeanReversionStrategy, TradeSignal
 logger = logging.getLogger("AITradingBot")
 logging.basicConfig(level=logging.INFO)
 
+def get_latest_close(df: pd.DataFrame) -> float:
+    """
+    Return the most recent closing price from df["close"].
+    If df is None, empty, missing "close", or the last value is NaN or ≤0, return 0.0.
+    """
+    if df is None or df.empty:
+        return 0.0
+    # Prefer lowercase "close"; fall back to uppercase if still present
+    if "close" in df.columns:
+        last = df["close"].iloc[-1]
+    elif "Close" in df.columns:
+        last = df["Close"].iloc[-1]
+    else:
+        return 0.0
+
+    if pd.isna(last) or last <= 0:
+        return 0.0
+    return float(last)
+
 def cancel_all_open_orders(ctx: "BotContext") -> None:
     """
     On startup or each run, cancel every Alpaca order whose status is 'open'.
@@ -2627,20 +2646,6 @@ def trade_logic(
     )
     return
 
-def get_latest_close(df: pd.DataFrame) -> float:
-    """Return last close price or a $1.00 fallback for missing/zero data."""
-    if df is None or df.empty:
-        return 1.0
-    # Use lowercase column if available, else fallback to title case
-    if "close" in df.columns:
-        last_close = df["close"].iloc[-1]
-    elif "Close" in df.columns:
-        last_close = df["Close"].iloc[-1]
-    else:
-        last_close = 1.0
-    if last_close == 0 or pd.isna(last_close):
-        return 1.0
-    return float(last_close)
 
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
@@ -3575,38 +3580,46 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     if n == 0 or cash <= 0 or buying_power <= 0:
         logger.info("INITIAL_REBALANCE_NO_SYMBOLS_OR_NO_CASH")
         return
-    per_symbol = cash / n
-    for sym in symbols:
-        try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=[sym])
-            quote: Quote = ctx.data_client.get_stock_latest_quote(req)
-            price = float(getattr(quote, "ask_price", 0) or 0)
-        except APIError as e:
-            logger.warning("INITIAL_REBALANCE_QUOTE_FAILED", extra={"symbol": sym, "error": str(e)})
-            continue
-        except Exception as e:
-            logger.exception("INITIAL_REBALANCE_FETCH_ERROR", extra={"symbol": sym, "error": str(e)})
-            continue
 
-        if price <= 0:
-            logger.warning("INITIAL_REBALANCE_INVALID_PRICE", extra={"symbol": sym, "price": price})
-            continue
+    # Determine current UTC time
+    now_utc = datetime.now(timezone.utc)
+    # If it’s between 00:00 and 00:15 UTC, daily bars may not be published yet.
+    if now_utc.hour == 0 and now_utc.minute < 15:
+        logger.info("INITIAL_REBALANCE: Too early—daily bars not live yet.")
+    else:
+        # Gather all symbols that have a valid, nonzero close
+        valid_symbols = []
+        valid_prices = {}
+        for symbol in symbols:
+            df_daily = ctx.data_fetcher.get_daily_df(ctx, symbol)
+            price = get_latest_close(df_daily)
+            if price <= 0:
+                # skip symbols with no real close data
+                continue
+            valid_symbols.append(symbol)
+            valid_prices[symbol] = price
 
-        qty = int(per_symbol // price)
-        if qty <= 0:
-            continue
+        if not valid_symbols:
+            logger.warning("INITIAL_REBALANCE: No valid prices for any symbol—skipping rebalance.")
+        else:
+            # Compute equal weights on valid symbols only
+            total_capital = cash
+            weight_per = 1.0 / len(valid_symbols)
 
-        logger.info("INITIAL_REBALANCE_BUY", extra={"symbol": sym, "qty": qty, "price": price})
-        try:
-            submit_order(ctx, sym, qty, "buy")
-        except APIError as e:
-            msg = str(e).lower()
-            if getattr(e, "status_code", None) == 403 or "forbidden" in msg:
-                logger.error("INITIAL_REBALANCE_FORBIDDEN", extra={"symbol": sym, "error": str(e)})
-            elif "insufficient" in msg or "buying power" in msg:
-                logger.warning("INITIAL_REBALANCE_SKIPPED_INSUFFICIENT", extra={"symbol": sym, "error": str(e)})
-            else:
-                logger.exception("INITIAL_REBALANCE_ERROR", extra={"symbol": sym, "error": str(e)})
+            for sym in valid_symbols:
+                price = valid_prices[sym]
+                # compute integer share quantity
+                quantity = int((total_capital * weight_per) // price)
+                if quantity < 1:
+                    logger.warning(
+                        f"INITIAL_REBALANCE: Computed <1 share for {sym} at price {price:.2f}, skipping."
+                    )
+                    continue
+                try:
+                    submit_order(ctx, sym, quantity, "buy")
+                    logger.info(f"INITIAL_REBALANCE: Placed order for {sym} @ {quantity} shares.")
+                except Exception as e:
+                    logger.error(f"INITIAL_REBALANCE: Order failed for {sym}: {repr(e)}")
 
 if __name__ == "__main__":
     def _handle_term(signum, frame):
