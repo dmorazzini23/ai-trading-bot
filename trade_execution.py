@@ -15,7 +15,6 @@ from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.models import Order
 from alpaca_trade_api.rest import APIError
-from alpaca_trade_api.exceptions import APIConnectionError
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockLatestQuoteRequest
 
@@ -186,7 +185,7 @@ class ExecutionEngine:
                     )
                     order = api.submit_order(order_data=order_req)
                     break
-                except (APIConnectionError, TimeoutError) as e:
+                except (APIError, TimeoutError) as e:
                     time.sleep(1)
                     if attempt == 1:
                         self.logger.warning(f'submit_order failed for {symbol}: {e}')
