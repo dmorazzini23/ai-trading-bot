@@ -16,7 +16,8 @@ from lightgbm import LGBMClassifier
 
 import pandas_ta as ta
 
-from config import NEWS_API_KEY
+import config
+NEWS_API_KEY = config.NEWS_API_KEY
 
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -190,12 +191,16 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     try:
         mfi_vals = ta.mfi(
-            df["high"], df["low"], df["close"], df["volume"], length=MFI_PERIOD
-        )
-        df["mfi"] = mfi_vals.astype(float)
-        df.dropna(subset=["mfi"], inplace=True)
+            df["high"],
+            df["low"],
+            df["close"],
+            df["volume"],
+            length=MFI_PERIOD,
+        ).astype(float)
+        df["mfi_14"] = mfi_vals
+        df.dropna(subset=["mfi_14"], inplace=True)
     except Exception:
-        df["mfi"] = np.nan
+        df["mfi_14"] = np.nan
 
     df["tema"] = np.nan
     try:

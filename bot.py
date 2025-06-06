@@ -63,18 +63,17 @@ import joblib
 
 import sentry_sdk
 
-from config import (
-    ALPACA_API_KEY,
-    ALPACA_SECRET_KEY,
-    ALPACA_BASE_URL,
-    ALPACA_PAPER,
-    validate_alpaca_credentials,
-    NEWS_API_KEY as CONFIG_NEWS_API_KEY,
-    FINNHUB_API_KEY,
-    SENTRY_DSN,
-    BOT_MODE as BOT_MODE_ENV,
-    RUN_HEALTHCHECK,
-)
+import config
+ALPACA_API_KEY = config.ALPACA_API_KEY
+ALPACA_SECRET_KEY = config.ALPACA_SECRET_KEY
+ALPACA_BASE_URL = config.ALPACA_BASE_URL
+ALPACA_PAPER = config.ALPACA_PAPER
+validate_alpaca_credentials = config.validate_alpaca_credentials
+CONFIG_NEWS_API_KEY = config.NEWS_API_KEY
+FINNHUB_API_KEY = config.FINNHUB_API_KEY
+SENTRY_DSN = config.SENTRY_DSN
+BOT_MODE_ENV = config.BOT_MODE
+RUN_HEALTHCHECK = config.RUN_HEALTHCHECK
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
