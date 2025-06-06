@@ -131,15 +131,25 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
         df = df.xs(symbol, level=0, axis=1)
     else:
         df = df.drop(columns=["symbol"], errors="ignore")
+
+    if isinstance(df.index, pd.MultiIndex):
+        df = df.reset_index(level=0, drop=True)
+    elif len(df.index) and isinstance(df.index[0], tuple):
+        df.index = [idx[-1] for idx in df.index]
+
     df.index = pd.to_datetime(df.index).tz_localize(None)
     df["timestamp"] = df.index
 
-    rename_map = {c: c.lower() for c in df.columns if c.lower() in {"open", "high", "low", "close", "volume"}}
+    rename_map = {}
+    for c in df.columns:
+        lc = c.lower()
+        if lc in {"open", "high", "low", "close", "volume"}:
+            rename_map[c] = lc.capitalize() if lc != "close" else "Close"
     if rename_map:
         df = df.rename(columns=rename_map)
 
     try:
-        return df[["timestamp", "open", "high", "low", "close", "volume"]]
+        return df[["timestamp", "Open", "High", "Low", "Close", "Volume"]]
     except KeyError:
         logger.warning(f"Missing OHLCV columns for {symbol}; returning empty DataFrame")
         return pd.DataFrame()
@@ -154,12 +164,35 @@ def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
             df = get_historical_data(symbol, start_dt, end_dt, "1Min")
             break
         except (APIError, RetryError) as e:
-            logger.debug(f"get_minute_df attempt {attempt+1} failed for {symbol}: {e}")
+            logger.debug(
+                f"get_minute_df attempt {attempt+1} failed for {symbol}: {e}"
+            )
             pytime.sleep(1)
     else:
         try:
-            req = StockBarsRequest(symbol_or_symbols=[symbol], start=start_dt, end=end_dt, timeframe=TimeFrame.Minute, feed="iex")
+            req = StockBarsRequest(
+                symbol_or_symbols=[symbol],
+                start=start_dt,
+                end=end_dt,
+                timeframe=TimeFrame.Minute,
+                feed="iex",
+            )
             df = _DATA_CLIENT.get_stock_bars(req).df
+            if isinstance(df.columns, pd.MultiIndex):
+                df = df.xs(symbol, level=0, axis=1)
+            else:
+                df = df.drop(columns=["symbol"], errors="ignore")
+            if isinstance(df.index, pd.MultiIndex):
+                df = df.reset_index(level=0, drop=True)
+            rename_map = {c: c.capitalize() for c in df.columns}
+            df = df.rename(columns=rename_map)
+            try:
+                df = df[["Open", "High", "Low", "Close", "Volume"]]
+            except KeyError:
+                logger.warning(
+                    f"NO ALTERNATIVE MINUTE DATA FOR {symbol}"
+                )
+                return pd.DataFrame()
         except (APIError, RetryError):
             logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
             return pd.DataFrame()
@@ -167,17 +200,29 @@ def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
         df = df.xs(symbol, level=0, axis=1)
     else:
         df = df.drop(columns=["symbol"], errors="ignore")
+
+    if isinstance(df.index, pd.MultiIndex):
+        df = df.reset_index(level=0, drop=True)
+    elif len(df.index) and isinstance(df.index[0], tuple):
+        df.index = [idx[-1] for idx in df.index]
+
     df.index = pd.to_datetime(df.index).tz_localize(None)
     df["timestamp"] = df.index
 
-    rename_map = {c: c.lower() for c in df.columns if c.lower() in {"open", "high", "low", "close", "volume"}}
+    rename_map = {}
+    for c in df.columns:
+        lc = c.lower()
+        if lc in {"open", "high", "low", "close", "volume"}:
+            rename_map[c] = lc.capitalize() if lc != "close" else "Close"
     if rename_map:
         df = df.rename(columns=rename_map)
 
     try:
-        return df[["timestamp", "open", "high", "low", "close", "volume"]]
+        return df[["timestamp", "Open", "High", "Low", "Close", "Volume"]]
     except KeyError:
-        logger.warning(f"Missing OHLCV columns for {symbol}; returning empty DataFrame")
+        logger.warning(
+            f"Missing OHLCV columns for {symbol}; returning empty DataFrame"
+        )
         return pd.DataFrame()
 
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
