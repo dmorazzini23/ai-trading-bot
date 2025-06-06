@@ -92,8 +92,6 @@ def predict(csv_path: str, freq: str = "intraday"):
         return None, None
     print(f"Regime: {regime}, Prediction: {pred}, Probability: {proba:.4f}")
     return pred, proba
-    print(f"Regime: {regime}, Prediction: {pred}, Probability: {proba:.4f}")
-    return pred, proba
 
 
 if __name__ == "__main__":
