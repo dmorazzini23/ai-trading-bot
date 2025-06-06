@@ -99,14 +99,12 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     if rename_map:
         df = df.rename(columns=rename_map)
 
-    required = ["high", "low", "close", "volume"]
-    missing = [c for c in required if c not in df.columns]
-    if missing:
-        raise KeyError(f"Missing columns in prepare_indicators(): {missing}")
-
-    for col in ["open", "high", "low", "close", "volume"]:
-        if col in df.columns:
-            df[col] = df[col].astype(float)
+    for col in ["high", "low", "close", "volume"]:
+        if col not in df.columns:
+            raise KeyError(f"Missing column '{col}' in prepare_indicators")
+        df[col] = df[col].astype(float)
+    if "open" in df.columns:
+        df["open"] = df["open"].astype(float)
 
     if df.index.name:
         df = df.reset_index().rename(columns={df.index.name: "Date"})
@@ -119,83 +117,101 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.sort_values("Date").set_index("Date")
 
     # Calculate basic TA indicators
+    df["vwap"] = np.nan
     df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"]).astype(float)
+    df["rsi"] = np.nan
     df["rsi"] = ta.rsi(df["close"], length=14).astype(float)
+    df["atr"] = np.nan
     df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14).astype(float)
 
     # ── New advanced indicators ───────────────────────────────────────────
+    df["kc_lower"] = np.nan
+    df["kc_mid"] = np.nan
+    df["kc_upper"] = np.nan
     try:
         kc = ta.kc(df["high"], df["low"], df["close"], length=20)
         df["kc_lower"] = kc.iloc[:, 0].astype(float)
-        df["kc_mid"]   = kc.iloc[:, 1].astype(float)
+        df["kc_mid"] = kc.iloc[:, 1].astype(float)
         df["kc_upper"] = kc.iloc[:, 2].astype(float)
     except Exception:
-        df["kc_lower"] = np.nan
-        df["kc_mid"]   = np.nan
-        df["kc_upper"] = np.nan
+        pass
 
+    df["atr_band_upper"] = np.nan
+    df["atr_band_lower"] = np.nan
+    df["avg_vol_20"] = np.nan
+    df["dow"] = np.nan
     df["atr_band_upper"] = (df["close"] + 1.5 * df["atr"]).astype(float)
     df["atr_band_lower"] = (df["close"] - 1.5 * df["atr"]).astype(float)
-    df["avg_vol_20"]      = df["volume"].rolling(20).mean().astype(float)
-    df["dow"]             = df.index.dayofweek.astype(float)
+    df["avg_vol_20"] = df["volume"].rolling(20).mean().astype(float)
+    df["dow"] = df.index.dayofweek.astype(float)
 
+    df["macd"] = np.nan
+    df["macds"] = np.nan
     try:
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
         df["macd"] = macd["MACD_12_26_9"].astype(float)
         df["macds"] = macd["MACDs_12_26_9"].astype(float)
     except Exception:
-        df["macd"] = np.nan
-        df["macds"] = np.nan
+        pass
 
     # Additional indicators for richer ML features
+    df["bb_upper"] = np.nan
+    df["bb_lower"] = np.nan
+    df["bb_percent"] = np.nan
     try:
         bb = ta.bbands(df["close"], length=20)
-        df["bb_upper"]   = bb["BBU_20_2.0"].astype(float)
-        df["bb_lower"]   = bb["BBL_20_2.0"].astype(float)
+        df["bb_upper"] = bb["BBU_20_2.0"].astype(float)
+        df["bb_lower"] = bb["BBL_20_2.0"].astype(float)
         df["bb_percent"] = bb["BBP_20_2.0"].astype(float)
     except Exception:
-        df["bb_upper"] = np.nan
-        df["bb_lower"] = np.nan
-        df["bb_percent"] = np.nan
+        pass
 
+    df["adx"] = np.nan
+    df["dmp"] = np.nan
+    df["dmn"] = np.nan
     try:
         adx = ta.adx(df["high"], df["low"], df["close"], length=14)
         df["adx"] = adx["ADX_14"].astype(float)
         df["dmp"] = adx["DMP_14"].astype(float)
         df["dmn"] = adx["DMN_14"].astype(float)
     except Exception:
-        df["adx"] = np.nan
-        df["dmp"] = np.nan
-        df["dmn"] = np.nan
+        pass
 
+    df["cci"] = np.nan
     try:
         df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20).astype(float)
     except Exception:
-        df["cci"] = np.nan
+        pass
 
+    df["mfi"] = np.nan
     try:
         df["mfi"] = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14).astype(float)
     except Exception:
-        df["mfi"] = np.nan
+        pass
 
+    df["tema"] = np.nan
     try:
         df["tema"] = ta.tema(df["close"], length=10).astype(float)
     except Exception:
-        df["tema"] = np.nan
+        pass
 
+    df["willr"] = np.nan
     try:
         df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14).astype(float)
     except Exception:
-        df["willr"] = np.nan
+        pass
 
+    df["psar_long"] = np.nan
+    df["psar_short"] = np.nan
     try:
         psar = ta.psar(df["high"], df["low"], df["close"])
-        df["psar_long"]  = psar["PSARl_0.02_0.2"].astype(float)
+        df["psar_long"] = psar["PSARl_0.02_0.2"].astype(float)
         df["psar_short"] = psar["PSARs_0.02_0.2"].astype(float)
     except Exception:
-        df["psar_long"] = np.nan
-        df["psar_short"] = np.nan
+        pass
 
+    df["ichimoku_conv"] = np.nan
+    df["ichimoku_base"] = np.nan
     try:
         ich = ta.ichimoku(high=df["high"], low=df["low"], close=df["close"])
         conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
@@ -203,16 +219,30 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ichimoku_conv"] = (conv.iloc[:, 0] if hasattr(conv, "iloc") else conv).astype(float)
         df["ichimoku_base"] = (base.iloc[:, 0] if hasattr(base, "iloc") else base).astype(float)
     except Exception:
-        df["ichimoku_conv"] = np.nan
-        df["ichimoku_base"] = np.nan
+        pass
 
+    df["stochrsi"] = np.nan
     try:
         st = ta.stochrsi(df["close"])
         df["stochrsi"] = st["STOCHRSIk_14_14_3_3"].astype(float)
     except Exception:
-        df["stochrsi"] = np.nan
+        pass
 
     # --- Multi-timeframe fusion ---
+    df["ret_5m"] = np.nan
+    df["ret_1h"] = np.nan
+    df["ret_d"] = np.nan
+    df["ret_w"] = np.nan
+    df["vol_norm"] = np.nan
+    df["5m_vs_1h"] = np.nan
+    df["vol_5m"] = np.nan
+    df["vol_1h"] = np.nan
+    df["vol_d"] = np.nan
+    df["vol_w"] = np.nan
+    df["vol_ratio"] = np.nan
+    df["mom_agg"] = np.nan
+    df["lag_close_1"] = np.nan
+    df["lag_close_3"] = np.nan
     try:
         df["ret_5m"] = df["close"].pct_change(5).astype(float)
         df["ret_1h"] = df["close"].pct_change(60).astype(float)
@@ -220,19 +250,16 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ret_w"] = df["close"].pct_change(1950).astype(float)
         df["vol_norm"] = (df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()).astype(float)
         df["5m_vs_1h"] = (df["ret_5m"] - df["ret_1h"]).astype(float)
-        df["vol_5m"]  = df["close"].pct_change().rolling(5).std().astype(float)
-        df["vol_1h"]  = df["close"].pct_change().rolling(60).std().astype(float)
-        df["vol_d"]   = df["close"].pct_change().rolling(390).std().astype(float)
-        df["vol_w"]   = df["close"].pct_change().rolling(1950).std().astype(float)
+        df["vol_5m"] = df["close"].pct_change().rolling(5).std().astype(float)
+        df["vol_1h"] = df["close"].pct_change().rolling(60).std().astype(float)
+        df["vol_d"] = df["close"].pct_change().rolling(390).std().astype(float)
+        df["vol_w"] = df["close"].pct_change().rolling(1950).std().astype(float)
         df["vol_ratio"] = (df["vol_5m"] / df["vol_1h"]).astype(float)
         df["mom_agg"] = (df["ret_5m"] + df["ret_1h"] + df["ret_d"]).astype(float)
         df["lag_close_1"] = df["close"].shift(1).astype(float)
         df["lag_close_3"] = df["close"].shift(3).astype(float)
     except Exception:
-        df["ret_5m"] = df["ret_1h"] = df["ret_d"] = df["ret_w"] = np.nan
-        df["vol_norm"] = df["5m_vs_1h"] = np.nan
-        df["vol_5m"] = df["vol_1h"] = df["vol_d"] = df["vol_w"] = np.nan
-        df["vol_ratio"] = df["mom_agg"] = df["lag_close_1"] = df["lag_close_3"] = np.nan
+        pass
 
     df.ffill(inplace=True)
     df.bfill(inplace=True)
@@ -242,6 +269,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         "ichimoku_conv", "ichimoku_base", "stochrsi"
     ]
     if freq == "daily":
+        df["sma_50"] = np.nan
+        df["sma_200"] = np.nan
         df["sma_50"] = ta.sma(df["close"], length=50)
         df["sma_200"] = ta.sma(df["close"], length=200)
         required += ["sma_50", "sma_200"]
@@ -294,48 +323,48 @@ def build_feature_label_df(
     """
     rows = []
     for sym, raw in raw_store.items():
-        if raw.shape[0] < (Δ_minutes + 1):
-            print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {Δ_minutes + 1}")
-            continue
-
         try:
+            if raw.shape[0] < (Δ_minutes + 1):
+                print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {Δ_minutes + 1}")
+                continue
+
+            for col in ["High", "LOW", "Close", "Volume"]:
+                if col in raw.columns:
+                    raw = raw.rename(columns={col: col.lower()})
+            if "close" not in raw.columns:
+                print(f">> DEBUG: Skipping {sym}: 'close' column not found")
+                continue
+
+            closes = raw["close"].astype(float).values
+
             feat = prepare_indicators(raw, freq="intraday")
+            if feat.empty:
+                print(f"[build_feature_label_df] – {sym} indicators empty after dropna")
+                continue
+
+            sent = fetch_sentiment(sym)
+            feat["sentiment"] = sent
+
+            regime_info = detect_regime(raw)
+            if isinstance(regime_info, pd.Series):
+                regimes = regime_info.reset_index(drop=True)
+            else:
+                regimes = pd.Series([regime_info] * len(feat))
+
+            n = len(feat)
+            for i in range(n - Δ_minutes):
+                buy_fill = closes[i] * (1 + 0.0005)
+                sell_fill = closes[i + Δ_minutes] * (1 - 0.0005)
+                ret_pct = (sell_fill / buy_fill) - 1.0
+                label = 1 if ret_pct >= threshold_pct else 0
+
+                row = feat.iloc[i].copy().to_dict()
+                row["regime"] = regimes.iloc[i] if len(regimes) > i else regimes.iloc[-1]
+                row["label"] = label
+                rows.append(row)
         except KeyError as e:
-            print(f">> DEBUG: Skipping {sym} in build_feature_label_df(): {e}")
+            print(f">> DEBUG: Skipping {sym}: missing {e}")
             continue
-        if feat.empty:
-            print(f"[build_feature_label_df] – {sym} indicators empty after dropna")
-            continue
-
-        sent = fetch_sentiment(sym)
-        feat["sentiment"] = sent
-
-        # Determine regime series for this symbol's data
-        regime_info = detect_regime(raw)
-        if isinstance(regime_info, pd.Series):
-            regimes = regime_info.reset_index(drop=True)
-        else:
-            regimes = pd.Series([regime_info] * len(feat))
-
-        if "close" not in raw.columns:
-            rename_candidates = {"Close": "close", "C": "close", "c": "close"}
-            raw = raw.rename(columns={k: v for k, v in rename_candidates.items() if k in raw.columns})
-        try:
-            closes = raw["close"].values
-        except KeyError:
-            print(f">> DEBUG: Skipping {sym}: 'close' column missing")
-            continue
-        n = len(feat)
-        for i in range(n - Δ_minutes):
-            buy_fill = closes[i] * (1 + 0.0005)
-            sell_fill = closes[i + Δ_minutes] * (1 - 0.0005)
-            ret_pct = (sell_fill / buy_fill) - 1.0
-            label = 1 if ret_pct >= threshold_pct else 0
-
-            row = feat.iloc[i].copy().to_dict()
-            row["regime"] = regimes.iloc[i] if len(regimes) > i else regimes.iloc[-1]
-            row["label"] = label
-            rows.append(row)
 
     df_all = pd.DataFrame(rows).dropna()
     return df_all
