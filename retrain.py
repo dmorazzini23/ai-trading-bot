@@ -4,6 +4,7 @@ import csv
 import random
 import joblib
 import logging
+import warnings
 import pandas as pd
 import numpy as np
 import requests
@@ -18,6 +19,10 @@ import pandas_ta as ta
 from config import NEWS_API_KEY
 
 logger = logging.getLogger(__name__)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+MINUTES_REQUIRED = 31
+MFI_PERIOD = 14
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 def abspath(p: str) -> str:
@@ -117,12 +122,12 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.sort_values("Date").set_index("Date")
 
     # Calculate basic TA indicators
-    df["vwap"] = np.nan
     df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"]).astype(float)
-    df["rsi"] = np.nan
-    df["rsi"] = ta.rsi(df["close"], length=14).astype(float)
-    df["atr"] = np.nan
-    df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14).astype(float)
+    df.dropna(subset=["vwap"], inplace=True)
+    df["rsi"] = ta.rsi(df["close"], length=14).astype("float64")
+    df.dropna(subset=["rsi"], inplace=True)
+    df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14).astype("float64")
+    df.dropna(subset=["atr"], inplace=True)
 
     # ── New advanced indicators ───────────────────────────────────────────
     df["kc_lower"] = np.nan
@@ -183,12 +188,13 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     except Exception:
         pass
 
-    df["mfi"] = pd.Series(np.nan, index=df.index, dtype=float)
     try:
-        mfi_vals = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
-        df["mfi"] = mfi_vals.astype(float)
+        df["mfi"] = ta.mfi(
+            df["high"], df["low"], df["close"], df["volume"], length=MFI_PERIOD
+        ).astype("float64")
+        df.dropna(subset=["mfi"], inplace=True)
     except Exception:
-        pass
+        df["mfi"] = np.nan
 
     df["tema"] = np.nan
     try:
@@ -325,8 +331,8 @@ def build_feature_label_df(
     rows = []
     for sym, raw in raw_store.items():
         try:
-            if raw.shape[0] < (Δ_minutes + 1):
-                print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {Δ_minutes + 1}")
+            if raw.shape[0] < MINUTES_REQUIRED:
+                print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {MINUTES_REQUIRED}")
                 continue
 
             for col in list(raw.columns):

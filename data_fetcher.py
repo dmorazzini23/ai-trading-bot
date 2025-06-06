@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, date, timedelta, timezone
 from collections import deque
 from typing import Optional, Sequence
+import warnings
 
 from dotenv import load_dotenv
 from config import (
@@ -12,10 +13,15 @@ from config import (
     ALPACA_SECRET_KEY,
     ALPACA_BASE_URL,
 )
+
+MINUTES_REQUIRED = 31
+HISTORICAL_START = "2025-06-01"
+HISTORICAL_END = "2025-06-06"
 import logging
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 import pandas as pd
 import numpy as np
@@ -30,6 +36,7 @@ from tenacity import (
     wait_random,
     retry_if_exception_type,
     wait_fixed,
+    RetryError,
 )
 import finnhub
 
@@ -104,21 +111,58 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
 
 
 def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
-    """Fetch daily bars for symbol between start and end."""
-    return get_historical_data(symbol, start, end, '1Day')
+    """Fetch daily bars with retry and IEX fallback."""
+    df = pd.DataFrame()
+    for attempt in range(3):
+        try:
+            df = get_historical_data(symbol, start, end, "1Day")
+            break
+        except (APIError, RetryError) as e:
+            logger.debug(f"get_daily_df attempt {attempt+1} failed for {symbol}: {e}")
+            pytime.sleep(1)
+    else:
+        try:
+            req = StockBarsRequest(symbol_or_symbols=[symbol], start=start, end=end, timeframe=TimeFrame.Day, feed="iex")
+            df = _DATA_CLIENT.get_stock_bars(req).df
+        except Exception:
+            logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+            return pd.DataFrame()
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.xs(symbol, level=0, axis=1)
+    else:
+        df = df.drop(columns=["symbol"], errors="ignore")
+    df.index = pd.to_datetime(df.index).tz_localize(None)
+    df["timestamp"] = df.index
+    return df[["timestamp", "open", "high", "low", "close", "volume"]]
 
 
 def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
     start_dt = pd.to_datetime(start_date).tz_localize("UTC")
     end_dt = pd.to_datetime(end_date).tz_localize("UTC") + pd.Timedelta(days=1)
-    try:
-        df = get_historical_data(symbol, start_dt, end_dt, "1Min")
-    except Exception as e:
-        print(f"[get_minute_df] error fetching {symbol}: {e}")
-        return pd.DataFrame()
+    df = pd.DataFrame()
+    for attempt in range(3):
+        try:
+            df = get_historical_data(symbol, start_dt, end_dt, "1Min")
+            break
+        except (APIError, RetryError) as e:
+            logger.debug(f"get_minute_df attempt {attempt+1} failed for {symbol}: {e}")
+            pytime.sleep(1)
+    else:
+        try:
+            req = StockBarsRequest(symbol_or_symbols=[symbol], start=start_dt, end=end_dt, timeframe=TimeFrame.Minute, feed="iex")
+            df = _DATA_CLIENT.get_stock_bars(req).df
+        except Exception:
+            logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+            return pd.DataFrame()
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df.xs(symbol, level=0, axis=1)
+    else:
+        df = df.drop(columns=["symbol"], errors="ignore")
+    df.index = pd.to_datetime(df.index).tz_localize(None)
+    df["timestamp"] = df.index
     if df.empty or "close" not in df.columns:
         return pd.DataFrame()
-    return df
+    return df[["timestamp", "open", "high", "low", "close", "volume"]]
 
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 
@@ -177,66 +221,4 @@ class FinnhubFetcher:
         if len(frames) == 1:
             return frames[0]
         return pd.concat(frames, axis=0, keys=syms, names=["symbol"]).reset_index(level=0)
-
-fh = FinnhubFetcher()
-
-@dataclass
-class DataFetcher:
-    """Unified data adapter supporting multiple feeds."""
-
-    def __post_init__(self) -> None:
-        self._daily_cache: dict[str, Optional[pd.DataFrame]] = {}
-        self._minute_cache: dict[str, Optional[pd.DataFrame]] = {}
-        self._minute_timestamps: dict[str, datetime] = {}
-
-    def get_daily_df(self, ctx, symbol: str) -> Optional[pd.DataFrame]:
-        if symbol in self._daily_cache:
-            return self._daily_cache[symbol]
-        try:
-            end = date.today()
-            start = end - timedelta(days=365)
-            df = get_historical_data(symbol, start, end, '1Day')
-        except Exception as e:
-            logger.warning(f"[get_daily_df] Primary Alpaca fetch failed for {symbol}: {e}")
-            try:
-                df = fh.fetch(symbol, period="12mo", interval="1d")
-            except Exception as fallback_e:
-                logger.warning(f"[get_daily_df] Finnhub fallback failed for {symbol}: {fallback_e}")
-                df = None
-        self._daily_cache[symbol] = df
-        return df
-
-    def get_minute_df(self, ctx, symbol: str) -> Optional[pd.DataFrame]:
-        now = datetime.now(timezone.utc)
-        ts = self._minute_timestamps.get(symbol)
-        if ts and (now - ts) < timedelta(seconds=60):
-            return self._minute_cache.get(symbol)
-
-        end = date.today()
-        lookback = 5
-        df: Optional[pd.DataFrame] = None
-
-        while lookback <= 10:
-            start = end - timedelta(days=lookback)
-            try:
-                df = get_historical_data(symbol, start, end, '1Min')
-                if df is not None and not df.empty:
-                    df = df[["timestamp", "open", "high", "low", "close", "volume"]]
-            except APIError:
-                df = None
-            except Exception as e:
-                logger.warning(f"[get_minute_df] Primary Alpaca fetch failed for {symbol}: {e}")
-                try:
-                    df = fh.fetch(symbol, period=f"{lookback}d", interval="1m")
-                except Exception as fallback_e:
-                    logger.warning(f"[get_minute_df] Finnhub fallback failed for {symbol}: {fallback_e}")
-                    df = None
-
-            if df is not None and len(df) >= 31:
-                break
-            lookback += 5
-
-        self._minute_cache[symbol] = df
-        self._minute_timestamps[symbol] = now
-        return df
 

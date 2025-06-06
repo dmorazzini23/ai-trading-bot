@@ -12,9 +12,13 @@ import argparse
 import json
 import os
 import time
+import warnings
 from itertools import product
 from datetime import datetime
 
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+BACKTEST_WINDOW_DAYS = 365
 import pandas as pd
 import numpy as np
 from data_fetcher import get_historical_data
@@ -68,7 +72,10 @@ def run_backtest(symbols, start, end, params) -> dict:
     # 1) Load (or download+cache) each symbol’s DataFrame
     data: dict[str, pd.DataFrame] = {}
     for s in symbols:
-        data[s] = load_price_data(s, start, end)
+        df_sym = load_price_data(s, start, end)
+        if not df_sym.empty:
+            df_sym["ret"] = df_sym["Close"].pct_change().fillna(0)
+        data[s] = df_sym
 
     cash = 100000.0
     positions = {s: 0 for s in symbols}
@@ -82,7 +89,7 @@ def run_backtest(symbols, start, end, params) -> dict:
             if d not in df.index:
                 continue
             price = df.loc[d, "Open"]
-            ret = df.loc[d, "Close"] / df.loc[d, "Open"] - 1
+            ret = df.loc[d, "ret"]
 
             if positions[sym] == 0:
                 # Entry logic

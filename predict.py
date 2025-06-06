@@ -1,5 +1,9 @@
 import argparse
 import os
+import argparse
+import os
+import logging
+import warnings
 import pandas as pd
 import joblib
 import requests
@@ -8,6 +12,9 @@ from retrain import prepare_indicators
 from utils import get_latest_close
 
 from config import NEWS_API_KEY
+
+logger = logging.getLogger(__name__)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INACTIVE_FEATURES_FILE = os.path.join(BASE_DIR, "inactive_features.json")
@@ -72,9 +79,19 @@ def predict(csv_path: str, freq: str = "intraday"):
     if isinstance(regime, pd.Series):
         regime = regime.iloc[-1]
     model = load_model(regime)
-    X = feat[model.feature_names_in_].iloc[-1].values.reshape(1, -1)
-    pred = model.predict(X)[0]
-    proba = model.predict_proba(X)[0][pred]
+    expected_features = list(model.feature_names_in_)
+    missing = set(expected_features) - set(feat.columns)
+    if missing:
+        raise ValueError(f"Missing features: {missing}")
+    X = feat[expected_features].iloc[-1:].astype({col: "float64" for col in expected_features})
+    try:
+        pred = model.predict(X)[0]
+        proba = model.predict_proba(X)[0][pred]
+    except (ValueError, TypeError) as e:
+        logger.error(f"Prediction failed for {symbol}: {e}")
+        return None, None
+    print(f"Regime: {regime}, Prediction: {pred}, Probability: {proba:.4f}")
+    return pred, proba
     print(f"Regime: {regime}, Prediction: {pred}, Probability: {proba:.4f}")
     return pred, proba
 

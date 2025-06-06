@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 load_dotenv()   # ensure .env is loaded before using os.getenv
+from argparse import ArgumentParser
 
 import logging
 import logging.handlers
@@ -46,6 +47,7 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.models import Order
 from alpaca_trade_api.rest import REST, APIError
+from alpaca.common.exceptions import APIConnectionError
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
@@ -81,7 +83,6 @@ import pybreaker
 from trade_execution import ExecutionEngine
 from capital_scaling import CapitalScalingEngine
 from data_fetcher import (
-    fh,
     finnhub_client,
     DataFetchError,
     get_minute_df,
@@ -1030,7 +1031,7 @@ def audit_positions(ctx: "BotContext") -> None:
                         side=OrderSide.SELL,
                         time_in_force=TimeInForce.DAY
                     )
-                    ctx.api.submit_order(order_data=req)
+                    safe_submit_order(ctx.api, req)
                 except Exception:
                     pass
             else:
@@ -1042,7 +1043,7 @@ def audit_positions(ctx: "BotContext") -> None:
                         side=OrderSide.BUY,
                         time_in_force=TimeInForce.DAY
                     )
-                    ctx.api.submit_order(order_data=req)
+                    safe_submit_order(ctx.api, req)
                 except Exception:
                     pass
 
@@ -1057,7 +1058,7 @@ def audit_positions(ctx: "BotContext") -> None:
                     side=side,
                     time_in_force=TimeInForce.DAY
                 )
-                ctx.api.submit_order(order_data=req)
+                safe_submit_order(ctx.api, req)
             except Exception:
                 pass
 
@@ -1084,7 +1085,7 @@ def validate_open_orders(ctx: "BotContext") -> None:
                         side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
                         time_in_force=TimeInForce.DAY
                     )
-                    ctx.api.submit_order(order_data=req)
+                    safe_submit_order(ctx.api, req)
             except Exception:
                 pass
 
@@ -1963,6 +1964,25 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     """Submit an order using the institutional execution engine."""
     return exec_engine.execute_order(symbol, qty, side)
 
+def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
+    for attempt in range(2):
+        try:
+            order = api.submit_order(order_data=req)
+            status = getattr(order, "status", "")
+            if status == "filled":
+                logger.info("ORDER_ACK", extra={"symbol": req.symbol, "order_id": getattr(order, "id", "")})
+            elif status in ("rejected", "canceled"):
+                logger.error(f"Order for {req.symbol} was {status}: {getattr(order, 'reject_reason', '')}")
+            else:
+                logger.error(f"Order for {req.symbol} status={status}: {getattr(order, 'reject_reason', '')}")
+            return order
+        except (APIConnectionError, TimeoutError) as e:
+            time.sleep(1)
+            if attempt == 1:
+                logger.warning(f"submit_order failed for {req.symbol}: {e}")
+                return None
+    return None
+
 def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -> None:
     """Poll Alpaca for order fill status until it is no longer open."""
     start = pytime.time()
@@ -2005,11 +2025,12 @@ def send_exit_order(ctx: BotContext, symbol: str, exit_qty: int, price: float, r
             side=OrderSide.SELL,
             time_in_force=TimeInForce.DAY
         )
-        ctx.api.submit_order(order_data=req)
+        safe_submit_order(ctx.api, req)
         return
 
-    limit_order = ctx.api.submit_order(
-        order_data=LimitOrderRequest(
+    limit_order = safe_submit_order(
+        ctx.api,
+        LimitOrderRequest(
             symbol=symbol,
             qty=exit_qty,
             side=OrderSide.SELL,
@@ -2022,8 +2043,9 @@ def send_exit_order(ctx: BotContext, symbol: str, exit_qty: int, price: float, r
         o2 = ctx.api.get_order_by_id(limit_order.id)
         if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
             ctx.api.cancel_order_by_id(limit_order.id)
-            ctx.api.submit_order(
-                order_data=MarketOrderRequest(
+            safe_submit_order(
+                ctx.api,
+                MarketOrderRequest(
                     symbol=symbol,
                     qty=exit_qty,
                     side=OrderSide.SELL,
@@ -2094,8 +2116,9 @@ def vwap_pegged_submit(
                         "order_type": "limit",
                     },
                 )
-                order = ctx.api.submit_order(
-                    order_data=LimitOrderRequest(
+                order = safe_submit_order(
+                    ctx.api,
+                    LimitOrderRequest(
                         symbol=symbol,
                         qty=slice_qty,
                         side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
@@ -3679,6 +3702,13 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, _handle_term)
     signal.signal(signal.SIGINT, _handle_term)
 
+    parser = ArgumentParser()
+    parser.add_argument("--mode", choices=["aggressive", "balanced", "conservative"], default=BOT_MODE_ENV or "balanced")
+    args = parser.parse_args()
+    if args.mode != mode_obj.mode:
+        globals()["mode_obj"] = BotMode(args.mode)
+        params.update(mode_obj.get_config())
+
     try:
         logger.info(">>> BOT __main__ ENTERED – starting up")
         
@@ -3705,7 +3735,15 @@ if __name__ == "__main__":
             retrain_meta_learner = None
             logger.warning("retrain.py not found or retrain_meta_learner missing. Daily retraining disabled.")
 
-        model = load_or_retrain_daily(ctx)
+        try:
+            model = load_or_retrain_daily(ctx)
+        except Exception as e:
+            logger.error(f"MODEL_LOAD_FAILED: {e}")
+            try:
+                model = load_model(MODEL_PATH)
+            except Exception as e2:
+                logger.fatal("Could not load existing model; aborting", exc_info=e2)
+                sys.exit(1)
         logger.info("BOT_LAUNCHED")
         cancel_all_open_orders(ctx)
         audit_positions(ctx)

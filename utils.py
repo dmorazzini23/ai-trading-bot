@@ -1,7 +1,14 @@
 """Utility functions for common operations across the bot."""
 
+import warnings
+
 import pandas as pd
 from datetime import datetime, time
+
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+MARKET_OPEN_TIME = time(9, 30)
+MARKET_CLOSE_TIME = time(16, 0)
 
 
 def get_latest_close(df: pd.DataFrame) -> float:
@@ -22,6 +29,4 @@ def get_latest_close(df: pd.DataFrame) -> float:
 def is_market_open() -> bool:
     """Return True if current local time is between 9:30 and 16:00."""
     now = datetime.now().time()
-    market_open = time(9, 30)
-    market_close = time(16, 0)
-    return market_open <= now <= market_close
+    return MARKET_OPEN_TIME <= now <= MARKET_CLOSE_TIME
