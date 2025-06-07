@@ -17,8 +17,6 @@ def get_latest_close(df: pd.DataFrame) -> float:
         return 1.0
     if "close" in df.columns:
         last = df["close"].iloc[-1]
-    elif "Close" in df.columns:
-        last = df["Close"].iloc[-1]
     else:
         return 1.0
     if pd.isna(last) or last == 0:

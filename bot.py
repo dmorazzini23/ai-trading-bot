@@ -105,11 +105,8 @@ def get_latest_close(df: pd.DataFrame) -> float:
     """
     if df is None or df.empty:
         return 0.0
-    # Prefer lowercase "close"; fall back to uppercase if still present
     if "close" in df.columns:
         last = df["close"].iloc[-1]
-    elif "Close" in df.columns:
-        last = df["Close"].iloc[-1]
     else:
         return 0.0
 
@@ -533,11 +530,11 @@ class FinnhubFetcherLegacy:
                 frames.append(pd.DataFrame())
                 continue
             df = pd.DataFrame({
-                'Open':   resp['o'],
-                'High':   resp['h'],
-                'Low':    resp['l'],
-                'Close':  resp['c'],
-                'Volume': resp['v'],
+                'open':   resp['o'],
+                'high':   resp['h'],
+                'low':    resp['l'],
+                'close':  resp['c'],
+                'volume': resp['v'],
             }, index=pd.to_datetime(resp['t'], unit='s', utc=True))
             df.index = df.index.tz_convert(None)
             frames.append(df)
@@ -2967,11 +2964,11 @@ def load_global_signal_performance(min_trades: int = 10, threshold: float = 0.4)
 def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.copy()
     if df.index.name:
-        df = df.reset_index().rename(columns={df.index.name: "Date"})
+        df = df.reset_index().rename(columns={df.index.name: "date"})
     else:
-        df = df.reset_index().rename(columns={"index": "Date"})
-    df["Date"] = pd.to_datetime(df["Date"])
-    df = df.sort_values("Date").set_index("Date")
+        df = df.reset_index().rename(columns={"index": "date"})
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").set_index("date")
 
     df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
     df["rsi"]  = ta.rsi(df["close"], length=14)

@@ -236,7 +236,7 @@ class SignalManager:
 
     def signal_momentum(self, df: pd.DataFrame) -> Tuple[int, float, str]:
         try:
-            df['momentum'] = df['Close'].pct_change(self.momentum_lookback)
+            df['momentum'] = df['close'].pct_change(self.momentum_lookback)
             val = df['momentum'].iloc[-1]
             signal = 1 if val > 0 else 0 if val < 0 else -1
             weight = min(abs(val) * 10, 1.0)
@@ -247,9 +247,9 @@ class SignalManager:
 
     def signal_mean_reversion(self, df: pd.DataFrame) -> Tuple[int, float, str]:
         try:
-            ma = df['Close'].rolling(self.mean_rev_lookback).mean()
-            sd = df['Close'].rolling(self.mean_rev_lookback).std()
-            df['zscore'] = (df['Close'] - ma) / sd
+            ma = df['close'].rolling(self.mean_rev_lookback).mean()
+            sd = df['close'].rolling(self.mean_rev_lookback).std()
+            df['zscore'] = (df['close'] - ma) / sd
             val = df['zscore'].iloc[-1]
             signal = (0 if val > self.mean_rev_zscore_threshold
                       else 1 if val < -self.mean_rev_zscore_threshold
@@ -289,7 +289,7 @@ class SignalManager:
             df = fetch_data(ctx, "SPY", period=f"{ctx.regime_lookback}d", interval="1d")
             if df is None or df.empty:
                 return -1, 0.0, 'regime'
-            atr_series = ta.atr(df["High"], df["Low"], df["Close"], length=ctx.regime_lookback)
+            atr_series = ta.atr(df["high"], df["low"], df["close"], length=ctx.regime_lookback)
             atr_val = atr_series.iloc[-1]
             if pd.isna(atr_val):
                 return -1, 0.0, 'regime'
@@ -310,7 +310,7 @@ class SignalManager:
 
     def signal_obv(self, df: pd.DataFrame) -> Tuple[int, float, str]:
         try:
-            obv = ta.obv(df['Close'], df['Volume'])
+            obv = ta.obv(df['close'], df['volume'])
             slope = np.polyfit(range(5), obv.tail(5), 1)[0]
             signal = 1 if slope>0 else 0 if slope<0 else -1
             weight = min(abs(slope)/1e6, 1.0)
@@ -321,11 +321,11 @@ class SignalManager:
 
     def signal_vsa(self, df: pd.DataFrame) -> Tuple[int, float, str]:
         try:
-            body = abs(df['Close'] - df['Open'])
-            vsa = df['Volume'] * body
+            body = abs(df['close'] - df['open'])
+            vsa = df['volume'] * body
             score = vsa.iloc[-1]
             avg   = vsa.rolling(20).mean().iloc[-1]
-            signal = 1 if df['Close'].iloc[-1]>df['Open'].iloc[-1] else 0 if df['Close'].iloc[-1]<df['Open'].iloc[-1] else -1
+            signal = 1 if df['close'].iloc[-1]>df['open'].iloc[-1] else 0 if df['close'].iloc[-1]<df['open'].iloc[-1] else -1
             weight = min(score/avg, 1.0)
             return signal, weight, 'vsa'
         except Exception:
@@ -518,16 +518,16 @@ def check_market_regime() -> bool:
     if df is None or df.empty:
         logger.warning("[check_market_regime] No SPY data – failing regime check")
         return False
-    for col in ["High","Low","Close"]:
+    for col in ["high","low","close"]:
         if col not in df.columns:
             logger.warning(f"[check_market_regime] Missing column '{col}' in SPY data")
             return False
-    df.dropna(subset=["High","Low","Close"],inplace=True)
+    df.dropna(subset=["high","low","close"],inplace=True)
     if len(df)<REGIME_LOOKBACK:
         logger.warning(f"[check_market_regime] Not enough SPY rows after cleaning: {len(df)} – need {REGIME_LOOKBACK}")
         return False
     try:
-        atr_series = ta.atr(df["High"],df["Low"],df["Close"],length=REGIME_LOOKBACK)
+        atr_series = ta.atr(df["high"],df["low"],df["close"],length=REGIME_LOOKBACK)
         atr_val = atr_series.iloc[-1]
         if pd.isna(atr_val):
             logger.warning("[check_market_regime] ATR value is NaN – failing regime check")
@@ -535,7 +535,7 @@ def check_market_regime() -> bool:
     except Exception as e:
         logger.warning(f"[check_market_regime] ATR calc failed: {e}")
         return False
-    vol = df["Close"].pct_change().std()
+    vol = df["close"].pct_change().std()
     return (atr_val<=REGIME_ATR_THRESHOLD) or (vol<=0.015)
 
 def too_many_positions() -> bool:
@@ -553,7 +553,7 @@ def too_correlated(sym: str) -> bool:
     rets={}
     for s in open_syms:
         d = fetch_data(ctx,s,period="3mo",interval="1d")
-        rets[s] = d["Close"].pct_change().dropna()
+        rets[s] = d["close"].pct_change().dropna()
     min_len = min(len(r) for r in rets.values())
     mat = pd.DataFrame({s:rets[s].tail(min_len) for s in open_syms})
     corr_matrix=mat.corr().abs()
@@ -695,14 +695,14 @@ def calculate_entry_size(
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     submit_order(ctx, symbol, qty, side)
     df_min = ctx.data_fetcher.get_minute_df(ctx, symbol)
-    price = df_min["Close"].iloc[-1]
+    price = df_min["close"].iloc[-1]
     ctx.trade_logger.log_entry(symbol, price, qty, side, "", "")
     tp = price*(1+TAKE_PROFIT_FACTOR) if side=="buy" else price*(1-TAKE_PROFIT_FACTOR)
     ctx.take_profit_targets[symbol] = tp
 
 def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
     submit_order(ctx, symbol, qty, "sell" if qty>0 else "buy")
-    ctx.trade_logger.log_exit(symbol, ctx.data_fetcher.get_minute_df(ctx, symbol)["Close"].iloc[-1])
+    ctx.trade_logger.log_exit(symbol, ctx.data_fetcher.get_minute_df(ctx, symbol)["close"].iloc[-1])
     ctx.take_profit_targets.pop(symbol, None)
 
 # ─── SIGNAL & TRADE LOGIC ────────────────────────────────────────────────────
@@ -763,7 +763,7 @@ def trade_logic(ctx: BotContext, symbol: str, balance: float, model) -> None:
     sig, conf, _ = signal_and_confirm(ctx, symbol, df, model)
     if sig==-1:
         return
-    price, atr = df["Close"].iloc[-1], df["atr"].iloc[-1]
+    price, atr = df["close"].iloc[-1], df["atr"].iloc[-1]
     do_exit, qty, _ = should_exit(ctx, symbol, price, atr)
     if do_exit:
         execute_exit(ctx, symbol, qty)
@@ -882,18 +882,18 @@ def prepare_indicators(df: pd.DataFrame) -> pd.DataFrame:
             df["Date"] = pd.to_datetime(df["Date"])
             df.set_index("Date", inplace=True)
         # drop any rows missing High/Low/Close before TA
-        df.dropna(subset=["High","Low","Close"], inplace=True)
+        df.dropna(subset=["high","low","close"], inplace=True)
 
-    df["vwap"]    = ta.vwap(df["High"],df["Low"],df["Close"],df["Volume"])
-    df["sma_50"]  = ta.sma(df["Close"],length=50)
-    df["sma_200"] = ta.sma(df["Close"],length=200)
-    df["rsi"]     = ta.rsi(df["Close"],length=14)
-    macd = ta.macd(df["Close"],fast=12,slow=26,signal=9)
+    df["vwap"]    = ta.vwap(df["high"],df["low"],df["close"],df["volume"])
+    df["sma_50"]  = ta.sma(df["close"],length=50)
+    df["sma_200"] = ta.sma(df["close"],length=200)
+    df["rsi"]     = ta.rsi(df["close"],length=14)
+    macd = ta.macd(df["close"],fast=12,slow=26,signal=9)
     df["macd"],df["macds"] = macd["MACD_12_26_9"],macd["MACDs_12_26_9"]
-    df["atr"]     = ta.atr(df["High"],df["Low"],df["Close"],length=ATR_LENGTH)
-    ich = ta.ichimoku(df["High"],df["Low"],df["Close"])
+    df["atr"]     = ta.atr(df["high"],df["low"],df["close"],length=ATR_LENGTH)
+    ich = ta.ichimoku(df["high"],df["low"],df["close"])
     df["ichimoku_base"],df["ichimoku_conv"] = ich["ISA_9"],ich["ISB_26"]
-    df["stochrsi"] = ta.stochrsi(df["Close"])["STOCHRSIk_14_14_3_3"]
+    df["stochrsi"] = ta.stochrsi(df["close"])["STOCHRSIk_14_14_3_3"]
 
     df.ffill(inplace=True)
     df.bfill(inplace=True)
