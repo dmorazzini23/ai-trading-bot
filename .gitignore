@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 .env
 config.py
+*.pub
+id_rsa*
+*~
+

@@ -1,10 +1,13 @@
 from typing import Dict
 import random
 import numpy as np
+import logging
 from strategies import TradeSignal
 
 random.seed(42)
 np.random.seed(42)
+
+logger = logging.getLogger(__name__)
 
 MAX_DRAWDOWN = 0.05
 
@@ -43,3 +46,10 @@ class RiskEngine:
         dollars = cash * min(signal.weight, 1.0)
         qty = int(dollars / price)
         return max(qty, 0)
+
+    def compute_volatility(self, returns: np.ndarray) -> dict:
+        if returns.size == 0:
+            logger.warning("Empty returns series—skipping risk computation")
+            return {"volatility": 0.0}
+        vol = float(np.std(returns))
+        return {"volatility": vol}
