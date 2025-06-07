@@ -61,6 +61,9 @@ from sklearn.linear_model import Ridge, BayesianRidge
 from sklearn.decomposition import PCA
 import pickle
 import joblib
+from pipeline import model_pipeline
+from utils import model_lock
+from metrics_logger import log_metrics
 
 import sentry_sdk
 
@@ -370,6 +373,8 @@ REBALANCE_HOLD_SECONDS = 600  # skip selling shortly after rebalance buys
 # Loss streak kill-switch
 _LOSS_STREAK = 0
 _STREAK_HALT_UNTIL: Optional[datetime] = None
+rolling_losses: list = []
+updates_halted = False
 
 # Volatility stats (for SPY ATR mean/std)
 _VOL_STATS = {"mean": None, "std": None, "last_update": None, "last": None}
@@ -2821,6 +2826,30 @@ def load_model(path: str = MODEL_PATH):
     logger.info("MODEL_LOADED", extra={"path": path})
     return model
 
+def online_update(symbol: str, X_new, y_new) -> None:
+    global updates_halted, rolling_losses
+    y_new = np.clip(y_new, -0.05, 0.05)
+    if updates_halted:
+        return
+    with model_lock:
+        try:
+            model_pipeline.partial_fit(X_new, y_new)
+        except Exception as e:
+            logger.error(f"Online update failed for {symbol}: {e}")
+            return
+    pred = model_pipeline.predict(X_new)
+    online_error = float(np.mean((pred - y_new)**2))
+    log_metrics({
+        'timestamp': datetime.utcnow().isoformat(),
+        'type': 'online_update',
+        'symbol': symbol,
+        'error': online_error,
+    })
+    rolling_losses.append(online_error)
+    if len(rolling_losses) >= 20 and sum(rolling_losses[-20:]) > 0.02:
+        updates_halted = True
+        logger.warning("Halting online updates due to 20-trade rolling loss >2%")
+
 def update_signal_weights() -> None:
     if not os.path.exists(TRADE_LOG_FILE):
         logger.warning("No trades log found; skipping weight update.")
@@ -3461,11 +3490,39 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 finally:
                     meta_lock.release()
 
-    # Finally, load whichever model is at MODEL_PATH
-    model = load_model(MODEL_PATH)
-    if model is None:
-        raise FileNotFoundError(f"Model not found at {MODEL_PATH} after retrain")
-    return model
+    df_train = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
+    if df_train is not None and not df_train.empty:
+        X_train = df_train[['open','high','low','close','volume']].astype(float).iloc[:-1].values
+        y_train = df_train['close'].pct_change().shift(-1).fillna(0).values[:-1]
+        with model_lock:
+            try:
+                model_pipeline.fit(X_train, y_train)
+            except Exception as e:
+                logger.error(f"Daily retrain failed: {e}")
+
+        date_str = datetime.utcnow().strftime('%Y%m%d_%H%M')
+        os.makedirs('models', exist_ok=True)
+        path = f"models/sgd_{date_str}.pkl"
+        joblib.dump(model_pipeline, path)
+        logger.info(f"Model checkpoint saved: {path}")
+
+        for f in os.listdir('models'):
+            if f.endswith('.pkl'):
+                dt = datetime.strptime(f.split('_')[1].split('.')[0], '%Y%m%d')
+                if datetime.utcnow() - dt > timedelta(days=30):
+                    os.remove(os.path.join('models', f))
+
+        batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train)**2))
+        log_metrics({
+            'timestamp': datetime.utcnow().isoformat(),
+            'type': 'daily_retrain',
+            'batch_mse': batch_mse,
+        })
+        global updates_halted, rolling_losses
+        updates_halted = False
+        rolling_losses.clear()
+
+    return model_pipeline
 
 # ─── M. MAIN LOOP & SCHEDULER ─────────────────────────────────────────────────
 app = Flask(__name__)
