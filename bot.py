@@ -20,6 +20,7 @@ from datetime import datetime, date, time as dt_time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Dict, List, Any, Sequence
 from threading import Semaphore, Lock, Thread
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from collections import deque
@@ -91,7 +92,7 @@ from data_fetcher import (
 )
 from strategy_allocator import StrategyAllocator
 from risk_engine import RiskEngine
-from utils import is_market_open
+from utils import is_market_open, portfolio_lock
 from strategies import MomentumStrategy, MeanReversionStrategy, TradeSignal
 
 # Basic logger setup so early code can log before full configuration below
@@ -191,6 +192,7 @@ sentry_sdk.init(
     dsn=SENTRY_DSN,
     traces_sample_rate=0.1,
     environment=BOT_MODE_ENV,
+    default_integrations=False  # FIXED: disable threading integration
 )
 
 # Suppress specific pandas_ta warnings
@@ -2691,7 +2693,8 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     drift = max(abs(current[s] - old.get(s, 0)) for s in current) if current else 0
     if drift <= 0.1:
         return True
-    ctx.portfolio_weights = current
+    with portfolio_lock:  # FIXED: protect shared portfolio state
+        ctx.portfolio_weights = current
     total_value = float(ctx.api.get_account().portfolio_value)
     for sym, w in current.items():
         target_dollar = w * total_value
@@ -3307,14 +3310,15 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
     if not high_load_syms:
         return
     # Reduce those weights by 20%
-    for sym in high_load_syms:
-        old = ctx.portfolio_weights.get(sym, 0.0)
-        ctx.portfolio_weights[sym] = round(old * 0.8, 4)
-    # Re-normalize to sum to 1
-    total = sum(ctx.portfolio_weights.values())
-    if total > 0:
-        for sym in ctx.portfolio_weights:
-            ctx.portfolio_weights[sym] = round(ctx.portfolio_weights[sym] / total, 4)
+    with portfolio_lock:  # FIXED: protect shared portfolio state
+        for sym in high_load_syms:
+            old = ctx.portfolio_weights.get(sym, 0.0)
+            ctx.portfolio_weights[sym] = round(old * 0.8, 4)
+        # Re-normalize to sum to 1
+        total = sum(ctx.portfolio_weights.values())
+        if total > 0:
+            for sym in ctx.portfolio_weights:
+                ctx.portfolio_weights[sym] = round(ctx.portfolio_weights[sym] / total, 4)
     logger.info("PCA_ADJUSTMENT_APPLIED", extra={
         "var_explained": round(var_explained, 3),
         "adjusted": high_load_syms
@@ -3509,6 +3513,7 @@ def run_all_trades_worker(model):
         return
     if not is_market_open():
         logger.info("MARKET_CLOSED_NO_FETCH")
+        return  # FIXED: skip work when market closed
     _running = True
     try:
         # On each run, clear open orders and correct any position mismatches
@@ -3536,7 +3541,8 @@ def run_all_trades_worker(model):
             symbols = full_watchlist
         logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
         ctx.tickers = symbols
-        ctx.portfolio_weights = compute_portfolio_weights(symbols)
+        with portfolio_lock:  # FIXED: protect shared portfolio state
+            ctx.portfolio_weights = compute_portfolio_weights(symbols)
 
         if check_halt_flag():
             logger.info("TRADING_HALTED_VIA_FLAG")
@@ -3567,7 +3573,12 @@ def run_all_trades_worker(model):
         _running = False
 
 def schedule_run_all_trades(model):
-    Thread(target=run_all_trades_worker, args=(model,), daemon=True).start()
+    """Spawn run_all_trades_worker if market is open."""  # FIXED
+    if is_market_open():
+        t = threading.Thread(target=run_all_trades_worker, args=(model,), daemon=True)
+        t.start()
+    else:
+        logger.info("Market closed—skipping run_all_trades.")
 
 def schedule_run_all_trades_with_delay(model):
     time.sleep(30)
