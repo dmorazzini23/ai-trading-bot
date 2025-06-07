@@ -13,3 +13,9 @@ jobs:
           scan-type: fs
           exit-code: 1
           severity: CRITICAL,HIGH
+      - name: Notify Slack on failure
+        if: failure()
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          message: "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"
