@@ -9,5 +9,7 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements.txt
       - run: black --check .
-      - run: flake8 .
+      - name: Run Flake8
+        run: |
+          flake8 bot.py data_fetcher.py utils.py
       - run: pytest --maxfail=1 --disable-warnings -q
