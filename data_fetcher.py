@@ -13,6 +13,9 @@ ALPACA_API_KEY = config.ALPACA_API_KEY
 ALPACA_SECRET_KEY = config.ALPACA_SECRET_KEY
 ALPACA_BASE_URL = config.ALPACA_BASE_URL
 
+import alpaca_trade_api as tradeapi
+client = tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version='v2')
+
 MINUTES_REQUIRED = 31
 HISTORICAL_START = "2025-06-01"
 HISTORICAL_END = "2025-06-06"
@@ -151,7 +154,7 @@ def get_minute_df(symbol, start_date, end_date):
     import pandas as pd
 
     # 1. Fetch raw minute bars via IEX
-    bars = api.get_bars(
+    bars = client.get_bars(
         symbol,
         TimeFrame.Minute,
         start=start_date,
