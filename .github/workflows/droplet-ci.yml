@@ -1,0 +1,93 @@
+name: Droplet CI & Nightly Health-Check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 3 * * *'
+
+jobs:
+
+  lint-and-test:
+    name: Lint & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: black --check .
+      - run: flake8 .
+      - run: pytest --maxfail=1 --disable-warnings -q
+
+  deploy-to-droplet:
+    name: Deploy to Droplet
+    needs: [ lint-and-test ]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: Archive bot for transfer
+        run: tar czf bot-dist.tar.gz .
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: bot-dist
+          path: bot-dist.tar.gz
+      - name: SSH & deploy
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script: |
+            systemctl stop ai-trading-scheduler
+            rm -rf ~/ai-trading-bot
+            mkdir ~/ai-trading-bot
+            cat > bot-dist.tar.gz
+            tar xzf bot-dist.tar.gz -C ~/ai-trading-bot
+            systemctl start ai-trading-scheduler
+
+  nightly-health-check:
+    name: Nightly Health-Check & Auto-Refactorer
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH & run health-check script
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script: |
+            cd ~/ai-trading-bot
+            python3 scripts/health_check.py > health_report.txt || exit 1
+      - name: Download health report
+        uses: actions/download-artifact@v3
+        with:
+          name: bot-dist
+          path: ./reports
+      - name: Auto-refactor suggestions commit
+        if: failure()
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "🛠 Automated refactoring suggestions from ChatGPT"
+          file_pattern: "refactor-suggestions/*.py"
+      - name: Open PR with refactors
+        if: failure()
+        uses: peter-evans/create-pull-request@v4
+        with:
+          title: "Automated refactor: health-check regressions"
+          commit-message: "Apply AI-suggested refactors for errors found in nightly health check"
+          body: |
+            The nightly health-check detected new exceptions or test failures.  
+            This PR applies function-level refactor suggestions from ChatGPT.
+          branch: refactor/health-`date +%F`
