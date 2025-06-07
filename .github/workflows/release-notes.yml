@@ -1,0 +1,29 @@
+name: Draft Release Notes
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Generate Release Notes
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.release.issue_number }}
+          body: |
+            <!-- codex: draft release notes -->
+            # Release ${{ github.ref_name }}
+            ## Changelog
+            <!-- Codex will fill in summary of changes -->
+      - name: Update CHANGELOG.md
+        run: |
+          # (Assume a script or Codex call to append notes to CHANGELOG.md)
+          echo "Changelog drafted" >> CHANGELOG.md
+      - uses: EndBug/add-and-commit@v9
+        with:
+          author_name: "github-actions"
+          author_email: "actions@github.com"
+          message: "chore: update CHANGELOG for ${{ github.ref_name }}"

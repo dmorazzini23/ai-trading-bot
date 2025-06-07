@@ -1,0 +1,23 @@
+name: Issue Triage
+on:
+  issues:
+    types: [ opened ]
+jobs:
+  labeler:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Label via GPT
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python scripts/triage_issue.py \
+            --title "${{ github.event.issue.title }}" \
+            --body "${{ github.event.issue.body }}" \
+            --labels-file .github/label-mapping.json
+      - name: Apply Labels
+        uses: chrnorm/deploy-labels@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          mapping-path: .github/label-mapping.json

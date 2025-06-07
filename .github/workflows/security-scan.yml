@@ -1,0 +1,15 @@
+name: Security Scan
+on:
+  push:
+    branches: [ main ]
+jobs:
+  trivy-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@v0.11.0
+        with:
+          scan-type: fs
+          exit-code: 1
+          severity: CRITICAL,HIGH

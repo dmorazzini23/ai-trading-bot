@@ -1,0 +1,29 @@
+name: Deploy to Droplet
+on:
+  push:
+    branches: [ main ]
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+jobs:
+  test-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - run: black --check .
+      - run: flake8 .
+      - run: pytest --maxfail=1 --disable-warnings -q
+      - name: Sync to Droplet & restart
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script: |
+            cd ~/ai-trading-bot
+            git pull origin main
+            sudo systemctl restart ai-trading-scheduler.service
