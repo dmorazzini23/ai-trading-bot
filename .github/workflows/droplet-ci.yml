@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: '0 3 * * *'
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
 
   lint-and-test:
@@ -22,6 +26,12 @@ jobs:
       - run: black --check .
       - run: flake8 .
       - run: pytest --maxfail=1 --disable-warnings -q
+      - name: Notify Slack on failure
+        if: failure()
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          message: "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"
 
   deploy-to-droplet:
     name: Deploy to Droplet
@@ -55,6 +65,12 @@ jobs:
             cat > bot-dist.tar.gz
             tar xzf bot-dist.tar.gz -C ~/ai-trading-bot
             systemctl start ai-trading-scheduler
+      - name: Notify Slack on failure
+        if: failure()
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          message: "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"
 
   nightly-health-check:
     name: Nightly Health-Check & Auto-Refactorer
@@ -88,6 +104,13 @@ jobs:
           title: "Automated refactor: health-check regressions"
           commit-message: "Apply AI-suggested refactors for errors found in nightly health check"
           body: |
-            The nightly health-check detected new exceptions or test failures.  
+            The nightly health-check detected new exceptions or test failures.
             This PR applies function-level refactor suggestions from ChatGPT.
           branch: refactor/health-`date +%F`
+      - name: Notify Slack on failure
+        if: failure()
+        uses: ./.github/actions/slack-notify
+        with:
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          message: "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"
+

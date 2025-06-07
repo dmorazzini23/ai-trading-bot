@@ -3,6 +3,10 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 2 * * *'  # 2 AM UTC daily
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
 jobs:
   backtest:
     runs-on: ubuntu-latest
