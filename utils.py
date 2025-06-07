@@ -24,6 +24,8 @@ EASTERN_TZ = ZoneInfo("America/New_York")
 
 # Lock protecting portfolio state across threads
 portfolio_lock = threading.Lock()
+# Lock protecting model updates
+model_lock = threading.Lock()
 
 
 def get_latest_close(df: pd.DataFrame) -> float:

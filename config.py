@@ -6,12 +6,10 @@ ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / '.env'
 load_dotenv(ENV_PATH)
 
-required_env_vars = ['APCA_API_KEY_ID','APCA_API_SECRET_KEY']  # FUNDAMENTAL_API_KEY optional
+required_env_vars = ['APCA_API_KEY_ID', 'APCA_API_SECRET_KEY']
 missing = [v for v in required_env_vars if v not in os.environ]
 if missing:
     raise RuntimeError(f"Missing required environment variables: {missing}")
-
-FUNDAMENTAL_API_KEY = os.getenv('FUNDAMENTAL_API_KEY', None)
 
 ALPACA_API_KEY = os.environ.get('ALPACA_API_KEY') or os.environ.get('APCA_API_KEY_ID')
 ALPACA_SECRET_KEY = os.environ.get('ALPACA_SECRET_KEY') or os.environ.get('APCA_API_SECRET_KEY')
@@ -31,6 +29,14 @@ RUN_HEALTHCHECK = os.environ.get('RUN_HEALTHCHECK', '0')
 BUY_THRESHOLD = float(os.environ.get('BUY_THRESHOLD', '0.5'))
 WEBHOOK_SECRET = os.environ.get('WEBHOOK_SECRET', '')
 WEBHOOK_PORT = int(os.environ.get('WEBHOOK_PORT', '9000'))
+
+# centralize SGDRegressor hyperparameters
+SGD_PARAMS = {
+    'loss': 'squared_error',
+    'learning_rate': 'constant',
+    'eta0': 0.01,
+    'penalty': 'l2',
+}
 
 
 def validate_alpaca_credentials() -> None:
