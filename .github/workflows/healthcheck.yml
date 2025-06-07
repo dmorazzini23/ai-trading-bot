@@ -1,0 +1,32 @@
+name: Nightly Health Check
+on:
+  schedule:
+    - cron: '0 1 * * *'  # 1 AM UTC daily
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH & run tests
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script: |
+            cd ~/ai-trading-bot
+            source venv/bin/activate
+            pytest --maxfail=1 --disable-warnings -q
+            curl -fsS http://localhost:8000/health || exit 1
+      - name: Notify Slack on failure
+        if: failure()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          fields: repo,message
+          custom_payload: |
+            {
+              "text":"🚨 Nightly health check failed on ${{ github.repository }}",
+              "attachments":[{"color":"danger","text":"Check the Actions logs"}]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

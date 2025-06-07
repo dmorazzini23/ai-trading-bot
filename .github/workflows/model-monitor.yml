@@ -1,0 +1,20 @@
+name: Model Performance Monitor
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *'  # 2 AM UTC daily
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Run backtest & record metrics
+        run: |
+          python scripts/backtest.py --output metrics.json --plot metrics.png
+      - name: Commit metrics
+        uses: EndBug/add-and-commit@v9
+        with:
+          message: "chore: update performance metrics"
+      - name: Fail on drift
+        run: |
+          python scripts/check_metrics_threshold.py metrics.json

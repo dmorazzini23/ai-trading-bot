@@ -1,0 +1,24 @@
+name: On-Demand Refactor
+on:
+  issue_comment:
+    types: [ created ]
+jobs:
+  refactor:
+    if: contains(github.event.comment.body, '/refactor')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Fetch PR branch
+        run: |
+          gh pr checkout ${{ github.event.issue.number }}
+      - name: Run Codex Refactor
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          # Pseudocode: send diff to Codex and apply patch
+          python scripts/codex_refactor.py --diff $(git diff main)
+      - uses: EndBug/add-and-commit@v9
+        with:
+          message: "refactor: apply Codex suggestions"
+      - name: Push changes
+        run: git push origin HEAD:codex-refactor-${{ github.event.issue.number }}

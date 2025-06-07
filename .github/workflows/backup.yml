@@ -1,0 +1,15 @@
+name: Daily Backup
+on:
+  schedule:
+    - cron: '0 3 * * *'  # 3 AM UTC daily
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install AWS CLI
+        run: sudo apt-get update && sudo apt-get install -y awscli
+      - name: Sync models to S3
+        run: aws s3 sync ./models s3://my-bucket/models --delete
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
