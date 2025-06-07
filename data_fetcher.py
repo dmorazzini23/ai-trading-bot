@@ -153,6 +153,33 @@ def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
     for attempt in range(3):
         try:
             df = get_historical_data(symbol, start_dt, end_dt, "1Min")
+            # DEBUG: show me exactly what columns and index types we got
+            print(f"DEBUG raw columns for {symbol}: {list(df.columns)}")
+            print(f"DEBUG raw index sample: {df.index[:5]}")
+
+            df = df.drop(columns=["symbol"], errors="ignore")
+
+            # flatten tuple-timestamps if any
+            df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
+            # then coerce to datetime without tz
+            df.index = pd.to_datetime(df.index, errors="coerce")
+            df.index = df.index.tz_localize(None)
+
+            # flatten MultiIndex columns
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(-1)
+
+            # lowercase everything
+            df.columns = [c.lower() for c in df.columns]
+
+            # now map any column ending with our five targets into them
+            for field in ("open", "high", "low", "close", "volume"):
+                if field not in df.columns:
+                    candidate = next((c for c in df.columns if c.endswith(field)), None)
+                    if candidate:
+                        df[field] = df[candidate]
+            # finally select just those five
+            df = df[["open", "high", "low", "close", "volume"]]
             break
         except (APIError, RetryError) as e:
             logger.debug(
@@ -169,12 +196,27 @@ def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
                 feed="iex",
             )
             df = _DATA_CLIENT.get_stock_bars(req).df
+
+            # DEBUG: show me exactly what columns and index types we got
+            print(f"DEBUG raw columns for {symbol}: {list(df.columns)}")
+            print(f"DEBUG raw index sample: {df.index[:5]}")
+
+            df = df.drop(columns=["symbol"], errors="ignore")
+            df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
+            df.index = pd.to_datetime(df.index, errors="coerce")
+            df.index = df.index.tz_localize(None)
+
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(-1)
-            df = df.drop(columns=["symbol"], errors="ignore")
-            if isinstance(df.index, pd.MultiIndex):
-                df = df.reset_index(level=0, drop=True)
-            df.columns = df.columns.str.lower()
+
+            df.columns = [c.lower() for c in df.columns]
+
+            for field in ("open", "high", "low", "close", "volume"):
+                if field not in df.columns:
+                    candidate = next((c for c in df.columns if c.endswith(field)), None)
+                    if candidate:
+                        df[field] = df[candidate]
+
             try:
                 df = df[["open", "high", "low", "close", "volume"]]
             except KeyError:
@@ -185,15 +227,6 @@ def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
         except (APIError, RetryError):
             logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
             return pd.DataFrame()
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(-1)
-    df = df.drop(columns=["symbol"], errors="ignore")
-
-    if isinstance(df.index, pd.MultiIndex):
-        df.index = df.index.get_level_values(0)
-    df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
-    df.index = pd.to_datetime(df.index, errors="coerce").tz_localize(None)
-    df.columns = df.columns.str.lower()
     df["timestamp"] = df.index
 
     try:
