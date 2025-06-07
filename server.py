@@ -23,14 +23,14 @@ def verify_sig(data: bytes, signature: str) -> bool:
 @app.route("/github-webhook", methods=["POST"])
 def hook():
     payload = request.get_json(force=True)
-    if not payload or 'symbol' not in payload or 'action' not in payload:
-        return jsonify({'error': 'Missing fields'}), 400
+    if not payload or "symbol" not in payload or "action" not in payload:
+        return jsonify({"error": "Missing fields"}), 400
     sig = request.headers.get("X-Hub-Signature-256", "")
     if not verify_sig(request.data, sig):
         abort(403)
     if request.headers.get("X-GitHub-Event") == "push":
         subprocess.Popen([os.path.join(os.path.dirname(__file__), "deploy.sh")])
-    return jsonify({'status': 'ok'})
+    return jsonify({"status": "ok"})
 
 
 def start():

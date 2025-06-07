@@ -9,7 +9,12 @@ import pandas as pd
 import numpy as np
 import requests
 from datetime import datetime, date, time, timedelta
-from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit, ParameterSampler, cross_val_score
+from sklearn.model_selection import (
+    RandomizedSearchCV,
+    TimeSeriesSplit,
+    ParameterSampler,
+    cross_val_score,
+)
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
@@ -17,6 +22,7 @@ from lightgbm import LGBMClassifier
 import pandas_ta as ta
 
 import config
+
 NEWS_API_KEY = config.NEWS_API_KEY
 
 logger = logging.getLogger(__name__)
@@ -26,8 +32,12 @@ MINUTES_REQUIRED = 31
 MFI_PERIOD = 14
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 def abspath(p: str) -> str:
     return os.path.join(BASE_DIR, p)
+
+
 FEATURE_PERF_FILE = abspath("feature_perf.csv")
 INACTIVE_FEATURES_FILE = abspath("inactive_features.json")
 HYPERPARAM_LOG_FILE = abspath("hyperparam_log.csv")
@@ -35,6 +45,7 @@ MODELS_DIR = abspath("models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 
 REWARD_LOG_FILE = abspath("reward_log.csv")
+
 
 def load_reward_by_band(n: int = 200) -> dict:
     if not os.path.exists(REWARD_LOG_FILE):
@@ -44,23 +55,25 @@ def load_reward_by_band(n: int = 200) -> dict:
         return {}
     return df.groupby("band")["reward"].mean().to_dict()
 
+
 def fetch_sentiment(symbol: str) -> float:
     """Lightweight sentiment score using NewsAPI headlines."""
     if not NEWS_API_KEY:
         return 0.0
     try:
-        url = (
-            f"https://newsapi.org/v2/everything?q={symbol}&pageSize=5&sortBy=publishedAt&apiKey={NEWS_API_KEY}"
-        )
+        url = f"https://newsapi.org/v2/everything?q={symbol}&pageSize=5&sortBy=publishedAt&apiKey={NEWS_API_KEY}"
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         articles = resp.json().get("articles", [])
         if not articles:
             return 0.0
-        score = sum(1 for a in articles if "positive" in (a.get("title") or "").lower()) / len(articles)
+        score = sum(
+            1 for a in articles if "positive" in (a.get("title") or "").lower()
+        ) / len(articles)
         return float(score)
     except Exception:
         return 0.0
+
 
 ##############################################################################
 # Inline `detect_regime` so we don’t import bot.py at module load time.
@@ -77,6 +90,8 @@ def detect_regime(df: pd.DataFrame) -> str:
     if sma50.iloc[-1] < sma200.iloc[-1]:
         return "bear"
     return "chop"
+
+
 ##############################################################################
 
 # Output models for each regime
@@ -85,6 +100,7 @@ MODEL_FILES = {
     "bear": os.path.join(MODELS_DIR, "model_bear.pkl"),
     "chop": os.path.join(MODELS_DIR, "model_chop.pkl"),
 }
+
 
 # ─── COPY&PASTE of prepare_indicators (unchanged) ─────────────────
 def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
@@ -107,7 +123,9 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     for col in ["high", "low", "close", "volume"]:
         if col not in df.columns:
-            raise KeyError(f"Column '{col}' not found in DataFrame in prepare_indicators")
+            raise KeyError(
+                f"Column '{col}' not found in DataFrame in prepare_indicators"
+            )
         df[col] = df[col].astype(float)
     if "open" in df.columns:
         df["open"] = df["open"].astype(float)
@@ -190,15 +208,13 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         pass
 
     try:
-        mfi_vals = (
-            ta.mfi(
-                df["high"],
-                df["low"],
-                df["close"],
-                df["volume"],
-                length=MFI_PERIOD,
-            ).astype(float)
-        )
+        mfi_vals = ta.mfi(
+            df["high"],
+            df["low"],
+            df["close"],
+            df["volume"],
+            length=MFI_PERIOD,
+        ).astype(float)
         df["mfi_14"] = mfi_vals
         df.dropna(subset=["mfi_14"], inplace=True)
     except Exception:
@@ -212,7 +228,9 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     df["willr"] = np.nan
     try:
-        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14).astype(float)
+        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14).astype(
+            float
+        )
     except Exception:
         pass
 
@@ -231,8 +249,12 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         ich = ta.ichimoku(high=df["high"], low=df["low"], close=df["close"])
         conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
         base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
-        df["ichimoku_conv"] = (conv.iloc[:, 0] if hasattr(conv, "iloc") else conv).astype(float)
-        df["ichimoku_base"] = (base.iloc[:, 0] if hasattr(base, "iloc") else base).astype(float)
+        df["ichimoku_conv"] = (
+            conv.iloc[:, 0] if hasattr(conv, "iloc") else conv
+        ).astype(float)
+        df["ichimoku_base"] = (
+            base.iloc[:, 0] if hasattr(base, "iloc") else base
+        ).astype(float)
     except Exception:
         pass
 
@@ -263,7 +285,9 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ret_1h"] = df["close"].pct_change(60).astype(float)
         df["ret_d"] = df["close"].pct_change(390).astype(float)
         df["ret_w"] = df["close"].pct_change(1950).astype(float)
-        df["vol_norm"] = (df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()).astype(float)
+        df["vol_norm"] = (
+            df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
+        ).astype(float)
         df["5m_vs_1h"] = (df["ret_5m"] - df["ret_1h"]).astype(float)
         df["vol_5m"] = df["close"].pct_change().rolling(5).std().astype(float)
         df["vol_1h"] = df["close"].pct_change().rolling(60).std().astype(float)
@@ -280,8 +304,14 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df.bfill(inplace=True)
 
     required = [
-        "vwap", "rsi", "atr", "macd", "macds",
-        "ichimoku_conv", "ichimoku_base", "stochrsi"
+        "vwap",
+        "rsi",
+        "atr",
+        "macd",
+        "macds",
+        "ichimoku_conv",
+        "ichimoku_base",
+        "stochrsi",
     ]
     if freq == "daily":
         df["sma_50"] = np.nan
@@ -295,9 +325,12 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df.reset_index(drop=True, inplace=True)
 
     return df
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 
 # No top‐level import of bot.py ⇒ avoids metric re‐registration.
+
 
 def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.DataFrame]:
     """
@@ -325,10 +358,11 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.Dat
 
     return raw_store
 
+
 def build_feature_label_df(
     raw_store: dict[str, pd.DataFrame],
     Δ_minutes: int = 30,
-    threshold_pct: float = 0.002
+    threshold_pct: float = 0.002,
 ) -> pd.DataFrame:
     """
     Build a combined DataFrame of (feature_vector, label) for each minute-slice.
@@ -340,18 +374,28 @@ def build_feature_label_df(
     for sym, raw in raw_store.items():
         try:
             if raw is None or raw.empty:
-                print(f"[build_feature_label_df] – {sym} returned no minute data; skipping symbol.")
+                print(
+                    f"[build_feature_label_df] – {sym} returned no minute data; skipping symbol."
+                )
                 continue
             if raw.shape[0] < MINUTES_REQUIRED:
-                print(f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {MINUTES_REQUIRED}")
+                print(
+                    f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {MINUTES_REQUIRED}"
+                )
                 continue
 
             for col in list(raw.columns):
                 if col.lower() in ["high", "low", "close", "volume"]:
                     raw = raw.rename(columns={col: col.lower()})
-            if ("close" not in raw.columns or "high" not in raw.columns or
-                    "low" not in raw.columns or "volume" not in raw.columns):
-                print(f"[build_feature_label_df] – skipping {sym}, missing price/volume columns")
+            if (
+                "close" not in raw.columns
+                or "high" not in raw.columns
+                or "low" not in raw.columns
+                or "volume" not in raw.columns
+            ):
+                print(
+                    f"[build_feature_label_df] – skipping {sym}, missing price/volume columns"
+                )
                 continue
 
             for col in ["high", "low", "close", "volume"]:
@@ -381,7 +425,9 @@ def build_feature_label_df(
                 label = 1 if ret_pct >= threshold_pct else 0
 
                 row = feat.iloc[i].copy().to_dict()
-                row["regime"] = regimes.iloc[i] if len(regimes) > i else regimes.iloc[-1]
+                row["regime"] = (
+                    regimes.iloc[i] if len(regimes) > i else regimes.iloc[-1]
+                )
                 row["label"] = label
                 rows.append(row)
         except KeyError as e:
@@ -392,7 +438,9 @@ def build_feature_label_df(
     return df_all
 
 
-def log_hyperparam_result(regime: str, generation: int, params: dict, score: float) -> None:
+def log_hyperparam_result(
+    regime: str, generation: int, params: dict, score: float
+) -> None:
     row = [datetime.utcnow().isoformat(), regime, generation, json.dumps(params), score]
     header = ["timestamp", "regime", "generation", "params", "score"]
     write_header = not os.path.exists(HYPERPARAM_LOG_FILE)
@@ -419,11 +467,22 @@ def save_model_version(clf, regime: str) -> str:
     return path
 
 
-def evolutionary_search(X, y, base_params: dict, param_space: dict, generations: int = 3, population: int = 10, elite: int = 3, scoring: str = "roc_auc") -> dict:
+def evolutionary_search(
+    X,
+    y,
+    base_params: dict,
+    param_space: dict,
+    generations: int = 3,
+    population: int = 10,
+    elite: int = 3,
+    scoring: str = "roc_auc",
+) -> dict:
     """Simple evolutionary hyperparameter search."""
     best_params = base_params.copy()
     best_score = -np.inf
-    population_params = list(ParameterSampler(param_space, n_iter=population, random_state=42))
+    population_params = list(
+        ParameterSampler(param_space, n_iter=population, random_state=42)
+    )
     for gen in range(generations):
         scores = []
         for params in population_params:
@@ -433,7 +492,9 @@ def evolutionary_search(X, y, base_params: dict, param_space: dict, generations:
             cv_scores = cross_val_score(clf, X, y, cv=3, scoring=scoring)
             score = float(cv_scores.mean())
             scores.append(score)
-        ranked = sorted(zip(scores, population_params), key=lambda t: t[0], reverse=True)
+        ranked = sorted(
+            zip(scores, population_params), key=lambda t: t[0], reverse=True
+        )
         for rank, (scr, pr) in enumerate(ranked):
             log_hyperparam_result("", gen, pr, scr)
         if ranked[0][0] > best_score:
@@ -449,6 +510,7 @@ def evolutionary_search(X, y, base_params: dict, param_space: dict, generations:
             new_pop.append(parent)
         population_params = new_pop
     return best_params
+
 
 def retrain_meta_learner(
     ctx,
@@ -471,7 +533,7 @@ def retrain_meta_learner(
         if not (market_open <= now.time() <= market_close):
             logger.info(
                 "[retrain_meta_learner] Outside market hours; skipping",
-                extra={"time": now.time().strftime('%H:%M')},
+                extra={"time": now.time().strftime("%H:%M")},
             )
             return False
 
@@ -492,7 +554,9 @@ def retrain_meta_learner(
         logger.warning("All minute DataFrames empty; skipping retrain")
         return False
 
-    df_all = build_feature_label_df(raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct)
+    df_all = build_feature_label_df(
+        raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct
+    )
     if df_all.empty:
         print("  ⚠️ No usable rows after building (Δ, threshold) → skipping retrain.")
         return False
@@ -511,7 +575,9 @@ def retrain_meta_learner(
 
         pos_ratio = y_train.mean()
         scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
-        print(f"  ✔ Training {regime} model using scoring='{scoring}' (pos_ratio={pos_ratio:.3f})")
+        print(
+            f"  ✔ Training {regime} model using scoring='{scoring}' (pos_ratio={pos_ratio:.3f})"
+        )
 
         base_params = dict(objective="binary", n_jobs=-1, random_state=42)
         search_space = {
@@ -522,13 +588,22 @@ def retrain_meta_learner(
             "subsample": [0.8, 1.0],
             "colsample_bytree": [0.8, 1.0],
         }
-        best_hyper = evolutionary_search(X_train, y_train, base_params, search_space, generations=3, population=8, scoring=scoring)
+        best_hyper = evolutionary_search(
+            X_train,
+            y_train,
+            base_params,
+            search_space,
+            generations=3,
+            population=8,
+            scoring=scoring,
+        )
         clf = LGBMClassifier(**best_hyper)
         pipe = make_pipeline(StandardScaler(), clf)
         pipe.fit(X_train, y_train)
         print(f"  ✔ {regime} best params: {best_hyper}")
 
         from sklearn.metrics import f1_score, roc_auc_score
+
         if scoring == "f1":
             val_pred = pipe.predict(X_val)
             metric = f1_score(y_val, val_pred)
@@ -545,13 +620,15 @@ def retrain_meta_learner(
             )
             print("  ✔ Top feature importances:")
             print(importances.sort_values(ascending=False).head(10))
-            imp_df = pd.DataFrame({
-                'timestamp': [datetime.utcnow().isoformat()] * len(importances),
-                'feature': importances.index,
-                'importance': importances.values
-            })
+            imp_df = pd.DataFrame(
+                {
+                    "timestamp": [datetime.utcnow().isoformat()] * len(importances),
+                    "feature": importances.index,
+                    "importance": importances.values,
+                }
+            )
             if os.path.exists(FEATURE_PERF_FILE):
-                imp_df.to_csv(FEATURE_PERF_FILE, mode='a', header=False, index=False)
+                imp_df.to_csv(FEATURE_PERF_FILE, mode="a", header=False, index=False)
             else:
                 imp_df.to_csv(FEATURE_PERF_FILE, index=False)
         except Exception:
@@ -564,8 +641,8 @@ def retrain_meta_learner(
     try:
         if os.path.exists(FEATURE_PERF_FILE):
             perf = pd.read_csv(FEATURE_PERF_FILE)
-            recent = perf.groupby('feature').tail(5)
-            means = recent.groupby('feature')['importance'].mean()
+            recent = perf.groupby("feature").tail(5)
+            means = recent.groupby("feature")["importance"].mean()
             threshold = means.quantile(0.1)
             inactive = means[means < threshold].index.tolist()
             if os.path.exists(INACTIVE_FEATURES_FILE):
@@ -576,7 +653,7 @@ def retrain_meta_learner(
             current.update(inactive)
             revived = means[means >= threshold].index.tolist()
             current.difference_update(revived)
-            with open(INACTIVE_FEATURES_FILE, 'w') as f:
+            with open(INACTIVE_FEATURES_FILE, "w") as f:
                 json.dump(sorted(current), f)
     except Exception:
         pass

@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
-load_dotenv()   # ensure .env is loaded before using os.getenv
+
+load_dotenv()  # ensure .env is loaded before using os.getenv
 from argparse import ArgumentParser
 
 import logging
@@ -26,6 +27,7 @@ from dataclasses import dataclass, field
 from collections import deque
 
 import numpy as np
+
 # Ensure numpy.NaN exists for pandas_ta compatibility
 np.NaN = np.nan
 
@@ -68,6 +70,7 @@ from metrics_logger import log_metrics
 import sentry_sdk
 
 import config
+
 ALPACA_API_KEY = config.ALPACA_API_KEY
 ALPACA_SECRET_KEY = config.ALPACA_SECRET_KEY
 ALPACA_BASE_URL = config.ALPACA_BASE_URL
@@ -102,6 +105,7 @@ from strategies import MomentumStrategy, MeanReversionStrategy, TradeSignal
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+
 def get_latest_close(df: pd.DataFrame) -> float:
     """
     Return the most recent closing price from df["close"].
@@ -125,6 +129,7 @@ def compute_time_range(minutes: int = 30) -> tuple[datetime, datetime]:
     start = end - timedelta(minutes=minutes)
     return start, end
 
+
 def cancel_all_open_orders(ctx: "BotContext") -> None:
     """
     On startup or each run, cancel every Alpaca order whose status is 'open'.
@@ -141,12 +146,17 @@ def cancel_all_open_orders(ctx: "BotContext") -> None:
     except Exception:
         pass
 
-def reconcile_positions(ctx: 'BotContext') -> None:
+
+def reconcile_positions(ctx: "BotContext") -> None:
     """On startup, fetch all live positions and clear any in-memory stop/take targets for assets no longer held."""
     try:
-        live_positions = {pos.symbol: int(pos.qty) for pos in ctx.api.get_all_positions()}
+        live_positions = {
+            pos.symbol: int(pos.qty) for pos in ctx.api.get_all_positions()
+        }
         with targets_lock:
-            symbols_with_targets = list(ctx.stop_targets.keys()) + list(ctx.take_profit_targets.keys())
+            symbols_with_targets = list(ctx.stop_targets.keys()) + list(
+                ctx.take_profit_targets.keys()
+            )
             for symbol in symbols_with_targets:
                 if symbol not in live_positions or live_positions[symbol] == 0:
                     ctx.stop_targets.pop(symbol, None)
@@ -154,13 +164,14 @@ def reconcile_positions(ctx: 'BotContext') -> None:
     except Exception as e:
         logger.warning(f"[reconcile_positions] failed: {e}")
 
+
 from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
     wait_random,
     retry_if_exception_type,
-    RetryError
+    RetryError,
 )
 from ratelimit import limits, sleep_and_retry
 
@@ -195,22 +206,23 @@ sentry_sdk.init(
     dsn=SENTRY_DSN,
     traces_sample_rate=0.1,
     environment=BOT_MODE_ENV,
-    default_integrations=False  # FIXED: disable threading integration
+    default_integrations=False,  # FIXED: disable threading integration
 )
 
 # Suppress specific pandas_ta warnings
 warnings.filterwarnings(
-    "ignore",
-    message=".*valid feature names.*",
-    category=UserWarning
+    "ignore", message=".*valid feature names.*", category=UserWarning
 )
 
 # ─── FINBERT SENTIMENT MODEL IMPORTS & FALLBACK ─────────────────────────────────
 try:
     import torch
     from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
     _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
-    _FINBERT_MODEL     = AutoModelForSequenceClassification.from_pretrained("yiyanghkust/finbert-tone")
+    _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
+        "yiyanghkust/finbert-tone"
+    )
     _FINBERT_MODEL.eval()
     _HUGGINGFACE_AVAILABLE = True
     logger.info("FinBERT loaded successfully")
@@ -221,63 +233,75 @@ except Exception as e:
     logger.warning(f"FinBERT load failed ({e}); falling back to neutral sentiment")
 
 # Prometheus metrics
-orders_total            = Counter('bot_orders_total', 'Total orders sent')
-order_failures          = Counter('bot_order_failures', 'Order submission failures')
-daily_drawdown          = Gauge('bot_daily_drawdown', 'Current daily drawdown fraction')
-signals_evaluated       = Counter('bot_signals_evaluated_total', 'Total signals evaluated')
-run_all_trades_duration = Histogram('run_all_trades_duration_seconds', 'Time spent in run_all_trades')
-minute_cache_hit        = Counter('bot_minute_cache_hits', 'Minute bar cache hits')
-minute_cache_miss       = Counter('bot_minute_cache_misses', 'Minute bar cache misses')
-daily_cache_hit         = Counter('bot_daily_cache_hits', 'Daily bar cache hits')
-daily_cache_miss        = Counter('bot_daily_cache_misses', 'Daily bar cache misses')
-event_cooldown_hits     = Counter('bot_event_cooldown_hits', 'Event cooldown hits')
-slippage_total          = Counter('bot_slippage_total', 'Cumulative slippage in cents')
-slippage_count          = Counter('bot_slippage_count', 'Number of orders with slippage logged')
-weekly_drawdown         = Gauge('bot_weekly_drawdown', 'Current weekly drawdown fraction')
+orders_total = Counter("bot_orders_total", "Total orders sent")
+order_failures = Counter("bot_order_failures", "Order submission failures")
+daily_drawdown = Gauge("bot_daily_drawdown", "Current daily drawdown fraction")
+signals_evaluated = Counter("bot_signals_evaluated_total", "Total signals evaluated")
+run_all_trades_duration = Histogram(
+    "run_all_trades_duration_seconds", "Time spent in run_all_trades"
+)
+minute_cache_hit = Counter("bot_minute_cache_hits", "Minute bar cache hits")
+minute_cache_miss = Counter("bot_minute_cache_misses", "Minute bar cache misses")
+daily_cache_hit = Counter("bot_daily_cache_hits", "Daily bar cache hits")
+daily_cache_miss = Counter("bot_daily_cache_misses", "Daily bar cache misses")
+event_cooldown_hits = Counter("bot_event_cooldown_hits", "Event cooldown hits")
+slippage_total = Counter("bot_slippage_total", "Cumulative slippage in cents")
+slippage_count = Counter("bot_slippage_count", "Number of orders with slippage logged")
+weekly_drawdown = Gauge("bot_weekly_drawdown", "Current weekly drawdown fraction")
 
-DISASTER_DD_LIMIT      = float(os.getenv('DISASTER_DD_LIMIT', '0.2'))
+DISASTER_DD_LIMIT = float(os.getenv("DISASTER_DD_LIMIT", "0.2"))
 
 # Paths
-BASE_DIR            = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 def abspath(fname: str) -> str:
     return os.path.join(BASE_DIR, fname)
 
-TICKERS_FILE        = abspath("tickers.csv")
-TRADE_LOG_FILE      = abspath("trades.csv")
+
+TICKERS_FILE = abspath("tickers.csv")
+TRADE_LOG_FILE = abspath("trades.csv")
 SIGNAL_WEIGHTS_FILE = abspath("signal_weights.csv")
-EQUITY_FILE         = abspath("last_equity.txt")
-PEAK_EQUITY_FILE    = abspath("peak_equity.txt")
-HALT_FLAG_PATH      = abspath("halt.flag")
-SLIPPAGE_LOG_FILE   = abspath("slippage.csv")
-REWARD_LOG_FILE     = abspath("reward_log.csv")
-FEATURE_PERF_FILE   = abspath("feature_perf.csv")
+EQUITY_FILE = abspath("last_equity.txt")
+PEAK_EQUITY_FILE = abspath("peak_equity.txt")
+HALT_FLAG_PATH = abspath("halt.flag")
+SLIPPAGE_LOG_FILE = abspath("slippage.csv")
+REWARD_LOG_FILE = abspath("reward_log.csv")
+FEATURE_PERF_FILE = abspath("feature_perf.csv")
 INACTIVE_FEATURES_FILE = abspath("inactive_features.json")
 
 # Hyperparameter files
-HYPERPARAMS_FILE     = abspath("hyperparams.json")
+HYPERPARAMS_FILE = abspath("hyperparams.json")
 BEST_HYPERPARAMS_FILE = abspath("best_hyperparams.json")
+
 
 def load_hyperparams() -> dict:
     """Load hyperparameters from best_hyperparams.json if present, else default."""
-    path = BEST_HYPERPARAMS_FILE if os.path.exists(BEST_HYPERPARAMS_FILE) else HYPERPARAMS_FILE
+    path = (
+        BEST_HYPERPARAMS_FILE
+        if os.path.exists(BEST_HYPERPARAMS_FILE)
+        else HYPERPARAMS_FILE
+    )
     if not os.path.exists(path):
         logger.warning(f"Hyperparameter file {path} not found; using defaults")
         return {}
     with open(path) as f:
         return json.load(f)
 
+
 # <-- NEW: marker file for daily retraining -->
 RETRAIN_MARKER_FILE = abspath("last_retrain.txt")
 
 # Main meta‐learner path: this is where retrain.py will dump the new sklearn model each day.
-MODEL_PATH          = abspath(os.getenv("MODEL_PATH", "meta_model.pkl"))
-MODEL_RF_PATH       = abspath(os.getenv("MODEL_RF_PATH", "model_rf.pkl"))
-MODEL_XGB_PATH      = abspath(os.getenv("MODEL_XGB_PATH", "model_xgb.pkl"))
-MODEL_LGB_PATH      = abspath(os.getenv("MODEL_LGB_PATH", "model_lgb.pkl"))
+MODEL_PATH = abspath(os.getenv("MODEL_PATH", "meta_model.pkl"))
+MODEL_RF_PATH = abspath(os.getenv("MODEL_RF_PATH", "model_rf.pkl"))
+MODEL_XGB_PATH = abspath(os.getenv("MODEL_XGB_PATH", "model_xgb.pkl"))
+MODEL_LGB_PATH = abspath(os.getenv("MODEL_LGB_PATH", "model_lgb.pkl"))
 
-REGIME_MODEL_PATH   = abspath("regime_model.pkl")
+REGIME_MODEL_PATH = abspath("regime_model.pkl")
 # (We keep a separate meta‐model for signal‐weight learning, if you use Bayesian/Ridge, etc.)
-META_MODEL_PATH     = abspath("meta_model.pkl")
+META_MODEL_PATH = abspath("meta_model.pkl")
+
 
 # Strategy mode
 class BotMode:
@@ -288,79 +312,92 @@ class BotMode:
     def set_parameters(self) -> dict[str, float]:
         if self.mode == "conservative":
             return {
-                "KELLY_FRACTION": 0.3, "CONF_THRESHOLD": 0.8, "CONFIRMATION_COUNT": 3,
-                "TAKE_PROFIT_FACTOR": 1.2, "DAILY_LOSS_LIMIT": 0.05,
-                "CAPITAL_CAP": 0.05, "TRAILING_FACTOR": 1.5
+                "KELLY_FRACTION": 0.3,
+                "CONF_THRESHOLD": 0.8,
+                "CONFIRMATION_COUNT": 3,
+                "TAKE_PROFIT_FACTOR": 1.2,
+                "DAILY_LOSS_LIMIT": 0.05,
+                "CAPITAL_CAP": 0.05,
+                "TRAILING_FACTOR": 1.5,
             }
         elif self.mode == "aggressive":
             return {
-                "KELLY_FRACTION": 0.75, "CONF_THRESHOLD": 0.6, "CONFIRMATION_COUNT": 1,
-                "TAKE_PROFIT_FACTOR": 2.2, "DAILY_LOSS_LIMIT": 0.1,
-                "CAPITAL_CAP": 0.1, "TRAILING_FACTOR": 2.0
+                "KELLY_FRACTION": 0.75,
+                "CONF_THRESHOLD": 0.6,
+                "CONFIRMATION_COUNT": 1,
+                "TAKE_PROFIT_FACTOR": 2.2,
+                "DAILY_LOSS_LIMIT": 0.1,
+                "CAPITAL_CAP": 0.1,
+                "TRAILING_FACTOR": 2.0,
             }
         else:  # balanced
             return {
-                "KELLY_FRACTION": 0.6, "CONF_THRESHOLD": 0.75, "CONFIRMATION_COUNT": 2,
-                "TAKE_PROFIT_FACTOR": 1.8, "DAILY_LOSS_LIMIT": 0.07,
-                "CAPITAL_CAP": 0.08, "TRAILING_FACTOR": 1.2
+                "KELLY_FRACTION": 0.6,
+                "CONF_THRESHOLD": 0.75,
+                "CONFIRMATION_COUNT": 2,
+                "TAKE_PROFIT_FACTOR": 1.8,
+                "DAILY_LOSS_LIMIT": 0.07,
+                "CAPITAL_CAP": 0.08,
+                "TRAILING_FACTOR": 1.2,
             }
 
     def get_config(self) -> dict[str, float]:
         return self.params
 
-mode_obj     = BotMode(BOT_MODE_ENV)
+
+mode_obj = BotMode(BOT_MODE_ENV)
 logger.info(f"Trading mode is set to '{mode_obj.mode}'")
-params       = mode_obj.get_config()
+params = mode_obj.get_config()
 params.update(load_hyperparams())
 
 # Other constants
-NEWS_API_KEY            = CONFIG_NEWS_API_KEY
-TRAILING_FACTOR         = params.get("TRAILING_FACTOR", 1.2)
-SECONDARY_TRAIL_FACTOR  = 1.0
-TAKE_PROFIT_FACTOR      = params.get("TAKE_PROFIT_FACTOR", 1.8)
-SCALING_FACTOR          = params.get("SCALING_FACTOR", 0.3)
-ORDER_TYPE              = 'market'
-LIMIT_ORDER_SLIPPAGE    = params.get("LIMIT_ORDER_SLIPPAGE", 0.005)
-MAX_POSITION_SIZE       = 1000
-SLICE_THRESHOLD         = 50
-POV_SLICE_PCT           = params.get("POV_SLICE_PCT", 0.05)
-DAILY_LOSS_LIMIT        = params.get("DAILY_LOSS_LIMIT", 0.07)
+NEWS_API_KEY = CONFIG_NEWS_API_KEY
+TRAILING_FACTOR = params.get("TRAILING_FACTOR", 1.2)
+SECONDARY_TRAIL_FACTOR = 1.0
+TAKE_PROFIT_FACTOR = params.get("TAKE_PROFIT_FACTOR", 1.8)
+SCALING_FACTOR = params.get("SCALING_FACTOR", 0.3)
+ORDER_TYPE = "market"
+LIMIT_ORDER_SLIPPAGE = params.get("LIMIT_ORDER_SLIPPAGE", 0.005)
+MAX_POSITION_SIZE = 1000
+SLICE_THRESHOLD = 50
+POV_SLICE_PCT = params.get("POV_SLICE_PCT", 0.05)
+DAILY_LOSS_LIMIT = params.get("DAILY_LOSS_LIMIT", 0.07)
 MAX_PORTFOLIO_POSITIONS = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
-CORRELATION_THRESHOLD   = 0.60
-SECTOR_EXPOSURE_CAP     = float(os.getenv("SECTOR_EXPOSURE_CAP", "0.4"))
-MAX_OPEN_POSITIONS      = int(os.getenv("MAX_OPEN_POSITIONS", "10"))
-WEEKLY_DRAWDOWN_LIMIT   = float(os.getenv("WEEKLY_DRAWDOWN_LIMIT", "0.15"))
-MARKET_OPEN             = dt_time(6, 30)
-MARKET_CLOSE            = dt_time(13, 0)
-VOLUME_THRESHOLD        = int(os.getenv("VOLUME_THRESHOLD", "50000"))
-ENTRY_START_OFFSET      = timedelta(minutes=params.get("ENTRY_START_OFFSET_MIN", 30))
-ENTRY_END_OFFSET        = timedelta(minutes=params.get("ENTRY_END_OFFSET_MIN", 15))
-REGIME_LOOKBACK         = 14
-REGIME_ATR_THRESHOLD    = 20.0
-RF_ESTIMATORS           = 300
-RF_MAX_DEPTH            = 3
-RF_MIN_SAMPLES_LEAF     = 5
-ATR_LENGTH              = 10
-CONF_THRESHOLD          = params.get("CONF_THRESHOLD", 0.75)
-CONFIRMATION_COUNT      = params.get("CONFIRMATION_COUNT", 2)
-CAPITAL_CAP             = params.get("CAPITAL_CAP", 0.08)
-DOLLAR_RISK_LIMIT       = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
-PACIFIC                 = ZoneInfo("America/Los_Angeles")
-PDT_DAY_TRADE_LIMIT     = params.get("PDT_DAY_TRADE_LIMIT", 3)
-PDT_EQUITY_THRESHOLD    = params.get("PDT_EQUITY_THRESHOLD", 25_000.0)
-BUY_THRESHOLD           = params.get("BUY_THRESHOLD", 0.2)
-FINNHUB_RPM             = int(os.getenv("FINNHUB_RPM", "60"))
+CORRELATION_THRESHOLD = 0.60
+SECTOR_EXPOSURE_CAP = float(os.getenv("SECTOR_EXPOSURE_CAP", "0.4"))
+MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "10"))
+WEEKLY_DRAWDOWN_LIMIT = float(os.getenv("WEEKLY_DRAWDOWN_LIMIT", "0.15"))
+MARKET_OPEN = dt_time(6, 30)
+MARKET_CLOSE = dt_time(13, 0)
+VOLUME_THRESHOLD = int(os.getenv("VOLUME_THRESHOLD", "50000"))
+ENTRY_START_OFFSET = timedelta(minutes=params.get("ENTRY_START_OFFSET_MIN", 30))
+ENTRY_END_OFFSET = timedelta(minutes=params.get("ENTRY_END_OFFSET_MIN", 15))
+REGIME_LOOKBACK = 14
+REGIME_ATR_THRESHOLD = 20.0
+RF_ESTIMATORS = 300
+RF_MAX_DEPTH = 3
+RF_MIN_SAMPLES_LEAF = 5
+ATR_LENGTH = 10
+CONF_THRESHOLD = params.get("CONF_THRESHOLD", 0.75)
+CONFIRMATION_COUNT = params.get("CONFIRMATION_COUNT", 2)
+CAPITAL_CAP = params.get("CAPITAL_CAP", 0.08)
+DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
+PACIFIC = ZoneInfo("America/Los_Angeles")
+PDT_DAY_TRADE_LIMIT = params.get("PDT_DAY_TRADE_LIMIT", 3)
+PDT_EQUITY_THRESHOLD = params.get("PDT_EQUITY_THRESHOLD", 25_000.0)
+BUY_THRESHOLD = params.get("BUY_THRESHOLD", 0.2)
+FINNHUB_RPM = int(os.getenv("FINNHUB_RPM", "60"))
 
 # Regime symbols (makes SPY configurable)
 REGIME_SYMBOLS = ["SPY"]
 
 # ─── THREAD-SAFETY LOCKS & CIRCUIT BREAKER ─────────────────────────────────────
-cache_lock      = Lock()
-targets_lock    = Lock()
-vol_lock        = Lock()
-sentiment_lock  = Lock()
-slippage_lock   = Lock()
-meta_lock       = Lock()
+cache_lock = Lock()
+targets_lock = Lock()
+vol_lock = Lock()
+sentiment_lock = Lock()
+slippage_lock = Lock()
+meta_lock = Lock()
 
 breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
 executor = ThreadPoolExecutor(max_workers=4)
@@ -381,11 +418,15 @@ _VOL_STATS = {"mean": None, "std": None, "last_update": None, "last": None}
 CURRENT_REGIME = "sideways"
 
 # Slippage logs (in-memory for quick access)
-_slippage_log: List[Tuple[str, float, float, datetime]] = []  # (symbol, expected, actual, timestamp)
+_slippage_log: List[Tuple[str, float, float, datetime]] = (
+    []
+)  # (symbol, expected, actual, timestamp)
 # Ensure persistent slippage log file exists
 if not os.path.exists(SLIPPAGE_LOG_FILE):
     with open(SLIPPAGE_LOG_FILE, "w", newline="") as f:
-        csv.writer(f).writerow(["timestamp", "symbol", "expected", "actual", "slippage_cents"])
+        csv.writer(f).writerow(
+            ["timestamp", "symbol", "expected", "actual", "slippage_cents"]
+        )
 
 # Sector cache for portfolio exposure calculations
 _SECTOR_CACHE: Dict[str, str] = {}
@@ -393,32 +434,40 @@ _SECTOR_CACHE: Dict[str, str] = {}
 # Weekly drawdown tracking
 week_start_equity: Optional[Tuple[date, float]] = None
 
+
 # ─── TYPED EXCEPTION ─────────────────────────────────────────────────────────
 class DataFetchErrorLegacy(Exception):
     pass
 
+
 # ─── B. CLIENTS & SINGLETONS ─────────────────────────────────────────────────
+
 
 def ensure_alpaca_credentials() -> None:
     """Verify Alpaca credentials are present before starting."""
     validate_alpaca_credentials()
 
+
 ensure_alpaca_credentials()
+
 
 # Prometheus-safe account fetch
 @breaker
-def safe_alpaca_get_account(ctx: 'BotContext'):
+def safe_alpaca_get_account(ctx: "BotContext"):
     return ctx.api.get_account()
+
 
 # ─── C. HELPERS ────────────────────────────────────────────────────────────────
 def chunked(iterable: Sequence, n: int):
     """Yield successive n-sized chunks from iterable."""
     for i in range(0, len(iterable), n):
-        yield iterable[i:i + n]
+        yield iterable[i : i + n]
+
 
 def ttl_seconds() -> int:
     """Configurable TTL for minute-bar cache (default 60s)."""
     return int(os.getenv("MINUTE_CACHE_TTL", "60"))
+
 
 def asset_class_for(symbol: str) -> str:
     """Very small heuristic to map tickers to asset classes."""
@@ -429,7 +478,8 @@ def asset_class_for(symbol: str) -> str:
         return "crypto"
     return "equity"
 
-def compute_spy_vol_stats(ctx: 'BotContext') -> None:
+
+def compute_spy_vol_stats(ctx: "BotContext") -> None:
     """Compute daily ATR mean/std on SPY for the past 1 year."""
     global _VOL_STATS
     today = date.today()
@@ -457,7 +507,11 @@ def compute_spy_vol_stats(ctx: 'BotContext') -> None:
         _VOL_STATS["last_update"] = today
         _VOL_STATS["last"] = last_val
 
-    logger.info("SPY_VOL_STATS_UPDATED", extra={"mean": mean_val, "std": std_val, "atr": last_val})
+    logger.info(
+        "SPY_VOL_STATS_UPDATED",
+        extra={"mean": mean_val, "std": std_val, "atr": last_val},
+    )
+
 
 def is_high_vol_thr_spy() -> bool:
     """Return True if SPY ATR > mean + 2*std."""
@@ -472,12 +526,15 @@ def is_high_vol_thr_spy() -> bool:
     if spy_df is None or len(spy_df) < ATR_LENGTH:
         return False
 
-    atr_series = ta.atr(spy_df["high"], spy_df["low"], spy_df["close"], length=ATR_LENGTH)
+    atr_series = ta.atr(
+        spy_df["high"], spy_df["low"], spy_df["close"], length=ATR_LENGTH
+    )
     if atr_series.empty:
         return False
 
     current_atr = float(atr_series.iloc[-1])
     return (current_atr - mean) / std >= 2
+
 
 def is_high_vol_regime() -> bool:
     """
@@ -485,6 +542,7 @@ def is_high_vol_regime() -> bool:
     Returns True if SPY is in a high-volatility regime (ATR > mean + 2*std).
     """
     return is_high_vol_thr_spy()
+
 
 # ─── D. DATA FETCHERS ─────────────────────────────────────────────────────────
 class FinnhubFetcherLegacy:
@@ -519,7 +577,7 @@ class FinnhubFetcherLegacy:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 1),
-        retry=retry_if_exception_type(Exception)
+        retry=retry_if_exception_type(Exception),
     )
     def fetch(self, symbols, period="1mo", interval="1d") -> pd.DataFrame:
         syms = symbols if isinstance(symbols, (list, tuple)) else [symbols]
@@ -527,22 +585,25 @@ class FinnhubFetcherLegacy:
         span = self._parse_period(period)
         start_ts = now_ts - span
 
-        resolution = 'D' if interval == '1d' else '1'
+        resolution = "D" if interval == "1d" else "1"
         frames = []
         for sym in syms:
             self._throttle()
             resp = self.client.stock_candles(sym, resolution, _from=start_ts, to=now_ts)
-            if resp.get('s') != 'ok':
+            if resp.get("s") != "ok":
                 logger.warning(f"[FH] no data for {sym}: status={resp.get('s')}")
                 frames.append(pd.DataFrame())
                 continue
-            df = pd.DataFrame({
-                'open':   resp['o'],
-                'high':   resp['h'],
-                'low':    resp['l'],
-                'close':  resp['c'],
-                'volume': resp['v'],
-            }, index=pd.to_datetime(resp['t'], unit='s', utc=True))
+            df = pd.DataFrame(
+                {
+                    "open": resp["o"],
+                    "high": resp["h"],
+                    "low": resp["l"],
+                    "close": resp["c"],
+                    "volume": resp["v"],
+                },
+                index=pd.to_datetime(resp["t"], unit="s", utc=True),
+            )
             df.index = df.index.tz_convert(None)
             frames.append(df)
 
@@ -550,11 +611,11 @@ class FinnhubFetcherLegacy:
             return pd.DataFrame()
         if len(frames) == 1:
             return frames[0]
-        return pd.concat(frames, axis=1, keys=syms, names=['Symbol','Field'])
-
+        return pd.concat(frames, axis=1, keys=syms, names=["Symbol", "Field"])
 
 
 _last_fh_prefetch_date: Optional[date] = None
+
 
 @dataclass
 class DataFetcher:
@@ -563,7 +624,7 @@ class DataFetcher:
         self._minute_cache: dict[str, Optional[pd.DataFrame]] = {}
         self._minute_timestamps: dict[str, datetime] = {}
 
-    def get_daily_df(self, ctx: 'BotContext', symbol: str) -> Optional[pd.DataFrame]:
+    def get_daily_df(self, ctx: "BotContext", symbol: str) -> Optional[pd.DataFrame]:
         symbol = symbol.upper()
         now_utc = datetime.now(timezone.utc)
         end_ts = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -592,7 +653,9 @@ class DataFetcher:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             bars.index = pd.to_datetime(bars.index, utc=True)
             bars.index = bars.index.tz_convert(None)
-            df = bars.rename(columns=lambda c: c.lower()).drop(columns=["symbol"], errors="ignore")
+            df = bars.rename(columns=lambda c: c.lower()).drop(
+                columns=["symbol"], errors="ignore"
+            )
         except APIError as e:
             err_msg = str(e).lower()
             if "subscription does not permit querying recent sip data" in err_msg:
@@ -616,32 +679,49 @@ class DataFetcher:
                     df = df_iex.rename(columns=lambda c: c.lower())
                 except Exception as iex_err:
                     print(f">> DEBUG: ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
-                    print(f">> DEBUG: INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}")
+                    print(
+                        f">> DEBUG: INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}"
+                    )
                     dummy_date = pd.to_datetime(end_ts).tz_localize("UTC")
-                    df = pd.DataFrame([
-                        {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
-                    ], index=[dummy_date])
+                    df = pd.DataFrame(
+                        [
+                            {
+                                "open": 0.0,
+                                "high": 0.0,
+                                "low": 0.0,
+                                "close": 0.0,
+                                "volume": 0,
+                            }
+                        ],
+                        index=[dummy_date],
+                    )
             else:
                 print(f">> DEBUG: ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
                 dummy_date = pd.to_datetime(end_ts).tz_localize("UTC")
-                df = pd.DataFrame([
-                    {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
-                ], index=[dummy_date])
+                df = pd.DataFrame(
+                    [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
+                    index=[dummy_date],
+                )
         except Exception as e:
             print(f">> DEBUG: ALPACA DAILY FETCH EXCEPTION for {symbol}: {repr(e)}")
             dummy_date = pd.to_datetime(end_ts).tz_localize("UTC")
-            df = pd.DataFrame([
-                {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
-            ], index=[dummy_date])
+            df = pd.DataFrame(
+                [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
+                index=[dummy_date],
+            )
 
         with cache_lock:
             self._daily_cache[symbol] = df
         return df
 
-    def get_minute_df(self, ctx: 'BotContext', symbol: str, lookback_minutes: int = 30) -> Optional[pd.DataFrame]:
+    def get_minute_df(
+        self, ctx: "BotContext", symbol: str, lookback_minutes: int = 30
+    ) -> Optional[pd.DataFrame]:
         symbol = symbol.upper()
         now_utc = datetime.now(timezone.utc)
-        last_closed_minute = now_utc.replace(second=0, microsecond=0) - timedelta(minutes=1)
+        last_closed_minute = now_utc.replace(second=0, microsecond=0) - timedelta(
+            minutes=1
+        )
         start_minute = last_closed_minute - timedelta(minutes=lookback_minutes)
 
         with cache_lock:
@@ -669,10 +749,15 @@ class DataFetcher:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             bars.index = pd.to_datetime(bars.index, utc=True)
             bars.index = bars.index.tz_convert(None)
-            df = bars.rename(columns=lambda c: c.lower()).drop(columns=["symbol"], errors="ignore")[["open", "high", "low", "close", "volume"]]
+            df = bars.rename(columns=lambda c: c.lower()).drop(
+                columns=["symbol"], errors="ignore"
+            )[["open", "high", "low", "close", "volume"]]
         except APIError as e:
             err_msg = str(e)
-            if "subscription does not permit querying recent sip data" in err_msg.lower():
+            if (
+                "subscription does not permit querying recent sip data"
+                in err_msg.lower()
+            ):
                 print(f">> DEBUG: ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
                 print(f">> DEBUG: ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
@@ -690,7 +775,9 @@ class DataFetcher:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
                     df_iex.index = pd.to_datetime(df_iex.index, utc=True)
                     df_iex.index = df_iex.index.tz_convert(None)
-                    df = df_iex.rename(columns=lambda c: c.lower())[["open", "high", "low", "close", "volume"]]
+                    df = df_iex.rename(columns=lambda c: c.lower())[
+                        ["open", "high", "low", "close", "volume"]
+                    ]
                 except Exception as iex_err:
                     print(f">> DEBUG: ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
                     print(f">> DEBUG: NO ALTERNATIVE MINUTE DATA FOR {symbol}")
@@ -709,10 +796,10 @@ class DataFetcher:
 
     def get_historical_minute(
         self,
-        ctx: 'BotContext',           # ← still needs ctx here, per retrain.py
+        ctx: "BotContext",  # ← still needs ctx here, per retrain.py
         symbol: str,
         start_date: date,
-        end_date: date
+        end_date: date,
     ) -> Optional[pd.DataFrame]:
         """
         Fetch all minute bars for `symbol` between start_date and end_date (inclusive),
@@ -736,7 +823,7 @@ class DataFetcher:
                     timeframe=TimeFrame.Minute,
                     start=day_start,
                     end=day_end,
-                    limit=10000
+                    limit=10000,
                 )
                 bars_day = ctx.data_client.get_stock_bars(bars_req).df
                 if isinstance(bars_day.columns, pd.MultiIndex):
@@ -744,7 +831,9 @@ class DataFetcher:
                 else:
                     bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
             except Exception as e:
-                logger.warning(f"[historic_minute] failed for {symbol} {day_start}-{day_end}: {e}")
+                logger.warning(
+                    f"[historic_minute] failed for {symbol} {day_start}-{day_end}: {e}"
+                )
                 bars_day = None
 
             if bars_day is not None and not bars_day.empty:
@@ -766,9 +855,12 @@ class DataFetcher:
         combined = combined.sort_index()
         return combined
 
+
 # Helper to prefetch daily data in bulk with Alpaca, handling SIP subscription
 # issues and falling back to IEX delayed feed per symbol if needed.
-def prefetch_daily_data(symbols: List[str], start_date: date, end_date: date) -> Dict[str, pd.DataFrame]:
+def prefetch_daily_data(
+    symbols: List[str], start_date: date, end_date: date
+) -> Dict[str, pd.DataFrame]:
     alpaca_key = os.getenv("APCA_API_KEY_ID")
     alpaca_secret = os.getenv("APCA_API_SECRET_KEY")
     base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
@@ -782,7 +874,11 @@ def prefetch_daily_data(symbols: List[str], start_date: date, end_date: date) ->
             end=end_date.isoformat(),
         ).df
         if isinstance(bars.columns, pd.MultiIndex):
-            grouped_raw = {sym: bars.xs(sym, level=0, axis=1) for sym in symbols if sym in bars.columns.get_level_values(0)}
+            grouped_raw = {
+                sym: bars.xs(sym, level=0, axis=1)
+                for sym in symbols
+                if sym in bars.columns.get_level_values(0)
+            }
         else:
             grouped_raw = {sym: df for sym, df in bars.groupby("symbol")}
         grouped = {}
@@ -795,7 +891,9 @@ def prefetch_daily_data(symbols: List[str], start_date: date, end_date: date) ->
     except APIError as e:
         err_msg = str(e).lower()
         if "subscription does not permit querying recent sip data" in err_msg:
-            print(f">> DEBUG: ALPACA SUBSCRIPTION ERROR in bulk for {symbols}: {repr(e)}")
+            print(
+                f">> DEBUG: ALPACA SUBSCRIPTION ERROR in bulk for {symbols}: {repr(e)}"
+            )
             print(f">> DEBUG: ATTEMPTING IEX-DELAYERED BULK FETCH FOR {symbols}")
             try:
                 bars_iex = client.get_bars(
@@ -807,7 +905,11 @@ def prefetch_daily_data(symbols: List[str], start_date: date, end_date: date) ->
                     feed="iex",
                 ).df
                 if isinstance(bars_iex.columns, pd.MultiIndex):
-                    grouped_raw = {sym: bars_iex.xs(sym, level=0, axis=1) for sym in symbols if sym in bars_iex.columns.get_level_values(0)}
+                    grouped_raw = {
+                        sym: bars_iex.xs(sym, level=0, axis=1)
+                        for sym in symbols
+                        if sym in bars_iex.columns.get_level_values(0)
+                    }
                 else:
                     grouped_raw = {sym: df for sym, df in bars_iex.groupby("symbol")}
                 grouped = {}
@@ -835,12 +937,25 @@ def prefetch_daily_data(symbols: List[str], start_date: date, end_date: date) ->
                         df_sym = df_sym.rename(columns=lambda c: c.lower())
                         daily_dict[sym] = df_sym
                     except Exception as indiv_err:
-                        print(f">> DEBUG: ALPACA IEX ERROR for {sym}: {repr(indiv_err)}")
-                        print(f">> DEBUG: INSERTING DUMMY DAILY FOR {sym} ON {end_date.isoformat()}")
+                        print(
+                            f">> DEBUG: ALPACA IEX ERROR for {sym}: {repr(indiv_err)}"
+                        )
+                        print(
+                            f">> DEBUG: INSERTING DUMMY DAILY FOR {sym} ON {end_date.isoformat()}"
+                        )
                         dummy_date = pd.to_datetime(end_date).tz_localize("UTC")
-                        dummy_df = pd.DataFrame([
-                            {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
-                        ], index=[dummy_date])
+                        dummy_df = pd.DataFrame(
+                            [
+                                {
+                                    "open": 0.0,
+                                    "high": 0.0,
+                                    "low": 0.0,
+                                    "close": 0.0,
+                                    "volume": 0,
+                                }
+                            ],
+                            index=[dummy_date],
+                        )
                         daily_dict[sym] = dummy_df
                 return daily_dict
         else:
@@ -848,9 +963,10 @@ def prefetch_daily_data(symbols: List[str], start_date: date, end_date: date) ->
             daily_dict = {}
             for sym in symbols:
                 dummy_date = pd.to_datetime(end_date).tz_localize("UTC")
-                dummy_df = pd.DataFrame([
-                    {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
-                ], index=[dummy_date])
+                dummy_df = pd.DataFrame(
+                    [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
+                    index=[dummy_date],
+                )
                 daily_dict[sym] = dummy_df
             return daily_dict
     except Exception as e:
@@ -858,40 +974,74 @@ def prefetch_daily_data(symbols: List[str], start_date: date, end_date: date) ->
         daily_dict = {}
         for sym in symbols:
             dummy_date = pd.to_datetime(end_date).tz_localize("UTC")
-            dummy_df = pd.DataFrame([
-                {"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}
-            ], index=[dummy_date])
+            dummy_df = pd.DataFrame(
+                [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
+                index=[dummy_date],
+            )
             daily_dict[sym] = dummy_df
         return daily_dict
+
 
 # ─── E. TRADE LOGGER ───────────────────────────────────────────────────────────
 class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
         self.path = path
         if not os.path.exists(path):
-            with portalocker.Lock(path, 'w', timeout=5) as f:
-                csv.writer(f).writerow([
-                    "symbol","entry_time","entry_price",
-                    "exit_time","exit_price","qty","side",
-                    "strategy","classification","signal_tags",
-                    "confidence","reward"
-                ])
+            with portalocker.Lock(path, "w", timeout=5) as f:
+                csv.writer(f).writerow(
+                    [
+                        "symbol",
+                        "entry_time",
+                        "entry_price",
+                        "exit_time",
+                        "exit_price",
+                        "qty",
+                        "side",
+                        "strategy",
+                        "classification",
+                        "signal_tags",
+                        "confidence",
+                        "reward",
+                    ]
+                )
         if not os.path.exists(REWARD_LOG_FILE):
-            with open(REWARD_LOG_FILE, 'w', newline='') as rf:
-                csv.writer(rf).writerow(["timestamp","symbol","reward","pnl","confidence","band"])
+            with open(REWARD_LOG_FILE, "w", newline="") as rf:
+                csv.writer(rf).writerow(
+                    ["timestamp", "symbol", "reward", "pnl", "confidence", "band"]
+                )
 
-    def log_entry(self, symbol: str, price: float, qty: int, side: str,
-                  strategy: str, signal_tags: str="", confidence: float = 0.0) -> None:
+    def log_entry(
+        self,
+        symbol: str,
+        price: float,
+        qty: int,
+        side: str,
+        strategy: str,
+        signal_tags: str = "",
+        confidence: float = 0.0,
+    ) -> None:
         now_iso = datetime.now(timezone.utc).isoformat()
-        with portalocker.Lock(self.path, 'a', timeout=5) as f:
-            csv.writer(f).writerow([
-                symbol, now_iso, price, "", "", qty, side, strategy,
-                "", signal_tags, confidence, ""
-            ])
+        with portalocker.Lock(self.path, "a", timeout=5) as f:
+            csv.writer(f).writerow(
+                [
+                    symbol,
+                    now_iso,
+                    price,
+                    "",
+                    "",
+                    qty,
+                    side,
+                    strategy,
+                    "",
+                    signal_tags,
+                    confidence,
+                    "",
+                ]
+            )
 
     def log_exit(self, symbol: str, exit_price: float) -> None:
         global _LOSS_STREAK, _STREAK_HALT_UNTIL
-        with portalocker.Lock(self.path, 'r+', timeout=5) as f:
+        with portalocker.Lock(self.path, "r+", timeout=5) as f:
             rows = list(csv.reader(f))
             header, data = rows[0], rows[1:]
             pnl = 0.0
@@ -900,10 +1050,16 @@ class TradeLogger:
                 if row[0] == symbol and row[3] == "":
                     entry_t = datetime.fromisoformat(row[1])
                     days = (datetime.now(timezone.utc) - entry_t).days
-                    cls = ("day_trade" if days == 0
-                        else "swing_trade" if days < 5
-                        else "long_trade")
-                    row[3], row[4], row[8] = datetime.now(timezone.utc).isoformat(), exit_price, cls
+                    cls = (
+                        "day_trade"
+                        if days == 0
+                        else "swing_trade" if days < 5 else "long_trade"
+                    )
+                    row[3], row[4], row[8] = (
+                        datetime.now(timezone.utc).isoformat(),
+                        exit_price,
+                        cls,
+                    )
                     # Compute PnL
                     entry_price = float(row[2])
                     pnl = (exit_price - entry_price) * (1 if row[6] == "buy" else -1)
@@ -918,21 +1074,25 @@ class TradeLogger:
                         row.append(conf)
                         row.append(pnl * conf)
                     break
-            f.seek(0); f.truncate()
+            f.seek(0)
+            f.truncate()
             w = csv.writer(f)
-            w.writerow(header); w.writerows(data)
+            w.writerow(header)
+            w.writerows(data)
 
         # log reward
         try:
-            with open(REWARD_LOG_FILE, 'a', newline='') as rf:
-                csv.writer(rf).writerow([
-                    datetime.now(timezone.utc).isoformat(),
-                    symbol,
-                    pnl * conf,
-                    pnl,
-                    conf,
-                    ctx.capital_band,
-                ])
+            with open(REWARD_LOG_FILE, "a", newline="") as rf:
+                csv.writer(rf).writerow(
+                    [
+                        datetime.now(timezone.utc).isoformat(),
+                        symbol,
+                        pnl * conf,
+                        pnl,
+                        conf,
+                        ctx.capital_band,
+                    ]
+                )
         except Exception:
             pass
 
@@ -943,7 +1103,11 @@ class TradeLogger:
             _LOSS_STREAK = 0
         if _LOSS_STREAK >= 3:
             _STREAK_HALT_UNTIL = datetime.now(PACIFIC) + timedelta(minutes=60)
-            logger.warning("STREAK_HALT_TRIGGERED", extra={"loss_streak": _LOSS_STREAK, "halt_until": _STREAK_HALT_UNTIL})
+            logger.warning(
+                "STREAK_HALT_TRIGGERED",
+                extra={"loss_streak": _LOSS_STREAK, "halt_until": _STREAK_HALT_UNTIL},
+            )
+
 
 def _parse_local_positions() -> Dict[str, int]:
     """Return current local open positions from the trade log."""
@@ -959,6 +1123,7 @@ def _parse_local_positions() -> Dict[str, int]:
         positions[row.symbol] = positions.get(row.symbol, 0) + qty
     positions = {k: v for k, v in positions.items() if v != 0}
     return positions
+
 
 def audit_positions(ctx: "BotContext") -> None:
     """
@@ -985,7 +1150,7 @@ def audit_positions(ctx: "BotContext") -> None:
                         symbol=sym,
                         qty=diff,
                         side=OrderSide.SELL,
-                        time_in_force=TimeInForce.DAY
+                        time_in_force=TimeInForce.DAY,
                     )
                     safe_submit_order(ctx.api, req)
                 except Exception:
@@ -997,7 +1162,7 @@ def audit_positions(ctx: "BotContext") -> None:
                         symbol=sym,
                         qty=abs(diff),
                         side=OrderSide.BUY,
-                        time_in_force=TimeInForce.DAY
+                        time_in_force=TimeInForce.DAY,
                     )
                     safe_submit_order(ctx.api, req)
                 except Exception:
@@ -1009,14 +1174,12 @@ def audit_positions(ctx: "BotContext") -> None:
             try:
                 side = OrderSide.BUY if lq > 0 else OrderSide.SELL
                 req = MarketOrderRequest(
-                    symbol=sym,
-                    qty=abs(lq),
-                    side=side,
-                    time_in_force=TimeInForce.DAY
+                    symbol=sym, qty=abs(lq), side=side, time_in_force=TimeInForce.DAY
                 )
                 safe_submit_order(ctx.api, req)
             except Exception:
                 pass
+
 
 def validate_open_orders(ctx: "BotContext") -> None:
     try:
@@ -1039,7 +1202,7 @@ def validate_open_orders(ctx: "BotContext") -> None:
                         symbol=od.symbol,
                         qty=qty,
                         side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
-                        time_in_force=TimeInForce.DAY
+                        time_in_force=TimeInForce.DAY,
                     )
                     safe_submit_order(ctx.api, req)
             except Exception:
@@ -1048,11 +1211,13 @@ def validate_open_orders(ctx: "BotContext") -> None:
     # After canceling/replacing any stuck orders, fix any position mismatches
     audit_positions(ctx)
 
+
 # ─── F. SIGNAL MANAGER & HELPER FUNCTIONS ─────────────────────────────────────
 _LAST_PRICE: Dict[str, float] = {}
 _SENTIMENT_CACHE: Dict[str, Tuple[float, float]] = {}  # {ticker: (timestamp, score)}
 PRICE_TTL_PCT = 0.005  # only fetch sentiment if price moved > 0.5%
 SENTIMENT_TTL_SEC = 600  # 10 minutes
+
 
 class SignalManager:
     def __init__(self) -> None:
@@ -1064,95 +1229,106 @@ class SignalManager:
 
     def signal_momentum(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
         if df is None or len(df) <= self.momentum_lookback:
-            return -1, 0.0, 'momentum'
+            return -1, 0.0, "momentum"
         try:
-            df['momentum'] = df['close'].pct_change(self.momentum_lookback)
-            val = df['momentum'].iloc[-1]
+            df["momentum"] = df["close"].pct_change(self.momentum_lookback)
+            val = df["momentum"].iloc[-1]
             s = 1 if val > 0 else -1 if val < 0 else -1
             w = min(abs(val) * 10, 1.0)
-            return s, w, 'momentum'
+            return s, w, "momentum"
         except Exception:
             logger.exception("Error in signal_momentum")
-            return -1, 0.0, 'momentum'
+            return -1, 0.0, "momentum"
 
-    def signal_mean_reversion(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
+    def signal_mean_reversion(
+        self, df: pd.DataFrame, model=None
+    ) -> Tuple[int, float, str]:
         if df is None or len(df) < self.mean_rev_lookback:
-            return -1, 0.0, 'mean_reversion'
+            return -1, 0.0, "mean_reversion"
         try:
-            ma = df['close'].rolling(self.mean_rev_lookback).mean()
-            sd = df['close'].rolling(self.mean_rev_lookback).std()
-            df['zscore'] = (df['close'] - ma) / sd
-            val = df['zscore'].iloc[-1]
-            s = -1 if val > self.mean_rev_zscore_threshold else 1 if val < -self.mean_rev_zscore_threshold else -1
+            ma = df["close"].rolling(self.mean_rev_lookback).mean()
+            sd = df["close"].rolling(self.mean_rev_lookback).std()
+            df["zscore"] = (df["close"] - ma) / sd
+            val = df["zscore"].iloc[-1]
+            s = (
+                -1
+                if val > self.mean_rev_zscore_threshold
+                else 1 if val < -self.mean_rev_zscore_threshold else -1
+            )
             w = min(abs(val) / 3, 1.0)
-            return s, w, 'mean_reversion'
+            return s, w, "mean_reversion"
         except Exception:
             logger.exception("Error in signal_mean_reversion")
-            return -1, 0.0, 'mean_reversion'
+            return -1, 0.0, "mean_reversion"
 
     def signal_stochrsi(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
-        if df is None or 'stochrsi' not in df or df['stochrsi'].dropna().empty:
-            return -1, 0.0, 'stochrsi'
+        if df is None or "stochrsi" not in df or df["stochrsi"].dropna().empty:
+            return -1, 0.0, "stochrsi"
         try:
-            val = df['stochrsi'].iloc[-1]
+            val = df["stochrsi"].iloc[-1]
             s = 1 if val < 0.2 else -1 if val > 0.8 else -1
-            return s, 0.3, 'stochrsi'
+            return s, 0.3, "stochrsi"
         except Exception:
             logger.exception("Error in signal_stochrsi")
-            return -1, 0.0, 'stochrsi'
+            return -1, 0.0, "stochrsi"
 
     def signal_obv(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
         if df is None or len(df) < 6:
-            return -1, 0.0, 'obv'
+            return -1, 0.0, "obv"
         try:
-            obv = pd.Series(ta.obv(df['close'], df['volume']).values)
+            obv = pd.Series(ta.obv(df["close"], df["volume"]).values)
             if len(obv) < 5:
-                return -1, 0.0, 'obv'
+                return -1, 0.0, "obv"
             slope = np.polyfit(range(5), obv.tail(5), 1)[0]
             s = 1 if slope > 0 else -1 if slope < 0 else -1
             w = min(abs(slope) / 1e6, 1.0)
-            return s, w, 'obv'
+            return s, w, "obv"
         except Exception:
             logger.exception("Error in signal_obv")
-            return -1, 0.0, 'obv'
+            return -1, 0.0, "obv"
 
     def signal_vsa(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
         if df is None or len(df) < 20:
-            return -1, 0.0, 'vsa'
+            return -1, 0.0, "vsa"
         try:
-            body = abs(df['close'] - df['open'])
-            vsa = df['volume'] * body
+            body = abs(df["close"] - df["open"])
+            vsa = df["volume"] * body
             score = vsa.iloc[-1]
             avg = vsa.rolling(20).mean().iloc[-1]
-            s = 1 if df['close'].iloc[-1] > df['open'].iloc[-1] else -1 if df['close'].iloc[-1] < df['open'].iloc[-1] else -1
+            s = (
+                1
+                if df["close"].iloc[-1] > df["open"].iloc[-1]
+                else -1 if df["close"].iloc[-1] < df["open"].iloc[-1] else -1
+            )
             w = min(score / avg, 1.0)
-            return s, w, 'vsa'
+            return s, w, "vsa"
         except Exception:
             logger.exception("Error in signal_vsa")
-            return -1, 0.0, 'vsa'
+            return -1, 0.0, "vsa"
 
-    def signal_ml(self, df: pd.DataFrame, model: Any=None) -> Tuple[int, float, str]:
+    def signal_ml(self, df: pd.DataFrame, model: Any = None) -> Tuple[int, float, str]:
         """Machine learning prediction signal with probability logging."""
         try:
             if hasattr(model, "feature_names_in_"):
                 feat = list(model.feature_names_in_)
             else:
-                feat = ['rsi', 'macd', 'atr', 'vwap', 'sma_50', 'sma_200']
+                feat = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
 
             X = df[feat].iloc[-1].values.reshape(1, -1)
             pred = model.predict(X)[0]
             proba = float(model.predict_proba(X)[0][pred])
             s = 1 if pred == 1 else -1
             logger.info(
-                "ML_SIGNAL",
-                extra={"prediction": int(pred), "probability": proba}
+                "ML_SIGNAL", extra={"prediction": int(pred), "probability": proba}
             )
-            return s, proba, 'ml'
+            return s, proba, "ml"
         except Exception as e:
             logger.exception(f"signal_ml failed: {e}")
-            return -1, 0.0, 'ml'
+            return -1, 0.0, "ml"
 
-    def signal_sentiment(self, ctx: 'BotContext', ticker: str, df: pd.DataFrame=None, model: Any=None) -> Tuple[int, float, str]:
+    def signal_sentiment(
+        self, ctx: "BotContext", ticker: str, df: pd.DataFrame = None, model: Any = None
+    ) -> Tuple[int, float, str]:
         """
         Only fetch sentiment if price has moved > PRICE_TTL_PCT; otherwise, return cached/neutral.
         """
@@ -1164,7 +1340,10 @@ class SignalManager:
             prev_close = _LAST_PRICE.get(ticker, None)
 
         # If price hasn’t moved enough, return cached or neutral
-        if prev_close is not None and abs(latest_close - prev_close) / prev_close < PRICE_TTL_PCT:
+        if (
+            prev_close is not None
+            and abs(latest_close - prev_close) / prev_close < PRICE_TTL_PCT
+        ):
             with sentiment_lock:
                 cached = _SENTIMENT_CACHE.get(ticker)
                 if cached and (pytime.time() - cached[0] < SENTIMENT_TTL_SEC):
@@ -1190,20 +1369,22 @@ class SignalManager:
         weight = abs(score)
         if is_high_vol_regime():
             weight *= 1.5
-        return s, weight, 'sentiment'
+        return s, weight, "sentiment"
 
     def signal_regime(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
         ok = check_market_regime()
         s = 1 if ok else -1
-        return s, 1.0, 'regime'
+        return s, 1.0, "regime"
 
     def load_signal_weights(self) -> dict[str, float]:
         if not os.path.exists(SIGNAL_WEIGHTS_FILE):
             return {}
         df = pd.read_csv(SIGNAL_WEIGHTS_FILE)
-        return {row['signal']: row['weight'] for _, row in df.iterrows()}
+        return {row["signal"]: row["weight"] for _, row in df.iterrows()}
 
-    def evaluate(self, ctx: 'BotContext', df: pd.DataFrame, ticker: str, model: Any) -> Tuple[int, float, str]:
+    def evaluate(
+        self, ctx: "BotContext", df: pd.DataFrame, ticker: str, model: Any
+    ) -> Tuple[int, float, str]:
         """
         Evaluate all signals, allowing short (s=-1) and long (s=1) components.
         Returns (final_signal, confidence ∈ [0,1], concatenated labels).
@@ -1237,26 +1418,29 @@ class SignalManager:
                 if s in (-1, 1):
                     weight = weights.get(lab, w)
                     regime_adj = {
-                        'trending': {'momentum':1.2, 'mean_reversion':0.8},
-                        'mean_reversion': {'momentum':0.8, 'mean_reversion':1.2},
-                        'high_volatility': {'sentiment':1.1},
-                        'sideways': {'momentum':0.9, 'mean_reversion':1.1},
+                        "trending": {"momentum": 1.2, "mean_reversion": 0.8},
+                        "mean_reversion": {"momentum": 0.8, "mean_reversion": 1.2},
+                        "high_volatility": {"sentiment": 1.1},
+                        "sideways": {"momentum": 0.9, "mean_reversion": 1.1},
                     }
-                    if CURRENT_REGIME in regime_adj and lab in regime_adj[CURRENT_REGIME]:
+                    if (
+                        CURRENT_REGIME in regime_adj
+                        and lab in regime_adj[CURRENT_REGIME]
+                    ):
                         weight *= regime_adj[CURRENT_REGIME][lab]
                     signals.append((s, weight, lab))
             except Exception:
                 continue
 
         if not signals:
-            return -1, 0.0, 'no_signal'
+            return -1, 0.0, "no_signal"
 
         self.last_components = signals
 
-        ml_prob = next((w for s, w, l in signals if l == 'ml'), 0.5)
+        ml_prob = next((w for s, w, l in signals if l == "ml"), 0.5)
         adj = []
         for s, w, l in signals:
-            if l != 'ml':
+            if l != "ml":
                 adj.append((s, w * ml_prob, l))
             else:
                 adj.append((s, w, l))
@@ -1271,6 +1455,7 @@ class SignalManager:
             final = -1
         label = "+".join(lab for _, _, lab in adj)
         return final, conf, label
+
 
 # ─── G. BOT CONTEXT ───────────────────────────────────────────────────────────
 @dataclass
@@ -1311,12 +1496,13 @@ class BotContext:
     strategies: List[Any] = field(default_factory=list)
     execution_engine: ExecutionEngine | None = None
 
-data_fetcher   = DataFetcher()
+
+data_fetcher = DataFetcher()
 signal_manager = SignalManager()
-trade_logger   = TradeLogger()
-risk_engine    = RiskEngine()
-allocator      = StrategyAllocator()
-strategies     = [MomentumStrategy(), MeanReversionStrategy()]
+trade_logger = TradeLogger()
+risk_engine = RiskEngine()
+allocator = StrategyAllocator()
+strategies = [MomentumStrategy(), MeanReversionStrategy()]
 API_KEY = ALPACA_API_KEY
 SECRET_KEY = ALPACA_SECRET_KEY
 BASE_URL = ALPACA_BASE_URL
@@ -1375,11 +1561,16 @@ except Exception as e:
 
 # ─── H. MARKET HOURS GUARD ────────────────────────────────────────────────────
 nyse = mcal.get_calendar("XNYS")
+
+
 def in_trading_hours(ts: pd.Timestamp) -> bool:
     schedule_today = nyse.schedule(start_date=ts.date(), end_date=ts.date())
     if schedule_today.empty:
         return False
-    return schedule_today.market_open.iloc[0] <= ts <= schedule_today.market_close.iloc[0]
+    return (
+        schedule_today.market_open.iloc[0] <= ts <= schedule_today.market_close.iloc[0]
+    )
+
 
 # ─── I. SENTIMENT & EVENTS ────────────────────────────────────────────────────
 @sleep_and_retry
@@ -1387,14 +1578,14 @@ def in_trading_hours(ts: pd.Timestamp) -> bool:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type(requests.RequestException)
+    retry=retry_if_exception_type(requests.RequestException),
 )
 def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
     with ctx.sem:
         r = requests.get(
             f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
             f"&CIK={ticker}&type=8-K&count=5",
-            headers={"User-Agent":"AI Trading Bot"}
+            headers={"User-Agent": "AI Trading Bot"},
         )
         r.raise_for_status()
 
@@ -1411,12 +1602,13 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
         logger.warning(f"[get_sec_headlines] parse failed for {ticker}: {e}")
         return ""
 
+
 @sleep_and_retry
 @limits(calls=60, period=60)
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    retry=retry_if_exception_type((requests.RequestException, DataFetchError))
+    retry=retry_if_exception_type((requests.RequestException, DataFetchError)),
 )
 def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     """
@@ -1447,7 +1639,9 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
         resp.raise_for_status()
     except requests.exceptions.HTTPError:
         if resp.status_code == 429:
-            logger.warning(f"fetch_sentiment({ticker}) rate-limited → returning neutral 0.0")
+            logger.warning(
+                f"fetch_sentiment({ticker}) rate-limited → returning neutral 0.0"
+            )
             with sentiment_lock:
                 _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
             return 0.0
@@ -1480,6 +1674,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
         _SENTIMENT_CACHE[ticker] = (now_ts, final_score)
     return final_score
 
+
 def predict_text_sentiment(text: str) -> float:
     """
     Uses FinBERT (if available) to assign a sentiment score ∈ [–1, +1].
@@ -1501,8 +1696,11 @@ def predict_text_sentiment(text: str) -> float:
             neg, neu, pos = probs.tolist()
             return float(pos - neg)
         except Exception as e:
-            logger.warning(f"[predict_text_sentiment] FinBERT inference failed ({e}); returning neutral")
+            logger.warning(
+                f"[predict_text_sentiment] FinBERT inference failed ({e}); returning neutral"
+            )
     return 0.0
+
 
 def fetch_form4_filings(ticker: str) -> List[dict]:
     """
@@ -1534,8 +1732,15 @@ def fetch_form4_filings(ticker: str) -> List[dict]:
             amt = float(amt_str)
         except Exception:
             amt = 0.0
-        filings.append({"date": fdate, "type": ("buy" if "purchase" in txn_type else "sell"), "dollar_amount": amt})
+        filings.append(
+            {
+                "date": fdate,
+                "type": ("buy" if "purchase" in txn_type else "sell"),
+                "dollar_amount": amt,
+            }
+        )
     return filings
+
 
 def _can_fetch_events(symbol: str) -> bool:
     now_ts = pytime.time()
@@ -1546,8 +1751,11 @@ def _can_fetch_events(symbol: str) -> bool:
     _LAST_EVENT_TS[symbol] = now_ts
     return True
 
+
 _calendar_cache: Dict[str, pd.DataFrame] = {}
 _calendar_last_fetch: Dict[str, date] = {}
+
+
 def get_calendar_safe(symbol: str) -> pd.DataFrame:
     today_date = date.today()
     if symbol in _calendar_cache and _calendar_last_fetch.get(symbol) == today_date:
@@ -1564,6 +1772,7 @@ def get_calendar_safe(symbol: str) -> pd.DataFrame:
     _calendar_last_fetch[symbol] = today_date
     return cal
 
+
 def is_near_event(symbol: str, days: int = 3) -> bool:
     cal = get_calendar_safe(symbol)
     if not hasattr(cal, "empty") or cal.empty:
@@ -1571,27 +1780,31 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
     try:
         dates = []
         for col in cal.columns:
-            raw = cal.at['Value', col]
+            raw = cal.at["Value", col]
             if isinstance(raw, (list, tuple)):
                 raw = raw[0]
             dates.append(pd.to_datetime(raw))
     except Exception:
-        logger.debug(f"[Events] Malformed calendar for {symbol}, columns={getattr(cal, 'columns', None)}")
+        logger.debug(
+            f"[Events] Malformed calendar for {symbol}, columns={getattr(cal, 'columns', None)}"
+        )
         return False
     today_ts = pd.Timestamp.now().normalize()
     cutoff = today_ts + pd.Timedelta(days=days)
     return any(today_ts <= d <= cutoff for d in dates)
 
+
 # ─── J. RISK & GUARDS ─────────────────────────────────────────────────────────
 day_start_equity: Optional[Tuple[date, float]] = None
 last_drawdown: float = 0.0
+
 
 @sleep_and_retry
 @limits(calls=200, period=60)
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    retry=retry_if_exception_type(APIError)
+    retry=retry_if_exception_type(APIError),
 )
 def check_daily_loss(ctx: BotContext) -> bool:
     global day_start_equity, last_drawdown
@@ -1605,7 +1818,8 @@ def check_daily_loss(ctx: BotContext) -> bool:
             limit = 0.03
         last_drawdown = (
             (day_start_equity[1] - equity) / day_start_equity[1]
-            if day_start_equity else 0.0
+            if day_start_equity
+            else 0.0
         )
         day_start_equity = (today_date, equity)
         daily_drawdown.set(0.0)
@@ -1616,6 +1830,7 @@ def check_daily_loss(ctx: BotContext) -> bool:
     if loss > 0.05:
         sentry_sdk.capture_message(f"[WARNING] Daily drawdown = {loss:.2%}")
     return loss >= limit
+
 
 def check_weekly_loss(ctx: BotContext) -> bool:
     """Weekly portfolio drawdown guard."""
@@ -1634,6 +1849,7 @@ def check_weekly_loss(ctx: BotContext) -> bool:
     weekly_drawdown.set(loss)
     return loss >= WEEKLY_DRAWDOWN_LIMIT
 
+
 def count_day_trades() -> int:
     if not os.path.exists(TRADE_LOG_FILE):
         return 0
@@ -1646,32 +1862,32 @@ def count_day_trades() -> int:
     df["entry_date"] = df["entry_time"].dt.normalize()
     df["exit_date"] = df["exit_time"].dt.normalize()
     mask = (
-        (df["entry_date"].isin(bdays)) &
-        (df["exit_date"].isin(bdays)) &
-        (df["entry_date"] == df["exit_date"])
+        (df["entry_date"].isin(bdays))
+        & (df["exit_date"].isin(bdays))
+        & (df["entry_date"] == df["exit_date"])
     )
     return int(mask.sum())
 
+
 _running = False
+
 
 @sleep_and_retry
 @limits(calls=200, period=60)
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    retry=retry_if_exception_type(APIError)
+    retry=retry_if_exception_type(APIError),
 )
 def check_pdt_rule(ctx: BotContext) -> bool:
     acct = safe_alpaca_get_account(ctx)
     equity = float(acct.equity)
 
-    api_day_trades = (
-        getattr(acct, "pattern_day_trades", None)
-        or getattr(acct, "pattern_day_trades_count", None)
+    api_day_trades = getattr(acct, "pattern_day_trades", None) or getattr(
+        acct, "pattern_day_trades_count", None
     )
-    api_buying_pw = (
-        getattr(acct, "daytrade_buying_power", None)
-        or getattr(acct, "day_trade_buying_power", None)
+    api_buying_pw = getattr(acct, "daytrade_buying_power", None) or getattr(
+        acct, "day_trade_buying_power", None
     )
 
     logger.info(
@@ -1701,6 +1917,7 @@ def check_pdt_rule(ctx: BotContext) -> bool:
 
     return False
 
+
 def check_halt_flag() -> bool:
     if not os.path.exists(HALT_FLAG_PATH):
         return False
@@ -1710,8 +1927,11 @@ def check_halt_flag() -> bool:
         content = open(HALT_FLAG_PATH).read().strip()
     except Exception:
         content = ""
-    max_age = timedelta(hours=24) if content.startswith("DISASTER") else timedelta(hours=1)
+    max_age = (
+        timedelta(hours=24) if content.startswith("DISASTER") else timedelta(hours=1)
+    )
     return age < max_age
+
 
 def too_many_positions(ctx: BotContext) -> bool:
     try:
@@ -1719,6 +1939,7 @@ def too_many_positions(ctx: BotContext) -> bool:
     except Exception:
         logger.warning("[too_many_positions] Could not fetch positions")
         return False
+
 
 def too_correlated(ctx: BotContext, sym: str) -> bool:
     if not os.path.exists(TRADE_LOG_FILE):
@@ -1751,8 +1972,9 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
     mat = pd.DataFrame({s: rets[s].tail(min_len).values for s in good_syms}, index=idx)
     corr_matrix = mat.corr().abs()
     avg_corr = corr_matrix.where(~np.eye(len(good_syms), dtype=bool)).stack().mean()
-    limit = getattr(ctx, 'correlation_limit', CORRELATION_THRESHOLD)
+    limit = getattr(ctx, "correlation_limit", CORRELATION_THRESHOLD)
     return avg_corr > limit
+
 
 def get_sector(symbol: str) -> str:
     if symbol in _SECTOR_CACHE:
@@ -1763,6 +1985,7 @@ def get_sector(symbol: str) -> str:
         sector = "Unknown"
     _SECTOR_CACHE[symbol] = sector
     return sector
+
 
 def sector_exposure(ctx: BotContext) -> Dict[str, float]:
     """Return current portfolio exposure by sector as fraction of equity."""
@@ -1777,13 +2000,16 @@ def sector_exposure(ctx: BotContext) -> Dict[str, float]:
     exposure: Dict[str, float] = {}
     for pos in positions:
         qty = abs(int(getattr(pos, "qty", 0)))
-        price = float(getattr(pos, "current_price", 0) or getattr(pos, "avg_entry_price", 0) or 0)
+        price = float(
+            getattr(pos, "current_price", 0) or getattr(pos, "avg_entry_price", 0) or 0
+        )
         sec = get_sector(getattr(pos, "symbol", ""))
         val = qty * price
         exposure[sec] = exposure.get(sec, 0.0) + val
     if total <= 0:
         return {k: 0.0 for k in exposure}
     return {k: v / total for k, v in exposure.items()}
+
 
 def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> bool:
     """Return True if adding qty*price of symbol keeps sector exposure within cap."""
@@ -1794,8 +2020,9 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
     except Exception:
         total = 0.0
     projected = exposures.get(sec, 0.0) + ((qty * price) / total if total > 0 else 0.0)
-    cap = getattr(ctx, 'sector_cap', SECTOR_EXPOSURE_CAP)
+    cap = getattr(ctx, "sector_cap", SECTOR_EXPOSURE_CAP)
     return projected <= cap
+
 
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext) -> bool:
@@ -1814,6 +2041,7 @@ def is_within_entry_window(ctx: BotContext) -> bool:
         return False
     return True
 
+
 def scaled_atr_stop(
     entry_price: float,
     atr: float,
@@ -1821,7 +2049,7 @@ def scaled_atr_stop(
     market_open: datetime,
     market_close: datetime,
     max_factor: float = 2.0,
-    min_factor: float = 0.5
+    min_factor: float = 0.5,
 ) -> Tuple[float, float]:
     total = (market_close - market_open).total_seconds()
     elapsed = (now - market_open).total_seconds()
@@ -1831,6 +2059,7 @@ def scaled_atr_stop(
     take = entry_price + factor * atr
     return stop, take
 
+
 def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     df = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if df is None or df.empty:
@@ -1839,7 +2068,11 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     try:
         req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
         quote: Quote = ctx.data_client.get_stock_latest_quote(req)
-        spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
+        spread = (
+            (quote.ask_price - quote.bid_price)
+            if quote.ask_price and quote.bid_price
+            else 0.0
+        )
     except APIError as e:
         logger.warning(f"[liquidity_factor] Alpaca quote failed for {symbol}: {e}")
         spread = 0.0
@@ -1849,13 +2082,14 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     spread_score = max(0.0, 1 - spread / 0.05)
     return max(0.0, min(1.0, vol_score * spread_score))
 
+
 def fractional_kelly_size(
     ctx: BotContext,
     balance: float,
     price: float,
     atr: float,
     win_prob: float,
-    payoff_ratio: float = 1.5
+    payoff_ratio: float = 1.5,
 ) -> int:
     # Volatility throttle: if SPY ATR > 2σ, cut kelly in half
     if is_high_vol_thr_spy():
@@ -1866,15 +2100,17 @@ def fractional_kelly_size(
     base_frac *= comp
 
     if not os.path.exists(PEAK_EQUITY_FILE):
-        with portalocker.Lock(PEAK_EQUITY_FILE, 'w', timeout=5) as f:
+        with portalocker.Lock(PEAK_EQUITY_FILE, "w", timeout=5) as f:
             f.write(str(balance))
         peak_equity = balance
     else:
-        with portalocker.Lock(PEAK_EQUITY_FILE, 'r+', timeout=5) as f:
+        with portalocker.Lock(PEAK_EQUITY_FILE, "r+", timeout=5) as f:
             content = f.read().strip()
             peak_equity = float(content) if content else balance
             if balance > peak_equity:
-                f.seek(0); f.truncate(); f.write(str(balance))
+                f.seek(0)
+                f.truncate()
+                f.write(str(balance))
                 peak_equity = balance
 
     drawdown = (peak_equity - balance) / peak_equity
@@ -1898,11 +2134,9 @@ def fractional_kelly_size(
     size = int(min(raw_pos, cap_pos, risk_cap, dollar_cap, MAX_POSITION_SIZE))
     return max(size, 1)
 
+
 def vol_target_position_size(
-    cash: float,
-    price: float,
-    returns: np.ndarray,
-    target_vol: float = 0.02
+    cash: float, price: float, returns: np.ndarray, target_vol: float = 0.02
 ) -> int:
     sigma = np.std(returns)
     if sigma <= 0 or price <= 0:
@@ -1910,6 +2144,7 @@ def vol_target_position_size(
     dollar_alloc = cash * (target_vol / sigma)
     qty = int(dollar_alloc / price)
     return max(qty, 1)
+
 
 @retry(
     stop=stop_after_attempt(3),
@@ -1920,17 +2155,25 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     """Submit an order using the institutional execution engine."""
     return exec_engine.execute_order(symbol, qty, side)
 
+
 def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
     for attempt in range(2):
         try:
             order = api.submit_order(order_data=req)
             status = getattr(order, "status", "")
             if status == "filled":
-                logger.info("ORDER_ACK", extra={"symbol": req.symbol, "order_id": getattr(order, "id", "")})
+                logger.info(
+                    "ORDER_ACK",
+                    extra={"symbol": req.symbol, "order_id": getattr(order, "id", "")},
+                )
             elif status in ("rejected", "canceled"):
-                logger.error(f"Order for {req.symbol} was {status}: {getattr(order, 'reject_reason', '')}")
+                logger.error(
+                    f"Order for {req.symbol} was {status}: {getattr(order, 'reject_reason', '')}"
+                )
             else:
-                logger.error(f"Order for {req.symbol} status={status}: {getattr(order, 'reject_reason', '')}")
+                logger.error(
+                    f"Order for {req.symbol} status={status}: {getattr(order, 'reject_reason', '')}"
+                )
             return order
         except Exception as e:
             time.sleep(1)
@@ -1938,6 +2181,7 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                 logger.warning(f"submit_order failed for {req.symbol}: {e}")
                 return None
     return None
+
 
 def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -> None:
     """Poll Alpaca for order fill status until it is no longer open."""
@@ -1950,7 +2194,11 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
             if status not in {"new", "accepted", "partially_filled"}:
                 logger.info(
                     "ORDER_FINAL_STATUS",
-                    extra={"order_id": order_id, "status": status, "filled_qty": filled},
+                    extra={
+                        "order_id": order_id,
+                        "status": status,
+                        "filled_qty": filled,
+                    },
                 )
                 return
         except Exception as e:
@@ -1958,7 +2206,10 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
             return
         pytime.sleep(3)
 
-def send_exit_order(ctx: BotContext, symbol: str, exit_qty: int, price: float, reason: str) -> None:
+
+def send_exit_order(
+    ctx: BotContext, symbol: str, exit_qty: int, price: float, reason: str
+) -> None:
     logger.info(
         f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price}"
     )
@@ -1979,7 +2230,7 @@ def send_exit_order(ctx: BotContext, symbol: str, exit_qty: int, price: float, r
             symbol=symbol,
             qty=exit_qty,
             side=OrderSide.SELL,
-            time_in_force=TimeInForce.DAY
+            time_in_force=TimeInForce.DAY,
         )
         safe_submit_order(ctx.api, req)
         return
@@ -1991,8 +2242,8 @@ def send_exit_order(ctx: BotContext, symbol: str, exit_qty: int, price: float, r
             qty=exit_qty,
             side=OrderSide.SELL,
             time_in_force=TimeInForce.DAY,
-            limit_price=price
-        )
+            limit_price=price,
+        ),
     )
     pytime.sleep(5)
     try:
@@ -2005,13 +2256,14 @@ def send_exit_order(ctx: BotContext, symbol: str, exit_qty: int, price: float, r
                     symbol=symbol,
                     qty=exit_qty,
                     side=OrderSide.SELL,
-                    time_in_force=TimeInForce.DAY
-                )
+                    time_in_force=TimeInForce.DAY,
+                ),
             )
     except Exception as e:
         logger.warning(
             f"[send_exit_order] couldn\u2019t check/cancel order {getattr(limit_order, 'id', '')}: {e}"
         )
+
 
 def twap_submit(
     ctx: BotContext,
@@ -2031,25 +2283,28 @@ def twap_submit(
             break
         pytime.sleep(wait_secs)
 
+
 def vwap_pegged_submit(
-    ctx: BotContext,
-    symbol: str,
-    total_qty: int,
-    side: str,
-    duration: int = 300
+    ctx: BotContext, symbol: str, total_qty: int, side: str, duration: int = 300
 ) -> None:
     start_time = pytime.time()
     placed = 0
     while placed < total_qty and pytime.time() - start_time < duration:
         df = ctx.data_fetcher.get_minute_df(ctx, symbol)
         if df is None or df.empty:
-            logger.warning("[VWAP] missing bars, aborting VWAP slice", extra={"symbol": symbol})
+            logger.warning(
+                "[VWAP] missing bars, aborting VWAP slice", extra={"symbol": symbol}
+            )
             break
         vwap_price = ta.vwap(df["high"], df["low"], df["close"], df["volume"]).iloc[-1]
         try:
             req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quote: Quote = ctx.data_client.get_stock_latest_quote(req)
-            spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
+            spread = (
+                (quote.ask_price - quote.bid_price)
+                if quote.ask_price and quote.bid_price
+                else 0.0
+            )
         except APIError as e:
             logger.warning(f"[vwap_slice] Alpaca quote failed for {symbol}: {e}")
             spread = 0.0
@@ -2080,7 +2335,7 @@ def vwap_pegged_submit(
                         side=OrderSide.BUY if side == "buy" else OrderSide.SELL,
                         time_in_force=TimeInForce.IOC,
                         limit_price=round(vwap_price, 2),
-                    )
+                    ),
                 )
                 logger.info(
                     "ORDER_ACK",
@@ -2100,16 +2355,20 @@ def vwap_pegged_submit(
                     slip = (fill_price - vwap_price) * 100
                     slippage_total.inc(abs(slip))
                     slippage_count.inc()
-                    _slippage_log.append((symbol, vwap_price, fill_price, datetime.now(timezone.utc)))
+                    _slippage_log.append(
+                        (symbol, vwap_price, fill_price, datetime.now(timezone.utc))
+                    )
                     with slippage_lock:
                         with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
-                            csv.writer(sf).writerow([
-                                datetime.now(timezone.utc).isoformat(),
-                                symbol,
-                                vwap_price,
-                                fill_price,
-                                slip,
-                            ])
+                            csv.writer(sf).writerow(
+                                [
+                                    datetime.now(timezone.utc).isoformat(),
+                                    symbol,
+                                    vwap_price,
+                                    fill_price,
+                                    slip,
+                                ]
+                            )
                 orders_total.inc()
                 break
             except APIError as e:
@@ -2123,6 +2382,7 @@ def vwap_pegged_submit(
         placed += slice_qty
         pytime.sleep(duration / 10)
 
+
 @dataclass(frozen=True)
 class SliceConfig:
     pct: float = 0.1
@@ -2131,13 +2391,15 @@ class SliceConfig:
     backoff_factor: float = 2.0
     max_backoff_interval: int = 300
 
+
 DEFAULT_SLICE_CFG = SliceConfig(
     pct=POV_SLICE_PCT,
     sleep_interval=60,
     max_retries=3,
     backoff_factor=2.0,
-    max_backoff_interval=300
+    max_backoff_interval=300,
 )
+
 
 def pov_submit(
     ctx: BotContext,
@@ -2154,9 +2416,15 @@ def pov_submit(
         if df is None or df.empty:
             retries += 1
             if retries > cfg.max_retries:
-                logger.warning(f"[pov_submit] no minute data after {cfg.max_retries} retries, aborting", extra={"symbol": symbol})
+                logger.warning(
+                    f"[pov_submit] no minute data after {cfg.max_retries} retries, aborting",
+                    extra={"symbol": symbol},
+                )
                 return False
-            logger.warning(f"[pov_submit] missing bars, retry {retries}/{cfg.max_retries} in {interval:.1f}s", extra={"symbol": symbol})
+            logger.warning(
+                f"[pov_submit] missing bars, retry {retries}/{cfg.max_retries} in {interval:.1f}s",
+                extra={"symbol": symbol},
+            )
             sleep_time = interval * (0.8 + 0.4 * random.random())
             pytime.sleep(sleep_time)
             interval = min(interval * cfg.backoff_factor, cfg.max_backoff_interval)
@@ -2167,7 +2435,11 @@ def pov_submit(
         try:
             req = StockLatestQuoteRequest(symbol_or_symbols=[symbol])
             quote: Quote = ctx.data_client.get_stock_latest_quote(req)
-            spread = (quote.ask_price - quote.bid_price) if quote.ask_price and quote.bid_price else 0.0
+            spread = (
+                (quote.ask_price - quote.bid_price)
+                if quote.ask_price and quote.bid_price
+                else 0.0
+            )
         except APIError as e:
             logger.warning(f"[pov_submit] Alpaca quote failed for {symbol}: {e}")
             spread = 0.0
@@ -2181,21 +2453,38 @@ def pov_submit(
             slice_qty = min(int(vol * cfg.pct), total_qty - placed)
 
         if slice_qty < 1:
-            logger.debug(f"[pov_submit] slice_qty<1 (vol={vol}), waiting", extra={"symbol": symbol})
+            logger.debug(
+                f"[pov_submit] slice_qty<1 (vol={vol}), waiting",
+                extra={"symbol": symbol},
+            )
             pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
             continue
         try:
             od = submit_order(ctx, symbol, slice_qty, side)
         except Exception as e:
-            logger.exception(f"[pov_submit] submit_order failed on slice, aborting: {e}", extra={"symbol": symbol})
+            logger.exception(
+                f"[pov_submit] submit_order failed on slice, aborting: {e}",
+                extra={"symbol": symbol},
+            )
             return False
         placed += slice_qty
-        logger.info("POV_SLICE_PLACED", extra={"symbol": symbol, "slice_qty": slice_qty, "placed": placed})
+        logger.info(
+            "POV_SLICE_PLACED",
+            extra={"symbol": symbol, "slice_qty": slice_qty, "placed": placed},
+        )
         pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
     logger.info("POV_SUBMIT_COMPLETE", extra={"symbol": symbol, "placed": placed})
     return True
 
-def maybe_pyramid(ctx: BotContext, symbol: str, entry_price: float, current_price: float, atr: float, prob: float):
+
+def maybe_pyramid(
+    ctx: BotContext,
+    symbol: str,
+    entry_price: float,
+    current_price: float,
+    atr: float,
+    prob: float,
+):
     """Add to a winning position when probability remains high."""
     profit = (current_price - entry_price) if entry_price else 0
     if profit > 2 * atr and prob >= 0.75:
@@ -2207,6 +2496,7 @@ def maybe_pyramid(ctx: BotContext, symbol: str, entry_price: float, current_pric
                 logger.info("PYRAMIDED", extra={"symbol": symbol, "qty": qty})
         except Exception as e:
             logger.exception(f"[maybe_pyramid] failed for {symbol}: {e}")
+
 
 def update_trailing_stop(
     ctx: BotContext,
@@ -2229,20 +2519,21 @@ def update_trailing_stop(
             return "exit_short"
     return "hold"
 
+
 def calculate_entry_size(
-    ctx: BotContext,
-    symbol: str,
-    price: float,
-    atr: float,
-    win_prob: float
+    ctx: BotContext, symbol: str, price: float, atr: float, win_prob: float
 ) -> int:
     cash = float(ctx.api.get_account().cash)
     df_daily = ctx.data_fetcher.get_daily_df(ctx, symbol)
     avg_vol = df_daily["volume"].tail(20).mean() if df_daily is not None else 0
-    cap_pct = ctx.params.get('CAPITAL_CAP', CAPITAL_CAP)
+    cap_pct = ctx.params.get("CAPITAL_CAP", CAPITAL_CAP)
     cap_sz = int((cash * cap_pct) / price) if price > 0 else 0
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
-    rets = df["close"].pct_change().dropna().values if df is not None and not df.empty else np.array([0.0])
+    rets = (
+        df["close"].pct_change().dropna().values
+        if df is not None and not df.empty
+        else np.array([0.0])
+    )
     kelly_sz = fractional_kelly_size(ctx, cash, price, atr, win_prob)
     vol_sz = vol_target_position_size(cash, price, rets, target_vol=0.02)
     dollar_cap = ctx.max_position_dollars / price if price > 0 else kelly_sz
@@ -2253,6 +2544,7 @@ def calculate_entry_size(
         return 0
     size = int(base * factor * liq)
     return max(size, 1)
+
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     buying_pw = float(ctx.api.get_account().buying_power)
@@ -2293,13 +2585,16 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     stop, take = scaled_atr_stop(
         entry_price,
         df_ind["atr"].iloc[-1],
-        now_pac, mo, mc,
+        now_pac,
+        mo,
+        mc,
         max_factor=tp_factor,
-        min_factor=0.5
+        min_factor=0.5,
     )
     with targets_lock:
         ctx.stop_targets[symbol] = stop
         ctx.take_profit_targets[symbol] = take
+
 
 def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
     if qty <= 0:
@@ -2313,6 +2608,7 @@ def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
         ctx.take_profit_targets.pop(symbol, None)
         ctx.stop_targets.pop(symbol, None)
 
+
 def exit_all_positions(ctx: BotContext) -> None:
     for pos in ctx.api.get_all_positions():
         qty = abs(int(pos.qty))
@@ -2320,23 +2616,28 @@ def exit_all_positions(ctx: BotContext) -> None:
             send_exit_order(ctx, pos.symbol, qty, 0.0, "eod_exit")
             logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
 
+
 # ─── L. SIGNAL & TRADE LOGIC ───────────────────────────────────────────────────
-def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int, float, str]:
+def signal_and_confirm(
+    ctx: BotContext, symbol: str, df: pd.DataFrame, model
+) -> Tuple[int, float, str]:
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, df, symbol, model)
     if sig == -1 or conf < CONF_THRESHOLD:
-        logger.debug("SKIP_LOW_SIGNAL", extra={"symbol": symbol, "sig": sig, "conf": conf})
+        logger.debug(
+            "SKIP_LOW_SIGNAL", extra={"symbol": symbol, "sig": sig, "conf": conf}
+        )
         return -1, 0.0, ""
     return sig, conf, strat
 
+
 def pre_trade_checks(
-    ctx: BotContext,
-    symbol: str,
-    balance: float,
-    regime_ok: bool
+    ctx: BotContext, symbol: str, balance: float, regime_ok: bool
 ) -> bool:
     # Streak kill-switch check
     if _STREAK_HALT_UNTIL and datetime.now(PACIFIC) < _STREAK_HALT_UNTIL:
-        logger.info("SKIP_STREAK_HALT", extra={"symbol": symbol, "until": _STREAK_HALT_UNTIL})
+        logger.info(
+            "SKIP_STREAK_HALT", extra={"symbol": symbol, "until": _STREAK_HALT_UNTIL}
+        )
         return False
     if check_pdt_rule(ctx):
         logger.info("SKIP_PDT_RULE", extra={"symbol": symbol})
@@ -2358,15 +2659,14 @@ def pre_trade_checks(
         return False
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
 
-def should_enter(
-    ctx: BotContext,
-    symbol: str,
-    balance: float,
-    regime_ok: bool
-) -> bool:
+
+def should_enter(ctx: BotContext, symbol: str, balance: float, regime_ok: bool) -> bool:
     return pre_trade_checks(ctx, symbol, balance, regime_ok)
 
-def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple[bool, int, str]:
+
+def should_exit(
+    ctx: BotContext, symbol: str, price: float, atr: float
+) -> Tuple[bool, int, str]:
     try:
         pos = ctx.api.get_open_position(symbol)
         current_qty = int(pos.qty)
@@ -2376,7 +2676,9 @@ def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple
     rebalance_time = ctx.rebalance_buys.get(symbol)
     recent_rebalance = False
     if rebalance_time:
-        if datetime.now(timezone.utc) - rebalance_time < timedelta(seconds=REBALANCE_HOLD_SECONDS):
+        if datetime.now(timezone.utc) - rebalance_time < timedelta(
+            seconds=REBALANCE_HOLD_SECONDS
+        ):
             recent_rebalance = True
         else:
             ctx.rebalance_buys.pop(symbol, None)
@@ -2400,27 +2702,36 @@ def should_exit(ctx: BotContext, symbol: str, price: float, atr: float) -> Tuple
         return True, exit_qty, "take_profit"
 
     action = update_trailing_stop(ctx, symbol, price, current_qty, atr)
-    if (action == "exit_long" and current_qty > 0) or (action == "exit_short" and current_qty < 0):
+    if (action == "exit_long" and current_qty > 0) or (
+        action == "exit_short" and current_qty < 0
+    ):
         return True, abs(current_qty), "trailing_stop"
 
     return False, 0, ""
+
 
 def _safe_trade(
     ctx: BotContext,
     symbol: str,
     balance: float,
     model: RandomForestClassifier,
-    regime_ok: bool
+    regime_ok: bool,
 ) -> bool:
     try:
         return trade_logic(ctx, symbol, balance, model, regime_ok)
     except RetryError as e:
-        logger.warning(f"[trade_logic] retries exhausted for {symbol}: {e}", extra={"symbol": symbol})
+        logger.warning(
+            f"[trade_logic] retries exhausted for {symbol}: {e}",
+            extra={"symbol": symbol},
+        )
         return False
     except APIError as e:
         msg = str(e).lower()
         if "insufficient buying power" in msg or "potential wash trade" in msg:
-            logger.warning(f"[trade_logic] skipping {symbol} due to APIError: {e}", extra={"symbol": symbol})
+            logger.warning(
+                f"[trade_logic] skipping {symbol} due to APIError: {e}",
+                extra={"symbol": symbol},
+            )
             return False
         else:
             logger.exception(f"[trade_logic] APIError for {symbol}: {e}")
@@ -2429,12 +2740,9 @@ def _safe_trade(
         logger.exception(f"[trade_logic] unhandled exception for {symbol}")
         return False
 
+
 def trade_logic(
-    ctx: BotContext,
-    symbol: str,
-    balance: float,
-    model,
-    regime_ok: bool
+    ctx: BotContext, symbol: str, balance: float, model, regime_ok: bool
 ) -> bool:
     """
     Core per-symbol logic: fetch data, compute features, evaluate signals, enter/exit orders.
@@ -2471,8 +2779,16 @@ def trade_logic(
     if hasattr(model, "feature_names_in_"):
         feature_names = list(model.feature_names_in_)
     else:
-        feature_names = ["rsi", "macd", "atr", "vwap", "macds",
-                         "ichimoku_conv", "ichimoku_base", "stochrsi"]
+        feature_names = [
+            "rsi",
+            "macd",
+            "atr",
+            "vwap",
+            "macds",
+            "ichimoku_conv",
+            "ichimoku_base",
+            "stochrsi",
+        ]
 
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
@@ -2501,13 +2817,20 @@ def trade_logic(
     reb_time = ctx.rebalance_buys.get(symbol)
     recent_rebal = False
     if reb_time:
-        if datetime.now(timezone.utc) - reb_time < timedelta(seconds=REBALANCE_HOLD_SECONDS):
+        if datetime.now(timezone.utc) - reb_time < timedelta(
+            seconds=REBALANCE_HOLD_SECONDS
+        ):
             recent_rebal = True
         else:
             ctx.rebalance_buys.pop(symbol, None)
 
     # Exit: bearish reversal for longs
-    if not recent_rebal and final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
+    if (
+        not recent_rebal
+        and final_score < 0
+        and current_qty > 0
+        and abs(conf) >= CONF_THRESHOLD
+    ):
         price = get_latest_close(feat_df)
         logger.info(
             f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
@@ -2520,7 +2843,12 @@ def trade_logic(
         return
 
     # Exit: bullish reversal for shorts
-    if not recent_rebal and final_score > 0 and current_qty < 0 and abs(conf) >= CONF_THRESHOLD:
+    if (
+        not recent_rebal
+        and final_score > 0
+        and current_qty < 0
+        and abs(conf) >= CONF_THRESHOLD
+    ):
         price = get_latest_close(feat_df)
         logger.info(
             f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
@@ -2536,7 +2864,9 @@ def trade_logic(
     if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
         current_price = get_latest_close(feat_df)
         target_weight = ctx.portfolio_weights.get(symbol, 0.0)
-        raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
+        raw_qty = (
+            int(balance * target_weight / current_price) if current_price > 0 else 0
+        )
 
         if raw_qty <= 0:
             logger.debug(f"SKIP_NO_QTY | symbol={symbol}")
@@ -2555,8 +2885,18 @@ def trade_logic(
         if order is None:
             logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
         else:
-            logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
-            ctx.trade_logger.log_entry(symbol, current_price, raw_qty, "buy", strat, signal_tags=strat, confidence=conf)
+            logger.debug(
+                f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}"
+            )
+            ctx.trade_logger.log_entry(
+                symbol,
+                current_price,
+                raw_qty,
+                "buy",
+                strat,
+                signal_tags=strat,
+                confidence=conf,
+            )
 
             now_pac = datetime.now(PACIFIC)
             mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
@@ -2570,8 +2910,11 @@ def trade_logic(
             stop, take = scaled_atr_stop(
                 entry_price=current_price,
                 atr=feat_df["atr"].iloc[-1],
-                now=now_pac, market_open=mo, market_close=mc,
-                max_factor=tp_factor, min_factor=0.5
+                now=now_pac,
+                market_open=mo,
+                market_close=mc,
+                max_factor=tp_factor,
+                min_factor=0.5,
             )
             with targets_lock:
                 ctx.stop_targets[symbol] = stop
@@ -2612,8 +2955,18 @@ def trade_logic(
         if order is None:
             logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
         else:
-            logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
-            ctx.trade_logger.log_entry(symbol, current_price, qty, "sell", strat, signal_tags=strat, confidence=conf)
+            logger.debug(
+                f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}"
+            )
+            ctx.trade_logger.log_entry(
+                symbol,
+                current_price,
+                qty,
+                "sell",
+                strat,
+                signal_tags=strat,
+                confidence=conf,
+            )
 
             now_pac = datetime.now(PACIFIC)
             mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
@@ -2627,8 +2980,11 @@ def trade_logic(
             long_stop, long_take = scaled_atr_stop(
                 entry_price=current_price,
                 atr=atr,
-                now=now_pac, market_open=mo, market_close=mc,
-                max_factor=tp_factor, min_factor=0.5
+                now=now_pac,
+                market_open=mo,
+                market_close=mc,
+                max_factor=tp_factor,
+                min_factor=0.5,
             )
             stop, take = long_take, long_stop
             with targets_lock:
@@ -2640,7 +2996,7 @@ def trade_logic(
     # If holding, check for stops/take/trailing
     if current_qty != 0:
         price = get_latest_close(feat_df)
-        atr   = feat_df["atr"].iloc[-1]
+        atr = feat_df["atr"].iloc[-1]
         if not recent_rebal:
             should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
         else:
@@ -2677,7 +3033,6 @@ def trade_logic(
     return True
 
 
-
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """Equal-weight portfolio using a dummy-price fallback for missing data."""
     n = len(symbols)
@@ -2691,6 +3046,7 @@ def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     weights = {s: inv / total_inv for s, inv in zip(symbols, inv_prices)}
     logger.info("PORTFOLIO_WEIGHTS", extra={"weights": weights})
     return weights
+
 
 def on_trade_exit_rebalance(ctx: BotContext) -> None:
     current = compute_portfolio_weights(list(ctx.portfolio_weights.keys()))
@@ -2719,15 +3075,21 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
             logger.exception(f"Rebalance failed for {sym}")
     logger.info("PORTFOLIO_REBALANCED")
 
+
 def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
     from statsmodels.tsa.stattools import coint
+
     df1 = ctx.data_fetcher.get_daily_df(ctx, sym1)
     df2 = ctx.data_fetcher.get_daily_df(ctx, sym2)
     if not hasattr(df1, "loc") or "close" not in df1.columns:
-        raise ValueError(f"pair_trade_signal: df1 for {sym1} is invalid or missing 'close'")
+        raise ValueError(
+            f"pair_trade_signal: df1 for {sym1} is invalid or missing 'close'"
+        )
     if not hasattr(df2, "loc") or "close" not in df2.columns:
-        raise ValueError(f"pair_trade_signal: df2 for {sym2} is invalid or missing 'close'")
-    df  = pd.concat([df1["close"], df2["close"]], axis=1).dropna()
+        raise ValueError(
+            f"pair_trade_signal: df2 for {sym2} is invalid or missing 'close'"
+        )
+    df = pd.concat([df1["close"], df2["close"]], axis=1).dropna()
     t_stat, p_value, _ = coint(df.iloc[:, 0], df.iloc[:, 1])
     if p_value < 0.05:
         beta = np.polyfit(df.iloc[:, 1], df.iloc[:, 0], 1)[0]
@@ -2740,8 +3102,11 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
             return ("long_spread", 1)
     return ("no_signal", 0)
 
+
 # ─── M. UTILITIES ─────────────────────────────────────────────────────────────
-def fetch_data(ctx: BotContext, symbols: List[str], period: str, interval: str) -> Optional[pd.DataFrame]:
+def fetch_data(
+    ctx: BotContext, symbols: List[str], period: str, interval: str
+) -> Optional[pd.DataFrame]:
     frames: List[pd.DataFrame] = []
     now = datetime.now(timezone.utc)
     if period.endswith("d"):
@@ -2758,7 +3123,9 @@ def fetch_data(ctx: BotContext, symbols: List[str], period: str, interval: str) 
     for batch in chunked(symbols, 3):
         for sym in batch:
             try:
-                ohlc = finnhub_client.stock_candle(sym, resolution=interval, _from=unix_from, to=unix_to)
+                ohlc = finnhub_client.stock_candle(
+                    sym, resolution=interval, _from=unix_from, to=unix_to
+                )
             except FinnhubAPIException as e:
                 logger.warning(f"[fetch_data] {sym} error: {e}")
                 continue
@@ -2766,13 +3133,16 @@ def fetch_data(ctx: BotContext, symbols: List[str], period: str, interval: str) 
             if not ohlc or ohlc.get("s") != "ok":
                 continue
 
-            df_sym = pd.DataFrame({
-                "open": ohlc.get("o", []),
-                "high": ohlc.get("h", []),
-                "low": ohlc.get("l", []),
-                "close": ohlc.get("c", []),
-                "volume": ohlc.get("v", []),
-            }, index=pd.to_datetime(ohlc.get("t", []), unit="s"))
+            df_sym = pd.DataFrame(
+                {
+                    "open": ohlc.get("o", []),
+                    "high": ohlc.get("h", []),
+                    "low": ohlc.get("l", []),
+                    "close": ohlc.get("c", []),
+                    "volume": ohlc.get("v", []),
+                },
+                index=pd.to_datetime(ohlc.get("t", []), unit="s"),
+            )
 
             df_sym.columns = pd.MultiIndex.from_product([[sym], df_sym.columns])
             frames.append(df_sym)
@@ -2783,6 +3153,7 @@ def fetch_data(ctx: BotContext, symbols: List[str], period: str, interval: str) 
         return None
 
     return pd.concat(frames, axis=1)
+
 
 class EnsembleModel:
     def __init__(self, models):
@@ -2826,6 +3197,7 @@ def load_model(path: str = MODEL_PATH):
     logger.info("MODEL_LOADED", extra={"path": path})
     return model
 
+
 def online_update(symbol: str, X_new, y_new) -> None:
     global updates_halted, rolling_losses
     y_new = np.clip(y_new, -0.05, 0.05)
@@ -2838,24 +3210,31 @@ def online_update(symbol: str, X_new, y_new) -> None:
             logger.error(f"Online update failed for {symbol}: {e}")
             return
     pred = model_pipeline.predict(X_new)
-    online_error = float(np.mean((pred - y_new)**2))
-    log_metrics({
-        'timestamp': datetime.now(timezone.utc).isoformat(),
-        'type': 'online_update',
-        'symbol': symbol,
-        'error': online_error,
-    })
+    online_error = float(np.mean((pred - y_new) ** 2))
+    log_metrics(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": "online_update",
+            "symbol": symbol,
+            "error": online_error,
+        }
+    )
     rolling_losses.append(online_error)
     if len(rolling_losses) >= 20 and sum(rolling_losses[-20:]) > 0.02:
         updates_halted = True
         logger.warning("Halting online updates due to 20-trade rolling loss >2%")
 
+
 def update_signal_weights() -> None:
     if not os.path.exists(TRADE_LOG_FILE):
         logger.warning("No trades log found; skipping weight update.")
         return
-    df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["entry_price","exit_price","signal_tags"])
-    df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].apply(lambda s: 1 if s == "buy" else -1)
+    df = pd.read_csv(TRADE_LOG_FILE).dropna(
+        subset=["entry_price", "exit_price", "signal_tags"]
+    )
+    df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].apply(
+        lambda s: 1 if s == "buy" else -1
+    )
     df["confidence"] = df.get("confidence", 0.5)
     df["reward"] = df["pnl"] * df["confidence"]
     recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
@@ -2874,7 +3253,11 @@ def update_signal_weights() -> None:
     new_weights = {}
     for tag, pnls in stats_all.items():
         overall_wr = np.mean([1 if p > 0 else 0 for p in pnls]) if pnls else 0.0
-        recent_wr = np.mean([1 if p > 0 else 0 for p in stats_recent.get(tag, [])]) if stats_recent.get(tag) else overall_wr
+        recent_wr = (
+            np.mean([1 if p > 0 else 0 for p in stats_recent.get(tag, [])])
+            if stats_recent.get(tag)
+            else overall_wr
+        )
         weight = 0.7 * recent_wr + 0.3 * overall_wr
         if recent_wr < 0.4:
             weight *= 0.5
@@ -2885,16 +3268,22 @@ def update_signal_weights() -> None:
         old = pd.read_csv(SIGNAL_WEIGHTS_FILE).set_index("signal")["weight"].to_dict()
     else:
         old = {}
-    merged = {tag: round(ALPHA * w + (1 - ALPHA) * old.get(tag, w), 3) for tag, w in new_weights.items()}
-    out_df = pd.DataFrame.from_dict(merged, orient="index", columns=["weight"]).reset_index()
+    merged = {
+        tag: round(ALPHA * w + (1 - ALPHA) * old.get(tag, w), 3)
+        for tag, w in new_weights.items()
+    }
+    out_df = pd.DataFrame.from_dict(
+        merged, orient="index", columns=["weight"]
+    ).reset_index()
     out_df.columns = ["signal", "weight"]
     out_df.to_csv(SIGNAL_WEIGHTS_FILE, index=False)
     logger.info("SIGNAL_WEIGHTS_UPDATED", extra={"count": len(merged)})
 
+
 def run_meta_learning_weight_optimizer(
     trade_log_path: str = TRADE_LOG_FILE,
     output_path: str = SIGNAL_WEIGHTS_FILE,
-    alpha: float = 1.0
+    alpha: float = 1.0,
 ):
     if not meta_lock.acquire(blocking=False):
         logger.warning("METALEARN_SKIPPED_LOCKED")
@@ -2904,18 +3293,24 @@ def run_meta_learning_weight_optimizer(
             logger.warning("METALEARN_NO_TRADES")
             return
 
-        df = pd.read_csv(trade_log_path).dropna(subset=["entry_price", "exit_price", "signal_tags"])
+        df = pd.read_csv(trade_log_path).dropna(
+            subset=["entry_price", "exit_price", "signal_tags"]
+        )
         if df.empty:
             logger.warning("METALEARN_NO_VALID_ROWS")
             return
 
-        df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map({"buy": 1, "sell": -1})
+        df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map(
+            {"buy": 1, "sell": -1}
+        )
         df["confidence"] = df.get("confidence", 0.5)
         df["reward"] = df["pnl"] * df["confidence"]
         df["outcome"] = (df["pnl"] > 0).astype(int)
 
         tags = sorted(set(tag for row in df["signal_tags"] for tag in row.split("+")))
-        X = np.array([[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]])
+        X = np.array(
+            [[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]]
+        )
         y = df["outcome"].values
 
         if len(y) < len(tags):
@@ -2928,16 +3323,18 @@ def run_meta_learning_weight_optimizer(
         joblib.dump(model, META_MODEL_PATH)
         logger.info("META_MODEL_TRAINED", extra={"samples": len(y)})
 
-        weights = {tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)}
+        weights = {
+            tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)
+        }
         out_df = pd.DataFrame(list(weights.items()), columns=["signal", "weight"])
         out_df.to_csv(output_path, index=False)
         logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
     finally:
         meta_lock.release()
 
+
 def run_bayesian_meta_learning_optimizer(
-    trade_log_path: str = TRADE_LOG_FILE,
-    output_path: str = SIGNAL_WEIGHTS_FILE
+    trade_log_path: str = TRADE_LOG_FILE, output_path: str = SIGNAL_WEIGHTS_FILE
 ):
     if not meta_lock.acquire(blocking=False):
         logger.warning("METALEARN_SKIPPED_LOCKED")
@@ -2947,16 +3344,22 @@ def run_bayesian_meta_learning_optimizer(
             logger.warning("METALEARN_NO_TRADES")
             return
 
-        df = pd.read_csv(trade_log_path).dropna(subset=["entry_price", "exit_price", "signal_tags"])
+        df = pd.read_csv(trade_log_path).dropna(
+            subset=["entry_price", "exit_price", "signal_tags"]
+        )
         if df.empty:
             logger.warning("METALEARN_NO_VALID_ROWS")
             return
 
-        df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map({"buy": 1, "sell": -1})
+        df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map(
+            {"buy": 1, "sell": -1}
+        )
         df["outcome"] = (df["pnl"] > 0).astype(int)
 
         tags = sorted(set(tag for row in df["signal_tags"] for tag in row.split("+")))
-        X = np.array([[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]])
+        X = np.array(
+            [[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]]
+        )
         y = df["outcome"].values
 
         if len(y) < len(tags):
@@ -2968,30 +3371,43 @@ def run_bayesian_meta_learning_optimizer(
         joblib.dump(model, abspath("meta_model_bayes.pkl"))
         logger.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
 
-        weights = {tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)}
+        weights = {
+            tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)
+        }
         out_df = pd.DataFrame(list(weights.items()), columns=["signal", "weight"])
         out_df.to_csv(output_path, index=False)
         logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
     finally:
         meta_lock.release()
 
-def load_global_signal_performance(min_trades: int = 10, threshold: float = 0.4) -> Optional[Dict[str, float]]:
+
+def load_global_signal_performance(
+    min_trades: int = 10, threshold: float = 0.4
+) -> Optional[Dict[str, float]]:
     if not os.path.exists(TRADE_LOG_FILE):
         logger.info("METALEARN_NO_HISTORY")
         return None
-    df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["exit_price","entry_price","signal_tags"])
-    df["pnl"] = (df.exit_price - df.entry_price) * df.side.apply(lambda s: 1 if s == "buy" else -1)
+    df = pd.read_csv(TRADE_LOG_FILE).dropna(
+        subset=["exit_price", "entry_price", "signal_tags"]
+    )
+    df["pnl"] = (df.exit_price - df.entry_price) * df.side.apply(
+        lambda s: 1 if s == "buy" else -1
+    )
     results: Dict[str, List[float]] = {}
     for _, row in df.iterrows():
         for tag in row.signal_tags.split("+"):
             results.setdefault(tag, []).append(row.pnl)
     win_rates = {
         tag: round(np.mean([1 if p > 0 else 0 for p in pnls]), 3)
-        for tag, pnls in results.items() if len(pnls) >= min_trades
+        for tag, pnls in results.items()
+        if len(pnls) >= min_trades
     }
     filtered = {tag: wr for tag, wr in win_rates.items() if wr >= threshold}
-    logger.info("METALEARN_FILTERED_SIGNALS", extra={"signals": list(filtered.keys()) or []})
+    logger.info(
+        "METALEARN_FILTERED_SIGNALS", extra={"signals": list(filtered.keys()) or []}
+    )
     return filtered
+
 
 def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.copy()
@@ -3003,30 +3419,30 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df = df.sort_values("date").set_index("date")
 
     df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
-    df["rsi"]  = ta.rsi(df["close"], length=14)
-    df["atr"]  = ta.atr(df["high"], df["low"], df["close"], length=14)
+    df["rsi"] = ta.rsi(df["close"], length=14)
+    df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
 
     # ── New advanced indicators ───────────────────────────────────────────
     try:
         kc = ta.kc(df["high"], df["low"], df["close"], length=20)
         df["kc_lower"] = kc.iloc[:, 0]
-        df["kc_mid"]   = kc.iloc[:, 1]
+        df["kc_mid"] = kc.iloc[:, 1]
         df["kc_upper"] = kc.iloc[:, 2]
     except Exception:
         df["kc_lower"] = np.nan
-        df["kc_mid"]   = np.nan
+        df["kc_mid"] = np.nan
         df["kc_upper"] = np.nan
 
     df["atr_band_upper"] = df["close"] + 1.5 * df["atr"]
     df["atr_band_lower"] = df["close"] - 1.5 * df["atr"]
-    df["avg_vol_20"]      = df["volume"].rolling(20).mean()
-    df["dow"]             = df.index.dayofweek
+    df["avg_vol_20"] = df["volume"].rolling(20).mean()
+    df["dow"] = df.index.dayofweek
 
     try:
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
         if macd is None or not isinstance(macd, pd.DataFrame):
             raise ValueError("MACD returned None")
-        df["macd"]  = macd["MACD_12_26_9"]
+        df["macd"] = macd["MACD_12_26_9"]
         df["macds"] = macd["MACDs_12_26_9"]
     except Exception:
         df["macd"] = np.nan
@@ -3035,8 +3451,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     # Additional indicators for richer ML features
     try:
         bb = ta.bbands(df["close"], length=20)
-        df["bb_upper"]   = bb["BBU_20_2.0"]
-        df["bb_lower"]   = bb["BBL_20_2.0"]
+        df["bb_upper"] = bb["BBU_20_2.0"]
+        df["bb_lower"] = bb["BBL_20_2.0"]
         df["bb_percent"] = bb["BBP_20_2.0"]
     except Exception:
         df["bb_upper"] = np.nan
@@ -3059,11 +3475,11 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["cci"] = np.nan
 
     # Ensure numeric dtype before computing MFI
-    df[["high", "low", "close", "volume"]] = df[["high", "low", "close", "volume"]].astype(float)
+    df[["high", "low", "close", "volume"]] = df[
+        ["high", "low", "close", "volume"]
+    ].astype(float)
     try:
-        mfi_vals = ta.mfi(
-            df["high"], df["low"], df["close"], df["volume"], length=14
-        )
+        mfi_vals = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
         df["mfi"] = mfi_vals.astype(float)
     except Exception as e:
         logger.warning(f"prepare_indicators: failed to compute MFI: {e}")
@@ -3081,7 +3497,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     try:
         psar = ta.psar(df["high"], df["low"], df["close"])
-        df["psar_long"]  = psar["PSARl_0.02_0.2"]
+        df["psar_long"] = psar["PSARl_0.02_0.2"]
         df["psar_short"] = psar["PSARs_0.02_0.2"]
     except Exception:
         df["psar_long"] = np.nan
@@ -3109,12 +3525,14 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ret_1h"] = df["close"].pct_change(60)
         df["ret_d"] = df["close"].pct_change(390)
         df["ret_w"] = df["close"].pct_change(1950)
-        df["vol_norm"] = df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
+        df["vol_norm"] = (
+            df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
+        )
         df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
-        df["vol_5m"]  = df["close"].pct_change().rolling(5).std()
-        df["vol_1h"]  = df["close"].pct_change().rolling(60).std()
-        df["vol_d"]   = df["close"].pct_change().rolling(390).std()
-        df["vol_w"]   = df["close"].pct_change().rolling(1950).std()
+        df["vol_5m"] = df["close"].pct_change().rolling(5).std()
+        df["vol_1h"] = df["close"].pct_change().rolling(60).std()
+        df["vol_d"] = df["close"].pct_change().rolling(390).std()
+        df["vol_w"] = df["close"].pct_change().rolling(1950).std()
         df["vol_ratio"] = df["vol_5m"] / df["vol_1h"]
         df["mom_agg"] = df["ret_5m"] + df["ret_1h"] + df["ret_d"]
         df["lag_close_1"] = df["close"].shift(1)
@@ -3128,9 +3546,18 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df.ffill(inplace=True)
     df.bfill(inplace=True)
 
-    required = ["vwap", "rsi", "atr", "macd", "macds", "ichimoku_conv", "ichimoku_base", "stochrsi"]
+    required = [
+        "vwap",
+        "rsi",
+        "atr",
+        "macd",
+        "macds",
+        "ichimoku_conv",
+        "ichimoku_base",
+        "stochrsi",
+    ]
     if freq == "daily":
-        df["sma_50"]  = ta.sma(df["close"], length=50)
+        df["sma_50"] = ta.sma(df["close"], length=50)
         df["sma_200"] = ta.sma(df["close"], length=200)
         required += ["sma_50", "sma_200"]
         df.dropna(subset=required, how="any", inplace=True)
@@ -3142,18 +3569,23 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         try:
             with open(INACTIVE_FEATURES_FILE) as f:
                 inactive = set(json.load(f))
-            df.drop(columns=[c for c in inactive if c in df.columns], inplace=True, errors="ignore")
+            df.drop(
+                columns=[c for c in inactive if c in df.columns],
+                inplace=True,
+                errors="ignore",
+            )
         except Exception:
             pass
 
     return df
 
+
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     feat = pd.DataFrame(index=df.index)
-    feat["atr"]  = ta.atr(df["high"], df["low"], df["close"], length=14)
-    feat["rsi"]  = ta.rsi(df["close"], length=14)
+    feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+    feat["rsi"] = ta.rsi(df["close"], length=14)
     feat["macd"] = ta.macd(df["close"], fast=12, slow=26, signal=9)["MACD_12_26_9"]
-    feat["vol"]  = df["close"].pct_change().rolling(14).std()
+    feat["vol"] = df["close"].pct_change().rolling(14).std()
     return feat.dropna()
 
 
@@ -3170,12 +3602,15 @@ def detect_regime(df: pd.DataFrame) -> str:
         return "bear"
     return "chop"
 
+
 # Train or load regime model
 if os.path.exists(REGIME_MODEL_PATH):
     regime_model = pickle.load(open(REGIME_MODEL_PATH, "rb"))
 else:
     today_date = date.today()
-    start_dt = datetime.combine(today_date - timedelta(days=365), dt_time.min, timezone.utc)
+    start_dt = datetime.combine(
+        today_date - timedelta(days=365), dt_time.min, timezone.utc
+    )
     end_dt = datetime.combine(today_date, dt_time.max, timezone.utc)
     if isinstance(start_dt, tuple):
         start_dt, _tmp = start_dt
@@ -3186,7 +3621,7 @@ else:
         timeframe=TimeFrame.Day,
         start=start_dt,
         end=end_dt,
-        limit=1000
+        limit=1000,
     )
     bars = ctx.data_client.get_stock_bars(bars_req).df
     if isinstance(bars.columns, pd.MultiIndex):
@@ -3196,18 +3631,30 @@ else:
     bars.index = pd.to_datetime(bars.index).tz_localize(None)
     bars = bars.rename(columns=lambda c: c.lower())
     feats = _compute_regime_features(bars)
-    labels = (bars["close"] > bars["close"].rolling(200).mean()).loc[feats.index].astype(int).rename("label")
+    labels = (
+        (bars["close"] > bars["close"].rolling(200).mean())
+        .loc[feats.index]
+        .astype(int)
+        .rename("label")
+    )
     training = feats.join(labels, how="inner").dropna()
     if len(training) >= 50:
         X = training[["atr", "rsi", "macd", "vol"]]
         y = training["label"]
-        regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+        regime_model = RandomForestClassifier(
+            n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
+        )
         regime_model.fit(X, y)
         pickle.dump(regime_model, open(REGIME_MODEL_PATH, "wb"))
         logger.info("REGIME_MODEL_TRAINED", extra={"rows": len(training)})
     else:
-        logger.error(f"Not enough valid rows ({len(training)}) to train regime model; using dummy fallback")
-        regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+        logger.error(
+            f"Not enough valid rows ({len(training)}) to train regime model; using dummy fallback"
+        )
+        regime_model = RandomForestClassifier(
+            n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
+        )
+
 
 def _market_breadth(ctx: BotContext) -> float:
     syms = load_tickers(TICKERS_FILE)[:20]
@@ -3218,9 +3665,10 @@ def _market_breadth(ctx: BotContext) -> float:
         if df is None or len(df) < 2:
             continue
         total += 1
-        if df['close'].iloc[-1] > df['close'].iloc[-2]:
+        if df["close"].iloc[-1] > df["close"].iloc[-2]:
             up += 1
     return up / total if total else 0.5
+
 
 def detect_regime_state(ctx: BotContext) -> str:
     df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
@@ -3243,17 +3691,19 @@ def detect_regime_state(ctx: BotContext) -> str:
         return "mean_reversion"
     return "sideways"
 
+
 def check_market_regime() -> bool:
     global CURRENT_REGIME
     CURRENT_REGIME = detect_regime_state(ctx)
     return True
+
 
 def screen_universe(
     candidates: Sequence[str],
     ctx: BotContext,
     lookback: str = "1mo",
     interval: str = "1d",
-    top_n: int = 20
+    top_n: int = 20,
 ) -> list[str]:
     atrs: Dict[str, float] = {}
     for sym in candidates:
@@ -3273,6 +3723,7 @@ def screen_candidates() -> list[str]:
     candidates = load_tickers(TICKERS_FILE)
     return screen_universe(candidates, ctx)
 
+
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
     tickers: List[str] = []
     try:
@@ -3287,12 +3738,15 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
         logger.exception(f"[load_tickers] Failed to read {path}: {e}")
     return tickers
 
+
 def daily_summary() -> None:
     if not os.path.exists(TRADE_LOG_FILE):
         logger.info("DAILY_SUMMARY_NO_TRADES")
         return
     df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["entry_price", "exit_price"])
-    df["pnl"] = (df.exit_price - df.entry_price) * df["side"].map({"buy": 1, "sell": -1})
+    df["pnl"] = (df.exit_price - df.entry_price) * df["side"].map(
+        {"buy": 1, "sell": -1}
+    )
     total_trades = len(df)
     win_rate = (df.pnl > 0).mean() if total_trades else 0
     total_pnl = df.pnl.sum()
@@ -3303,9 +3757,10 @@ def daily_summary() -> None:
             "trades": total_trades,
             "win_rate": f"{win_rate:.2%}",
             "pnl": total_pnl,
-            "max_drawdown": max_dd
-        }
+            "max_drawdown": max_dd,
+        },
     )
+
 
 # ─── PCA-BASED PORTFOLIO ADJUSTMENT ─────────────────────────────────────────────
 def run_daily_pca_adjustment(ctx: BotContext) -> None:
@@ -3347,11 +3802,14 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
         total = sum(ctx.portfolio_weights.values())
         if total > 0:
             for sym in ctx.portfolio_weights:
-                ctx.portfolio_weights[sym] = round(ctx.portfolio_weights[sym] / total, 4)
-    logger.info("PCA_ADJUSTMENT_APPLIED", extra={
-        "var_explained": round(var_explained, 3),
-        "adjusted": high_load_syms
-    })
+                ctx.portfolio_weights[sym] = round(
+                    ctx.portfolio_weights[sym] / total, 4
+                )
+    logger.info(
+        "PCA_ADJUSTMENT_APPLIED",
+        extra={"var_explained": round(var_explained, 3), "adjusted": high_load_syms},
+    )
+
 
 def daily_reset() -> None:
     """Reset daily counters and in-memory slippage logs."""
@@ -3360,13 +3818,15 @@ def daily_reset() -> None:
     _LOSS_STREAK = 0
     logger.info("DAILY_STATE_RESET")
 
+
 def _average_reward(n: int = 20) -> float:
     if not os.path.exists(REWARD_LOG_FILE):
         return 0.0
     df = pd.read_csv(REWARD_LOG_FILE).tail(n)
-    if df.empty or 'reward' not in df.columns:
+    if df.empty or "reward" not in df.columns:
         return 0.0
-    return float(df['reward'].mean())
+    return float(df["reward"].mean())
+
 
 def _current_drawdown() -> float:
     try:
@@ -3380,22 +3840,32 @@ def _current_drawdown() -> float:
         return 0.0
     return max(0.0, (peak - eq) / peak)
 
+
 def update_bot_mode() -> None:
     global mode_obj, params, ctx
     avg_r = _average_reward()
     dd = _current_drawdown()
     regime = CURRENT_REGIME
     if dd > 0.05 or avg_r < -0.01:
-        new_mode = 'conservative'
-    elif avg_r > 0.05 and regime == 'trending':
-        new_mode = 'aggressive'
+        new_mode = "conservative"
+    elif avg_r > 0.05 and regime == "trending":
+        new_mode = "aggressive"
     else:
-        new_mode = 'balanced'
+        new_mode = "balanced"
     if new_mode != mode_obj.mode:
         mode_obj = BotMode(new_mode)
         params.update(mode_obj.get_config())
-        ctx.kelly_fraction = params.get('KELLY_FRACTION', 0.6)
-        logger.info('MODE_SWITCH', extra={'new_mode': new_mode, 'avg_reward': avg_r, 'drawdown': dd, 'regime': regime})
+        ctx.kelly_fraction = params.get("KELLY_FRACTION", 0.6)
+        logger.info(
+            "MODE_SWITCH",
+            extra={
+                "new_mode": new_mode,
+                "avg_reward": avg_r,
+                "drawdown": dd,
+                "regime": regime,
+            },
+        )
+
 
 def adaptive_risk_scaling(ctx: BotContext) -> None:
     """Adjust risk parameters based on volatility, rewards and drawdown."""
@@ -3408,8 +3878,8 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
     except Exception:
         equity = 0.0
     ctx.capital_scaler.update(ctx, equity)
-    params['CAPITAL_CAP'] = ctx.params['CAPITAL_CAP']
-    frac = params.get('KELLY_FRACTION', 0.6)
+    params["CAPITAL_CAP"] = ctx.params["CAPITAL_CAP"]
+    frac = params.get("KELLY_FRACTION", 0.6)
     if spy_atr and vol and spy_atr > vol * 1.5:
         frac *= 0.5
     if avg_r < -0.02:
@@ -3417,18 +3887,31 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
     if dd > 0.1:
         frac *= 0.5
     ctx.kelly_fraction = round(max(0.2, min(frac, 1.0)), 2)
-    params['CAPITAL_CAP'] = round(max(0.02, min(0.1, params.get('CAPITAL_CAP', 0.08) * (1 - dd))), 3)
-    logger.info('RISK_SCALED', extra={'kelly_fraction': ctx.kelly_fraction, 'dd': dd, 'atr': spy_atr, 'avg_reward': avg_r})
+    params["CAPITAL_CAP"] = round(
+        max(0.02, min(0.1, params.get("CAPITAL_CAP", 0.08) * (1 - dd))), 3
+    )
+    logger.info(
+        "RISK_SCALED",
+        extra={
+            "kelly_fraction": ctx.kelly_fraction,
+            "dd": dd,
+            "atr": spy_atr,
+            "avg_reward": avg_r,
+        },
+    )
+
 
 def check_disaster_halt() -> None:
     dd = _current_drawdown()
     if dd >= DISASTER_DD_LIMIT:
-        with open(HALT_FLAG_PATH, 'w') as f:
+        with open(HALT_FLAG_PATH, "w") as f:
             f.write("DISASTER " + datetime.now(timezone.utc).isoformat())
-        logger.error('DISASTER_HALT_TRIGGERED', extra={'drawdown': dd})
+        logger.error("DISASTER_HALT_TRIGGERED", extra={"drawdown": dd})
+
 
 # At top‐level, define retrain_meta_learner = None so load_or_retrain_daily can reference it safely
 retrain_meta_learner = None
+
 
 def load_or_retrain_daily(ctx: BotContext) -> Any:
     """
@@ -3455,88 +3938,121 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
 
     if need_to_retrain:
         if retrain_meta_learner is None:
-            logger.warning("Daily retraining requested, but retrain_meta_learner is unavailable.")
+            logger.warning(
+                "Daily retraining requested, but retrain_meta_learner is unavailable."
+            )
         else:
             if not meta_lock.acquire(blocking=False):
                 logger.warning("METALEARN_SKIPPED_LOCKED")
             else:
                 try:
                     symbols = load_tickers(TICKERS_FILE)
-                    print(f">> DEBUG: RETRAINING START for {today_str} on {len(symbols)} tickers...")
+                    print(
+                        f">> DEBUG: RETRAINING START for {today_str} on {len(symbols)} tickers..."
+                    )
                     valid_symbols = []
                     for symbol in symbols:
-                        df_min = ctx.data_fetcher.get_minute_df(ctx, symbol, lookback_minutes=30)
+                        df_min = ctx.data_fetcher.get_minute_df(
+                            ctx, symbol, lookback_minutes=30
+                        )
                         if df_min is None or df_min.empty:
-                            print(f">> DEBUG: {symbol} returned no minute data; skipping symbol.")
+                            print(
+                                f">> DEBUG: {symbol} returned no minute data; skipping symbol."
+                            )
                             continue
                         valid_symbols.append(symbol)
                     if not valid_symbols:
-                        print(">> WARNING: No symbols returned valid minute data; skipping retraining entirely.")
+                        print(
+                            ">> WARNING: No symbols returned valid minute data; skipping retraining entirely."
+                        )
                     else:
                         force_train = not os.path.exists(MODEL_PATH)
                         if is_market_open():
-                            success = retrain_meta_learner(ctx, valid_symbols, force=force_train)
+                            success = retrain_meta_learner(
+                                ctx, valid_symbols, force=force_train
+                            )
                         else:
-                            logger.info("[retrain_meta_learner] Outside market hours; skipping")
+                            logger.info(
+                                "[retrain_meta_learner] Outside market hours; skipping"
+                            )
                             success = False
                         if success:
                             try:
                                 with open(marker, "w") as f:
                                     f.write(today_str)
                             except Exception as e:
-                                logger.warning(f"Failed to write retrain marker file: {e}")
+                                logger.warning(
+                                    f"Failed to write retrain marker file: {e}"
+                                )
                         else:
-                            logger.warning("Retraining failed; continuing with existing model.")
+                            logger.warning(
+                                "Retraining failed; continuing with existing model."
+                            )
                 finally:
                     meta_lock.release()
 
     df_train = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
     if df_train is not None and not df_train.empty:
-        X_train = df_train[['open','high','low','close','volume']].astype(float).iloc[:-1].values
-        y_train = df_train['close'].pct_change().shift(-1).fillna(0).values[:-1]
+        X_train = (
+            df_train[["open", "high", "low", "close", "volume"]]
+            .astype(float)
+            .iloc[:-1]
+            .values
+        )
+        y_train = df_train["close"].pct_change().shift(-1).fillna(0).values[:-1]
         with model_lock:
             try:
                 model_pipeline.fit(X_train, y_train)
             except Exception as e:
                 logger.error(f"Daily retrain failed: {e}")
 
-        date_str = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')
-        os.makedirs('models', exist_ok=True)
+        date_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        os.makedirs("models", exist_ok=True)
         path = f"models/sgd_{date_str}.pkl"
         joblib.dump(model_pipeline, path)
         logger.info(f"Model checkpoint saved: {path}")
 
-        for f in os.listdir('models'):
-            if f.endswith('.pkl'):
-                dt = datetime.strptime(f.split('_')[1].split('.')[0], '%Y%m%d').replace(tzinfo=timezone.utc)
+        for f in os.listdir("models"):
+            if f.endswith(".pkl"):
+                dt = datetime.strptime(f.split("_")[1].split(".")[0], "%Y%m%d").replace(
+                    tzinfo=timezone.utc
+                )
                 if datetime.now(timezone.utc) - dt > timedelta(days=30):
-                    os.remove(os.path.join('models', f))
+                    os.remove(os.path.join("models", f))
 
-        batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train)**2))
-        log_metrics({
-            'timestamp': datetime.now(timezone.utc).isoformat(),
-            'type': 'daily_retrain',
-            'batch_mse': batch_mse,
-        })
+        batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
+        log_metrics(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": "daily_retrain",
+                "batch_mse": batch_mse,
+            }
+        )
         global updates_halted, rolling_losses
         updates_halted = False
         rolling_losses.clear()
 
     return model_pipeline
 
+
 # ─── M. MAIN LOOP & SCHEDULER ─────────────────────────────────────────────────
 app = Flask(__name__)
+
 
 @app.route("/health")
 def health() -> str:
     return "OK", 200
+
 
 def start_healthcheck() -> None:
     port = int(os.getenv("HEALTHCHECK_PORT", "8080"))
     try:
         app.run(host="0.0.0.0", port=port)
     except OSError as e:
-        logger.warning(f"Healthcheck port {port} in use: {e}. Skipping health-endpoint.")
+        logger.warning(
+            f"Healthcheck port {port} in use: {e}. Skipping health-endpoint."
+        )
+
 
 def run_multi_strategy(ctx: BotContext) -> None:
     """Execute all modular strategies via allocator and risk engine."""
@@ -3560,10 +4076,19 @@ def run_multi_strategy(ctx: BotContext) -> None:
             continue
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty > 0:
-            ctx.execution_engine.execute_order(sig.symbol, qty, sig.side, asset_class=sig.asset_class)
+            ctx.execution_engine.execute_order(
+                sig.symbol, qty, sig.side, asset_class=sig.asset_class
+            )
             ctx.risk_engine.register_fill(sig)
 
-def run_all_trades_worker(model):
+
+def run_all_trades_worker(model) -> None:
+    """Run the full trading cycle for all candidate symbols.
+
+    This fetches data, executes strategy logic and places orders. The function
+    guards against overlapping runs and ensures the market is open before
+    proceeding.
+    """
     global _last_fh_prefetch_date, _running
     if _running:
         logger.warning("RUN_ALL_TRADES_SKIPPED_OVERLAP")
@@ -3581,7 +4106,7 @@ def run_all_trades_worker(model):
         except Exception:
             equity = 0.0
         ctx.capital_scaler.update(ctx, equity)
-        params['CAPITAL_CAP'] = ctx.params['CAPITAL_CAP']
+        params["CAPITAL_CAP"] = ctx.params["CAPITAL_CAP"]
         now_utc = pd.Timestamp.utcnow()
         start_date = (now_utc - timedelta(days=5)).date()
         end_date = now_utc.date()
@@ -3589,7 +4114,10 @@ def run_all_trades_worker(model):
         # Update SPY vol stats first
         compute_spy_vol_stats(ctx)
 
-        logger.info("RUN_ALL_TRADES_START", extra={"timestamp": datetime.now(timezone.utc).isoformat()})
+        logger.info(
+            "RUN_ALL_TRADES_START",
+            extra={"timestamp": datetime.now(timezone.utc).isoformat()},
+        )
 
         full_watchlist = load_tickers(TICKERS_FILE)
         symbols = screen_candidates()
@@ -3609,18 +4137,28 @@ def run_all_trades_worker(model):
         current_cash = float(acct.cash)
         regime_ok = check_market_regime()
 
-        processed = []
-        for symbol in symbols:
-            logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
-            price_df = get_minute_df(symbol, start_date, end_date)
-            if price_df.empty or 'close' not in price_df.columns:
-                print(f"INFO SKIP_NO_PRICE_DATA | {symbol}")
-                continue
-            processed.append(symbol)
-            _safe_trade(ctx, symbol, current_cash, model, regime_ok)
+        processed: list[str] = []
+
+        def process_symbol(symbol: str) -> None:
+            """Fetch data and execute trading logic for a single symbol."""
+            try:
+                logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
+                price_df = get_minute_df(symbol, start_date, end_date)
+                if price_df.empty or "close" not in price_df.columns:
+                    print(f"INFO SKIP_NO_PRICE_DATA | {symbol}")
+                    return
+                processed.append(symbol)
+                _safe_trade(ctx, symbol, current_cash, model, regime_ok)
+            except Exception as e:
+                logger.error(f"Error processing {symbol}: {e}", exc_info=True)
+
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            list(executor.map(process_symbol, symbols))
 
         if not processed:
-            print("WARNING no symbols returned any price data; skipping strategy computation.")
+            print(
+                "WARNING no symbols returned any price data; skipping strategy computation."
+            )
             return
 
         run_multi_strategy(ctx)
@@ -3628,6 +4166,7 @@ def run_all_trades_worker(model):
     finally:
         # Always reset running flag
         _running = False
+
 
 def schedule_run_all_trades(model):
     """Spawn run_all_trades_worker if market is open."""  # FIXED
@@ -3637,9 +4176,11 @@ def schedule_run_all_trades(model):
     else:
         logger.info("Market closed—skipping run_all_trades.")
 
+
 def schedule_run_all_trades_with_delay(model):
     time.sleep(30)
     schedule_run_all_trades(model)
+
 
 def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     now_pac = datetime.now(PACIFIC)
@@ -3679,7 +4220,9 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
             valid_prices[symbol] = price
 
         if not valid_symbols:
-            logger.warning("INITIAL_REBALANCE: No valid prices for any symbol—skipping rebalance.")
+            logger.warning(
+                "INITIAL_REBALANCE: No valid prices for any symbol—skipping rebalance."
+            )
         else:
             # Compute equal weights on valid symbols only
             total_capital = cash
@@ -3701,7 +4244,9 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                         logger.info(f"INITIAL_REBALANCE: Bought {qty_to_buy} {sym}")
                         ctx.rebalance_buys[sym] = datetime.now(timezone.utc)
                     except Exception as e:
-                        logger.error(f"INITIAL_REBALANCE: Buy failed for {sym}: {repr(e)}")
+                        logger.error(
+                            f"INITIAL_REBALANCE: Buy failed for {sym}: {repr(e)}"
+                        )
                 elif current_qty > target_qty:
                     qty_to_sell = current_qty - target_qty
                     if qty_to_sell < 1:
@@ -3710,9 +4255,13 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                         submit_order(ctx, sym, qty_to_sell, "sell")
                         logger.info(f"INITIAL_REBALANCE: Sold {qty_to_sell} {sym}")
                     except Exception as e:
-                        logger.error(f"INITIAL_REBALANCE: Sell failed for {sym}: {repr(e)}")
+                        logger.error(
+                            f"INITIAL_REBALANCE: Sell failed for {sym}: {repr(e)}"
+                        )
+
 
 if __name__ == "__main__":
+
     def _handle_term(signum, frame):
         logger.info("PROCESS_TERMINATION", extra={"signal": signum})
         sys.exit(0)
@@ -3721,7 +4270,11 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, _handle_term)
 
     parser = ArgumentParser()
-    parser.add_argument("--mode", choices=["aggressive", "balanced", "conservative"], default=BOT_MODE_ENV or "balanced")
+    parser.add_argument(
+        "--mode",
+        choices=["aggressive", "balanced", "conservative"],
+        default=BOT_MODE_ENV or "balanced",
+    )
     args = parser.parse_args()
     if args.mode != mode_obj.mode:
         globals()["mode_obj"] = BotMode(args.mode)
@@ -3729,29 +4282,46 @@ if __name__ == "__main__":
 
     try:
         logger.info(">>> BOT __main__ ENTERED – starting up")
-        
+
         # Try to start Prometheus metrics server; if port is already in use, log and continue
         try:
             start_http_server(9200)
         except OSError as e:
-            logger.warning(f"Metrics server port 9200 already in use; skipping start_http_server: {e!r}")
+            logger.warning(
+                f"Metrics server port 9200 already in use; skipping start_http_server: {e!r}"
+            )
 
         if RUN_HEALTH:
             Thread(target=start_healthcheck, daemon=True).start()
 
         # Daily jobs
-        schedule.every().day.at("00:30").do(lambda: Thread(target=daily_summary, daemon=True).start())
-        schedule.every().day.at("00:05").do(lambda: Thread(target=daily_reset, daemon=True).start())
-        schedule.every().day.at("10:00").do(lambda: Thread(target=run_meta_learning_weight_optimizer, daemon=True).start())
-        schedule.every().day.at("02:00").do(lambda: Thread(target=run_bayesian_meta_learning_optimizer, daemon=True).start())
+        schedule.every().day.at("00:30").do(
+            lambda: Thread(target=daily_summary, daemon=True).start()
+        )
+        schedule.every().day.at("00:05").do(
+            lambda: Thread(target=daily_reset, daemon=True).start()
+        )
+        schedule.every().day.at("10:00").do(
+            lambda: Thread(
+                target=run_meta_learning_weight_optimizer, daemon=True
+            ).start()
+        )
+        schedule.every().day.at("02:00").do(
+            lambda: Thread(
+                target=run_bayesian_meta_learning_optimizer, daemon=True
+            ).start()
+        )
 
         # ⮕ Only now import retrain_meta_learner, to avoid circular import / duplicated metrics
         try:
             from retrain import retrain_meta_learner as _tmp_retrain
+
             retrain_meta_learner = _tmp_retrain
         except ImportError:
             retrain_meta_learner = None
-            logger.warning("retrain.py not found or retrain_meta_learner missing. Daily retraining disabled.")
+            logger.warning(
+                "retrain.py not found or retrain_meta_learner missing. Daily retraining disabled."
+            )
 
         try:
             model = load_or_retrain_daily(ctx)
@@ -3789,11 +4359,25 @@ if __name__ == "__main__":
             schedule_run_all_trades(model)
 
         schedule.every().minute.do(gather_minute_data_with_delay)
-        schedule.every(1).minutes.do(lambda: Thread(target=validate_open_orders, args=(ctx,), daemon=True).start())
-        schedule.every(6).hours.do(lambda: Thread(target=update_signal_weights, daemon=True).start())
-        schedule.every(30).minutes.do(lambda: Thread(target=update_bot_mode, daemon=True).start())
-        schedule.every(30).minutes.do(lambda: Thread(target=adaptive_risk_scaling, args=(ctx,), daemon=True).start())
-        schedule.every().day.at("23:55").do(lambda: Thread(target=check_disaster_halt, daemon=True).start())
+        schedule.every(1).minutes.do(
+            lambda: Thread(
+                target=validate_open_orders, args=(ctx,), daemon=True
+            ).start()
+        )
+        schedule.every(6).hours.do(
+            lambda: Thread(target=update_signal_weights, daemon=True).start()
+        )
+        schedule.every(30).minutes.do(
+            lambda: Thread(target=update_bot_mode, daemon=True).start()
+        )
+        schedule.every(30).minutes.do(
+            lambda: Thread(
+                target=adaptive_risk_scaling, args=(ctx,), daemon=True
+            ).start()
+        )
+        schedule.every().day.at("23:55").do(
+            lambda: Thread(target=check_disaster_halt, daemon=True).start()
+        )
 
         # Scheduler loop
         while True:

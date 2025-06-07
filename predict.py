@@ -20,19 +20,20 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INACTIVE_FEATURES_FILE = os.path.join(BASE_DIR, "inactive_features.json")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
+
 def fetch_sentiment(symbol: str) -> float:
     if not NEWS_API_KEY:
         return 0.0
     try:
-        url = (
-            f"https://newsapi.org/v2/everything?q={symbol}&pageSize=5&sortBy=publishedAt&apiKey={NEWS_API_KEY}"
-        )
+        url = f"https://newsapi.org/v2/everything?q={symbol}&pageSize=5&sortBy=publishedAt&apiKey={NEWS_API_KEY}"
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         arts = resp.json().get("articles", [])
         if not arts:
             return 0.0
-        score = sum(1 for a in arts if "positive" in (a.get("title") or "").lower()) / len(arts)
+        score = sum(
+            1 for a in arts if "positive" in (a.get("title") or "").lower()
+        ) / len(arts)
         return float(score)
     except Exception:
         return 0.0
@@ -49,6 +50,7 @@ def detect_regime(df: pd.DataFrame) -> str:
     if sma50.iloc[-1] < sma200.iloc[-1]:
         return "bear"
     return "chop"
+
 
 MODEL_FILES = {
     "bull": os.path.join(MODELS_DIR, "model_bull.pkl"),
@@ -70,7 +72,9 @@ def predict(csv_path: str, freq: str = "intraday"):
     if os.path.exists(INACTIVE_FEATURES_FILE):
         try:
             inactive = set(json.load(open(INACTIVE_FEATURES_FILE)))
-            feat = feat.drop(columns=[c for c in inactive if c in feat.columns], errors='ignore')
+            feat = feat.drop(
+                columns=[c for c in inactive if c in feat.columns], errors="ignore"
+            )
         except Exception:
             pass
     symbol = os.path.splitext(os.path.basename(csv_path))[0]
@@ -83,7 +87,11 @@ def predict(csv_path: str, freq: str = "intraday"):
     missing = set(expected_features) - set(feat.columns)
     if missing:
         raise ValueError(f"Missing features: {missing}")
-    X = feat[expected_features].iloc[-1:].astype({col: "float64" for col in expected_features})
+    X = (
+        feat[expected_features]
+        .iloc[-1:]
+        .astype({col: "float64" for col in expected_features})
+    )
     try:
         pred = model.predict(X)[0]
         proba = model.predict_proba(X)[0][pred]

@@ -16,6 +16,7 @@ ALPACA_SECRET_KEY = os.environ.get('ALPACA_SECRET_KEY') or os.environ.get('APCA_
 ALPACA_BASE_URL = os.environ.get('ALPACA_BASE_URL', 'https://paper-api.alpaca.markets')
 ALPACA_PAPER = 'paper' in ALPACA_BASE_URL.lower()
 FINNHUB_API_KEY = os.environ.get('FINNHUB_API_KEY')
+FUNDAMENTAL_API_KEY = os.environ.get('FUNDAMENTAL_API_KEY')
 NEWS_API_KEY = os.environ.get('NEWS_API_KEY')
 IEX_API_TOKEN = os.environ.get('IEX_API_TOKEN')
 SENTRY_DSN = os.environ.get('SENTRY_DSN')

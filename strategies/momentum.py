@@ -2,6 +2,7 @@ from typing import List
 import pandas as pd
 from .base import Strategy, TradeSignal, asset_class_for
 
+
 class MomentumStrategy(Strategy):
     """Simple momentum strategy using recent returns."""
 
@@ -21,5 +22,13 @@ class MomentumStrategy(Strategy):
             if pd.isna(ret):
                 continue
             side = "buy" if ret > 0 else "sell"
-            signals.append(TradeSignal(symbol=sym, side=side, confidence=abs(ret), strategy=self.name, asset_class=asset_class_for(sym)))
+            signals.append(
+                TradeSignal(
+                    symbol=sym,
+                    side=side,
+                    confidence=abs(ret),
+                    strategy=self.name,
+                    asset_class=asset_class_for(sym),
+                )
+            )
         return signals

@@ -21,3 +21,6 @@ xgboost>=1.7.6
 lightgbm>=4.0.0
 pytz
 alpaca-trade-api
+pytest
+flake8
+black
