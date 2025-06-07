@@ -1,0 +1,23 @@
+name: Coverage
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install coverage[toml] codecov pytest-cov
+      - name: Run tests with coverage
+        run: pytest --cov=.
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+

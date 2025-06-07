@@ -1,15 +1,32 @@
-on: [push, pull_request]
+name: CI
+
+on:
+  push:
+  pull_request:
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
         with:
-          python-version: '3.12'
-      - run: pip install -r requirements.txt
-      - run: black --check .
-      - name: Run Flake8
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
         run: |
-          flake8 bot.py data_fetcher.py utils.py
-      - run: pytest --maxfail=1 --disable-warnings -q
+          pip install -r requirements.txt
+          pip install isort mypy
+      - name: Black
+        run: black --check .
+      - name: Isort
+        run: isort --check-only .
+      - name: Flake8
+        run: flake8 .
+      - name: Mypy
+        run: mypy .
+      - name: Pytest
+        run: pytest --maxfail=1 --disable-warnings -q
+
