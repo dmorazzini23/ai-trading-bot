@@ -8,6 +8,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import SGDRegressor
 import config
 
+
 class FeatureBuilder(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
         return self
@@ -23,13 +24,21 @@ class FeatureBuilder(BaseEstimator, TransformerMixin):
                 "vol": close.pct_change().rolling(10).std().fillna(0),
             }
             arr = np.column_stack(
-                [features["returns"], features["ma10"], features["ma30"], features["vol"]]
+                [
+                    features["returns"],
+                    features["ma10"],
+                    features["ma30"],
+                    features["vol"],
+                ]
             )
             return arr
         return np.asarray(df, dtype=float)
 
-model_pipeline = Pipeline([
-    ("features", FeatureBuilder()),
-    ("scaler", StandardScaler()),
-    ("regressor", SGDRegressor(warm_start=True, **config.SGD_PARAMS)),
-])
+
+model_pipeline = Pipeline(
+    [
+        ("features", FeatureBuilder()),
+        ("scaler", StandardScaler()),
+        ("regressor", SGDRegressor(warm_start=True, **config.SGD_PARAMS)),
+    ]
+)

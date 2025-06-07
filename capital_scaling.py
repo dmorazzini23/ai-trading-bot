@@ -32,14 +32,18 @@ class CapitalScalingEngine:
         self.bands = [
             CapitalBand("small", 0, 100_000, 0.6, 0.08, 10_000, 0.002, 0.4, 0.6),
             CapitalBand("mid", 100_000, 500_000, 0.5, 0.06, 20_000, 0.0015, 0.3, 0.5),
-            CapitalBand("large", 500_000, 1_000_000, 0.4, 0.05, 40_000, 0.001, 0.25, 0.4),
+            CapitalBand(
+                "large", 500_000, 1_000_000, 0.4, 0.05, 40_000, 0.001, 0.25, 0.4
+            ),
             CapitalBand("xl", 1_000_000, None, 0.3, 0.04, 60_000, 0.0008, 0.2, 0.35),
         ]
         self.current: CapitalBand = self.bands[0]
 
     def band_for_equity(self, equity: float) -> CapitalBand:
         for band in self.bands:
-            if (band.max_equity is None or equity < band.max_equity) and equity >= band.min_equity:
+            if (
+                band.max_equity is None or equity < band.max_equity
+            ) and equity >= band.min_equity:
                 return band
         return self.bands[-1]
 
@@ -52,7 +56,7 @@ class CapitalScalingEngine:
         ctx.kelly_fraction = band.kelly_frac
         ctx.adv_target_pct = band.adv_pct
         ctx.max_position_dollars = band.max_pos_dollars
-        ctx.params['CAPITAL_CAP'] = band.capital_cap
+        ctx.params["CAPITAL_CAP"] = band.capital_cap
         ctx.sector_cap = band.sector_cap
         ctx.correlation_limit = band.corr_limit
 
@@ -66,7 +70,9 @@ class CapitalGrowthSimulator:
     def __init__(self, scaler: CapitalScalingEngine) -> None:
         self.scaler = scaler
 
-    def simulate(self, returns: Sequence[float], starting_capital: float) -> pd.DataFrame:
+    def simulate(
+        self, returns: Sequence[float], starting_capital: float
+    ) -> pd.DataFrame:
         equity = starting_capital
         records = []
         for r in returns:
@@ -79,4 +85,3 @@ class CapitalGrowthSimulator:
                 drawdown = (peak - equity) / peak if peak else 0.0
             records.append((equity, band.name, drawdown))
         return pd.DataFrame(records, columns=["equity", "band", "drawdown"])
-

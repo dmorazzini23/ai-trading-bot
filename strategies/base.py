@@ -10,6 +10,7 @@ def asset_class_for(symbol: str) -> str:
         return "crypto"
     return "equity"
 
+
 @dataclass
 class TradeSignal:
     symbol: str
@@ -19,6 +20,7 @@ class TradeSignal:
     asset_class: str = "equity"
     weight: float = 1.0
     price: float = 0.0
+
 
 class Strategy:
     """Base strategy interface."""

@@ -1,6 +1,7 @@
 from typing import Dict, List
 from strategies import TradeSignal
 
+
 class StrategyAllocator:
     """Dynamic allocation of strategy weights."""
 

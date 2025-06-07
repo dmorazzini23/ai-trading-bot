@@ -10,6 +10,7 @@ import os
 import threading
 from dotenv import load_dotenv
 import config
+
 FINNHUB_API_KEY = config.FINNHUB_API_KEY
 ALPACA_API_KEY = config.ALPACA_API_KEY
 ALPACA_SECRET_KEY = config.ALPACA_SECRET_KEY
@@ -23,6 +24,8 @@ client = tradeapi.REST(
     secret_key=ALPACA_SECRET_KEY,
     base_url=ALPACA_BASE_URL,
 )
+# Alias used throughout the project
+api = client
 
 _rate_limit_lock = threading.Lock()
 import requests
@@ -62,11 +65,15 @@ _DATA_CLIENT = StockHistoricalDataClient(
     secret_key=ALPACA_SECRET_KEY,
 )
 
+
 class DataFetchError(Exception):
     pass
 
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd.DataFrame:
+def get_historical_data(
+    symbol: str, start_date, end_date, timeframe: str
+) -> pd.DataFrame:
     """Fetch historical bars from Alpaca and ensure OHLCV float columns."""
 
     start_dt = pd.to_datetime(start_date)
@@ -99,7 +106,9 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
             try:
                 bars = _fetch("iex")
             except APIError as iex_err:
-                raise DataFetchError(f"IEX fallback failed for {symbol}: {iex_err}") from iex_err
+                raise DataFetchError(
+                    f"IEX fallback failed for {symbol}: {iex_err}"
+                ) from iex_err
         else:
             raise
     except RetryError as e:
@@ -137,7 +146,13 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
             pytime.sleep(1)
     else:
         try:
-            req = StockBarsRequest(symbol_or_symbols=[symbol], start=start, end=end, timeframe=TimeFrame.Day, feed="iex")
+            req = StockBarsRequest(
+                symbol_or_symbols=[symbol],
+                start=start,
+                end=end,
+                timeframe=TimeFrame.Day,
+                feed="iex",
+            )
             df = _DATA_CLIENT.get_stock_bars(req).df
         except (APIError, RetryError):
             logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
@@ -161,14 +176,48 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_minute_df(symbol, start_date, end_date):
+@retry(
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    stop=stop_after_attempt(3),
+    retry=retry_if_exception_type((APIError, KeyError, ConnectionError)),
+)
+def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame:
+    """Return minute-level OHLCV DataFrame for ``symbol``.
+
+    Falls back to daily bars if minute data is unavailable.
+
+    Parameters
+    ----------
+    symbol : str
+        Ticker symbol to fetch.
+    start_date : date
+        Start date of the range.
+    end_date : date
+        End date of the range.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame indexed by timestamp with ``open``/``high``/``low``/``close``/``volume`` columns.
+
+    Raises
+    ------
+    APIError
+        If Alpaca returns an error and no fallback succeeds.
+    KeyError
+        If expected OHLCV columns are missing.
+    ConnectionError
+        For network-related failures handled by ``tenacity`` retry.
+    """
     from alpaca_trade_api.rest import TimeFrame, APIError
     import pandas as pd
 
     try:
         bars = None
         try:
-            bars = client.get_bars(symbol, TimeFrame.Minute, start=start_date, end=end_date)
+            bars = client.get_bars(
+                symbol, TimeFrame.Minute, start=start_date, end=end_date
+            )
         except APIError as e:
             if "subscription does not permit" in str(e).lower():
                 bars = client.get_bars(
@@ -191,11 +240,11 @@ def get_minute_df(symbol, start_date, end_date):
 
         rename_map = {}
         patterns = {
-            'open':    ['open', 'o', 'open_price'],
-            'high':    ['high', 'h', 'high_price'],
-            'low':     ['low', 'l', 'low_price'],
-            'close':   ['close', 'c', 'close_price'],
-            'volume':  ['volume', 'v']
+            "open": ["open", "o", "open_price"],
+            "high": ["high", "h", "high_price"],
+            "low": ["low", "l", "low_price"],
+            "close": ["close", "c", "close_price"],
+            "volume": ["volume", "v"],
         }
         for std, pats in patterns.items():
             for pat in pats:
@@ -209,11 +258,11 @@ def get_minute_df(symbol, start_date, end_date):
         df.rename(columns=rename_map, inplace=True)
         logger.debug(f"{symbol}: renamed bar columns: {df.columns.tolist()}")
 
-        required = {'open','high','low','close','volume'}
+        required = {"open", "high", "low", "close", "volume"}
         if not required.issubset(df.columns):
             raise KeyError("Missing OHLCV columns")
 
-        df = df[['open','high','low','close','volume']]
+        df = df[["open", "high", "low", "close", "volume"]]
         df.index = pd.to_datetime(df.index).tz_localize(None)
 
         return df
@@ -227,7 +276,7 @@ def get_minute_df(symbol, start_date, end_date):
                 end=(end_date + timedelta(days=1)).isoformat(),
                 adjustment="raw",
             )
-            df = bars.df[['open', 'high', 'low', 'close', 'volume']].copy()
+            df = bars.df[["open", "high", "low", "close", "volume"]].copy()
             df.index = pd.to_datetime(df.index).tz_localize(None)
             logger.info(f"Falling back to daily bars for {symbol} ({len(df)} rows)")
             return df
@@ -235,7 +284,9 @@ def get_minute_df(symbol, start_date, end_date):
             logger.debug(f"{symbol}: daily fallback fetch failed: {daily_err}")
             return pd.DataFrame()
 
+
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
+
 
 class FinnhubFetcher:
     def __init__(self, calls_per_minute: int = 30) -> None:
@@ -252,7 +303,9 @@ class FinnhubFetcher:
                 if len(self._timestamps) < self.max_calls:
                     self._timestamps.append(now_ts)
                     return
-                wait_secs = 60 - (now_ts - self._timestamps[0]) + random.uniform(0.1, 0.5)
+                wait_secs = (
+                    60 - (now_ts - self._timestamps[0]) + random.uniform(0.1, 0.5)
+                )
             pytime.sleep(wait_secs)
 
     def _parse_period(self, period: str) -> int:
@@ -267,14 +320,16 @@ class FinnhubFetcher:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 1),
-        retry=retry_if_exception_type((requests.exceptions.RequestException, urllib3.exceptions.HTTPError))
+        retry=retry_if_exception_type(
+            (requests.exceptions.RequestException, urllib3.exceptions.HTTPError)
+        ),
     )
     def fetch(self, symbols, period="1mo", interval="1d") -> pd.DataFrame:
         syms = symbols if isinstance(symbols, (list, tuple)) else [symbols]
         now_ts = int(pytime.time())
         span = self._parse_period(period)
         start_ts = now_ts - span
-        resolution = 'D' if interval == '1d' else '1'
+        resolution = "D" if interval == "1d" else "1"
         frames = []
         for sym in syms:
             self._throttle()
@@ -282,13 +337,16 @@ class FinnhubFetcher:
             if resp.get("s") != "ok":
                 frames.append(pd.DataFrame())
                 continue
-            df = pd.DataFrame({
-                "open": resp["o"],
-                "high": resp["h"],
-                "low": resp["l"],
-                "close": resp["c"],
-                "volume": resp["v"],
-            }, index=pd.to_datetime(resp["t"], unit="s", utc=True))
+            df = pd.DataFrame(
+                {
+                    "open": resp["o"],
+                    "high": resp["h"],
+                    "low": resp["l"],
+                    "close": resp["c"],
+                    "volume": resp["v"],
+                },
+                index=pd.to_datetime(resp["t"], unit="s", utc=True),
+            )
             df.index = df.index.tz_convert(None)
             df["timestamp"] = df.index
             frames.append(df)
@@ -296,5 +354,6 @@ class FinnhubFetcher:
             return pd.DataFrame()
         if len(frames) == 1:
             return frames[0]
-        return pd.concat(frames, axis=0, keys=syms, names=["symbol"]).reset_index(level=0)
-
+        return pd.concat(frames, axis=0, keys=syms, names=["symbol"]).reset_index(
+            level=0
+        )
