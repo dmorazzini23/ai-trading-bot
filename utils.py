@@ -5,7 +5,14 @@ import os
 
 import pandas as pd
 from datetime import datetime, time
-from tzlocal import get_localzone
+try:
+    from tzlocal import get_localzone
+except ImportError:  # pragma: no cover - optional dependency
+    import logging, pytz
+    logging.warning("tzlocal not installed; defaulting to UTC")
+
+    def get_localzone():
+        return pytz.UTC
 from zoneinfo import ZoneInfo
 import threading
 

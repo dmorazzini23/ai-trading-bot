@@ -15,13 +15,13 @@ ALPACA_API_KEY = config.ALPACA_API_KEY
 ALPACA_SECRET_KEY = config.ALPACA_SECRET_KEY
 ALPACA_BASE_URL = config.ALPACA_BASE_URL
 
-from alpaca_trade_api import REST as AlpacaREST
+import alpaca_trade_api as tradeapi
 
-# Global Alpaca client using environment credentials
-api = AlpacaREST(  # FIXED: shared Alpaca REST client
-    key_id=os.getenv("APCA_API_KEY_ID"),
-    secret_key=os.getenv("APCA_API_SECRET_KEY"),
-    base_url=os.getenv("APCA_API_BASE_URL")
+# Global Alpaca client using config credentials
+api = tradeapi.REST(
+    key_id=ALPACA_API_KEY,
+    secret_key=ALPACA_SECRET_KEY,
+    base_url=ALPACA_BASE_URL,
 )
 
 _rate_limit_lock = threading.Lock()
