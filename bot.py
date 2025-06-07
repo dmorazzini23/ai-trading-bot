@@ -2840,7 +2840,7 @@ def online_update(symbol: str, X_new, y_new) -> None:
     pred = model_pipeline.predict(X_new)
     online_error = float(np.mean((pred - y_new)**2))
     log_metrics({
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'type': 'online_update',
         'symbol': symbol,
         'error': online_error,
@@ -3500,7 +3500,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
             except Exception as e:
                 logger.error(f"Daily retrain failed: {e}")
 
-        date_str = datetime.utcnow().strftime('%Y%m%d_%H%M')
+        date_str = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')
         os.makedirs('models', exist_ok=True)
         path = f"models/sgd_{date_str}.pkl"
         joblib.dump(model_pipeline, path)
@@ -3508,13 +3508,13 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
 
         for f in os.listdir('models'):
             if f.endswith('.pkl'):
-                dt = datetime.strptime(f.split('_')[1].split('.')[0], '%Y%m%d')
-                if datetime.utcnow() - dt > timedelta(days=30):
+                dt = datetime.strptime(f.split('_')[1].split('.')[0], '%Y%m%d').replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - dt > timedelta(days=30):
                     os.remove(os.path.join('models', f))
 
         batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train)**2))
         log_metrics({
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'type': 'daily_retrain',
             'batch_mse': batch_mse,
         })

@@ -165,12 +165,12 @@ def get_minute_df(symbol, start_date, end_date):
     from alpaca_trade_api.rest import TimeFrame, APIError
     import pandas as pd
 
-    bars = None
     try:
-        bars = client.get_bars(symbol, TimeFrame.Minute, start=start_date, end=end_date)
-    except APIError as e:
-        if "subscription does not permit" in str(e).lower():
-            try:
+        bars = None
+        try:
+            bars = client.get_bars(symbol, TimeFrame.Minute, start=start_date, end=end_date)
+        except APIError as e:
+            if "subscription does not permit" in str(e).lower():
                 bars = client.get_bars(
                     symbol,
                     TimeFrame.Minute,
@@ -179,58 +179,61 @@ def get_minute_df(symbol, start_date, end_date):
                     adjustment="raw",
                     feed="iex",
                 )
-            except Exception as iex_err:
-                logger.debug(f"{symbol}: Alpaca and IEX fetch failed: {iex_err}")
-        else:
-            logger.debug(f"{symbol}: Alpaca minute fetch failed: {e}")
-    except Exception as e:
-        logger.debug(f"{symbol}: minute fetch error: {e}")
+            else:
+                raise
 
-    if bars is None or not getattr(bars, "df", pd.DataFrame()).size:
-        logger.debug(f"{symbol}: no minute data from Alpaca or IEX—skipping further attempts.")
-        return pd.DataFrame()
+        if bars is None or not getattr(bars, "df", pd.DataFrame()).size:
+            raise APIError("No minute data returned")
 
-    df = bars.df.copy()
+        df = bars.df.copy()
 
-    # 2. Log raw columns so we can see what we actually got
-    logger.debug(f"{symbol}: raw bar columns: {df.columns.tolist()}")
+        logger.debug(f"{symbol}: raw bar columns: {df.columns.tolist()}")
 
-    # 3. Build rename map from raw names → standard
-    rename_map = {}
-    patterns = {
-        'open':    ['open', 'o', 'open_price'],
-        'high':    ['high', 'h', 'high_price'],
-        'low':     ['low', 'l', 'low_price'],
-        'close':   ['close', 'c', 'close_price'],
-        'volume':  ['volume', 'v']
-    }
-    for std, pats in patterns.items():
-        for pat in pats:
-            for col in df.columns:
-                if col.lower().startswith(pat):
-                    rename_map[col] = std
+        rename_map = {}
+        patterns = {
+            'open':    ['open', 'o', 'open_price'],
+            'high':    ['high', 'h', 'high_price'],
+            'low':     ['low', 'l', 'low_price'],
+            'close':   ['close', 'c', 'close_price'],
+            'volume':  ['volume', 'v']
+        }
+        for std, pats in patterns.items():
+            for pat in pats:
+                for col in df.columns:
+                    if col.lower().startswith(pat):
+                        rename_map[col] = std
+                        break
+                if std in rename_map:
                     break
-            if std in rename_map:
-                break
 
-    df.rename(columns=rename_map, inplace=True)
-    logger.debug(f"{symbol}: renamed bar columns: {df.columns.tolist()}")
+        df.rename(columns=rename_map, inplace=True)
+        logger.debug(f"{symbol}: renamed bar columns: {df.columns.tolist()}")
 
-    # 4. Bail if we still don’t have all five
-    required = {'open','high','low','close','volume'}
-    if not required.issubset(df.columns):
-        logger.warning(f"{symbol}: missing required OHLCV columns after rename—skipping")
-        return None
+        required = {'open','high','low','close','volume'}
+        if not required.issubset(df.columns):
+            raise KeyError("Missing OHLCV columns")
 
-    # 5. Slice and drop tz
-    try:
         df = df[['open','high','low','close','volume']]
-    except KeyError as e:
-        logger.error(f"Missing expected columns for {symbol}: {df.columns.tolist()}")
-        return pd.DataFrame()
-    df.index = pd.to_datetime(df.index).tz_localize(None)
+        df.index = pd.to_datetime(df.index).tz_localize(None)
 
-    return df
+        return df
+
+    except (APIError, KeyError) as e:
+        try:
+            bars = client.get_bars(
+                symbol,
+                timeframe="1Day",
+                start=start_date.isoformat(),
+                end=(end_date + timedelta(days=1)).isoformat(),
+                adjustment="raw",
+            )
+            df = bars.df[['open', 'high', 'low', 'close', 'volume']].copy()
+            df.index = pd.to_datetime(df.index).tz_localize(None)
+            logger.info(f"Falling back to daily bars for {symbol} ({len(df)} rows)")
+            return df
+        except Exception as daily_err:
+            logger.debug(f"{symbol}: daily fallback fetch failed: {daily_err}")
+            return pd.DataFrame()
 
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 
