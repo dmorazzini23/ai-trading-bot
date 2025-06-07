@@ -15,11 +15,13 @@ ALPACA_API_KEY = config.ALPACA_API_KEY
 ALPACA_SECRET_KEY = config.ALPACA_SECRET_KEY
 ALPACA_BASE_URL = config.ALPACA_BASE_URL
 
-import alpaca_trade_api as tradeapi
-api = tradeapi.REST(
-    os.environ['APCA_API_KEY_ID'],
-    os.environ['APCA_API_SECRET_KEY'],
-    base_url=os.environ.get('APCA_API_BASE_URL', 'https://paper-api.alpaca.markets')
+from alpaca_trade_api import REST as AlpacaREST
+
+# Global Alpaca client using environment credentials
+api = AlpacaREST(  # FIXED: shared Alpaca REST client
+    key_id=os.getenv("APCA_API_KEY_ID"),
+    secret_key=os.getenv("APCA_API_SECRET_KEY"),
+    base_url=os.getenv("APCA_API_BASE_URL")
 )
 
 _rate_limit_lock = threading.Lock()
@@ -160,18 +162,34 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
 
 
 def get_minute_df(symbol, start_date, end_date):
-    from alpaca_trade_api.rest import TimeFrame
+    from alpaca_trade_api.rest import TimeFrame, APIError
     import pandas as pd
 
-    # 1. Fetch raw minute bars via IEX
-    bars = api.get_bars(
-        symbol,
-        TimeFrame.Minute,
-        start=start_date,
-        end=end_date,
-        adjustment='raw',
-        feed='iex'
-    )
+    bars = None
+    try:
+        bars = api.get_bars(symbol, TimeFrame.Minute, start=start_date, end=end_date)
+    except APIError as e:
+        if "subscription does not permit" in str(e).lower():
+            try:
+                bars = api.get_bars(
+                    symbol,
+                    TimeFrame.Minute,
+                    start=start_date,
+                    end=end_date,
+                    adjustment="raw",
+                    feed="iex",
+                )
+            except Exception as iex_err:
+                logger.debug(f"{symbol}: Alpaca and IEX fetch failed: {iex_err}")
+        else:
+            logger.debug(f"{symbol}: Alpaca minute fetch failed: {e}")
+    except Exception as e:
+        logger.debug(f"{symbol}: minute fetch error: {e}")
+
+    if bars is None or not getattr(bars, "df", pd.DataFrame()).size:
+        logger.debug(f"{symbol}: no minute data from Alpaca or IEX—skipping further attempts.")
+        return pd.DataFrame()
+
     df = bars.df.copy()
 
     # 2. Log raw columns so we can see what we actually got

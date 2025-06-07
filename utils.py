@@ -6,11 +6,17 @@ import os
 import pandas as pd
 from datetime import datetime, time
 from tzlocal import get_localzone
+from zoneinfo import ZoneInfo
+import threading
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 MARKET_OPEN_TIME = time(9, 30)
 MARKET_CLOSE_TIME = time(16, 0)
+EASTERN_TZ = ZoneInfo("America/New_York")
+
+# Lock protecting portfolio state across threads
+portfolio_lock = threading.Lock()
 
 
 def get_latest_close(df: pd.DataFrame) -> float:
@@ -26,10 +32,13 @@ def get_latest_close(df: pd.DataFrame) -> float:
     return float(last)
 
 
-def is_market_open() -> bool:
-    """Return True if current local time is between 9:30 and 16:00."""
-    now = datetime.now().time()
-    return MARKET_OPEN_TIME <= now <= MARKET_CLOSE_TIME
+def is_market_open(now: datetime | None = None) -> bool:
+    """Return True if within weekday US market hours (9:30–16:00 ET)."""  # FIXED
+    now_et = (now or datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
+    if now_et.weekday() >= 5:
+        return False
+    current = now_et.time()
+    return MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME
 
 
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
