@@ -146,37 +146,55 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
-    """Fetch minute bars via IEX and return OHLCV columns indexed by timestamp."""
-    api = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version="v2")
+def get_minute_df(symbol, start_date, end_date):
+    from alpaca_trade_api.rest import TimeFrame
+    import pandas as pd
+
+    # 1. Fetch raw minute bars via IEX
     bars = api.get_bars(
         symbol,
         TimeFrame.Minute,
         start=start_date,
         end=end_date,
-        adjustment="raw",
-        feed="iex",
+        adjustment='raw',
+        feed='iex'
     )
+    df = bars.df.copy()
 
-    df = bars.df
+    # 2. Log raw columns so we can see what we actually got
     logger.debug(f"{symbol}: raw bar columns: {df.columns.tolist()}")
 
+    # 3. Build rename map from raw names → standard
     rename_map = {}
-    for std, candidates in [
-        ("open", ["open", "open_price", "o"]),
-        ("high", ["high", "high_price", "h"]),
-        ("low", ["low", "low_price", "l"]),
-        ("close", ["close", "close_price", "c"]),
-        ("volume", ["volume", "v"]),
-    ]:
-        for col in candidates:
-            if col in df.columns:
-                rename_map[col] = std
+    patterns = {
+        'open':    ['open', 'o', 'open_price'],
+        'high':    ['high', 'h', 'high_price'],
+        'low':     ['low', 'l', 'low_price'],
+        'close':   ['close', 'c', 'close_price'],
+        'volume':  ['volume', 'v']
+    }
+    for std, pats in patterns.items():
+        for pat in pats:
+            for col in df.columns:
+                if col.lower().startswith(pat):
+                    rename_map[col] = std
+                    break
+            if std in rename_map:
                 break
 
-    df = df.rename(columns=rename_map)
-    df = df[["open", "high", "low", "close", "volume"]]
+    df.rename(columns=rename_map, inplace=True)
+    logger.debug(f"{symbol}: renamed bar columns: {df.columns.tolist()}")
+
+    # 4. Bail if we still don’t have all five
+    required = {'open','high','low','close','volume'}
+    if not required.issubset(df.columns):
+        logger.warning(f"{symbol}: missing required OHLCV columns after rename—skipping")
+        return None
+
+    # 5. Slice and drop tz
+    df = df[['open','high','low','close','volume']]
     df.index = pd.to_datetime(df.index).tz_localize(None)
+
     return df
 
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
