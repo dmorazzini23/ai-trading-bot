@@ -6,6 +6,8 @@ from collections import deque
 from typing import Optional, Sequence
 import warnings
 
+import os
+import threading
 from dotenv import load_dotenv
 import config
 FINNHUB_API_KEY = config.FINNHUB_API_KEY
@@ -14,7 +16,15 @@ ALPACA_SECRET_KEY = config.ALPACA_SECRET_KEY
 ALPACA_BASE_URL = config.ALPACA_BASE_URL
 
 import alpaca_trade_api as tradeapi
-client = tradeapi.REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version='v2')
+api = tradeapi.REST(
+    os.environ['APCA_API_KEY_ID'],
+    os.environ['APCA_API_SECRET_KEY'],
+    base_url=os.environ.get('APCA_API_BASE_URL', 'https://paper-api.alpaca.markets')
+)
+
+_rate_limit_lock = threading.Lock()
+import requests
+import urllib3
 
 MINUTES_REQUIRED = 31
 HISTORICAL_START = "2025-06-01"
@@ -154,7 +164,7 @@ def get_minute_df(symbol, start_date, end_date):
     import pandas as pd
 
     # 1. Fetch raw minute bars via IEX
-    bars = client.get_bars(
+    bars = api.get_bars(
         symbol,
         TimeFrame.Minute,
         start=start_date,
@@ -195,7 +205,11 @@ def get_minute_df(symbol, start_date, end_date):
         return None
 
     # 5. Slice and drop tz
-    df = df[['open','high','low','close','volume']]
+    try:
+        df = df[['open','high','low','close','volume']]
+    except KeyError as e:
+        logger.error(f"Missing expected columns for {symbol}: {df.columns.tolist()}")
+        return pd.DataFrame()
     df.index = pd.to_datetime(df.index).tz_localize(None)
 
     return df
@@ -211,12 +225,13 @@ class FinnhubFetcher:
     def _throttle(self) -> None:
         while True:
             now_ts = pytime.time()
-            while self._timestamps and now_ts - self._timestamps[0] > 60:
-                self._timestamps.popleft()
-            if len(self._timestamps) < self.max_calls:
-                self._timestamps.append(now_ts)
-                return
-            wait_secs = 60 - (now_ts - self._timestamps[0]) + random.uniform(0.1, 0.5)
+            with _rate_limit_lock:
+                while self._timestamps and now_ts - self._timestamps[0] > 60:
+                    self._timestamps.popleft()
+                if len(self._timestamps) < self.max_calls:
+                    self._timestamps.append(now_ts)
+                    return
+                wait_secs = 60 - (now_ts - self._timestamps[0]) + random.uniform(0.1, 0.5)
             pytime.sleep(wait_secs)
 
     def _parse_period(self, period: str) -> int:
@@ -228,7 +243,11 @@ class FinnhubFetcher:
             return num * 86400
         raise ValueError(f"Unsupported period: {period}")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 1), retry=retry_if_exception_type(Exception))
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 1),
+        retry=retry_if_exception_type((requests.exceptions.RequestException, urllib3.exceptions.HTTPError))
+    )
     def fetch(self, symbols, period="1mo", interval="1d") -> pd.DataFrame:
         syms = symbols if isinstance(symbols, (list, tuple)) else [symbols]
         now_ts = int(pytime.time())

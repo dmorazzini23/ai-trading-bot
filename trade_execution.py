@@ -1,5 +1,6 @@
 import os
 import csv
+import math
 import time
 import random
 import logging
@@ -143,7 +144,7 @@ class ExecutionEngine:
 
     def execute_order(self, symbol: str, qty: int, side: str, asset_class: str = "equity") -> Optional[Order]:
         """Execute an order for the given asset class."""
-        remaining = qty
+        remaining = int(math.floor(qty))
         last_order = None
         api = self.api
         if asset_class == "crypto" and hasattr(self.ctx, "crypto_api"):
@@ -183,7 +184,11 @@ class ExecutionEngine:
                             'type': order_req.__class__.__name__
                         }
                     )
-                    order = api.submit_order(order_data=order_req)
+                    try:
+                        order = api.submit_order(order_data=order_req)
+                    except Exception as e:
+                        self.logger.error(f"Order failed for {symbol}: {e}")
+                        break
                     break
                 except (APIError, TimeoutError) as e:
                     time.sleep(1)

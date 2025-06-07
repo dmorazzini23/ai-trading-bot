@@ -1,9 +1,11 @@
 """Utility functions for common operations across the bot."""
 
 import warnings
+import os
 
 import pandas as pd
 from datetime import datetime, time
+from tzlocal import get_localzone
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -28,3 +30,14 @@ def is_market_open() -> bool:
     """Return True if current local time is between 9:30 and 16:00."""
     now = datetime.now().time()
     return MARKET_OPEN_TIME <= now <= MARKET_CLOSE_TIME
+
+
+BASE_PATH = os.path.dirname(os.path.abspath(__file__))
+
+def data_filepath(filename: str) -> str:
+    return os.path.join(BASE_PATH, 'data', filename)
+
+
+def convert_to_local(df: pd.DataFrame) -> pd.DataFrame:
+    local_tz = get_localzone()
+    return df.tz_convert(local_tz)
