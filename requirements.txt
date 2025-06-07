@@ -6,6 +6,7 @@ pandas_ta>=0.3.14b0
 requests>=2.27.1
 beautifulsoup4>=4.11.1
 flask>=2.1.0
+pandas_market_calendars>=4.1.4
 schedule>=1.1.0
 portalocker>=2.7.0
 alpaca-py>=0.40.1
@@ -17,3 +18,6 @@ prometheus-client>=0.14.1
 finnhub-python>=0.4.0
 xgboost>=1.7.6
 lightgbm>=4.0.0
+tzlocal
+pytz
+alpaca-trade-api
