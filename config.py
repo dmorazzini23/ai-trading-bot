@@ -6,8 +6,8 @@ ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / '.env'
 load_dotenv(ENV_PATH)
 
-required = ['APCA_API_KEY_ID','APCA_API_SECRET_KEY']  # FUNDAMENTAL_API_KEY optional
-missing = [v for v in required if v not in os.environ]
+required_env_vars = ['APCA_API_KEY_ID','APCA_API_SECRET_KEY']  # FUNDAMENTAL_API_KEY optional
+missing = [v for v in required_env_vars if v not in os.environ]
 if missing:
     raise RuntimeError(f"Missing required environment variables: {missing}")
 

@@ -18,7 +18,7 @@ ALPACA_BASE_URL = config.ALPACA_BASE_URL
 import alpaca_trade_api as tradeapi
 
 # Global Alpaca client using config credentials
-api = tradeapi.REST(
+client = tradeapi.REST(
     key_id=ALPACA_API_KEY,
     secret_key=ALPACA_SECRET_KEY,
     base_url=ALPACA_BASE_URL,
@@ -167,11 +167,11 @@ def get_minute_df(symbol, start_date, end_date):
 
     bars = None
     try:
-        bars = api.get_bars(symbol, TimeFrame.Minute, start=start_date, end=end_date)
+        bars = client.get_bars(symbol, TimeFrame.Minute, start=start_date, end=end_date)
     except APIError as e:
         if "subscription does not permit" in str(e).lower():
             try:
-                bars = api.get_bars(
+                bars = client.get_bars(
                     symbol,
                     TimeFrame.Minute,
                     start=start_date,
