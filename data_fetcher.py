@@ -27,7 +27,7 @@ import numpy as np
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-from alpaca_trade_api.rest import APIError
+from alpaca_trade_api.rest import REST, APIError
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -147,95 +147,37 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
 
 
 def get_minute_df(symbol: str, start_date, end_date) -> pd.DataFrame:
-    start_dt = pd.to_datetime(start_date).tz_localize("UTC")
-    end_dt = pd.to_datetime(end_date).tz_localize("UTC") + pd.Timedelta(days=1)
-    df = pd.DataFrame()
-    for attempt in range(3):
-        try:
-            df = get_historical_data(symbol, start_dt, end_dt, "1Min")
-            # DEBUG: show me exactly what columns and index types we got
-            print(f"DEBUG raw columns for {symbol}: {list(df.columns)}")
-            print(f"DEBUG raw index sample: {df.index[:5]}")
+    """Fetch minute bars via IEX and return OHLCV columns indexed by timestamp."""
+    api = REST(ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL, api_version="v2")
+    bars = api.get_bars(
+        symbol,
+        TimeFrame.Minute,
+        start=start_date,
+        end=end_date,
+        adjustment="raw",
+        feed="iex",
+    )
 
-            df = df.drop(columns=["symbol"], errors="ignore")
+    df = bars.df
+    logger.debug(f"{symbol}: raw bar columns: {df.columns.tolist()}")
 
-            # flatten tuple-timestamps if any
-            df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
-            # then coerce to datetime without tz
-            df.index = pd.to_datetime(df.index, errors="coerce")
-            df.index = df.index.tz_localize(None)
+    rename_map = {}
+    for std, candidates in [
+        ("open", ["open", "open_price", "o"]),
+        ("high", ["high", "high_price", "h"]),
+        ("low", ["low", "low_price", "l"]),
+        ("close", ["close", "close_price", "c"]),
+        ("volume", ["volume", "v"]),
+    ]:
+        for col in candidates:
+            if col in df.columns:
+                rename_map[col] = std
+                break
 
-            # flatten MultiIndex columns
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(-1)
-
-            # lowercase everything
-            df.columns = [c.lower() for c in df.columns]
-
-            # now map any column ending with our five targets into them
-            for field in ("open", "high", "low", "close", "volume"):
-                if field not in df.columns:
-                    candidate = next((c for c in df.columns if c.endswith(field)), None)
-                    if candidate:
-                        df[field] = df[candidate]
-            # finally select just those five
-            df = df[["open", "high", "low", "close", "volume"]]
-            break
-        except (APIError, RetryError) as e:
-            logger.debug(
-                f"get_minute_df attempt {attempt+1} failed for {symbol}: {e}"
-            )
-            pytime.sleep(1)
-    else:
-        try:
-            req = StockBarsRequest(
-                symbol_or_symbols=[symbol],
-                start=start_dt,
-                end=end_dt,
-                timeframe=TimeFrame.Minute,
-                feed="iex",
-            )
-            df = _DATA_CLIENT.get_stock_bars(req).df
-
-            # DEBUG: show me exactly what columns and index types we got
-            print(f"DEBUG raw columns for {symbol}: {list(df.columns)}")
-            print(f"DEBUG raw index sample: {df.index[:5]}")
-
-            df = df.drop(columns=["symbol"], errors="ignore")
-            df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
-            df.index = pd.to_datetime(df.index, errors="coerce")
-            df.index = df.index.tz_localize(None)
-
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(-1)
-
-            df.columns = [c.lower() for c in df.columns]
-
-            for field in ("open", "high", "low", "close", "volume"):
-                if field not in df.columns:
-                    candidate = next((c for c in df.columns if c.endswith(field)), None)
-                    if candidate:
-                        df[field] = df[candidate]
-
-            try:
-                df = df[["open", "high", "low", "close", "volume"]]
-            except KeyError:
-                logger.warning(
-                    f"NO ALTERNATIVE MINUTE DATA FOR {symbol}"
-                )
-                return pd.DataFrame()
-        except (APIError, RetryError):
-            logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
-            return pd.DataFrame()
-    df["timestamp"] = df.index
-
-    try:
-        return df[["timestamp", "open", "high", "low", "close", "volume"]]
-    except KeyError:
-        logger.warning(
-            f"Missing OHLCV columns for {symbol}; returning empty DataFrame"
-        )
-        return pd.DataFrame()
+    df = df.rename(columns=rename_map)
+    df = df[["open", "high", "low", "close", "volume"]]
+    df.index = pd.to_datetime(df.index).tz_localize(None)
+    return df
 
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 
