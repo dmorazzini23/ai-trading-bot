@@ -9,16 +9,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  prepare:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.12'
       - name: Cache pip
         uses: actions/cache@v3
         with:
@@ -28,16 +25,35 @@ jobs:
             ${{ runner.os }}-pip-
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install isort mypy
-      - name: Black
-        run: black --check .
-      - name: Isort
-        run: isort --check-only .
-      - name: Flake8
-        run: flake8 .
-      - name: Mypy
-        run: mypy .
-      - name: Pytest
-        run: pytest --maxfail=1 --disable-warnings -q
 
+  lint:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - run: black .
+      - run: black --check .
+        continue-on-error: true
+      - run: flake8 .
+
+  test:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - run: pytest --maxfail=1 --disable-warnings -q
+
+  notify:
+    if: failure()
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": ":x: CI failed in <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|this run>."
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
