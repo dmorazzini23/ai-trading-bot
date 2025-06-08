@@ -12,13 +12,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Send failure notification to Slack
-        uses: slackapi/slack-github-action@v1.26.0
+      - name: Notify Slack
+        uses: slackapi/slack-github-action@v1
         with:
           payload: |
-            {
-              "text": ":x: *${{ github.workflow }}* failed on `${{ github.ref }}` by `${{ github.actor }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
-            }
+            { "text": ":x: CI failed on `${{ github.workflow }}`" }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
 

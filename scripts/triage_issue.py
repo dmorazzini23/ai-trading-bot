@@ -18,7 +18,8 @@ def main():
         labels.append("enhancement")
 
     mapping = {label: {"name": label} for label in labels}
-    with open(args.labels - file, "w") as f:
+    file_path = args.labels_file
+    with open(file_path, "w") as f:
         json.dump(mapping, f)
     print(json.dumps(mapping))
 
