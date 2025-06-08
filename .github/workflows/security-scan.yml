@@ -7,16 +7,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
       - name: Run Trivy vulnerability scan
         uses: aquasecurity/trivy-action@v0.31.0
         with:
           scan-type: fs
           exit-code: 1
           severity: CRITICAL,HIGH
-      - name: Notify Slack on failure
-        if: failure()
-        uses: slackapi/slack-github-action@v2.1.0
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          payload: |
-            {"text": "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"}
