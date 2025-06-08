@@ -7,6 +7,7 @@ import requests
 REPO = "dmorazzini23/ai-trading-bot"
 API = "https://api.github.com"
 
+
 def _get_failed_steps(zip_bytes: bytes) -> Set[str]:
     failed = set()
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
@@ -18,32 +19,53 @@ def _get_failed_steps(zip_bytes: bytes) -> Set[str]:
                     failed.add(step)
     return failed
 
+
 def list_failed_runs(token: str) -> Iterable[dict]:
-    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
     params = {"status": "failure", "per_page": 10}
-    resp = requests.get(f"{API}/repos/{REPO}/actions/runs", headers=headers, params=params)
+    resp = requests.get(
+        f"{API}/repos/{REPO}/actions/runs", headers=headers, params=params
+    )
     resp.raise_for_status()
     return resp.json().get("workflow_runs", [])
 
+
 def download_logs(run_id: int, token: str) -> bytes:
-    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
-    resp = requests.get(f"{API}/repos/{REPO}/actions/runs/{run_id}/logs", headers=headers, allow_redirects=True)
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    resp = requests.get(
+        f"{API}/repos/{REPO}/actions/runs/{run_id}/logs",
+        headers=headers,
+        allow_redirects=True,
+    )
     resp.raise_for_status()
     return resp.content
+
 
 def fetch_failed_steps(run_id: int, token: str) -> Set[str]:
     steps = _get_failed_steps(download_logs(run_id, token))
     if steps:
         return steps
     # fallback to jobs API
-    headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
-    resp = requests.get(f"{API}/repos/{REPO}/actions/runs/{run_id}/jobs", headers=headers)
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+    }
+    resp = requests.get(
+        f"{API}/repos/{REPO}/actions/runs/{run_id}/jobs", headers=headers
+    )
     if resp.ok:
         for job in resp.json().get("jobs", []):
             for step in job.get("steps", []):
                 if step.get("conclusion") == "failure":
                     steps.add(step["name"])
     return steps
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -62,6 +84,6 @@ def main():
         else:
             print("  [No failed steps detected]")
 
+
 if __name__ == "__main__":
     main()
-
