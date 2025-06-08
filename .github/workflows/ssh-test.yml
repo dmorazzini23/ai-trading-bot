@@ -1,36 +1,39 @@
 name: SSH & run tests
 
-on: [push]
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
-  ssh_test:
+  ssh-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: SSH & prepare remote
+      - name: SSH & prepare droplet
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
+          port: 22
           script: |
-            set -e
+            # go to project root
             cd ~/ai-trading-bot
 
-            # create & activate venv if needed
-            if [ ! -d ~/ai-trading-bot/venv ]; then
-              python3 -m venv ~/ai-trading-bot/venv
+            # ensure venv exists
+            if [ ! -d venv ]; then
+              python3 -m venv venv
             fi
-            source ~/ai-trading-bot/venv/bin/activate
+
+            # activate and install deps
+            source venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
 
-            # start the bot web service if not running
+            # restart service and give it time to start
             sudo systemctl restart ai-trading-scheduler.service
-            # give it a moment to bind port 8000
             sleep 5
 
+            # run tests and health check
             pytest --maxfail=1 --disable-warnings -q
             curl -fsS http://localhost:8000/health || exit 1
