@@ -3,6 +3,7 @@ on: [push, pull_request]
 jobs:
   notify-on-failure:
     if: failure()
+    needs: [test, ssh_test]
     runs-on: ubuntu-latest
     steps:
       - name: Notify Slack
