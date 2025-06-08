@@ -3,7 +3,7 @@ name: SSH & run tests
 on: [push]
 
 jobs:
-  ssh-test:
+  ssh_test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -20,10 +20,10 @@ jobs:
             cd ~/ai-trading-bot
 
             # create & activate venv if needed
-            if [ ! -d venv ]; then
-              python3 -m venv venv
+            if [ ! -d ~/ai-trading-bot/venv ]; then
+              python3 -m venv ~/ai-trading-bot/venv
             fi
-            source venv/bin/activate
+            source ~/ai-trading-bot/venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
 
@@ -33,4 +33,4 @@ jobs:
             sleep 5
 
             pytest --maxfail=1 --disable-warnings -q
-            curl -fsS http://localhost:8000/health
+            curl -fsS http://localhost:8000/health || exit 1
