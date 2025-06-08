@@ -10,10 +10,12 @@ jobs:
     if: failure()
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
       - name: Notify Slack
-        uses: slackapi/slack-github-action@v1.27.0
+        uses: ./.github/actions/slack-notify
         with:
           payload: |
-            {"text": ":x: Lint or tests failed on `${{ github.workflow }}` (`${{ github.ref }}`). See <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>."}
+            { "text": ":x: CI failed for ${{ github.workflow }} – ${{ github.run_number }}" }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

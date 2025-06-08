@@ -9,45 +9,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  prepare:
+  build-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
         with:
           python-version: '3.12'
-      - name: Cache pip
-        uses: actions/cache@v3
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Install dev dependencies
-        run: pip install black flake8 pytest
-
-  lint:
-    needs: prepare
-    runs-on: ubuntu-latest
-    steps:
-      - run: black .
-      - run: black --check .
-        continue-on-error: true
-      - run: flake8 .
-
-  test:
-    needs: prepare
-    runs-on: ubuntu-latest
-    steps:
-      - run: pytest --maxfail=1 --disable-warnings -q
+        run: pip install -r requirements.txt
+      - name: Lint with Black
+        run: black --check .
+      - name: Lint with Flake8
+        run: flake8 .
+      - name: Test with pytest
+        run: pytest --maxfail=1 --disable-warnings -q
 
   notify:
     if: failure()
-    needs: [lint, test]
+    needs: build-and-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
