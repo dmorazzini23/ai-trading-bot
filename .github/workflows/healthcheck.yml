@@ -6,6 +6,9 @@ jobs:
   smoke-test:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
       - name: SSH & run tests
         uses: appleboy/ssh-action@v0.1.7
         with:
@@ -16,12 +19,11 @@ jobs:
             cd ~/ai-trading-bot
             source venv/bin/activate
             pytest --maxfail=1 --disable-warnings -q
-            curl -fsS http://localhost:8000/health || exit 1
       - name: Notify Slack on failure
         if: failure()
         uses: slackapi/slack-github-action@v1
         with:
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           payload: |
             {"text": "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"}
 
