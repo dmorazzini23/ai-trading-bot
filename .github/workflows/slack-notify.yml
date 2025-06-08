@@ -1,0 +1,16 @@
+on: [push, pull_request]
+
+jobs:
+  notify-on-failure:
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Slack
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": ":x: Build or tests failed in *${{ github.repo }}* on branch *${{ github.ref_name }}* (<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|view run>)"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
