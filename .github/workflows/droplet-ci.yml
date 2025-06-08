@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install dependencies
@@ -39,7 +39,7 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Install dependencies
@@ -50,6 +50,7 @@ jobs:
       - name: Archive bot for transfer
         run: tar czf bot-dist.tar.gz .
       - name: Copy archive to droplet
+        if: ${{ secrets.DROPLET_HOST != '' }}
         uses: appleboy/scp-action@v0.1.0
         with:
           host: ${{ secrets.DROPLET_HOST }}
@@ -58,6 +59,7 @@ jobs:
           source: "bot-dist.tar.gz"
           target: "~/bot-dist.tar.gz"
       - name: SSH & deploy
+        if: ${{ secrets.DROPLET_HOST != '' }}
         uses: appleboy/ssh-action@v1.2.2
         with:
           host: ${{ secrets.DROPLET_HOST }}
@@ -77,6 +79,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: SSH & run health-check script
+        if: ${{ secrets.DROPLET_HOST != '' }}
         uses: appleboy/ssh-action@v1.2.2
         with:
           host: ${{ secrets.DROPLET_HOST }}
