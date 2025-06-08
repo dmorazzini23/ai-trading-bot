@@ -55,7 +55,7 @@ jobs:
       - name: Archive bot for transfer
         run: tar czf bot-dist.tar.gz .
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: bot-dist
           path: bot-dist.tar.gz
