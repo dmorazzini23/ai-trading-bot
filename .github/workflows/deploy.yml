@@ -21,13 +21,24 @@ jobs:
       - run: black --check .
       - run: flake8 . --exclude venv,.venv
       - run: pytest --maxfail=1 --disable-warnings -q
-      - name: Sync to Droplet & restart
+      - name: Create archive
+        run: tar czf bot.tar.gz .
+      - name: Copy to Droplet
+        uses: appleboy/scp-action@v0.1.0
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          source: "bot.tar.gz"
+          target: "~/bot.tar.gz"
+      - name: Deploy on Droplet
         uses: appleboy/ssh-action@v1.2.2
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
-            cd ~/ai-trading-bot
-            git pull origin main
+            mkdir -p ~/ai-trading-bot
+            tar xzf ~/bot.tar.gz -C ~/ai-trading-bot --strip-components=1
+            rm ~/bot.tar.gz
             sudo systemctl restart ai-trading-scheduler.service

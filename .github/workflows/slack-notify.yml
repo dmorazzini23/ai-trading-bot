@@ -19,9 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Notify Slack
-        uses: slackapi/slack-github-action@v2.1.0
+        uses: ./.github/actions/slack-notify
         with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          payload: |
-            { "text": ":x: Workflow `${{ github.event.workflow_run.name }}` failed (<${{ github.event.workflow_run.html_url }}|details>)" }
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: ":x: Workflow `${{ github.event.workflow_run.name }}` failed (<${{ github.event.workflow_run.html_url }}|details>)"
 

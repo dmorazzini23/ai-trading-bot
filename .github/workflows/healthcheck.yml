@@ -20,11 +20,4 @@ jobs:
             systemctl is-active --quiet ai-trading-scheduler
             source venv/bin/activate
             pytest --maxfail=1 --disable-warnings -q
-      - name: Notify Slack on failure
-        if: failure()
-        uses: slackapi/slack-github-action@v2.1.0
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          payload: |
-            {"text": "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"}
 

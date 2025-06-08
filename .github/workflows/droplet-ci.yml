@@ -30,13 +30,6 @@ jobs:
       - run: black --check .
       - run: flake8 . --exclude venv,.venv
       - run: pytest --maxfail=1 --disable-warnings -q
-      - name: Notify Slack on failure
-        if: failure()
-        uses: slackapi/slack-github-action@v2.1.0
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          payload: |
-            {"text": "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"}
 
   deploy-to-droplet:
     name: Deploy to Droplet
@@ -56,11 +49,6 @@ jobs:
           pip install -U black flake8 pytest
       - name: Archive bot for transfer
         run: tar czf bot-dist.tar.gz .
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: bot-dist
-          path: bot-dist.tar.gz
       - name: Copy archive to droplet
         uses: appleboy/scp-action@v0.1.0
         with:
@@ -82,13 +70,6 @@ jobs:
             tar xzf ~/bot-dist.tar.gz -C ~/ai-trading-bot
             rm ~/bot-dist.tar.gz
             systemctl start ai-trading-scheduler
-      - name: Notify Slack on failure
-        if: failure()
-        uses: slackapi/slack-github-action@v2.1.0
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          payload: |
-            {"text": "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"}
 
   nightly-health-check:
     name: Nightly Health-Check & Auto-Refactorer
@@ -121,11 +102,4 @@ jobs:
             The nightly health-check detected new exceptions or test failures.
             This PR applies function-level refactor suggestions from ChatGPT.
           branch: refactor/health-${{ github.run_id }}
-      - name: Notify Slack on failure
-        if: failure()
-        uses: slackapi/slack-github-action@v2.1.0
-        with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          payload: |
-            {"text": "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"}
 
