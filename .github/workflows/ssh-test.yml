@@ -20,10 +20,10 @@ jobs:
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
             cd $GITHUB_WORKSPACE
-            if [ ! -d venv ]; then python3 -m venv venv; fi
+            python3 -m venv venv
             source venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
-            pytest --maxfail=1 --disable-warnings -q
-            curl -fsS http://localhost:8000/health || true
+            pytest
+            curl http://localhost:8000/health
 
