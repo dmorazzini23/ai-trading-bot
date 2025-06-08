@@ -21,6 +21,7 @@ jobs:
         run: |
           ssh -i "${{ secrets.DROPLET_SSH_KEY }}" ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }} << 'EOF'
           cd ~/ai-trading-bot
+          source venv/bin/activate
           pip install -r requirements.txt
           EOF
 
