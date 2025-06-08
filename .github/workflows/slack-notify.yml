@@ -8,18 +8,12 @@ on:
 jobs:
   notify-on-failure:
     if: failure()
-    needs: [ ssh-test ]   # match the job ID exactly from ssh-test.yml
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
       - name: Notify Slack
-        uses: slackapi/slack-github-action@v1
+        uses: slackapi/slack-github-action@v1.27.0
         with:
           payload: |
-            {
-              "text": ":x: Build or tests failed in *<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|view run>*"
-            }
+            {"text": ":x: Lint or tests failed on `${{ github.workflow }}` (`${{ github.ref }}`). See <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>."}
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
