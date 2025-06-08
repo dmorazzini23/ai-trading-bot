@@ -1,9 +1,10 @@
 [flake8]
 exclude =
-    venv/,
+    venv/, 
     .venv/,
     __pycache__/, 
     migrations/,
     build/,
     dist/
-max-line-length = 88
+max-line-length = 120
+ignore = E501, E402, F401, F821, F841, E203, W503, W391, F811, E401

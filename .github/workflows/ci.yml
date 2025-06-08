@@ -35,9 +35,10 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest
+        run: pip install --upgrade pip && pip install -r requirements.txt
+      - name: Check formatting with Black
+        run: black --check .
+      - name: Check style with Flake8
+        run: flake8 .
       - name: Run pytest
         run: pytest --maxfail=1 --disable-warnings -q

@@ -12,7 +12,7 @@ import json
 import re
 import time
 import time as pytime
-import pathlib
+
 import random
 import signal
 import sys
@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 from typing import Optional, Tuple, Dict, List, Any, Sequence
 from threading import Semaphore, Lock, Thread
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from collections import deque
 
@@ -42,6 +42,8 @@ from bs4 import BeautifulSoup
 from flask import Flask
 import schedule
 import portalocker
+import yfinance as yf
+from yfinance import YFRateLimitError
 
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
@@ -85,7 +87,6 @@ RUN_HEALTHCHECK = config.RUN_HEALTHCHECK
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from prometheus_client import start_http_server, Counter, Gauge, Histogram
-import finnhub
 from finnhub import FinnhubAPIException
 import pybreaker
 from trade_execution import ExecutionEngine
@@ -94,7 +95,6 @@ from data_fetcher import (
     finnhub_client,
     DataFetchError,
     get_minute_df,
-    get_daily_df,
 )
 from strategy_allocator import StrategyAllocator
 from risk_engine import RiskEngine
@@ -481,7 +481,6 @@ def asset_class_for(symbol: str) -> str:
 
 def compute_spy_vol_stats(ctx: "BotContext") -> None:
     """Compute daily ATR mean/std on SPY for the past 1 year."""
-    global _VOL_STATS
     today = date.today()
     with vol_lock:
         if _VOL_STATS["last_update"] == today:
@@ -3199,7 +3198,7 @@ def load_model(path: str = MODEL_PATH):
 
 
 def online_update(symbol: str, X_new, y_new) -> None:
-    global updates_halted, rolling_losses
+    global updates_halted
     y_new = np.clip(y_new, -0.05, 0.05)
     if updates_halted:
         return
@@ -3813,7 +3812,7 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
 
 def daily_reset() -> None:
     """Reset daily counters and in-memory slippage logs."""
-    global _slippage_log, _LOSS_STREAK
+    global _LOSS_STREAK
     _slippage_log.clear()
     _LOSS_STREAK = 0
     logger.info("DAILY_STATE_RESET")
@@ -3842,7 +3841,7 @@ def _current_drawdown() -> float:
 
 
 def update_bot_mode() -> None:
-    global mode_obj, params, ctx
+    global mode_obj
     avg_r = _average_reward()
     dd = _current_drawdown()
     regime = CURRENT_REGIME
@@ -4028,7 +4027,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 "batch_mse": batch_mse,
             }
         )
-        global updates_halted, rolling_losses
+        global updates_halted
         updates_halted = False
         rolling_losses.clear()
 
@@ -4089,7 +4088,7 @@ def run_all_trades_worker(model) -> None:
     guards against overlapping runs and ensures the market is open before
     proceeding.
     """
-    global _last_fh_prefetch_date, _running
+    global _running
     if _running:
         logger.warning("RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
