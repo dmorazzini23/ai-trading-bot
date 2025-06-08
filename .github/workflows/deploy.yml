@@ -10,37 +10,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v4
         with:
-          python-version: '3.12'
+          python-version: '3.11'
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
           pip install -U black flake8 pytest
+      - run: black .
       - run: black --check .
       - run: flake8 . --exclude venv,.venv
       - run: pytest --maxfail=1 --disable-warnings -q
       - name: Create archive
         run: tar czf bot.tar.gz .
-        - name: Copy to Droplet
-          if: ${{ secrets.DROPLET_HOST != '' }}
-          uses: appleboy/scp-action@v0.1.0
-          with:
-            host: ${{ secrets.DROPLET_HOST }}
-            username: ${{ secrets.DROPLET_USER }}
-            key: ${{ secrets.DROPLET_SSH_KEY }}
-            source: "bot.tar.gz"
-            target: "~/bot.tar.gz"
-        - name: Deploy on Droplet
-          if: ${{ secrets.DROPLET_HOST != '' }}
-          uses: appleboy/ssh-action@v1.2.2
-          with:
-            host: ${{ secrets.DROPLET_HOST }}
-            username: ${{ secrets.DROPLET_USER }}
-            key: ${{ secrets.DROPLET_SSH_KEY }}
-            script: |
-              mkdir -p ~/ai-trading-bot
-              tar xzf ~/bot.tar.gz -C ~/ai-trading-bot --strip-components=1
-              rm ~/bot.tar.gz
-              sudo systemctl restart ai-trading-scheduler.service
+      - name: Copy to Droplet
+        if: ${{ secrets.DROPLET_HOST != '' }}
+        uses: appleboy/scp-action@v0.1.0
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          source: "bot.tar.gz"
+          target: "~/bot.tar.gz"
+      - name: Deploy on Droplet
+        if: ${{ secrets.DROPLET_HOST != '' }}
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script: |
+            mkdir -p ~/ai-trading-bot
+            tar xzf ~/bot.tar.gz -C ~/ai-trading-bot --strip-components=1
+            rm ~/bot.tar.gz
+            sudo systemctl restart ai-trading-scheduler.service

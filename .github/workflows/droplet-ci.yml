@@ -19,14 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v4
         with:
-          python-version: '3.12'
+          python-version: '3.11'
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
           pip install -U black flake8 pytest
+      - run: black .
       - run: black --check .
       - run: flake8 . --exclude venv,.venv
       - run: pytest --maxfail=1 --disable-warnings -q
@@ -39,14 +40,16 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v4
         with:
-          python-version: '3.12'
+          python-version: '3.11'
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
           pip install -U black flake8 pytest
+      - run: black .
+      - run: black --check .
       - name: Archive bot for transfer
         run: tar czf bot-dist.tar.gz .
       - name: Copy archive to droplet
@@ -60,7 +63,7 @@ jobs:
           target: "~/bot-dist.tar.gz"
       - name: SSH & deploy
         if: ${{ secrets.DROPLET_HOST != '' }}
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
@@ -80,7 +83,7 @@ jobs:
     steps:
       - name: SSH & run health-check script
         if: ${{ secrets.DROPLET_HOST != '' }}
-        uses: appleboy/ssh-action@v1.2.2
+        uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
