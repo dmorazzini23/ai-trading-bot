@@ -1,5 +1,3 @@
-mkdir -p scripts
-cat > scripts/fetch_failed_workflow_logs.py << 'EOF'
 #!/usr/bin/env python3
 """Download logs for recent failed GitHub Actions runs and report failing steps."""
 import argparse, io, os, zipfile
