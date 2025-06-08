@@ -9,31 +9,20 @@ jobs:
   ssh-test:
     runs-on: ubuntu-latest
     steps:
-      - name: SSH & prepare droplet
-        uses: appleboy/ssh-action@v0.1.7
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          port: 22
-          script: |
-            # go to project root
-            cd ~/ai-trading-bot
+      - name: Create & activate venv
+        run: |
+          ssh -i "${{ secrets.DROPLET_SSH_KEY }}" ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }} << 'EOF'
+          cd ~/ai-trading-bot
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+          EOF
 
-            # ensure venv exists
-            if [ ! -d venv ]; then
-              python3 -m venv venv
-            fi
-
-            # activate and install deps
-            source venv/bin/activate
-            pip install --upgrade pip
-            pip install -r requirements.txt
-
-            # restart service and give it time to start
-            sudo systemctl restart ai-trading-scheduler.service
-            sleep 5
-
-            # run tests and health check
-            pytest --maxfail=1 --disable-warnings -q
-            curl -fsS http://localhost:8000/health || exit 1
+      - name: Run tests & health-check
+        run: |
+          ssh -i "${{ secrets.DROPLET_SSH_KEY }}" ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }} << 'EOF'
+          cd ~/ai-trading-bot
+          source venv/bin/activate
+          pytest --maxfail=1 --disable-warnings -q
+          curl -fsS http://localhost:8000/health || exit 1
+          EOF

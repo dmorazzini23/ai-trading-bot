@@ -3,22 +3,25 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 
-LOG_FILE = '/var/log/ai-trading-scheduler.log'
-REPORT = 'health_report.txt'
+LOG_FILE = "/var/log/ai-trading-scheduler.log"
+REPORT = "health_report.txt"
+
 
 def main():
     # 1) Check for uncaught exceptions in last 24h
-    since = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+    since = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
     grep = subprocess.run(
-        ['grep', '-R', 'Traceback', '--include', '*.log', LOG_FILE],
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+        ["grep", "-R", "Traceback", "--include", "*.log", LOG_FILE],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
     )
     errors = grep.stdout.decode().strip()
 
     # 2) Run pytest
     test = subprocess.run(
-        ['pytest', '--maxfail=1', '--disable-warnings', '-q'],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+        ["pytest", "--maxfail=1", "--disable-warnings", "-q"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
     test_out = test.stdout.decode()
 
@@ -29,12 +32,13 @@ def main():
         report.append("===== Pytest Failures =====\n")
         report.append(test_out)
 
-    with open(REPORT, 'w') as f:
-        f.write('\n'.join(report))
+    with open(REPORT, "w") as f:
+        f.write("\n".join(report))
 
     # if anything went wrong, exit non-zero
     if errors or test.returncode != 0:
         sys.exit(1)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
