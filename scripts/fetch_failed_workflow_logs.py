@@ -64,5 +64,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-EOF
-chmod +x scripts/fetch_failed_workflow_logs.py
+
