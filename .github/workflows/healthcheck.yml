@@ -10,18 +10,19 @@ jobs:
         with:
           python-version: '3.12'
       - name: SSH & run tests
-        uses: appleboy/ssh-action@v0.1.7
+        uses: appleboy/ssh-action@v1.2.2
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
             cd ~/ai-trading-bot
+            systemctl is-active --quiet ai-trading-scheduler
             source venv/bin/activate
             pytest --maxfail=1 --disable-warnings -q
       - name: Notify Slack on failure
         if: failure()
-        uses: slackapi/slack-github-action@v1
+        uses: slackapi/slack-github-action@v2.1.0
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
           payload: |

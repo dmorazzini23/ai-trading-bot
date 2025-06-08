@@ -14,7 +14,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install mkdocs mkdocs-material
+          pip install -U mkdocs mkdocs-material
       - run: mkdocs build
         if: ${{ hashFiles('mkdocs.yml') != '' }}
       - name: Deploy to GitHub Pages

@@ -20,7 +20,7 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
       - name: SSH & Run
-        uses: appleboy/ssh-action@v0.1.7
+        uses: appleboy/ssh-action@v1.2.2
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
