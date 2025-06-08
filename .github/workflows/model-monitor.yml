@@ -14,8 +14,11 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
       - name: Run backtest & record metrics
         run: |
           python scripts/backtest.py --output metrics.json --plot metrics.png

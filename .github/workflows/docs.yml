@@ -9,10 +9,14 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - run: pip install mkdocs mkdocs-material
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install mkdocs mkdocs-material
       - run: mkdocs build
+        if: ${{ hashFiles('mkdocs.yml') != '' }}
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
