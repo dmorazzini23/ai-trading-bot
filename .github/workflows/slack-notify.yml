@@ -4,18 +4,21 @@ on:
   push:
     branches: [ main ]
   pull_request:
+    branches: [ main ]
 
 jobs:
-  notify-on-failure:
+  notify:
     if: failure()
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
-      - name: Notify Slack
-        uses: ./.github/actions/slack-notify
+      - uses: actions/checkout@v3
+      - name: Send failure notification to Slack
+        uses: slackapi/slack-github-action@v1.26.0
         with:
           payload: |
-            { "text": ":x: CI failed for ${{ github.workflow }} – ${{ github.run_number }}" }
+            {
+              "text": ":x: *${{ github.workflow }}* failed on `${{ github.ref }}` by `${{ github.actor }}`\n<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
+            }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+

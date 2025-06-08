@@ -1,35 +1,28 @@
-name: SSH & run tests
+name: SSH & Run Tests
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  ssh-test:
+  droplet-test:
+    name: SSH to Droplet & Run Tests
     runs-on: ubuntu-latest
     steps:
-      - name: Create & activate venv
-        run: |
-          ssh -i "${{ secrets.DROPLET_SSH_KEY }}" ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }} << 'EOF'
-          cd ~/ai-trading-bot
-          python3 -m venv venv
-          source venv/bin/activate
-          EOF
+      - uses: actions/checkout@v3
+      - name: SSH & Run
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script: |
+            cd ~/ai-trading-bot
+            source venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            pytest --maxfail=1 --disable-warnings -q
+            curl -fsS http://localhost:8000/health || exit 1
 
-      - name: Install dependencies on droplet
-        run: |
-          ssh -i "${{ secrets.DROPLET_SSH_KEY }}" ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }} << 'EOF'
-          cd ~/ai-trading-bot
-          source venv/bin/activate
-          pip install -r requirements.txt
-          EOF
-
-      - name: Run tests & health-check
-        run: |
-          ssh -i "${{ secrets.DROPLET_SSH_KEY }}" ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }} << 'EOF'
-          cd ~/ai-trading-bot
-          source venv/bin/activate
-          pytest --maxfail=1 --disable-warnings -q
-          curl -fsS http://localhost:8000/health || exit 1
-          EOF
