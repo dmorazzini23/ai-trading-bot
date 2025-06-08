@@ -18,7 +18,8 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -U black flake8
       - name: Check formatting with Black
         run: black --check .
       - name: Run Flake8
-        run: flake8 .
+        run: flake8 . --exclude venv,.venv

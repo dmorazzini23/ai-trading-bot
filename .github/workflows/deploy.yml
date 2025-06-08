@@ -17,11 +17,12 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
+          pip install -U black flake8 pytest
       - run: black --check .
-      - run: flake8 .
+      - run: flake8 . --exclude venv,.venv
       - run: pytest --maxfail=1 --disable-warnings -q
       - name: Sync to Droplet & restart
-        uses: appleboy/ssh-action@v0.1.7
+        uses: appleboy/ssh-action@v1.2.2
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}

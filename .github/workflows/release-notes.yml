@@ -14,7 +14,7 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body: |
             <!-- codex: draft release notes -->
-            # Release ${{ github.ref_name }}
+            # Release ${{ github.event.pull_request.head.ref }}
             ## Changelog
             <!-- Codex will fill in summary of changes -->
       - name: Update CHANGELOG.md
@@ -25,4 +25,4 @@ jobs:
         with:
           author_name: "github-actions"
           author_email: "actions@github.com"
-          message: "chore: update CHANGELOG for ${{ github.ref_name }}"
+          message: "chore: update CHANGELOG for ${{ github.event.pull_request.head.ref }}"

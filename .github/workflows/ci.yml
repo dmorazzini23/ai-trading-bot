@@ -25,12 +25,12 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install black flake8 pytest
+          pip install -U black flake8 pytest
       - name: Run Black autoformat
         run: black .
       - name: Check formatting with Black
         run: black --check .
       - name: Run Flake8
-        run: flake8 . --ignore=E402,F401,F821,F841 --max-line-length=100
+        run: flake8 . --ignore=E402,F401,F821,F841 --max-line-length=100 --exclude venv,.venv
       - name: Run pytest
         run: pytest --maxfail=1 --disable-warnings -q
