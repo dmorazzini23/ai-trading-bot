@@ -1,21 +1,27 @@
 name: Notify Slack on Failure
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_run:
+    workflows:
+      - CI
+      - Droplet CI & Nightly Health-Check
+      - Test
+      - Coverage
+      - Nightly Tests
+      - Security Scan
+      - Model Performance Monitor
+    types:
+      - completed
 
 jobs:
   notify:
-    if: failure()
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
       - name: Notify Slack
         uses: slackapi/slack-github-action@v1
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           payload: |
-            { "text": ":x: Build or tests failed in *${{ github.workflow }}* (<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>)" }
+            { "text": ":x: Workflow `${{ github.event.workflow_run.name }}` failed (<${{ github.event.workflow_run.html_url }}|details>)" }
 

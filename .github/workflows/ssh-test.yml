@@ -19,7 +19,7 @@ jobs:
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
-            cd $GITHUB_WORKSPACE
+            cd ~/ai-trading-bot
             python3 -m venv venv
             source venv/bin/activate
             pip install --upgrade pip

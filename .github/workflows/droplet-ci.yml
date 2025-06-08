@@ -28,10 +28,11 @@ jobs:
       - run: pytest --maxfail=1 --disable-warnings -q
       - name: Notify Slack on failure
         if: failure()
-        uses: ./.github/actions/slack-notify
+        uses: slackapi/slack-github-action@v1
         with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          message: "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {"text": "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"}
 
   deploy-to-droplet:
     name: Deploy to Droplet
@@ -52,6 +53,14 @@ jobs:
         with:
           name: bot-dist
           path: bot-dist.tar.gz
+      - name: Copy archive to droplet
+        uses: appleboy/scp-action@v0.1.3
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          source: "bot-dist.tar.gz"
+          target: "~/bot-dist.tar.gz"
       - name: SSH & deploy
         uses: appleboy/ssh-action@v0.1.6
         with:
@@ -62,15 +71,16 @@ jobs:
             systemctl stop ai-trading-scheduler
             rm -rf ~/ai-trading-bot
             mkdir ~/ai-trading-bot
-            cat > bot-dist.tar.gz
-            tar xzf bot-dist.tar.gz -C ~/ai-trading-bot
+            tar xzf ~/bot-dist.tar.gz -C ~/ai-trading-bot
+            rm ~/bot-dist.tar.gz
             systemctl start ai-trading-scheduler
       - name: Notify Slack on failure
         if: failure()
-        uses: ./.github/actions/slack-notify
+        uses: slackapi/slack-github-action@v1
         with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          message: "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {"text": "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"}
 
   nightly-health-check:
     name: Nightly Health-Check & Auto-Refactorer
@@ -86,11 +96,6 @@ jobs:
           script: |
             cd ~/ai-trading-bot
             python3 scripts/health_check.py > health_report.txt || exit 1
-      - name: Download health report
-        uses: actions/download-artifact@v3
-        with:
-          name: bot-dist
-          path: ./reports
       - name: Auto-refactor suggestions commit
         if: failure()
         uses: stefanzweifel/git-auto-commit-action@v4
@@ -106,11 +111,12 @@ jobs:
           body: |
             The nightly health-check detected new exceptions or test failures.
             This PR applies function-level refactor suggestions from ChatGPT.
-          branch: refactor/health-`date +%F`
+          branch: refactor/health-${{ github.run_id }}
       - name: Notify Slack on failure
         if: failure()
-        uses: ./.github/actions/slack-notify
+        uses: slackapi/slack-github-action@v1
         with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          message: "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {"text": "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"}
 

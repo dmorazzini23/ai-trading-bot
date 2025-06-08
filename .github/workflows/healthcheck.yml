@@ -19,8 +19,9 @@ jobs:
             curl -fsS http://localhost:8000/health || exit 1
       - name: Notify Slack on failure
         if: failure()
-        uses: ./.github/actions/slack-notify
+        uses: slackapi/slack-github-action@v1
         with:
-          webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          message: "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          payload: |
+            {"text": "⚠️ *${{ github.workflow }}* failed in `${{ github.ref_name }}` (${{ github.run_number }}) <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>"}
 
