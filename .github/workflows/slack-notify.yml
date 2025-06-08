@@ -1,17 +1,25 @@
-on: [push, pull_request]
+name: Notify Slack on Failure
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
 
 jobs:
   notify-on-failure:
     if: failure()
-    needs: [test, ssh_test]
+    needs: [ ssh-test ]   # match the job ID exactly from ssh-test.yml
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
       - name: Notify Slack
         uses: slackapi/slack-github-action@v1
         with:
           payload: |
             {
-              "text": ":x: Build or tests failed in *${{ github.repo }}* on branch *${{ github.ref_name }}* (<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|view run>)"
+              "text": ":x: Build or tests failed in *<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|view run>*"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
