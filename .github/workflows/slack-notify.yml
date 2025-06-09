@@ -18,6 +18,8 @@ on:
 
 jobs:
   notify:
+    permissions:
+      contents: read
     if: ${{ github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
     steps:
@@ -29,6 +31,6 @@ jobs:
           message: |
             :x: *${{ github.workflow }}* #${{ github.run_number }}
             Status: ${{ job.status }}
-            <${{ github.event.workflow_run.html_url }}|View details>
-          status: ${{ job.status }}
+            <${{ github.event.workflow_run.html_url }}|View run details>
+          status:  ${{ job.status }}
           retries: 3
