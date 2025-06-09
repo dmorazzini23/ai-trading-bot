@@ -12,14 +12,11 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -U mkdocs mkdocs-material
-      - run: mkdocs build
-        if: ${{ hashFiles('mkdocs.yml') != '' }}
-      - name: Deploy to GitHub Pages
-        if: ${{ hashFiles('mkdocs.yml') != '' }}
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          publish_dir: ./site
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install MkDocs
+        run: pip install mkdocs mkdocs-material
+      - name: Build docs
+        run: mkdocs build
+      - name: Deploy docs
+        run: mkdocs gh-deploy --force

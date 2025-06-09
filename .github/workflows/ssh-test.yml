@@ -17,7 +17,7 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: SSH & Run
         if: ${{ secrets.DROPLET_HOST != '' }}
@@ -28,10 +28,7 @@ jobs:
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
             cd ~/ai-trading-bot
-            python3 -m venv venv
             source venv/bin/activate
-            pip install -r requirements-dev.txt
-            pip install --upgrade pip
-            pip install -r requirements.txt
+            pip install --upgrade pip && pip install -r requirements.txt
             pytest
 

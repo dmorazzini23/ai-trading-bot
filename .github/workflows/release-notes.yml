@@ -1,18 +1,15 @@
 name: Draft Release Notes
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
 jobs:
   draft:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Update CHANGELOG.md
-        run: |
-          echo "## Release ${{ github.event.release.tag_name }}" >> CHANGELOG.md
-          echo "Changelog drafted" >> CHANGELOG.md
-      - uses: EndBug/add-and-commit@v9
+      - name: Post release notes
+        uses: some/release-notes-action@v1
         with:
-          author_name: "github-actions"
-          author_email: "actions@github.com"
-          message: "chore: update CHANGELOG for ${{ github.event.release.tag_name }}"
+          pr-number: ${{ github.event.workflow_run.pull_requests[0].number }}
+          body: Automated release notes

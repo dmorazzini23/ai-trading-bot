@@ -14,7 +14,7 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install coverage[toml] codecov pytest-cov
       - name: Run tests with coverage

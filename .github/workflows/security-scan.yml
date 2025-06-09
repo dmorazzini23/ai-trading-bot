@@ -7,11 +7,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      - run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sudo sh -s -- -b /usr/local/bin
-      - name: Run Trivy vulnerability scan
-        run: trivy fs --exit-code 1 --severity CRITICAL,HIGH .
+      - name: Install Trivy
+        run: sudo apt-get update && sudo apt-get install -y trivy
+      - name: Run Trivy scan
+        run: trivy fs --exit-code 1 --severity HIGH,CRITICAL .
