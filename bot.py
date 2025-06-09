@@ -1761,7 +1761,7 @@ def get_calendar_safe(symbol: str) -> pd.DataFrame:
         return _calendar_cache[symbol]
     try:
         cal = yf.Ticker(symbol).calendar
-    except HTTPError as e:
+    except HTTPError:
         logger.warning(f"[Events] Rate limited for {symbol}; skipping events.")
         cal = pd.DataFrame()
     except Exception as e:
@@ -2459,7 +2459,7 @@ def pov_submit(
             pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
             continue
         try:
-            od = submit_order(ctx, symbol, slice_qty, side)
+            submit_order(ctx, symbol, slice_qty, side)
         except Exception as e:
             logger.exception(
                 f"[pov_submit] submit_order failed on slice, aborting: {e}",
@@ -2523,8 +2523,6 @@ def calculate_entry_size(
     ctx: BotContext, symbol: str, price: float, atr: float, win_prob: float
 ) -> int:
     cash = float(ctx.api.get_account().cash)
-    df_daily = ctx.data_fetcher.get_daily_df(ctx, symbol)
-    avg_vol = df_daily["volume"].tail(20).mean() if df_daily is not None else 0
     cap_pct = ctx.params.get("CAPITAL_CAP", CAPITAL_CAP)
     cap_sz = int((cash * cap_pct) / price) if price > 0 else 0
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)

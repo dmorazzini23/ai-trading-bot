@@ -4,7 +4,8 @@ import warnings
 import os
 
 import pandas as pd
-from datetime import datetime, time
+from datetime import datetime
+from datetime import time
 
 try:
     from tzlocal import get_localzone

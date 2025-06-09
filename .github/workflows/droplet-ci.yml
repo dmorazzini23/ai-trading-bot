@@ -69,7 +69,6 @@ jobs:
             mkdir ~/ai-trading-bot
             tar xzf ~/ai-trading-bot/bot-dist.tar.gz -C ~/ai-trading-bot
             rm ~/ai-trading-bot/bot-dist.tar.gz
-            source venv/bin/activate
             pip install --upgrade pip && pip install -r requirements.txt
             systemctl start ai-trading-scheduler
 
@@ -92,7 +91,6 @@ jobs:
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
             systemctl is-active --quiet ai-trading-scheduler
-            source venv/bin/activate
             pip install --upgrade pip && pip install -r requirements.txt
             python3 scripts/health_check.py > health_report.txt || exit 1
       - name: Auto-refactor suggestions commit

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
-from typing import Optional, Sequence, Any
+from typing import Any
+from typing import Optional
+from typing import Sequence
 
 import pandas as pd
 import logging

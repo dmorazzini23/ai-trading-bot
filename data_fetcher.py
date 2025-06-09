@@ -1,12 +1,10 @@
 import random
 import time as pytime
-from dataclasses import dataclass
-from datetime import datetime, date, timedelta, timezone
 from collections import deque
-from typing import Optional, Sequence
+from datetime import date
+from datetime import timedelta
 import warnings
 
-import os
 import threading
 from dotenv import load_dotenv
 import config
@@ -41,18 +39,16 @@ logging.basicConfig(level=logging.INFO)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 import pandas as pd
-import numpy as np
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-from alpaca_trade_api.rest import REST, APIError
+from alpaca_trade_api.rest import APIError
 from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
     wait_random,
     retry_if_exception_type,
-    wait_fixed,
     RetryError,
 )
 import finnhub
@@ -267,7 +263,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
 
         return df
 
-    except (APIError, KeyError) as e:
+    except (APIError, KeyError):
         try:
             bars = client.get_bars(
                 symbol,
