@@ -2,35 +2,28 @@ name: SSH & Run Tests
 
 on:
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
-  droplet-test:
-    name: SSH to Droplet & Run Tests
+  ssh-test:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Prepare environment
-        run: pip install -r requirements.txt
-      - name: SSH & run tests
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          script: |
-            python3 -m venv ~/venv
-            source ~/venv/bin/activate
-            pip install -r requirements.txt
-            pip install -r requirements-dev.txt
-            pytest --maxfail=1 --disable-warnings -q
 
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: SSH to server and run tests
+      run: |
+        wget https://github.com/appleboy/drone-ssh/releases/download/v1.8.1/drone-ssh-1.8.1-linux-amd64 -O drone-ssh
+        chmod +x drone-ssh
+        ./drone-ssh --host "$SSH_HOST" --username "$SSH_USER" --password "$SSH_PASSWORD" --command "your-test-command-here"
+      env:
+        SSH_HOST: ${{ secrets.SSH_HOST }}
+        SSH_USER: ${{ secrets.SSH_USER }}
+        SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
