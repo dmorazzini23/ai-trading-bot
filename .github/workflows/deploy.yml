@@ -28,29 +28,37 @@ jobs:
       - name: Check style with Flake8
         run: flake8 . --max-line-length=120 --extend-ignore=E402,E203 --exclude venv,.venv
       - run: pytest --maxfail=1 --disable-warnings -q
-      - name: Create archive
-        run: tar czf bot.tar.gz .
-      - name: Copy to Droplet
-        if: ${{ secrets.DROPLET_HOST != '' }}
-        uses: appleboy/scp-action@v0.1.6
+      - name: Archive bot for transfer
+        run: tar czf bot-dist.tar.gz .
+      - name: Upload artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: bot-dist
+          path: bot-dist.tar.gz
+      - name: Copy bot-dist.tar.gz to droplet
+        uses: appleboy/scp-action@master
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          source: "bot.tar.gz"
-          target: "~/bot.tar.gz"
-      - name: Deploy to DigitalOcean Droplet
-        uses: appleboy/ssh-action@v0.1.7
+          key: ${{ secrets.DROPLET_KEY }}
+          source: "bot-dist.tar.gz"
+          target: "~/ai-trading-bot/bot-dist.tar.gz"
+      - name: SSH & deploy
+        uses: appleboy/ssh-action@master
         with:
-          host:        ${{ secrets.DROPLET_HOST }}
-          username:    ${{ secrets.DROPLET_USER }}
-          key:         ${{ secrets.DROPLET_SSH_KEY }}
-          port:        22
-          known_hosts: '*'
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_KEY }}
           script: |
-            python3 -m venv ~/venv
-            source ~/venv/bin/activate
+            set -e
+            cd ~/ai-trading-bot
+            # recreate virtualenv to avoid system-managed errors
+            rm -rf venv
+            python3 -m venv venv
+            source venv/bin/activate
             pip install --upgrade pip
-            pip install -r requirements.txt
+            pip install bot-dist.tar.gz
             pip install -r requirements-dev.txt
-            ./deploy.sh
+            pytest --maxfail=1 --disable-warnings -q
+            # restart your service
+            sudo systemctl restart ai-trading-scheduler
