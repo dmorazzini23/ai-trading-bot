@@ -1,4 +1,6 @@
 name: Deploy to Droplet
+permissions:
+  contents: read
 on:
   push:
     branches: [ main ]
@@ -37,13 +39,12 @@ jobs:
           source: "bot.tar.gz"
           target: "~/bot.tar.gz"
       - name: Deploy to DigitalOcean Droplet
-        if: ${{ secrets.DROPLET_HOST != '' }}
         uses: appleboy/ssh-action@v0.1.7
         with:
-          host:     ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key:      ${{ secrets.DROPLET_SSH_KEY }}
-          port:     22
+          host:        ${{ secrets.DROPLET_HOST }}
+          username:    ${{ secrets.DROPLET_USER }}
+          key:         ${{ secrets.DROPLET_SSH_KEY }}
+          port:        22
           known_hosts: '*'
           script: |
             python3 -m venv ~/venv
