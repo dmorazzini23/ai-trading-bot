@@ -1,7 +1,7 @@
 name: Notify Slack on Failure
 
 permissions:
-  contents: read
+  contents: write
 
 on:
   workflow_run:
@@ -18,16 +18,13 @@ on:
 
 jobs:
   notify:
-    permissions:
-      contents: read
-    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    if: ${{ failure() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - name: Notify Slack on failure
-        if: ${{ failure() }}
-        uses: slackapi/slack-github-action@v2
+      - uses: slackapi/slack-github-action@v2
         with:
           method: webhook
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
-          text: ':x: Workflow `${{ github.workflow }}` failed (<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>)'
+          text: |
+            :x: Workflow *${{ github.workflow }}* failed
+            <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|See details>
