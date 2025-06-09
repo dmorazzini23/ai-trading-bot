@@ -43,7 +43,7 @@ from flask import Flask
 import schedule
 import portalocker
 import yfinance as yf
-from yfinance import YFRateLimitError
+from requests.exceptions import HTTPError
 
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
@@ -1761,7 +1761,7 @@ def get_calendar_safe(symbol: str) -> pd.DataFrame:
         return _calendar_cache[symbol]
     try:
         cal = yf.Ticker(symbol).calendar
-    except YFRateLimitError:
+    except HTTPError as e:
         logger.warning(f"[Events] Rate limited for {symbol}; skipping events.")
         cal = pd.DataFrame()
     except Exception as e:
