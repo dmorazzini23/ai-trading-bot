@@ -18,15 +18,13 @@ jobs:
     name: Lint & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.11"
-      - run: pip install -r requirements.txt
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -U black flake8 pytest
+        run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - run: black .
       - run: black --check .
       - run: flake8 . --max-line-length=120 --extend-ignore=E402,E203 --exclude venv,.venv
@@ -39,12 +37,13 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Archive bot for transfer
         run: tar czf bot-dist.tar.gz .
       - name: Deploy to droplet via SCP
@@ -79,11 +78,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.11"
-      - run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: SSH & run health-check script
         if: ${{ secrets.DROPLET_HOST != '' }}
         uses: appleboy/ssh-action@v0.1.7
@@ -93,8 +94,6 @@ jobs:
           key:            ${{ secrets.DROPLET_SSH_KEY }}
           port:           22
           script: |
-            python3 -m venv ~/venv
-            source ~/venv/bin/activate
             pip install --upgrade pip
             pip install -r requirements.txt
             pip install -r requirements-dev.txt
