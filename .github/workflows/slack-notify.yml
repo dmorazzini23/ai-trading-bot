@@ -20,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Notify Slack
-        uses: slackapi/slack-github-action@v1
+        uses: slackapi/slack-github-action@v2
         with:
           webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
-          payload: '{"text":"Workflow `${{ github.workflow }}` failed: ${{ github.run_url }}"}'
+          slack-message: ':x: Workflow `${{ github.workflow }}` failed (<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|details>)'
