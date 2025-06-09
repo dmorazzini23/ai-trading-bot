@@ -54,7 +54,7 @@ jobs:
         run: tar czf bot-dist.tar.gz .
       - name: Copy archive to droplet
         if: ${{ secrets.DROPLET_HOST != '' }}
-        uses: appleboy/scp-action@v0.1.6
+        uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}

@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Post release notes
-        uses: some/release-notes-action@v1
+        uses: release-drafter/release-drafter@v5
         with:
           pr-number: ${{ github.event.workflow_run.pull_requests[0].number }}
           body: Automated release notes
