@@ -1,8 +1,4 @@
 [flake8]
-exclude =
-  .venv,
-  venv,
-  __pycache__,
-  .github,
-  docs
-max-line-length = 88
+max-line-length = 120
+extend-ignore = E402,E203
+exclude = venv,.venv

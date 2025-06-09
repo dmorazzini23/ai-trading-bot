@@ -8,8 +8,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Run Trivy scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@v0.13.0
         with:
-          scan-type: fs
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
+          scan-type: filesystem
