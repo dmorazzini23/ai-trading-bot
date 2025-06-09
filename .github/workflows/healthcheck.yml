@@ -6,15 +6,18 @@ on:
     - cron: '0 1 * * *'  # 1 AM UTC daily
 jobs:
   health-check:
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
-      - run: pip install -r requirements.txt
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
