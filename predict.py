@@ -1,7 +1,5 @@
 import argparse
 import os
-import argparse
-import os
 import logging
 import warnings
 import pandas as pd
@@ -9,7 +7,6 @@ import joblib
 import requests
 import json
 from retrain import prepare_indicators
-from utils import get_latest_close
 
 from config import NEWS_API_KEY
 

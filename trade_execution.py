@@ -13,12 +13,16 @@ from tenacity import (
     wait_random,
     retry_if_exception_type,
 )
-from datetime import datetime, timezone
-from typing import Optional, Tuple, Any
+from datetime import datetime
+from datetime import timezone
+from typing import Any
+from typing import Optional
+from typing import Tuple
 
 # Updated Alpaca SDK imports
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
+from alpaca.trading.requests import LimitOrderRequest
+from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.models import Order
 from alpaca_trade_api.rest import APIError

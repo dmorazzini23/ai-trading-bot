@@ -20,7 +20,6 @@ jobs:
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
             systemctl is-active --quiet ai-trading-scheduler
-            source venv/bin/activate
             pip install --upgrade pip && pip install -r requirements.txt
             pytest --maxfail=1 --disable-warnings -q
 

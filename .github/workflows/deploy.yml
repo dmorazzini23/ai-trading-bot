@@ -45,6 +45,5 @@ jobs:
             mkdir -p ~/ai-trading-bot
             tar xzf ~/bot.tar.gz -C ~/ai-trading-bot --strip-components=1
             rm ~/bot.tar.gz
-            source venv/bin/activate
             pip install --upgrade pip && pip install -r requirements.txt
             sudo systemctl restart ai-trading-scheduler.service

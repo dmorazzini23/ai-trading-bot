@@ -47,4 +47,3 @@ def validate_alpaca_credentials() -> None:
             "Missing Alpaca credentials. Please set ALPACA_API_KEY, "
             "ALPACA_SECRET_KEY and ALPACA_BASE_URL in your environment"
         )
-

@@ -1,4 +1,7 @@
 name: Draft Release Notes
+
+permissions:
+  contents: write
 on:
   workflow_run:
     workflows: ["CI"]

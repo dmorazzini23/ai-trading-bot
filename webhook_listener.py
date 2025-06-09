@@ -3,7 +3,9 @@ import os
 import hmac
 import hashlib
 import subprocess
-from flask import Flask, request, abort
+from flask import Flask
+from flask import abort
+from flask import request
 
 from config import WEBHOOK_SECRET, WEBHOOK_PORT
 
