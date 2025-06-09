@@ -7,6 +7,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test-and-deploy:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -38,12 +40,15 @@ jobs:
         if: ${{ secrets.DROPLET_HOST != '' }}
         uses: appleboy/ssh-action@v0.1.7
         with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
+          host:           ${{ secrets.DROPLET_HOST }}
+          username:       ${{ secrets.DROPLET_USER }}
+          key:            ${{ secrets.DROPLET_SSH_KEY }}
+          port:           22
           script: |
-            mkdir -p ~/ai-trading-bot
-            tar xzf ~/bot.tar.gz -C ~/ai-trading-bot --strip-components=1
-            rm ~/bot.tar.gz
-            pip install --upgrade pip && pip install -r requirements.txt
-            sudo systemctl restart ai-trading-scheduler.service
+            python3 -m venv ~/venv
+            source ~/venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install -r requirements-dev.txt
+            # your deploy commands below, e.g.:
+            ./deploy.sh

@@ -77,7 +77,7 @@ jobs:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-python@v5
@@ -88,13 +88,18 @@ jobs:
         if: ${{ secrets.DROPLET_HOST != '' }}
         uses: appleboy/ssh-action@v0.1.7
         with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
+          host:           ${{ secrets.DROPLET_HOST }}
+          username:       ${{ secrets.DROPLET_USER }}
+          key:            ${{ secrets.DROPLET_SSH_KEY }}
+          port:           22
           script: |
-            systemctl is-active --quiet ai-trading-scheduler
-            pip install --upgrade pip && pip install -r requirements.txt
-            python3 scripts/health_check.py > health_report.txt || exit 1
+            python3 -m venv ~/venv
+            source ~/venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install -r requirements-dev.txt
+            # your deploy commands below, e.g.:
+            ./deploy.sh
       - name: Auto-refactor suggestions commit
         if: failure()
         uses: stefanzweifel/git-auto-commit-action@v4
