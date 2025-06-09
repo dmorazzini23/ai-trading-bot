@@ -22,5 +22,6 @@ jobs:
             cd ~/ai-trading-bot
             systemctl is-active --quiet ai-trading-scheduler
             source venv/bin/activate
+            pip install -r requirements-dev.txt
             pytest --maxfail=1 --disable-warnings -q
 

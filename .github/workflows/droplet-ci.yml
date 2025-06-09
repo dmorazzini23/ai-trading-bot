@@ -29,7 +29,7 @@ jobs:
           pip install -U black flake8 pytest
       - run: black .
       - run: black --check .
-      - run: flake8 . --exclude venv,.venv
+      - run: flake8 ai_trading_bot/ --max-line-length=88 --exclude=venv,.env
       - run: pytest --maxfail=1 --disable-warnings -q
 
   deploy-to-droplet:
@@ -91,6 +91,8 @@ jobs:
           script: |
             cd ~/ai-trading-bot
             systemctl is-active --quiet ai-trading-scheduler
+            source venv/bin/activate
+            pip install -r requirements-dev.txt
             python3 scripts/health_check.py > health_report.txt || exit 1
       - name: Auto-refactor suggestions commit
         if: failure()
