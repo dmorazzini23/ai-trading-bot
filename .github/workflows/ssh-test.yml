@@ -25,16 +25,17 @@ jobs:
           python3 -m venv venv
           source venv/bin/activate
           pip install -r requirements.txt
-      - name: SSH & Run
-        if: ${{ secrets.DROPLET_HOST != '' }}
-        uses: appleboy/ssh-action@v0.1.7
+      - name: SSH & run tests
+        uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
             cd ~/ai-trading-bot
+            python3 -m venv venv
             source venv/bin/activate
             pip install -r requirements.txt
-            pytest
+            pip install -r requirements-dev.txt
+            pytest --maxfail=1 --disable-warnings -q
 

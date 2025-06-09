@@ -1,4 +1,6 @@
-site_name: "AI Trading Bot"
-docs_dir: docs
+site_name: AI Trading Bot
+nav:
+  - Home: index.md
 theme:
   name: material
+plugins: []

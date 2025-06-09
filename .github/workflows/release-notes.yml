@@ -8,9 +8,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - name: Generate notes
+      - name: Generate release notes
         id: gen
-        run: echo "::set-output name=notes::$(python scripts/generate_release_notes.py)"
+        run: |
+          # replace with your notes generator
+          echo "::set-output name=notes::$(python scripts/generate_release_notes.py)"
       - name: Post release notes
         uses: peter-evans/create-or-update-comment@v2
         with:
