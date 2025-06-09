@@ -26,4 +26,9 @@ jobs:
         uses: slackapi/slack-github-action@v2
         with:
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
-          message: ':x: Workflow `${{ github.workflow }}` failed (<${{ github.event.workflow_run.html_url }}|details>)'
+          message: |
+            :x: *${{ github.workflow }}* #${{ github.run_number }}
+            Status: ${{ job.status }}
+            <${{ github.event.workflow_run.html_url }}|View details>
+          status: ${{ job.status }}
+          retries: 3
