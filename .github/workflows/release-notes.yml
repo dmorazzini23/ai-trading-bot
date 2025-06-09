@@ -8,8 +8,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+      - name: Generate notes
+        id: gen
+        run: echo "::set-output name=notes::$(python scripts/generate_release_notes.py)"
       - name: Post release notes
-        uses: release-drafter/release-drafter@v5
+        uses: peter-evans/create-or-update-comment@v2
         with:
-          pr-number: ${{ github.event.workflow_run.pull_requests[0].number }}
-          body: Automated release notes
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.workflow_run.pull_requests[0].number }}
+          body: |
+            ## Release Notes
+            ${{ steps.gen.outputs.notes }}
