@@ -15,12 +15,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -r requirements-dev.txt
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Check formatting
+      - name: Install dev dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Check formatting with Black & Flake8
         run: |
           black --check .
           flake8 . --max-line-length=120 --extend-ignore=E402,E203 --exclude venv,.venv
