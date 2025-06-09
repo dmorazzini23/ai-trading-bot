@@ -1,4 +1,6 @@
 name: Nightly Health Check
+permissions:
+  contents: read
 on:
   schedule:
     - cron: '0 1 * * *'  # 1 AM UTC daily
@@ -13,14 +15,19 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            us-east-1
       - name: Deploy to DigitalOcean Droplet
-        if: ${{ secrets.DROPLET_HOST != '' }}
         uses: appleboy/ssh-action@v0.1.7
         with:
-          host:     ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key:      ${{ secrets.DROPLET_SSH_KEY }}
-          port:     22
+          host:        ${{ secrets.DROPLET_HOST }}
+          username:    ${{ secrets.DROPLET_USER }}
+          key:         ${{ secrets.DROPLET_SSH_KEY }}
+          port:        22
           known_hosts: '*'
           script: |
             python3 -m venv ~/venv

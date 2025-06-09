@@ -23,4 +23,4 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body: |
             ## Release Notes
-            <!-- TODO: fill in summary of changes -->
+            <!-- TODO: summarize your changes here -->
