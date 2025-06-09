@@ -22,10 +22,20 @@ jobs:
 
     - name: Install dependencies & run tests
       run: |
+        # remove any old virtual environment
+        rm -rf venv
+
+        # create a fresh venv in workspace
         python3 -m venv venv
         source venv/bin/activate
-        pip install --upgrade pip
-        pip install pandas
-        pip install -r requirements.txt
-        pip install -r requirements-dev.txt
-        pytest --maxfail=1 --disable-warnings -q
+
+        # upgrade pip via the venv Python interpreter
+        python3 -m pip install --upgrade pip
+
+        # install core dependencies
+        python3 -m pip install pandas
+        python3 -m pip install -r requirements.txt
+        python3 -m pip install -r requirements-dev.txt
+
+        # run pytest under the venv interpreter
+        python3 -m pytest --maxfail=1 --disable-warnings -q
