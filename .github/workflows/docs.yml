@@ -12,5 +12,6 @@ jobs:
           python-version: "3.11"
       - name: Install MkDocs
         run: pip install mkdocs mkdocs-material
+      - run: mkdir -p docs
       - name: Build & deploy docs
         run: mkdocs gh-deploy --force

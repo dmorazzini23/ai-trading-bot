@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Install AWS CLI
-        run: sudo apt-get update && sudo apt-get install -y awscli
+        run: pip install awscli --upgrade
       - name: Sync models to S3
         run: aws s3 sync ./models s3://my-bucket/models --delete
         env:

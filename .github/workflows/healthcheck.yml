@@ -19,7 +19,6 @@ jobs:
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
-            cd ~/ai-trading-bot
             systemctl is-active --quiet ai-trading-scheduler
             source venv/bin/activate
             pip install --upgrade pip && pip install -r requirements.txt

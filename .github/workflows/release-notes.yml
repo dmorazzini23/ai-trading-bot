@@ -9,7 +9,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Generate release notes
-        id: gen
+        id: generate_notes
         run: |
           # replace with your notes generator
           echo "::set-output name=notes::$(python scripts/generate_release_notes.py)"
@@ -20,4 +20,4 @@ jobs:
           issue-number: ${{ github.event.workflow_run.pull_requests[0].number }}
           body: |
             ## Release Notes
-            ${{ steps.gen.outputs.notes }}
+            ${{ steps.generate_notes.outputs.notes }}
