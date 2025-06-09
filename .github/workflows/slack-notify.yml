@@ -27,10 +27,10 @@ jobs:
       - name: Notify Slack
         uses: slackapi/slack-github-action@v2
         with:
+          method:  webhook
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
           message: |
-            :x: *${{ github.workflow }}* #${{ github.run_number }}
-            Status: ${{ job.status }}
-            <${{ github.event.workflow_run.html_url }}|View run details>
-          status:  ${{ job.status }}
+            :x: *${{ github.workflow }}* run #${{ github.run_number }} failed  
+            Status: ${{ job.status }}  
+            <${{ github.event.workflow_run.html_url }}|View details>
           retries: 3
