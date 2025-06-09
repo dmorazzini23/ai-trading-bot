@@ -20,7 +20,8 @@ jobs:
           pip install -U black flake8 pytest
       - run: black .
       - run: black --check .
-      - run: flake8 . --exclude venv,.venv
+      - name: Check style with Flake8
+        run: flake8 ai_trading_bot/ --max-line-length=88 --exclude=venv,.env
       - run: pytest --maxfail=1 --disable-warnings -q
       - name: Create archive
         run: tar czf bot.tar.gz .

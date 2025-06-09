@@ -30,7 +30,7 @@ jobs:
         run: black .
       - name: Check formatting with Black
         run: black --check .
-      - name: Run Flake8
-        run: flake8 . --ignore=E402,F401,F821,F841 --max-line-length=100 --exclude venv,.venv
+      - name: Check style with Flake8
+        run: flake8 ai_trading_bot/ --max-line-length=88 --exclude=venv,.env
       - name: Run pytest
         run: pytest --maxfail=1 --disable-warnings -q

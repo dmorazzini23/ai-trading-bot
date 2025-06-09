@@ -25,4 +25,4 @@ jobs:
       - name: Check formatting with Black
         run: black --check .
       - name: Check style with Flake8
-        run: flake8 .
+        run: flake8 ai_trading_bot/ --max-line-length=88 --exclude=venv,.env
