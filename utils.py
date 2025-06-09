@@ -9,7 +9,8 @@ from datetime import datetime, time
 try:
     from tzlocal import get_localzone
 except ImportError:  # pragma: no cover - optional dependency
-    import logging, pytz
+    import logging
+    import pytz
 
     logging.warning("tzlocal not installed; defaulting to UTC")
 

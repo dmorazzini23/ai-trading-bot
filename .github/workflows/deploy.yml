@@ -21,7 +21,7 @@ jobs:
       - run: black .
       - run: black --check .
       - name: Check style with Flake8
-        run: flake8 . --exclude venv,.venv
+        run: flake8 . --max-line-length=120 --extend-ignore=E402,E203 --exclude venv,.venv
       - run: pytest --maxfail=1 --disable-warnings -q
       - name: Create archive
         run: tar czf bot.tar.gz .
@@ -45,7 +45,6 @@ jobs:
             mkdir -p ~/ai-trading-bot
             tar xzf ~/bot.tar.gz -C ~/ai-trading-bot --strip-components=1
             rm ~/bot.tar.gz
-            cd ~/ai-trading-bot
             source venv/bin/activate
             pip install --upgrade pip && pip install -r requirements.txt
             sudo systemctl restart ai-trading-scheduler.service

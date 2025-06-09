@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Download logs for recent failed GitHub Actions runs and report failing steps."""
-import argparse, io, os, zipfile
+import argparse
+import io
+import os
+import zipfile
 from typing import Iterable, Set
 import requests
 
