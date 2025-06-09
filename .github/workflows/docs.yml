@@ -6,7 +6,7 @@ on:
   push:
     branches: [ main ]
 jobs:
-  build:
+  deploy-docs:
     permissions:
       pages: write
       contents: write

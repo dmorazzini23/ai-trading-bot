@@ -3,7 +3,9 @@ on:
   schedule:
     - cron: '0 1 * * *'  # 1 AM UTC daily
 jobs:
-  smoke-test:
+  health-check:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -11,15 +13,20 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - name: SSH & run tests
+      - name: Deploy to DigitalOcean Droplet
         if: ${{ secrets.DROPLET_HOST != '' }}
         uses: appleboy/ssh-action@v0.1.7
         with:
-          host: ${{ secrets.DROPLET_HOST }}
+          host:     ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
+          key:      ${{ secrets.DROPLET_SSH_KEY }}
+          port:     22
+          known_hosts: '*'
           script: |
-            systemctl is-active --quiet ai-trading-scheduler
-            pip install --upgrade pip && pip install -r requirements.txt
-            pytest --maxfail=1 --disable-warnings -q
+            python3 -m venv ~/venv
+            source ~/venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install -r requirements-dev.txt
+            ./deploy.sh
 
