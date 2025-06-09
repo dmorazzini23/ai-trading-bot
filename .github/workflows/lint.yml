@@ -17,12 +17,9 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -U black flake8
-      - name: Autoformat with Black
-        run: black .
       - name: Check formatting with Black
         run: black --check .
       - name: Check style with Flake8
-        run: flake8 ai_trading_bot/ --max-line-length=88 --exclude=venv,.env
+        run: flake8 . --exclude venv,.venv

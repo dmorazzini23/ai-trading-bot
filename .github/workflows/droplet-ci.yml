@@ -24,12 +24,12 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -U black flake8 pytest
       - run: black .
       - run: black --check .
-      - run: flake8 ai_trading_bot/ --max-line-length=88 --exclude=venv,.env
+      - run: flake8 . --exclude venv,.venv
       - run: pytest --maxfail=1 --disable-warnings -q
 
   deploy-to-droplet:
@@ -45,7 +45,7 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -U black flake8 pytest
       - run: black .
@@ -54,7 +54,7 @@ jobs:
         run: tar czf bot-dist.tar.gz .
       - name: Copy archive to droplet
         if: ${{ secrets.DROPLET_HOST != '' }}
-        uses: appleboy/scp-action@v0.1.0
+        uses: appleboy/scp-action@v0.1.6
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
@@ -74,6 +74,9 @@ jobs:
             mkdir ~/ai-trading-bot
             tar xzf ~/bot-dist.tar.gz -C ~/ai-trading-bot
             rm ~/bot-dist.tar.gz
+            cd ~/ai-trading-bot
+            source venv/bin/activate
+            pip install --upgrade pip && pip install -r requirements.txt
             systemctl start ai-trading-scheduler
 
   nightly-health-check:
@@ -92,7 +95,7 @@ jobs:
             cd ~/ai-trading-bot
             systemctl is-active --quiet ai-trading-scheduler
             source venv/bin/activate
-            pip install -r requirements-dev.txt
+            pip install --upgrade pip && pip install -r requirements.txt
             python3 scripts/health_check.py > health_report.txt || exit 1
       - name: Auto-refactor suggestions commit
         if: failure()
