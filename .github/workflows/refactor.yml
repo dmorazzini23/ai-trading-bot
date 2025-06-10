@@ -1,6 +1,7 @@
 name: On-Demand Refactor
+
 permissions:
-  contents: write
+  contents: read
   issues: write
 
 on:

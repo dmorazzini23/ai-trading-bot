@@ -1,13 +1,22 @@
 name: Issue Triage
+
+permissions:
+  contents: read
+  issues: write
+
 on:
   issues:
     types: [ opened ]
+
+concurrency:
+  group: "${{ github.workflow }}"
+  cancel-in-progress: true
 jobs:
   labeler:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install dependencies

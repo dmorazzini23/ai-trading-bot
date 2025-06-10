@@ -1,7 +1,8 @@
 name: Lint & Format
 
 permissions:
-  contents: write
+  contents: read
+  issues: write
 
 on:
   push:
@@ -9,12 +10,16 @@ on:
   pull_request:
     branches: [ main ]
 
+concurrency:
+  group: "${{ github.workflow }}"
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"

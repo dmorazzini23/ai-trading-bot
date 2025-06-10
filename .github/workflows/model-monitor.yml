@@ -1,14 +1,15 @@
 name: Model Performance Monitor
+
+permissions:
+  contents: read
+  issues: write
+
 on:
   schedule:
     - cron: '0 0 * * *'
 
-permissions:
-  contents: write
-  pull-requests: write
-
 concurrency:
-  group: ${{ github.workflow }}
+  group: "${{ github.workflow }}"
   cancel-in-progress: true
 jobs:
   monitor:
@@ -16,12 +17,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
       - name: Run backtest & record metrics
         run: |
           python scripts/backtest.py --output metrics.json --plot metrics.png

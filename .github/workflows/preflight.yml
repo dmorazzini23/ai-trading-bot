@@ -2,16 +2,21 @@ name: Preflight
 
 permissions:
   contents: read
+  issues: write
 
 on:
   push:
     branches: [ main ]
 
+concurrency:
+  group: "${{ github.workflow }}"
+  cancel-in-progress: true
+
 jobs:
   validate-secrets:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Verify required secrets
         env:
           DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
