@@ -9,7 +9,7 @@ on:
     - cron: '0 3 * * *'
 
 concurrency:
-  group: ${{ github.workflow }}
+  group: "${{ github.workflow }}"
   cancel-in-progress: true
 
 jobs:
@@ -48,7 +48,7 @@ jobs:
         run: tar czf bot-dist.tar.gz .
       - name: Deploy to droplet via SCP
         if: ${{ secrets.DROPLET_HOST != '' }}
-        uses: appleboy/scp-action@main
+        uses: appleboy/scp-action@v0.1.4
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
@@ -57,7 +57,7 @@ jobs:
           target: ~/ai-trading-bot/
       - name: SSH & deploy
         if: ${{ secrets.DROPLET_HOST != '' }}
-        uses: appleboy/ssh-action@v0.1.7
+        uses: appleboy/ssh-action@v0.1.8
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
@@ -87,7 +87,7 @@ jobs:
       - run: python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: SSH & run health-check script
         if: ${{ secrets.DROPLET_HOST != '' }}
-        uses: appleboy/ssh-action@v0.1.7
+        uses: appleboy/ssh-action@v0.1.8
         with:
           host:           ${{ secrets.DROPLET_HOST }}
           username:       ${{ secrets.DROPLET_USER }}
@@ -100,13 +100,13 @@ jobs:
             # your deploy commands below, e.g.:
             ./deploy.sh
       - name: Auto-refactor suggestions commit
-        if: failure()
+        if: ${{ failure() }}
         uses: stefanzweifel/git-auto-commit-action@v4
         with:
           commit_message: "🛠 Automated refactoring suggestions from ChatGPT"
           file_pattern: "refactor-suggestions/*.py"
       - name: Open PR with refactors
-        if: failure()
+        if: ${{ failure() }}
         uses: peter-evans/create-pull-request@v4
         with:
           title: "Automated refactor: health-check regressions"
