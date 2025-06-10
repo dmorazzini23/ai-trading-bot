@@ -42,6 +42,16 @@ jobs:
           echo "${{ secrets.DROPLET_SSH_KEY }}" > droplet_key.pem
           chmod 600 droplet_key.pem
 
+      # ensure the deploy directory exists on the droplet
+      - name: Create remote deploy directory
+        run: |
+          ssh \
+            -i droplet_key.pem \
+            -o StrictHostKeyChecking=no \
+            ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }} \
+            "mkdir -p ~/ai-trading-bot"
+
+      # now copy the tarball over
       - name: Copy to droplet via scp
         run: |
           scp \
