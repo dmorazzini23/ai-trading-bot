@@ -33,7 +33,9 @@ jobs:
         run: flake8 . --max-line-length=120 --extend-ignore=E402,E203 --exclude venv,.venv
       - run: pytest --maxfail=1 --disable-warnings -q
       - name: Archive bot for transfer
-        run: git archive --format=tar.gz --output=bot-dist.tar.gz HEAD
+        run: |
+          # bundle the current commit into bot-dist.tar.gz
+          git archive --format=tar.gz --output=bot-dist.tar.gz HEAD
 
       - name: Copy bot-dist.tar.gz to droplet
         uses: appleboy/scp-action@v0.1.7
@@ -42,7 +44,8 @@ jobs:
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
           source: bot-dist.tar.gz
-          target: ~/ai-trading-bot/bot-dist.tar.gz
+          target: ~/ai-trading-bot/
+          overwrite: true
       - name: SSH & deploy
         uses: appleboy/ssh-action@v0.1.7
         with:
@@ -52,13 +55,15 @@ jobs:
           script: |
             set -e
             cd ~/ai-trading-bot
-            tar xf bot-dist.tar.gz -C ~/ai-trading-bot
+            # unpack the tarball dropped in the directory
+            tar xf bot-dist.tar.gz
             # recreate virtualenv to avoid system-managed errors
             rm -rf venv
             python3 -m venv venv
             source venv/bin/activate
             python3 -m pip install --upgrade pip
-            python3 -m pip install -r requirements.txt -r requirements-dev.txt
+            python3 -m pip install -r requirements.txt
+            python3 -m pip install -r requirements-dev.txt
             pytest --maxfail=1 --disable-warnings -q
             # restart your service
             sudo systemctl restart ai-trading-scheduler
