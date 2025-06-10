@@ -37,12 +37,18 @@ jobs:
           # bundle the current commit into bot-dist.tar.gz
           git archive --format=tar.gz --output=bot-dist.tar.gz HEAD
 
+      - name: Prepare SSH key
+        run: |
+          echo "${{ secrets.DROPLET_SSH_KEY }}" > droplet_key.pem
+          chmod 600 droplet_key.pem
+
       - name: Copy to droplet via scp
         run: |
-          scp -i "${{ secrets.DROPLET_SSH_KEY }}" \
-              -o StrictHostKeyChecking=no \
-              bot-dist.tar.gz \
-              ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }}:~/ai-trading-bot/
+          scp \
+            -i droplet_key.pem \
+            -o StrictHostKeyChecking=no \
+            bot-dist.tar.gz \
+            ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }}:~/ai-trading-bot/
       - name: SSH & deploy
         uses: appleboy/ssh-action@v0.1.7
         with:
