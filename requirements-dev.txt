@@ -3,4 +3,4 @@ black
 flake8
 pytest
 mkdocs
-pandas
+pandas>=2.0
