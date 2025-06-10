@@ -1,8 +1,8 @@
 name: Publish Docs
+
 permissions:
   contents: read
   pages: write
-  issues: write
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install MkDocs
-        run: python -m pip install --upgrade pip mkdocs
+        run: python -m pip install --upgrade pip mkdocs mkdocs-material
       - name: Build docs
         run: mkdocs build
       - name: Deploy to gh-pages
@@ -30,3 +30,7 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./site
+      - name: Deploy docs to GitHub Pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: mkdocs gh-deploy --force --clean
