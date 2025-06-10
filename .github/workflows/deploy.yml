@@ -33,14 +33,14 @@ jobs:
         run: flake8 . --max-line-length=120 --extend-ignore=E402,E203 --exclude venv,.venv
       - run: pytest --maxfail=1 --disable-warnings -q
       - name: Archive bot for transfer
-        run: git archive --format=tar.gz HEAD > bot-dist.tar.gz
+        run: git archive --format=tar.gz --output=bot-dist.tar.gz HEAD
 
       - name: Copy bot-dist.tar.gz to droplet
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_KEY }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
           source: bot-dist.tar.gz
           target: ~/ai-trading-bot/bot-dist.tar.gz
       - name: SSH & deploy
@@ -48,7 +48,7 @@ jobs:
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_KEY }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
             set -e
             cd ~/ai-trading-bot
