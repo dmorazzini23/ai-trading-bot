@@ -33,7 +33,7 @@ jobs:
   deploy-to-droplet:
     name: Deploy to Droplet
     needs: [ lint-and-test ]
-    if: github.ref == 'refs/heads/main'
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -48,7 +48,7 @@ jobs:
         run: tar czf bot-dist.tar.gz .
       - name: Deploy to droplet via SCP
         if: ${{ secrets.DROPLET_HOST != '' }}
-        uses: appleboy/scp-action@master
+        uses: appleboy/scp-action@main
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
@@ -73,7 +73,7 @@ jobs:
 
   nightly-health-check:
     name: Nightly Health-Check & Auto-Refactorer
-    if: github.event_name == 'schedule'
+    if: ${{ github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
