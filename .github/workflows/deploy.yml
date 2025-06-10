@@ -29,7 +29,14 @@ jobs:
         run: flake8 . --max-line-length=120 --extend-ignore=E402,E203 --exclude venv,.venv
       - run: pytest --maxfail=1 --disable-warnings -q
       - name: Archive bot for transfer
-        run: tar czf bot-dist.tar.gz .
+        run: |
+          # exclude .git, virtualenv, the archive itself, and suppress warning on files changing
+          tar czf bot-dist.tar.gz \
+            --exclude='.git' \
+            --exclude='venv' \
+            --exclude='bot-dist.tar.gz' \
+            --warning=no-file-changed \
+            .
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
