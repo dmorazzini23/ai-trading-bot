@@ -35,7 +35,6 @@ jobs:
     needs: [ lint-and-test ]
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v4
