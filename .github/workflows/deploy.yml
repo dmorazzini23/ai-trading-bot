@@ -49,7 +49,15 @@ jobs:
             -i droplet_key.pem \
             -o StrictHostKeyChecking=no \
             ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }} \
-            "mkdir -p ~/ai-trading-bot"
+            "mkdir -p /home/${{ secrets.DROPLET_USER }}/ai-trading-bot"
+
+      - name: Debug - list remote directory before copy
+        run: |
+          ssh \
+            -i droplet_key.pem \
+            -o StrictHostKeyChecking=no \
+            ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }} \
+            "ls -la /home/${{ secrets.DROPLET_USER }}/ai-trading-bot"
 
       # now copy the tarball over
       - name: Copy to droplet via scp
@@ -58,7 +66,15 @@ jobs:
             -i droplet_key.pem \
             -o StrictHostKeyChecking=no \
             bot-dist.tar.gz \
-            ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }}:~/ai-trading-bot/
+            "${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }}:/home/${{ secrets.DROPLET_USER }}/ai-trading-bot/"
+
+      - name: Debug - list remote directory after copy
+        run: |
+          ssh \
+            -i droplet_key.pem \
+            -o StrictHostKeyChecking=no \
+            ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }} \
+            "ls -la /home/${{ secrets.DROPLET_USER }}/ai-trading-bot"
       - name: SSH & deploy
         uses: appleboy/ssh-action@v0.1.7
         with:
@@ -67,7 +83,7 @@ jobs:
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
             set -e
-            cd ~/ai-trading-bot
+            cd /home/${{ secrets.DROPLET_USER }}/ai-trading-bot
             # unpack the file we just SCP’d
             tar xf bot-dist.tar.gz
             # recreate virtualenv to avoid system-managed errors
