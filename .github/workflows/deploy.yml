@@ -37,16 +37,12 @@ jobs:
           # bundle the current commit into bot-dist.tar.gz
           git archive --format=tar.gz --output=bot-dist.tar.gz HEAD
 
-      - name: Copy bot-dist.tar.gz to droplet
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          source: bot-dist.tar.gz
-          # copy into this directory (not as a file path)
-          target: ~/ai-trading-bot
-          overwrite: true
+      - name: Copy to droplet via scp
+        run: |
+          scp -i "${{ secrets.DROPLET_SSH_KEY }}" \
+              -o StrictHostKeyChecking=no \
+              bot-dist.tar.gz \
+              ${{ secrets.DROPLET_USER }}@${{ secrets.DROPLET_HOST }}:~/ai-trading-bot/
       - name: SSH & deploy
         uses: appleboy/ssh-action@v0.1.7
         with:
@@ -63,8 +59,7 @@ jobs:
             python3 -m venv venv
             source venv/bin/activate
             python3 -m pip install --upgrade pip
-            python3 -m pip install -r requirements.txt
-            python3 -m pip install -r requirements-dev.txt
+            python3 -m pip install -r requirements.txt -r requirements-dev.txt
             pytest --maxfail=1 --disable-warnings -q
             # restart your service
             sudo systemctl restart ai-trading-scheduler
