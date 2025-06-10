@@ -31,18 +31,24 @@ jobs:
       - name: Archive bot for transfer
         run: tar czf bot-dist.tar.gz .
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: bot-dist
           path: bot-dist.tar.gz
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bot-dist
+          path: .
+
       - name: Copy bot-dist.tar.gz to droplet
         uses: appleboy/scp-action@master
         with:
           host: ${{ secrets.DROPLET_HOST }}
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_KEY }}
-          source: "bot-dist.tar.gz"
-          target: "~/ai-trading-bot/bot-dist.tar.gz"
+          source: bot-dist.tar.gz
+          target: ~/ai-trading-bot/bot-dist.tar.gz
       - name: SSH & deploy
         uses: appleboy/ssh-action@master
         with:
