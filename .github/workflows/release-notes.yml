@@ -3,13 +3,13 @@ permissions:
     issues: write
     contents: read
 on:
-  push:
-    tags:
-      - 'v*.*.*'
+  release:
+    types: [published]
 jobs:
   draft-notes:
     permissions:
-      contents: write
+      contents: read
+      issues: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -22,7 +22,7 @@ jobs:
         uses: peter-evans/create-or-update-comment@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          issue-number: ${{ github.event.pull_request.number || github.event.issue.number }}
+          release-id: ${{ github.event.release.id }}
           body: |
             ## Release Notes
-            <!-- TODO: summarize your changes here -->
+            ${{ steps.generate_notes.outputs.notes }}
