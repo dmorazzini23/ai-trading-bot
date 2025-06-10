@@ -1,25 +1,30 @@
 name: Draft Release Notes
 permissions:
-    issues: write
-    contents: read
+  contents: read
+  issues: write
 on:
   release:
     types: [published]
+
+concurrency:
+  group: "${{ github.workflow }}"
+  cancel-in-progress: true
+
 jobs:
   draft-notes:
-    permissions:
-      contents: read
-      issues: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Generate release notes
         id: generate_notes
         run: |
-          # replace with your notes generator
-          echo "::set-output name=notes::$(python scripts/generate_release_notes.py)"
+          NOTES=$(python scripts/generate_release_notes.py)
+          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
       - name: Post release notes
-        uses: peter-evans/create-or-update-comment@v2
+        uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           release-id: ${{ github.event.release.id }}
