@@ -27,10 +27,15 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Debug: list installed packages
+        run: pip list
+      - name: Debug: verify pandas import
+        run: python -c "import pandas; print('pandas', pandas.__version__)"
       - run: black .
       - run: black --check .
       - run: flake8 . --max-line-length=120 --extend-ignore=E402,E203 --exclude venv,.venv
-      - run: pytest --maxfail=1 --disable-warnings -q
+      - name: Run tests
+        run: python -m pytest --maxfail=1 --disable-warnings -q
 
   deploy-to-droplet:
     needs: lint-and-test
