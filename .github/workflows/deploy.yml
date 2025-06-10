@@ -52,12 +52,12 @@ jobs:
           script: |
             set -e
             cd ~/ai-trading-bot
+            tar xf bot-dist.tar.gz -C ~/ai-trading-bot
             # recreate virtualenv to avoid system-managed errors
             rm -rf venv
             python3 -m venv venv
             source venv/bin/activate
             python3 -m pip install --upgrade pip
-            python3 -m pip install bot-dist.tar.gz
             python3 -m pip install -r requirements-dev.txt
             pytest --maxfail=1 --disable-warnings -q
             # restart your service
