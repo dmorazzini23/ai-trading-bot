@@ -1,6 +1,7 @@
 name: Notify Slack on Failure
 permissions:
   contents: read
+  issues: write
 
 on:
   workflow_run:

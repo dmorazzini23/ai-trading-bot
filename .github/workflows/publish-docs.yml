@@ -2,6 +2,7 @@ name: Publish Docs
 permissions:
   contents: read
   pages: write
+  issues: write
 
 on:
   push:

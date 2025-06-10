@@ -1,6 +1,7 @@
 name: Nightly Health Check
 permissions:
   contents: read
+  issues: write
 
 on:
   schedule:
