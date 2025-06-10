@@ -44,8 +44,8 @@ jobs:
           username: ${{ secrets.DROPLET_USER }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
           source: bot-dist.tar.gz
-          # explicitly copy into a file, not a folder
-          target: ~/ai-trading-bot/bot-dist.tar.gz
+          # copy into this directory (not as a file path)
+          target: ~/ai-trading-bot
           overwrite: true
       - name: SSH & deploy
         uses: appleboy/ssh-action@v0.1.7
