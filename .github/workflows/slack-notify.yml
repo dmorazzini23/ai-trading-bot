@@ -1,30 +1,29 @@
 name: Notify Slack on Failure
 
 permissions:
-  contents: write
+  contents: read
 
 on:
   workflow_run:
     workflows:
-      - CI
       - Droplet CI & Nightly Health-Check
-      - Test
-      - Coverage
-      - Nightly Tests
-      - Security Scan
-      - Model Performance Monitor
+      - Daily Backup
     types:
       - completed
 
+concurrency:
+  group: "${{ github.workflow }}"
+  cancel-in-progress: true
+
 jobs:
   notify:
-    if: ${{ failure() }}
+    if: ${{ github.event.workflow_run.conclusion != 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: slackapi/slack-github-action@v2
         with:
           method: webhook
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
-          text: |
-            :x: Workflow *${{ github.workflow }}* failed
-            <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|See details>
+          text: >
+            :x: Job *${{ github.event.workflow_run.workflow_name }}* failed.
+            <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}|View run>

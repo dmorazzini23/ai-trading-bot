@@ -2,7 +2,7 @@ structlog>=21.5.0
 tenacity>=8.2.0
 ratelimit>=2.2.1
 numpy
-pandas
+pandas>=2.0
 pandas_ta>=0.3.14b0
 requests>=2.27.1
 beautifulsoup4>=4.11.1
