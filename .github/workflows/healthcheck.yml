@@ -1,14 +1,18 @@
 name: Nightly Health Check
 permissions:
   contents: read
+
 on:
   schedule:
-    - cron: '0 1 * * *'  # 1 AM UTC daily
+    - cron: '0 1 * * *'
+
+concurrency:
+  group: "${{ github.workflow }}"
+  cancel-in-progress: true
+
 jobs:
   health-check:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,25 +22,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:            us-east-1
       - name: Deploy to DigitalOcean Droplet
         uses: appleboy/ssh-action@v0.1.8
         with:
-          host:        ${{ secrets.DROPLET_HOST }}
-          username:    ${{ secrets.DROPLET_USER }}
-          key:         ${{ secrets.DROPLET_SSH_KEY }}
-          port:        22
-          known_hosts: '*'
-          script: |
-            python3 -m venv ~/venv
-            source ~/venv/bin/activate
-            pip install --upgrade pip
-            pip install -r requirements.txt
-            pip install -r requirements-dev.txt
-            ./deploy.sh
-
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script: ./deploy.sh

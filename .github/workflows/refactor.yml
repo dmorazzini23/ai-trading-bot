@@ -1,35 +1,41 @@
 name: On-Demand Refactor
-on:
-  issue_comment:
-    types: [ created ]
-
 permissions:
   contents: write
   pull-requests: write
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: "${{ github.workflow }}"
+  cancel-in-progress: true
+
 jobs:
   refactor:
-    if: contains(github.event.comment.body, '/refactor')
+    if: ${{ contains(github.event.comment.body, '/refactor') }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Fetch PR branch
+      - name: Ensure gh CLI
         run: |
-          gh pr checkout ${{ github.event.issue.number }}
+          if ! command -v gh > /dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y gh
+          fi
+      - name: Fetch PR branch
+        run: gh pr checkout ${{ github.event.issue.number }}
       - name: Run Codex Refactor
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          # Pseudocode: send diff to Codex and apply patch
-          python scripts/codex_refactor.py --diff $(git diff main)
+        run: python scripts/codex_refactor.py --diff "$(git diff main)"
       - uses: EndBug/add-and-commit@v9
         with:
           message: "refactor: apply Codex suggestions"
