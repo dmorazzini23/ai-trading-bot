@@ -1,5 +1,4 @@
 name: Notify Slack on Failure
-
 permissions:
   contents: read
 
@@ -8,6 +7,9 @@ on:
     workflows:
       - Droplet CI & Nightly Health-Check
       - Daily Backup
+      - Publish Docs
+      - On-Demand Refactor
+      - Draft Release Notes
     types:
       - completed
 
@@ -24,6 +26,6 @@ jobs:
         with:
           method: webhook
           webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
-          text: >
-            :x: Job *${{ github.event.workflow_run.workflow_name }}* failed.
+          text: |
+            :x: *${{ github.event.workflow_run.workflow_name }}* failed.
             <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}|View run>

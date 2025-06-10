@@ -1,11 +1,12 @@
 name: On-Demand Refactor
 permissions:
   contents: write
-  pull-requests: write
+  issues: write
 
 on:
   issue_comment:
-    types: [created]
+    types:
+      - created
 
 concurrency:
   group: "${{ github.workflow }}"
@@ -13,31 +14,34 @@ concurrency:
 
 jobs:
   refactor:
-    if: ${{ contains(github.event.comment.body, '/refactor') }}
+    if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, '/refactor') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install dependencies
+      - name: Install GitHub CLI
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Ensure gh CLI
-        run: |
-          if ! command -v gh > /dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y gh
-          fi
-      - name: Fetch PR branch
+          sudo apt-get update
+          sudo apt-get install -y gh
+      - name: Checkout PR
         run: gh pr checkout ${{ github.event.issue.number }}
       - name: Run Codex Refactor
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: python scripts/codex_refactor.py --diff "$(git diff main)"
-      - uses: EndBug/add-and-commit@v9
+        run: python scripts/codex_refactor.py --diff "$(git diff origin/main)"
+      - name: Commit refactored code
+        uses: EndBug/add-and-commit@v9
         with:
-          message: "refactor: apply Codex suggestions"
-      - name: Push changes
-        run: git push origin HEAD:codex-refactor-${{ github.event.issue.number }}
+          author_name: "github-actions[bot]"
+          author_email: "41898282+github-actions[bot]@users.noreply.github.com"
+          message: "Apply AI refactor suggestions"
+          add: "refactor-suggestions/*.py"
+      - name: Create Refactor PR
+        uses: peter-evans/create-pull-request@v4
+        with:
+          title: "AI-driven refactor for issue #${{ github.event.issue.number }}"
+          commit-message: "Apply AI refactors"
+          base: main
+          branch: refactor/${{ github.event.issue.number }}
+          body: |
+            This PR applies function-level refactor suggestions from ChatGPT to address issues uncovered in the nightly health check.

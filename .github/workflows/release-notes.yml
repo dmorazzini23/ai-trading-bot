@@ -2,9 +2,11 @@ name: Draft Release Notes
 permissions:
   contents: read
   issues: write
+
 on:
   release:
-    types: [published]
+    types:
+      - published
 
 concurrency:
   group: "${{ github.workflow }}"
@@ -19,15 +21,17 @@ jobs:
         with:
           python-version: '3.11'
       - name: Generate release notes
-        id: generate_notes
+        id: gen
         run: |
-          NOTES=$(python scripts/generate_release_notes.py)
-          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
+          notes=$(python scripts/generate_release_notes.py)
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "$notes" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
       - name: Post release notes
         uses: peter-evans/create-or-update-comment@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          release-id: ${{ github.event.release.id }}
+          issue-number: ${{ github.event.release.id }}
           body: |
             ## Release Notes
-            ${{ steps.generate_notes.outputs.notes }}
+            ${{ steps.gen.outputs.notes }}
