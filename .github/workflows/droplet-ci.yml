@@ -93,7 +93,7 @@ jobs:
             "cd ~/ai-trading-bot && ./deploy.sh"
       - name: Commit refactor suggestions
         if: ${{ failure() }}
-        uses: stefanzweifel/git-auto-commit-action@v4
+        uses: stefanzweifel/git-auto-commit-action@v6
         with:
           commit_message: "🛠️ Automated refactoring suggestions from ChatGPT"
           file_pattern: "refactor-suggestions/*.py"
