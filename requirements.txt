@@ -25,3 +25,6 @@ pytest
 flake8
 black
 pybreaker
+tzlocal>=4.0
+GPy>=1.10
+torch>=2.0
