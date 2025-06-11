@@ -71,7 +71,7 @@ jobs:
             pip install --upgrade pip
             pip install -r requirements.txt
             systemctl start ai-trading-scheduler
-EOF
+            EOF
 
   nightly-health-check:
     if: ${{ github.event_name == 'schedule' }}
