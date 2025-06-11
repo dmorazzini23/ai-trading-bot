@@ -98,7 +98,7 @@ jobs:
         if: ${{ failure() }}
         uses: stefanzweifel/git-auto-commit-action@v4
         with:
-          commit_message: "\U0001F6E0 Automated refactoring suggestions from ChatGPT"
+          commit_message: "🛠️ Automated refactoring suggestions from ChatGPT"
           file_pattern: "refactor-suggestions/*.py"
       - name: Open PR with refactors
         if: ${{ failure() }}
