@@ -2,6 +2,7 @@ name: Droplet CI & Nightly Health-Check
 permissions:
   contents: read
   issues: write
+  secrets: read
 
 on:
   push:
