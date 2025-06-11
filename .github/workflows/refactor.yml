@@ -43,7 +43,7 @@ jobs:
           message: "Apply AI refactor suggestions"
           add: "refactor-suggestions/*.py"
       - name: Create Refactor PR
-        uses: peter-evans/create-pull-request@v4
+        uses: peter-evans/create-pull-request@v7
         with:
           title: "AI-driven refactor for issue #${{ env.PR_NUMBER }}"
           commit-message: "Apply AI refactors"
