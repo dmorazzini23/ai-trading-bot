@@ -823,8 +823,16 @@ class DataFetcher:
                     start=day_start,
                     end=day_end,
                     limit=10000,
+                    feed="iex",
                 )
-                bars_day = ctx.data_client.get_stock_bars(bars_req).df
+                try:
+                    bars_day = ctx.data_client.get_stock_bars(bars_req).df
+                except APIError as e:
+                    logger.warning(
+                        f"[historic_minute] SIP failed for {symbol} {day_start}-{day_end}: {e}; retrying with IEX"
+                    )
+                    bars_req.feed = "iex"
+                    bars_day = ctx.data_client.get_stock_bars(bars_req).df
                 if isinstance(bars_day.columns, pd.MultiIndex):
                     bars_day = bars_day.xs(symbol, level=0, axis=1)
                 else:
@@ -1507,7 +1515,7 @@ SECRET_KEY = ALPACA_SECRET_KEY
 BASE_URL = ALPACA_BASE_URL
 paper = ALPACA_PAPER
 trading_client = TradingClient(API_KEY, SECRET_KEY, paper=paper)
-data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
+data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY, feed="iex")
 ctx = BotContext(
     api=trading_client,
     data_client=data_client,
@@ -3619,8 +3627,16 @@ else:
         start=start_dt,
         end=end_dt,
         limit=1000,
+        feed="iex",
     )
-    bars = ctx.data_client.get_stock_bars(bars_req).df
+    try:
+        bars = ctx.data_client.get_stock_bars(bars_req).df
+    except APIError as e:
+        logger.warning(
+            f"[regime_data] SIP failed {start_dt}-{end_dt}: {e}; retrying with IEX"
+        )
+        bars_req.feed = "iex"
+        bars = ctx.data_client.get_stock_bars(bars_req).df
     if isinstance(bars.columns, pd.MultiIndex):
         bars = bars.xs(REGIME_SYMBOLS[0], level=0, axis=1)
     else:
