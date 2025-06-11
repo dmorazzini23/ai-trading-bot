@@ -10,6 +10,7 @@ runs:
   using: composite
   steps:
     - uses: slackapi/slack-github-action@v1
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.webhook_url }}
       with:
-        webhook-url: ${{ inputs.webhook_url }}
         payload: '{"text": "${{ inputs.text }}"}'

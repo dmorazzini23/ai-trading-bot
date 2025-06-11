@@ -48,7 +48,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Archive bot for transfer
-        run: tar czf bot-dist.tar.gz .
+        run: tar --exclude=bot-dist.tar.gz -czf bot-dist.tar.gz .
       - name: Copy files to droplet
         run: |
           if [ -z "$DROPLET_HOST" ]; then
