@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: ./.github/actions/slack-notify
         with:
-          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
-          message: |
+          webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          text: |
             :x: *${{ github.event.workflow_run.workflow_name }}* failed.
             <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}|View run>
