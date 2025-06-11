@@ -49,20 +49,24 @@ jobs:
           python-version: '3.11'
       - name: Archive bot for transfer
         run: git archive --format=tar.gz --output=bot-dist.tar.gz HEAD
+      - name: Prepare SSH key
+        run: |
+          echo "$DROPLET_SSH_KEY" > droplet_key.pem
+          chmod 600 droplet_key.pem
       - name: Copy files to droplet
         run: |
           if [ -z "$DROPLET_HOST" ]; then
             echo "Skipping deploy, DROPLET_HOST not set"
             exit 0
           fi
-          scp -i <(echo "$DROPLET_SSH_KEY") -o StrictHostKeyChecking=no bot-dist.tar.gz "$DROPLET_USER@$DROPLET_HOST:~/ai-trading-bot/"
+          scp -i droplet_key.pem -o StrictHostKeyChecking=no bot-dist.tar.gz "$DROPLET_USER@$DROPLET_HOST:~/ai-trading-bot/"
       - name: Unpack and restart service
         run: |
           if [ -z "$DROPLET_HOST" ]; then
             echo "Skipping remote commands, DROPLET_HOST not set"
             exit 0
           fi
-          ssh -i <(echo "$DROPLET_SSH_KEY") -o StrictHostKeyChecking=no "$DROPLET_USER@$DROPLET_HOST" <<'EOF'
+          ssh -i droplet_key.pem -o StrictHostKeyChecking=no "$DROPLET_USER@$DROPLET_HOST" <<'EOF'
             systemctl stop ai-trading-scheduler
             rm -rf ~/ai-trading-bot
             mkdir ~/ai-trading-bot
