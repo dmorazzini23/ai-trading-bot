@@ -62,12 +62,12 @@ jobs:
             echo "Skipping deploy, DROPLET_HOST not set"
             exit 0
           fi
-          ssh -i droplet_key.pem -o StrictHostKeyChecking=no "$DROPLET_USER@$DROPLET_HOST" <<EOF
+          ssh -i droplet_key.pem -o StrictHostKeyChecking=no "$DROPLET_USER@$DROPLET_HOST" <<'EOF'
           docker pull my-bot:${{ github.sha }}
           docker stop tradingbot || true
           docker rm tradingbot || true
           docker run -d --name tradingbot --restart always my-bot:${{ github.sha }}
-EOF
+          EOF
 
   nightly-health-check:
     if: ${{ github.event_name == 'schedule' }}
