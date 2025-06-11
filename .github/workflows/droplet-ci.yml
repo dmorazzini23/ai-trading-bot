@@ -42,35 +42,32 @@ jobs:
       DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
       DROPLET_USER: ${{ secrets.DROPLET_USER }}
       DROPLET_SSH_KEY: ${{ secrets.DROPLET_SSH_KEY }}
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
-      - name: Archive bot for transfer
-        run: git archive --format=tar.gz --output=bot-dist.tar.gz HEAD
+      - name: Build Docker image
+        run: docker build -t my-bot:${{ github.sha }} .
+      - name: Log in to Docker registry
+        run: echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+      - name: Push Docker image
+        run: docker push my-bot:${{ github.sha }}
       - name: Prepare SSH key
         run: |
           echo "$DROPLET_SSH_KEY" > droplet_key.pem
           chmod 600 droplet_key.pem
-      - name: Deploy to droplet
+      - name: Deploy container on droplet
         run: |
           if [ -z "$DROPLET_HOST" ]; then
             echo "Skipping deploy, DROPLET_HOST not set"
             exit 0
           fi
-          scp -i droplet_key.pem -o StrictHostKeyChecking=no bot-dist.tar.gz \
-            "$DROPLET_USER@$DROPLET_HOST:~/bot-dist.tar.gz"
-          ssh -i droplet_key.pem -o StrictHostKeyChecking=no "$DROPLET_USER@$DROPLET_HOST" << 'EOF'
-            set -eux
-            cd ~/ai-trading-bot
-            rm -rf venv
-            python3 -m venv venv
-            source venv/bin/activate
-            pip install --upgrade pip
-            sudo apt-get clean
-            rm -rf ~/.cache/pip
-            python3 -m pip install --no-cache-dir -r requirements.txt
-            sudo systemctl restart tradingbot
-            echo "✅ Bot deployed and service restarted"
-          EOF
+          ssh -i droplet_key.pem -o StrictHostKeyChecking=no "$DROPLET_USER@$DROPLET_HOST" <<EOF
+          docker pull my-bot:${{ github.sha }}
+          docker stop tradingbot || true
+          docker rm tradingbot || true
+          docker run -d --name tradingbot --restart always my-bot:${{ github.sha }}
+EOF
 
   nightly-health-check:
     if: ${{ github.event_name == 'schedule' }}
