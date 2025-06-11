@@ -38,6 +38,10 @@ jobs:
     needs: lint-and-test
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
+    env:
+      DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+      DROPLET_USER: ${{ secrets.DROPLET_USER }}
+      DROPLET_SSH_KEY: ${{ secrets.DROPLET_SSH_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -46,22 +50,19 @@ jobs:
       - name: Archive bot for transfer
         run: tar czf bot-dist.tar.gz .
       - name: Copy files to droplet
-        if: ${{ secrets.DROPLET_HOST != '' }}
-        uses: appleboy/scp-action@v0.1.4
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          source: bot-dist.tar.gz
-          target: ~/ai-trading-bot/
+        run: |
+          if [ -z "$DROPLET_HOST" ]; then
+            echo "Skipping deploy, DROPLET_HOST not set"
+            exit 0
+          fi
+          scp -i <(echo "$DROPLET_SSH_KEY") -o StrictHostKeyChecking=no bot-dist.tar.gz "$DROPLET_USER@$DROPLET_HOST:~/ai-trading-bot/"
       - name: Unpack and restart service
-        if: ${{ secrets.DROPLET_HOST != '' }}
-        uses: appleboy/ssh-action@v0.1.8
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          script: |
+        run: |
+          if [ -z "$DROPLET_HOST" ]; then
+            echo "Skipping remote commands, DROPLET_HOST not set"
+            exit 0
+          fi
+          ssh -i <(echo "$DROPLET_SSH_KEY") -o StrictHostKeyChecking=no "$DROPLET_USER@$DROPLET_HOST" <<'EOF'
             systemctl stop ai-trading-scheduler
             rm -rf ~/ai-trading-bot
             mkdir ~/ai-trading-bot
@@ -70,6 +71,7 @@ jobs:
             pip install --upgrade pip
             pip install -r requirements.txt
             systemctl start ai-trading-scheduler
+EOF
 
   nightly-health-check:
     if: ${{ github.event_name == 'schedule' }}
