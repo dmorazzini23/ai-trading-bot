@@ -13,4 +13,7 @@ runs:
       env:
         SLACK_WEBHOOK_URL: ${{ inputs.webhook_url }}
       with:
-        payload: '{"text": "${{ inputs.text }}"}'
+        payload: |
+          {
+            "text": ${{ toJSON(inputs.text) }}
+          }
