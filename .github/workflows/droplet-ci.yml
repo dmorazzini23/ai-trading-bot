@@ -86,7 +86,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run health-check script
-        if: ${{ secrets.DROPLET_HOST != '' }}
+        if: ${{ env.DROPLET_HOST != '' }}
         uses: appleboy/ssh-action@v0.1.8
         with:
           host: ${{ secrets.DROPLET_HOST }}
@@ -101,7 +101,7 @@ jobs:
           file_pattern: "refactor-suggestions/*.py"
       - name: Open PR with refactors
         if: ${{ failure() }}
-        uses: peter-evans/create-pull-request@v4
+        uses: peter-evans/create-pull-request@v7
         with:
           title: "Automated refactor: health-check regressions"
           commit-message: "Apply AI-suggested refactors for errors found in nightly health check"
