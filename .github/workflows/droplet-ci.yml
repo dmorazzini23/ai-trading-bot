@@ -49,9 +49,19 @@ jobs:
       - name: Build Docker image
         run: docker build -t my-bot:${{ github.sha }} .
       - name: Log in to Docker registry
-        run: echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+        run: |
+          if [[ -z "$DOCKER_USERNAME" || -z "$DOCKER_PASSWORD" ]]; then
+            echo "Skipping Docker login, credentials not set"
+            exit 0
+          fi
+          echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
       - name: Push Docker image
-        run: docker push my-bot:${{ github.sha }}
+        run: |
+          if [[ -z "$DOCKER_USERNAME" || -z "$DOCKER_PASSWORD" ]]; then
+            echo "Skipping Docker push, credentials not set"
+            exit 0
+          fi
+          docker push my-bot:${{ github.sha }}
       - name: Prepare SSH key
         run: |
           echo "$DROPLET_SSH_KEY" > droplet_key.pem
