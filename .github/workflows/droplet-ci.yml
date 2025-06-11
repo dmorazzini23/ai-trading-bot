@@ -46,8 +46,15 @@ jobs:
       DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
+      - name: Set Docker image tag
+        run: |
+          if [ -z "$DOCKER_USERNAME" ]; then
+            echo "IMAGE_TAG=my-bot:${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            echo "IMAGE_TAG=$DOCKER_USERNAME/my-bot:${{ github.sha }}" >> "$GITHUB_ENV"
+          fi
       - name: Build Docker image
-        run: docker build -t ${{ env.DOCKER_USERNAME }}/my-bot:${{ github.sha }} .
+        run: docker build -t "$IMAGE_TAG" .
       - name: Log in to Docker registry
         run: |
           if [[ -z "$DOCKER_USERNAME" || -z "$DOCKER_PASSWORD" ]]; then
@@ -61,18 +68,18 @@ jobs:
             echo "Skipping Docker push, credentials not set"
             exit 0
           fi
-          docker push ${{ env.DOCKER_USERNAME }}/my-bot:${{ github.sha }}
+          docker push "$IMAGE_TAG"
       - name: Prepare SSH key
         run: |
           echo "$DROPLET_SSH_KEY" > droplet_key.pem
           chmod 600 droplet_key.pem
       - name: Deploy container on droplet
         run: |
-          if [ -z "$DROPLET_HOST" ]; then
-            echo "Skipping deploy, DROPLET_HOST not set"
+          if [ -z "$DROPLET_HOST" ] || [ -z "$DOCKER_USERNAME" ]; then
+            echo "Skipping deploy, DROPLET_HOST or DOCKER_USERNAME not set"
             exit 0
           fi
-          ssh -i droplet_key.pem -o StrictHostKeyChecking=no "$DROPLET_USER@$DROPLET_HOST" <<'EOF'
+          ssh -i droplet_key.pem -o StrictHostKeyChecking=no "$DROPLET_USER@$DROPLET_HOST" <<EOF
           if ! command -v docker >/dev/null 2>&1; then
             sudo apt-get update
             sudo apt-get install -y docker.io
@@ -80,10 +87,10 @@ jobs:
           if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
             echo "$DOCKER_PASSWORD" | sudo docker login -u "$DOCKER_USERNAME" --password-stdin
           fi
-          sudo docker pull $DOCKER_USERNAME/my-bot:${{ github.sha }}
+          sudo docker pull $IMAGE_TAG
           sudo docker stop tradingbot || true
           sudo docker rm tradingbot || true
-          sudo docker run -d --name tradingbot --restart always $DOCKER_USERNAME/my-bot:${{ github.sha }}
+          sudo docker run -d --name tradingbot --restart always $IMAGE_TAG
           EOF
 
   nightly-health-check:
