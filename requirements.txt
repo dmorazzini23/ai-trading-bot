@@ -24,3 +24,4 @@ alpaca-trade-api
 pytest
 flake8
 black
+pybreaker
