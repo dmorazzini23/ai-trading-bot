@@ -7,7 +7,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--title", required=True)
     parser.add_argument("--body", required=True)
-    parser.add_argument("--labels-file", required=True)
+    parser.add_argument("--output", required=False)
     args = parser.parse_args()
 
     text = (args.title + " " + args.body).lower()
@@ -17,11 +17,10 @@ def main():
     if "feature" in text or "enhancement" in text:
         labels.append("enhancement")
 
-    mapping = {label: {"name": label} for label in labels}
-    file_path = args.labels_file
-    with open(file_path, "w") as f:
-        json.dump(mapping, f)
-    print(json.dumps(mapping))
+    if args.output:
+        with open(args.output, "w") as f:
+            json.dump(labels, f)
+    print(" ".join(labels))
 
 
 if __name__ == "__main__":

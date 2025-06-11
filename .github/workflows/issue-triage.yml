@@ -23,17 +23,22 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Label via GPT
+      - name: Install GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gh
+      - name: Determine labels
+        id: triage
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          python scripts/triage_issue.py \
+          labels=$(python scripts/triage_issue.py \
             --title "${{ github.event.issue.title }}" \
-            --body "${{ github.event.issue.body }}" \
-            --labels-file .github/label-mapping.json
+            --body "${{ github.event.issue.body }}")
+          echo "labels=$labels" >> "$GITHUB_OUTPUT"
       - name: Apply Labels
-        uses: chrnorm/deploy-labels@v1
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          mapping-path: .github/label-mapping.json
+        if: steps.triage.outputs.labels != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue edit ${{ github.event.issue.number }} --add-label "${{ steps.triage.outputs.labels }}"
