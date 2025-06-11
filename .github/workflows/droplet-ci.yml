@@ -44,37 +44,30 @@ jobs:
       DROPLET_SSH_KEY: ${{ secrets.DROPLET_SSH_KEY }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
       - name: Archive bot for transfer
         run: git archive --format=tar.gz --output=bot-dist.tar.gz HEAD
       - name: Prepare SSH key
         run: |
           echo "$DROPLET_SSH_KEY" > droplet_key.pem
           chmod 600 droplet_key.pem
-      - name: Copy files to droplet
+      - name: Deploy to droplet
         run: |
           if [ -z "$DROPLET_HOST" ]; then
             echo "Skipping deploy, DROPLET_HOST not set"
             exit 0
           fi
-          scp -i droplet_key.pem -o StrictHostKeyChecking=no bot-dist.tar.gz "$DROPLET_USER@$DROPLET_HOST:~/bot-dist.tar.gz"
-      - name: Unpack and restart service
-        run: |
-          if [ -z "$DROPLET_HOST" ]; then
-            echo "Skipping remote commands, DROPLET_HOST not set"
-            exit 0
-          fi
-          ssh -i droplet_key.pem -o StrictHostKeyChecking=no "$DROPLET_USER@$DROPLET_HOST" <<'EOF'
-            systemctl stop ai-trading-scheduler
-            rm -rf ~/ai-trading-bot
-            mkdir ~/ai-trading-bot
-            tar xzf ~/bot-dist.tar.gz -C ~/ai-trading-bot
-            rm ~/bot-dist.tar.gz
+          scp -i droplet_key.pem -o StrictHostKeyChecking=no bot-dist.tar.gz \
+            "$DROPLET_USER@$DROPLET_HOST:~/bot-dist.tar.gz"
+          ssh -i droplet_key.pem -o StrictHostKeyChecking=no "$DROPLET_USER@$DROPLET_HOST" << 'EOF'
+            set -eux
+            cd ~/ai-trading-bot
+            rm -rf venv
+            python3 -m venv venv
+            source venv/bin/activate
             pip install --upgrade pip
-            pip install -r ~/ai-trading-bot/requirements.txt
-            systemctl start ai-trading-scheduler
+            pip install -r requirements.txt
+            sudo systemctl restart tradingbot
+            echo "✅ Bot deployed and service restarted"
           EOF
 
   nightly-health-check:
@@ -90,13 +83,14 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run health-check script
-        if: ${{ env.DROPLET_HOST != '' }}
-        uses: appleboy/ssh-action@v0.1.8
-        with:
-          host: ${{ secrets.DROPLET_HOST }}
-          username: ${{ secrets.DROPLET_USER }}
-          key: ${{ secrets.DROPLET_SSH_KEY }}
-          script: ./deploy.sh
+        run: |
+          if [ -z "$DROPLET_HOST" ]; then
+            echo "Skipping health check, DROPLET_HOST not set"
+            exit 0
+          fi
+          ssh -i droplet_key.pem -o StrictHostKeyChecking=no \
+            "$DROPLET_USER@$DROPLET_HOST" \
+            "cd ~/ai-trading-bot && ./deploy.sh"
       - name: Commit refactor suggestions
         if: ${{ failure() }}
         uses: stefanzweifel/git-auto-commit-action@v4
