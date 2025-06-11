@@ -1,11 +1,14 @@
 name: On-Demand Refactor
 
 permissions:
-  contents: read
+  contents: write
   issues: write
 
 on:
   issue_comment:
+    types:
+      - created
+  pull_request_review_comment:
     types:
       - created
 
@@ -15,8 +18,10 @@ concurrency:
 
 jobs:
   refactor:
-    if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, '/refactor') }}
+    if: ${{ (github.event.issue.pull_request || github.event.pull_request) && contains(github.event.comment.body, '/refactor') }}
     runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,7 +32,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gh
       - name: Checkout PR
-        run: gh pr checkout ${{ github.event.issue.number }}
+        run: gh pr checkout $PR_NUMBER
       - name: Run Codex Refactor
         run: python scripts/codex_refactor.py --diff "$(git diff origin/main)"
       - name: Commit refactored code
@@ -40,9 +45,9 @@ jobs:
       - name: Create Refactor PR
         uses: peter-evans/create-pull-request@v4
         with:
-          title: "AI-driven refactor for issue #${{ github.event.issue.number }}"
+          title: "AI-driven refactor for issue #${{ env.PR_NUMBER }}"
           commit-message: "Apply AI refactors"
           base: main
-          branch: refactor/${{ github.event.issue.number }}
+          branch: refactor/${{ env.PR_NUMBER }}
           body: |
             This PR applies function-level refactor suggestions from ChatGPT to address issues uncovered in the nightly health check.
