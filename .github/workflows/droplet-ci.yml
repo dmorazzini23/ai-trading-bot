@@ -47,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build Docker image
-        run: docker build -t my-bot:${{ github.sha }} .
+        run: docker build -t ${{ env.DOCKER_USERNAME }}/my-bot:${{ github.sha }} .
       - name: Log in to Docker registry
         run: |
           if [[ -z "$DOCKER_USERNAME" || -z "$DOCKER_PASSWORD" ]]; then
@@ -61,7 +61,7 @@ jobs:
             echo "Skipping Docker push, credentials not set"
             exit 0
           fi
-          docker push my-bot:${{ github.sha }}
+          docker push ${{ env.DOCKER_USERNAME }}/my-bot:${{ github.sha }}
       - name: Prepare SSH key
         run: |
           echo "$DROPLET_SSH_KEY" > droplet_key.pem
@@ -77,10 +77,13 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y docker.io
           fi
-          docker pull my-bot:${{ github.sha }}
-          docker stop tradingbot || true
-          docker rm tradingbot || true
-          docker run -d --name tradingbot --restart always my-bot:${{ github.sha }}
+          if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+            echo "$DOCKER_PASSWORD" | sudo docker login -u "$DOCKER_USERNAME" --password-stdin
+          fi
+          sudo docker pull $DOCKER_USERNAME/my-bot:${{ github.sha }}
+          sudo docker stop tradingbot || true
+          sudo docker rm tradingbot || true
+          sudo docker run -d --name tradingbot --restart always $DOCKER_USERNAME/my-bot:${{ github.sha }}
           EOF
 
   nightly-health-check:
