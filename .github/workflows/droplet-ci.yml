@@ -59,7 +59,7 @@ jobs:
             echo "Skipping deploy, DROPLET_HOST not set"
             exit 0
           fi
-          scp -i droplet_key.pem -o StrictHostKeyChecking=no bot-dist.tar.gz "$DROPLET_USER@$DROPLET_HOST:~/ai-trading-bot/"
+          scp -i droplet_key.pem -o StrictHostKeyChecking=no bot-dist.tar.gz "$DROPLET_USER@$DROPLET_HOST:~/bot-dist.tar.gz"
       - name: Unpack and restart service
         run: |
           if [ -z "$DROPLET_HOST" ]; then
@@ -70,10 +70,10 @@ jobs:
             systemctl stop ai-trading-scheduler
             rm -rf ~/ai-trading-bot
             mkdir ~/ai-trading-bot
-            tar xzf ~/ai-trading-bot/bot-dist.tar.gz -C ~/ai-trading-bot
-            rm ~/ai-trading-bot/bot-dist.tar.gz
+            tar xzf ~/bot-dist.tar.gz -C ~/ai-trading-bot
+            rm ~/bot-dist.tar.gz
             pip install --upgrade pip
-            pip install -r requirements.txt
+            pip install -r ~/ai-trading-bot/requirements.txt
             systemctl start ai-trading-scheduler
           EOF
 
