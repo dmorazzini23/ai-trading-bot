@@ -1,5 +1,5 @@
 # Ensure PyYAML can build under Python 3.12
-cython<3.0.0
+cython<4.0.0
 wheel
 
 structlog>=21.5.0
