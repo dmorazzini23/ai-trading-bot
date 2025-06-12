@@ -1515,7 +1515,7 @@ SECRET_KEY = ALPACA_SECRET_KEY
 BASE_URL = ALPACA_BASE_URL
 paper = ALPACA_PAPER
 trading_client = TradingClient(API_KEY, SECRET_KEY, paper=paper)
-data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY, data_feed="iex")
+data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 ctx = BotContext(
     api=trading_client,
     data_client=data_client,
