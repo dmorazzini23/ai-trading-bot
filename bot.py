@@ -667,7 +667,10 @@ class DataFetcher:
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
-            bars.index = pd.to_datetime(bars.index, utc=True)
+            if len(bars.index) and isinstance(bars.index[0], tuple):
+                bars.index = pd.to_datetime([t[0] for t in bars.index], utc=True)
+            else:
+                bars.index = pd.to_datetime(bars.index, utc=True)
             bars.index = bars.index.tz_convert(None)
             df = bars.rename(columns=lambda c: c.lower()).drop(
                 columns=["symbol"], errors="ignore"
@@ -684,7 +687,10 @@ class DataFetcher:
                         df_iex = df_iex.xs(symbol, level=0, axis=1)
                     else:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
-                    df_iex.index = pd.to_datetime(df_iex.index, utc=True)
+                    if len(df_iex.index) and isinstance(df_iex.index[0], tuple):
+                        df_iex.index = pd.to_datetime([t[0] for t in df_iex.index], utc=True)
+                    else:
+                        df_iex.index = pd.to_datetime(df_iex.index, utc=True)
                     df_iex.index = df_iex.index.tz_convert(None)
                     df = df_iex.rename(columns=lambda c: c.lower())
                 except Exception as iex_err:
@@ -692,7 +698,12 @@ class DataFetcher:
                     print(
                         f">> DEBUG: INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}"
                     )
-                    dummy_date = pd.to_datetime(end_ts).tz_localize("UTC")
+                    ts = pd.to_datetime(end_ts)
+                    if ts.tzinfo is not None:
+                        ts = ts.tz_convert("UTC")
+                    else:
+                        ts = ts.tz_localize("UTC")
+                    dummy_date = ts
                     df = pd.DataFrame(
                         [
                             {
@@ -707,14 +718,24 @@ class DataFetcher:
                     )
             else:
                 print(f">> DEBUG: ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
-                dummy_date = pd.to_datetime(end_ts).tz_localize("UTC")
+                ts2 = pd.to_datetime(end_ts)
+                if ts2.tzinfo is not None:
+                    ts2 = ts2.tz_convert("UTC")
+                else:
+                    ts2 = ts2.tz_localize("UTC")
+                dummy_date = ts2
                 df = pd.DataFrame(
                     [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
                     index=[dummy_date],
                 )
         except Exception as e:
             print(f">> DEBUG: ALPACA DAILY FETCH EXCEPTION for {symbol}: {repr(e)}")
-            dummy_date = pd.to_datetime(end_ts).tz_localize("UTC")
+            ts = pd.to_datetime(end_ts)
+            if ts.tzinfo is not None:
+                ts = ts.tz_convert("UTC")
+            else:
+                ts = ts.tz_localize("UTC")
+            dummy_date = ts
             df = pd.DataFrame(
                 [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
                 index=[dummy_date],
@@ -757,7 +778,10 @@ class DataFetcher:
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
-            bars.index = pd.to_datetime(bars.index, utc=True)
+            if len(bars.index) and isinstance(bars.index[0], tuple):
+                bars.index = pd.to_datetime([t[0] for t in bars.index], utc=True)
+            else:
+                bars.index = pd.to_datetime(bars.index, utc=True)
             bars.index = bars.index.tz_convert(None)
             df = bars.rename(columns=lambda c: c.lower()).drop(
                 columns=["symbol"], errors="ignore"
@@ -777,7 +801,10 @@ class DataFetcher:
                         df_iex = df_iex.xs(symbol, level=0, axis=1)
                     else:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
-                    df_iex.index = pd.to_datetime(df_iex.index, utc=True)
+                    if len(df_iex.index) and isinstance(df_iex.index[0], tuple):
+                        df_iex.index = pd.to_datetime([t[0] for t in df_iex.index], utc=True)
+                    else:
+                        df_iex.index = pd.to_datetime(df_iex.index, utc=True)
                     df_iex.index = df_iex.index.tz_convert(None)
                     df = df_iex.rename(columns=lambda c: c.lower())[
                         ["open", "high", "low", "close", "volume"]
@@ -949,7 +976,12 @@ def prefetch_daily_data(
                         print(
                             f">> DEBUG: INSERTING DUMMY DAILY FOR {sym} ON {end_date.isoformat()}"
                         )
-                        dummy_date = pd.to_datetime(end_date).tz_localize("UTC")
+                        tsd = pd.to_datetime(end_date)
+                        if tsd.tzinfo is not None:
+                            tsd = tsd.tz_convert("UTC")
+                        else:
+                            tsd = tsd.tz_localize("UTC")
+                        dummy_date = tsd
                         dummy_df = pd.DataFrame(
                             [
                                 {
@@ -968,7 +1000,12 @@ def prefetch_daily_data(
             print(f">> DEBUG: ALPACA BULK FETCH UNKNOWN ERROR for {symbols}: {repr(e)}")
             daily_dict = {}
             for sym in symbols:
-                dummy_date = pd.to_datetime(end_date).tz_localize("UTC")
+                t2 = pd.to_datetime(end_date)
+                if t2.tzinfo is not None:
+                    t2 = t2.tz_convert("UTC")
+                else:
+                    t2 = t2.tz_localize("UTC")
+                dummy_date = t2
                 dummy_df = pd.DataFrame(
                     [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
                     index=[dummy_date],
@@ -979,7 +1016,12 @@ def prefetch_daily_data(
         print(f">> DEBUG: ALPACA BULK FETCH EXCEPTION for {symbols}: {repr(e)}")
         daily_dict = {}
         for sym in symbols:
-            dummy_date = pd.to_datetime(end_date).tz_localize("UTC")
+            t3 = pd.to_datetime(end_date)
+            if t3.tzinfo is not None:
+                t3 = t3.tz_convert("UTC")
+            else:
+                t3 = t3.tz_localize("UTC")
+            dummy_date = t3
             dummy_df = pd.DataFrame(
                 [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
                 index=[dummy_date],
@@ -1535,10 +1577,10 @@ stream = TradingStream(
     paper=True,
 )
 
-async def on_trade_update(channel, data):
+async def on_trade_update(event):
     """Handle order status updates from the Alpaca stream."""
     logger.info(
-        f"Trade update for {data.order['symbol']}: {data.order['status']}"
+        f"Trade update for {event.order['symbol']}: {event.order['status']}"
     )
 
 stream.subscribe_trade_updates(on_trade_update)
@@ -2192,10 +2234,36 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
 def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
     for attempt in range(2):
         try:
+            try:
+                acct = api.get_account()
+            except Exception:
+                acct = None
+            if acct and getattr(req, "side", "").lower() == "buy":
+                price = getattr(req, "limit_price", None)
+                if not price:
+                    price = getattr(req, "notional", 0)
+                need = float(price or 0) * float(getattr(req, "qty", 0))
+                if need > float(getattr(acct, "buying_power", 0)):
+                    logger.warning(
+                        f"insufficient buying power for {req.symbol}: requested {req.qty}, available {acct.buying_power}"
+                    )
+                    return None
+            if getattr(req, "side", "").lower() == "sell":
+                try:
+                    positions = api.get_all_positions()
+                except Exception:
+                    positions = []
+                avail = next((float(p.qty) for p in positions if p.symbol == req.symbol), 0.0)
+                if float(getattr(req, "qty", 0)) > avail:
+                    logger.warning(
+                        f"insufficient qty available for {req.symbol}: requested {req.qty}, available {avail}"
+                    )
+                    return None
+
             order = api.submit_order(order_data=req)
             while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
                 time.sleep(0.5)
-                order = api.get_order_by_client_order_id(order.client_order_id)
+                order = api.get_order_by_id(order.id)
             logger.info(f"Order status for {req.symbol}: {getattr(order, 'status', '')}")
             status = getattr(order, "status", "")
             if status == "filled":
@@ -2233,7 +2301,7 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                     order = api.submit_order(order_data=req)
                     while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
                         time.sleep(0.5)
-                        order = api.get_order_by_client_order_id(order.client_order_id)
+                        order = api.get_order_by_id(order.id)
                     logger.info(
                         f"Order status for {req.symbol}: {getattr(order, 'status', '')}"
                     )
@@ -2258,7 +2326,7 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
     start = pytime.time()
     while pytime.time() - start < timeout:
         try:
-            od = ctx.api.get_order_by_client_order_id(order_id)
+            od = ctx.api.get_order_by_id(order_id)
             status = getattr(od, "status", "")
             filled = getattr(od, "filled_qty", "0")
             if status not in {"new", "accepted", "partially_filled"}:
@@ -2317,7 +2385,7 @@ def send_exit_order(
     )
     pytime.sleep(5)
     try:
-        o2 = ctx.api.get_order_by_client_order_id(limit_order.client_order_id)
+        o2 = ctx.api.get_order_by_id(limit_order.id)
         if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
             ctx.api.cancel_order_by_id(limit_order.id)
             safe_submit_order(

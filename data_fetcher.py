@@ -251,7 +251,11 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             raise KeyError("Missing OHLCV columns")
 
         df = df[["open", "high", "low", "close", "volume"]]
-        df.index = pd.to_datetime(df.index).tz_localize(None)
+        if len(df.index) and isinstance(df.index[0], tuple):
+            df.index = pd.to_datetime([t[0] for t in df.index], utc=True)
+        else:
+            df.index = pd.to_datetime(df.index, utc=True)
+        df.index = df.index.tz_convert(None)
 
         return df
 
@@ -266,7 +270,11 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             )
             bars = client.get_stock_bars(req)
             df = bars.df[["open", "high", "low", "close", "volume"]].copy()
-            df.index = pd.to_datetime(df.index).tz_localize(None)
+            if len(df.index) and isinstance(df.index[0], tuple):
+                df.index = pd.to_datetime([t[0] for t in df.index], utc=True)
+            else:
+                df.index = pd.to_datetime(df.index, utc=True)
+            df.index = df.index.tz_convert(None)
             logger.info(f"Falling back to daily bars for {symbol} ({len(df)} rows)")
             return df
         except Exception as daily_err:
