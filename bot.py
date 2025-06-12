@@ -3637,10 +3637,20 @@ else:
         )
         bars_req.feed = "iex"
         bars = ctx.data_client.get_stock_bars(bars_req).df
+    # 1) If columns are (symbol, field), select our one symbol
     if isinstance(bars.columns, pd.MultiIndex):
         bars = bars.xs(REGIME_SYMBOLS[0], level=0, axis=1)
     else:
         bars = bars.drop(columns=["symbol"], errors="ignore")
+
+    # 2) Fix the index if it's a MultiIndex of (symbol, timestamp)
+    if isinstance(bars.index, pd.MultiIndex):
+        bars.index = bars.index.get_level_values(1)
+    # 3) Or if each index entry is still a 1-tuple
+    elif bars.index.dtype == object and isinstance(bars.index[0], tuple):
+        bars.index = [t[0] for t in bars.index]
+
+    # 4) Now safely convert to a timezone-naive DatetimeIndex
     bars.index = pd.to_datetime(bars.index).tz_localize(None)
     bars = bars.rename(columns=lambda c: c.lower())
     feats = _compute_regime_features(bars)
