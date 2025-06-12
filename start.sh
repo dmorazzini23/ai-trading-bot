@@ -3,7 +3,7 @@ set -euo pipefail
 
 echo "🔁 Starting AI Trading Bot..."
 source ~/.bashrc
-cd ~/AI_TRADING_BOT
+cd ~/ai-trading-bot
 if [ ! -d venv ]; then
   python3 -m venv venv
 fi
