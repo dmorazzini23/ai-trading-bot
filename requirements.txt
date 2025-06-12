@@ -18,7 +18,7 @@ portalocker>=2.7.0
 alpaca-py>=0.40.1        # new official SDK
 scikit-learn==1.6.1
 Cython>=0.29.36         # needed to build PyYAML on Python 3.12
-PyYAML==6.0             # ensure a wheel install
+PyYAML==6.0.1             # ensure a wheel install
 joblib
 python-dotenv>=0.21.0
 sentry-sdk
