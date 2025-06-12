@@ -68,6 +68,8 @@ from alpaca.trading.requests import (
 from alpaca.trading.models import Order
 from alpaca_trade_api.rest import REST, APIError
 from alpaca_trade_api.stream import Stream
+# for paper trading
+ALPACA_BASE_URL = 'https://paper-api.alpaca.markets'
 import threading
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
@@ -89,7 +91,6 @@ import config
 
 ALPACA_API_KEY = config.ALPACA_API_KEY
 ALPACA_SECRET_KEY = config.ALPACA_SECRET_KEY
-ALPACA_BASE_URL = config.ALPACA_BASE_URL
 ALPACA_PAPER = config.ALPACA_PAPER
 validate_alpaca_credentials = config.validate_alpaca_credentials
 CONFIG_NEWS_API_KEY = config.NEWS_API_KEY
@@ -1336,7 +1337,11 @@ class SignalManager:
                 feat = ["rsi", "macd", "atr", "vwap", "sma_50", "sma_200"]
 
             X = df[feat].iloc[-1].values.reshape(1, -1)
-            pred = model.predict(X)[0]
+            try:
+                pred = model.predict(X)[0]
+            except ValueError as e:
+                logger.error(f"signal_ml failed: {e}")
+                return -1, 0.0, "ml"
             proba = float(model.predict_proba(X)[0][pred])
             s = 1 if pred == 1 else -1
             logger.info(
@@ -1416,6 +1421,10 @@ class SignalManager:
 
         # Track total signals evaluated
         signals_evaluated.inc()
+
+        # simple moving averages
+        df['sma_50'] = df['close'].rolling(window=50).mean()
+        df['sma_200'] = df['close'].rolling(window=200).mean()
 
         fns = [
             self.signal_momentum,
@@ -1532,7 +1541,7 @@ trading_client = TradingClient(API_KEY, SECRET_KEY, paper=paper)
 data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 
 # WebSocket for order status updates
-stream = Stream(API_KEY, SECRET_KEY, paper=True)
+stream = Stream(API_KEY, SECRET_KEY, base_url=ALPACA_BASE_URL)
 
 @stream.on_trade_update
 async def on_trade_update(conn, channel, data):
@@ -2212,6 +2221,9 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
             return order
         except APIError as e:
             err = e.args[0] or {}
+            if "insufficient qty" in str(e).lower():
+                logger.warning(f"insufficient qty available for {req.symbol}: {e}")
+                return None
             if (
                 getattr(req, "side", "").lower() == "sell"
                 and err.get("code") == 40310000

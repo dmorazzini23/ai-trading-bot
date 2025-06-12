@@ -28,7 +28,8 @@ pybreaker
 tzlocal>=4.0
 GPy>=1.10
 torch>=2.0
-setuptools
+# pin setuptools to avoid pandas_ta/pkg_resources deprecation warnings
+setuptools<81
 yfinance
 urllib3
 statsmodels
