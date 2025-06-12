@@ -12,6 +12,7 @@ schedule>=1.1.0
 portalocker>=2.7.0
 alpaca-py>=0.40.1        # new official SDK
 scikit-learn==1.6.1
+Cython>=0.29.36         # needed to build PyYAML on Python 3.12
 joblib
 python-dotenv>=0.21.0
 sentry-sdk
