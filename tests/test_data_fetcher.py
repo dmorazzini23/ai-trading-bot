@@ -4,6 +4,10 @@ from pathlib import Path
 import pandas as pd
 import datetime
 import pytest
+import os
+
+os.environ.setdefault("APCA_API_KEY_ID", "dummy")
+os.environ.setdefault("APCA_API_SECRET_KEY", "dummy")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 mods = [
@@ -13,11 +17,14 @@ mods = [
     "alpaca.data.timeframe",
     "alpaca_trade_api.rest",
     "alpaca.common.exceptions",
+    "dotenv",
     "finnhub",
 ]
 for m in mods:
     sys.modules.setdefault(m, types.ModuleType(m))
 sys.modules.setdefault("alpaca_trade_api", types.ModuleType("alpaca_trade_api"))
+sys.modules["dotenv"] = types.ModuleType("dotenv")
+sys.modules["dotenv"].load_dotenv = lambda *a, **k: None
 
 
 class _FakeREST:
