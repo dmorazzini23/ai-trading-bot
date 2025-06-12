@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: |
           python3 -m pip install --upgrade pip setuptools
-          python -m pip install -r requirements.txt -r requirements-dev.txt
+          python3 -m pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
       - name: "Debug: list installed packages"
         run: pip list
       - name: "Debug: verify pandas import"
