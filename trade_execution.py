@@ -25,7 +25,7 @@ from alpaca.trading.requests import LimitOrderRequest
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.models import Order
-from alpaca_trade_api.rest import APIError
+from alpaca.common.exceptions import APIError
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockLatestQuoteRequest
 
