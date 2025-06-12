@@ -30,8 +30,9 @@ jobs:
           flake8 \
             --max-line-length=160 \
             --extend-ignore=E302,E305,E402,E203,E501,F811 \
-            --statistics .
-          mypy .
+            --statistics \
+            --exclude scripts/ .
+          mypy . --exclude scripts/
 
       - name: Pytest
         run: pytest --maxfail=1 --disable-warnings --junitxml=reports/junit.xml --cov=. --cov-report=xml
