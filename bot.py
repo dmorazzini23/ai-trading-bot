@@ -54,7 +54,12 @@ from requests.exceptions import HTTPError
 
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
+from alpaca.trading.enums import (
+    OrderSide,
+    TimeInForce,
+    QueryOrderStatus,
+    OrderStatus,
+)
 from alpaca.trading.requests import (
     GetOrdersRequest,
     MarketOrderRequest,
@@ -62,7 +67,7 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.models import Order
 from alpaca_trade_api.rest import REST, APIError
-from alpaca_trade_api import Stream
+from alpaca_trade_api.stream import Stream
 import threading
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
@@ -1525,18 +1530,16 @@ BASE_URL = ALPACA_BASE_URL
 paper = ALPACA_PAPER
 trading_client = TradingClient(API_KEY, SECRET_KEY, paper=paper)
 data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
+
 # WebSocket for order status updates
-stream = Stream(
-    key_id=API_KEY,
-    secret_key=SECRET_KEY,
-    base_url="https://paper-api.alpaca.markets",
-    data_feed="iex",
-)
+stream = Stream(API_KEY, SECRET_KEY, paper=True)
 
 @stream.on_trade_update
 async def on_trade_update(conn, channel, data):
-    # data contains order id, new status, filled qty, etc.
-    print("Trade update:", data)
+    # data.order contains order id, symbol, new status, filled qty, etc.
+    logger.info(
+        f"Trade update for {data.order['symbol']}: {data.order['status']}"
+    )
 ctx = BotContext(
     api=trading_client,
     data_client=data_client,
@@ -2188,6 +2191,10 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
     for attempt in range(2):
         try:
             order = api.submit_order(order_data=req)
+            while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
+                time.sleep(0.5)
+                order = api.get_order(order.id)
+            logger.info(f"Order status for {req.symbol}: {getattr(order, 'status', '')}")
             status = getattr(order, "status", "")
             if status == "filled":
                 logger.info(
@@ -2203,6 +2210,36 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                     f"Order for {req.symbol} status={status}: {getattr(order, 'reject_reason', '')}"
                 )
             return order
+        except APIError as e:
+            err = e.args[0] or {}
+            if (
+                getattr(req, "side", "").lower() == "sell"
+                and err.get("code") == 40310000
+            ):
+                try:
+                    pos_qty = float(api.get_position(req.symbol).qty)
+                except Exception:
+                    pos_qty = 0.0
+                if pos_qty > 0:
+                    logger.warning(
+                        f"Requested {req.qty} but only {pos_qty} available, selling that"
+                    )
+                    req.qty = pos_qty
+                    order = api.submit_order(order_data=req)
+                    while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
+                        time.sleep(0.5)
+                        order = api.get_order(order.id)
+                    logger.info(
+                        f"Order status for {req.symbol}: {getattr(order, 'status', '')}"
+                    )
+                    return order
+                else:
+                    logger.warning(f"No shares of {req.symbol} to sell, skipping")
+                    return None
+            time.sleep(1)
+            if attempt == 1:
+                logger.warning(f"submit_order failed for {req.symbol}: {e}")
+                return None
         except Exception as e:
             time.sleep(1)
             if attempt == 1:
@@ -3758,6 +3795,9 @@ def screen_universe(
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
         if df is None or len(df) < ATR_LENGTH:
             continue
+        df = df[df["volume"] > 100_000]
+        if df.empty:
+            continue
         series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH)
         atr_val = series.iloc[-1] if not series.empty else np.nan
         if not pd.isna(atr_val):
@@ -4428,7 +4468,9 @@ if __name__ == "__main__":
         )
 
         # Start listening for trade updates in a background thread
-        threading.Thread(target=stream.run, daemon=True).start()
+        threading.Thread(
+            target=lambda: stream.run(["trade_updates"]), daemon=True
+        ).start()
 
         # Scheduler loop
         while True:
