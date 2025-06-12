@@ -1540,8 +1540,6 @@ BASE_URL = ALPACA_BASE_URL
 paper = ALPACA_PAPER
 trading_client = TradingClient(API_KEY, SECRET_KEY, paper=paper)
 # alias get_order for v2 SDK differences
-if not hasattr(trading_client, "get_order"):
-    trading_client.get_order = lambda oid: trading_client.get_order_by_client_order_id(oid)
 data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 
 # WebSocket for order status updates
@@ -1553,12 +1551,13 @@ stream = Stream(
     data_feed="iex",
 )
 
-@stream.on_trade_update
-async def on_trade_update(conn, channel, data):
-    # data.order contains order id, symbol, new status, filled qty, etc.
+async def on_trade_update(channel: str, data):
+    """Handle order status updates from the Alpaca stream."""
     logger.info(
         f"Trade update for {data.order['symbol']}: {data.order['status']}"
     )
+
+stream.subscribe_trade_updates(on_trade_update)
 ctx = BotContext(
     api=trading_client,
     data_client=data_client,
@@ -2212,7 +2211,7 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
             order = api.submit_order(order_data=req)
             while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
                 time.sleep(0.5)
-                order = api.get_order(order.id)
+                order = api.get_order(order_id=order.id)
             logger.info(f"Order status for {req.symbol}: {getattr(order, 'status', '')}")
             status = getattr(order, "status", "")
             if status == "filled":
@@ -2250,7 +2249,7 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                     order = api.submit_order(order_data=req)
                     while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
                         time.sleep(0.5)
-                        order = api.get_order(order.id)
+                        order = api.get_order(order_id=order.id)
                     logger.info(
                         f"Order status for {req.symbol}: {getattr(order, 'status', '')}"
                     )
@@ -2275,7 +2274,7 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
     start = pytime.time()
     while pytime.time() - start < timeout:
         try:
-            od = ctx.api.get_order_by_id(order_id)
+            od = ctx.api.get_order(order_id=order_id)
             status = getattr(od, "status", "")
             filled = getattr(od, "filled_qty", "0")
             if status not in {"new", "accepted", "partially_filled"}:
@@ -2334,7 +2333,7 @@ def send_exit_order(
     )
     pytime.sleep(5)
     try:
-        o2 = ctx.api.get_order_by_id(limit_order.id)
+        o2 = ctx.api.get_order(order_id=limit_order.id)
         if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
             ctx.api.cancel_order_by_id(limit_order.id)
             safe_submit_order(
