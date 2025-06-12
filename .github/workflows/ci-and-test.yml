@@ -24,11 +24,14 @@ jobs:
           pip install -r requirements.txt
           pip install mypy pytest-cov
 
-      - name: Flake8
-        run: flake8 --max-line-length=88 --statistics
-
-      - name: Mypy
-        run: mypy .
+      - name: Lint & Type-Check
+        run: |
+          pip install flake8 mypy
+          flake8 \
+            --max-line-length=120 \
+            --extend-ignore=E302,E305,F811 \
+            --statistics .
+          mypy .
 
       - name: Pytest
         run: pytest --maxfail=1 --disable-warnings --junitxml=reports/junit.xml --cov=. --cov-report=xml

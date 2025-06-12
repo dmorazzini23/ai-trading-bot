@@ -44,35 +44,24 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DROPLET_SSH_KEY }}
 
-      - name: Deploy container
-        env:
-          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
-          DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
-          IMAGE_TAG: ${{ env.IMAGE_TAG }}
-        run: |
-          ssh -o StrictHostKeyChecking=no root@$DROPLET_HOST <<'EOS'
-            docker pull $DOCKER_REGISTRY/$GITHUB_REPOSITORY:$IMAGE_TAG
+      - name: Deploy on Droplet
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script: |
+            docker pull ${{ secrets.DOCKER_REGISTRY }}/${{ github.repository }}:${{ github.sha }}
             docker stop ai-trader || true
             docker rm ai-trader  || true
             docker run -d \
               --name ai-trader \
               --restart always \
               -e BOT_MODE=$BOT_MODE \
-              -e OTHER_ENV_VAR=$OTHER_ENV_VAR \
-              $DOCKER_REGISTRY/$GITHUB_REPOSITORY:$IMAGE_TAG
-EOS
+              ${{ secrets.DOCKER_REGISTRY }}/${{ github.repository }}:${{ github.sha }}
 
       - name: Health check
-        env:
-          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
         run: |
-          ssh -o StrictHostKeyChecking=no root@$DROPLET_HOST <<'EOS'
-            for i in {1..30}; do
-              if curl --fail http://localhost:5050/health; then exit 0; fi
-              sleep 1
-            done
-            exit 1
-EOS
+          timeout 30 bash -c 'until curl --silent --fail http://localhost:5050/health; do sleep 1; done'
 
       - name: Post release to Sentry
         if: success()
