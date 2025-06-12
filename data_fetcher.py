@@ -25,6 +25,8 @@ client = StockHistoricalDataClient(
 _rate_limit_lock = threading.Lock()
 import requests
 import urllib3
+import dateutil.tz
+import pytz
 
 MINUTES_REQUIRED = 31
 HISTORICAL_START = "2025-06-01"
@@ -156,8 +158,14 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
 
     if isinstance(df.index, pd.MultiIndex):
         df.index = df.index.get_level_values(0)
-    df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
-    df.index = pd.to_datetime(df.index, errors="coerce").tz_localize(None)
+    # 🛠️ handle tuple-indexed IEX feeds
+    if len(df.index) and isinstance(df.index[0], tuple):
+        # each index entry looks like (symbol, ts)
+        df.index = pd.to_datetime([t[0] for t in df.index], utc=True)
+    else:
+        df.index = pd.to_datetime(df.index, utc=True)
+    # strip tzinfo to make it naive
+    df.index = df.index.tz_convert(None)
     df["timestamp"] = df.index
 
     try:
@@ -202,14 +210,22 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
     """
     import pandas as pd
 
+    # 🛠️ make sure start_date/end_date are timezone-aware before converting to UTC
+    if start_date.tzinfo is None:
+        start_date = start_date.tz_localize(dateutil.tz.tzlocal())
+    start_dt = start_date.astimezone(pytz.UTC) - timedelta(minutes=1)
+    if end_date.tzinfo is None:
+        end_date = end_date.tz_localize(dateutil.tz.tzlocal())
+    end_dt = end_date.astimezone(pytz.UTC)
+
     try:
         bars = None
         try:
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=TimeFrame.Minute,
-                start=start_date,
-                end=end_date,
+                start=start_dt,
+                end=end_dt,
             )
             bars = client.get_stock_bars(req)
         except APIError as e:
@@ -222,7 +238,13 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
         if bars is None or not getattr(bars, "df", pd.DataFrame()).size:
             raise APIError("No minute data returned")
 
-        df = bars.df.copy()
+        bars = bars.df
+        # drop MultiIndex if present, otherwise drop the stray "symbol" column
+        if isinstance(bars.columns, pd.MultiIndex):
+            bars = bars.xs(symbol, level=0, axis=1)
+        else:
+            bars = bars.drop(columns=["symbol"], errors="ignore")
+        df = bars.copy()
 
         logger.debug(f"{symbol}: raw bar columns: {df.columns.tolist()}")
 
@@ -251,6 +273,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             raise KeyError("Missing OHLCV columns")
 
         df = df[["open", "high", "low", "close", "volume"]]
+        # 🛠️ unify tuple-handling and drop tzinfo
         if len(df.index) and isinstance(df.index[0], tuple):
             df.index = pd.to_datetime([t[0] for t in df.index], utc=True)
         else:
@@ -270,6 +293,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             )
             bars = client.get_stock_bars(req)
             df = bars.df[["open", "high", "low", "close", "volume"]].copy()
+            # 🛠️ unify tuple-handling and drop tzinfo
             if len(df.index) and isinstance(df.index[0], tuple):
                 df.index = pd.to_datetime([t[0] for t in df.index], utc=True)
             else:
