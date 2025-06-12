@@ -3427,6 +3427,10 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["rsi"] = ta.rsi(df["close"], length=14)
     df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
 
+    # ensure rolling simple moving averages are available for ML
+    df["sma_50"] = df["close"].astype(float).rolling(window=50).mean()
+    df["sma_200"] = df["close"].astype(float).rolling(window=200).mean()
+
     # ── New advanced indicators ───────────────────────────────────────────
     try:
         kc = ta.kc(df["high"], df["low"], df["close"], length=20)
