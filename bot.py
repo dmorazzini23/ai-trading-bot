@@ -62,7 +62,7 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.models import Order
 from alpaca_trade_api.rest import REST, APIError
-from alpaca_trade_api.stream import StreamConn
+from alpaca_trade_api import Stream
 import threading
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
@@ -1526,10 +1526,15 @@ paper = ALPACA_PAPER
 trading_client = TradingClient(API_KEY, SECRET_KEY, paper=paper)
 data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 # WebSocket for order status updates
-conn = StreamConn(API_KEY, SECRET_KEY, paper=paper)
+stream = Stream(
+    key_id=API_KEY,
+    secret_key=SECRET_KEY,
+    base_url="https://paper-api.alpaca.markets",
+    data_feed="iex",
+)
 
-@conn.on(r'trade_updates')
-async def on_trade_update(ws_conn, channel, data):
+@stream.on_trade_updates
+async def on_trade_update(conn, channel, data):
     # Log or update internal state when an order changes status
     logger.info(f"Trade update received: {data}")
 ctx = BotContext(
@@ -4423,7 +4428,7 @@ if __name__ == "__main__":
         )
 
         # Start listening for trade updates in a background thread
-        threading.Thread(target=lambda: conn.run(['trade_updates']), daemon=True).start()
+        threading.Thread(target=stream.run, daemon=True).start()
 
         # Scheduler loop
         while True:
