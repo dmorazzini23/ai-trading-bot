@@ -379,9 +379,11 @@ def build_feature_label_df(
                     f"[build_feature_label_df] – {sym} returned no minute data; skipping symbol."
                 )
                 continue
-            if raw.shape[0] < MINUTES_REQUIRED:
+            min_required = max(int(MINUTES_REQUIRED * 0.7), 5)
+            if raw.shape[0] < min_required:
                 print(
-                    f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {MINUTES_REQUIRED}"
+                    f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {min_required} "
+                    f"(70% of {MINUTES_REQUIRED})"
                 )
                 continue
 
