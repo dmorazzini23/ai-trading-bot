@@ -96,7 +96,8 @@ def get_historical_data(
         return _DATA_CLIENT.get_stock_bars(req).df
 
     try:
-        bars = _fetch("sip")
+        # default to IEX-delayed data to avoid SIP subscription errors
+        bars = _fetch("iex")
     except APIError as e:
         if "subscription does not permit querying recent sip data" in str(e).lower():
             try:
