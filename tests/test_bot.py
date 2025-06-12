@@ -23,7 +23,7 @@ mods = [
     "alpaca_trade_api",
     "alpaca_trade_api.rest",
     "alpaca.data",
-    "alpaca.data.stream",
+    "alpaca.trading.stream",
     "alpaca.data.historical",
     "alpaca.data.models",
     "alpaca.data.requests",
@@ -50,8 +50,7 @@ for name in mods:
     if name not in sys.modules:
         sys.modules[name] = types.ModuleType(name)
 sys.modules["pipeline"].model_pipeline = lambda *a, **k: None
-sys.modules["alpaca.data"].Stream = object
-sys.modules["alpaca.data.stream"].Stream = object
+sys.modules["alpaca.trading.stream"].TradingStream = object
 
 sys.modules["flask"].Flask = object
 sys.modules["requests"].get = lambda *a, **k: None

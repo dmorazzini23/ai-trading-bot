@@ -68,7 +68,8 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.models import Order
 from alpaca.common.exceptions import APIError
-from alpaca.data.stream import Stream
+# Legacy import removed; using alpaca-py trading stream instead
+from alpaca.trading.stream import TradingStream
 # for paper trading
 ALPACA_BASE_URL = 'https://paper-api.alpaca.markets'
 import threading
@@ -1527,11 +1528,11 @@ data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 # WebSocket for order status updates
 # use the new Stream class; explicitly set feed and base_url
 
-stream = Stream(
+# Create a trading stream for order status updates
+stream = TradingStream(
     API_KEY,
     SECRET_KEY,
-    base_url="https://paper-api.alpaca.markets",
-    data_stream_url="wss://paper-data.alpaca.markets/stream",
+    paper=True,
 )
 
 async def on_trade_update(channel, data):
