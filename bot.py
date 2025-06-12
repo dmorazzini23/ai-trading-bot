@@ -1,3 +1,10 @@
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message="pkg_resources is deprecated as an API.*",
+    category=UserWarning,
+)
+
 import os
 from dotenv import load_dotenv
 
