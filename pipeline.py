@@ -19,6 +19,8 @@ class FeatureBuilder(BaseEstimator, TransformerMixin):
                 "ma10": close.rolling(10).mean().bfill(),
                 "ma30": close.rolling(30).mean().bfill(),
                 "vol": close.pct_change().rolling(10).std().fillna(0),
+                "sma_50": close.rolling(50).mean().bfill(),
+                "sma_200": close.rolling(200).mean().bfill(),
             }
             arr = np.column_stack(
                 [
@@ -26,6 +28,8 @@ class FeatureBuilder(BaseEstimator, TransformerMixin):
                     features["ma10"],
                     features["ma30"],
                     features["vol"],
+                    features["sma_50"],
+                    features["sma_200"],
                 ]
             )
             return arr
