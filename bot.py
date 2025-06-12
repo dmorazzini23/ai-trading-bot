@@ -1,9 +1,11 @@
 import warnings
+from sklearn.exceptions import InconsistentVersionWarning
 warnings.filterwarnings(
     "ignore",
     message="pkg_resources is deprecated as an API.*",
     category=UserWarning,
 )
+warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
 import os
 from dotenv import load_dotenv
@@ -13,7 +15,6 @@ from argparse import ArgumentParser
 
 import logging
 import logging.handlers
-import warnings
 import csv
 import json
 import re
@@ -1538,10 +1539,19 @@ SECRET_KEY = ALPACA_SECRET_KEY
 BASE_URL = ALPACA_BASE_URL
 paper = ALPACA_PAPER
 trading_client = TradingClient(API_KEY, SECRET_KEY, paper=paper)
+# alias get_order for v2 SDK differences
+if not hasattr(trading_client, "get_order"):
+    trading_client.get_order = lambda oid: trading_client.get_order_by_client_order_id(oid)
 data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 
 # WebSocket for order status updates
-stream = Stream(API_KEY, SECRET_KEY, base_url=ALPACA_BASE_URL)
+# use the new Stream class; explicitly set feed and base_url
+stream = Stream(
+    API_KEY,
+    SECRET_KEY,
+    base_url=ALPACA_BASE_URL,
+    data_feed="iex",
+)
 
 @stream.on_trade_update
 async def on_trade_update(conn, channel, data):
@@ -3269,6 +3279,8 @@ def load_model(path: str = MODEL_PATH):
     except Exception as e:
         logger.exception(f"Failed to load model at {path}: {e}")
         return None
+    if model is None:
+        raise RuntimeError("MODEL_LOAD_FAILED: null model in " + path)
     logger.info("MODEL_LOADED", extra={"path": path})
     return model
 
@@ -4481,7 +4493,7 @@ if __name__ == "__main__":
 
         # Start listening for trade updates in a background thread
         threading.Thread(
-            target=lambda: stream.run(["trade_updates"]), daemon=True
+            target=lambda: stream.run(), daemon=True
         ).start()
 
         # Scheduler loop
