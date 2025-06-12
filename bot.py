@@ -68,7 +68,7 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.models import Order
 from alpaca_trade_api.rest import REST, APIError
-from alpaca.data import Stream
+from alpaca.data.stream import Stream
 # for paper trading
 ALPACA_BASE_URL = 'https://paper-api.alpaca.markets'
 import threading
