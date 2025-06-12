@@ -38,3 +38,17 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
+
+## Systemd Service
+
+A sample service file `ai-trading-scheduler.service` is provided to run the bot using the `start.sh` helper script. This ensures the virtual environment is activated and all dependencies are installed before the bot starts.
+
+To use it:
+
+```bash
+sudo cp ai-trading-scheduler.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai-trading-scheduler.service
+```
+
+The service writes logs to `/var/log/ai-trading-scheduler.log`.

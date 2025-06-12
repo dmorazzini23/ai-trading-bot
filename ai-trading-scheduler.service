@@ -1,0 +1,15 @@
+[Unit]
+Description=AI Trading Bot Scheduler & Metrics
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/ai-trading-bot
+ExecStart=/root/ai-trading-bot/start.sh
+Restart=always
+RestartSec=5
+StandardOutput=append:/var/log/ai-trading-scheduler.log
+StandardError=append:/var/log/ai-trading-scheduler.log
+
+[Install]
+WantedBy=multi-user.target
