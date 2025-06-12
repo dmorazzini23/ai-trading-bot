@@ -256,6 +256,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#systemd-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      Systemd Service
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -347,6 +356,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#systemd-service" class="md-nav__link">
+    <span class="md-ellipsis">
+      Systemd Service
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -386,6 +404,14 @@ includes <code>requirements.txt</code>:</p>
 <h3 id="running-tests">Running Tests</h3>
 <pre><code class="language-bash">pytest
 </code></pre>
+<h2 id="systemd-service">Systemd Service</h2>
+<p>A sample service file <code>ai-trading-scheduler.service</code> is provided to run the bot using the <code>start.sh</code> helper script. This ensures the virtual environment is activated and all dependencies are installed before the bot starts.</p>
+<p>To use it:</p>
+<pre><code class="language-bash">sudo cp ai-trading-scheduler.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai-trading-scheduler.service
+</code></pre>
+<p>The service writes logs to <code>/var/log/ai-trading-scheduler.log</code>.</p>
 
 
 
