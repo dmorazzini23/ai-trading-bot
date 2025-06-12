@@ -1,3 +1,7 @@
+# Ensure PyYAML can build under Python 3.12
+cython<3.0.0
+wheel
+
 structlog>=21.5.0
 tenacity>=8.2.0
 ratelimit>=2.2.1
