@@ -1546,16 +1546,16 @@ data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 # use the new Stream class; explicitly set feed and base_url
 
 stream = Stream(
-    key_id=API_KEY,
-    secret_key=SECRET_KEY,
-    base_url=ALPACA_BASE_URL,
-    data_feed="iex",
+    API_KEY,
+    SECRET_KEY,
+    base_url="https://paper-api.alpaca.markets",
+    data_stream_url="wss://paper-data.alpaca.markets/stream",
 )
 
-def on_trade_update(trade_update):
+async def on_trade_update(channel, data):
     """Handle order status updates from the Alpaca stream."""
     logger.info(
-        f"Trade update for {trade_update.order['symbol']}: {trade_update.order['status']}"
+        f"Trade update for {data.order['symbol']}: {data.order['status']}"
     )
 
 stream.subscribe_trade_updates(on_trade_update)
@@ -2212,7 +2212,7 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
             order = api.submit_order(order_data=req)
             while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
                 time.sleep(0.5)
-                order = api.get_order_by_id(order.id)
+                order = api.get_order_by_client_order_id(order.client_order_id)
             logger.info(f"Order status for {req.symbol}: {getattr(order, 'status', '')}")
             status = getattr(order, "status", "")
             if status == "filled":
@@ -2250,7 +2250,7 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                     order = api.submit_order(order_data=req)
                     while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
                         time.sleep(0.5)
-                        order = api.get_order_by_id(order.id)
+                        order = api.get_order_by_client_order_id(order.client_order_id)
                     logger.info(
                         f"Order status for {req.symbol}: {getattr(order, 'status', '')}"
                     )
@@ -2275,7 +2275,7 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
     start = pytime.time()
     while pytime.time() - start < timeout:
         try:
-            od = ctx.api.get_order_by_id(order_id)
+            od = ctx.api.get_order_by_client_order_id(order_id)
             status = getattr(od, "status", "")
             filled = getattr(od, "filled_qty", "0")
             if status not in {"new", "accepted", "partially_filled"}:
@@ -2334,7 +2334,7 @@ def send_exit_order(
     )
     pytime.sleep(5)
     try:
-        o2 = ctx.api.get_order_by_id(limit_order.id)
+        o2 = ctx.api.get_order_by_client_order_id(limit_order.client_order_id)
         if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
             ctx.api.cancel_order_by_id(limit_order.id)
             safe_submit_order(
@@ -4493,7 +4493,8 @@ if __name__ == "__main__":
 
         # Start listening for trade updates in a background thread
         threading.Thread(
-            target=lambda: stream.run(), daemon=True
+            target=stream.run,
+            daemon=True,
         ).start()
 
         # Scheduler loop
