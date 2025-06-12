@@ -161,7 +161,7 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
     # 🛠️ handle tuple-indexed IEX feeds
     if len(df.index) and isinstance(df.index[0], tuple):
         # each index entry looks like (symbol, ts)
-        df.index = pd.to_datetime([t[0] for t in df.index], utc=True)
+        df.index = pd.to_datetime([t[1] for t in df.index], utc=True)
     else:
         df.index = pd.to_datetime(df.index, utc=True)
     # strip tzinfo to make it naive
@@ -275,7 +275,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
         df = df[["open", "high", "low", "close", "volume"]]
         # 🛠️ unify tuple-handling and drop tzinfo
         if len(df.index) and isinstance(df.index[0], tuple):
-            df.index = pd.to_datetime([t[0] for t in df.index], utc=True)
+            df.index = pd.to_datetime([t[1] for t in df.index], utc=True)
         else:
             df.index = pd.to_datetime(df.index, utc=True)
         df.index = df.index.tz_convert(None)
@@ -295,7 +295,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             df = bars.df[["open", "high", "low", "close", "volume"]].copy()
             # 🛠️ unify tuple-handling and drop tzinfo
             if len(df.index) and isinstance(df.index[0], tuple):
-                df.index = pd.to_datetime([t[0] for t in df.index], utc=True)
+                df.index = pd.to_datetime([t[1] for t in df.index], utc=True)
             else:
                 df.index = pd.to_datetime(df.index, utc=True)
             df.index = df.index.tz_convert(None)
