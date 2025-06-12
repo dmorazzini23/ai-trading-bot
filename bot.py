@@ -1533,10 +1533,10 @@ stream = Stream(
     data_feed="iex",
 )
 
-@stream.on_trade_updates
+@stream.on_trade_update
 async def on_trade_update(conn, channel, data):
-    # Log or update internal state when an order changes status
-    logger.info(f"Trade update received: {data}")
+    # data contains order id, new status, filled qty, etc.
+    print("Trade update:", data)
 ctx = BotContext(
     api=trading_client,
     data_client=data_client,
