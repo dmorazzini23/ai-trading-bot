@@ -14,16 +14,13 @@ ALPACA_API_KEY = config.ALPACA_API_KEY
 ALPACA_SECRET_KEY = config.ALPACA_SECRET_KEY
 ALPACA_BASE_URL = config.ALPACA_BASE_URL
 
-import alpaca_trade_api as tradeapi
+from alpaca.data.historical import StockHistoricalDataClient
 
-# Global Alpaca client using config credentials
-client = tradeapi.REST(
-    key_id=ALPACA_API_KEY,
+# Global Alpaca data client using config credentials
+client = StockHistoricalDataClient(
+    api_key=ALPACA_API_KEY,
     secret_key=ALPACA_SECRET_KEY,
-    base_url=ALPACA_BASE_URL,
 )
-# Alias used throughout the project
-api = client
 
 _rate_limit_lock = threading.Lock()
 import requests
@@ -42,7 +39,7 @@ import pandas as pd
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-from alpaca_trade_api.rest import APIError
+from alpaca.common.exceptions import APIError
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -56,10 +53,7 @@ import finnhub
 load_dotenv()
 
 # Alpaca historical data client
-_DATA_CLIENT = StockHistoricalDataClient(
-    api_key=ALPACA_API_KEY,
-    secret_key=ALPACA_SECRET_KEY,
-)
+_DATA_CLIENT = client
 
 
 class DataFetchError(Exception):
@@ -206,25 +200,22 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
     ConnectionError
         For network-related failures handled by ``tenacity`` retry.
     """
-    from alpaca_trade_api.rest import TimeFrame, APIError
     import pandas as pd
 
     try:
         bars = None
         try:
-            bars = client.get_bars(
-                symbol, TimeFrame.Minute, start=start_date, end=end_date
+            req = StockBarsRequest(
+                symbol_or_symbols=[symbol],
+                timeframe=TimeFrame.Minute,
+                start=start_date,
+                end=end_date,
             )
+            bars = client.get_stock_bars(req)
         except APIError as e:
             if "subscription does not permit" in str(e).lower():
-                bars = client.get_bars(
-                    symbol,
-                    TimeFrame.Minute,
-                    start=start_date,
-                    end=end_date,
-                    adjustment="raw",
-                    feed="iex",
-                )
+                req.feed = "iex"
+                bars = client.get_stock_bars(req)
             else:
                 raise
 
@@ -266,13 +257,14 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
 
     except (APIError, KeyError):
         try:
-            bars = client.get_bars(
-                symbol,
-                timeframe="1Day",
-                start=start_date.isoformat(),
-                end=(end_date + timedelta(days=1)).isoformat(),
-                adjustment="raw",
+            req = StockBarsRequest(
+                symbol_or_symbols=[symbol],
+                timeframe=TimeFrame.Day,
+                start=start_date,
+                end=end_date + timedelta(days=1),
+                feed="iex",
             )
+            bars = client.get_stock_bars(req)
             df = bars.df[["open", "high", "low", "close", "volume"]].copy()
             df.index = pd.to_datetime(df.index).tz_localize(None)
             logger.info(f"Falling back to daily bars for {symbol} ({len(df)} rows)")

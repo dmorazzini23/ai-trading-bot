@@ -67,7 +67,7 @@ from alpaca.trading.requests import (
     LimitOrderRequest,
 )
 from alpaca.trading.models import Order
-from alpaca_trade_api.rest import REST, APIError
+from alpaca.common.exceptions import APIError
 from alpaca.data.stream import Stream
 # for paper trading
 ALPACA_BASE_URL = 'https://paper-api.alpaca.markets'
@@ -652,16 +652,16 @@ class DataFetcher:
 
         api_key = os.getenv("APCA_API_KEY_ID")
         api_secret = os.getenv("APCA_API_SECRET_KEY")
-        base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-        client = REST(api_key, api_secret, base_url, api_version="v2")
+        client = StockHistoricalDataClient(api_key, api_secret)
 
         try:
-            bars = client.get_bars(
-                symbol,
-                timeframe="1Day",
-                start=start_ts.isoformat(),
-                end=end_ts.isoformat(),
-            ).df
+            req = StockBarsRequest(
+                symbol_or_symbols=[symbol],
+                timeframe=TimeFrame.Day,
+                start=start_ts,
+                end=end_ts,
+            )
+            bars = client.get_stock_bars(req).df
             if isinstance(bars.columns, pd.MultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
@@ -677,14 +677,8 @@ class DataFetcher:
                 print(f">> DEBUG: ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
                 print(f">> DEBUG: ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
-                    df_iex = client.get_bars(
-                        symbol,
-                        timeframe="1Day",
-                        start=start_ts.isoformat(),
-                        end=end_ts.isoformat(),
-                        adjustment="raw",
-                        feed="iex",
-                    ).df
+                    req.feed = "iex"
+                    df_iex = client.get_stock_bars(req).df
                     if isinstance(df_iex.columns, pd.MultiIndex):
                         df_iex = df_iex.xs(symbol, level=0, axis=1)
                     else:
@@ -748,16 +742,16 @@ class DataFetcher:
         minute_cache_miss.inc()
         api_key = os.getenv("APCA_API_KEY_ID")
         api_secret = os.getenv("APCA_API_SECRET_KEY")
-        base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-        client = REST(api_key, api_secret, base_url, api_version="v2")
+        client = StockHistoricalDataClient(api_key, api_secret)
 
         try:
-            bars = client.get_bars(
-                symbol,
-                timeframe="1Min",
-                start=start_minute.isoformat(),
-                end=last_closed_minute.isoformat(),
-            ).df
+            req = StockBarsRequest(
+                symbol_or_symbols=[symbol],
+                timeframe=TimeFrame.Minute,
+                start=start_minute,
+                end=last_closed_minute,
+            )
+            bars = client.get_stock_bars(req).df
             if isinstance(bars.columns, pd.MultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
@@ -776,14 +770,8 @@ class DataFetcher:
                 print(f">> DEBUG: ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
                 print(f">> DEBUG: ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
-                    df_iex = client.get_bars(
-                        symbol,
-                        timeframe="1Min",
-                        start=start_minute.isoformat(),
-                        end=last_closed_minute.isoformat(),
-                        adjustment="raw",
-                        feed="iex",
-                    ).df
+                    req.feed = "iex"
+                    df_iex = client.get_stock_bars(req).df
                     if isinstance(df_iex.columns, pd.MultiIndex):
                         df_iex = df_iex.xs(symbol, level=0, axis=1)
                     else:
@@ -886,16 +874,16 @@ def prefetch_daily_data(
 ) -> Dict[str, pd.DataFrame]:
     alpaca_key = os.getenv("APCA_API_KEY_ID")
     alpaca_secret = os.getenv("APCA_API_SECRET_KEY")
-    base_url = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-    client = REST(alpaca_key, alpaca_secret, base_url, api_version="v2")
+    client = StockHistoricalDataClient(alpaca_key, alpaca_secret)
 
     try:
-        bars = client.get_bars(
-            symbols,
-            timeframe="1Day",
-            start=start_date.isoformat(),
-            end=end_date.isoformat(),
-        ).df
+        req = StockBarsRequest(
+            symbol_or_symbols=symbols,
+            timeframe=TimeFrame.Day,
+            start=start_date,
+            end=end_date,
+        )
+        bars = client.get_stock_bars(req).df
         if isinstance(bars.columns, pd.MultiIndex):
             grouped_raw = {
                 sym: bars.xs(sym, level=0, axis=1)
@@ -919,14 +907,8 @@ def prefetch_daily_data(
             )
             print(f">> DEBUG: ATTEMPTING IEX-DELAYERED BULK FETCH FOR {symbols}")
             try:
-                bars_iex = client.get_bars(
-                    symbols,
-                    timeframe="1Day",
-                    start=start_date.isoformat(),
-                    end=end_date.isoformat(),
-                    adjustment="raw",
-                    feed="iex",
-                ).df
+                req.feed = "iex"
+                bars_iex = client.get_stock_bars(req).df
                 if isinstance(bars_iex.columns, pd.MultiIndex):
                     grouped_raw = {
                         sym: bars_iex.xs(sym, level=0, axis=1)
@@ -947,14 +929,14 @@ def prefetch_daily_data(
                 daily_dict = {}
                 for sym in symbols:
                     try:
-                        df_sym = client.get_bars(
-                            sym,
-                            timeframe="1Day",
-                            start=start_date.isoformat(),
-                            end=end_date.isoformat(),
-                            adjustment="raw",
+                        req_sym = StockBarsRequest(
+                            symbol_or_symbols=[sym],
+                            timeframe=TimeFrame.Day,
+                            start=start_date,
+                            end=end_date,
                             feed="iex",
-                        ).df
+                        )
+                        df_sym = client.get_stock_bars(req_sym).df
                         df_sym = df_sym.drop(columns=["symbol"], errors="ignore")
                         df_sym.index = pd.to_datetime(df_sym.index).tz_localize(None)
                         df_sym = df_sym.rename(columns=lambda c: c.lower())

@@ -28,6 +28,7 @@ mods = [
     "alpaca.data.models",
     "alpaca.data.requests",
     "alpaca.data.timeframe",
+    "alpaca.common.exceptions",
     "sklearn.ensemble",
     "sklearn.linear_model",
     "sklearn.decomposition",
@@ -59,6 +60,7 @@ sys.modules["urllib3"] = types.ModuleType("urllib3")
 sys.modules["urllib3"].exceptions = types.SimpleNamespace(HTTPError=Exception)
 sys.modules["alpaca_trade_api"].REST = object
 sys.modules["alpaca_trade_api"].APIError = Exception
+sys.modules["alpaca.common.exceptions"].APIError = Exception
 sys.modules["sklearn.ensemble"].RandomForestClassifier = object
 sys.modules["sklearn.linear_model"].Ridge = object
 sys.modules["sklearn.linear_model"].BayesianRidge = object

@@ -9,6 +9,7 @@ beautifulsoup4>=4.11.1
 flask>=2.1.0
 pandas_market_calendars>=4.1.4
 schedule>=1.1.0
+# removed: alpaca-trade-api (not compatible with Python 3.12)
 portalocker>=2.7.0
 alpaca-py>=0.40.1        # new official SDK
 scikit-learn==1.6.1
@@ -22,7 +23,6 @@ finnhub-python>=0.4.0
 xgboost>=1.7.6
 lightgbm>=4.0.0
 pytz
-alpaca-trade-api==2.3.0  # last 2.x release supporting get_order_by_client_order_id
 pytest
 flake8
 black

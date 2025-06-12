@@ -22,7 +22,7 @@ BACKTEST_WINDOW_DAYS = 365
 import pandas as pd
 import numpy as np
 from data_fetcher import get_historical_data, DataFetchError
-from alpaca_trade_api.rest import APIError
+from alpaca.common.exceptions import APIError
 from tenacity import RetryError
 
 
