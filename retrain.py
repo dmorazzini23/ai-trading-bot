@@ -9,6 +9,7 @@ import warnings
 import pandas as pd
 import numpy as np
 from metrics_logger import log_metrics
+from utils import safe_to_datetime
 
 load_dotenv(dotenv_path=".env", override=True)
 
@@ -197,9 +198,12 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     else:
         df = df.reset_index().rename(columns={"index": "Date"})
     if "timestamp" in df.columns and df["Date"].dtype == object:
-        df["Date"] = pd.to_datetime(df["timestamp"])
+        idx = safe_to_datetime(df["timestamp"])
     else:
-        df["Date"] = pd.to_datetime(df["Date"])
+        idx = safe_to_datetime(df["Date"])
+    if idx is None:
+        raise ValueError("Invalid date values in dataframe")
+    df["Date"] = idx
     df = df.sort_values("Date").set_index("Date")
 
     # Calculate basic TA indicators

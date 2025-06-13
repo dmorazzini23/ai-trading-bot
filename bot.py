@@ -104,7 +104,7 @@ from sklearn.decomposition import PCA
 import pickle
 import joblib
 from pipeline import model_pipeline
-from utils import model_lock
+from utils import model_lock, safe_to_datetime
 from metrics_logger import log_metrics
 
 import sentry_sdk
@@ -777,10 +777,14 @@ class DataFetcher:
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             if len(bars.index) and isinstance(bars.index[0], tuple):
-                bars.index = pd.to_datetime([t[0] for t in bars.index], utc=True)
+                idx_vals = [t[0] for t in bars.index]
             else:
-                bars.index = pd.to_datetime(bars.index, utc=True)
-            bars.index = bars.index.tz_convert(None)
+                idx_vals = bars.index
+            idx = safe_to_datetime(idx_vals)
+            if idx is None:
+                logger.warning(f"Invalid daily index for {symbol}; skipping")
+                return None
+            bars.index = idx
             df = bars.rename(columns=lambda c: c.lower()).drop(
                 columns=["symbol"], errors="ignore"
             )
@@ -797,12 +801,14 @@ class DataFetcher:
                     else:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
                     if len(df_iex.index) and isinstance(df_iex.index[0], tuple):
-                        df_iex.index = pd.to_datetime(
-                            [t[0] for t in df_iex.index], utc=True
-                        )
+                        idx_vals = [t[0] for t in df_iex.index]
                     else:
-                        df_iex.index = pd.to_datetime(df_iex.index, utc=True)
-                    df_iex.index = df_iex.index.tz_convert(None)
+                        idx_vals = df_iex.index
+                    idx = safe_to_datetime(idx_vals)
+                    if idx is None:
+                        logger.warning(f"Invalid IEX daily index for {symbol}; skipping")
+                        return None
+                    df_iex.index = idx
                     df = df_iex.rename(columns=lambda c: c.lower())
                 except Exception as iex_err:
                     print(f">> DEBUG: ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
@@ -888,10 +894,14 @@ class DataFetcher:
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             if len(bars.index) and isinstance(bars.index[0], tuple):
-                bars.index = pd.to_datetime([t[0] for t in bars.index], utc=True)
+                idx_vals = [t[0] for t in bars.index]
             else:
-                bars.index = pd.to_datetime(bars.index, utc=True)
-            bars.index = bars.index.tz_convert(None)
+                idx_vals = bars.index
+            idx = safe_to_datetime(idx_vals)
+            if idx is None:
+                logger.warning(f"Invalid minute index for {symbol}; skipping")
+                return None
+            bars.index = idx
             df = bars.rename(columns=lambda c: c.lower()).drop(
                 columns=["symbol"], errors="ignore"
             )[["open", "high", "low", "close", "volume"]]
@@ -911,15 +921,20 @@ class DataFetcher:
                     else:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
                     if len(df_iex.index) and isinstance(df_iex.index[0], tuple):
-                        df_iex.index = pd.to_datetime(
-                            [t[0] for t in df_iex.index], utc=True
-                        )
+                        idx_vals = [t[0] for t in df_iex.index]
                     else:
-                        df_iex.index = pd.to_datetime(df_iex.index, utc=True)
-                    df_iex.index = df_iex.index.tz_convert(None)
-                    df = df_iex.rename(columns=lambda c: c.lower())[
-                        ["open", "high", "low", "close", "volume"]
-                    ]
+                        idx_vals = df_iex.index
+                    idx = safe_to_datetime(idx_vals)
+                    if idx is None:
+                        logger.warning(
+                            f"Invalid IEX minute index for {symbol}; skipping"
+                        )
+                        df = pd.DataFrame()
+                    else:
+                        df_iex.index = idx
+                        df = df_iex.rename(columns=lambda c: c.lower())[ 
+                            ["open", "high", "low", "close", "volume"]
+                        ]
                 except Exception as iex_err:
                     print(f">> DEBUG: ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
                     print(f">> DEBUG: NO ALTERNATIVE MINUTE DATA FOR {symbol}")
@@ -990,10 +1005,18 @@ class DataFetcher:
                 if "symbol" in bars_day.columns:
                     bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
 
-                bars_day.index = pd.to_datetime(bars_day.index).tz_localize(None)
-                bars_day = bars_day.rename(columns=lambda c: c.lower())
-                bars_day = bars_day[["open", "high", "low", "close", "volume"]]
-                all_days.append(bars_day)
+                idx = safe_to_datetime(bars_day.index)
+                if idx is None:
+                    logger.warning(
+                        f"Invalid minute index for {symbol}; skipping day {day_start}"
+                    )
+                    bars_day = None
+                else:
+                    bars_day.index = idx
+                    bars_day = bars_day.rename(columns=lambda c: c.lower())[
+                        ["open", "high", "low", "close", "volume"]
+                    ]
+                    all_days.append(bars_day)
 
             current_day += timedelta(days=1)
 
@@ -1038,7 +1061,11 @@ def prefetch_daily_data(
         grouped = {}
         for sym, df in grouped_raw.items():
             df = df.drop(columns=["symbol"], errors="ignore")
-            df.index = pd.to_datetime(df.index).tz_localize(None)
+            idx = safe_to_datetime(df.index)
+            if idx is None:
+                logger.warning(f"Invalid bulk index for {sym}; skipping")
+                continue
+            df.index = idx
             df = df.rename(columns=lambda c: c.lower())
             grouped[sym] = df
         return grouped
@@ -1063,7 +1090,11 @@ def prefetch_daily_data(
                 grouped = {}
                 for sym, df in grouped_raw.items():
                     df = df.drop(columns=["symbol"], errors="ignore")
-                    df.index = pd.to_datetime(df.index).tz_localize(None)
+                    idx = safe_to_datetime(df.index)
+                    if idx is None:
+                        logger.warning(f"Invalid IEX bulk index for {sym}; skipping")
+                        continue
+                    df.index = idx
                     df = df.rename(columns=lambda c: c.lower())
                     grouped[sym] = df
                 return grouped
@@ -1081,7 +1112,13 @@ def prefetch_daily_data(
                         )
                         df_sym = client.get_stock_bars(req_sym).df
                         df_sym = df_sym.drop(columns=["symbol"], errors="ignore")
-                        df_sym.index = pd.to_datetime(df_sym.index).tz_localize(None)
+                        idx = safe_to_datetime(df_sym.index)
+                        if idx is None:
+                            logger.warning(
+                                f"Invalid fallback bulk index for {sym}; skipping"
+                            )
+                            continue
+                        df_sym.index = idx
                         df_sym = df_sym.rename(columns=lambda c: c.lower())
                         daily_dict[sym] = df_sym
                     except Exception as indiv_err:
@@ -3969,7 +4006,12 @@ else:
         bars.index = [t[0] for t in bars.index]
 
     # 4) Now safely convert to a timezone-naive DatetimeIndex
-    bars.index = pd.to_datetime(bars.index).tz_localize(None)
+    idx = safe_to_datetime(bars.index)
+    if idx is None:
+        logger.warning("Invalid regime data index; skipping regime model train")
+        bars = pd.DataFrame()
+    else:
+        bars.index = idx
     bars = bars.rename(columns=lambda c: c.lower())
     feats = _compute_regime_features(bars)
     labels = (
