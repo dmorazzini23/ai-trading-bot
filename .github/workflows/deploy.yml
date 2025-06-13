@@ -15,7 +15,23 @@ on:
 jobs:
   preflight:
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
-    uses: ./.github/workflows/preflight.yml
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required secrets
+        env:
+          DROPLET_HOST: ${{ secrets.DROPLET_HOST }}
+          DROPLET_SSH_KEY: ${{ secrets.DROPLET_SSH_KEY }}
+          DOCKER_REGISTRY: ${{ secrets.DOCKER_REGISTRY }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+        run: |
+          set -e
+          for var in DROPLET_HOST DROPLET_SSH_KEY DOCKER_REGISTRY DOCKER_USERNAME DOCKER_PASSWORD; do
+            if [ -z "${!var}" ]; then
+              echo "::error::Missing required secret $var"
+              exit 1
+            fi
+          done
 
   deploy:
     needs: preflight
@@ -81,6 +97,7 @@ jobs:
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
         run: |
+          set -e
           sentry-cli releases new $IMAGE_TAG
           sentry-cli releases finalize $IMAGE_TAG
 
