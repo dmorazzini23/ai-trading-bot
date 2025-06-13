@@ -1,6 +1,10 @@
 from typing import List
 import pandas as pd
+import logging
 from .base import Strategy, TradeSignal, asset_class_for
+
+
+logger = logging.getLogger(__name__)
 
 
 class MeanReversionStrategy(Strategy):
@@ -17,13 +21,30 @@ class MeanReversionStrategy(Strategy):
         tickers = getattr(ctx, "tickers", [])
         for sym in tickers:
             df = ctx.data_fetcher.get_daily_df(ctx, sym)
-            if df is None or len(df) <= self.lookback:
+            # Ensure we have data and enough rows before doing rolling calculations
+            if df is None or df.empty or len(df) < self.lookback:
+                logger.warning(
+                    f"{sym}: insufficient data for lookback {self.lookback}"
+                )
+                # Skip signal generation when we don't have enough history
                 continue
+
             ma = df["close"].rolling(self.lookback).mean().iloc[-1]
             sd = df["close"].rolling(self.lookback).std().iloc[-1]
+            # Validate rolling mean/std results before computing the z-score
             if pd.isna(ma) or pd.isna(sd) or sd == 0:
+                logger.warning(f"{sym}: invalid rolling statistics")
+                # Avoid division by zero or propagating NaNs
                 continue
-            z = (df["close"].iloc[-1] - ma) / sd
+
+            last_close = df["close"].iloc[-1]
+            # Guard against NaN closing prices before computing z-score
+            if pd.isna(last_close):
+                logger.warning(f"{sym}: last close is NaN")
+                continue
+
+            # Calculate the z-score of the latest close price
+            z = (last_close - ma) / sd
             if z > self.z:
                 signals.append(
                     TradeSignal(
