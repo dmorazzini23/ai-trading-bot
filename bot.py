@@ -313,8 +313,12 @@ def load_hyperparams() -> dict:
     if not os.path.exists(path):
         logger.warning(f"Hyperparameter file {path} not found; using defaults")
         return {}
-    with open(path) as f:
-        return json.load(f)
+    try:
+        with open(path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load hyperparameters from {path}: {e}")
+        return {}
 
 
 # <-- NEW: marker file for daily retraining -->
@@ -451,10 +455,13 @@ _slippage_log: List[Tuple[str, float, float, datetime]] = (
 )  # (symbol, expected, actual, timestamp)
 # Ensure persistent slippage log file exists
 if not os.path.exists(SLIPPAGE_LOG_FILE):
-    with open(SLIPPAGE_LOG_FILE, "w", newline="") as f:
-        csv.writer(f).writerow(
-            ["timestamp", "symbol", "expected", "actual", "slippage_cents"]
-        )
+    try:
+        with open(SLIPPAGE_LOG_FILE, "w", newline="") as f:
+            csv.writer(f).writerow(
+                ["timestamp", "symbol", "expected", "actual", "slippage_cents"]
+            )
+    except Exception as e:
+        logger.warning(f"Could not create slippage log {SLIPPAGE_LOG_FILE}: {e}")
 
 # Sector cache for portfolio exposure calculations
 _SECTOR_CACHE: Dict[str, str] = {}
@@ -1076,10 +1083,20 @@ class TradeLogger:
                     ]
                 )
         if not os.path.exists(REWARD_LOG_FILE):
-            with open(REWARD_LOG_FILE, "w", newline="") as rf:
-                csv.writer(rf).writerow(
-                    ["timestamp", "symbol", "reward", "pnl", "confidence", "band"]
-                )
+            try:
+                with open(REWARD_LOG_FILE, "w", newline="") as rf:
+                    csv.writer(rf).writerow(
+                        [
+                            "timestamp",
+                            "symbol",
+                            "reward",
+                            "pnl",
+                            "confidence",
+                            "band",
+                        ]
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to create reward log: {e}")
 
     def log_entry(
         self,
@@ -2025,7 +2042,8 @@ def check_halt_flag() -> bool:
     mtime = os.path.getmtime(HALT_FLAG_PATH)
     age = datetime.now(timezone.utc) - datetime.fromtimestamp(mtime, timezone.utc)
     try:
-        content = open(HALT_FLAG_PATH).read().strip()
+        with open(HALT_FLAG_PATH, "r") as f:
+            content = f.read().strip()
     except Exception:
         content = ""
     max_age = (
@@ -2527,16 +2545,19 @@ def vwap_pegged_submit(
                         (symbol, vwap_price, fill_price, datetime.now(timezone.utc))
                     )
                     with slippage_lock:
-                        with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
-                            csv.writer(sf).writerow(
-                                [
-                                    datetime.now(timezone.utc).isoformat(),
-                                    symbol,
-                                    vwap_price,
-                                    fill_price,
-                                    slip,
-                                ]
-                            )
+                        try:
+                            with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
+                                csv.writer(sf).writerow(
+                                    [
+                                        datetime.now(timezone.utc).isoformat(),
+                                        symbol,
+                                        vwap_price,
+                                        fill_price,
+                                        slip,
+                                    ]
+                                )
+                        except Exception as e:
+                            logger.warning(f"Failed to append slippage log: {e}")
                 orders_total.inc()
                 break
             except APIError as e:
@@ -3789,7 +3810,12 @@ def detect_regime(df: pd.DataFrame) -> str:
 
 # Train or load regime model
 if os.path.exists(REGIME_MODEL_PATH):
-    regime_model = pickle.load(open(REGIME_MODEL_PATH, "rb"))
+    try:
+        with open(REGIME_MODEL_PATH, "rb") as f:
+            regime_model = pickle.load(f)
+    except Exception as e:
+        logger.warning(f"Failed to load regime model: {e}")
+        regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 else:
     today_date = date.today()
     start_dt = datetime.combine(
@@ -3847,8 +3873,13 @@ else:
             n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
         )
         regime_model.fit(X, y)
-        pickle.dump(regime_model, open(REGIME_MODEL_PATH, "wb"))
-        logger.info("REGIME_MODEL_TRAINED", extra={"rows": len(training)})
+        try:
+            with open(REGIME_MODEL_PATH, "wb") as f:
+                pickle.dump(regime_model, f)
+        except Exception as e:
+            logger.warning(f"Failed to save regime model: {e}")
+        else:
+            logger.info("REGIME_MODEL_TRAINED", extra={"rows": len(training)})
     else:
         logger.error(
             f"Not enough valid rows ({len(training)}) to train regime model; using dummy fallback"
