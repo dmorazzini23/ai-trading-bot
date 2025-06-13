@@ -1,3 +1,4 @@
+# Composite action to send Slack messages
 name: Slack Notify
 inputs:
   text:
@@ -9,7 +10,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: slackapi/slack-github-action@v1
+    - uses: slackapi/slack-github-action@v2
       env:
         SLACK_WEBHOOK_URL: ${{ inputs.webhook_url }}
       with:
@@ -17,3 +18,4 @@ runs:
           {
             "text": ${{ toJSON(inputs.text) }}
           }
+

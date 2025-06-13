@@ -1,3 +1,7 @@
+# Daily Backup workflow
+# Triggers nightly to back up the database and snapshot the droplet.
+# Required secrets:
+#   DROPLET_SSH_KEY, DROPLET_HOST, DO_API_TOKEN, DROPLET_ID
 name: Daily Backup
 
 on:
@@ -11,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up SSH
-        uses: webfactory/ssh-agent@v0.9.0
+        uses: webfactory/ssh-agent@v0.9.1
         with:
           ssh-private-key: ${{ secrets.DROPLET_SSH_KEY }}
 
@@ -37,3 +41,4 @@ jobs:
             -H "Authorization: Bearer $DO_API_TOKEN" \
             "https://api.digitalocean.com/v2/droplets/$DROPLET_ID/actions" \
             -d '{"type":"snapshot","name":"ai-trader-'$(date +"%Y%m%d")'"}'
+
