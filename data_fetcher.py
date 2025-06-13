@@ -24,7 +24,7 @@ client = StockHistoricalDataClient(
 _rate_limit_lock = threading.Lock()
 import requests
 import urllib3
-from utils import ensure_utc
+from utils import ensure_utc, safe_to_datetime
 
 MINUTES_REQUIRED = 31
 HISTORICAL_START = "2025-06-01"
@@ -121,8 +121,12 @@ def get_historical_data(
     df.columns = df.columns.str.lower()
 
     if not df.empty:
-        df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
-        df.index = pd.to_datetime(df.index, errors="coerce").tz_localize(None)
+        idx_vals = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
+        idx = safe_to_datetime(idx_vals)
+        if idx is None:
+            logger.warning(f"Unexpected index format for {symbol}; skipping")
+            return pd.DataFrame()
+        df.index = idx
         df["timestamp"] = df.index
 
     for col in ["open", "high", "low", "close", "volume"]:
@@ -170,12 +174,14 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
         df.index = df.index.get_level_values(0)
     # 🛠️ handle tuple-indexed IEX feeds
     if len(df.index) and isinstance(df.index[0], tuple):
-        # each index entry looks like (symbol, ts)
-        df.index = pd.to_datetime([t[1] for t in df.index], utc=True)
+        idx_vals = [t[1] for t in df.index]
     else:
-        df.index = pd.to_datetime(df.index, utc=True)
-    # strip tzinfo to make it naive
-    df.index = df.index.tz_convert(None)
+        idx_vals = df.index
+    idx = safe_to_datetime(idx_vals)
+    if idx is None:
+        logger.warning(f"Invalid date index for {symbol}; skipping")
+        return pd.DataFrame()
+    df.index = idx
     df["timestamp"] = df.index
 
     try:
@@ -299,10 +305,14 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             return pd.DataFrame()
         # 🛠️ unify tuple-handling and drop tzinfo
         if len(df.index) and isinstance(df.index[0], tuple):
-            df.index = pd.to_datetime([t[1] for t in df.index], utc=True)
+            idx_vals = [t[1] for t in df.index]
         else:
-            df.index = pd.to_datetime(df.index, utc=True)
-        df.index = df.index.tz_convert(None)
+            idx_vals = df.index
+        idx = safe_to_datetime(idx_vals)
+        if idx is None:
+            logger.warning(f"Invalid minute index for {symbol}; skipping")
+            return pd.DataFrame()
+        df.index = idx
 
         return df
 
@@ -326,10 +336,14 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
                 return pd.DataFrame()
             # 🛠️ unify tuple-handling and drop tzinfo
             if len(df.index) and isinstance(df.index[0], tuple):
-                df.index = pd.to_datetime([t[1] for t in df.index], utc=True)
+                idx_vals = [t[1] for t in df.index]
             else:
-                df.index = pd.to_datetime(df.index, utc=True)
-            df.index = df.index.tz_convert(None)
+                idx_vals = df.index
+            idx = safe_to_datetime(idx_vals)
+            if idx is None:
+                logger.warning(f"Invalid fallback index for {symbol}; skipping")
+                return pd.DataFrame()
+            df.index = idx
             logger.info(f"Falling back to daily bars for {symbol} ({len(df)} rows)")
             return df
         except Exception as daily_err:

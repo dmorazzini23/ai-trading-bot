@@ -2,6 +2,7 @@
 
 import warnings
 import os
+import re
 
 import pandas as pd
 from datetime import datetime, date, time, timezone
@@ -76,3 +77,25 @@ def ensure_utc(dt: datetime | date) -> datetime:
     if isinstance(dt, date):
         return datetime.combine(dt, time.min, tzinfo=timezone.utc)
     raise TypeError(f"Unsupported type for ensure_utc: {type(dt)!r}")
+
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def safe_to_datetime(values) -> pd.DatetimeIndex | None:
+    """Return ``DatetimeIndex`` if values are parseable, else ``None``."""
+    if values is None or len(values) == 0:
+        return None
+    sample = values[0]
+    if isinstance(sample, tuple):
+        sample = next((v for v in sample if isinstance(v, str) or hasattr(v, "year")), sample)
+    if isinstance(sample, str) and not _DATE_RE.match(sample):
+        return None
+    try:
+        idx = pd.to_datetime(values, errors="coerce", utc=True)
+    except Exception:
+        return None
+    idx = idx.tz_convert(None)
+    if idx.isnull().all():
+        return None
+    return idx
