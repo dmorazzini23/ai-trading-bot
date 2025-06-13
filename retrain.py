@@ -1,6 +1,7 @@
 import os
 import json
 import csv
+from dotenv import load_dotenv
 import random
 import joblib
 import logging
@@ -9,20 +10,20 @@ import pandas as pd
 import numpy as np
 from metrics_logger import log_metrics
 
+load_dotenv(dotenv_path=".env", override=True)
+
 # Set deterministic random seeds for reproducibility
 SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
 try:
     import torch
+
     torch.manual_seed(SEED)
 except ImportError:
     pass
 import requests
-from datetime import date
-from datetime import datetime
-from datetime import time
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from sklearn.model_selection import (
     ParameterSampler,
     cross_val_score,
@@ -513,7 +514,7 @@ def log_hyperparam_result(
     regime: str, generation: int, params: dict, score: float
 ) -> None:
     row = [
-        datetime.utcnow().isoformat(),
+        datetime.now(timezone.utc).isoformat(),
         regime,
         generation,
         json.dumps(params),
@@ -542,7 +543,7 @@ def log_hyperparam_result(
 
 
 def save_model_version(clf, regime: str) -> str:
-    ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     filename = f"model_{regime}_{ts}.pkl"
     path = os.path.join(MODELS_DIR, filename)
     try:
@@ -553,7 +554,7 @@ def save_model_version(clf, regime: str) -> str:
     log_hyperparam_result(regime, -1, {"model_path": filename}, 0.0)
     log_metrics(
         {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "type": "model_checkpoint",
             "regime": regime,
             "model_path": filename,
@@ -636,7 +637,9 @@ def optuna_search(
     """Hyperparameter tuning using Optuna if available."""
     if optuna is None:
         logger.warning("Optuna not installed; falling back to evolutionary search")
-        return evolutionary_search(X, y, base_params, param_space, generations=3, population=n_trials)
+        return evolutionary_search(
+            X, y, base_params, param_space, generations=3, population=n_trials
+        )
 
     def objective(trial):
         params = {k: trial.suggest_categorical(k, v) for k, v in param_space.items()}
@@ -659,7 +662,7 @@ def retrain_meta_learner(
     threshold_pct: float = 0.002,
     force: bool = False,
 ) -> bool:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     if not force:
         if now.weekday() >= 5:
             logger.info(
@@ -774,7 +777,8 @@ def retrain_meta_learner(
             print(importances.sort_values(ascending=False).head(10))
             imp_df = pd.DataFrame(
                 {
-                    "timestamp": [datetime.utcnow().isoformat()] * len(importances),
+                    "timestamp": [datetime.now(timezone.utc).isoformat()]
+                    * len(importances),
                     "feature": importances.index,
                     "importance": importances.values,
                 }
@@ -790,7 +794,7 @@ def retrain_meta_learner(
         print(f"  ✔ Saved {regime} model to {path}")
         log_metrics(
             {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "type": "retrain_model",
                 "regime": regime,
                 "metric": metric,

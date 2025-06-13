@@ -8,6 +8,8 @@ from flask import jsonify
 from flask import request
 import os
 from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=".env", override=True)
 from config import WEBHOOK_SECRET, WEBHOOK_PORT
 
 app = Flask(__name__)

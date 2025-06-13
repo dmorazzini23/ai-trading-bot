@@ -1,8 +1,7 @@
 import random
 import time as pytime
 from collections import deque
-from datetime import date
-from datetime import timedelta
+from datetime import date, datetime, timedelta, timezone
 import warnings
 
 import threading
@@ -25,8 +24,7 @@ client = StockHistoricalDataClient(
 _rate_limit_lock = threading.Lock()
 import requests
 import urllib3
-import dateutil.tz
-import pytz
+from utils import ensure_utc
 
 MINUTES_REQUIRED = 31
 HISTORICAL_START = "2025-06-01"
@@ -68,8 +66,8 @@ def get_historical_data(
 ) -> pd.DataFrame:
     """Fetch historical bars from Alpaca and ensure OHLCV float columns."""
 
-    start_dt = pd.to_datetime(start_date, utc=True, errors="coerce")
-    end_dt = pd.to_datetime(end_date, utc=True, errors="coerce")
+    start_dt = pd.to_datetime(ensure_utc(start_date))
+    end_dt = pd.to_datetime(ensure_utc(end_date))
 
     tf_map = {
         "1Min": TimeFrame.Minute,
@@ -89,7 +87,11 @@ def get_historical_data(
             timeframe=tf,
             feed=feed,
         )
-        return _DATA_CLIENT.get_stock_bars(req).df
+        try:
+            return _DATA_CLIENT.get_stock_bars(req).df
+        except Exception as err:
+            logger.exception("Historical data fetch failed for %s", symbol)
+            raise
 
     try:
         # default to IEX-delayed data to avoid SIP subscription errors
@@ -136,7 +138,7 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
     df = pd.DataFrame()
     for attempt in range(3):
         try:
-            df = get_historical_data(symbol, start, end, "1Day")
+            df = get_historical_data(symbol, ensure_utc(start), ensure_utc(end), "1Day")
             break
         except (APIError, RetryError) as e:
             logger.debug(f"get_daily_df attempt {attempt+1} failed for {symbol}: {e}")
@@ -145,8 +147,8 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
         try:
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
-                start=start,
-                end=end,
+                start=ensure_utc(start),
+                end=ensure_utc(end),
                 timeframe=TimeFrame.Day,
                 feed="iex",
             )
@@ -218,13 +220,8 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
     """
     import pandas as pd
 
-    # 🛠️ make sure start_date/end_date are timezone-aware before converting to UTC
-    if start_date.tzinfo is None:
-        start_date = start_date.tz_localize(dateutil.tz.tzlocal())
-    start_dt = start_date.astimezone(pytz.UTC) - timedelta(minutes=1)
-    if end_date.tzinfo is None:
-        end_date = end_date.tz_localize(dateutil.tz.tzlocal())
-    end_dt = end_date.astimezone(pytz.UTC)
+    start_dt = ensure_utc(start_date) - timedelta(minutes=1)
+    end_dt = ensure_utc(end_date)
 
     try:
         bars = None
@@ -235,7 +232,11 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
                 start=start_dt,
                 end=end_dt,
             )
-            bars = client.get_stock_bars(req)
+            try:
+                bars = client.get_stock_bars(req)
+            except Exception as err:
+                logger.exception("Minute data fetch failed for %s", symbol)
+                raise
         except APIError as e:
             if "subscription does not permit" in str(e).lower():
                 logger.critical(
@@ -244,8 +245,8 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
                 req.feed = "iex"
                 try:
                     bars = client.get_stock_bars(req)
-                except APIError as iex_err:
-                    logger.error(f"IEX fallback failed for {symbol}: {iex_err}")
+                except Exception as iex_err:
+                    logger.exception("IEX fallback failed for %s", symbol)
                     return pd.DataFrame()
             else:
                 logger.error(f"API error for {symbol}: {e}")
@@ -310,11 +311,15 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=TimeFrame.Day,
-                start=start_date,
-                end=end_date + timedelta(days=1),
+                start=ensure_utc(start_date),
+                end=ensure_utc(end_date) + timedelta(days=1),
                 feed="iex",
             )
-            bars = client.get_stock_bars(req)
+            try:
+                bars = client.get_stock_bars(req)
+            except Exception:
+                logger.exception("Daily fallback fetch failed for %s", symbol)
+                raise
             df = bars.df[["open", "high", "low", "close", "volume"]].copy()
             if df.empty:
                 logger.warning(f"Daily fallback returned no data for {symbol}")

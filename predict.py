@@ -1,6 +1,7 @@
 import argparse
 import os
 import logging
+from dotenv import load_dotenv
 import warnings
 import pandas as pd
 import joblib
@@ -8,6 +9,7 @@ import requests
 import json
 from retrain import prepare_indicators
 
+load_dotenv(dotenv_path=".env", override=True)
 from config import NEWS_API_KEY
 
 logger = logging.getLogger(__name__)

@@ -11,7 +11,9 @@ warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 import os
 from dotenv import load_dotenv
 
-load_dotenv()  # ensure .env is loaded before using os.getenv
+load_dotenv(
+    dotenv_path=".env", override=True
+)  # ensure .env is loaded before using os.getenv
 
 # BOT_MODE must be defined before any classes that reference it
 BOT_MODE = os.getenv("BOT_MODE", "balanced")
@@ -47,6 +49,7 @@ random.seed(SEED)
 np.random.seed(SEED)
 try:
     import torch
+
     torch.manual_seed(SEED)
 except ImportError:
     pass
@@ -118,6 +121,7 @@ SENTRY_DSN = getattr(config, "SENTRY_DSN", None)
 BOT_MODE_ENV = getattr(config, "BOT_MODE", BOT_MODE)
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
 
+
 def _require_cfg(value, name):
     """Require a config value; sleep-and-retry in production."""
     if value:
@@ -128,10 +132,12 @@ def _require_cfg(value, name):
             time.sleep(60)
             config.reload_env()
             import importlib
+
             importlib.reload(config)
             value = getattr(config, name, None)
         return value
     raise RuntimeError(f"{name} must be defined in the configuration or environment")
+
 
 ALPACA_API_KEY = _require_cfg(ALPACA_API_KEY, "ALPACA_API_KEY")
 ALPACA_SECRET_KEY = _require_cfg(ALPACA_SECRET_KEY, "ALPACA_SECRET_KEY")

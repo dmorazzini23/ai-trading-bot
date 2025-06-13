@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 LOG_FILE = "/var/log/ai-trading-scheduler.log"
 REPORT = "health_report.txt"
@@ -9,7 +9,9 @@ REPORT = "health_report.txt"
 
 def main():
     # 1) Check for uncaught exceptions in last 24h
-    since = (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
     grep = subprocess.run(
         ["grep", "-R", "Traceback", "--include", "*.log", LOG_FILE],
         stdout=subprocess.PIPE,
