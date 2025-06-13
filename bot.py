@@ -91,15 +91,26 @@ import sentry_sdk
 
 import config
 
-ALPACA_API_KEY = config.ALPACA_API_KEY
-ALPACA_SECRET_KEY = config.ALPACA_SECRET_KEY
-ALPACA_PAPER = config.ALPACA_PAPER
-validate_alpaca_credentials = config.validate_alpaca_credentials
-CONFIG_NEWS_API_KEY = config.NEWS_API_KEY
-FINNHUB_API_KEY = config.FINNHUB_API_KEY
-SENTRY_DSN = config.SENTRY_DSN
-BOT_MODE_ENV = config.BOT_MODE
-RUN_HEALTHCHECK = config.RUN_HEALTHCHECK
+ALPACA_API_KEY = getattr(config, "ALPACA_API_KEY", None)
+ALPACA_SECRET_KEY = getattr(config, "ALPACA_SECRET_KEY", None)
+ALPACA_PAPER = getattr(config, "ALPACA_PAPER", None)
+validate_alpaca_credentials = getattr(config, "validate_alpaca_credentials", None)
+CONFIG_NEWS_API_KEY = getattr(config, "NEWS_API_KEY", None)
+FINNHUB_API_KEY = getattr(config, "FINNHUB_API_KEY", None)
+SENTRY_DSN = getattr(config, "SENTRY_DSN", None)
+BOT_MODE_ENV = getattr(config, "BOT_MODE", None)
+RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
+
+if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
+    raise RuntimeError(
+        "Missing Alpaca credentials. Please set ALPACA_API_KEY and ALPACA_SECRET_KEY."
+    )
+if not callable(validate_alpaca_credentials):
+    raise RuntimeError("validate_alpaca_credentials not found in config")
+if BOT_MODE_ENV is None:
+    raise RuntimeError("BOT_MODE must be defined in the configuration or environment")
+if not FINNHUB_API_KEY:
+    raise RuntimeError("FINNHUB_API_KEY must be provided for market data access")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -653,6 +664,10 @@ class DataFetcher:
 
         api_key = os.getenv("APCA_API_KEY_ID")
         api_secret = os.getenv("APCA_API_SECRET_KEY")
+        if not api_key or not api_secret:
+            raise RuntimeError(
+                "APCA_API_KEY_ID and APCA_API_SECRET_KEY must be set for data fetching"
+            )
         client = StockHistoricalDataClient(api_key, api_secret)
 
         try:
@@ -764,6 +779,10 @@ class DataFetcher:
         minute_cache_miss.inc()
         api_key = os.getenv("APCA_API_KEY_ID")
         api_secret = os.getenv("APCA_API_SECRET_KEY")
+        if not api_key or not api_secret:
+            raise RuntimeError(
+                "APCA_API_KEY_ID and APCA_API_SECRET_KEY must be set for data fetching"
+            )
         client = StockHistoricalDataClient(api_key, api_secret)
 
         try:
@@ -902,6 +921,10 @@ def prefetch_daily_data(
 ) -> Dict[str, pd.DataFrame]:
     alpaca_key = os.getenv("APCA_API_KEY_ID")
     alpaca_secret = os.getenv("APCA_API_SECRET_KEY")
+    if not alpaca_key or not alpaca_secret:
+        raise RuntimeError(
+            "APCA_API_KEY_ID and APCA_API_SECRET_KEY must be set for data fetching"
+        )
     client = StockHistoricalDataClient(alpaca_key, alpaca_secret)
 
     try:
@@ -1342,7 +1365,8 @@ class SignalManager:
             body = abs(df["close"] - df["open"])
             vsa = df["volume"] * body
             score = vsa.iloc[-1]
-            avg = vsa.rolling(20).mean().iloc[-1]
+            roll = vsa.rolling(20).mean()
+            avg = roll.iloc[-1] if not roll.empty else 0.0
             s = (
                 1
                 if df["close"].iloc[-1] > df["open"].iloc[-1]
@@ -1855,6 +1879,8 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
     try:
         dates = []
         for col in cal.columns:
+            if "Value" not in cal.index or col not in cal.columns:
+                continue
             raw = cal.at["Value", col]
             if isinstance(raw, (list, tuple)):
                 raw = raw[0]
@@ -2020,6 +2046,8 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
     if not os.path.exists(TRADE_LOG_FILE):
         return False
     df = pd.read_csv(TRADE_LOG_FILE)
+    if "exit_time" not in df.columns or "symbol" not in df.columns:
+        return False
     open_syms = df.loc[df.exit_time == "", "symbol"].unique().tolist() + [sym]
     rets: Dict[str, pd.Series] = {}
     for s in open_syms:
@@ -2138,6 +2166,8 @@ def scaled_atr_stop(
 def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     df = ctx.data_fetcher.get_minute_df(ctx, symbol)
     if df is None or df.empty:
+        return 0.0
+    if "volume" not in df.columns:
         return 0.0
     avg_vol = df["volume"].tail(30).mean()
     try:
@@ -3226,6 +3256,8 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
             f"pair_trade_signal: df2 for {sym2} is invalid or missing 'close'"
         )
     df = pd.concat([df1["close"], df2["close"]], axis=1).dropna()
+    if df.empty:
+        return ("no_signal", 0)
     t_stat, p_value, _ = coint(df.iloc[:, 0], df.iloc[:, 1])
     if p_value < 0.05:
         beta = np.polyfit(df.iloc[:, 1], df.iloc[:, 0], 1)[0]
@@ -3364,58 +3396,68 @@ def online_update(symbol: str, X_new, y_new) -> None:
 
 
 def update_signal_weights() -> None:
-    if not os.path.exists(TRADE_LOG_FILE):
-        logger.warning("No trades log found; skipping weight update.")
-        return
-    df = pd.read_csv(TRADE_LOG_FILE).dropna(
-        subset=["entry_price", "exit_price", "signal_tags"]
-    )
-    df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].apply(
-        lambda s: 1 if s == "buy" else -1
-    )
-    df["confidence"] = df.get("confidence", 0.5)
-    df["reward"] = df["pnl"] * df["confidence"]
-    recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
-    recent_mask = recent_cut >= (datetime.now(timezone.utc) - timedelta(days=30))
-    df_recent = df[recent_mask]
-
-    stats_all: Dict[str, List[float]] = {}
-    stats_recent: Dict[str, List[float]] = {}
-    for _, row in df.iterrows():
-        for tag in row["signal_tags"].split("+"):
-            stats_all.setdefault(tag, []).append(row["reward"])
-    for _, row in df_recent.iterrows():
-        for tag in row["signal_tags"].split("+"):
-            stats_recent.setdefault(tag, []).append(row["reward"])
-
-    new_weights = {}
-    for tag, pnls in stats_all.items():
-        overall_wr = np.mean([1 if p > 0 else 0 for p in pnls]) if pnls else 0.0
-        recent_wr = (
-            np.mean([1 if p > 0 else 0 for p in stats_recent.get(tag, [])])
-            if stats_recent.get(tag)
-            else overall_wr
+    try:
+        if not os.path.exists(TRADE_LOG_FILE):
+            logger.warning("No trades log found; skipping weight update.")
+            return
+        df = pd.read_csv(TRADE_LOG_FILE).dropna(
+            subset=["entry_price", "exit_price", "signal_tags"]
         )
-        weight = 0.7 * recent_wr + 0.3 * overall_wr
-        if recent_wr < 0.4:
-            weight *= 0.5
-        new_weights[tag] = round(weight, 3)
+        df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].apply(
+            lambda s: 1 if s == "buy" else -1
+        )
+        df["confidence"] = df.get("confidence", 0.5)
+        df["reward"] = df["pnl"] * df["confidence"]
+        recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
+        recent_mask = recent_cut >= (
+            datetime.now(timezone.utc) - timedelta(days=30)
+        )
+        df_recent = df[recent_mask]
 
-    ALPHA = 0.2
-    if os.path.exists(SIGNAL_WEIGHTS_FILE):
-        old = pd.read_csv(SIGNAL_WEIGHTS_FILE).set_index("signal")["weight"].to_dict()
-    else:
-        old = {}
-    merged = {
-        tag: round(ALPHA * w + (1 - ALPHA) * old.get(tag, w), 3)
-        for tag, w in new_weights.items()
-    }
-    out_df = pd.DataFrame.from_dict(
-        merged, orient="index", columns=["weight"]
-    ).reset_index()
-    out_df.columns = ["signal", "weight"]
-    out_df.to_csv(SIGNAL_WEIGHTS_FILE, index=False)
-    logger.info("SIGNAL_WEIGHTS_UPDATED", extra={"count": len(merged)})
+        stats_all: Dict[str, List[float]] = {}
+        stats_recent: Dict[str, List[float]] = {}
+        for _, row in df.iterrows():
+            for tag in row["signal_tags"].split("+"):
+                stats_all.setdefault(tag, []).append(row["reward"])
+        for _, row in df_recent.iterrows():
+            for tag in row["signal_tags"].split("+"):
+                stats_recent.setdefault(tag, []).append(row["reward"])
+
+        new_weights = {}
+        for tag, pnls in stats_all.items():
+            overall_wr = np.mean([1 if p > 0 else 0 for p in pnls]) if pnls else 0.0
+            recent_wr = (
+                np.mean([1 if p > 0 else 0 for p in stats_recent.get(tag, [])])
+                if stats_recent.get(tag)
+                else overall_wr
+            )
+            weight = 0.7 * recent_wr + 0.3 * overall_wr
+            if recent_wr < 0.4:
+                weight *= 0.5
+            new_weights[tag] = round(weight, 3)
+
+        ALPHA = 0.2
+        if os.path.exists(SIGNAL_WEIGHTS_FILE):
+            old = (
+                pd.read_csv(SIGNAL_WEIGHTS_FILE)
+                .set_index("signal")["weight"]
+                .to_dict()
+            )
+        else:
+            old = {}
+        merged = {
+            tag: round(ALPHA * w + (1 - ALPHA) * old.get(tag, w), 3)
+            for tag, w in new_weights.items()
+        }
+        out_df = (
+            pd.DataFrame.from_dict(merged, orient="index", columns=["weight"])
+            .reset_index()
+        )
+        out_df.columns = ["signal", "weight"]
+        out_df.to_csv(SIGNAL_WEIGHTS_FILE, index=False)
+        logger.info("SIGNAL_WEIGHTS_UPDATED", extra={"count": len(merged)})
+    except Exception as e:
+        logger.exception(f"update_signal_weights failed: {e}")
 
 
 def run_meta_learning_weight_optimizer(
@@ -3903,26 +3945,31 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
 
 
 def daily_summary() -> None:
-    if not os.path.exists(TRADE_LOG_FILE):
-        logger.info("DAILY_SUMMARY_NO_TRADES")
-        return
-    df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["entry_price", "exit_price"])
-    df["pnl"] = (df.exit_price - df.entry_price) * df["side"].map(
-        {"buy": 1, "sell": -1}
-    )
-    total_trades = len(df)
-    win_rate = (df.pnl > 0).mean() if total_trades else 0
-    total_pnl = df.pnl.sum()
-    max_dd = (df.pnl.cumsum().cummax() - df.pnl.cumsum()).max()
-    logger.info(
-        "DAILY_SUMMARY",
-        extra={
-            "trades": total_trades,
-            "win_rate": f"{win_rate:.2%}",
-            "pnl": total_pnl,
-            "max_drawdown": max_dd,
-        },
-    )
+    try:
+        if not os.path.exists(TRADE_LOG_FILE):
+            logger.info("DAILY_SUMMARY_NO_TRADES")
+            return
+        df = pd.read_csv(TRADE_LOG_FILE).dropna(
+            subset=["entry_price", "exit_price"]
+        )
+        df["pnl"] = (df.exit_price - df.entry_price) * df["side"].map(
+            {"buy": 1, "sell": -1}
+        )
+        total_trades = len(df)
+        win_rate = (df.pnl > 0).mean() if total_trades else 0
+        total_pnl = df.pnl.sum()
+        max_dd = (df.pnl.cumsum().cummax() - df.pnl.cumsum()).max()
+        logger.info(
+            "DAILY_SUMMARY",
+            extra={
+                "trades": total_trades,
+                "win_rate": f"{win_rate:.2%}",
+                "pnl": total_pnl,
+                "max_drawdown": max_dd,
+            },
+        )
+    except Exception as e:
+        logger.exception(f"daily_summary failed: {e}")
 
 
 # ─── PCA-BASED PORTFOLIO ADJUSTMENT ─────────────────────────────────────────────
@@ -3976,10 +4023,13 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
 
 def daily_reset() -> None:
     """Reset daily counters and in-memory slippage logs."""
-    global _LOSS_STREAK
-    _slippage_log.clear()
-    _LOSS_STREAK = 0
-    logger.info("DAILY_STATE_RESET")
+    try:
+        global _LOSS_STREAK
+        _slippage_log.clear()
+        _LOSS_STREAK = 0
+        logger.info("DAILY_STATE_RESET")
+    except Exception as e:
+        logger.exception(f"daily_reset failed: {e}")
 
 
 def _average_reward(n: int = 20) -> float:
@@ -4005,71 +4055,80 @@ def _current_drawdown() -> float:
 
 
 def update_bot_mode() -> None:
-    global mode_obj
-    avg_r = _average_reward()
-    dd = _current_drawdown()
-    regime = CURRENT_REGIME
-    if dd > 0.05 or avg_r < -0.01:
-        new_mode = "conservative"
-    elif avg_r > 0.05 and regime == "trending":
-        new_mode = "aggressive"
-    else:
-        new_mode = "balanced"
-    if new_mode != mode_obj.mode:
-        mode_obj = BotMode(new_mode)
-        params.update(mode_obj.get_config())
-        ctx.kelly_fraction = params.get("KELLY_FRACTION", 0.6)
-        logger.info(
-            "MODE_SWITCH",
-            extra={
-                "new_mode": new_mode,
-                "avg_reward": avg_r,
-                "drawdown": dd,
-                "regime": regime,
-            },
-        )
+    try:
+        global mode_obj
+        avg_r = _average_reward()
+        dd = _current_drawdown()
+        regime = CURRENT_REGIME
+        if dd > 0.05 or avg_r < -0.01:
+            new_mode = "conservative"
+        elif avg_r > 0.05 and regime == "trending":
+            new_mode = "aggressive"
+        else:
+            new_mode = "balanced"
+        if new_mode != mode_obj.mode:
+            mode_obj = BotMode(new_mode)
+            params.update(mode_obj.get_config())
+            ctx.kelly_fraction = params.get("KELLY_FRACTION", 0.6)
+            logger.info(
+                "MODE_SWITCH",
+                extra={
+                    "new_mode": new_mode,
+                    "avg_reward": avg_r,
+                    "drawdown": dd,
+                    "regime": regime,
+                },
+            )
+    except Exception as e:
+        logger.exception(f"update_bot_mode failed: {e}")
 
 
 def adaptive_risk_scaling(ctx: BotContext) -> None:
     """Adjust risk parameters based on volatility, rewards and drawdown."""
-    vol = _VOL_STATS.get("mean", 0)
-    spy_atr = _VOL_STATS.get("last", 0)
-    avg_r = _average_reward(30)
-    dd = _current_drawdown()
     try:
-        equity = float(ctx.api.get_account().equity)
-    except Exception:
-        equity = 0.0
-    ctx.capital_scaler.update(ctx, equity)
-    params["CAPITAL_CAP"] = ctx.params["CAPITAL_CAP"]
-    frac = params.get("KELLY_FRACTION", 0.6)
-    if spy_atr and vol and spy_atr > vol * 1.5:
-        frac *= 0.5
-    if avg_r < -0.02:
-        frac *= 0.7
-    if dd > 0.1:
-        frac *= 0.5
-    ctx.kelly_fraction = round(max(0.2, min(frac, 1.0)), 2)
-    params["CAPITAL_CAP"] = round(
-        max(0.02, min(0.1, params.get("CAPITAL_CAP", 0.08) * (1 - dd))), 3
-    )
-    logger.info(
-        "RISK_SCALED",
-        extra={
-            "kelly_fraction": ctx.kelly_fraction,
-            "dd": dd,
-            "atr": spy_atr,
-            "avg_reward": avg_r,
-        },
-    )
+        vol = _VOL_STATS.get("mean", 0)
+        spy_atr = _VOL_STATS.get("last", 0)
+        avg_r = _average_reward(30)
+        dd = _current_drawdown()
+        try:
+            equity = float(ctx.api.get_account().equity)
+        except Exception:
+            equity = 0.0
+        ctx.capital_scaler.update(ctx, equity)
+        params["CAPITAL_CAP"] = ctx.params["CAPITAL_CAP"]
+        frac = params.get("KELLY_FRACTION", 0.6)
+        if spy_atr and vol and spy_atr > vol * 1.5:
+            frac *= 0.5
+        if avg_r < -0.02:
+            frac *= 0.7
+        if dd > 0.1:
+            frac *= 0.5
+        ctx.kelly_fraction = round(max(0.2, min(frac, 1.0)), 2)
+        params["CAPITAL_CAP"] = round(
+            max(0.02, min(0.1, params.get("CAPITAL_CAP", 0.08) * (1 - dd))), 3
+        )
+        logger.info(
+            "RISK_SCALED",
+            extra={
+                "kelly_fraction": ctx.kelly_fraction,
+                "dd": dd,
+                "atr": spy_atr,
+                "avg_reward": avg_r,
+            },
+        )
+    except Exception as e:
+        logger.exception(f"adaptive_risk_scaling failed: {e}")
 
 
 def check_disaster_halt() -> None:
-    dd = _current_drawdown()
-    if dd >= DISASTER_DD_LIMIT:
-        with open(HALT_FLAG_PATH, "w") as f:
-            f.write("DISASTER " + datetime.now(timezone.utc).isoformat())
-        logger.error("DISASTER_HALT_TRIGGERED", extra={"drawdown": dd})
+    try:
+        dd = _current_drawdown()
+        if dd >= DISASTER_DD_LIMIT:
+            with open(HALT_FLAG_PATH, "w") as f:
+                f.write("DISASTER " + datetime.now(timezone.utc).isoformat())
+            logger.error("DISASTER_HALT_TRIGGERED", extra={"drawdown": dd})
+    except Exception as e:
+        logger.exception(f"check_disaster_halt failed: {e}")
 
 
 # At top‐level, define retrain_meta_learner = None so load_or_retrain_daily can reference it safely
@@ -4215,6 +4274,8 @@ def start_healthcheck() -> None:
         logger.warning(
             f"Healthcheck port {port} in use: {e}. Skipping health-endpoint."
         )
+    except Exception as e:
+        logger.exception(f"start_healthcheck failed: {e}")
 
 
 def run_multi_strategy(ctx: BotContext) -> None:
@@ -4518,8 +4579,11 @@ if __name__ == "__main__":
 
         # Recurring jobs
         def gather_minute_data_with_delay():
-            time.sleep(30)
-            schedule_run_all_trades(model)
+            try:
+                time.sleep(30)
+                schedule_run_all_trades(model)
+            except Exception as e:
+                logger.exception(f"gather_minute_data_with_delay failed: {e}")
 
         schedule.every().minute.do(gather_minute_data_with_delay)
         schedule.every(1).minutes.do(
