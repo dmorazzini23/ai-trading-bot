@@ -1,3 +1,6 @@
+# Preflight workflow
+# Checks presence of deployment secrets before running.
+# Required secrets: DROPLET_HOST, DROPLET_SSH_KEY, DOCKER_REGISTRY, DOCKER_USERNAME, DOCKER_PASSWORD
 name: Preflight
 
 on:
@@ -22,3 +25,4 @@ jobs:
               exit 1
             fi
           done
+
