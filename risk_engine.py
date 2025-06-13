@@ -1,7 +1,9 @@
-from typing import Dict
-import random
-import numpy as np
 import logging
+import random
+from typing import Dict
+
+import numpy as np
+
 from strategies import TradeSignal
 
 random.seed(42)
@@ -22,39 +24,94 @@ class RiskEngine:
         self.exposure: Dict[str, float] = {}
 
     def can_trade(self, signal: TradeSignal) -> bool:
+        if not isinstance(signal, TradeSignal):
+            logger.error("can_trade called with invalid signal type")
+            return False
+
         asset_exp = self.exposure.get(signal.asset_class, 0.0)
         asset_cap = self.asset_limits.get(signal.asset_class, self.global_limit)
         if asset_exp + signal.weight > asset_cap:
+            logger.info(
+                "Trade blocked: %s exposure %.2f exceeds cap %.2f",
+                signal.asset_class,
+                asset_exp + signal.weight,
+                asset_cap,
+            )
             return False
+
         strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
-        return signal.weight <= strat_cap
+        allowed = signal.weight <= strat_cap
+        if not allowed:
+            logger.info(
+                "Trade blocked: strategy %s weight %.2f exceeds cap %.2f",
+                signal.strategy,
+                signal.weight,
+                strat_cap,
+            )
+        return allowed
 
     def register_fill(self, signal: TradeSignal) -> None:
-        self.exposure[signal.asset_class] = (
-            self.exposure.get(signal.asset_class, 0.0) + signal.weight
+        if not isinstance(signal, TradeSignal):
+            logger.error("register_fill called with invalid signal type")
+            return
+
+        prev = self.exposure.get(signal.asset_class, 0.0)
+        self.exposure[signal.asset_class] = prev + signal.weight
+        logger.debug(
+            "Registered fill for %s: exposure %.2f -> %.2f",
+            signal.asset_class,
+            prev,
+            self.exposure[signal.asset_class],
         )
 
     def check_max_drawdown(self, api) -> bool:
-        account = api.get_account()
-        pnl = float(account.equity) - float(account.last_equity)
-        if pnl < -MAX_DRAWDOWN * float(account.last_equity):
+        try:
+            account = api.get_account()
+            pnl = float(account.equity) - float(account.last_equity)
+            # Assume account returns equity strings convertible to float
+            if pnl < -MAX_DRAWDOWN * float(account.last_equity):
+                logger.warning("Max drawdown exceeded: %.2f", pnl)
+                return False
+            return True
+        except Exception as exc:
+            logger.error("check_max_drawdown failed: %s", exc)
             return False
-        return True
 
     def position_size(
         self, signal: TradeSignal, cash: float, price: float, api=None
     ) -> int:
+        if not isinstance(signal, TradeSignal):
+            logger.error("position_size called with invalid signal type")
+            return 0
+
         if api is not None and not self.check_max_drawdown(api):
             return 0
-        if not self.can_trade(signal) or price <= 0:
+
+        if cash <= 0 or price <= 0:
+            logger.error(
+                "Invalid cash %.2f or price %.2f for position sizing", cash, price
+            )
             return 0
+
+        if not self.can_trade(signal):
+            return 0
+
         dollars = cash * min(signal.weight, 1.0)
-        qty = int(dollars / price)
+        try:
+            qty = int(dollars / price)
+        except Exception as exc:
+            logger.error("position_size division error: %s", exc)
+            return 0
         return max(qty, 0)
 
     def compute_volatility(self, returns: np.ndarray) -> dict:
-        if returns.size == 0:
-            logger.warning("Empty returns series—skipping risk computation")
+        if not isinstance(returns, np.ndarray) or returns.size == 0:
+            logger.warning("Empty or invalid returns series—skipping risk computation")
             return {"volatility": 0.0}
-        vol = float(np.std(returns))
+
+        try:
+            vol = float(np.std(returns))
+        except Exception as exc:
+            logger.error("Failed computing volatility: %s", exc)
+            vol = 0.0
         return {"volatility": vol}
