@@ -803,11 +803,9 @@ class DataFetcher:
                     print(
                         f">> DEBUG: INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}"
                     )
-                    ts = pd.to_datetime(end_ts)
-                    if ts.tzinfo is not None:
-                        ts = ts.tz_convert("UTC")
-                    else:
-                        ts = ts.tz_localize("UTC")
+                    ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
+                    if ts is None:
+                        ts = pd.Timestamp.utcnow()
                     dummy_date = ts
                     df = pd.DataFrame(
                         [
@@ -823,11 +821,9 @@ class DataFetcher:
                     )
             else:
                 print(f">> DEBUG: ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
-                ts2 = pd.to_datetime(end_ts)
-                if ts2.tzinfo is not None:
-                    ts2 = ts2.tz_convert("UTC")
-                else:
-                    ts2 = ts2.tz_localize("UTC")
+                ts2 = pd.to_datetime(end_ts, utc=True, errors="coerce")
+                if ts2 is None:
+                    ts2 = pd.Timestamp.utcnow()
                 dummy_date = ts2
                 df = pd.DataFrame(
                     [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
@@ -835,11 +831,9 @@ class DataFetcher:
                 )
         except Exception as e:
             print(f">> DEBUG: ALPACA DAILY FETCH EXCEPTION for {symbol}: {repr(e)}")
-            ts = pd.to_datetime(end_ts)
-            if ts.tzinfo is not None:
-                ts = ts.tz_convert("UTC")
-            else:
-                ts = ts.tz_localize("UTC")
+            ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
+            if ts is None:
+                ts = pd.Timestamp.utcnow()
             dummy_date = ts
             df = pd.DataFrame(
                 [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
@@ -1091,11 +1085,9 @@ def prefetch_daily_data(
                         print(
                             f">> DEBUG: INSERTING DUMMY DAILY FOR {sym} ON {end_date.isoformat()}"
                         )
-                        tsd = pd.to_datetime(end_date)
-                        if tsd.tzinfo is not None:
-                            tsd = tsd.tz_convert("UTC")
-                        else:
-                            tsd = tsd.tz_localize("UTC")
+                        tsd = pd.to_datetime(end_date, utc=True, errors="coerce")
+                        if tsd is None:
+                            tsd = pd.Timestamp.utcnow()
                         dummy_date = tsd
                         dummy_df = pd.DataFrame(
                             [
@@ -1115,11 +1107,9 @@ def prefetch_daily_data(
             print(f">> DEBUG: ALPACA BULK FETCH UNKNOWN ERROR for {symbols}: {repr(e)}")
             daily_dict = {}
             for sym in symbols:
-                t2 = pd.to_datetime(end_date)
-                if t2.tzinfo is not None:
-                    t2 = t2.tz_convert("UTC")
-                else:
-                    t2 = t2.tz_localize("UTC")
+                t2 = pd.to_datetime(end_date, utc=True, errors="coerce")
+                if t2 is None:
+                    t2 = pd.Timestamp.utcnow()
                 dummy_date = t2
                 dummy_df = pd.DataFrame(
                     [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
@@ -1131,11 +1121,9 @@ def prefetch_daily_data(
         print(f">> DEBUG: ALPACA BULK FETCH EXCEPTION for {symbols}: {repr(e)}")
         daily_dict = {}
         for sym in symbols:
-            t3 = pd.to_datetime(end_date)
-            if t3.tzinfo is not None:
-                t3 = t3.tz_convert("UTC")
-            else:
-                t3 = t3.tz_localize("UTC")
+            t3 = pd.to_datetime(end_date, utc=True, errors="coerce")
+            if t3 is None:
+                t3 = pd.Timestamp.utcnow()
             dummy_date = t3
             dummy_df = pd.DataFrame(
                 [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],

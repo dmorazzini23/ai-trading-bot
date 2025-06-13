@@ -74,14 +74,20 @@ jobs:
           host: ${{ secrets.DROPLET_HOST }}
           key: ${{ secrets.DROPLET_SSH_KEY }}
           script: |
-            docker pull ${{ secrets.DOCKER_REGISTRY }}/${{ github.repository }}:${{ github.sha }}
+            docker pull ${{ secrets.DOCKER_REGISTRY }}/${{ github.repository }}:${{ env.IMAGE_TAG }}
             docker stop ai-trader || true
             docker rm ai-trader  || true
             docker run -d \
               --name ai-trader \
               --restart always \
               -e BOT_MODE=$BOT_MODE \
-              ${{ secrets.DOCKER_REGISTRY }}/${{ github.repository }}:${{ github.sha }}
+              ${{ secrets.DOCKER_REGISTRY }}/${{ github.repository }}:${{ env.IMAGE_TAG }}
+
+      - name: Debug workspace on failure
+        if: failure()
+        run: |
+          echo "PWD: $(pwd)"
+          ls -al
 
       - name: Health check
         run: |

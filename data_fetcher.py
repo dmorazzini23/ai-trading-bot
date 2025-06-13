@@ -68,8 +68,8 @@ def get_historical_data(
 ) -> pd.DataFrame:
     """Fetch historical bars from Alpaca and ensure OHLCV float columns."""
 
-    start_dt = pd.to_datetime(start_date)
-    end_dt = pd.to_datetime(end_date)
+    start_dt = pd.to_datetime(start_date, utc=True, errors="coerce")
+    end_dt = pd.to_datetime(end_date, utc=True, errors="coerce")
 
     tf_map = {
         "1Min": TimeFrame.Minute,
