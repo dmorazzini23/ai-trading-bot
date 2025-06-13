@@ -42,12 +42,15 @@ class ExecutionEngine:
         # Trading client from the new Alpaca SDK
         self.api: TradingClient = ctx.api
         log_path = os.path.join(os.path.dirname(__file__), "logs", "execution.log")
-        handler = logging.handlers.RotatingFileHandler(
-            log_path, maxBytes=5_000_000, backupCount=2
-        )
         self.logger = logging.getLogger("execution")
         self.logger.setLevel(logging.INFO)
-        self.logger.addHandler(handler)
+        try:
+            handler = logging.handlers.RotatingFileHandler(
+                log_path, maxBytes=5_000_000, backupCount=2
+            )
+            self.logger.addHandler(handler)
+        except Exception as e:
+            self.logger.error(f"Failed to set up log handler {log_path}: {e}")
         self.slippage_path = os.path.join(
             os.path.dirname(__file__), "logs", "slippage.csv"
         )
