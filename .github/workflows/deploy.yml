@@ -40,6 +40,7 @@ jobs:
     environment: production
     env:
       IMAGE_TAG: ${{ github.event.workflow_run.head_sha }}
+      BOT_MODE: ${{ secrets.BOT_MODE }}
     steps:
       - uses: actions/checkout@v4
         with:

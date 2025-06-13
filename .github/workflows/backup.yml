@@ -43,3 +43,8 @@ jobs:
             "https://api.digitalocean.com/v2/droplets/$DROPLET_ID/actions" \
             -d '{"type":"snapshot","name":"ai-trader-'$(date +"%Y%m%d")'"}'
 
+      - name: Notify failure
+        if: failure()
+        run: echo "Backup job failed" > backup_failed.txt
+        continue-on-error: true
+

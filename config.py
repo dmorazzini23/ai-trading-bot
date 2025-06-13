@@ -6,6 +6,12 @@ ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"
 load_dotenv(ENV_PATH)
 
+
+def reload_env() -> None:
+    """Reload environment variables from the .env file if it exists."""
+    if ENV_PATH.exists():
+        load_dotenv(ENV_PATH, override=True)
+
 from types import MappingProxyType
 
 required_env_vars = ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY")

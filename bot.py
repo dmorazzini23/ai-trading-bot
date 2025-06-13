@@ -126,7 +126,7 @@ def _require_cfg(value, name):
         while not value:
             logger.critical(f"Missing {name}; retrying in 60s")
             time.sleep(60)
-            load_dotenv()
+            config.reload_env()
             import importlib
             importlib.reload(config)
             value = getattr(config, name, None)
@@ -354,7 +354,7 @@ def get_git_hash() -> str:
         import subprocess
 
         return (
-            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])\
+            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])
             .decode()
             .strip()
         )
@@ -4418,7 +4418,9 @@ app = Flask(__name__)
 
 
 @app.route("/health")
+@app.route("/health_check")
 def health() -> str:
+    """Simple health endpoint for liveness probes."""
     return "OK", 200
 
 
