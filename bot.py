@@ -37,6 +37,16 @@ from collections import deque
 
 import numpy as np
 
+# Set deterministic random seeds for reproducibility
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+try:
+    import torch
+    torch.manual_seed(SEED)
+except ImportError:
+    pass
+
 # Ensure numpy.NaN exists for pandas_ta compatibility
 np.NaN = np.nan
 
@@ -104,16 +114,27 @@ SENTRY_DSN = getattr(config, "SENTRY_DSN", None)
 BOT_MODE_ENV = getattr(config, "BOT_MODE", None)
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
 
-if not ALPACA_API_KEY or not ALPACA_SECRET_KEY:
-    raise RuntimeError(
-        "Missing Alpaca credentials. Please set ALPACA_API_KEY and ALPACA_SECRET_KEY."
-    )
+def _require_cfg(value, name):
+    """Require a config value; sleep-and-retry in production."""
+    if value:
+        return value
+    if BOT_MODE_ENV == "production":
+        while not value:
+            logger.critical(f"Missing {name}; retrying in 60s")
+            time.sleep(60)
+            load_dotenv()
+            import importlib
+            importlib.reload(config)
+            value = getattr(config, name, None)
+        return value
+    raise RuntimeError(f"{name} must be defined in the configuration or environment")
+
+ALPACA_API_KEY = _require_cfg(ALPACA_API_KEY, "ALPACA_API_KEY")
+ALPACA_SECRET_KEY = _require_cfg(ALPACA_SECRET_KEY, "ALPACA_SECRET_KEY")
 if not callable(validate_alpaca_credentials):
     raise RuntimeError("validate_alpaca_credentials not found in config")
-if BOT_MODE_ENV is None:
-    raise RuntimeError("BOT_MODE must be defined in the configuration or environment")
-if not FINNHUB_API_KEY:
-    raise RuntimeError("FINNHUB_API_KEY must be provided for market data access")
+BOT_MODE_ENV = _require_cfg(BOT_MODE_ENV, "BOT_MODE")
+FINNHUB_API_KEY = _require_cfg(FINNHUB_API_KEY, "FINNHUB_API_KEY")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -288,6 +309,53 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def abspath(fname: str) -> str:
     return os.path.join(BASE_DIR, fname)
+
+
+def atomic_joblib_dump(obj, path: str) -> None:
+    """Safely write joblib file using atomic replace."""
+    import tempfile
+
+    dir_name = os.path.dirname(path)
+    os.makedirs(dir_name, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+    os.close(fd)
+    try:
+        joblib.dump(obj, tmp_path)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def atomic_pickle_dump(obj, path: str) -> None:
+    """Safely pickle object to path with atomic replace."""
+    import tempfile
+
+    dir_name = os.path.dirname(path)
+    os.makedirs(dir_name, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+    os.close(fd)
+    try:
+        with open(tmp_path, "wb") as f:
+            pickle.dump(obj, f)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def get_git_hash() -> str:
+    """Return current git commit short hash if available."""
+    try:
+        import subprocess
+
+        return (
+            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])\
+            .decode()
+            .strip()
+        )
+    except Exception:
+        return "unknown"
 
 
 TICKERS_FILE = abspath("tickers.csv")
@@ -3539,8 +3607,19 @@ def run_meta_learning_weight_optimizer(
         sample_w = df["reward"].abs() + 1e-3
         model = Ridge(alpha=alpha, fit_intercept=True)
         model.fit(X, y, sample_weight=sample_w)
-        joblib.dump(model, META_MODEL_PATH)
+        atomic_joblib_dump(model, META_MODEL_PATH)
         logger.info("META_MODEL_TRAINED", extra={"samples": len(y)})
+        log_metrics(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": "meta_model_train",
+                "samples": len(y),
+                "hyperparams": json.dumps({"alpha": alpha}),
+                "seed": SEED,
+                "model": "Ridge",
+                "git_hash": get_git_hash(),
+            }
+        )
 
         weights = {
             tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)
@@ -3587,8 +3666,18 @@ def run_bayesian_meta_learning_optimizer(
 
         model = BayesianRidge(fit_intercept=True, normalize=True)
         model.fit(X, y)
-        joblib.dump(model, abspath("meta_model_bayes.pkl"))
+        atomic_joblib_dump(model, abspath("meta_model_bayes.pkl"))
         logger.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
+        log_metrics(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": "meta_model_bayes_train",
+                "samples": len(y),
+                "seed": SEED,
+                "model": "BayesianRidge",
+                "git_hash": get_git_hash(),
+            }
+        )
 
         weights = {
             tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)
@@ -3894,8 +3983,7 @@ else:
         )
         regime_model.fit(X, y)
         try:
-            with open(REGIME_MODEL_PATH, "wb") as f:
-                pickle.dump(regime_model, f)
+            atomic_pickle_dump(regime_model, REGIME_MODEL_PATH)
         except Exception as e:
             logger.warning(f"Failed to save regime model: {e}")
         else:
@@ -4277,7 +4365,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         date_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
         os.makedirs("models", exist_ok=True)
         path = f"models/sgd_{date_str}.pkl"
-        joblib.dump(model_pipeline, path)
+        atomic_joblib_dump(model_pipeline, path)
         logger.info(f"Model checkpoint saved: {path}")
 
         for f in os.listdir("models"):
@@ -4294,6 +4382,10 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "type": "daily_retrain",
                 "batch_mse": batch_mse,
+                "hyperparams": json.dumps(config.SGD_PARAMS),
+                "seed": SEED,
+                "model": "SGDRegressor",
+                "git_hash": get_git_hash(),
             }
         )
         state.updates_halted = False
@@ -4665,7 +4757,12 @@ if __name__ == "__main__":
 
         # Scheduler loop
         while True:
-            schedule.run_pending()
+            try:
+                schedule.run_pending()
+            except Exception as e:
+                logger.exception(f"Scheduler error: {e}")
+                time.sleep(5)
+                continue
             pytime.sleep(1)
 
     except Exception as e:

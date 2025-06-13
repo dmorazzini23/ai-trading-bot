@@ -7,6 +7,17 @@ import logging
 import warnings
 import pandas as pd
 import numpy as np
+from metrics_logger import log_metrics
+
+# Set deterministic random seeds for reproducibility
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+try:
+    import torch
+    torch.manual_seed(SEED)
+except ImportError:
+    pass
 import requests
 from datetime import date
 from datetime import datetime
@@ -21,6 +32,11 @@ from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 
 import pandas_ta as ta
+
+try:
+    import optuna
+except Exception:  # pragma: no cover - optional dependency
+    optuna = None
 
 import config
 
@@ -39,6 +55,36 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def abspath(p: str) -> str:
     return os.path.join(BASE_DIR, p)
+
+
+def get_git_hash() -> str:
+    """Return current git commit short hash if available."""
+    try:
+        import subprocess
+
+        return (
+            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])\
+            .decode()
+            .strip()
+        )
+    except Exception:
+        return "unknown"
+
+
+def atomic_joblib_dump(obj, path: str) -> None:
+    """Safely write joblib file atomically."""
+    import tempfile
+
+    dir_name = os.path.dirname(path)
+    os.makedirs(dir_name, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+    os.close(fd)
+    try:
+        joblib.dump(obj, tmp_path)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 FEATURE_PERF_FILE = abspath("feature_perf.csv")
@@ -461,8 +507,24 @@ def build_feature_label_df(
 def log_hyperparam_result(
     regime: str, generation: int, params: dict, score: float
 ) -> None:
-    row = [datetime.utcnow().isoformat(), regime, generation, json.dumps(params), score]
-    header = ["timestamp", "regime", "generation", "params", "score"]
+    row = [
+        datetime.utcnow().isoformat(),
+        regime,
+        generation,
+        json.dumps(params),
+        score,
+        SEED,
+        get_git_hash(),
+    ]
+    header = [
+        "timestamp",
+        "regime",
+        "generation",
+        "params",
+        "score",
+        "seed",
+        "git_hash",
+    ]
     write_header = not os.path.exists(HYPERPARAM_LOG_FILE)
     try:
         with open(HYPERPARAM_LOG_FILE, "a", newline="") as f:
@@ -479,11 +541,21 @@ def save_model_version(clf, regime: str) -> str:
     filename = f"model_{regime}_{ts}.pkl"
     path = os.path.join(MODELS_DIR, filename)
     try:
-        joblib.dump(clf, path)
+        atomic_joblib_dump(clf, path)
     except Exception as e:
         logger.exception("Failed to save model %s: %s", regime, e)
         raise
     log_hyperparam_result(regime, -1, {"model_path": filename}, 0.0)
+    log_metrics(
+        {
+            "timestamp": datetime.utcnow().isoformat(),
+            "type": "model_checkpoint",
+            "regime": regime,
+            "model_path": filename,
+            "seed": SEED,
+            "git_hash": get_git_hash(),
+        }
+    )
     link_path = MODEL_FILES.get(regime, os.path.join(MODELS_DIR, f"model_{regime}.pkl"))
     try:
         if os.path.islink(link_path) or os.path.exists(link_path):
@@ -508,7 +580,7 @@ def evolutionary_search(
     best_params = base_params.copy()
     best_score = -np.inf
     population_params = list(
-        ParameterSampler(param_space, n_iter=population, random_state=42)
+        ParameterSampler(param_space, n_iter=population, random_state=SEED)
     )
     for gen in range(generations):
         scores = []
@@ -546,6 +618,32 @@ def evolutionary_search(
             new_pop.append(parent)
         population_params = new_pop
     return best_params
+
+
+def optuna_search(
+    X,
+    y,
+    base_params: dict,
+    param_space: dict,
+    n_trials: int = 20,
+    scoring: str = "roc_auc",
+) -> dict:
+    """Hyperparameter tuning using Optuna if available."""
+    if optuna is None:
+        logger.warning("Optuna not installed; falling back to evolutionary search")
+        return evolutionary_search(X, y, base_params, param_space, generations=3, population=n_trials)
+
+    def objective(trial):
+        params = {k: trial.suggest_categorical(k, v) for k, v in param_space.items()}
+        cfg = base_params.copy()
+        cfg.update(params)
+        clf = LGBMClassifier(**cfg)
+        score = cross_val_score(clf, X, y, cv=3, scoring=scoring).mean()
+        return score
+
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=n_trials)
+    return {**base_params, **study.best_params}
 
 
 def retrain_meta_learner(
@@ -622,7 +720,7 @@ def retrain_meta_learner(
             f"  ✔ Training {regime} model using scoring='{scoring}' (pos_ratio={pos_ratio:.3f})"
         )
 
-        base_params = dict(objective="binary", n_jobs=-1, random_state=42)
+        base_params = dict(objective="binary", n_jobs=-1, random_state=SEED)
         search_space = {
             "n_estimators": [100, 200, 300, 500],
             "max_depth": [-1, 4, 6, 8],
@@ -631,13 +729,12 @@ def retrain_meta_learner(
             "subsample": [0.8, 1.0],
             "colsample_bytree": [0.8, 1.0],
         }
-        best_hyper = evolutionary_search(
+        best_hyper = optuna_search(
             X_train,
             y_train,
             base_params,
             search_space,
-            generations=3,
-            population=8,
+            n_trials=20,
             scoring=scoring,
         )
         clf = LGBMClassifier(**best_hyper)
@@ -679,6 +776,18 @@ def retrain_meta_learner(
 
         path = save_model_version(pipe, regime)
         print(f"  ✔ Saved {regime} model to {path}")
+        log_metrics(
+            {
+                "timestamp": datetime.utcnow().isoformat(),
+                "type": "retrain_model",
+                "regime": regime,
+                "metric": metric,
+                "scoring": scoring,
+                "params": json.dumps(best_hyper),
+                "seed": SEED,
+                "git_hash": get_git_hash(),
+            }
+        )
         trained_any = True
 
     try:
