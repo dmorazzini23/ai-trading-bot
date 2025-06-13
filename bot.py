@@ -12,6 +12,10 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()  # ensure .env is loaded before using os.getenv
+
+# BOT_MODE must be defined before any classes that reference it
+BOT_MODE = os.getenv("BOT_MODE", "balanced")
+assert BOT_MODE is not None, "BOT_MODE must be set before using BotState"
 from argparse import ArgumentParser
 
 import logging
@@ -111,7 +115,7 @@ validate_alpaca_credentials = getattr(config, "validate_alpaca_credentials", Non
 CONFIG_NEWS_API_KEY = getattr(config, "NEWS_API_KEY", None)
 FINNHUB_API_KEY = getattr(config, "FINNHUB_API_KEY", None)
 SENTRY_DSN = getattr(config, "SENTRY_DSN", None)
-BOT_MODE_ENV = getattr(config, "BOT_MODE", None)
+BOT_MODE_ENV = getattr(config, "BOT_MODE", BOT_MODE)
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
 
 def _require_cfg(value, name):
