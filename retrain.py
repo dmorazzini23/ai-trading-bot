@@ -40,11 +40,11 @@ except Exception:  # pragma: no cover - optional dependency
 
 import config
 
+logger = logging.getLogger(__name__)
 NEWS_API_KEY = config.NEWS_API_KEY
+
 if not NEWS_API_KEY:
     logger.warning("NEWS_API_KEY is not set; sentiment features will be zero")
-
-logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 MINUTES_REQUIRED = 31
@@ -63,7 +63,7 @@ def get_git_hash() -> str:
         import subprocess
 
         return (
-            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])\
+            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])
             .decode()
             .strip()
         )
