@@ -19,6 +19,7 @@ jobs:
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
         run: |
+          set -e
           for var in DROPLET_HOST DROPLET_SSH_KEY DOCKER_REGISTRY DOCKER_USERNAME DOCKER_PASSWORD; do
             if [ -z "${!var}" ]; then
               echo "::error::Missing required secret $var"

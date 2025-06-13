@@ -30,6 +30,7 @@ jobs:
         with:
           name: db-backup
           path: backup-*.sql
+          retention-days: 7
 
       - name: Snapshot Droplet
         if: env.DO_API_TOKEN != ''
