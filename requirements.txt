@@ -40,3 +40,4 @@ yfinance
 urllib3
 statsmodels
 transformers
+python-dateutil
