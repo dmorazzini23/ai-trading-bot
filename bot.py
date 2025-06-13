@@ -3610,6 +3610,9 @@ def run_meta_learning_weight_optimizer(
 
         sample_w = df["reward"].abs() + 1e-3
         model = Ridge(alpha=alpha, fit_intercept=True)
+        if X.empty:
+            logger.warning("META_MODEL_TRAIN_SKIPPED_EMPTY")
+            return
         model.fit(X, y, sample_weight=sample_w)
         atomic_joblib_dump(model, META_MODEL_PATH)
         logger.info("META_MODEL_TRAINED", extra={"samples": len(y)})
@@ -3669,6 +3672,9 @@ def run_bayesian_meta_learning_optimizer(
             return
 
         model = BayesianRidge(fit_intercept=True, normalize=True)
+        if X.size == 0:
+            logger.warning("BAYES_MODEL_TRAIN_SKIPPED_EMPTY")
+            return
         model.fit(X, y)
         atomic_joblib_dump(model, abspath("meta_model_bayes.pkl"))
         logger.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
@@ -3985,7 +3991,10 @@ else:
         regime_model = RandomForestClassifier(
             n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
         )
-        regime_model.fit(X, y)
+        if X.empty:
+            logger.warning("REGIME_MODEL_TRAIN_SKIPPED_EMPTY")
+        else:
+            regime_model.fit(X, y)
         try:
             atomic_pickle_dump(regime_model, REGIME_MODEL_PATH)
         except Exception as e:
@@ -4133,6 +4142,9 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
     if returns_df.shape[1] < 2:
         return
     pca = PCA(n_components=3)
+    if returns_df.empty:
+        logger.warning("PCA_SKIPPED_EMPTY_RETURNS")
+        return
     pca.fit(returns_df.values)
     var_explained = pca.explained_variance_ratio_[0]
     if var_explained < 0.4:
@@ -4362,7 +4374,10 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         y_train = df_train["close"].pct_change().shift(-1).fillna(0).values[:-1]
         with model_lock:
             try:
-                model_pipeline.fit(X_train, y_train)
+                if len(X_train) == 0:
+                    logger.warning("DAILY_MODEL_TRAIN_SKIPPED_EMPTY")
+                else:
+                    model_pipeline.fit(X_train, y_train)
             except Exception as e:
                 logger.error(f"Daily retrain failed: {e}")
 

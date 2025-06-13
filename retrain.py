@@ -419,6 +419,11 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.Dat
             print(f"[gather_minute_data] ✓ {sym} → {len(bars)} rows")
             raw_store[sym] = bars
 
+    if not raw_store:
+        logger.critical(
+            "No symbols returned valid data for the day. Cannot trade or retrain. Check your data subscription."
+        )
+
     return raw_store
 
 
@@ -674,7 +679,9 @@ def retrain_meta_learner(
     logger.info(f"Starting meta-learner retraining at {now:%Y-%m-%d %H:%M:%S}")
     raw_store = gather_minute_data(ctx, symbols, lookback_days=lookback_days)
     if not raw_store:
-        logger.warning("No minute bars returned; skipping retrain")
+        logger.critical(
+            "No symbols returned valid data for the day. Cannot trade or retrain. Check your data subscription."
+        )
         return False
 
     filtered: dict[str, pd.DataFrame] = {}
@@ -739,6 +746,11 @@ def retrain_meta_learner(
         )
         clf = LGBMClassifier(**best_hyper)
         pipe = make_pipeline(StandardScaler(), clf)
+        if X_train.empty:
+            logger.warning(
+                f"[retrain_meta_learner] Training data empty for {regime}; skipping model fit"
+            )
+            continue
         pipe.fit(X_train, y_train)
         print(f"  ✔ {regime} best params: {best_hyper}")
 
