@@ -391,7 +391,7 @@ class BotState:
     running: bool = False
     current_regime: str = "sideways"
     rolling_losses: list[float] = field(default_factory=list)
-    mode_obj: BotMode = field(default_factory=lambda: BotMode(BOT_MODE_ENV))
+    mode_obj: BotMode = field(default_factory=lambda: BotMode(BOT_MODE))
 
 
 state = BotState()
