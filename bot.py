@@ -1,5 +1,6 @@
 import warnings
 from sklearn.exceptions import InconsistentVersionWarning
+
 warnings.filterwarnings(
     "ignore",
     message="pkg_resources is deprecated as an API.*",
@@ -68,10 +69,12 @@ from alpaca.trading.requests import (
 )
 from alpaca.trading.models import Order
 from alpaca.common.exceptions import APIError
+
 # Legacy import removed; using alpaca-py trading stream instead
 from alpaca.trading.stream import TradingStream
+
 # for paper trading
-ALPACA_BASE_URL = 'https://paper-api.alpaca.markets'
+ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
 import threading
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
@@ -377,9 +380,23 @@ class BotMode:
         return self.params
 
 
-mode_obj = BotMode(BOT_MODE_ENV)
-logger.info(f"Trading mode is set to '{mode_obj.mode}'")
-params = mode_obj.get_config()
+@dataclass
+class BotState:
+    loss_streak: int = 0
+    streak_halt_until: Optional[datetime] = None
+    day_start_equity: Optional[tuple[date, float]] = None
+    week_start_equity: Optional[tuple[date, float]] = None
+    last_drawdown: float = 0.0
+    updates_halted: bool = False
+    running: bool = False
+    current_regime: str = "sideways"
+    rolling_losses: list[float] = field(default_factory=list)
+    mode_obj: BotMode = field(default_factory=lambda: BotMode(BOT_MODE_ENV))
+
+
+state = BotState()
+logger.info(f"Trading mode is set to '{state.mode_obj.mode}'")
+params = state.mode_obj.get_config()
 params.update(load_hyperparams())
 
 # Other constants
@@ -439,15 +456,10 @@ _LAST_EVENT_TS = {}
 EVENT_COOLDOWN = 15.0  # seconds
 REBALANCE_HOLD_SECONDS = 600  # skip selling shortly after rebalance buys
 
-# Loss streak kill-switch
-_LOSS_STREAK = 0
-_STREAK_HALT_UNTIL: Optional[datetime] = None
-rolling_losses: list = []
-updates_halted = False
+# Loss streak kill-switch (managed via BotState)
 
 # Volatility stats (for SPY ATR mean/std)
 _VOL_STATS = {"mean": None, "std": None, "last_update": None, "last": None}
-CURRENT_REGIME = "sideways"
 
 # Slippage logs (in-memory for quick access)
 _slippage_log: List[Tuple[str, float, float, datetime]] = (
@@ -465,9 +477,6 @@ if not os.path.exists(SLIPPAGE_LOG_FILE):
 
 # Sector cache for portfolio exposure calculations
 _SECTOR_CACHE: Dict[str, str] = {}
-
-# Weekly drawdown tracking
-week_start_equity: Optional[Tuple[date, float]] = None
 
 
 # ─── TYPED EXCEPTION ─────────────────────────────────────────────────────────
@@ -710,7 +719,9 @@ class DataFetcher:
                     else:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
                     if len(df_iex.index) and isinstance(df_iex.index[0], tuple):
-                        df_iex.index = pd.to_datetime([t[0] for t in df_iex.index], utc=True)
+                        df_iex.index = pd.to_datetime(
+                            [t[0] for t in df_iex.index], utc=True
+                        )
                     else:
                         df_iex.index = pd.to_datetime(df_iex.index, utc=True)
                     df_iex.index = df_iex.index.tz_convert(None)
@@ -828,7 +839,9 @@ class DataFetcher:
                     else:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
                     if len(df_iex.index) and isinstance(df_iex.index[0], tuple):
-                        df_iex.index = pd.to_datetime([t[0] for t in df_iex.index], utc=True)
+                        df_iex.index = pd.to_datetime(
+                            [t[0] for t in df_iex.index], utc=True
+                        )
                     else:
                         df_iex.index = pd.to_datetime(df_iex.index, utc=True)
                     df_iex.index = df_iex.index.tz_convert(None)
@@ -1127,8 +1140,7 @@ class TradeLogger:
                 ]
             )
 
-    def log_exit(self, symbol: str, exit_price: float) -> None:
-        global _LOSS_STREAK, _STREAK_HALT_UNTIL
+    def log_exit(self, state: BotState, symbol: str, exit_price: float) -> None:
         with portalocker.Lock(self.path, "r+", timeout=5) as f:
             rows = list(csv.reader(f))
             header, data = rows[0], rows[1:]
@@ -1186,14 +1198,17 @@ class TradeLogger:
 
         # Update streak-based kill-switch
         if pnl < 0:
-            _LOSS_STREAK += 1
+            state.loss_streak += 1
         else:
-            _LOSS_STREAK = 0
-        if _LOSS_STREAK >= 3:
-            _STREAK_HALT_UNTIL = datetime.now(PACIFIC) + timedelta(minutes=60)
+            state.loss_streak = 0
+        if state.loss_streak >= 3:
+            state.streak_halt_until = datetime.now(PACIFIC) + timedelta(minutes=60)
             logger.warning(
                 "STREAK_HALT_TRIGGERED",
-                extra={"loss_streak": _LOSS_STREAK, "halt_until": _STREAK_HALT_UNTIL},
+                extra={
+                    "loss_streak": state.loss_streak,
+                    "halt_until": state.streak_halt_until,
+                },
             )
 
 
@@ -1464,8 +1479,10 @@ class SignalManager:
             weight *= 1.5
         return s, weight, "sentiment"
 
-    def signal_regime(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
-        ok = check_market_regime()
+    def signal_regime(
+        self, state: BotState, df: pd.DataFrame, model=None
+    ) -> Tuple[int, float, str]:
+        ok = check_market_regime(state)
         s = 1 if ok else -1
         return s, 1.0, "regime"
 
@@ -1476,7 +1493,12 @@ class SignalManager:
         return {row["signal"]: row["weight"] for _, row in df.iterrows()}
 
     def evaluate(
-        self, ctx: "BotContext", df: pd.DataFrame, ticker: str, model: Any
+        self,
+        ctx: "BotContext",
+        state: BotState,
+        df: pd.DataFrame,
+        ticker: str,
+        model: Any,
     ) -> Tuple[int, float, str]:
         """
         Evaluate all signals, allowing short (s=-1) and long (s=1) components.
@@ -1490,8 +1512,8 @@ class SignalManager:
         signals_evaluated.inc()
 
         # simple moving averages
-        df['sma_50'] = df['close'].rolling(window=50).mean()
-        df['sma_200'] = df['close'].rolling(window=200).mean()
+        df["sma_50"] = df["close"].rolling(window=50).mean()
+        df["sma_200"] = df["close"].rolling(window=200).mean()
 
         fns = [
             self.signal_momentum,
@@ -1508,6 +1530,8 @@ class SignalManager:
             try:
                 if fn == self.signal_sentiment:
                     s, w, lab = fn(ctx, ticker, df, model)
+                elif fn == self.signal_regime:
+                    s, w, lab = fn(state, df, model)
                 else:
                     s, w, lab = fn(df, model)
                 if allowed_tags and lab not in allowed_tags:
@@ -1521,10 +1545,10 @@ class SignalManager:
                         "sideways": {"momentum": 0.9, "mean_reversion": 1.1},
                     }
                     if (
-                        CURRENT_REGIME in regime_adj
-                        and lab in regime_adj[CURRENT_REGIME]
+                        state.current_regime in regime_adj
+                        and lab in regime_adj[state.current_regime]
                     ):
-                        weight *= regime_adj[CURRENT_REGIME][lab]
+                        weight *= regime_adj[state.current_regime][lab]
                     signals.append((s, weight, lab))
             except Exception:
                 continue
@@ -1618,11 +1642,11 @@ stream = TradingStream(
     paper=True,
 )
 
+
 async def on_trade_update(event):
     """Handle order status updates from the Alpaca stream."""
-    logger.info(
-        f"Trade update for {event.order['symbol']}: {event.order['status']}"
-    )
+    logger.info(f"Trade update for {event.order['symbol']}: {event.order['status']}")
+
 
 stream.subscribe_trade_updates(on_trade_update)
 ctx = BotContext(
@@ -1913,8 +1937,6 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
 
 
 # ─── J. RISK & GUARDS ─────────────────────────────────────────────────────────
-day_start_equity: Optional[Tuple[date, float]] = None
-last_drawdown: float = 0.0
 
 
 @sleep_and_retry
@@ -1924,46 +1946,44 @@ last_drawdown: float = 0.0
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
     retry=retry_if_exception_type(APIError),
 )
-def check_daily_loss(ctx: BotContext) -> bool:
-    global day_start_equity, last_drawdown
+def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
     acct = safe_alpaca_get_account(ctx)
     equity = float(acct.equity)
     today_date = date.today()
     limit = params.get("DAILY_LOSS_LIMIT", 0.07)
 
-    if day_start_equity is None or day_start_equity[0] != today_date:
-        if last_drawdown >= 0.05:
+    if state.day_start_equity is None or state.day_start_equity[0] != today_date:
+        if state.last_drawdown >= 0.05:
             limit = 0.03
-        last_drawdown = (
-            (day_start_equity[1] - equity) / day_start_equity[1]
-            if day_start_equity
+        state.last_drawdown = (
+            (state.day_start_equity[1] - equity) / state.day_start_equity[1]
+            if state.day_start_equity
             else 0.0
         )
-        day_start_equity = (today_date, equity)
+        state.day_start_equity = (today_date, equity)
         daily_drawdown.set(0.0)
         return False
 
-    loss = (day_start_equity[1] - equity) / day_start_equity[1]
+    loss = (state.day_start_equity[1] - equity) / state.day_start_equity[1]
     daily_drawdown.set(loss)
     if loss > 0.05:
         sentry_sdk.capture_message(f"[WARNING] Daily drawdown = {loss:.2%}")
     return loss >= limit
 
 
-def check_weekly_loss(ctx: BotContext) -> bool:
+def check_weekly_loss(ctx: BotContext, state: BotState) -> bool:
     """Weekly portfolio drawdown guard."""
-    global week_start_equity
     acct = safe_alpaca_get_account(ctx)
     equity = float(acct.equity)
     today_date = date.today()
     week_start = today_date - timedelta(days=today_date.weekday())
 
-    if week_start_equity is None or week_start_equity[0] != week_start:
-        week_start_equity = (week_start, equity)
+    if state.week_start_equity is None or state.week_start_equity[0] != week_start:
+        state.week_start_equity = (week_start, equity)
         weekly_drawdown.set(0.0)
         return False
 
-    loss = (week_start_equity[1] - equity) / week_start_equity[1]
+    loss = (state.week_start_equity[1] - equity) / state.week_start_equity[1]
     weekly_drawdown.set(loss)
     return loss >= WEEKLY_DRAWDOWN_LIMIT
 
@@ -1985,9 +2005,6 @@ def count_day_trades() -> int:
         & (df["entry_date"] == df["exit_date"])
     )
     return int(mask.sum())
-
-
-_running = False
 
 
 @sleep_and_retry
@@ -2146,7 +2163,7 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
 
 
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
-def is_within_entry_window(ctx: BotContext) -> bool:
+def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
     """Return True if current time is during regular Eastern trading hours."""
     now_et = datetime.now(ZoneInfo("America/New_York"))
     start = dt_time(9, 30)
@@ -2157,8 +2174,8 @@ def is_within_entry_window(ctx: BotContext) -> bool:
             extra={"start": start, "end": end, "now": now_et.time()},
         )
         return False
-    if _STREAK_HALT_UNTIL and datetime.now(PACIFIC) < _STREAK_HALT_UNTIL:
-        logger.info("SKIP_STREAK_HALT", extra={"until": _STREAK_HALT_UNTIL})
+    if state.streak_halt_until and datetime.now(PACIFIC) < state.streak_halt_until:
+        logger.info("SKIP_STREAK_HALT", extra={"until": state.streak_halt_until})
         return False
     return True
 
@@ -2301,7 +2318,9 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                     positions = api.get_all_positions()
                 except Exception:
                     positions = []
-                avail = next((float(p.qty) for p in positions if p.symbol == req.symbol), 0.0)
+                avail = next(
+                    (float(p.qty) for p in positions if p.symbol == req.symbol), 0.0
+                )
                 if float(getattr(req, "qty", 0)) > avail:
                     logger.warning(
                         f"insufficient qty available for {req.symbol}: requested {req.qty}, available {avail}"
@@ -2312,7 +2331,9 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
             while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
                 time.sleep(0.5)
                 order = api.get_order_by_id(order.id)
-            logger.info(f"Order status for {req.symbol}: {getattr(order, 'status', '')}")
+            logger.info(
+                f"Order status for {req.symbol}: {getattr(order, 'status', '')}"
+            )
             status = getattr(order, "status", "")
             if status == "filled":
                 logger.info(
@@ -2783,13 +2804,13 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
         ctx.take_profit_targets[symbol] = take
 
 
-def execute_exit(ctx: BotContext, symbol: str, qty: int) -> None:
+def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> None:
     if qty <= 0:
         return
     raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
     exit_price = get_latest_close(raw) if raw is not None else 1.0
     send_exit_order(ctx, symbol, qty, exit_price, "manual_exit")
-    ctx.trade_logger.log_exit(symbol, exit_price)
+    ctx.trade_logger.log_exit(state, symbol, exit_price)
     on_trade_exit_rebalance(ctx)
     with targets_lock:
         ctx.take_profit_targets.pop(symbol, None)
@@ -2818,12 +2839,13 @@ def signal_and_confirm(
 
 
 def pre_trade_checks(
-    ctx: BotContext, symbol: str, balance: float, regime_ok: bool
+    ctx: BotContext, state: BotState, symbol: str, balance: float, regime_ok: bool
 ) -> bool:
     # Streak kill-switch check
-    if _STREAK_HALT_UNTIL and datetime.now(PACIFIC) < _STREAK_HALT_UNTIL:
+    if state.streak_halt_until and datetime.now(PACIFIC) < state.streak_halt_until:
         logger.info(
-            "SKIP_STREAK_HALT", extra={"symbol": symbol, "until": _STREAK_HALT_UNTIL}
+            "SKIP_STREAK_HALT",
+            extra={"symbol": symbol, "until": state.streak_halt_until},
         )
         return False
     if check_pdt_rule(ctx):
@@ -2832,10 +2854,10 @@ def pre_trade_checks(
     if check_halt_flag():
         logger.info("SKIP_HALT_FLAG", extra={"symbol": symbol})
         return False
-    if check_daily_loss(ctx):
+    if check_daily_loss(ctx, state):
         logger.info("SKIP_DAILY_LOSS", extra={"symbol": symbol})
         return False
-    if check_weekly_loss(ctx):
+    if check_weekly_loss(ctx, state):
         logger.info("SKIP_WEEKLY_LOSS", extra={"symbol": symbol})
         return False
     if too_many_positions(ctx):
@@ -2847,8 +2869,10 @@ def pre_trade_checks(
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
 
 
-def should_enter(ctx: BotContext, symbol: str, balance: float, regime_ok: bool) -> bool:
-    return pre_trade_checks(ctx, symbol, balance, regime_ok)
+def should_enter(
+    ctx: BotContext, state: BotState, symbol: str, balance: float, regime_ok: bool
+) -> bool:
+    return pre_trade_checks(ctx, state, symbol, balance, regime_ok)
 
 
 def should_exit(
@@ -3023,7 +3047,7 @@ def trade_logic(
             f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
         )
         send_exit_order(ctx, symbol, current_qty, price, "reversal")
-        ctx.trade_logger.log_exit(symbol, price)
+        ctx.trade_logger.log_exit(state, symbol, price)
         with targets_lock:
             ctx.stop_targets.pop(symbol, None)
             ctx.take_profit_targets.pop(symbol, None)
@@ -3041,7 +3065,7 @@ def trade_logic(
             f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
         )
         send_exit_order(ctx, symbol, abs(current_qty), price, "reversal")
-        ctx.trade_logger.log_exit(symbol, price)
+        ctx.trade_logger.log_exit(state, symbol, price)
         with targets_lock:
             ctx.stop_targets.pop(symbol, None)
             ctx.take_profit_targets.pop(symbol, None)
@@ -3194,7 +3218,7 @@ def trade_logic(
                 f"exit_qty={exit_qty}  price={price:.4f}"
             )
             send_exit_order(ctx, symbol, exit_qty, price, reason)
-            ctx.trade_logger.log_exit(symbol, price)
+            ctx.trade_logger.log_exit(state, symbol, price)
             try:
                 pos_after = ctx.api.get_open_position(symbol)
                 if int(pos_after.qty) == 0:
@@ -3389,10 +3413,9 @@ def load_model(path: str = MODEL_PATH):
     return model
 
 
-def online_update(symbol: str, X_new, y_new) -> None:
-    global updates_halted
+def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
     y_new = np.clip(y_new, -0.05, 0.05)
-    if updates_halted:
+    if state.updates_halted:
         return
     with model_lock:
         try:
@@ -3410,9 +3433,9 @@ def online_update(symbol: str, X_new, y_new) -> None:
             "error": online_error,
         }
     )
-    rolling_losses.append(online_error)
-    if len(rolling_losses) >= 20 and sum(rolling_losses[-20:]) > 0.02:
-        updates_halted = True
+    state.rolling_losses.append(online_error)
+    if len(state.rolling_losses) >= 20 and sum(state.rolling_losses[-20:]) > 0.02:
+        state.updates_halted = True
         logger.warning("Halting online updates due to 20-trade rolling loss >2%")
 
 
@@ -3430,9 +3453,7 @@ def update_signal_weights() -> None:
         df["confidence"] = df.get("confidence", 0.5)
         df["reward"] = df["pnl"] * df["confidence"]
         recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
-        recent_mask = recent_cut >= (
-            datetime.now(timezone.utc) - timedelta(days=30)
-        )
+        recent_mask = recent_cut >= (datetime.now(timezone.utc) - timedelta(days=30))
         df_recent = df[recent_mask]
 
         stats_all: Dict[str, List[float]] = {}
@@ -3460,9 +3481,7 @@ def update_signal_weights() -> None:
         ALPHA = 0.2
         if os.path.exists(SIGNAL_WEIGHTS_FILE):
             old = (
-                pd.read_csv(SIGNAL_WEIGHTS_FILE)
-                .set_index("signal")["weight"]
-                .to_dict()
+                pd.read_csv(SIGNAL_WEIGHTS_FILE).set_index("signal")["weight"].to_dict()
             )
         else:
             old = {}
@@ -3470,10 +3489,9 @@ def update_signal_weights() -> None:
             tag: round(ALPHA * w + (1 - ALPHA) * old.get(tag, w), 3)
             for tag, w in new_weights.items()
         }
-        out_df = (
-            pd.DataFrame.from_dict(merged, orient="index", columns=["weight"])
-            .reset_index()
-        )
+        out_df = pd.DataFrame.from_dict(
+            merged, orient="index", columns=["weight"]
+        ).reset_index()
         out_df.columns = ["signal", "weight"]
         out_df.to_csv(SIGNAL_WEIGHTS_FILE, index=False)
         logger.info("SIGNAL_WEIGHTS_UPDATED", extra={"count": len(merged)})
@@ -3815,7 +3833,9 @@ if os.path.exists(REGIME_MODEL_PATH):
             regime_model = pickle.load(f)
     except Exception as e:
         logger.warning(f"Failed to load regime model: {e}")
-        regime_model = RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+        regime_model = RandomForestClassifier(
+            n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
+        )
 else:
     today_date = date.today()
     start_dt = datetime.combine(
@@ -3925,9 +3945,8 @@ def detect_regime_state(ctx: BotContext) -> str:
     return "sideways"
 
 
-def check_market_regime() -> bool:
-    global CURRENT_REGIME
-    CURRENT_REGIME = detect_regime_state(ctx)
+def check_market_regime(state: BotState) -> bool:
+    state.current_regime = detect_regime_state(ctx)
     return True
 
 
@@ -3980,9 +3999,7 @@ def daily_summary() -> None:
         if not os.path.exists(TRADE_LOG_FILE):
             logger.info("DAILY_SUMMARY_NO_TRADES")
             return
-        df = pd.read_csv(TRADE_LOG_FILE).dropna(
-            subset=["entry_price", "exit_price"]
-        )
+        df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["entry_price", "exit_price"])
         df["pnl"] = (df.exit_price - df.entry_price) * df["side"].map(
             {"buy": 1, "sell": -1}
         )
@@ -4052,12 +4069,11 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
     )
 
 
-def daily_reset() -> None:
+def daily_reset(state: BotState) -> None:
     """Reset daily counters and in-memory slippage logs."""
     try:
-        global _LOSS_STREAK
         _slippage_log.clear()
-        _LOSS_STREAK = 0
+        state.loss_streak = 0
         logger.info("DAILY_STATE_RESET")
     except Exception as e:
         logger.exception(f"daily_reset failed: {e}")
@@ -4085,21 +4101,20 @@ def _current_drawdown() -> float:
     return max(0.0, (peak - eq) / peak)
 
 
-def update_bot_mode() -> None:
+def update_bot_mode(state: BotState) -> None:
     try:
-        global mode_obj
         avg_r = _average_reward()
         dd = _current_drawdown()
-        regime = CURRENT_REGIME
+        regime = state.current_regime
         if dd > 0.05 or avg_r < -0.01:
             new_mode = "conservative"
         elif avg_r > 0.05 and regime == "trending":
             new_mode = "aggressive"
         else:
             new_mode = "balanced"
-        if new_mode != mode_obj.mode:
-            mode_obj = BotMode(new_mode)
-            params.update(mode_obj.get_config())
+        if new_mode != state.mode_obj.mode:
+            state.mode_obj = BotMode(new_mode)
+            params.update(state.mode_obj.get_config())
             ctx.kelly_fraction = params.get("KELLY_FRACTION", 0.6)
             logger.info(
                 "MODE_SWITCH",
@@ -4281,9 +4296,8 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 "batch_mse": batch_mse,
             }
         )
-        global updates_halted
-        updates_halted = False
-        rolling_losses.clear()
+        state.updates_halted = False
+        state.rolling_losses.clear()
 
     return model_pipeline
 
@@ -4337,21 +4351,20 @@ def run_multi_strategy(ctx: BotContext) -> None:
             ctx.risk_engine.register_fill(sig)
 
 
-def run_all_trades_worker(model) -> None:
+def run_all_trades_worker(state: BotState, model) -> None:
     """Run the full trading cycle for all candidate symbols.
 
     This fetches data, executes strategy logic and places orders. The function
     guards against overlapping runs and ensures the market is open before
     proceeding.
     """
-    global _running
-    if _running:
+    if state.running:
         logger.warning("RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
     if not is_market_open():
         logger.info("MARKET_CLOSED_NO_FETCH")
         return  # FIXED: skip work when market closed
-    _running = True
+    state.running = True
     try:
         # On each run, clear open orders and correct any position mismatches
         cancel_all_open_orders(ctx)
@@ -4390,7 +4403,7 @@ def run_all_trades_worker(model) -> None:
 
         acct = ctx.api.get_account()
         current_cash = float(acct.cash)
-        regime_ok = check_market_regime()
+        regime_ok = check_market_regime(state)
 
         processed: list[str] = []
 
@@ -4420,13 +4433,20 @@ def run_all_trades_worker(model) -> None:
         logger.info("RUN_ALL_TRADES_COMPLETE")
     finally:
         # Always reset running flag
-        _running = False
+        state.running = False
 
 
 def schedule_run_all_trades(model):
     """Spawn run_all_trades_worker if market is open."""  # FIXED
     if is_market_open():
-        t = threading.Thread(target=run_all_trades_worker, args=(model,), daemon=True)
+        t = threading.Thread(
+            target=run_all_trades_worker,
+            args=(
+                state,
+                model,
+            ),
+            daemon=True,
+        )
         t.start()
     else:
         logger.info("Market closed—skipping run_all_trades.")
@@ -4531,9 +4551,9 @@ if __name__ == "__main__":
         default=BOT_MODE_ENV or "balanced",
     )
     args = parser.parse_args()
-    if args.mode != mode_obj.mode:
-        globals()["mode_obj"] = BotMode(args.mode)
-        params.update(mode_obj.get_config())
+    if args.mode != state.mode_obj.mode:
+        state.mode_obj = BotMode(args.mode)
+        params.update(state.mode_obj.get_config())
 
     try:
         logger.info(">>> BOT __main__ ENTERED – starting up")
@@ -4554,7 +4574,7 @@ if __name__ == "__main__":
             lambda: Thread(target=daily_summary, daemon=True).start()
         )
         schedule.every().day.at("00:05").do(
-            lambda: Thread(target=daily_reset, daemon=True).start()
+            lambda: Thread(target=daily_reset, args=(state,), daemon=True).start()
         )
         schedule.every().day.at("10:00").do(
             lambda: Thread(
@@ -4626,7 +4646,7 @@ if __name__ == "__main__":
             lambda: Thread(target=update_signal_weights, daemon=True).start()
         )
         schedule.every(30).minutes.do(
-            lambda: Thread(target=update_bot_mode, daemon=True).start()
+            lambda: Thread(target=update_bot_mode, args=(state,), daemon=True).start()
         )
         schedule.every(30).minutes.do(
             lambda: Thread(
