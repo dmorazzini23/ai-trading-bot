@@ -52,16 +52,22 @@ class ExecutionEngine:
             os.path.dirname(__file__), "logs", "slippage.csv"
         )
         if not os.path.exists(self.slippage_path):
-            with open(self.slippage_path, "w", newline="") as f:
-                csv.writer(f).writerow(
-                    [
-                        "timestamp",
-                        "symbol",
-                        "expected",
-                        "actual",
-                        "slippage_cents",
-                        "band",
-                    ]
+            # Protect file creation in case the logs directory is unwritable
+            try:
+                with open(self.slippage_path, "w", newline="") as f:
+                    csv.writer(f).writerow(
+                        [
+                            "timestamp",
+                            "symbol",
+                            "expected",
+                            "actual",
+                            "slippage_cents",
+                            "band",
+                        ]
+                    )
+            except OSError as e:
+                self.logger.error(
+                    f"Failed to create slippage log {self.slippage_path}: {e}"
                 )
         self.slippage_total = slippage_total
         self.slippage_count = slippage_count
@@ -86,12 +92,33 @@ class ExecutionEngine:
     def _adv_volume(self, symbol: str) -> Optional[float]:
         df = self.ctx.data_fetcher.get_daily_df(self.ctx, symbol)
         if df is None or df.empty or "volume" not in df.columns:
-            return None
+            # DataFrame missing or empty; return safe default
+            self.logger.warning(f"ADV data unavailable for {symbol}")
+            return 0.0
+        if len(df) < 20:
+            # Not enough rows for a 20 day average
+            self.logger.warning(
+                f"Not enough rows for ADV calculation of {symbol}: got {len(df)}"
+            )
+            return 0.0
         return float(df["volume"].tail(20).mean())
 
     def _minute_stats(self, symbol: str) -> Tuple[float, float, float]:
         df = self.ctx.data_fetcher.get_minute_df(self.ctx, symbol)
-        if df is None or df.empty or "volume" not in df.columns:
+        if (
+            df is None
+            or df.empty
+            or "volume" not in df.columns
+            or "close" not in df.columns
+        ):
+            # Missing data means we can't compute stats safely
+            self.logger.warning(f"Minute data unavailable for {symbol}")
+            return 0.0, 0.0, 0.0
+        if len(df) < 5:
+            # Require at least 5 rows for momentum/average calculations
+            self.logger.warning(
+                f"Not enough rows for minute stats of {symbol}: got {len(df)}"
+            )
             return 0.0, 0.0, 0.0
         vol = float(df["volume"].iloc[-1])
         avg1m = float(df["volume"].tail(5).mean())
@@ -158,17 +185,21 @@ class ExecutionEngine:
         self, symbol: str, expected: Optional[float], actual: float
     ) -> None:
         slip = ((actual - expected) * 100) if expected else 0.0
-        with open(self.slippage_path, "a", newline="") as f:
-            csv.writer(f).writerow(
-                [
-                    datetime.now(timezone.utc).isoformat(),
-                    symbol,
-                    expected,
-                    actual,
-                    slip,
-                    getattr(self.ctx, "capital_band", "small"),
-                ]
-            )
+        try:
+            # File I/O may fail; handle gracefully
+            with open(self.slippage_path, "a", newline="") as f:
+                csv.writer(f).writerow(
+                    [
+                        datetime.now(timezone.utc).isoformat(),
+                        symbol,
+                        expected,
+                        actual,
+                        slip,
+                        getattr(self.ctx, "capital_band", "small"),
+                    ]
+                )
+        except OSError as e:
+            self.logger.error(f"Failed to write slippage log: {e}")
         if self.slippage_total is not None:
             self.slippage_total.inc(abs(slip))
         if self.slippage_count is not None:
@@ -202,7 +233,9 @@ class ExecutionEngine:
             slice_qty = getattr(order_req, "qty", remaining)
             try:
                 acct = api.get_account()
-            except Exception:
+            except Exception as e:
+                # Log unexpected account retrieval errors
+                self.logger.error(f"Error fetching account information: {e}")
                 acct = None
             if side.lower() == "buy" and acct:
                 need = slice_qty * (expected_price or 0)
@@ -214,8 +247,9 @@ class ExecutionEngine:
             if side.lower() == "sell":
                 try:
                     api.get_position(symbol)
-                except Exception:
-                    self.logger.error(f"No position to sell for {symbol}")
+                except Exception as e:
+                    # Log the exception to aid debugging of sell attempts
+                    self.logger.error(f"No position to sell for {symbol}: {e}")
                     break
             start = time.monotonic()
             order = None
