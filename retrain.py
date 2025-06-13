@@ -25,6 +25,8 @@ import pandas_ta as ta
 import config
 
 NEWS_API_KEY = config.NEWS_API_KEY
+if not NEWS_API_KEY:
+    logger.warning("NEWS_API_KEY is not set; sentiment features will be zero")
 
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -49,10 +51,15 @@ REWARD_LOG_FILE = abspath("reward_log.csv")
 
 
 def load_reward_by_band(n: int = 200) -> dict:
+    """Return average reward by band from recent history."""
     if not os.path.exists(REWARD_LOG_FILE):
         return {}
-    df = pd.read_csv(REWARD_LOG_FILE).tail(n)
-    if "band" not in df.columns:
+    try:
+        df = pd.read_csv(REWARD_LOG_FILE).tail(n)
+    except Exception as e:
+        logger.exception("Failed to read reward log: %s", e)
+        return {}
+    if df.empty or "band" not in df.columns:
         return {}
     return df.groupby("band")["reward"].mean().to_dict()
 
@@ -72,7 +79,8 @@ def fetch_sentiment(symbol: str) -> float:
             1 for a in articles if "positive" in (a.get("title") or "").lower()
         ) / len(articles)
         return float(score)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to fetch sentiment for %s: %s", symbol, e)
         return 0.0
 
 
@@ -84,8 +92,14 @@ def detect_regime(df: pd.DataFrame) -> str:
     if df is None or df.empty or "close" not in df:
         return "chop"
     close = df["close"].astype(float)
+    if len(close) < 200:
+        return "chop"
     sma50 = close.rolling(50).mean()
     sma200 = close.rolling(200).mean()
+    if sma50.empty or sma200.empty:
+        return "chop"
+    if pd.isna(sma50.iloc[-1]) or pd.isna(sma200.iloc[-1]):
+        return "chop"
     if sma50.iloc[-1] > sma200.iloc[-1]:
         return "bull"
     if sma50.iloc[-1] < sma200.iloc[-1]:
@@ -158,8 +172,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["kc_lower"] = kc.iloc[:, 0].astype(float)
         df["kc_mid"] = kc.iloc[:, 1].astype(float)
         df["kc_upper"] = kc.iloc[:, 2].astype(float)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("KC indicator failed: %s", e)
 
     df["atr_band_upper"] = np.nan
     df["atr_band_lower"] = np.nan
@@ -176,8 +190,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
         df["macd"] = macd["MACD_12_26_9"].astype(float)
         df["macds"] = macd["MACDs_12_26_9"].astype(float)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("MACD calculation failed: %s", e)
 
     # Additional indicators for richer ML features
     df["bb_upper"] = np.nan
@@ -188,8 +202,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["bb_upper"] = bb["BBU_20_2.0"].astype(float)
         df["bb_lower"] = bb["BBL_20_2.0"].astype(float)
         df["bb_percent"] = bb["BBP_20_2.0"].astype(float)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("Bollinger Bands failed: %s", e)
 
     df["adx"] = np.nan
     df["dmp"] = np.nan
@@ -199,14 +213,14 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["adx"] = adx["ADX_14"].astype(float)
         df["dmp"] = adx["DMP_14"].astype(float)
         df["dmn"] = adx["DMN_14"].astype(float)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("ADX calculation failed: %s", e)
 
     df["cci"] = np.nan
     try:
         df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20).astype(float)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("CCI calculation failed: %s", e)
 
     try:
         mfi_vals = ta.mfi(
@@ -218,22 +232,23 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         ).astype(float)
         df["mfi_14"] = mfi_vals
         df.dropna(subset=["mfi_14"], inplace=True)
-    except Exception:
+    except Exception as e:
+        logger.exception("MFI calculation failed: %s", e)
         df["mfi_14"] = np.nan
 
     df["tema"] = np.nan
     try:
         df["tema"] = ta.tema(df["close"], length=10).astype(float)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("TEMA calculation failed: %s", e)
 
     df["willr"] = np.nan
     try:
         df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14).astype(
             float
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("Williams %R calculation failed: %s", e)
 
     df["psar_long"] = np.nan
     df["psar_short"] = np.nan
@@ -241,8 +256,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         psar = ta.psar(df["high"], df["low"], df["close"])
         df["psar_long"] = psar["PSARl_0.02_0.2"].astype(float)
         df["psar_short"] = psar["PSARs_0.02_0.2"].astype(float)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("PSAR calculation failed: %s", e)
 
     df["ichimoku_conv"] = np.nan
     df["ichimoku_base"] = np.nan
@@ -256,15 +271,15 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ichimoku_base"] = (
             base.iloc[:, 0] if hasattr(base, "iloc") else base
         ).astype(float)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("Ichimoku calculation failed: %s", e)
 
     df["stochrsi"] = np.nan
     try:
         st = ta.stochrsi(df["close"])
         df["stochrsi"] = st["STOCHRSIk_14_14_3_3"].astype(float)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("StochRSI calculation failed: %s", e)
 
     # --- Multi-timeframe fusion ---
     df["ret_5m"] = np.nan
@@ -298,8 +313,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["mom_agg"] = (df["ret_5m"] + df["ret_1h"] + df["ret_d"]).astype(float)
         df["lag_close_1"] = df["close"].shift(1).astype(float)
         df["lag_close_3"] = df["close"].shift(3).astype(float)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("Multi-timeframe features failed: %s", e)
 
     df.ffill(inplace=True)
     df.bfill(inplace=True)
@@ -349,6 +364,7 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.Dat
             bars = ctx.data_fetcher.get_minute_df(ctx, sym)
         except Exception as e:
             bars = None
+            logger.exception("[gather_minute_data] %s fetch failed: %s", sym, e)
             print(f"[gather_minute_data] ✗ {sym} → exception {start_dt}→{end_dt}: {e}")
 
         if bars is None or bars.empty:
@@ -434,6 +450,7 @@ def build_feature_label_df(
                 row["label"] = label
                 rows.append(row)
         except KeyError as e:
+            logger.exception("[build_feature_label_df] %s missing data: %s", sym, e)
             print(f"[build_feature_label_df] – skipping {sym}, KeyError: {e}")
             continue
 
@@ -447,26 +464,33 @@ def log_hyperparam_result(
     row = [datetime.utcnow().isoformat(), regime, generation, json.dumps(params), score]
     header = ["timestamp", "regime", "generation", "params", "score"]
     write_header = not os.path.exists(HYPERPARAM_LOG_FILE)
-    with open(HYPERPARAM_LOG_FILE, "a", newline="") as f:
-        w = csv.writer(f)
-        if write_header:
-            w.writerow(header)
-        w.writerow(row)
+    try:
+        with open(HYPERPARAM_LOG_FILE, "a", newline="") as f:
+            w = csv.writer(f)
+            if write_header:
+                w.writerow(header)
+            w.writerow(row)
+    except Exception as e:
+        logger.exception("Failed to log hyperparameters: %s", e)
 
 
 def save_model_version(clf, regime: str) -> str:
     ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     filename = f"model_{regime}_{ts}.pkl"
     path = os.path.join(MODELS_DIR, filename)
-    joblib.dump(clf, path)
+    try:
+        joblib.dump(clf, path)
+    except Exception as e:
+        logger.exception("Failed to save model %s: %s", regime, e)
+        raise
     log_hyperparam_result(regime, -1, {"model_path": filename}, 0.0)
     link_path = MODEL_FILES.get(regime, os.path.join(MODELS_DIR, f"model_{regime}.pkl"))
     try:
         if os.path.islink(link_path) or os.path.exists(link_path):
             os.remove(link_path)
         os.symlink(filename, link_path)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("Failed to update symlink for %s: %s", regime, e)
     return path
 
 
@@ -492,9 +516,18 @@ def evolutionary_search(
             cfg = base_params.copy()
             cfg.update(params)
             clf = LGBMClassifier(**cfg)
-            cv_scores = cross_val_score(clf, X, y, cv=3, scoring=scoring)
+            try:
+                cv_scores = cross_val_score(clf, X, y, cv=3, scoring=scoring)
+            except Exception as e:
+                logger.exception("CV failed for params %s: %s", params, e)
+                continue
+            if len(cv_scores) == 0:
+                continue
             score = float(cv_scores.mean())
             scores.append(score)
+        if not scores:
+            logger.warning("No successful CV scores in generation %s", gen)
+            continue
         ranked = sorted(
             zip(scores, population_params), key=lambda t: t[0], reverse=True
         )
@@ -576,6 +609,13 @@ def retrain_meta_learner(
         X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
         y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
 
+        if len(y_train) < 3:
+            logger.warning(
+                "[retrain_meta_learner] Not enough training samples for %s; skipping",
+                regime,
+            )
+            continue
+
         pos_ratio = y_train.mean()
         scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
         print(
@@ -634,8 +674,8 @@ def retrain_meta_learner(
                 imp_df.to_csv(FEATURE_PERF_FILE, mode="a", header=False, index=False)
             else:
                 imp_df.to_csv(FEATURE_PERF_FILE, index=False)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Failed to log feature importances for %s: %s", regime, e)
 
         path = save_model_version(pipe, regime)
         print(f"  ✔ Saved {regime} model to {path}")
@@ -644,6 +684,8 @@ def retrain_meta_learner(
     try:
         if os.path.exists(FEATURE_PERF_FILE):
             perf = pd.read_csv(FEATURE_PERF_FILE)
+            if perf.empty:
+                raise ValueError("feature_perf.csv is empty")
             recent = perf.groupby("feature").tail(5)
             means = recent.groupby("feature")["importance"].mean()
             threshold = means.quantile(0.1)
@@ -658,14 +700,14 @@ def retrain_meta_learner(
             current.difference_update(revived)
             with open(INACTIVE_FEATURES_FILE, "w") as f:
                 json.dump(sorted(current), f)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("Failed updating inactive features: %s", e)
 
     try:
         band_rewards = load_reward_by_band()
         if band_rewards:
             print(f"  ✔ Avg rewards by band: {band_rewards}")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.exception("Failed to load reward by band: %s", e)
 
     return trained_any
