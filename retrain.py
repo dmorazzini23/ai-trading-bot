@@ -22,14 +22,14 @@ from lightgbm import LGBMClassifier
 
 import pandas_ta as ta
 
+logger = logging.getLogger(__name__)
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import config
 
 NEWS_API_KEY = config.NEWS_API_KEY
 if not NEWS_API_KEY:
     logger.warning("NEWS_API_KEY is not set; sentiment features will be zero")
-
-logger = logging.getLogger(__name__)
-warnings.filterwarnings("ignore", category=FutureWarning)
 
 MINUTES_REQUIRED = 31
 MFI_PERIOD = 14

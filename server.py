@@ -1,12 +1,17 @@
-import os
 import hmac
 import hashlib
+import logging
+import os
 import subprocess
-from flask import Flask
-from flask import abort
-from flask import jsonify
-from flask import request
+from flask import Flask, abort, jsonify, request
 from config import WEBHOOK_SECRET, WEBHOOK_PORT
+
+logger = logging.getLogger(__name__)
+
+if not WEBHOOK_SECRET:
+    raise RuntimeError("WEBHOOK_SECRET must be set for webhook authentication")
+if not isinstance(WEBHOOK_PORT, int) or WEBHOOK_PORT <= 0:
+    raise RuntimeError("WEBHOOK_PORT must be a positive integer")
 
 app = Flask(__name__)
 SECRET = WEBHOOK_SECRET.encode()
@@ -19,7 +24,8 @@ def verify_sig(data: bytes, signature: str) -> bool:
             return False
         mac = hmac.new(SECRET, msg=data, digestmod=hashlib.sha256)
         return hmac.compare_digest(mac.hexdigest(), sig)
-    except Exception:
+    except Exception as exc:
+        logger.warning("Signature verification failed: %s", exc)
         return False
 
 
