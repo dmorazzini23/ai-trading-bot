@@ -4707,6 +4707,18 @@ if __name__ == "__main__":
     try:
         logger.info(">>> BOT __main__ ENTERED – starting up")
 
+        # --- Market hours check ---
+        import pandas_market_calendars as mcal
+        from datetime import datetime, timezone
+
+        nyse = mcal.get_calendar('NYSE')
+        now_utc = datetime.now(timezone.utc)
+        market_open = nyse.open_at_time(now_utc)
+
+        if not market_open:
+            logger.info("Market is closed. Skipping minute-data operations and retraining.")
+            sys.exit(0)
+
         # Try to start Prometheus metrics server; if port is already in use, log and continue
         try:
             start_http_server(9200)
