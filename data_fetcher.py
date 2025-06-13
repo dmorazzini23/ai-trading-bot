@@ -108,16 +108,20 @@ def get_historical_data(
         raise DataFetchError(f"Historical fetch failed for {symbol}: {e}") from e
 
     df = pd.DataFrame(bars)
+    if df.empty:
+        logger.warning(f"No bar data returned for {symbol}")
+        return pd.DataFrame()
+
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(-1)
     df = df.drop(columns=["symbol"], errors="ignore")
 
     df.columns = df.columns.str.lower()
 
-    df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
-    df.index = pd.to_datetime(df.index, errors="coerce").tz_localize(None)
-
-    df["timestamp"] = df.index
+    if not df.empty:
+        df.index = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
+        df.index = pd.to_datetime(df.index, errors="coerce").tz_localize(None)
+        df["timestamp"] = df.index
 
     for col in ["open", "high", "low", "close", "volume"]:
         if col not in df.columns:
@@ -155,6 +159,10 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
     df = df.drop(columns=["symbol"], errors="ignore")
 
     df.columns = df.columns.str.lower()
+
+    if df.empty:
+        logger.warning(f"No daily bars returned for {symbol}")
+        return pd.DataFrame()
 
     if isinstance(df.index, pd.MultiIndex):
         df.index = df.index.get_level_values(0)
@@ -230,15 +238,27 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             bars = client.get_stock_bars(req)
         except APIError as e:
             if "subscription does not permit" in str(e).lower():
+                logger.critical(
+                    f"API subscription error for {symbol}: {e}. Your Alpaca account does not have the required data subscription (recent SIP data). Please upgrade your Alpaca data plan or change data source."
+                )
                 req.feed = "iex"
-                bars = client.get_stock_bars(req)
+                try:
+                    bars = client.get_stock_bars(req)
+                except APIError as iex_err:
+                    logger.error(f"IEX fallback failed for {symbol}: {iex_err}")
+                    return pd.DataFrame()
             else:
-                raise
+                logger.error(f"API error for {symbol}: {e}")
+                return pd.DataFrame()
 
         if bars is None or not getattr(bars, "df", pd.DataFrame()).size:
-            raise APIError("No minute data returned")
+            logger.warning(f"No bar data returned for {symbol}, skipping")
+            return pd.DataFrame()
 
         bars = bars.df
+        if bars.empty:
+            logger.warning(f"No bar data returned for {symbol}, skipping")
+            return pd.DataFrame()
         # drop MultiIndex if present, otherwise drop the stray "symbol" column
         if isinstance(bars.columns, pd.MultiIndex):
             bars = bars.xs(symbol, level=0, axis=1)
@@ -273,6 +293,9 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             raise KeyError("Missing OHLCV columns")
 
         df = df[["open", "high", "low", "close", "volume"]]
+        if df.empty:
+            logger.warning(f"No bar data after column filtering for {symbol}")
+            return pd.DataFrame()
         # 🛠️ unify tuple-handling and drop tzinfo
         if len(df.index) and isinstance(df.index[0], tuple):
             df.index = pd.to_datetime([t[1] for t in df.index], utc=True)
@@ -293,6 +316,9 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             )
             bars = client.get_stock_bars(req)
             df = bars.df[["open", "high", "low", "close", "volume"]].copy()
+            if df.empty:
+                logger.warning(f"Daily fallback returned no data for {symbol}")
+                return pd.DataFrame()
             # 🛠️ unify tuple-handling and drop tzinfo
             if len(df.index) and isinstance(df.index[0], tuple):
                 df.index = pd.to_datetime([t[1] for t in df.index], utc=True)

@@ -72,6 +72,7 @@ class _DummyFinnhub:
 
 sys.modules["finnhub"].Client = _DummyFinnhub
 
+import logging
 import data_fetcher
 
 
@@ -95,3 +96,28 @@ def test_get_minute_df(monkeypatch):
         "AAPL", datetime.date(2023, 1, 1), datetime.date(2023, 1, 2)
     )
     assert not result.empty
+
+def test_subscription_error_logged(monkeypatch, caplog):
+    df = pd.DataFrame(
+        {"open": [1.0], "high": [2.0], "low": [0.5], "close": [1.5], "volume": [100]},
+        index=[pd.Timestamp("2023-01-01T09:30")],
+    )
+
+    class DummyClient:
+        def get_stock_bars(self, req):
+            if getattr(req, "feed", None) == "iex":
+                return FakeBars(df)
+            raise data_fetcher.APIError("subscription does not permit querying recent SIP data")
+
+    monkeypatch.setattr(data_fetcher, "client", DummyClient())
+    monkeypatch.setattr(data_fetcher, "TimeFrame", types.SimpleNamespace(Minute="1Min"))
+
+    start = pd.Timestamp("2023-01-01", tz="UTC")
+    end = pd.Timestamp("2023-01-02", tz="UTC")
+    messages = []
+    monkeypatch.setattr(data_fetcher.logger, "critical", lambda msg, *a, **k: messages.append(msg))
+    data_fetcher.get_minute_df("AAPL", start, end)
+    assert any(
+        "Your Alpaca account does not have the required data subscription" in m
+        for m in messages
+    )
