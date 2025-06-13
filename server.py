@@ -6,6 +6,8 @@ from flask import Flask
 from flask import abort
 from flask import jsonify
 from flask import request
+import os
+from dotenv import load_dotenv
 from config import WEBHOOK_SECRET, WEBHOOK_PORT
 
 app = Flask(__name__)
@@ -25,6 +27,8 @@ def verify_sig(data: bytes, signature: str) -> bool:
 
 @app.route("/github-webhook", methods=["POST"])
 def hook():
+    # Refresh environment variables on each webhook event
+    load_dotenv(dotenv_path=".env", override=True)
     payload = request.get_json(force=True)
     if not payload or "symbol" not in payload or "action" not in payload:
         return jsonify({"error": "Missing fields"}), 400
@@ -37,6 +41,8 @@ def hook():
 
 
 def start():
+    # Reload env vars when starting the Flask server
+    load_dotenv(dotenv_path=".env", override=True)
     app.run(host="0.0.0.0", port=WEBHOOK_PORT)
 
 
