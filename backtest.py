@@ -11,11 +11,13 @@ This will search over a default hyperparameter grid and write the best set to
 import argparse
 import json
 import os
+from dotenv import load_dotenv
 import time
 import warnings
 from itertools import product
 from datetime import datetime
 
+load_dotenv(dotenv_path=".env", override=True)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 BACKTEST_WINDOW_DAYS = 365

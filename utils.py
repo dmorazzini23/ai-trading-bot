@@ -4,8 +4,7 @@ import warnings
 import os
 
 import pandas as pd
-from datetime import datetime
-from datetime import time
+from datetime import datetime, date, time, timezone
 
 try:
     from tzlocal import get_localzone
@@ -66,3 +65,14 @@ def data_filepath(filename: str) -> str:
 def convert_to_local(df: pd.DataFrame) -> pd.DataFrame:
     local_tz = get_localzone()
     return df.tz_convert(local_tz)
+
+
+def ensure_utc(dt: datetime | date) -> datetime:
+    """Return a timezone-aware UTC datetime for ``dt``."""
+    if isinstance(dt, datetime):
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    if isinstance(dt, date):
+        return datetime.combine(dt, time.min, tzinfo=timezone.utc)
+    raise TypeError(f"Unsupported type for ensure_utc: {type(dt)!r}")
