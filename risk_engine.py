@@ -93,6 +93,7 @@ class RiskEngine:
             return 0
 
         if api is not None and not self.check_max_drawdown(api):
+            logger.error("Max drawdown breached; rejecting trade")
             return 0
 
         if cash <= 0 or price <= 0:
@@ -102,14 +103,21 @@ class RiskEngine:
             return 0
 
         if not self.can_trade(signal):
+            logger.info("Trade blocked by exposure limits")
             return 0
-
-        dollars = cash * min(signal.weight, 1.0)
+        weight = min(signal.weight, 1.0)
+        if weight != signal.weight:
+            logger.info(
+                "Weight capped %.2f -> %.2f for %s", signal.weight, weight, signal.symbol
+            )
+        dollars = cash * weight
         try:
             qty = int(dollars / price)
         except Exception as exc:
             logger.error("position_size division error: %s", exc)
             return 0
+        if qty <= 0:
+            logger.info("Computed position size zero for %s", signal.symbol)
         return max(qty, 0)
 
     def compute_volatility(self, returns: np.ndarray) -> dict:

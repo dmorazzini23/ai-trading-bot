@@ -229,6 +229,10 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
     """
     import pandas as pd
 
+    # Normalize date inputs
+    start_date = pd.to_datetime(start_date)
+    end_date = pd.to_datetime(end_date)
+
     # Skip network calls when requesting near real-time data outside market hours
     end_check = end_date
     if hasattr(end_check, "date"):

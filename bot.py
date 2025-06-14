@@ -159,7 +159,12 @@ from data_fetcher import (
 )
 from strategy_allocator import StrategyAllocator
 from risk_engine import RiskEngine
-from utils import is_market_open as utils_market_open, portfolio_lock
+from meta_learning import load_weights
+from utils import (
+    is_market_open as utils_market_open,
+    portfolio_lock,
+    get_latest_close,
+)
 from logger import get_logger
 from strategies import MomentumStrategy, MeanReversionStrategy, TradeSignal
 
@@ -173,23 +178,6 @@ def market_is_open(now: datetime | None = None) -> bool:
 
 # backward compatibility
 is_market_open = market_is_open
-
-
-def get_latest_close(df: pd.DataFrame) -> float:
-    """
-    Return the most recent closing price from df["close"].
-    If df is None, empty, missing "close", or the last value is NaN or ≤0, return 0.0.
-    """
-    if df is None or df.empty:
-        return 0.0
-    if "close" in df.columns:
-        last = df["close"].iloc[-1]
-    else:
-        return 0.0
-
-    if pd.isna(last) or last <= 0:
-        return 0.0
-    return float(last)
 
 
 def compute_time_range(minutes: int = 30) -> tuple[datetime, datetime]:
@@ -806,8 +794,9 @@ class DataFetcher:
         except APIError as e:
             err_msg = str(e).lower()
             if "subscription does not permit querying recent sip data" in err_msg:
-                print(f">> DEBUG: ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
-                print(f">> DEBUG: ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
+                logger.info(
+                    f"ALPACA SUBSCRIPTION ERROR for {symbol}: {e!r}; attempting IEX-delayed data"
+                )
                 try:
                     req.feed = "iex"
                     df_iex = client.get_stock_bars(req).df
@@ -826,9 +815,11 @@ class DataFetcher:
                     df_iex.index = idx
                     df = df_iex.rename(columns=lambda c: c.lower())
                 except Exception as iex_err:
-                    print(f">> DEBUG: ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
-                    print(
-                        f">> DEBUG: INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}"
+                    logger.info(
+                        f"ALPACA IEX ERROR for {symbol}: {iex_err!r}; inserting dummy daily"
+                    )
+                    logger.info(
+                        f"INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}"
                     )
                     ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
                     if ts is None:
@@ -847,7 +838,9 @@ class DataFetcher:
                         index=[dummy_date],
                     )
             else:
-                print(f">> DEBUG: ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
+                logger.error(
+                    f"ALPACA DAILY FETCH ERROR for {symbol}: {e!r}"
+                )
                 ts2 = pd.to_datetime(end_ts, utc=True, errors="coerce")
                 if ts2 is None:
                     ts2 = pd.Timestamp.utcnow()
@@ -857,7 +850,9 @@ class DataFetcher:
                     index=[dummy_date],
                 )
         except Exception as e:
-            print(f">> DEBUG: ALPACA DAILY FETCH EXCEPTION for {symbol}: {repr(e)}")
+            logger.error(
+                f"ALPACA DAILY FETCH EXCEPTION for {symbol}: {e!r}"
+            )
             ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
             if ts is None:
                 ts = pd.Timestamp.utcnow()
@@ -926,8 +921,9 @@ class DataFetcher:
                 "subscription does not permit querying recent sip data"
                 in err_msg.lower()
             ):
-                print(f">> DEBUG: ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
-                print(f">> DEBUG: ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
+                logger.info(
+                    f"ALPACA SUBSCRIPTION ERROR for {symbol}: {e!r}; attempting IEX-delayed data"
+                )
                 try:
                     req.feed = "iex"
                     df_iex = client.get_stock_bars(req).df
@@ -951,14 +947,19 @@ class DataFetcher:
                             ["open", "high", "low", "close", "volume"]
                         ]
                 except Exception as iex_err:
-                    print(f">> DEBUG: ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
-                    print(f">> DEBUG: NO ALTERNATIVE MINUTE DATA FOR {symbol}")
+                    logger.info(
+                        f"ALPACA IEX ERROR for {symbol}: {iex_err!r}; no alternative minute data"
+                    )
                     df = pd.DataFrame()
             else:
-                print(f">> DEBUG: ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
+                logger.error(
+                    f"ALPACA MINUTE FETCH ERROR for {symbol}: {e!r}"
+                )
                 df = pd.DataFrame()
         except Exception as e:
-            print(f">> DEBUG: ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
+            logger.error(
+                f"ALPACA MINUTE FETCH ERROR for {symbol}: {e!r}"
+            )
             df = pd.DataFrame()
 
         with cache_lock:
@@ -1087,10 +1088,9 @@ def prefetch_daily_data(
     except APIError as e:
         err_msg = str(e).lower()
         if "subscription does not permit querying recent sip data" in err_msg:
-            print(
-                f">> DEBUG: ALPACA SUBSCRIPTION ERROR in bulk for {symbols}: {repr(e)}"
+            logger.info(
+                f"ALPACA SUBSCRIPTION ERROR in bulk for {symbols}: {e!r}; attempting IEX-delayed"
             )
-            print(f">> DEBUG: ATTEMPTING IEX-DELAYERED BULK FETCH FOR {symbols}")
             try:
                 req.feed = "iex"
                 bars_iex = client.get_stock_bars(req).df
@@ -1114,7 +1114,9 @@ def prefetch_daily_data(
                     grouped[sym] = df
                 return grouped
             except Exception as iex_err:
-                print(f">> DEBUG: ALPACA IEX BULK ERROR for {symbols}: {repr(iex_err)}")
+                logger.info(
+                    f"ALPACA IEX BULK ERROR for {symbols}: {iex_err!r}"
+                )
                 daily_dict = {}
                 for sym in symbols:
                     try:
@@ -1137,11 +1139,11 @@ def prefetch_daily_data(
                         df_sym = df_sym.rename(columns=lambda c: c.lower())
                         daily_dict[sym] = df_sym
                     except Exception as indiv_err:
-                        print(
-                            f">> DEBUG: ALPACA IEX ERROR for {sym}: {repr(indiv_err)}"
+                        logger.info(
+                            f"ALPACA IEX ERROR for {sym}: {indiv_err!r}; inserting dummy daily"
                         )
-                        print(
-                            f">> DEBUG: INSERTING DUMMY DAILY FOR {sym} ON {end_date.isoformat()}"
+                        logger.info(
+                            f"INSERTING DUMMY DAILY FOR {sym} ON {end_date.isoformat()}"
                         )
                         tsd = pd.to_datetime(end_date, utc=True, errors="coerce")
                         if tsd is None:
@@ -1162,7 +1164,9 @@ def prefetch_daily_data(
                         daily_dict[sym] = dummy_df
                 return daily_dict
         else:
-            print(f">> DEBUG: ALPACA BULK FETCH UNKNOWN ERROR for {symbols}: {repr(e)}")
+            logger.error(
+                f"ALPACA BULK FETCH UNKNOWN ERROR for {symbols}: {e!r}"
+            )
             daily_dict = {}
             for sym in symbols:
                 t2 = pd.to_datetime(end_date, utc=True, errors="coerce")
@@ -1176,7 +1180,9 @@ def prefetch_daily_data(
                 daily_dict[sym] = dummy_df
             return daily_dict
     except Exception as e:
-        print(f">> DEBUG: ALPACA BULK FETCH EXCEPTION for {symbols}: {repr(e)}")
+        logger.error(
+            f"ALPACA BULK FETCH EXCEPTION for {symbols}: {e!r}"
+        )
         daily_dict = {}
         for sym in symbols:
             t3 = pd.to_datetime(end_date, utc=True, errors="coerce")
@@ -1605,10 +1611,7 @@ class SignalManager:
         return s, 1.0, "regime"
 
     def load_signal_weights(self) -> dict[str, float]:
-        if not os.path.exists(SIGNAL_WEIGHTS_FILE):
-            return {}
-        df = pd.read_csv(SIGNAL_WEIGHTS_FILE)
-        return {row["signal"]: row["weight"] for _, row in df.iterrows()}
+        return load_weights(SIGNAL_WEIGHTS_FILE)
 
     def evaluate(
         self,
@@ -4383,21 +4386,21 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
             else:
                 try:
                     symbols = load_tickers(TICKERS_FILE)
-                    print(
-                        f">> DEBUG: RETRAINING START for {today_str} on {len(symbols)} tickers..."
+                    logger.info(
+                        f"RETRAINING START for {today_str} on {len(symbols)} tickers..."
                     )
                     valid_symbols = []
                     for symbol in symbols:
                         df_min = fetch_minute_df_safe(ctx, symbol)
                         if df_min is None or df_min.empty:
-                            print(
-                                f">> DEBUG: {symbol} returned no minute data; skipping symbol."
+                            logger.info(
+                                f"{symbol} returned no minute data; skipping symbol."
                             )
                             continue
                         valid_symbols.append(symbol)
                     if not valid_symbols:
-                        print(
-                            ">> WARNING: No symbols returned valid minute data; skipping retraining entirely."
+                        logger.warning(
+                            "No symbols returned valid minute data; skipping retraining entirely."
                         )
                     else:
                         force_train = not os.path.exists(MODEL_PATH)
@@ -4593,7 +4596,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     return
                 price_df = fetch_minute_df_safe(ctx, symbol)
                 if price_df.empty or "close" not in price_df.columns:
-                    print(f"INFO SKIP_NO_PRICE_DATA | {symbol}")
+                    logger.info("SKIP_NO_PRICE_DATA", extra={"symbol": symbol})
                     return
                 processed.append(symbol)
                 _safe_trade(ctx, symbol, current_cash, model, regime_ok)
@@ -4604,8 +4607,8 @@ def run_all_trades_worker(state: BotState, model) -> None:
             list(executor.map(process_symbol, symbols))
 
         if not processed:
-            print(
-                "WARNING no symbols returned any price data; skipping strategy computation."
+            logger.warning(
+                "No symbols returned any price data; skipping strategy computation."
             )
             return
 

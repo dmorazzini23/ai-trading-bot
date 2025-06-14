@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+import logging
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"
@@ -66,3 +67,17 @@ def validate_alpaca_credentials() -> None:
             "Missing Alpaca credentials. Please set ALPACA_API_KEY, "
             "ALPACA_SECRET_KEY and ALPACA_BASE_URL in your environment"
         )
+
+
+def validate_config() -> None:
+    """Validate required API keys and configuration values."""
+    missing = []
+    if not ALPACA_API_KEY:
+        missing.append("ALPACA_API_KEY")
+    if not ALPACA_SECRET_KEY:
+        missing.append("ALPACA_SECRET_KEY")
+    if not FINNHUB_API_KEY:
+        missing.append("FINNHUB_API_KEY")
+    if missing:
+        logging.getLogger(__name__).error("Missing config values: %s", missing)
+        raise RuntimeError(f"Missing required configuration values: {missing}")

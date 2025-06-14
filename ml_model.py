@@ -39,10 +39,12 @@ class MLModel:
     def predict(self, X: pd.DataFrame):
         if not isinstance(X, pd.DataFrame):
             raise TypeError("X must be a DataFrame")
-        preds = self.pipeline.predict(X)
-        self.logger.info(
-            "MODEL_PREDICT", extra={"rows": len(X)}
-        )
+        try:
+            preds = self.pipeline.predict(X)
+        except Exception as exc:
+            self.logger.error(f"MODEL_PREDICT_FAILED: {exc}")
+            raise
+        self.logger.info("MODEL_PREDICT", extra={"rows": len(X)})
         return preds
 
     def save(self, path: str | None = None) -> str:
@@ -56,3 +58,13 @@ class MLModel:
             self.logger.exception(f"MODEL_SAVE_FAILED: {exc}")
             raise
         return path
+
+    @classmethod
+    def load(cls, path: str) -> "MLModel":
+        logger = logging.getLogger(__name__)
+        try:
+            pipeline = joblib.load(path)
+        except Exception as exc:
+            logger.error(f"MODEL_LOAD_FAILED: {exc}")
+            raise
+        return cls(pipeline)

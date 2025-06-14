@@ -131,11 +131,23 @@ class ExecutionEngine:
     def _prepare_order(
         self, symbol: str, side: str, qty: int
     ) -> Tuple[object, Optional[float]]:
-        bid, ask = self._latest_quote(symbol)
+        try:
+            bid, ask = self._latest_quote(symbol)
+        except Exception as exc:
+            self.logger.error(f"_latest_quote failed for {symbol}: {exc}")
+            bid = ask = 0.0
         spread = (ask - bid) if ask and bid else 0.0
         mid = (ask + bid) / 2 if ask and bid else None
-        vol, avg1m, momentum = self._minute_stats(symbol)
-        adv = self._adv_volume(symbol)
+        try:
+            vol, avg1m, momentum = self._minute_stats(symbol)
+        except Exception as exc:
+            self.logger.error(f"_minute_stats failed for {symbol}: {exc}")
+            vol = avg1m = momentum = 0.0
+        try:
+            adv = self._adv_volume(symbol)
+        except Exception as exc:
+            self.logger.error(f"_adv_volume failed for {symbol}: {exc}")
+            adv = 0.0
 
         adv_pct = getattr(self.ctx, "adv_target_pct", 0.002)
         max_adv = adv * adv_pct if adv else qty
@@ -287,11 +299,17 @@ class ExecutionEngine:
                     )
                     return last_order
             if order is None:
+                self.logger.error(f"Order for {symbol} failed to submit")
                 break
             status = getattr(order, "status", "")
             if status in ("rejected", "canceled"):
                 self.logger.error(
                     f"Order for {symbol} was {status}: {getattr(order, 'reject_reason', '')}"
+                )
+                lvl = "ORDER_REJECTED" if status == "rejected" else "ORDER_CANCELED"
+                self.logger.info(
+                    lvl,
+                    extra={"symbol": symbol, "order_id": getattr(order, "id", "")},
                 )
                 break
             fill_price = float(
