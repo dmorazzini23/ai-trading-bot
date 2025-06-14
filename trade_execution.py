@@ -34,6 +34,24 @@ from slippage import monitor_slippage
 from audit import log_trade
 from config import SHADOW_MODE
 
+
+def log_order(order):
+    """Simple stub for testing/logging."""
+    pass
+
+
+def place_order(symbol: str, qty: int, side: str):
+    """Convenience wrapper to place a basic market order."""
+    req = MarketOrderRequest(
+        symbol=symbol,
+        qty=qty,
+        side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,
+        time_in_force=TimeInForce.DAY,
+    )
+    order = submit_order(None, req)
+    log_order(order)
+    return order
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
