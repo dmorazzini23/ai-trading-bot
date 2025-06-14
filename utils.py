@@ -63,6 +63,10 @@ def is_market_open(now: datetime | None = None) -> bool:
             start_date=check_time.date(), end_date=check_time.date()
         )
         if sched.empty:
+            logger.warning(
+                "No market schedule for %s in is_market_open; returning False.",
+                check_time.date(),
+            )
             return False  # holiday or weekend
         market_open = sched.iloc[0]["market_open"].tz_convert(EASTERN_TZ).time()
         market_close = sched.iloc[0]["market_close"].tz_convert(EASTERN_TZ).time()
