@@ -22,8 +22,12 @@ class RiskEngine:
         self.asset_limits: Dict[str, float] = {}
         self.strategy_limits: Dict[str, float] = {}
         self.exposure: Dict[str, float] = {}
+        self.hard_stop = False
 
     def can_trade(self, signal: TradeSignal) -> bool:
+        if self.hard_stop:
+            logger.error("TRADING_HALTED_RISK_LIMIT")
+            return False
         if not isinstance(signal, TradeSignal):
             logger.error("can_trade called with invalid signal type")
             return False
@@ -70,7 +74,8 @@ class RiskEngine:
             pnl = float(account.equity) - float(account.last_equity)
             # Assume account returns equity strings convertible to float
             if pnl < -MAX_DRAWDOWN * float(account.last_equity):
-                logger.warning("Max drawdown exceeded: %.2f", pnl)
+                logger.error("HARD_STOP_MAX_DRAWDOWN", extra={"pnl": pnl})
+                self.hard_stop = True
                 return False
             return True
         except Exception as exc:
@@ -80,6 +85,9 @@ class RiskEngine:
     def position_size(
         self, signal: TradeSignal, cash: float, price: float, api=None
     ) -> int:
+        if self.hard_stop:
+            logger.error("HARD_STOP_ACTIVE")
+            return 0
         if not isinstance(signal, TradeSignal):
             logger.error("position_size called with invalid signal type")
             return 0

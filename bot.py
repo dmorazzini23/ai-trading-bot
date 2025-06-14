@@ -15,7 +15,7 @@ import config
 config.reload_env()
 
 # BOT_MODE must be defined before any classes that reference it
-BOT_MODE = os.getenv("BOT_MODE", "balanced")
+BOT_MODE = config.get_env("BOT_MODE", "balanced")
 assert BOT_MODE is not None, "BOT_MODE must be set before using BotState"
 from argparse import ArgumentParser
 
@@ -167,9 +167,12 @@ from strategies import MomentumStrategy, MeanReversionStrategy, TradeSignal
 logger = get_logger(__name__)
 
 
-def is_market_open(now: datetime | None = None) -> bool:
-    """Wrapper around utils.is_market_open with inline comment."""
+def market_is_open(now: datetime | None = None) -> bool:
+    """Return True if the market is currently open."""
     return utils_market_open(now)
+
+# backward compatibility
+is_market_open = market_is_open
 
 
 def get_latest_close(df: pd.DataFrame) -> float:
@@ -194,6 +197,14 @@ def compute_time_range(minutes: int = 30) -> tuple[datetime, datetime]:
     end = datetime.now(timezone.utc)
     start = end - timedelta(minutes=minutes)
     return start, end
+
+
+def fetch_minute_df_safe(ctx: "BotContext", symbol: str) -> pd.DataFrame:
+    """Return minute bars if market is open; otherwise an empty DataFrame."""
+    if not market_is_open():
+        logger.warning("MARKET_CLOSED_MINUTE_FETCH_SKIP", extra={"symbol": symbol})
+        return pd.DataFrame()
+    return ctx.data_fetcher.get_minute_df(ctx, symbol)
 
 
 def cancel_all_open_orders(ctx: "BotContext") -> None:
@@ -315,7 +326,7 @@ slippage_total = Counter("bot_slippage_total", "Cumulative slippage in cents")
 slippage_count = Counter("bot_slippage_count", "Number of orders with slippage logged")
 weekly_drawdown = Gauge("bot_weekly_drawdown", "Current weekly drawdown fraction")
 
-DISASTER_DD_LIMIT = float(os.getenv("DISASTER_DD_LIMIT", "0.2"))
+DISASTER_DD_LIMIT = float(config.get_env("DISASTER_DD_LIMIT", "0.2"))
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -410,10 +421,10 @@ def load_hyperparams() -> dict:
 RETRAIN_MARKER_FILE = abspath("last_retrain.txt")
 
 # Main meta‐learner path: this is where retrain.py will dump the new sklearn model each day.
-MODEL_PATH = abspath(os.getenv("MODEL_PATH", "meta_model.pkl"))
-MODEL_RF_PATH = abspath(os.getenv("MODEL_RF_PATH", "model_rf.pkl"))
-MODEL_XGB_PATH = abspath(os.getenv("MODEL_XGB_PATH", "model_xgb.pkl"))
-MODEL_LGB_PATH = abspath(os.getenv("MODEL_LGB_PATH", "model_lgb.pkl"))
+MODEL_PATH = abspath(config.get_env("MODEL_PATH", "meta_model.pkl"))
+MODEL_RF_PATH = abspath(config.get_env("MODEL_RF_PATH", "model_rf.pkl"))
+MODEL_XGB_PATH = abspath(config.get_env("MODEL_XGB_PATH", "model_xgb.pkl"))
+MODEL_LGB_PATH = abspath(config.get_env("MODEL_LGB_PATH", "model_lgb.pkl"))
 
 REGIME_MODEL_PATH = abspath("regime_model.pkl")
 # (We keep a separate meta‐model for signal‐weight learning, if you use Bayesian/Ridge, etc.)
@@ -493,14 +504,14 @@ MAX_POSITION_SIZE = 1000
 SLICE_THRESHOLD = 50
 POV_SLICE_PCT = params.get("POV_SLICE_PCT", 0.05)
 DAILY_LOSS_LIMIT = params.get("DAILY_LOSS_LIMIT", 0.07)
-MAX_PORTFOLIO_POSITIONS = int(os.getenv("MAX_PORTFOLIO_POSITIONS", 15))
+MAX_PORTFOLIO_POSITIONS = int(config.get_env("MAX_PORTFOLIO_POSITIONS", 15))
 CORRELATION_THRESHOLD = 0.60
-SECTOR_EXPOSURE_CAP = float(os.getenv("SECTOR_EXPOSURE_CAP", "0.4"))
-MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "10"))
-WEEKLY_DRAWDOWN_LIMIT = float(os.getenv("WEEKLY_DRAWDOWN_LIMIT", "0.15"))
+SECTOR_EXPOSURE_CAP = float(config.get_env("SECTOR_EXPOSURE_CAP", "0.4"))
+MAX_OPEN_POSITIONS = int(config.get_env("MAX_OPEN_POSITIONS", "10"))
+WEEKLY_DRAWDOWN_LIMIT = float(config.get_env("WEEKLY_DRAWDOWN_LIMIT", "0.15"))
 MARKET_OPEN = dt_time(6, 30)
 MARKET_CLOSE = dt_time(13, 0)
-VOLUME_THRESHOLD = int(os.getenv("VOLUME_THRESHOLD", "50000"))
+VOLUME_THRESHOLD = int(config.get_env("VOLUME_THRESHOLD", "50000"))
 ENTRY_START_OFFSET = timedelta(minutes=params.get("ENTRY_START_OFFSET_MIN", 30))
 ENTRY_END_OFFSET = timedelta(minutes=params.get("ENTRY_END_OFFSET_MIN", 15))
 REGIME_LOOKBACK = 14
@@ -512,12 +523,12 @@ ATR_LENGTH = 10
 CONF_THRESHOLD = params.get("CONF_THRESHOLD", 0.75)
 CONFIRMATION_COUNT = params.get("CONFIRMATION_COUNT", 2)
 CAPITAL_CAP = params.get("CAPITAL_CAP", 0.08)
-DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
+DOLLAR_RISK_LIMIT = float(config.get_env("DOLLAR_RISK_LIMIT", "0.02"))
 PACIFIC = ZoneInfo("America/Los_Angeles")
 PDT_DAY_TRADE_LIMIT = params.get("PDT_DAY_TRADE_LIMIT", 3)
 PDT_EQUITY_THRESHOLD = params.get("PDT_EQUITY_THRESHOLD", 25_000.0)
 BUY_THRESHOLD = params.get("BUY_THRESHOLD", 0.2)
-FINNHUB_RPM = int(os.getenv("FINNHUB_RPM", "60"))
+FINNHUB_RPM = int(config.get_env("FINNHUB_RPM", "60"))
 
 # Regime symbols (makes SPY configurable)
 REGIME_SYMBOLS = ["SPY"]
@@ -592,7 +603,7 @@ def chunked(iterable: Sequence, n: int):
 
 def ttl_seconds() -> int:
     """Configurable TTL for minute-bar cache (default 60s)."""
-    return int(os.getenv("MINUTE_CACHE_TTL", "60"))
+    return int(config.get_env("MINUTE_CACHE_TTL", "60"))
 
 
 def asset_class_for(symbol: str) -> str:
@@ -760,8 +771,8 @@ class DataFetcher:
                 daily_cache_hit.inc()
                 return self._daily_cache[symbol]
 
-        api_key = os.getenv("APCA_API_KEY_ID")
-        api_secret = os.getenv("APCA_API_SECRET_KEY")
+        api_key = config.get_env("APCA_API_KEY_ID")
+        api_secret = config.get_env("APCA_API_SECRET_KEY")
         if not api_key or not api_secret:
             raise RuntimeError(
                 "APCA_API_KEY_ID and APCA_API_SECRET_KEY must be set for data fetching"
@@ -877,8 +888,8 @@ class DataFetcher:
                 return self._minute_cache[symbol]
 
         minute_cache_miss.inc()
-        api_key = os.getenv("APCA_API_KEY_ID")
-        api_secret = os.getenv("APCA_API_SECRET_KEY")
+        api_key = config.get_env("APCA_API_KEY_ID")
+        api_secret = config.get_env("APCA_API_SECRET_KEY")
         if not api_key or not api_secret:
             raise RuntimeError(
                 "APCA_API_KEY_ID and APCA_API_SECRET_KEY must be set for data fetching"
@@ -1038,8 +1049,8 @@ class DataFetcher:
 def prefetch_daily_data(
     symbols: List[str], start_date: date, end_date: date
 ) -> Dict[str, pd.DataFrame]:
-    alpaca_key = os.getenv("APCA_API_KEY_ID")
-    alpaca_secret = os.getenv("APCA_API_SECRET_KEY")
+    alpaca_key = config.get_env("APCA_API_KEY_ID")
+    alpaca_secret = config.get_env("APCA_API_SECRET_KEY")
     if not alpaca_key or not alpaca_secret:
         raise RuntimeError(
             "APCA_API_KEY_ID and APCA_API_SECRET_KEY must be set for data fetching"
@@ -2306,7 +2317,7 @@ def scaled_atr_stop(
 
 
 def liquidity_factor(ctx: BotContext, symbol: str) -> float:
-    df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+    df = fetch_minute_df_safe(ctx, symbol)
     if df is None or df.empty:
         return 0.0
     if "volume" not in df.columns:
@@ -2400,10 +2411,17 @@ def vol_target_position_size(
 )
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
     """Submit an order using the institutional execution engine."""
+    if not market_is_open():
+        logger.warning("MARKET_CLOSED_ORDER_SKIP", extra={"symbol": symbol})
+        return None
     return exec_engine.execute_order(symbol, qty, side)
 
 
 def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
+    config.reload_env()
+    if not market_is_open():
+        logger.warning("MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, 'symbol', '')})
+        return None
     for attempt in range(2):
         try:
             try:
@@ -2442,10 +2460,15 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                 f"Order status for {req.symbol}: {getattr(order, 'status', '')}"
             )
             status = getattr(order, "status", "")
+            filled_qty = getattr(order, "filled_qty", "0")
             if status == "filled":
                 logger.info(
                     "ORDER_ACK",
                     extra={"symbol": req.symbol, "order_id": getattr(order, "id", "")},
+                )
+            elif status == "partially_filled":
+                logger.warning(
+                    f"Order partially filled for {req.symbol}: {filled_qty}/{getattr(req, 'qty', 0)}"
                 )
             elif status in ("rejected", "canceled"):
                 logger.error(
@@ -2604,7 +2627,7 @@ def vwap_pegged_submit(
     start_time = pytime.time()
     placed = 0
     while placed < total_qty and pytime.time() - start_time < duration:
-        df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+        df = fetch_minute_df_safe(ctx, symbol)
         if df is None or df.empty:
             logger.warning(
                 "[VWAP] missing bars, aborting VWAP slice", extra={"symbol": symbol}
@@ -2729,7 +2752,7 @@ def pov_submit(
     retries = 0
     interval = cfg.sleep_interval
     while placed < total_qty:
-        df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+        df = fetch_minute_df_safe(ctx, symbol)
         if df is None or df.empty:
             retries += 1
             if retries > cfg.max_retries:
@@ -2879,7 +2902,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
         logger.info("MARKET_ENTRY", extra={"symbol": symbol, "qty": qty})
         submit_order(ctx, symbol, qty, side)
 
-    raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
+    raw = fetch_minute_df_safe(ctx, symbol)
     if raw is None or raw.empty:
         logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
         return
@@ -2914,7 +2937,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
 def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> None:
     if qty <= 0:
         return
-    raw = ctx.data_fetcher.get_minute_df(ctx, symbol)
+    raw = fetch_minute_df_safe(ctx, symbol)
     exit_price = get_latest_close(raw) if raw is not None else 1.0
     send_exit_order(ctx, symbol, qty, exit_price, "manual_exit")
     ctx.trade_logger.log_exit(state, symbol, exit_price)
@@ -3073,7 +3096,7 @@ def trade_logic(
         return False
 
     try:
-        raw_df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+        raw_df = fetch_minute_df_safe(ctx, symbol)
     except APIError as e:
         msg = str(e).lower()
         if "subscription does not permit querying recent sip data" in msg:
@@ -3377,7 +3400,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     total_value = float(ctx.api.get_account().portfolio_value)
     for sym, w in current.items():
         target_dollar = w * total_value
-        raw = ctx.data_fetcher.get_minute_df(ctx, sym)
+        raw = fetch_minute_df_safe(ctx, sym)
         price = get_latest_close(raw) if raw is not None else 1.0
         if price <= 0:
             continue
@@ -4216,6 +4239,7 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
 def daily_reset(state: BotState) -> None:
     """Reset daily counters and in-memory slippage logs."""
     try:
+        config.reload_env()
         _slippage_log.clear()
         state.loss_streak = 0
         logger.info("DAILY_STATE_RESET")
@@ -4364,9 +4388,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                     )
                     valid_symbols = []
                     for symbol in symbols:
-                        df_min = ctx.data_fetcher.get_minute_df(
-                            ctx, symbol, lookback_minutes=30
-                        )
+                        df_min = fetch_minute_df_safe(ctx, symbol)
                         if df_min is None or df_min.empty:
                             print(
                                 f">> DEBUG: {symbol} returned no minute data; skipping symbol."
@@ -4467,7 +4489,7 @@ def health() -> str:
 
 
 def start_healthcheck() -> None:
-    port = int(os.getenv("HEALTHCHECK_PORT", "8080"))
+    port = int(config.get_env("HEALTHCHECK_PORT", "8080"))
     try:
         app.run(host="0.0.0.0", port=port)
     except OSError as e:
@@ -4569,7 +4591,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 if not is_market_open():
                     logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
                     return
-                price_df = get_minute_df(symbol, start_date, end_date)
+                price_df = fetch_minute_df_safe(ctx, symbol)
                 if price_df.empty or "close" not in price_df.columns:
                     print(f"INFO SKIP_NO_PRICE_DATA | {symbol}")
                     return
@@ -4693,8 +4715,8 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                         )
 
 
-if __name__ == "__main__":
-
+def main() -> None:
+    config.reload_env()
     def _handle_term(signum, frame):
         logger.info("PROCESS_TERMINATION", extra={"signal": signum})
         sys.exit(0)
@@ -4844,5 +4866,12 @@ if __name__ == "__main__":
             pytime.sleep(1)
 
     except Exception as e:
-        logger.exception(f"Fatal error in __main__: {e}")
+        logger.exception(f"Fatal error in main: {e}")
         raise
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        logger.exception("UNCAUGHT_EXCEPTION")

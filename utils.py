@@ -104,13 +104,17 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 
 def safe_to_datetime(values) -> pd.DatetimeIndex | None:
-    """Return ``DatetimeIndex`` if values are parseable, else ``None``."""
+    """Return ``DatetimeIndex`` from ``values`` or ``None`` on failure."""
     if values is None or len(values) == 0:
         return None
+    if isinstance(values, pd.MultiIndex):
+        values = values.get_level_values(-1)
     sample = values[0]
     if isinstance(sample, tuple):
-        sample = next((v for v in sample if isinstance(v, str) or hasattr(v, "year")), sample)
-    if isinstance(sample, str) and not _DATE_RE.match(sample):
+        sample = next(
+            (v for v in sample if isinstance(v, str) or hasattr(v, "year")), sample
+        )
+    if isinstance(sample, str) and not _DATE_RE.match(str(sample)):
         return None
     try:
         idx = pd.to_datetime(values, errors="coerce", utc=True)

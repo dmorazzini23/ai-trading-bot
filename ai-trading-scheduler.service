@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/root/ai-trading-bot
-ExecStart=/root/ai-trading-bot/start.sh
+WorkingDirectory=/opt/ai-trading-bot
+ExecStart=/opt/ai-trading-bot/start.sh
 Restart=always
 RestartSec=5
 StandardOutput=append:/var/log/ai-trading-scheduler.log
