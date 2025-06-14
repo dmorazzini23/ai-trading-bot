@@ -269,8 +269,12 @@ class ExecutionEngine:
                     )
                     try:
                         order = api.submit_order(order_data=order_req)
+                        self.logger.info(f"Order submit response for {symbol}: {order}")
                     except Exception as e:
-                        self.logger.error(f"Order failed for {symbol}: {e}")
+                        self.logger.error(
+                            f"Order submission failed for {symbol}: {e}",
+                            exc_info=True,
+                        )
                         break
                     break
                 except (APIError, TimeoutError) as e:

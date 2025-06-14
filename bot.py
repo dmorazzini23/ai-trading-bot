@@ -1,9 +1,12 @@
 import warnings
+
 try:
     from sklearn.exceptions import InconsistentVersionWarning
 except Exception:  # pragma: no cover - sklearn optional
+
     class InconsistentVersionWarning(UserWarning):
         pass
+
 
 warnings.filterwarnings(
     "ignore",
@@ -168,11 +171,17 @@ from strategies import MomentumStrategy, MeanReversionStrategy, TradeSignal
 
 # Basic logger setup so early code can log before full configuration below
 logger = get_logger(__name__)
+try:
+    _ = os.environ["API_KEY"]
+except KeyError:
+    logger.critical("API_KEY missing, cannot start bot.")
+    sys.exit(1)
 
 
 def market_is_open(now: datetime | None = None) -> bool:
     """Return True if the market is currently open."""
     return utils_market_open(now)
+
 
 # backward compatibility
 is_market_open = market_is_open
@@ -558,9 +567,9 @@ REBALANCE_HOLD_SECONDS = 600  # skip selling shortly after rebalance buys
 _VOL_STATS = {"mean": None, "std": None, "last_update": None, "last": None}
 
 # Slippage logs (in-memory for quick access)
-_slippage_log: List[Tuple[str, float, float, datetime]] = (
-    []
-)  # (symbol, expected, actual, timestamp)
+_slippage_log: List[
+    Tuple[str, float, float, datetime]
+] = []  # (symbol, expected, actual, timestamp)
 # Ensure persistent slippage log file exists
 if not os.path.exists(SLIPPAGE_LOG_FILE):
     try:
@@ -809,12 +818,8 @@ class DataFetcher:
         except APIError as e:
             err_msg = str(e).lower()
             if "subscription does not permit querying recent sip data" in err_msg:
-                logger.warning(
-                    f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}"
-                )
-                logger.info(
-                    f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}"
-                )
+                logger.warning(f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
+                logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
                     req.feed = "iex"
                     df_iex = client.get_stock_bars(req).df
@@ -828,14 +833,14 @@ class DataFetcher:
                         idx_vals = df_iex.index
                     idx = safe_to_datetime(idx_vals)
                     if idx is None:
-                        logger.warning(f"Invalid IEX daily index for {symbol}; skipping")
+                        logger.warning(
+                            f"Invalid IEX daily index for {symbol}; skipping"
+                        )
                         return None
                     df_iex.index = idx
                     df = df_iex.rename(columns=lambda c: c.lower())
                 except Exception as iex_err:
-                    logger.warning(
-                        f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}"
-                    )
+                    logger.warning(f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
                     logger.info(
                         f"INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}"
                     )
@@ -856,9 +861,7 @@ class DataFetcher:
                         index=[dummy_date],
                     )
             else:
-                logger.warning(
-                    f"ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}"
-                )
+                logger.warning(f"ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
                 ts2 = pd.to_datetime(end_ts, utc=True, errors="coerce")
                 if ts2 is None:
                     ts2 = pd.Timestamp.utcnow()
@@ -868,9 +871,7 @@ class DataFetcher:
                     index=[dummy_date],
                 )
         except Exception as e:
-            logger.warning(
-                f"ALPACA DAILY FETCH EXCEPTION for {symbol}: {repr(e)}"
-            )
+            logger.warning(f"ALPACA DAILY FETCH EXCEPTION for {symbol}: {repr(e)}")
             ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
             if ts is None:
                 ts = pd.Timestamp.utcnow()
@@ -939,12 +940,8 @@ class DataFetcher:
                 "subscription does not permit querying recent sip data"
                 in err_msg.lower()
             ):
-                logger.warning(
-                    f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}"
-                )
-                logger.info(
-                    f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}"
-                )
+                logger.warning(f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
+                logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
                     req.feed = "iex"
                     df_iex = client.get_stock_bars(req).df
@@ -964,24 +961,18 @@ class DataFetcher:
                         df = pd.DataFrame()
                     else:
                         df_iex.index = idx
-                        df = df_iex.rename(columns=lambda c: c.lower())[ 
+                        df = df_iex.rename(columns=lambda c: c.lower())[
                             ["open", "high", "low", "close", "volume"]
                         ]
                 except Exception as iex_err:
-                    logger.warning(
-                        f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}"
-                    )
+                    logger.warning(f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
                     logger.info(f"NO ALTERNATIVE MINUTE DATA FOR {symbol}")
                     df = pd.DataFrame()
             else:
-                logger.warning(
-                    f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}"
-                )
+                logger.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
                 df = pd.DataFrame()
         except Exception as e:
-            logger.warning(
-                f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}"
-            )
+            logger.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
             df = pd.DataFrame()
 
         with cache_lock:
@@ -1137,9 +1128,7 @@ def prefetch_daily_data(
                     grouped[sym] = df
                 return grouped
             except Exception as iex_err:
-                logger.warning(
-                    f"ALPACA IEX BULK ERROR for {symbols}: {repr(iex_err)}"
-                )
+                logger.warning(f"ALPACA IEX BULK ERROR for {symbols}: {repr(iex_err)}")
                 daily_dict = {}
                 for sym in symbols:
                     try:
@@ -1162,9 +1151,7 @@ def prefetch_daily_data(
                         df_sym = df_sym.rename(columns=lambda c: c.lower())
                         daily_dict[sym] = df_sym
                     except Exception as indiv_err:
-                        logger.warning(
-                            f"ALPACA IEX ERROR for {sym}: {repr(indiv_err)}"
-                        )
+                        logger.warning(f"ALPACA IEX ERROR for {sym}: {repr(indiv_err)}")
                         logger.info(
                             f"INSERTING DUMMY DAILY FOR {sym} ON {end_date.isoformat()}"
                         )
@@ -1187,9 +1174,7 @@ def prefetch_daily_data(
                         daily_dict[sym] = dummy_df
                 return daily_dict
         else:
-            logger.warning(
-                f"ALPACA BULK FETCH UNKNOWN ERROR for {symbols}: {repr(e)}"
-            )
+            logger.warning(f"ALPACA BULK FETCH UNKNOWN ERROR for {symbols}: {repr(e)}")
             daily_dict = {}
             for sym in symbols:
                 t2 = pd.to_datetime(end_date, utc=True, errors="coerce")
@@ -1203,9 +1188,7 @@ def prefetch_daily_data(
                 daily_dict[sym] = dummy_df
             return daily_dict
     except Exception as e:
-        logger.warning(
-            f"ALPACA BULK FETCH EXCEPTION for {symbols}: {repr(e)}"
-        )
+        logger.warning(f"ALPACA BULK FETCH EXCEPTION for {symbols}: {repr(e)}")
         daily_dict = {}
         for sym in symbols:
             t3 = pd.to_datetime(end_date, utc=True, errors="coerce")
@@ -1300,7 +1283,9 @@ class TradeLogger:
                     cls = (
                         "day_trade"
                         if days == 0
-                        else "swing_trade" if days < 5 else "long_trade"
+                        else "swing_trade"
+                        if days < 5
+                        else "long_trade"
                     )
                     row[3], row[4], row[8] = (
                         datetime.now(timezone.utc).isoformat(),
@@ -1503,7 +1488,9 @@ class SignalManager:
             s = (
                 -1
                 if val > self.mean_rev_zscore_threshold
-                else 1 if val < -self.mean_rev_zscore_threshold else -1
+                else 1
+                if val < -self.mean_rev_zscore_threshold
+                else -1
             )
             w = min(abs(val) / 3, 1.0)
             return s, w, "mean_reversion"
@@ -1549,7 +1536,9 @@ class SignalManager:
             s = (
                 1
                 if df["close"].iloc[-1] > df["open"].iloc[-1]
-                else -1 if df["close"].iloc[-1] < df["open"].iloc[-1] else -1
+                else -1
+                if df["close"].iloc[-1] < df["open"].iloc[-1]
+                else -1
             )
             w = min(score / avg, 1.0)
             return s, w, "vsa"
@@ -2452,7 +2441,9 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
 def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
     config.reload_env()
     if not market_is_open():
-        logger.warning("MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, 'symbol', '')})
+        logger.warning(
+            "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, "symbol", "")}
+        )
         return None
     for attempt in range(2):
         try:
@@ -2485,6 +2476,9 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                     return None
 
             order = api.submit_order(order_data=req)
+            logger.info(
+                f"Order submit response for {getattr(req, 'symbol', '')}: {order}"
+            )
             while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
                 time.sleep(0.5)
                 order = api.get_order_by_id(order.id)
@@ -2530,6 +2524,9 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                     )
                     req.qty = pos_qty
                     order = api.submit_order(order_data=req)
+                    logger.info(
+                        f"Order submit response for {getattr(req, 'symbol', '')}: {order}"
+                    )
                     while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
                         time.sleep(0.5)
                         order = api.get_order_by_id(order.id)
@@ -2542,12 +2539,18 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                     return None
             time.sleep(1)
             if attempt == 1:
-                logger.warning(f"submit_order failed for {req.symbol}: {e}")
+                logger.error(
+                    f"Order submission failed for {req.symbol}: {e}",
+                    exc_info=True,
+                )
                 return None
         except Exception as e:
             time.sleep(1)
             if attempt == 1:
-                logger.warning(f"submit_order failed for {req.symbol}: {e}")
+                logger.error(
+                    f"Order submission failed for {req.symbol}: {e}",
+                    exc_info=True,
+                )
                 return None
     return None
 
@@ -2921,8 +2924,10 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     if buying_pw <= 0:
         logger.info("NO_BUYING_POWER", extra={"symbol": symbol})
         return
-    if qty <= 0:
-        logger.warning("ZERO_QTY", extra={"symbol": symbol})
+    if qty is None or not np.isfinite(qty) or qty <= 0:
+        logger.error(
+            f"Invalid order size for {symbol}: {qty}. Signal: n/a, Price: n/a, Data: NONE"
+        )
         return
     if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
         logger.info("POV_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
@@ -2967,7 +2972,10 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
 
 
 def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> None:
-    if qty <= 0:
+    if qty is None or not np.isfinite(qty) or qty <= 0:
+        logger.error(
+            f"Invalid order size for {symbol}: {qty}. Signal: n/a, Price: n/a, Data: NONE"
+        )
         return
     raw = fetch_minute_df_safe(ctx, symbol)
     exit_price = get_latest_close(raw) if raw is not None else 1.0
@@ -3241,8 +3249,10 @@ def trade_logic(
             int(balance * target_weight / current_price) if current_price > 0 else 0
         )
 
-        if raw_qty <= 0:
-            logger.debug(f"SKIP_NO_QTY | symbol={symbol}")
+        if raw_qty is None or not np.isfinite(raw_qty) or raw_qty <= 0:
+            logger.error(
+                f"Invalid order size for {symbol}: {raw_qty}. Signal: {final_score}, Price: {current_price}, Data: {feat_df.describe() if not feat_df.empty else 'EMPTY'}"
+            )
             return True
 
         logger.info(
@@ -3312,8 +3322,10 @@ def trade_logic(
         except Exception:
             pass
 
-        if qty <= 0:
-            logger.debug(f"SKIP_NO_QTY | symbol={symbol}")
+        if qty is None or not np.isfinite(qty) or qty <= 0:
+            logger.error(
+                f"Invalid order size for {symbol}: {qty}. Signal: {final_score}, Price: {current_price}, Data: {feat_df.describe() if not feat_df.empty else 'EMPTY'}"
+            )
             return True
 
         logger.info(
@@ -4472,7 +4484,9 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                     logger.warning("DAILY_MODEL_TRAIN_SKIPPED_EMPTY")
                 else:
                     model_pipeline.fit(X_train, y_train)
-                    mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
+                    mse = float(
+                        np.mean((model_pipeline.predict(X_train) - y_train) ** 2)
+                    )
                     logger.info("TRAIN_METRIC", extra={"mse": mse})
             except Exception as e:
                 logger.error(f"Daily retrain failed: {e}")
@@ -4552,12 +4566,26 @@ def run_multi_strategy(ctx: BotContext) -> None:
         except APIError as e:
             logger.warning(f"[run_all_trades] quote failed for {sig.symbol}: {e}")
             continue
-        qty = ctx.risk_engine.position_size(sig, cash, price)
-        if qty > 0:
-            ctx.execution_engine.execute_order(
-                sig.symbol, qty, sig.side, asset_class=sig.asset_class
+
+        bars = ctx.data_fetcher.get_daily_df(ctx, sig.symbol) or pd.DataFrame()
+        signal_val = sig.weight
+        if signal_val is None or not np.isfinite(signal_val) or signal_val == 0:
+            logger.error(
+                f"Invalid or empty signal for {sig.symbol}. Data: {bars.describe() if not bars.empty else 'EMPTY'}"
             )
-            ctx.risk_engine.register_fill(sig)
+            continue
+
+        qty = ctx.risk_engine.position_size(sig, cash, price)
+        if qty is None or not np.isfinite(qty) or qty <= 0:
+            logger.error(
+                f"Invalid order size for {sig.symbol}: {qty}. Signal: {signal_val}, Price: {price}, Data: {bars.describe() if not bars.empty else 'EMPTY'}"
+            )
+            continue
+
+        ctx.execution_engine.execute_order(
+            sig.symbol, qty, sig.side, asset_class=sig.asset_class
+        )
+        ctx.risk_engine.register_fill(sig)
 
 
 def run_all_trades_worker(state: BotState, model) -> None:
@@ -4749,6 +4777,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
 
 def main() -> None:
     config.reload_env()
+
     def _handle_term(signum, frame):
         logger.info("PROCESS_TERMINATION", extra={"signal": signum})
         sys.exit(0)
@@ -4785,10 +4814,9 @@ def main() -> None:
             market_open = nyse.open_at_time(schedule, now_utc)
 
         if not market_open:
-            logger.info(
-                "Market is closed. Sleeping for 60 minutes before rechecking."
-            )
+            logger.info("Market is closed. Sleeping for 60 minutes before rechecking.")
             import time
+
             time.sleep(60 * 60)
             sys.exit(0)
 
@@ -4906,6 +4934,9 @@ def main() -> None:
                 time.sleep(5)
                 continue
             pytime.sleep(1)
+            logger.info(
+                f"Bot heartbeat: loop completed at {datetime.now(timezone.utc)}"
+            )
 
     except Exception as e:
         logger.exception(f"Fatal error in main: {e}")
