@@ -38,7 +38,8 @@ import pandas_ta as ta
 
 try:
     import optuna
-except Exception:  # pragma: no cover - optional dependency
+except Exception as e:  # pragma: no cover - optional dependency
+    logger.warning("Optuna import failed: %s", e)
     optuna = None
 
 import config
@@ -70,7 +71,8 @@ def get_git_hash() -> str:
             .decode()
             .strip()
         )
-    except Exception:
+    except Exception as e:
+        logger.debug("git hash lookup failed: %s", e)
         return "unknown"
 
 
