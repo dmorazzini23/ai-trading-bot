@@ -34,7 +34,10 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from lightgbm import LGBMClassifier
 
+logger = logging.getLogger(__name__)
 import pandas_ta as ta
+
+logger = logging.getLogger(__name__)
 
 try:
     import optuna
@@ -43,8 +46,6 @@ except Exception as e:  # pragma: no cover - optional dependency
     optuna = None
 
 import config
-
-logger = logging.getLogger(__name__)
 NEWS_API_KEY = config.NEWS_API_KEY
 
 if not NEWS_API_KEY:

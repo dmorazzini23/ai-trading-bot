@@ -1,11 +1,13 @@
 import random
 import time as pytime
 from collections import deque
-from datetime import date, datetime, timedelta, timezone
+from typing import Sequence
+from datetime import date, datetime, timedelta
 import warnings
 
 import threading
 import config
+import logging
 
 FINNHUB_API_KEY = config.FINNHUB_API_KEY
 ALPACA_API_KEY = config.ALPACA_API_KEY
@@ -20,6 +22,7 @@ client = StockHistoricalDataClient(
     secret_key=ALPACA_SECRET_KEY,
 )
 
+logger = logging.getLogger(__name__)
 _rate_limit_lock = threading.Lock()
 try:
     import requests
@@ -47,7 +50,6 @@ logging.basicConfig(level=logging.INFO)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 import pandas as pd
-from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from alpaca.common.exceptions import APIError
@@ -116,7 +118,7 @@ def get_historical_data(
         try:
             return _DATA_CLIENT.get_stock_bars(req).df
         except Exception as err:
-            logger.exception("Historical data fetch failed for %s", symbol)
+            logger.exception("Historical data fetch failed for %s: %s", symbol, err)
             raise
 
     try:
@@ -250,7 +252,6 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
         For network-related failures handled by ``tenacity`` retry.
     """
     import pandas as pd
-    from datetime import datetime, date, timedelta
 
     start_date = ensure_datetime(start_date)
     end_date = ensure_datetime(end_date)
@@ -286,7 +287,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             try:
                 bars = client.get_stock_bars(req)
             except Exception as err:
-                logger.exception("Minute data fetch failed for %s", symbol)
+                logger.exception("Minute data fetch failed for %s: %s", symbol, err)
                 raise
         except APIError as e:
             if "subscription does not permit" in str(e).lower():
@@ -297,7 +298,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
                 try:
                     bars = client.get_stock_bars(req)
                 except Exception as iex_err:
-                    logger.exception("IEX fallback failed for %s", symbol)
+                    logger.exception("IEX fallback failed for %s: %s", symbol, iex_err)
                     return pd.DataFrame()
             else:
                 logger.error(f"API error for {symbol}: {e}")
@@ -401,7 +402,10 @@ finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
 
 
 class FinnhubFetcher:
+    """Thin wrapper around the Finnhub client with basic rate limiting."""
+
     def __init__(self, calls_per_minute: int = 30) -> None:
+        """Initialize the fetcher with an API rate limit."""
         self.max_calls = calls_per_minute
         self._timestamps = deque()
         self.client = finnhub_client
@@ -436,7 +440,10 @@ class FinnhubFetcher:
             (requests.exceptions.RequestException, urllib3.exceptions.HTTPError)
         ),
     )
-    def fetch(self, symbols, period="1mo", interval="1d") -> pd.DataFrame:
+    def fetch(
+        self, symbols: str | Sequence[str], period: str = "1mo", interval: str = "1d"
+    ) -> pd.DataFrame:
+        """Fetch OHLCV data for ``symbols`` over the given period."""
         syms = symbols if isinstance(symbols, (list, tuple)) else [symbols]
         now_ts = int(pytime.time())
         span = self._parse_period(period)

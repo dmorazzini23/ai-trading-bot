@@ -72,7 +72,6 @@ class _DummyFinnhub:
 
 sys.modules["finnhub"].Client = _DummyFinnhub
 
-import logging
 import data_fetcher
 
 

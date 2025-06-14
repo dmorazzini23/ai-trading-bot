@@ -3,6 +3,7 @@
 import warnings
 import os
 import re
+import logging
 
 import pandas as pd
 from datetime import datetime, date, time, timezone
@@ -10,13 +11,14 @@ from datetime import datetime, date, time, timezone
 try:
     from tzlocal import get_localzone
 except ImportError:  # pragma: no cover - optional dependency
-    import logging
     import pytz
 
     logging.warning("tzlocal not installed; defaulting to UTC")
 
     def get_localzone():
         return pytz.UTC
+
+logger = logging.getLogger(__name__)
 
 
 from zoneinfo import ZoneInfo
