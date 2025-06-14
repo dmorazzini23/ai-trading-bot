@@ -4767,9 +4767,9 @@ def main() -> None:
         import pandas_market_calendars as mcal
         from datetime import datetime, timezone
 
-        nyse = mcal.get_calendar('NYSE')
-        now_utc = datetime.now(timezone.utc)
-        market_open = nyse.open_at_time(now_utc)
+        now_utc = pd.Timestamp.utcnow()
+        schedule = nyse.schedule(start_date=now_utc.date(), end_date=now_utc.date())
+        market_open = nyse.open_at_time(schedule, now_utc)
 
         if not market_open:
             logger.info("Market is closed. Skipping minute-data operations and retraining.")
