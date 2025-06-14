@@ -2,7 +2,7 @@ import random
 import time as pytime
 from collections import deque
 from typing import Sequence
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 import warnings
 
 import threading
@@ -260,7 +260,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
     end_check = end_date
     if hasattr(end_check, "date"):
         end_check = end_check.date()
-    if end_check >= datetime.utcnow().date() and not is_market_open():
+    if end_check >= datetime.now(timezone.utc).date() and not is_market_open():
         logger.info("MARKET_CLOSED_MINUTE_FETCH", extra={"symbol": symbol})
         return pd.DataFrame()
 
