@@ -104,7 +104,22 @@ class RiskEngine:
         if not self.can_trade(signal):
             return 0
 
-        dollars = cash * min(signal.weight, 1.0)
+        asset_cap = self.asset_limits.get(signal.asset_class, self.global_limit)
+        asset_rem = max(asset_cap - self.exposure.get(signal.asset_class, 0.0), 0.0)
+        strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
+        weight = signal.weight
+        if weight > asset_rem:
+            logger.info(
+                "ADJUST_WEIGHT_ASSET", extra={"orig": weight, "new": asset_rem}
+            )
+            weight = asset_rem
+        if weight > strat_cap:
+            logger.info(
+                "ADJUST_WEIGHT_STRATEGY", extra={"orig": weight, "new": strat_cap}
+            )
+            weight = strat_cap
+
+        dollars = cash * min(weight, 1.0)
         try:
             qty = int(dollars / price)
         except Exception as exc:

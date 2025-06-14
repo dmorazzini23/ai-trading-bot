@@ -79,6 +79,7 @@ BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 
 
 def data_filepath(filename: str) -> str:
+    """Return absolute path to a data file shipped with the project."""
     return os.path.join(BASE_PATH, "data", filename)
 
 
@@ -103,7 +104,10 @@ def ensure_utc(dt: datetime | date) -> datetime:
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 
-def safe_to_datetime(values) -> pd.DatetimeIndex | None:
+from typing import Iterable, Any
+
+
+def safe_to_datetime(values: Iterable[Any]) -> pd.DatetimeIndex | None:
     """Return ``DatetimeIndex`` from ``values`` or ``None`` on failure."""
     if values is None or len(values) == 0:
         return None

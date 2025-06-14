@@ -259,7 +259,7 @@ class ExecutionEngine:
             for attempt in range(2):
                 try:
                     self.logger.info(
-                        "ORDER_SENT",
+                        "ORDER_SUBMIT",
                         extra={
                             "symbol": symbol,
                             "side": side,
@@ -289,9 +289,19 @@ class ExecutionEngine:
             if order is None:
                 break
             status = getattr(order, "status", "")
-            if status in ("rejected", "canceled"):
+            if status == "rejected":
                 self.logger.error(
-                    f"Order for {symbol} was {status}: {getattr(order, 'reject_reason', '')}"
+                    "ORDER_REJECTED",
+                    extra={
+                        "symbol": symbol,
+                        "reason": getattr(order, "reject_reason", ""),
+                    },
+                )
+                break
+            if status == "canceled":
+                self.logger.error(
+                    "ORDER_CANCELED",
+                    extra={"symbol": symbol},
                 )
                 break
             fill_price = float(
@@ -301,16 +311,17 @@ class ExecutionEngine:
             self._log_slippage(symbol, expected_price, fill_price)
             if status == "filled":
                 self.logger.info(
-                    "ORDER_ACK",
+                    "ORDER_FILLED",
                     extra={
                         "symbol": symbol,
                         "order_id": getattr(order, "id", ""),
                         "latency_ms": latency,
+                        "price": fill_price,
                     },
                 )
             else:
                 self.logger.error(
-                    f"Order for {symbol} status={status}: {getattr(order, 'reject_reason', '')}"
+                    "ORDER_STATUS", extra={"symbol": symbol, "status": status}
                 )
             if self.orders_total is not None:
                 self.orders_total.inc()
