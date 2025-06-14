@@ -8,8 +8,12 @@ from unittest.mock import patch, MagicMock
 # Ensure project root is importable and stub heavy optional deps
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 mods = [
+    "pandas",
+    "numpy",
     "pandas_ta",
     "pandas_market_calendars",
+    "pytz",
+    "tzlocal",
     "requests",
     "urllib3",
     "bs4",
@@ -29,6 +33,7 @@ mods = [
     "alpaca.data.requests",
     "alpaca.data.timeframe",
     "alpaca.common.exceptions",
+    "dotenv",
     "finnhub",
     "joblib",
     "sklearn.ensemble",
@@ -41,6 +46,7 @@ mods = [
 ]
 for m in mods:
     sys.modules.setdefault(m, types.ModuleType(m))
+sys.modules["dotenv"].load_dotenv = lambda *a, **k: None
 req_mod = types.ModuleType("requests")
 sys.modules["requests"] = req_mod
 exc_mod = types.ModuleType("requests.exceptions")
@@ -107,18 +113,14 @@ sys.modules["sentry_sdk"] = types.ModuleType("sentry_sdk")
 
 def test_bot_main_normal(monkeypatch):
     monkeypatch.setenv("TRADING_MODE", "shadow")
+    monkeypatch.setenv("APCA_API_KEY_ID", "k")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "s")
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
-    monkeypatch.setenv("FINNHUB_API_KEY", "f")
+    monkeypatch.setenv("FINNHUB_API_KEY", "testkey")
     monkeypatch.setattr("config.ALPACA_API_KEY", "k", raising=False)
     monkeypatch.setattr("config.ALPACA_SECRET_KEY", "s", raising=False)
-    monkeypatch.setattr("config.FINNHUB_API_KEY", "f", raising=False)
-    monkeypatch.setattr("config.ALPACA_API_KEY", "k", raising=False)
-    monkeypatch.setattr("config.ALPACA_SECRET_KEY", "s", raising=False)
-    monkeypatch.setattr("config.FINNHUB_API_KEY", "f", raising=False)
-    monkeypatch.setattr("config.ALPACA_API_KEY", "k", raising=False)
-    monkeypatch.setattr("config.ALPACA_SECRET_KEY", "s", raising=False)
-    monkeypatch.setattr("config.FINNHUB_API_KEY", "f", raising=False)
+    monkeypatch.setattr("config.FINNHUB_API_KEY", "testkey", raising=False)
     with patch("data_fetcher.get_minute_df", return_value=MagicMock()), \
          patch("alpaca_api.submit_order", return_value={"status": "mocked"}), \
          patch("signals.generate", return_value=1), \
@@ -128,12 +130,14 @@ def test_bot_main_normal(monkeypatch):
 
 
 def test_bot_main_data_fetch_error(monkeypatch):
+    monkeypatch.setenv("APCA_API_KEY_ID", "k")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "s")
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
-    monkeypatch.setenv("FINNHUB_API_KEY", "f")
+    monkeypatch.setenv("FINNHUB_API_KEY", "testkey")
     monkeypatch.setattr("config.ALPACA_API_KEY", "k", raising=False)
     monkeypatch.setattr("config.ALPACA_SECRET_KEY", "s", raising=False)
-    monkeypatch.setattr("config.FINNHUB_API_KEY", "f", raising=False)
+    monkeypatch.setattr("config.FINNHUB_API_KEY", "testkey", raising=False)
     with patch("data_fetcher.get_minute_df", side_effect=Exception("API error")):
         import bot
         with pytest.raises(Exception):
@@ -141,9 +145,14 @@ def test_bot_main_data_fetch_error(monkeypatch):
 
 
 def test_bot_main_signal_nan(monkeypatch):
+    monkeypatch.setenv("APCA_API_KEY_ID", "k")
+    monkeypatch.setenv("APCA_API_SECRET_KEY", "s")
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
-    monkeypatch.setenv("FINNHUB_API_KEY", "f")
+    monkeypatch.setenv("FINNHUB_API_KEY", "testkey")
+    monkeypatch.setattr("config.ALPACA_API_KEY", "k", raising=False)
+    monkeypatch.setattr("config.ALPACA_SECRET_KEY", "s", raising=False)
+    monkeypatch.setattr("config.FINNHUB_API_KEY", "testkey", raising=False)
     with patch("signals.generate", return_value=float('nan')), \
          patch("data_fetcher.get_minute_df", return_value=MagicMock()):
         import bot
