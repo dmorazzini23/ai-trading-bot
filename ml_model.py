@@ -1,6 +1,8 @@
 import os
 import time
 import logging
+import hashlib
+import io
 from datetime import datetime
 from typing import Any
 
@@ -25,12 +27,19 @@ class MLModel:
         self.pipeline: BaseEstimator = pipeline
         self.logger = logging.getLogger(__name__)
 
-    def fit(self, X: pd.DataFrame, y) -> float:
+    def _validate_inputs(self, X: pd.DataFrame) -> None:
         if not isinstance(X, pd.DataFrame):
             raise TypeError("X must be a DataFrame")
-        if len(X) == 0:
-            self.logger.warning("TRAIN_SKIPPED_EMPTY_INPUT")
-            return 0.0
+        if X.empty:
+            raise ValueError("Input DataFrame is empty")
+        if X.isna().any().any():
+            self.logger.error("NaN values detected in input")
+            raise ValueError("Input contains NaN values")
+        if not all(pd.api.types.is_numeric_dtype(dt) for dt in X.dtypes):
+            raise TypeError("All input columns must be numeric")
+
+    def fit(self, X: pd.DataFrame, y) -> float:
+        self._validate_inputs(X)
         start = time.time()
         self.logger.info("MODEL_TRAIN_START", extra={"rows": len(X)})
         try:
@@ -48,8 +57,7 @@ class MLModel:
             raise
 
     def predict(self, X: pd.DataFrame) -> Any:
-        if not isinstance(X, pd.DataFrame):
-            raise TypeError("X must be a DataFrame")
+        self._validate_inputs(X)
         try:
             preds = self.pipeline.predict(X)
         except Exception as exc:
@@ -74,8 +82,14 @@ class MLModel:
     def load(cls, path: str) -> "MLModel":
         logger = logging.getLogger(__name__)
         try:
-            pipeline = joblib.load(path)
-            logger.info("MODEL_LOADED", extra={"path": path})
+            with open(path, "rb") as f:
+                data = f.read()
+            digest = hashlib.sha256(data).hexdigest()
+            pipeline = joblib.load(io.BytesIO(data))
+            logger.info(
+                "MODEL_LOADED",
+                extra={"path": path, "sha256": digest, "version": getattr(pipeline, "version", "n/a")},
+            )
         except Exception as exc:
             logger.exception(f"MODEL_LOAD_FAILED: {exc}")
             raise
