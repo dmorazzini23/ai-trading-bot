@@ -1,8 +1,8 @@
 import logging
-from config import get_env
+import os
 from alerts import send_slack_alert
 
-SLIPPAGE_THRESHOLD = float(get_env("SLIPPAGE_THRESHOLD", "0.003"))
+SLIPPAGE_THRESHOLD = float(os.getenv("SLIPPAGE_THRESHOLD", "0.003"))
 
 logger = logging.getLogger(__name__)
 

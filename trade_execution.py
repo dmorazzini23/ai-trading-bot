@@ -79,14 +79,21 @@ except Exception:  # pragma: no cover - allow running without Alpaca API config
 
 from slippage import monitor_slippage
 from audit import log_trade
-from config import SHADOW_MODE
 
-def log_order(order):
+SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
-    """
-    Logging or audit hook for every executed order. Extend for audit, compliance, and event tracking.
-    Args:
-        order (dict): The order or trade object to log.
+
+def log_order(order, status=None, extra=None):
+    """Log the result of an order execution.
+
+    Parameters
+    ----------
+    order : object
+        The order or trade object to log.
+    status : Optional[str]
+        Execution status. Unused in the stub.
+    extra : Optional[dict]
+        Additional logging context.
     """
     # TODO: Extend with persistent logging, audit trails, etc.
     pass
