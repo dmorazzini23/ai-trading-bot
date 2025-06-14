@@ -74,6 +74,11 @@ RUN_HEALTHCHECK = get_env("RUN_HEALTHCHECK", "0")
 BUY_THRESHOLD = float(get_env("BUY_THRESHOLD", "0.5"))
 WEBHOOK_SECRET = get_env("WEBHOOK_SECRET", "")
 WEBHOOK_PORT = int(get_env("WEBHOOK_PORT", "9000"))
+SLACK_WEBHOOK = get_env("SLACK_WEBHOOK")
+SLIPPAGE_THRESHOLD = float(get_env("SLIPPAGE_THRESHOLD", "0.003"))
+REBALANCE_INTERVAL_MIN = int(get_env("REBALANCE_INTERVAL_MIN", "1440"))
+SHADOW_MODE = get_env("SHADOW_MODE", "0") == "1"
+TRADE_LOG_FILE = get_env("TRADE_LOG_FILE", "trades.csv")
 
 # centralize SGDRegressor hyperparameters
 SGD_PARAMS = MappingProxyType(
