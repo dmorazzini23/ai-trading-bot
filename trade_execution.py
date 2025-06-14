@@ -20,46 +20,69 @@ from typing import Optional
 from typing import Tuple
 
 # Updated Alpaca SDK imports
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import LimitOrderRequest
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.models import Order
-from alpaca.common.exceptions import APIError
-from alpaca.data.models import Quote
-from alpaca.data.requests import StockLatestQuoteRequest
+try:
+    from alpaca.trading.client import TradingClient
+    from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
+    from alpaca.trading.enums import OrderSide, TimeInForce
+    from alpaca.trading.models import Order
+    from alpaca.common.exceptions import APIError
+    from alpaca.data.models import Quote
+    from alpaca.data.requests import StockLatestQuoteRequest
+except Exception:  # pragma: no cover - allow running without Alpaca SDK
+    TradingClient = object
 
-from alpaca_api import submit_order
+    class MarketOrderRequest(dict):
+        def __init__(self, symbol, qty, side, time_in_force):
+            super().__init__(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                time_in_force=time_in_force,
+            )
+
+    class LimitOrderRequest(dict):
+        def __init__(self, symbol, qty, side, time_in_force, limit_price):
+            super().__init__(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                time_in_force=time_in_force,
+                limit_price=limit_price,
+            )
+
+    class OrderSide:
+        BUY = "buy"
+        SELL = "sell"
+
+    class TimeInForce:
+        DAY = "day"
+
+    class Order(dict):
+        pass
+
+    class APIError(Exception):
+        pass
+
+    class Quote:
+        bid_price = 0
+        ask_price = 0
+
+    class StockLatestQuoteRequest:
+        def __init__(self, symbol_or_symbols):
+            self.symbols = symbol_or_symbols
+
+try:
+    from alpaca_api import submit_order
+except Exception:  # pragma: no cover - allow running without Alpaca API config
+    def submit_order(*args, **kwargs):
+        raise RuntimeError("Alpaca API unavailable")
+
 from slippage import monitor_slippage
 from audit import log_trade
 from config import SHADOW_MODE
 
-__all__ = ["ExecutionEngine", "log_order"]
-
-
-class ExecutionEngine:
-    """
-    Template for centralized trade execution, order handling, and slippage tracking.
-    """
-
-    def __init__(self, broker_api=None):
-        self.broker_api = broker_api
-
-    def place_order(self, symbol, qty, side, **kwargs):
-        """
-        Place an order via broker API.
-        Args:
-            symbol (str): Ticker symbol.
-            qty (float): Quantity to trade.
-            side (str): "buy" or "sell".
-        Returns:
-            dict: Order confirmation/response.
-        """
-        # TODO: Implement actual order placement logic here
-        return {"symbol": symbol, "qty": qty, "side": side, "status": "stubbed"}
-
-
 def log_order(order):
+
     """
     Logging or audit hook for every executed order. Extend for audit, compliance, and event tracking.
     Args:
@@ -127,6 +150,10 @@ class ExecutionEngine:
         self.slippage_total = slippage_total
         self.slippage_count = slippage_count
         self.orders_total = orders_total
+    def submit_order(self, order_request):
+        """Placeholder for order submission logic."""
+        return submit_order(self.api, order_request, self.logger)
+
 
     @retry(
         stop=stop_after_attempt(3),
@@ -392,3 +419,5 @@ class ExecutionEngine:
             if remaining > 0:
                 time.sleep(random.uniform(0.05, 0.15))
         return last_order
+
+__all__ = ["ExecutionEngine", "log_order"]
