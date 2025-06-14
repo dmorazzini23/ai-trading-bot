@@ -48,12 +48,31 @@ def get_latest_close(df: pd.DataFrame) -> float:
 
 
 def is_market_open(now: datetime | None = None) -> bool:
-    """Return True if within weekday US market hours (9:30–16:00 ET)."""  # FIXED
-    now_et = (now or datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
-    if now_et.weekday() >= 5:
-        return False
-    current = now_et.time()
-    return MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME
+    """Return True if current time is within NYSE trading hours."""
+    try:
+        import pandas_market_calendars as mcal
+
+        check_time = (now or datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
+        cal = getattr(mcal, "get_calendar", None)
+        if cal is None:
+            raise AttributeError
+        cal = cal("NYSE")
+        sched = cal.schedule(
+            start_date=check_time.date(), end_date=check_time.date()
+        )
+        if sched.empty:
+            return False  # holiday or weekend
+        market_open = sched.iloc[0]["market_open"].tz_convert(EASTERN_TZ).time()
+        market_close = sched.iloc[0]["market_close"].tz_convert(EASTERN_TZ).time()
+        current = check_time.time()
+        return market_open <= current <= market_close
+    except Exception:
+        # Fallback to simple weekday/time check when calendar unavailable
+        now_et = (now or datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
+        if now_et.weekday() >= 5:
+            return False
+        current = now_et.time()
+        return MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME
 
 
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -65,11 +84,13 @@ def data_filepath(filename: str) -> str:
 
 def convert_to_local(df: pd.DataFrame) -> pd.DataFrame:
     local_tz = get_localzone()
+    assert df.index.tz is not None, "DataFrame index must be timezone aware"
     return df.tz_convert(local_tz)
 
 
 def ensure_utc(dt: datetime | date) -> datetime:
     """Return a timezone-aware UTC datetime for ``dt``."""
+    assert isinstance(dt, (datetime, date)), "dt must be date or datetime"
     if isinstance(dt, datetime):
         if dt.tzinfo is None:
             return dt.replace(tzinfo=timezone.utc)

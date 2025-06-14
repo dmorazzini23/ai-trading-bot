@@ -1,7 +1,6 @@
 import os
 import json
 import csv
-from dotenv import load_dotenv
 import random
 import joblib
 import logging
@@ -11,7 +10,9 @@ import numpy as np
 from metrics_logger import log_metrics
 from utils import safe_to_datetime
 
-load_dotenv(dotenv_path=".env", override=True)
+import config
+
+config.reload_env()
 
 # Set deterministic random seeds for reproducibility
 SEED = 42

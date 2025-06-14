@@ -5,7 +5,6 @@ from datetime import date, datetime, timedelta, timezone
 import warnings
 
 import threading
-from dotenv import load_dotenv
 import config
 
 FINNHUB_API_KEY = config.FINNHUB_API_KEY
@@ -22,9 +21,15 @@ client = StockHistoricalDataClient(
 )
 
 _rate_limit_lock = threading.Lock()
-import requests
-import urllib3
-from utils import ensure_utc, safe_to_datetime
+try:
+    import requests
+    import urllib3
+except Exception:  # pragma: no cover - allow missing in test env
+    import types
+
+    requests = types.SimpleNamespace(get=lambda *a, **k: None, exceptions=types.SimpleNamespace(RequestException=Exception))
+    urllib3 = types.SimpleNamespace(exceptions=types.SimpleNamespace(HTTPError=Exception))
+from utils import ensure_utc, safe_to_datetime, is_market_open
 
 MINUTES_REQUIRED = 31
 HISTORICAL_START = "2025-06-01"
@@ -50,7 +55,11 @@ from tenacity import (
 )
 import finnhub
 
-load_dotenv()
+# Refresh environment in case this module is executed as a script
+config.reload_env()
+
+# In-memory minute bar cache to avoid unnecessary API calls
+_MINUTE_CACHE: dict[str, tuple[pd.DataFrame, pd.Timestamp]] = {}
 
 # Alpaca historical data client
 _DATA_CLIENT = client
@@ -226,8 +235,24 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
     """
     import pandas as pd
 
+    # Skip network calls when requesting near real-time data outside market hours
+    end_check = end_date
+    if hasattr(end_check, "date"):
+        end_check = end_check.date()
+    if end_check >= datetime.utcnow().date() and not is_market_open():
+        logger.info("MARKET_CLOSED_MINUTE_FETCH", extra={"symbol": symbol})
+        return pd.DataFrame()
+
     start_dt = ensure_utc(start_date) - timedelta(minutes=1)
     end_dt = ensure_utc(end_date)
+
+    # Serve cached data if still fresh (within 1 minute of last bar)
+    cached = _MINUTE_CACHE.get(symbol)
+    if cached is not None:
+        df_cached, ts = cached
+        if not df_cached.empty and ts >= pd.Timestamp.utcnow() - pd.Timedelta(minutes=1):
+            logger.debug("minute cache hit for %s", symbol)
+            return df_cached.copy()
 
     try:
         bars = None
@@ -314,6 +339,11 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             return pd.DataFrame()
         df.index = idx
 
+        _MINUTE_CACHE[symbol] = (df, pd.Timestamp.utcnow())
+        logger.info(
+            "MINUTE_FETCHED",
+            extra={"symbol": symbol, "rows": len(df), "cols": df.shape[1]},
+        )
         return df
 
     except (APIError, KeyError):
@@ -344,7 +374,13 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
                 logger.warning(f"Invalid fallback index for {symbol}; skipping")
                 return pd.DataFrame()
             df.index = idx
-            logger.info(f"Falling back to daily bars for {symbol} ({len(df)} rows)")
+            logger.info(
+                f"Falling back to daily bars for {symbol} ({len(df)} rows)")
+            _MINUTE_CACHE[symbol] = (df, pd.Timestamp.utcnow())
+            logger.info(
+                "MINUTE_FETCHED",
+                extra={"symbol": symbol, "rows": len(df), "cols": df.shape[1]},
+            )
             return df
         except Exception as daily_err:
             logger.debug(f"{symbol}: daily fallback fetch failed: {daily_err}")
