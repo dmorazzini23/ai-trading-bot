@@ -3,7 +3,7 @@ set -e
 
 # ——— Your droplet’s SSH info ———
 SERVER="root@143.110.157.152"
-APP_DIR="/root/ai-trading-bot"
+APP_DIR="$HOME/ai-trading-bot"
 BRANCH="main"
 
 echo "Deploying branch '$BRANCH' to $SERVER:$APP_DIR …"

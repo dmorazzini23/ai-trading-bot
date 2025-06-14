@@ -22,15 +22,19 @@ class MLModel:
             return 0.0
         start = time.time()
         self.logger.info("MODEL_TRAIN_START", extra={"rows": len(X)})
-        self.pipeline.fit(X, y)
-        dur = time.time() - start
-        preds = self.pipeline.predict(X)
-        mse = float(mean_squared_error(y, preds))
-        self.logger.info(
-            "MODEL_TRAIN_END",
-            extra={"duration": round(dur, 2), "mse": mse},
-        )
-        return mse
+        try:
+            self.pipeline.fit(X, y)
+            dur = time.time() - start
+            preds = self.pipeline.predict(X)
+            mse = float(mean_squared_error(y, preds))
+            self.logger.info(
+                "MODEL_TRAIN_END",
+                extra={"duration": round(dur, 2), "mse": mse},
+            )
+            return mse
+        except Exception as exc:
+            self.logger.exception(f"MODEL_TRAIN_FAILED: {exc}")
+            raise
 
     def predict(self, X: pd.DataFrame):
         if not isinstance(X, pd.DataFrame):
@@ -45,6 +49,10 @@ class MLModel:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = path or os.path.join("models", f"model_{ts}.pkl")
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        joblib.dump(self.pipeline, path)
-        self.logger.info("MODEL_SAVED", extra={"path": path})
+        try:
+            joblib.dump(self.pipeline, path)
+            self.logger.info("MODEL_SAVED", extra={"path": path})
+        except Exception as exc:
+            self.logger.exception(f"MODEL_SAVE_FAILED: {exc}")
+            raise
         return path

@@ -130,8 +130,7 @@ def get_historical_data(
     df.columns = df.columns.str.lower()
 
     if not df.empty:
-        idx_vals = [ts[0] if isinstance(ts, tuple) else ts for ts in df.index]
-        idx = safe_to_datetime(idx_vals)
+        idx = safe_to_datetime(df.index)
         if idx is None:
             logger.warning(f"Unexpected index format for {symbol}; skipping")
             return pd.DataFrame()
@@ -181,12 +180,7 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
 
     if isinstance(df.index, pd.MultiIndex):
         df.index = df.index.get_level_values(0)
-    # 🛠️ handle tuple-indexed IEX feeds
-    if len(df.index) and isinstance(df.index[0], tuple):
-        idx_vals = [t[1] for t in df.index]
-    else:
-        idx_vals = df.index
-    idx = safe_to_datetime(idx_vals)
+    idx = safe_to_datetime(df.index)
     if idx is None:
         logger.warning(f"Invalid date index for {symbol}; skipping")
         return pd.DataFrame()
@@ -328,12 +322,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
         if df.empty:
             logger.warning(f"No bar data after column filtering for {symbol}")
             return pd.DataFrame()
-        # 🛠️ unify tuple-handling and drop tzinfo
-        if len(df.index) and isinstance(df.index[0], tuple):
-            idx_vals = [t[1] for t in df.index]
-        else:
-            idx_vals = df.index
-        idx = safe_to_datetime(idx_vals)
+        idx = safe_to_datetime(df.index)
         if idx is None:
             logger.warning(f"Invalid minute index for {symbol}; skipping")
             return pd.DataFrame()
@@ -364,12 +353,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             if df.empty:
                 logger.warning(f"Daily fallback returned no data for {symbol}")
                 return pd.DataFrame()
-            # 🛠️ unify tuple-handling and drop tzinfo
-            if len(df.index) and isinstance(df.index[0], tuple):
-                idx_vals = [t[1] for t in df.index]
-            else:
-                idx_vals = df.index
-            idx = safe_to_datetime(idx_vals)
+            idx = safe_to_datetime(df.index)
             if idx is None:
                 logger.warning(f"Invalid fallback index for {symbol}; skipping")
                 return pd.DataFrame()
