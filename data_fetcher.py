@@ -228,6 +228,12 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
         For network-related failures handled by ``tenacity`` retry.
     """
     import pandas as pd
+    from datetime import datetime, date, timedelta
+
+    if isinstance(start_date, date) and not isinstance(start_date, datetime):
+        start_date = datetime.combine(start_date, datetime.min.time())
+    if isinstance(end_date, date) and not isinstance(end_date, datetime):
+        end_date = datetime.combine(end_date, datetime.max.time())
 
     # Skip network calls when requesting near real-time data outside market hours
     end_check = end_date

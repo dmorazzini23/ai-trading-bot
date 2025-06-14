@@ -13,6 +13,7 @@ flask==2.2.5
 pandas_market_calendars>=4.3.0
 schedule>=1.1.0
 # removed: alpaca-trade-api (not compatible with Python 3.12)
+alpaca-trade-api==3.2.0
 portalocker==2.7.0
 alpaca-py==0.40.1        # new official SDK
 scikit-learn==1.6.1
