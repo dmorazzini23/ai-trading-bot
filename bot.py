@@ -9,11 +9,10 @@ warnings.filterwarnings(
 warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
 import os
-from dotenv import load_dotenv
+import config
 
-load_dotenv(
-    dotenv_path=".env", override=True
-)  # ensure .env is loaded before using os.getenv
+# Refresh environment variables on startup for reliability
+config.reload_env()
 
 # BOT_MODE must be defined before any classes that reference it
 BOT_MODE = os.getenv("BOT_MODE", "balanced")
@@ -160,12 +159,17 @@ from data_fetcher import (
 )
 from strategy_allocator import StrategyAllocator
 from risk_engine import RiskEngine
-from utils import is_market_open, portfolio_lock
+from utils import is_market_open as utils_market_open, portfolio_lock
+from logger import get_logger
 from strategies import MomentumStrategy, MeanReversionStrategy, TradeSignal
 
 # Basic logger setup so early code can log before full configuration below
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logger = get_logger(__name__)
+
+
+def is_market_open(now: datetime | None = None) -> bool:
+    """Wrapper around utils.is_market_open with inline comment."""
+    return utils_market_open(now)
 
 
 def get_latest_close(df: pd.DataFrame) -> float:
@@ -252,13 +256,13 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
     handlers=[
-        logging.StreamHandler(),  # stderr for journalctl
+        logging.StreamHandler(),
         file_handler,
     ],
     force=True,
 )
 atexit.register(logging.shutdown)
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 logging.getLogger("alpaca_trade_api").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("requests").setLevel(logging.WARNING)
@@ -4414,6 +4418,8 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                     logger.warning("DAILY_MODEL_TRAIN_SKIPPED_EMPTY")
                 else:
                     model_pipeline.fit(X_train, y_train)
+                    mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
+                    logger.info("TRAIN_METRIC", extra={"mse": mse})
             except Exception as e:
                 logger.error(f"Daily retrain failed: {e}")
 
@@ -4560,6 +4566,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
             """Fetch data and execute trading logic for a single symbol."""
             try:
                 logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
+                if not is_market_open():
+                    logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
+                    return
                 price_df = get_minute_df(symbol, start_date, end_date)
                 if price_df.empty or "close" not in price_df.columns:
                     print(f"INFO SKIP_NO_PRICE_DATA | {symbol}")

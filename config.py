@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"
+# Load environment variables once at import. Individual scripts
+# should call ``reload_env()`` to refresh values if needed.
 load_dotenv(ENV_PATH)
 
 
