@@ -24,11 +24,17 @@ _rate_limit_lock = threading.Lock()
 try:
     import requests
     import urllib3
-except Exception:  # pragma: no cover - allow missing in test env
+except Exception as e:  # pragma: no cover - allow missing in test env
+    logger.warning("Optional dependencies missing: %s", e)
     import types
 
-    requests = types.SimpleNamespace(get=lambda *a, **k: None, exceptions=types.SimpleNamespace(RequestException=Exception))
-    urllib3 = types.SimpleNamespace(exceptions=types.SimpleNamespace(HTTPError=Exception))
+    requests = types.SimpleNamespace(
+        get=lambda *a, **k: None,
+        exceptions=types.SimpleNamespace(RequestException=Exception),
+    )
+    urllib3 = types.SimpleNamespace(
+        exceptions=types.SimpleNamespace(HTTPError=Exception)
+    )
 from utils import ensure_utc, safe_to_datetime, is_market_open
 
 MINUTES_REQUIRED = 31
@@ -59,7 +65,18 @@ import finnhub
 config.reload_env()
 
 # In-memory minute bar cache to avoid unnecessary API calls
+
+# In-memory minute bar cache to avoid unnecessary API calls
 _MINUTE_CACHE: dict[str, tuple[pd.DataFrame, pd.Timestamp]] = {}
+
+# Helper to coerce dates into datetimes
+def ensure_datetime(dt: date | datetime) -> datetime:
+    """Return ``datetime`` object for ``dt`` without timezone."""
+    if isinstance(dt, datetime):
+        return dt
+    if isinstance(dt, date):
+        return datetime.combine(dt, datetime.min.time())
+    raise TypeError(f"Unsupported type for ensure_datetime: {type(dt)!r}")
 
 # Alpaca historical data client
 _DATA_CLIENT = client
@@ -75,8 +92,8 @@ def get_historical_data(
 ) -> pd.DataFrame:
     """Fetch historical bars from Alpaca and ensure OHLCV float columns."""
 
-    start_dt = pd.to_datetime(ensure_utc(start_date))
-    end_dt = pd.to_datetime(ensure_utc(end_date))
+    start_dt = pd.to_datetime(ensure_utc(ensure_datetime(start_date)))
+    end_dt = pd.to_datetime(ensure_utc(ensure_datetime(end_date)))
 
     tf_map = {
         "1Min": TimeFrame.Minute,
@@ -150,7 +167,12 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
     df = pd.DataFrame()
     for attempt in range(3):
         try:
-            df = get_historical_data(symbol, ensure_utc(start), ensure_utc(end), "1Day")
+            df = get_historical_data(
+                symbol,
+                ensure_datetime(start),
+                ensure_datetime(end),
+                "1Day",
+            )
             break
         except (APIError, RetryError) as e:
             logger.debug(f"get_daily_df attempt {attempt+1} failed for {symbol}: {e}")
@@ -159,8 +181,8 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
         try:
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
-                start=ensure_utc(start),
-                end=ensure_utc(end),
+                start=ensure_utc(ensure_datetime(start)),
+                end=ensure_utc(ensure_datetime(end)),
                 timeframe=TimeFrame.Day,
                 feed="iex",
             )
@@ -230,10 +252,8 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
     import pandas as pd
     from datetime import datetime, date, timedelta
 
-    if isinstance(start_date, date) and not isinstance(start_date, datetime):
-        start_date = datetime.combine(start_date, datetime.min.time())
-    if isinstance(end_date, date) and not isinstance(end_date, datetime):
-        end_date = datetime.combine(end_date, datetime.max.time())
+    start_date = ensure_datetime(start_date)
+    end_date = ensure_datetime(end_date)
 
     # Skip network calls when requesting near real-time data outside market hours
     end_check = end_date
@@ -346,14 +366,14 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=TimeFrame.Day,
-                start=ensure_utc(start_date),
-                end=ensure_utc(end_date) + timedelta(days=1),
+                start=ensure_utc(ensure_datetime(start_date)),
+                end=ensure_utc(ensure_datetime(end_date)) + timedelta(days=1),
                 feed="iex",
             )
             try:
                 bars = client.get_stock_bars(req)
-            except Exception:
-                logger.exception("Daily fallback fetch failed for %s", symbol)
+            except Exception as fetch_err:
+                logger.exception("Daily fallback fetch failed for %s: %s", symbol, fetch_err)
                 raise
             df = bars.df[["open", "high", "low", "close", "volume"]].copy()
             if df.empty:

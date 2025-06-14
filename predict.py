@@ -35,7 +35,8 @@ def fetch_sentiment(symbol: str) -> float:
             1 for a in arts if "positive" in (a.get("title") or "").lower()
         ) / len(arts)
         return float(score)
-    except Exception:
+    except Exception as e:
+        logger.error("fetch_sentiment failed for %s: %s", symbol, e)
         return 0.0
 
 
@@ -75,8 +76,8 @@ def predict(csv_path: str, freq: str = "intraday"):
             feat = feat.drop(
                 columns=[c for c in inactive if c in feat.columns], errors="ignore"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed loading inactive features: %s", e)
     symbol = os.path.splitext(os.path.basename(csv_path))[0]
     feat["sentiment"] = fetch_sentiment(symbol)
     regime = detect_regime(df)

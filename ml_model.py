@@ -2,6 +2,9 @@ import os
 import time
 import logging
 from datetime import datetime
+from typing import Any
+
+from sklearn.base import BaseEstimator
 import joblib
 import pandas as pd
 from sklearn.metrics import mean_squared_error
@@ -10,8 +13,8 @@ from sklearn.metrics import mean_squared_error
 class MLModel:
     """Wrapper around an sklearn Pipeline with extra safety checks."""
 
-    def __init__(self, pipeline):
-        self.pipeline = pipeline
+    def __init__(self, pipeline: BaseEstimator) -> None:
+        self.pipeline: BaseEstimator = pipeline
         self.logger = logging.getLogger(__name__)
 
     def fit(self, X: pd.DataFrame, y) -> float:
@@ -36,7 +39,7 @@ class MLModel:
             self.logger.exception(f"MODEL_TRAIN_FAILED: {exc}")
             raise
 
-    def predict(self, X: pd.DataFrame):
+    def predict(self, X: pd.DataFrame) -> Any:
         if not isinstance(X, pd.DataFrame):
             raise TypeError("X must be a DataFrame")
         try:

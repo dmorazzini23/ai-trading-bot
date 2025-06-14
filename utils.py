@@ -66,7 +66,8 @@ def is_market_open(now: datetime | None = None) -> bool:
         market_close = sched.iloc[0]["market_close"].tz_convert(EASTERN_TZ).time()
         current = check_time.time()
         return market_open <= current <= market_close
-    except Exception:
+    except Exception as e:
+        logger.debug("market calendar unavailable: %s", e)
         # Fallback to simple weekday/time check when calendar unavailable
         now_et = (now or datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
         if now_et.weekday() >= 5:
@@ -122,7 +123,8 @@ def safe_to_datetime(values: Iterable[Any]) -> pd.DatetimeIndex | None:
         return None
     try:
         idx = pd.to_datetime(values, errors="coerce", utc=True)
-    except Exception:
+    except Exception as e:
+        logger.debug("safe_to_datetime failed: %s", e)
         return None
     idx = idx.tz_convert(None)
     if idx.isnull().all():
