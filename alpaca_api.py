@@ -1,11 +1,11 @@
 import logging
+import os
 import time
 import requests
 
-from config import get_env
 from alerts import send_slack_alert
 
-SHADOW_MODE = get_env("SHADOW_MODE", "0") == "1"
+SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
 logger = logging.getLogger(__name__)
 

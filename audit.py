@@ -4,9 +4,7 @@ import uuid
 from datetime import datetime, timezone
 import logging
 
-from config import get_env
-
-TRADE_LOG_FILE = get_env("TRADE_LOG_FILE", "trades.csv")
+TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", "trades.csv")
 
 logger = logging.getLogger(__name__)
 _fields = ["id", "timestamp", "symbol", "side", "qty", "price", "mode", "result"]

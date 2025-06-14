@@ -164,7 +164,13 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
     class ExecutionEngine:
         def __init__(self, *args, **kwargs):
             pass
-from capital_scaling import CapitalScalingEngine
+
+try:
+    from capital_scaling import CapitalScalingEngine
+except Exception:  # pragma: no cover - allow tests with stubbed module
+    class CapitalScalingEngine:
+        def __init__(self, *args, **kwargs):
+            pass
 from data_fetcher import (
     finnhub_client,
     DataFetchError,
