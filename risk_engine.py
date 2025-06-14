@@ -138,3 +138,9 @@ class RiskEngine:
             logger.error("Failed computing volatility: %s", exc)
             vol = 0.0
         return {"volatility": vol}
+
+
+def calculate_position_size(signal: TradeSignal, cash: float, price: float, api=None) -> int:
+    """Convenience wrapper used in tests."""
+    engine = RiskEngine()
+    return engine.position_size(signal, cash, price, api)
