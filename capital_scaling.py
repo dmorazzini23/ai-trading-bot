@@ -10,8 +10,26 @@ import pandas as pd
 
 
 class CapitalScalingEngine:
-    def __init__(self, *args, **kwargs):
-        pass
+    """
+    Template for Capital Scaling/Position Sizing Engine.
+    Implement capital allocation strategies and risk-based sizing logic here.
+    """
+
+    def __init__(self, initial_equity=None, params=None):
+        self.initial_equity = initial_equity
+        self.params = params or {}
+
+    def compute_position_size(self, signal, risk_budget, **kwargs):
+        """
+        Calculate the position size based on provided strategy, risk budget, etc.
+        Args:
+            signal: The trading signal/strength/score.
+            risk_budget: The total risk allowed for the position.
+        Returns:
+            position_size (float): Number of shares/units to allocate.
+        """
+        # TODO: Implement your position sizing algorithm here
+        return 0.0
 
 logger = logging.getLogger(__name__)
 
