@@ -77,3 +77,6 @@ class StrategyAllocator:
             )
 
         return results
+
+
+__all__ = ["StrategyAllocator"]
