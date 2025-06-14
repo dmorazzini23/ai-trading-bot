@@ -2921,8 +2921,11 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     if buying_pw <= 0:
         logger.info("NO_BUYING_POWER", extra={"symbol": symbol})
         return
-    if qty <= 0:
-        logger.warning("ZERO_QTY", extra={"symbol": symbol})
+    if qty is None or qty <= 0 or not np.isfinite(qty):
+        logger.error(
+            f"Invalid order quantity for {symbol}: {qty}. Skipping order and logging input data."
+        )
+        # Optionally, log signal, price, and input features here for debug
         return
     if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
         logger.info("POV_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
@@ -4643,6 +4646,8 @@ def run_all_trades_worker(state: BotState, model) -> None:
 
         run_multi_strategy(ctx)
         logger.info("RUN_ALL_TRADES_COMPLETE")
+    except Exception as e:
+        logger.error(f"Exception in trading loop: {e}", exc_info=True)
     finally:
         # Always reset running flag
         state.running = False
