@@ -34,6 +34,8 @@ from slippage import monitor_slippage
 from audit import log_trade
 from config import SHADOW_MODE
 
+__all__ = ["ExecutionEngine", "log_order"]
+
 
 class ExecutionEngine:
     """
