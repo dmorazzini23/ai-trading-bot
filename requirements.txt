@@ -26,7 +26,7 @@ lightgbm==4.1.0
 pytz==2024.1
 pybreaker==1.0.0
 tzlocal==4.3
-torch==2.1.0
+torch==2.7.1
 # pin setuptools to avoid pandas_ta/pkg_resources deprecation warnings
 setuptools<81
 yfinance==0.2.36
