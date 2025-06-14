@@ -155,7 +155,6 @@ from capital_scaling import CapitalScalingEngine
 from data_fetcher import (
     finnhub_client,
     DataFetchError,
-    get_minute_df,
 )
 from strategy_allocator import StrategyAllocator
 from risk_engine import RiskEngine

@@ -2,15 +2,19 @@ import os
 import hmac
 import hashlib
 import subprocess
+import logging
 from flask import Flask
 from flask import abort
 from flask import jsonify
 from flask import request
-import os
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=".env", override=True)
 from config import WEBHOOK_SECRET, WEBHOOK_PORT
+
+if not WEBHOOK_SECRET:
+    logging.getLogger(__name__).error("WEBHOOK_SECRET must be set")
+    raise RuntimeError("WEBHOOK_SECRET must be set")
 
 app = Flask(__name__)
 SECRET = WEBHOOK_SECRET.encode()

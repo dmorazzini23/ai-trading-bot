@@ -12,11 +12,29 @@ load_dotenv(ENV_PATH)
 logger = logging.getLogger(__name__)
 
 
-def get_env(key: str, default: str | None = None, *, reload: bool = False):
-    """Return environment variable ``key``. Reload .env first if requested."""
+def get_env(
+    key: str, default: str | None = None, *, reload: bool = False, required: bool = False
+) -> str | None:
+    """Return environment variable ``key``.
+
+    Parameters
+    ----------
+    key : str
+        Name of the variable.
+    default : str | None, optional
+        Value returned if the variable is missing.
+    reload : bool, optional
+        Reload ``.env`` before checking when ``True``.
+    required : bool, optional
+        If ``True`` and the variable is missing, raise ``RuntimeError``.
+    """
     if reload:
         reload_env()
-    return os.environ.get(key, default)
+    value = os.environ.get(key, default)
+    if required and value is None:
+        logger.error("Required environment variable '%s' is missing", key)
+        raise RuntimeError(f"Required environment variable '{key}' is missing")
+    return value
 
 
 def reload_env() -> None:
@@ -26,11 +44,15 @@ def reload_env() -> None:
 
 from types import MappingProxyType
 
-required_env_vars = ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY")
-missing = [v for v in required_env_vars if not os.environ.get(v)]
-if missing:
-    logger.error("Missing required environment variables: %s", missing)
-    raise RuntimeError(f"Missing required environment variables: {missing}")
+
+def _require_env_vars(*keys: str) -> None:
+    missing = [v for v in keys if not os.environ.get(v)]
+    if missing:
+        logger.error("Missing required environment variables: %s", missing)
+        raise RuntimeError(f"Missing required environment variables: {missing}")
+
+
+_require_env_vars("APCA_API_KEY_ID", "APCA_API_SECRET_KEY")
 
 ALPACA_API_KEY = get_env("ALPACA_API_KEY") or get_env("APCA_API_KEY_ID")
 ALPACA_SECRET_KEY = get_env("ALPACA_SECRET_KEY") or get_env("APCA_API_SECRET_KEY")
