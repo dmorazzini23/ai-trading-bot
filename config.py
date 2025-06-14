@@ -1,12 +1,15 @@
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+import logging
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"
 # Load environment variables once at import. Individual scripts
 # should call ``reload_env()`` to refresh values if needed.
 load_dotenv(ENV_PATH)
+
+logger = logging.getLogger(__name__)
 
 
 def get_env(key: str, default: str | None = None, *, reload: bool = False):
@@ -24,8 +27,9 @@ def reload_env() -> None:
 from types import MappingProxyType
 
 required_env_vars = ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY")
-missing = [v for v in required_env_vars if v not in os.environ]
+missing = [v for v in required_env_vars if not os.environ.get(v)]
 if missing:
+    logger.error("Missing required environment variables: %s", missing)
     raise RuntimeError(f"Missing required environment variables: {missing}")
 
 ALPACA_API_KEY = get_env("ALPACA_API_KEY") or get_env("APCA_API_KEY_ID")
@@ -62,6 +66,7 @@ SGD_PARAMS = MappingProxyType(
 def validate_alpaca_credentials() -> None:
     """Ensure required Alpaca credentials are present."""
     if not ALPACA_API_KEY or not ALPACA_SECRET_KEY or not ALPACA_BASE_URL:
+        logger.error("Missing Alpaca credentials")
         raise RuntimeError(
             "Missing Alpaca credentials. Please set ALPACA_API_KEY, "
             "ALPACA_SECRET_KEY and ALPACA_BASE_URL in your environment"
