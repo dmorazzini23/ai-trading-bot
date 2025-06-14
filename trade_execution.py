@@ -36,7 +36,7 @@ from config import SHADOW_MODE
 
 
 def log_order(order):
-    """Simple stub for testing/logging."""
+    # Stub for integration tests
     pass
 
 

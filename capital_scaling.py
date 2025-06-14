@@ -8,6 +8,11 @@ from typing import Any, Optional, Sequence
 
 import pandas as pd
 
+
+class CapitalScalingEngine:
+    def __init__(self, *args, **kwargs):
+        pass
+
 logger = logging.getLogger(__name__)
 
 
