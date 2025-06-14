@@ -4785,7 +4785,11 @@ def main() -> None:
             market_open = nyse.open_at_time(schedule, now_utc)
 
         if not market_open:
-            logger.info("Market is closed. Skipping minute-data operations and retraining.")
+            logger.info(
+                "Market is closed. Sleeping for 60 minutes before rechecking."
+            )
+            import time
+            time.sleep(60 * 60)
             sys.exit(0)
 
         # Try to start Prometheus metrics server; if port is already in use, log and continue
