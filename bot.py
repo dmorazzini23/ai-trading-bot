@@ -14,6 +14,7 @@ warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
 import os
 import config
+from config import SHADOW_MODE
 
 # Refresh environment variables on startup for reliability
 config.reload_env()
@@ -73,6 +74,9 @@ import schedule
 import portalocker
 import yfinance as yf
 from requests.exceptions import HTTPError
+from alerts import send_slack_alert
+from rebalancer import maybe_rebalance
+from config import REBALANCE_INTERVAL_MIN
 
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
@@ -4585,6 +4589,8 @@ def run_all_trades_worker(state: BotState, model) -> None:
     guards against overlapping runs and ensures the market is open before
     proceeding.
     """
+    import uuid
+    loop_id = str(uuid.uuid4())
     if state.running:
         logger.warning("RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
@@ -4592,6 +4598,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
         logger.info("MARKET_CLOSED_NO_FETCH")
         return  # FIXED: skip work when market closed
     state.running = True
+    loop_start = time.monotonic()
     try:
         # On each run, clear open orders and correct any position mismatches
         cancel_all_open_orders(ctx)
@@ -4661,13 +4668,28 @@ def run_all_trades_worker(state: BotState, model) -> None:
 
         run_multi_strategy(ctx)
         logger.info("RUN_ALL_TRADES_COMPLETE")
+        try:
+            acct = ctx.api.get_account()
+            pnl = float(acct.equity) - float(acct.last_equity)
+            logger.info(
+                "LOOP_PNL",
+                extra={"loop_id": loop_id, "pnl": pnl, "mode": "SHADOW" if SHADOW_MODE else "LIVE"},
+            )
+        except Exception as e:
+            logger.warning(f"Failed P&L retrieval: {e}")
     except Exception as e:
         logger.error(f"Exception in trading loop: {e}", exc_info=True)
     finally:
         # Always reset running flag
         state.running = False
+        duration = time.monotonic() - loop_start
         logger.info(
-            f"Bot heartbeat: loop completed at {datetime.now(timezone.utc)}"
+            "HEARTBEAT",
+            extra={
+                "loop_id": loop_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "duration": duration,
+            },
         )
 
 
@@ -4910,6 +4932,9 @@ def main() -> None:
                 target=adaptive_risk_scaling, args=(ctx,), daemon=True
             ).start()
         )
+        schedule.every(REBALANCE_INTERVAL_MIN).minutes.do(
+            lambda: Thread(target=maybe_rebalance, args=(ctx,), daemon=True).start()
+        )
         schedule.every().day.at("23:55").do(
             lambda: Thread(target=check_disaster_halt, daemon=True).start()
         )
@@ -4936,7 +4961,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        logger.exception("UNCAUGHT_EXCEPTION")
+    while True:
+        try:
+            main()
+        except Exception as exc:
+            logger.critical("UNCAUGHT_EXCEPTION: %s", exc, exc_info=True)
+            send_slack_alert(f"Bot crashed: {exc}. Restarting in 5s")
+            time.sleep(5)

@@ -29,6 +29,11 @@ from alpaca.common.exceptions import APIError
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockLatestQuoteRequest
 
+from alpaca_api import submit_order
+from slippage import monitor_slippage
+from audit import log_trade
+from config import SHADOW_MODE
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
@@ -217,6 +222,7 @@ class ExecutionEngine:
                 "band": getattr(self.ctx, "capital_band", "small"),
             },
         )
+        monitor_slippage(expected, actual, symbol)
 
     def execute_order(
         self, symbol: str, qty: int, side: str, asset_class: str = "equity"
@@ -268,11 +274,11 @@ class ExecutionEngine:
                         },
                     )
                     try:
-                        order = api.submit_order(order_data=order_req)
+                        order = submit_order(api, order_req, self.logger)
                         self.logger.info(
                             f"Order submit response for {symbol}: {order}"
                         )
-                        if not getattr(order, "id", None):
+                        if not getattr(order, "id", None) and not SHADOW_MODE:
                             self.logger.error(f"Order failed for {symbol}: {order}")
                     except Exception as e:
                         self.logger.error(
@@ -327,6 +333,7 @@ class ExecutionEngine:
                         "price": fill_price,
                     },
                 )
+                log_trade(symbol, side, slice_qty, fill_price, status, "SHADOW" if SHADOW_MODE else "LIVE")
             else:
                 self.logger.error(
                     "ORDER_STATUS", extra={"symbol": symbol, "status": status}
