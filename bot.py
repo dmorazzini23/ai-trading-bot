@@ -2970,7 +2970,8 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
 
 
 def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> None:
-    if qty <= 0:
+    if qty is None or not np.isfinite(qty) or qty <= 0:
+        logger.error(f"Invalid order size for {symbol}: {qty}")
         return
     raw = fetch_minute_df_safe(ctx, symbol)
     exit_price = get_latest_close(raw) if raw is not None else 1.0
@@ -3183,6 +3184,11 @@ def trade_logic(
     logger.info(
         f"SIGNAL_RESULT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
     )
+    if final_score is None or not np.isfinite(final_score) or final_score == 0:
+        logger.error(
+            f"Invalid or empty signal for {symbol}. Data: {raw_df.describe() if not raw_df.empty else 'EMPTY'}"
+        )
+        return True
 
     try:
         pos = ctx.api.get_open_position(symbol)
@@ -3244,8 +3250,10 @@ def trade_logic(
             int(balance * target_weight / current_price) if current_price > 0 else 0
         )
 
-        if raw_qty <= 0:
-            logger.debug(f"SKIP_NO_QTY | symbol={symbol}")
+        if raw_qty is None or not np.isfinite(raw_qty) or raw_qty <= 0:
+            logger.error(
+                f"Invalid order size for {symbol}: {raw_qty}. Signal: {final_score}, Price: {current_price}, Data: {raw_df.describe() if not raw_df.empty else 'EMPTY'}"
+            )
             return True
 
         logger.info(
@@ -3315,8 +3323,10 @@ def trade_logic(
         except Exception:
             pass
 
-        if qty <= 0:
-            logger.debug(f"SKIP_NO_QTY | symbol={symbol}")
+        if qty is None or not np.isfinite(qty) or qty <= 0:
+            logger.error(
+                f"Invalid order size for {symbol}: {qty}. Signal: {final_score}, Price: {current_price}, Data: {raw_df.describe() if not raw_df.empty else 'EMPTY'}"
+            )
             return True
 
         logger.info(
@@ -4556,11 +4566,16 @@ def run_multi_strategy(ctx: BotContext) -> None:
             logger.warning(f"[run_all_trades] quote failed for {sig.symbol}: {e}")
             continue
         qty = ctx.risk_engine.position_size(sig, cash, price)
-        if qty > 0:
-            ctx.execution_engine.execute_order(
-                sig.symbol, qty, sig.side, asset_class=sig.asset_class
+        if qty is None or not np.isfinite(qty) or qty <= 0:
+            bars = fetch_minute_df_safe(ctx, sig.symbol)
+            logger.error(
+                f"Invalid order size for {sig.symbol}: {qty}. Signal: {sig.weight}, Price: {price}, Data: {bars.describe() if not bars.empty else 'EMPTY'}"
             )
-            ctx.risk_engine.register_fill(sig)
+            continue
+        ctx.execution_engine.execute_order(
+            sig.symbol, qty, sig.side, asset_class=sig.asset_class
+        )
+        ctx.risk_engine.register_fill(sig)
 
 
 def run_all_trades_worker(state: BotState, model) -> None:
@@ -4651,6 +4666,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
     finally:
         # Always reset running flag
         state.running = False
+        logger.info(
+            f"Bot heartbeat: loop completed at {datetime.now(timezone.utc)}"
+        )
 
 
 def schedule_run_all_trades(model):

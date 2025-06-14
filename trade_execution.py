@@ -269,11 +269,14 @@ class ExecutionEngine:
                     )
                     try:
                         order = api.submit_order(order_data=order_req)
+                        self.logger.info(
+                            f"Order submit response for {symbol}: {order}"
+                        )
                         if not getattr(order, "id", None):
                             self.logger.error(f"Order failed for {symbol}: {order}")
                     except Exception as e:
                         self.logger.error(
-                            f"Exception during order submission for {symbol}: {e}",
+                            f"Order submission failed for {symbol}: {e}",
                             exc_info=True,
                         )
                         break
