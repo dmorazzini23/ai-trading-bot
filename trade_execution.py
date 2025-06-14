@@ -35,8 +35,35 @@ from audit import log_trade
 from config import SHADOW_MODE
 
 
+class ExecutionEngine:
+    """
+    Template for centralized trade execution, order handling, and slippage tracking.
+    """
+
+    def __init__(self, broker_api=None):
+        self.broker_api = broker_api
+
+    def place_order(self, symbol, qty, side, **kwargs):
+        """
+        Place an order via broker API.
+        Args:
+            symbol (str): Ticker symbol.
+            qty (float): Quantity to trade.
+            side (str): "buy" or "sell".
+        Returns:
+            dict: Order confirmation/response.
+        """
+        # TODO: Implement actual order placement logic here
+        return {"symbol": symbol, "qty": qty, "side": side, "status": "stubbed"}
+
+
 def log_order(order):
-    # Stub for integration tests
+    """
+    Logging or audit hook for every executed order. Extend for audit, compliance, and event tracking.
+    Args:
+        order (dict): The order or trade object to log.
+    """
+    # TODO: Extend with persistent logging, audit trails, etc.
     pass
 
 
