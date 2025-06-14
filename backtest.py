@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 import time
 import warnings
 from itertools import product
-from datetime import datetime
+from datetime import datetime, timedelta
 
 load_dotenv(dotenv_path=".env", override=True)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -206,9 +206,28 @@ def optimize_hyperparams(
 
 def main():
     parser = argparse.ArgumentParser(description="Hyperparameter optimizer")
-    parser.add_argument("--symbols", required=True, help="Comma separated symbols")
-    parser.add_argument("--start", required=True, help="Backtest start date YYYY-MM-DD")
-    parser.add_argument("--end", required=True, help="Backtest end date YYYY-MM-DD")
+
+    default_end = datetime.today().date()
+    default_start = default_end - timedelta(days=30)
+
+    parser.add_argument(
+        "--symbols",
+        required=False,
+        default="AAPL,MSFT,SPY",
+        help="Comma separated symbols (default: AAPL,MSFT,SPY)",
+    )
+    parser.add_argument(
+        "--start",
+        required=False,
+        default=str(default_start),
+        help=f"Backtest start date YYYY-MM-DD (default: {default_start})",
+    )
+    parser.add_argument(
+        "--end",
+        required=False,
+        default=str(default_end),
+        help=f"Backtest end date YYYY-MM-DD (default: {default_end})",
+    )
     parser.add_argument("--mode", choices=["grid"], default="grid")
     args = parser.parse_args()
 
