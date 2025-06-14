@@ -1,5 +1,9 @@
 import warnings
-from sklearn.exceptions import InconsistentVersionWarning
+try:
+    from sklearn.exceptions import InconsistentVersionWarning
+except Exception:  # pragma: no cover - sklearn optional
+    class InconsistentVersionWarning(UserWarning):
+        pass
 
 warnings.filterwarnings(
     "ignore",
@@ -1849,6 +1853,9 @@ nyse = mcal.get_calendar("XNYS")
 def in_trading_hours(ts: pd.Timestamp) -> bool:
     schedule_today = nyse.schedule(start_date=ts.date(), end_date=ts.date())
     if schedule_today.empty:
+        logger.warning(
+            f"No NYSE market schedule for {ts.date()}; skipping market open/close check."
+        )
         return False
     return (
         schedule_today.market_open.iloc[0] <= ts <= schedule_today.market_close.iloc[0]
@@ -4769,7 +4776,13 @@ def main() -> None:
 
         now_utc = pd.Timestamp.utcnow()
         schedule = nyse.schedule(start_date=now_utc.date(), end_date=now_utc.date())
-        market_open = nyse.open_at_time(schedule, now_utc)
+        if schedule.empty:
+            logger.warning(
+                f"No NYSE market schedule for {now_utc.date()}; skipping market open/close check."
+            )
+            market_open = False
+        else:
+            market_open = nyse.open_at_time(schedule, now_utc)
 
         if not market_open:
             logger.info("Market is closed. Skipping minute-data operations and retraining.")
