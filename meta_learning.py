@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import numpy as np
 
@@ -55,7 +55,7 @@ def update_weights(weight_path: str, new_weights: np.ndarray, metrics: dict, his
     except Exception as e:
         logger.error("Failed to read metric history: %s", e)
         hist = []
-    hist.append({"ts": datetime.utcnow().isoformat(), **metrics})
+    hist.append({"ts": datetime.now(timezone.utc).isoformat(), **metrics})
     hist = hist[-n_history:]
     with open(history_file, "w") as f:
         json.dump(hist, f)
