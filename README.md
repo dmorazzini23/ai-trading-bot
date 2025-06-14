@@ -1,4 +1,6 @@
 # AI Trading Bot
+![CI](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/ci.yml/badge.svg)
+[![codecov](https://codecov.io/gh/dmorazzini23/ai-trading-bot/branch/main/graph/badge.svg)](https://codecov.io/gh/dmorazzini23/ai-trading-bot)
 
 This repository contains a simple trading bot together with a backtesting
 harness for optimizing its tunable hyperparameters.
