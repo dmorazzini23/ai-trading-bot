@@ -79,7 +79,7 @@ class RiskEngine:
                 return False
             return True
         except Exception as exc:
-            logger.error("check_max_drawdown failed: %s", exc)
+            logger.error("check_max_drawdown failed: %s", exc, exc_info=True)
             return False
 
     def position_size(
@@ -123,7 +123,7 @@ class RiskEngine:
         try:
             qty = int(dollars / price)
         except Exception as exc:
-            logger.error("position_size division error: %s", exc)
+            logger.error("position_size division error: %s", exc, exc_info=True)
             return 0
         return max(qty, 0)
 
@@ -135,6 +135,6 @@ class RiskEngine:
         try:
             vol = float(np.std(returns))
         except Exception as exc:
-            logger.error("Failed computing volatility: %s", exc)
+            logger.error("Failed computing volatility: %s", exc, exc_info=True)
             vol = 0.0
         return {"volatility": vol}

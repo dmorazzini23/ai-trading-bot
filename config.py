@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 import logging
+import sys
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"
@@ -48,8 +49,10 @@ from types import MappingProxyType
 def _require_env_vars(*keys: str) -> None:
     missing = [v for v in keys if not os.environ.get(v)]
     if missing:
-        logger.error("Missing required environment variables: %s", missing)
-        raise RuntimeError(f"Missing required environment variables: {missing}")
+        logger.critical(
+            "Missing required environment variables: %s", missing
+        )
+        sys.exit(1)
 
 
 _require_env_vars("APCA_API_KEY_ID", "APCA_API_SECRET_KEY")

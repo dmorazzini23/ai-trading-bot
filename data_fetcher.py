@@ -301,7 +301,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
                     logger.exception("IEX fallback failed for %s: %s", symbol, iex_err)
                     return pd.DataFrame()
             else:
-                logger.error(f"API error for {symbol}: {e}")
+                logger.error(f"API error for {symbol}: {e}", exc_info=True)
                 return pd.DataFrame()
 
         if bars is None or not getattr(bars, "df", pd.DataFrame()).size:

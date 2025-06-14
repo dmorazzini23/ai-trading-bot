@@ -36,7 +36,7 @@ def fetch_sentiment(symbol: str) -> float:
         ) / len(arts)
         return float(score)
     except Exception as e:
-        logger.error("fetch_sentiment failed for %s: %s", symbol, e)
+        logger.error("fetch_sentiment failed for %s: %s", symbol, e, exc_info=True)
         return 0.0
 
 
@@ -97,7 +97,7 @@ def predict(csv_path: str, freq: str = "intraday"):
         pred = model.predict(X)[0]
         proba = model.predict_proba(X)[0][pred]
     except (ValueError, TypeError) as e:
-        logger.error(f"Prediction failed for {symbol}: {e}")
+        logger.error(f"Prediction failed for {symbol}: {e}", exc_info=True)
         return None, None
     print(f"Regime: {regime}, Prediction: {pred}, Probability: {proba:.4f}")
     return pred, proba

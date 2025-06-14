@@ -28,7 +28,7 @@ def verify_sig(data: bytes, signature: str) -> bool:
         mac = hmac.new(SECRET, msg=data, digestmod=hashlib.sha256)
         return hmac.compare_digest(mac.hexdigest(), sig)
     except Exception as e:
-        logging.getLogger(__name__).error("verify_sig error: %s", e)
+        logging.getLogger(__name__).error("verify_sig error: %s", e, exc_info=True)
         return False
 
 

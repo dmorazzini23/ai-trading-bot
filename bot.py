@@ -2921,8 +2921,11 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     if buying_pw <= 0:
         logger.info("NO_BUYING_POWER", extra={"symbol": symbol})
         return
-    if qty <= 0:
-        logger.warning("ZERO_QTY", extra={"symbol": symbol})
+    if qty is None or not np.isfinite(qty) or qty <= 0:
+        logger.error(
+            f"Invalid order size for {symbol}: {qty}. Skipping order.",
+            extra={"symbol": symbol},
+        )
         return
     if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
         logger.info("POV_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
@@ -2967,7 +2970,11 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
 
 
 def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> None:
-    if qty <= 0:
+    if qty is None or not np.isfinite(qty) or qty <= 0:
+        logger.error(
+            f"Invalid order size for {symbol}: {qty}. Skipping exit.",
+            extra={"symbol": symbol},
+        )
         return
     raw = fetch_minute_df_safe(ctx, symbol)
     exit_price = get_latest_close(raw) if raw is not None else 1.0
@@ -3241,8 +3248,11 @@ def trade_logic(
             int(balance * target_weight / current_price) if current_price > 0 else 0
         )
 
-        if raw_qty <= 0:
-            logger.debug(f"SKIP_NO_QTY | symbol={symbol}")
+        if raw_qty is None or not np.isfinite(raw_qty) or raw_qty <= 0:
+            logger.error(
+                f"Invalid order size for {symbol}: {raw_qty}. Skipping order.",
+                extra={"symbol": symbol},
+            )
             return True
 
         logger.info(
@@ -3312,8 +3322,11 @@ def trade_logic(
         except Exception:
             pass
 
-        if qty <= 0:
-            logger.debug(f"SKIP_NO_QTY | symbol={symbol}")
+        if qty is None or not np.isfinite(qty) or qty <= 0:
+            logger.error(
+                f"Invalid order size for {symbol}: {qty}. Skipping order.",
+                extra={"symbol": symbol},
+            )
             return True
 
         logger.info(
@@ -4901,6 +4914,9 @@ def main() -> None:
         while True:
             try:
                 schedule.run_pending()
+                logger.info(
+                    f"Bot heartbeat: Trading loop completed at {datetime.now(timezone.utc)}"
+                )
             except Exception as e:
                 logger.exception(f"Scheduler error: {e}")
                 time.sleep(5)

@@ -53,7 +53,7 @@ def update_weights(weight_path: str, new_weights: np.ndarray, metrics: dict, his
         else:
             hist = []
     except Exception as e:
-        logger.error("Failed to read metric history: %s", e)
+        logger.error("Failed to read metric history: %s", e, exc_info=True)
         hist = []
     hist.append({"ts": datetime.utcnow().isoformat(), **metrics})
     hist = hist[-n_history:]

@@ -50,7 +50,9 @@ class ExecutionEngine:
             )
             self.logger.addHandler(handler)
         except Exception as e:
-            self.logger.error(f"Failed to set up log handler {log_path}: {e}")
+            self.logger.error(
+                f"Failed to set up log handler {log_path}: {e}", exc_info=True
+            )
         self.slippage_path = os.path.join(
             os.path.dirname(__file__), "logs", "slippage.csv"
         )
@@ -70,7 +72,8 @@ class ExecutionEngine:
                     )
             except OSError as e:
                 self.logger.error(
-                    f"Failed to create slippage log {self.slippage_path}: {e}"
+                    f"Failed to create slippage log {self.slippage_path}: {e}",
+                    exc_info=True,
                 )
         self.slippage_total = slippage_total
         self.slippage_count = slippage_count
@@ -202,7 +205,7 @@ class ExecutionEngine:
                     ]
                 )
         except OSError as e:
-            self.logger.error(f"Failed to write slippage log: {e}")
+            self.logger.error(f"Failed to write slippage log: {e}", exc_info=True)
         if self.slippage_total is not None:
             self.slippage_total.inc(abs(slip))
         if self.slippage_count is not None:
@@ -238,7 +241,9 @@ class ExecutionEngine:
                 acct = api.get_account()
             except Exception as e:
                 # Log unexpected account retrieval errors
-                self.logger.error(f"Error fetching account information: {e}")
+                self.logger.error(
+                    f"Error fetching account information: {e}", exc_info=True
+                )
                 acct = None
             if side.lower() == "buy" and acct:
                 need = slice_qty * (expected_price or 0)
@@ -252,7 +257,9 @@ class ExecutionEngine:
                     api.get_position(symbol)
                 except Exception as e:
                     # Log the exception to aid debugging of sell attempts
-                    self.logger.error(f"No position to sell for {symbol}: {e}")
+                    self.logger.error(
+                        f"No position to sell for {symbol}: {e}", exc_info=True
+                    )
                     break
             start = time.monotonic()
             order = None
@@ -270,7 +277,9 @@ class ExecutionEngine:
                     try:
                         order = api.submit_order(order_data=order_req)
                     except Exception as e:
-                        self.logger.error(f"Order failed for {symbol}: {e}")
+                        self.logger.error(
+                            f"Order failed for {symbol}: {e}", exc_info=True
+                        )
                         break
                     break
                 except (APIError, TimeoutError) as e:
