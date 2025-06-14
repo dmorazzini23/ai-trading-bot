@@ -310,7 +310,10 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
 
         bars = bars.df
         if bars.empty:
-            logger.warning(f"No bar data returned for {symbol}, skipping")
+            logger.error(
+                f"Data fetch failed for {symbol} on {end_dt.date()} during trading hours! Skipping symbol."
+            )
+            # Optionally, alert or set error counter here
             return pd.DataFrame()
         # drop MultiIndex if present, otherwise drop the stray "symbol" column
         if isinstance(bars.columns, pd.MultiIndex):
