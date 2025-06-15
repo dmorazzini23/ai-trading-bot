@@ -26,5 +26,8 @@ class CapitalScalingEngine:
         # TODO: Implement Kelly, drawdown-aware, volatility-adaptive, etc.
         return raw_size  # For now, return as-is.
 
+    def update(self, ctx, equity_init):
+        # TODO: Implement capital scaling logic here.
+        pass
 
 __all__ = ["CapitalScalingEngine"]
