@@ -1,3 +1,5 @@
+print("=== STRATEGY_ALLOCATOR LOADED ===", __file__, flush=True)
+
 from typing import Dict
 from typing import List
 import logging
