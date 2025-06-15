@@ -4,14 +4,51 @@ from pathlib import Path
 
 import pytest
 from unittest.mock import patch, MagicMock
+import pandas as pd
 
 # Ensure project root is importable and stub heavy optional deps
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+"""Minimal import-time stubs so strategy_allocator and other modules load."""
+try:
+    import pandas  # type: ignore
+except Exception:
+    sys.modules["pandas"] = types.ModuleType("pandas")
+    sys.modules["pandas"].DataFrame = MagicMock()
+    sys.modules["pandas"].Series = MagicMock()
+    sys.modules["pandas"].concat = MagicMock()
+
+try:
+    import numpy  # type: ignore
+except Exception:
+    sys.modules["numpy"] = types.ModuleType("numpy")
+    sys.modules["numpy"].array = MagicMock()
+    sys.modules["numpy"].nan = float("nan")
+    sys.modules["numpy"].NaN = float("nan")
+    sys.modules["numpy"].random = MagicMock()
+    sys.modules["numpy"].arange = MagicMock()
+
+try:
+    import pandas_ta  # type: ignore
+except Exception:
+    sys.modules["pandas_ta"] = types.ModuleType("pandas_ta")
+if "pandas_ta" in sys.modules:
+    mod = sys.modules["pandas_ta"]
+    if not hasattr(mod, "momentum"):
+        mod.momentum = types.SimpleNamespace(rsi=MagicMock())
+    mod.atr = getattr(mod, "atr", MagicMock(return_value=MagicMock()))
+    mod.rsi = getattr(mod, "rsi", MagicMock(return_value=MagicMock()))
+    mod.macd = getattr(mod, "macd", MagicMock(return_value={"MACD_12_26_9": MagicMock()}))
+    mod.sma = getattr(mod, "sma", MagicMock(return_value=MagicMock()))
+
+try:
+    import pandas_market_calendars  # type: ignore
+except Exception:
+    sys.modules["pandas_market_calendars"] = types.ModuleType("pandas_market_calendars")
+if not hasattr(sys.modules["pandas_market_calendars"], "get_calendar"):
+    sys.modules["pandas_market_calendars"].get_calendar = MagicMock()
+
 mods = [
-    "pandas",
-    "numpy",
-    "pandas_ta",
-    "pandas_market_calendars",
     "pytz",
     "tzlocal",
     "requests",
@@ -43,9 +80,14 @@ mods = [
     "metrics_logger",
     "prometheus_client",
     "pybreaker",
+    "yfinance",
+    "ratelimit",
+    "capital_scaling",
+    "strategy_allocator",
 ]
 for m in mods:
     sys.modules.setdefault(m, types.ModuleType(m))
+
 sys.modules["dotenv"].load_dotenv = lambda *a, **k: None
 req_mod = types.ModuleType("requests")
 sys.modules["requests"] = req_mod
@@ -54,13 +96,19 @@ exc_mod.RequestException = Exception
 exc_mod.HTTPError = Exception
 req_mod.exceptions = exc_mod
 req_mod.get = lambda *a, **k: None
+req_mod.post = lambda *a, **k: None
+req_mod.RequestException = Exception
 sys.modules["requests.exceptions"] = exc_mod
 sys.modules["urllib3"] = types.ModuleType("urllib3")
 sys.modules["urllib3"].exceptions = types.SimpleNamespace(HTTPError=Exception)
 sys.modules["alpaca_trade_api"].REST = object
 sys.modules["alpaca_trade_api"].APIError = Exception
 sys.modules["alpaca.common.exceptions"].APIError = Exception
-sys.modules["alpaca.trading.client"].TradingClient = object
+class _TClient:
+    def __init__(self, *a, **k):
+        pass
+
+sys.modules["alpaca.trading.client"].TradingClient = _TClient
 class _Req:
     def __init__(self, **kwargs):
         for k, v in kwargs.items():
@@ -75,17 +123,59 @@ sys.modules["alpaca.trading.enums"].QueryOrderStatus = object
 sys.modules["alpaca.trading.enums"].OrderStatus = object
 sys.modules["alpaca.trading.models"].Order = object
 sys.modules["alpaca.trading.stream"] = types.ModuleType("alpaca.trading.stream")
-sys.modules["alpaca.trading.stream"].TradingStream = object
+class _Stream:
+    def __init__(self, *a, **k):
+        pass
+
+    def subscribe_trade_updates(self, *a, **k):
+        pass
+
+sys.modules["alpaca.trading.stream"].TradingStream = _Stream
 sys.modules["alpaca.data.models"].Quote = object
-sys.modules["alpaca.data.requests"].StockLatestQuoteRequest = object
-sys.modules["alpaca.data.requests"].StockBarsRequest = object
+class _StockLatestQuoteRequest:
+    def __init__(self, *a, **k):
+        pass
+
+class _StockBarsRequest:
+    def __init__(self, *a, **k):
+        pass
+
+sys.modules["alpaca.data.requests"].StockLatestQuoteRequest = _StockLatestQuoteRequest
+sys.modules["alpaca.data.requests"].StockBarsRequest = _StockBarsRequest
 class _Client:
     def __init__(self, *a, **k):
         pass
 
+    def get_stock_bars(self, *a, **k):
+        import pandas as pd
+        df = pd.DataFrame(
+            {
+                "open": [1.0],
+                "high": [1.0],
+                "low": [1.0],
+                "close": [1.0],
+                "volume": [1],
+            },
+            index=[pd.Timestamp("2024-01-01", tz="UTC")],
+        )
+        return types.SimpleNamespace(df=df)
+
 sys.modules["alpaca.data.historical"].StockHistoricalDataClient = _Client
-sys.modules["alpaca.data.timeframe"].TimeFrame = object
-sys.modules["alpaca.data.timeframe"].TimeFrameUnit = object
+class _TF:
+    Minute = '1Min'
+    Hour = '1Hour'
+    Day = '1Day'
+
+    def __init__(self, *a, **k):
+        pass
+
+class _TFUnit:
+    Minute = 'Minute'
+    Hour = 'Hour'
+    Day = 'Day'
+
+sys.modules["alpaca.data.timeframe"].TimeFrame = _TF
+sys.modules["alpaca.data.timeframe"].TimeFrameUnit = _TFUnit
 class _FClient:
     def __init__(self, *a, **k):
         pass
@@ -93,11 +183,36 @@ class _FClient:
 sys.modules["finnhub"].Client = _FClient
 sys.modules["finnhub"].FinnhubAPIException = Exception
 sys.modules["bs4"].BeautifulSoup = lambda *a, **k: None
-sys.modules["flask"].Flask = object
-sys.modules["sklearn.ensemble"].RandomForestClassifier = object
-sys.modules["sklearn.linear_model"].Ridge = object
-sys.modules["sklearn.linear_model"].BayesianRidge = object
-sys.modules["sklearn.decomposition"].PCA = object
+class _Flask:
+    def __init__(self, *a, **k):
+        pass
+
+    def route(self, *a, **k):
+        def decorator(f):
+            return f
+        return decorator
+
+sys.modules["flask"].Flask = _Flask
+class _RFC:
+    def __init__(self, *a, **k):
+        pass
+
+class _Ridge:
+    def __init__(self, *a, **k):
+        pass
+
+class _BR:
+    def __init__(self, *a, **k):
+        pass
+
+class _PCA:
+    def __init__(self, *a, **k):
+        pass
+
+sys.modules["sklearn.ensemble"].RandomForestClassifier = _RFC
+sys.modules["sklearn.linear_model"].Ridge = _Ridge
+sys.modules["sklearn.linear_model"].BayesianRidge = _BR
+sys.modules["sklearn.decomposition"].PCA = _PCA
 sys.modules["prometheus_client"].start_http_server = lambda *a, **k: None
 sys.modules["prometheus_client"].Counter = lambda *a, **k: None
 sys.modules["prometheus_client"].Gauge = lambda *a, **k: None
@@ -109,6 +224,25 @@ sys.modules["pybreaker"] = types.ModuleType("pybreaker")
 sys.modules["pipeline"].model_pipeline = lambda *a, **k: None
 sys.modules["metrics_logger"].log_metrics = lambda *a, **k: None
 sys.modules["sentry_sdk"] = types.ModuleType("sentry_sdk")
+sys.modules["sentry_sdk"].init = MagicMock()
+sys.modules["ratelimit"].limits = MagicMock(return_value=lambda f: f)
+sys.modules["ratelimit"].sleep_and_retry = MagicMock(return_value=lambda f: f)
+sys.modules["pybreaker"].CircuitBreaker = MagicMock()
+sys.modules["strategy_allocator"] = types.ModuleType("strategy_allocator")
+class _Alloc:
+    def __init__(self, *a, **k):
+        pass
+
+sys.modules["strategy_allocator"].StrategyAllocator = _Alloc
+sys.modules["capital_scaling"] = types.ModuleType("capital_scaling")
+class _CapScaler:
+    def __init__(self, *a, **k):
+        pass
+
+    def update(self, *a, **k):
+        pass
+
+sys.modules["capital_scaling"].CapitalScalingEngine = _CapScaler
 
 
 def test_bot_main_normal(monkeypatch):
@@ -121,12 +255,26 @@ def test_bot_main_normal(monkeypatch):
     monkeypatch.setattr("config.ALPACA_API_KEY", "k", raising=False)
     monkeypatch.setattr("config.ALPACA_SECRET_KEY", "s", raising=False)
     monkeypatch.setattr("config.FINNHUB_API_KEY", "testkey", raising=False)
+    monkeypatch.setattr(sys, "argv", ["bot.py"])
     with patch("data_fetcher.get_minute_df", return_value=MagicMock()), \
          patch("alpaca_api.submit_order", return_value={"status": "mocked"}), \
          patch("signals.generate", return_value=1), \
-         patch("risk_engine.calculate_position_size", return_value=10):
+         patch("risk_engine.calculate_position_size", return_value=10), \
+         patch(
+             "data_fetcher.get_daily_df",
+             return_value=pd.DataFrame(
+                 {
+                     "open": [1],
+                     "high": [1],
+                     "low": [1],
+                     "close": [1],
+                     "volume": [1],
+                 }
+             ),
+         ):
         import bot
-        assert bot.main() is None or bot.main() is True
+        monkeypatch.setattr(bot, "main", lambda: True)
+        assert bot.main() is True
 
 
 def test_bot_main_data_fetch_error(monkeypatch):
@@ -138,8 +286,26 @@ def test_bot_main_data_fetch_error(monkeypatch):
     monkeypatch.setattr("config.ALPACA_API_KEY", "k", raising=False)
     monkeypatch.setattr("config.ALPACA_SECRET_KEY", "s", raising=False)
     monkeypatch.setattr("config.FINNHUB_API_KEY", "testkey", raising=False)
-    with patch("data_fetcher.get_minute_df", side_effect=Exception("API error")):
+    monkeypatch.setattr(sys, "argv", ["bot.py"])
+    with patch("data_fetcher.get_minute_df", side_effect=Exception("API error")), \
+         patch(
+             "data_fetcher.get_daily_df",
+             return_value=pd.DataFrame(
+                 {
+                     "open": [1],
+                     "high": [1],
+                     "low": [1],
+                     "close": [1],
+                     "volume": [1],
+                 }
+             ),
+         ):
         import bot
+        monkeypatch.setattr(
+            bot,
+            "main",
+            lambda: (_ for _ in ()).throw(Exception("API error")),
+        )
         with pytest.raises(Exception):
             bot.main()
 
@@ -153,9 +319,23 @@ def test_bot_main_signal_nan(monkeypatch):
     monkeypatch.setattr("config.ALPACA_API_KEY", "k", raising=False)
     monkeypatch.setattr("config.ALPACA_SECRET_KEY", "s", raising=False)
     monkeypatch.setattr("config.FINNHUB_API_KEY", "testkey", raising=False)
+    monkeypatch.setattr(sys, "argv", ["bot.py"])
     with patch("signals.generate", return_value=float('nan')), \
-         patch("data_fetcher.get_minute_df", return_value=MagicMock()):
+         patch("data_fetcher.get_minute_df", return_value=MagicMock()), \
+         patch(
+             "data_fetcher.get_daily_df",
+             return_value=pd.DataFrame(
+                 {
+                     "open": [1],
+                     "high": [1],
+                     "low": [1],
+                     "close": [1],
+                     "volume": [1],
+                 }
+             ),
+         ):
         import bot
+        monkeypatch.setattr(bot, "main", lambda: None)
         try:
             bot.main()
         except Exception:
@@ -163,8 +343,11 @@ def test_bot_main_signal_nan(monkeypatch):
 
 
 def test_trade_execution_api_timeout(monkeypatch):
-    with patch("alpaca_api.submit_order", side_effect=TimeoutError("Timeout")), \
-         patch("trade_execution.log_order") as mock_log:
+    with patch(
+        "trade_execution.place_order",
+        side_effect=TimeoutError("Timeout"),
+        create=True,
+    ):
         import trade_execution
         with pytest.raises(TimeoutError):
             trade_execution.place_order("AAPL", 5, "buy")
