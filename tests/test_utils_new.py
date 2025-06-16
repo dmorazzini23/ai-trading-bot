@@ -3,7 +3,7 @@ from pathlib import Path
 import types
 import pandas as pd
 import pytest
-from datetime import datetime, date, time, timezone
+from datetime import datetime, date, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import utils

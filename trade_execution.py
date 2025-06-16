@@ -96,7 +96,6 @@ def log_order(order, status=None, extra=None):
         Additional logging context.
     """
     # TODO: Extend with persistent logging, audit trails, etc.
-    pass
 
 
 def place_order(symbol: str, qty: int, side: str):

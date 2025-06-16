@@ -1,4 +1,3 @@
-import pytest
 import risk_engine
 
 

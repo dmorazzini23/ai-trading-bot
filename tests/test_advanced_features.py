@@ -1,6 +1,5 @@
 import types
 import sys
-import pytest
 import os
 
 # Ensure repository root in path

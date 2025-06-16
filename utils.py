@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 
 from zoneinfo import ZoneInfo
 import threading
-from contextlib import contextmanager
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -141,9 +140,16 @@ def ensure_utc(dt: datetime | date) -> datetime:
 
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+_WARN_COUNTS: dict[str, int] = {}
 
-
-from typing import Iterable, Any
+def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
+    """Log a warning only up to ``limit`` times for the given ``key``."""
+    count = _WARN_COUNTS.get(key, 0)
+    if count < limit:
+        logger.warning(msg, *args, **kwargs)
+        _WARN_COUNTS[key] = count + 1
+        if count + 1 == limit:
+            logger.warning("Further '%s' warnings suppressed", key)
 
 
 def safe_to_datetime(
@@ -165,12 +171,24 @@ def safe_to_datetime(
 
     arr = np.asarray(list(values))
     if arr.size == 0 or np.all(pd.isna(arr)):
-        logger.warning(
+        _warn_limited(
+            "empty-values",
             "[safe_to_datetime]%s: All values missing or empty: %r",
             context,
             list(values)[:5],
         )
         return pd.DatetimeIndex([], tz=timezone.utc)
+
+    if arr.dtype.kind in {"U", "S", "O"}:
+        bad = [v for v in arr if isinstance(v, str) and not _DATE_RE.match(v)]
+        if bad:
+            _warn_limited(
+                "invalid-date",
+                "[safe_to_datetime]%s: Non-date strings encountered: %r",
+                context,
+                bad[:5],
+            )
+            raise ValueError(f"Invalid date strings in {context}: {bad[:5]}")
 
     ms_first = os.getenv("DEFAULT_MS_EPOCH", "0").lower() in {"1", "true", "yes"}
     if try_units is None:
@@ -178,11 +196,16 @@ def safe_to_datetime(
 
     for unit in try_units:
         try:
-            idx = (
-                pd.to_datetime(arr, unit=unit, errors="coerce", utc=True)
-                if unit
-                else pd.to_datetime(arr, errors="coerce", utc=True)
-            )
+            if unit:
+                idx = pd.to_datetime(arr, unit=unit, errors="coerce", utc=True)
+            else:
+                sample = next((s for s in arr if isinstance(s, str)), "")
+                fmt = None
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", sample):
+                    fmt = "%Y-%m-%d"
+                elif re.fullmatch(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}", sample):
+                    fmt = "%Y-%m-%d %H:%M:%S" if " " in sample else "%Y-%m-%dT%H:%M:%S"
+                idx = pd.to_datetime(arr, format=fmt, errors="coerce", utc=True)
         except Exception as e:  # pragma: no cover - unexpected failures
             logger.error(
                 "[safe_to_datetime]%s: Failed with unit=%s: %s",
@@ -193,7 +216,8 @@ def safe_to_datetime(
             continue
         if idx.notna().any():
             if idx.isna().any():
-                logger.warning(
+                _warn_limited(
+                    "partial-parse",
                     "[safe_to_datetime]%s: Some timestamps failed to parse: %r",
                     context,
                     arr[idx.isna()].tolist(),

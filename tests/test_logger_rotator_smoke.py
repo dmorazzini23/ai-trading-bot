@@ -1,5 +1,4 @@
 from pathlib import Path
-import types
 import pytest
 import logger_rotator
 

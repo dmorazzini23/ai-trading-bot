@@ -84,7 +84,6 @@ def test_load_model_missing_file(tmp_path):
 
 
 def test_save_and_load_model(tmp_path):
-    import joblib
     dummy_model = {"foo": "bar"}
     model_path = tmp_path / "test_model.pkl"
     ml_model.save_model(dummy_model, str(model_path))
