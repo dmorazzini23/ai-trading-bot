@@ -827,7 +827,7 @@ class DataFetcher:
                 )
                 return None
             if len(bars.index) and isinstance(bars.index[0], tuple):
-                idx_vals = [t[0] for t in bars.index]
+                idx_vals = [t[1] for t in bars.index]
             else:
                 idx_vals = bars.index
             try:
@@ -859,7 +859,7 @@ class DataFetcher:
                     else:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
                     if len(df_iex.index) and isinstance(df_iex.index[0], tuple):
-                        idx_vals = [t[0] for t in df_iex.index]
+                        idx_vals = [t[1] for t in df_iex.index]
                     else:
                         idx_vals = df_iex.index
                     try:
@@ -978,7 +978,7 @@ class DataFetcher:
                 )
                 return None
             if len(bars.index) and isinstance(bars.index[0], tuple):
-                idx_vals = [t[0] for t in bars.index]
+                idx_vals = [t[1] for t in bars.index]
             else:
                 idx_vals = bars.index
             try:
@@ -1013,7 +1013,7 @@ class DataFetcher:
                     else:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
                     if len(df_iex.index) and isinstance(df_iex.index[0], tuple):
-                        idx_vals = [t[0] for t in df_iex.index]
+                        idx_vals = [t[1] for t in df_iex.index]
                     else:
                         idx_vals = df_iex.index
                     try:
@@ -1867,7 +1867,14 @@ stream = TradingStream(
 
 async def on_trade_update(event):
     """Handle order status updates from the Alpaca stream."""
-    logger.info(f"Trade update for {event.order['symbol']}: {event.order['status']}")
+    try:
+        symbol = event.order.symbol
+        status = event.order.status
+    except AttributeError:
+        # Fallback for dict-like event objects
+        symbol = event.order.get("symbol") if isinstance(event.order, dict) else "?"
+        status = event.order.get("status") if isinstance(event.order, dict) else "?"
+    logger.info(f"Trade update for {symbol}: {status}")
 
 
 stream.subscribe_trade_updates(on_trade_update)

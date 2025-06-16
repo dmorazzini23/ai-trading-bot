@@ -7,4 +7,7 @@ config.py
 *.pub
 id_rsa*
 *~
+logs/
+slippage.csv
+reward_log.csv
 
