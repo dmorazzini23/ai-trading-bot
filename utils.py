@@ -145,7 +145,9 @@ _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 from typing import Iterable, Any
 
 
-def safe_to_datetime(values: Iterable[Any]) -> pd.DatetimeIndex | None:
+def safe_to_datetime(
+    values: Iterable[Any], *, symbol: str | None = None
+) -> pd.DatetimeIndex | None:
     """Return ``DatetimeIndex`` from ``values`` or ``None`` on failure."""
     if values is None or len(values) == 0:
         return None
@@ -163,10 +165,20 @@ def safe_to_datetime(values: Iterable[Any]) -> pd.DatetimeIndex | None:
     try:
         idx = pd.to_datetime(values, errors="coerce", utc=True)
     except Exception as e:
-        logger.debug("safe_to_datetime failed: %s", e)
+        logger.warning(
+            "Failed to parse timestamps%s: %r | %s",
+            f" for {symbol}" if symbol else "",
+            list(values)[:5],
+            e,
+        )
         return None
     idx = idx.tz_convert(None)
     if idx.isnull().all():
+        logger.warning(
+            "All timestamps unparseable%s: %r",
+            f" for {symbol}" if symbol else "",
+            list(values)[:5],
+        )
         return None
     return idx
 

@@ -61,3 +61,9 @@ def update_weights(weight_path: str, new_weights: np.ndarray, metrics: dict, his
         json.dump(hist, f)
     logger.info("META_METRICS", extra={"recent": hist})
     return True
+
+
+def retrain_meta_learner(*args, **kwargs) -> bool:
+    """Stub retrain_meta_learner for optional import."""
+    logger.warning("retrain_meta_learner stub invoked; implementation missing")
+    return False

@@ -149,8 +149,9 @@ def get_historical_data(
     df.columns = df.columns.str.lower()
 
     if not df.empty:
-        idx = safe_to_datetime(df.index)
+        idx = safe_to_datetime(df.index, symbol=symbol)
         if idx is None:
+            logger.debug("Raw data for %s: %s", symbol, df.head().to_dict())
             logger.warning(f"Unexpected index format for {symbol}; skipping")
             return pd.DataFrame()
         df.index = idx
@@ -206,9 +207,10 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
 
     if isinstance(df.index, pd.MultiIndex):
         df.index = df.index.get_level_values(0)
-    idx = safe_to_datetime(df.index)
+    idx = safe_to_datetime(df.index, symbol=symbol)
     if idx is None:
         reason = "unparseable timestamps"
+        logger.debug("Raw daily data for %s: %s", symbol, df.head().to_dict())
         logger.warning(
             f"Invalid date index for {symbol}; skipping. Data fetch reason: {reason}"
         )
@@ -357,9 +359,10 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
         if df.empty:
             logger.warning(f"No bar data after column filtering for {symbol}")
             return pd.DataFrame()
-        idx = safe_to_datetime(df.index)
+        idx = safe_to_datetime(df.index, symbol=symbol)
         if idx is None:
             reason = "unparseable timestamps"
+            logger.debug("Raw minute data for %s: %s", symbol, df.head().to_dict())
             logger.warning(
                 f"Invalid minute index for {symbol}; skipping. Data fetch reason: {reason}"
             )
@@ -391,8 +394,11 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             if df.empty:
                 logger.warning(f"Daily fallback returned no data for {symbol}")
                 return pd.DataFrame()
-            idx = safe_to_datetime(df.index)
+            idx = safe_to_datetime(df.index, symbol=symbol)
             if idx is None:
+                logger.debug(
+                    "Raw fallback data for %s: %s", symbol, df.head().to_dict()
+                )
                 logger.warning(f"Invalid fallback index for {symbol}; skipping")
                 return pd.DataFrame()
             df.index = idx
@@ -467,6 +473,14 @@ class FinnhubFetcher:
             if resp.get("s") != "ok":
                 frames.append(pd.DataFrame())
                 continue
+            try:
+                idx = pd.to_datetime(resp["t"], unit="s", utc=True)
+            except Exception as e:
+                logger.warning(
+                    "Failed timestamp parse for %s: %s", sym, e
+                )
+                logger.debug("Raw Finnhub response for %s: %s", sym, resp)
+                idx = pd.to_datetime(resp["t"], unit="s", errors="coerce", utc=True)
             df = pd.DataFrame(
                 {
                     "open": resp["o"],
@@ -475,7 +489,7 @@ class FinnhubFetcher:
                     "close": resp["c"],
                     "volume": resp["v"],
                 },
-                index=pd.to_datetime(resp["t"], unit="s", utc=True),
+                index=idx,
             )
             df.index = df.index.tz_convert(None)
             df["timestamp"] = df.index
