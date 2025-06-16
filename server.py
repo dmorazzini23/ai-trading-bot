@@ -1,16 +1,14 @@
-import os
-import hmac
 import hashlib
-import subprocess
+import hmac
 import logging
-from flask import Flask
-from flask import abort
-from flask import jsonify
-from flask import request
+import os
+import subprocess
+
 from dotenv import load_dotenv
+from flask import Flask, abort, jsonify, request
 
 load_dotenv(dotenv_path=".env", override=True)
-from config import WEBHOOK_SECRET, WEBHOOK_PORT
+from config import WEBHOOK_PORT, WEBHOOK_SECRET
 
 if not WEBHOOK_SECRET:
     logging.getLogger(__name__).error("WEBHOOK_SECRET must be set")
@@ -47,11 +45,7 @@ def hook():
     return jsonify({"status": "ok"})
 
 
-def start():
+if __name__ == "__main__":
     # Reload env vars when starting the Flask server
     load_dotenv(dotenv_path=".env", override=True)
     app.run(host="0.0.0.0", port=WEBHOOK_PORT)
-
-
-if __name__ == "__main__":
-    start()

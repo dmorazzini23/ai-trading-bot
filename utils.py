@@ -1,14 +1,14 @@
 """Utility functions for common operations across the bot."""
 
-import warnings
+import logging
 import os
 import re
-import logging
+import warnings
+from datetime import date, datetime, time, timezone
+from typing import Any, Iterable
 
-import pandas as pd
 import numpy as np
-from datetime import datetime, date, time, timezone
-from typing import Iterable, Any
+import pandas as pd
 
 try:
     from tzlocal import get_localzone
@@ -20,11 +20,12 @@ except ImportError:  # pragma: no cover - optional dependency
     def get_localzone():
         return pytz.UTC
 
+
 logger = logging.getLogger(__name__)
 
 
-from zoneinfo import ZoneInfo
 import threading
+from zoneinfo import ZoneInfo
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -90,9 +91,7 @@ def is_market_open(now: datetime | None = None) -> bool:
         if cal is None:
             raise AttributeError
         cal = cal("NYSE")
-        sched = cal.schedule(
-            start_date=check_time.date(), end_date=check_time.date()
-        )
+        sched = cal.schedule(start_date=check_time.date(), end_date=check_time.date())
         if sched.empty:
             logger.warning(
                 "No market schedule for %s in is_market_open; returning False.",
@@ -142,6 +141,7 @@ def ensure_utc(dt: datetime | date) -> datetime:
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 _WARN_COUNTS: dict[str, int] = {}
 
+
 def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
     """Log a warning only up to ``limit`` times for the given ``key``."""
     count = _WARN_COUNTS.get(key, 0)
@@ -178,53 +178,87 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
 
     return pd.DatetimeIndex(valid_dates)
 
+
 # Generic robust column getter with validation
 
-def get_column(df, options, label, dtype=None, must_be_monotonic=False,
-               must_be_non_null=False, must_be_unique=False, must_be_timezone_aware=False):
+
+def get_column(
+    df,
+    options,
+    label,
+    dtype=None,
+    must_be_monotonic=False,
+    must_be_non_null=False,
+    must_be_unique=False,
+    must_be_timezone_aware=False,
+):
     for col in options:
         if col in df.columns:
             if dtype is not None:
-                if dtype == "datetime64[ns]" and pd.api.types.is_datetime64_any_dtype(df[col]):
+                if dtype == "datetime64[ns]" and pd.api.types.is_datetime64_any_dtype(
+                    df[col]
+                ):
                     pass
                 elif not pd.api.types.is_dtype_equal(df[col].dtype, dtype):
-                    raise TypeError(f"{label}: column '{col}' is not of dtype {dtype}, got {df[col].dtype}")
+                    raise TypeError(
+                        f"{label}: column '{col}' is not of dtype {dtype}, got {df[col].dtype}"
+                    )
             if must_be_monotonic and not df[col].is_monotonic_increasing:
                 raise ValueError(f"{label}: column '{col}' is not monotonic increasing")
             if must_be_non_null and df[col].isnull().all():
                 raise ValueError(f"{label}: column '{col}' is all null")
             if must_be_unique and not df[col].is_unique:
                 raise ValueError(f"{label}: column '{col}' is not unique")
-            if must_be_timezone_aware and hasattr(df[col], "dt") and df[col].dt.tz is None:
+            if (
+                must_be_timezone_aware
+                and hasattr(df[col], "dt")
+                and df[col].dt.tz is None
+            ):
                 raise ValueError(f"{label}: column '{col}' is not timezone-aware")
             return col
-    raise ValueError(f"No recognized {label} column found in DataFrame: {df.columns.tolist()}")
+    raise ValueError(
+        f"No recognized {label} column found in DataFrame: {df.columns.tolist()}"
+    )
+
 
 # OHLCV helpers
+
 
 def get_open_column(df):
     return get_column(df, ["Open", "open", "o"], "open price", dtype=None)
 
+
 def get_high_column(df):
     return get_column(df, ["High", "high", "h"], "high price", dtype=None)
+
 
 def get_low_column(df):
     return get_column(df, ["Low", "low", "l"], "low price", dtype=None)
 
+
 def get_close_column(df):
-    return get_column(df, ["Close", "close", "c", "adj_close", "Adj Close", "adjclose", "adjusted_close"], "close price", dtype=None)
+    return get_column(
+        df,
+        ["Close", "close", "c", "adj_close", "Adj Close", "adjclose", "adjusted_close"],
+        "close price",
+        dtype=None,
+    )
+
 
 def get_volume_column(df):
     return get_column(df, ["Volume", "volume", "v"], "volume", dtype=None)
 
+
 # Datetime helper with advanced checks
+
 
 def _safe_get_column(df, options, label, **kwargs):
     if not isinstance(df, pd.DataFrame) or df.empty:
         return None
     try:
         return get_column(df, options, label, **kwargs)
-    except Exception:
+    except ValueError as exc:
+        logger.warning("_safe_get_column failed for %s: %s", label, exc)
         return None
 
 
@@ -239,25 +273,43 @@ def get_datetime_column(df):
         must_be_timezone_aware=True,
     )
 
+
 # Ticker/symbol column
 
+
 def get_symbol_column(df):
-    return _safe_get_column(df, ["symbol", "ticker", "SYMBOL"], "symbol", dtype="O", must_be_unique=True)
+    return _safe_get_column(
+        df, ["symbol", "ticker", "SYMBOL"], "symbol", dtype="O", must_be_unique=True
+    )
+
 
 # Return/returns column
 
+
 def get_return_column(df):
-    return _safe_get_column(df, ["Return", "ret", "returns"], "return", dtype=None, must_be_non_null=True)
+    return _safe_get_column(
+        df, ["Return", "ret", "returns"], "return", dtype=None, must_be_non_null=True
+    )
+
 
 # Indicator column (pass a list, e.g. ["SMA", "sma", "EMA", ...])
+
 
 def get_indicator_column(df, possible_names):
     return _safe_get_column(df, possible_names, "indicator")
 
+
 # Order/trade columns
 
+
 def get_order_column(df, name):
-    return _safe_get_column(df, [name, name.lower(), name.upper()], f"order/{name}", dtype=None, must_be_non_null=True)
+    return _safe_get_column(
+        df,
+        [name, name.lower(), name.upper()],
+        f"order/{name}",
+        dtype=None,
+        must_be_non_null=True,
+    )
 
 
 def get_ohlcv_columns(df):
