@@ -118,6 +118,11 @@ import sentry_sdk
 
 import config
 
+try:
+    from meta_learning import retrain_meta_learner
+except ImportError:
+    retrain_meta_learner = None
+
 ALPACA_API_KEY = getattr(config, "ALPACA_API_KEY", None)
 ALPACA_SECRET_KEY = getattr(config, "ALPACA_SECRET_KEY", None)
 ALPACA_PAPER = getattr(config, "ALPACA_PAPER", None)
@@ -4450,8 +4455,7 @@ def check_disaster_halt() -> None:
         logger.exception(f"check_disaster_halt failed: {e}")
 
 
-# At top‐level, define retrain_meta_learner = None so load_or_retrain_daily can reference it safely
-retrain_meta_learner = None
+# retrain_meta_learner is imported above if available
 
 
 def load_or_retrain_daily(ctx: BotContext) -> Any:
@@ -4720,9 +4724,10 @@ def run_all_trades_worker(state: BotState, model) -> None:
             list(executor.map(process_symbol, symbols))
 
         if not processed:
-            logger.warning(
-                "No symbols returned any price data; skipping strategy computation."
+            logger.critical(
+                "DATA_SOURCE_EMPTY", extra={"symbols": symbols}
             )
+            time.sleep(60)
             return
 
         run_multi_strategy(ctx)
