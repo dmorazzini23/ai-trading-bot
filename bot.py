@@ -15,7 +15,7 @@ warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
 import os
 import config
-from config import SHADOW_MODE, DISABLE_DAILY_RETRAIN
+from config import SHADOW_MODE, DISABLE_DAILY_RETRAIN, ALPACA_DATA_FEED
 
 # Refresh environment variables on startup for reliability
 config.reload_env()
@@ -57,6 +57,8 @@ try:
     torch.manual_seed(SEED)
 except ImportError:
     pass
+
+_DEFAULT_FEED = ALPACA_DATA_FEED or "iex"
 
 # Ensure numpy.NaN exists for pandas_ta compatibility
 np.NaN = np.nan
@@ -808,6 +810,7 @@ class DataFetcher:
                 timeframe=TimeFrame.Day,
                 start=start_ts,
                 end=end_ts,
+                feed=_DEFAULT_FEED,
             )
             bars = client.get_stock_bars(req).df
             if isinstance(bars.columns, pd.MultiIndex):
@@ -948,6 +951,7 @@ class DataFetcher:
                 timeframe=TimeFrame.Minute,
                 start=start_minute,
                 end=last_closed_minute,
+                feed=_DEFAULT_FEED,
             )
             bars = client.get_stock_bars(req).df
             if isinstance(bars.columns, pd.MultiIndex):
@@ -1059,16 +1063,19 @@ class DataFetcher:
                     start=day_start,
                     end=day_end,
                     limit=10000,
-                    feed="iex",
+                    feed=_DEFAULT_FEED,
                 )
                 try:
                     bars_day = ctx.data_client.get_stock_bars(bars_req).df
                 except APIError as e:
-                    logger.warning(
-                        f"[historic_minute] SIP failed for {symbol} {day_start}-{day_end}: {e}; retrying with IEX"
-                    )
-                    bars_req.feed = "iex"
-                    bars_day = ctx.data_client.get_stock_bars(bars_req).df
+                    if "subscription does not permit" in str(e).lower() and _DEFAULT_FEED != "iex":
+                        logger.warning(
+                            f"[historic_minute] subscription error for {symbol} {day_start}-{day_end}: {e}; retrying with IEX"
+                        )
+                        bars_req.feed = "iex"
+                        bars_day = ctx.data_client.get_stock_bars(bars_req).df
+                    else:
+                        raise
                 if isinstance(bars_day.columns, pd.MultiIndex):
                     bars_day = bars_day.xs(symbol, level=0, axis=1)
                 else:
@@ -1129,6 +1136,7 @@ def prefetch_daily_data(
             timeframe=TimeFrame.Day,
             start=start_date,
             end=end_date,
+            feed=_DEFAULT_FEED,
         )
         bars = client.get_stock_bars(req).df
         if isinstance(bars.columns, pd.MultiIndex):
@@ -1191,7 +1199,7 @@ def prefetch_daily_data(
                             timeframe=TimeFrame.Day,
                             start=start_date,
                             end=end_date,
-                            feed="iex",
+                            feed=_DEFAULT_FEED,
                         )
                         df_sym = client.get_stock_bars(req_sym).df
                         df_sym = df_sym.drop(columns=["symbol"], errors="ignore")
@@ -4119,16 +4127,19 @@ else:
         start=start_dt,
         end=end_dt,
         limit=1000,
-        feed="iex",
+        feed=_DEFAULT_FEED,
     )
     try:
         bars = ctx.data_client.get_stock_bars(bars_req).df
     except APIError as e:
-        logger.warning(
-            f"[regime_data] SIP failed {start_dt}-{end_dt}: {e}; retrying with IEX"
-        )
-        bars_req.feed = "iex"
-        bars = ctx.data_client.get_stock_bars(bars_req).df
+        if "subscription does not permit" in str(e).lower() and _DEFAULT_FEED != "iex":
+            logger.warning(
+                f"[regime_data] subscription error {start_dt}-{end_dt}: {e}; retrying with IEX"
+            )
+            bars_req.feed = "iex"
+            bars = ctx.data_client.get_stock_bars(bars_req).df
+        else:
+            raise
     # 1) If columns are (symbol, field), select our one symbol
     if isinstance(bars.columns, pd.MultiIndex):
         bars = bars.xs(REGIME_SYMBOLS[0], level=0, axis=1)
