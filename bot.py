@@ -755,6 +755,7 @@ class FinnhubFetcherLegacy:
                 logger.warning(f"[FH] no data for {sym}: status={resp.get('s')}")
                 frames.append(pd.DataFrame())
                 continue
+            idx = safe_to_datetime(resp["t"], context=f"Finnhub {sym}")
             df = pd.DataFrame(
                 {
                     "open": resp["o"],
@@ -763,9 +764,8 @@ class FinnhubFetcherLegacy:
                     "close": resp["c"],
                     "volume": resp["v"],
                 },
-                index=pd.to_datetime(resp["t"], unit="s", utc=True),
+                index=idx,
             )
-            df.index = df.index.tz_convert(None)
             frames.append(df)
 
         if not frames:
@@ -826,11 +826,12 @@ class DataFetcher:
                 idx_vals = [t[0] for t in bars.index]
             else:
                 idx_vals = bars.index
-            idx = safe_to_datetime(idx_vals)
-            if idx is None:
+            try:
+                idx = safe_to_datetime(idx_vals, context=f"daily {symbol}")
+            except ValueError as e:
                 reason = "empty data" if bars.empty else "unparseable timestamps"
                 logger.warning(
-                    f"Invalid daily index for {symbol}; skipping. Data fetch reason: {reason}"
+                    f"Invalid daily index for {symbol}; skipping. {reason} | {e}"
                 )
                 return None
             bars.index = idx
@@ -857,13 +858,14 @@ class DataFetcher:
                         idx_vals = [t[0] for t in df_iex.index]
                     else:
                         idx_vals = df_iex.index
-                    idx = safe_to_datetime(idx_vals)
-                    if idx is None:
+                    try:
+                        idx = safe_to_datetime(idx_vals, context=f"IEX daily {symbol}")
+                    except ValueError as e:
                         reason = (
                             "empty data" if df_iex.empty else "unparseable timestamps"
                         )
                         logger.warning(
-                            f"Invalid IEX daily index for {symbol}; skipping. Data fetch reason: {reason}"
+                            f"Invalid IEX daily index for {symbol}; skipping. {reason} | {e}"
                         )
                         return None
                     df_iex.index = idx
@@ -967,11 +969,12 @@ class DataFetcher:
                 idx_vals = [t[0] for t in bars.index]
             else:
                 idx_vals = bars.index
-            idx = safe_to_datetime(idx_vals)
-            if idx is None:
+            try:
+                idx = safe_to_datetime(idx_vals, context=f"minute {symbol}")
+            except ValueError as e:
                 reason = "empty data" if bars.empty else "unparseable timestamps"
                 logger.warning(
-                    f"Invalid minute index for {symbol}; skipping. Data fetch reason: {reason}"
+                    f"Invalid minute index for {symbol}; skipping. {reason} | {e}"
                 )
                 return None
             bars.index = idx
@@ -1001,11 +1004,12 @@ class DataFetcher:
                         idx_vals = [t[0] for t in df_iex.index]
                     else:
                         idx_vals = df_iex.index
-                    idx = safe_to_datetime(idx_vals)
-                    if idx is None:
+                    try:
+                        idx = safe_to_datetime(idx_vals, context=f"IEX minute {symbol}")
+                    except ValueError as _e:
                         reason = "empty data" if df_iex.empty else "unparseable timestamps"
                         logger.warning(
-                            f"Invalid IEX minute index for {symbol}; skipping. Data fetch reason: {reason}"
+                            f"Invalid IEX minute index for {symbol}; skipping. {reason} | {_e}"
                         )
                         df = pd.DataFrame()
                     else:
@@ -1090,18 +1094,19 @@ class DataFetcher:
                 if "symbol" in bars_day.columns:
                     bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
 
-                idx = safe_to_datetime(bars_day.index)
-                if idx is None:
+                try:
+                    idx = safe_to_datetime(bars_day.index, context=f"historic minute {symbol}")
+                except ValueError as e:
                     reason = (
                         "empty data" if bars_day.empty else "unparseable timestamps"
                     )
                     logger.warning(
-                        f"Invalid minute index for {symbol}; skipping day {day_start}. Data fetch reason: {reason}"
+                        f"Invalid minute index for {symbol}; skipping day {day_start}. {reason} | {e}"
                     )
                     bars_day = None
                 else:
                     bars_day.index = idx
-                    bars_day = bars_day.rename(columns=lambda c: c.lower())[
+                    bars_day = bars_day.rename(columns=lambda c: c.lower())[ 
                         ["open", "high", "low", "close", "volume"]
                     ]
                     all_days.append(bars_day)
@@ -1150,9 +1155,10 @@ def prefetch_daily_data(
         grouped = {}
         for sym, df in grouped_raw.items():
             df = df.drop(columns=["symbol"], errors="ignore")
-            idx = safe_to_datetime(df.index)
-            if idx is None:
-                logger.warning(f"Invalid bulk index for {sym}; skipping")
+            try:
+                idx = safe_to_datetime(df.index, context=f"bulk {sym}")
+            except ValueError as e:
+                logger.warning(f"Invalid bulk index for {sym}; skipping | {e}")
                 continue
             df.index = idx
             df = df.rename(columns=lambda c: c.lower())
@@ -1179,9 +1185,10 @@ def prefetch_daily_data(
                 grouped = {}
                 for sym, df in grouped_raw.items():
                     df = df.drop(columns=["symbol"], errors="ignore")
-                    idx = safe_to_datetime(df.index)
-                    if idx is None:
-                        logger.warning(f"Invalid IEX bulk index for {sym}; skipping")
+                    try:
+                        idx = safe_to_datetime(df.index, context=f"IEX bulk {sym}")
+                    except ValueError as e:
+                        logger.warning(f"Invalid IEX bulk index for {sym}; skipping | {e}")
                         continue
                     df.index = idx
                     df = df.rename(columns=lambda c: c.lower())
@@ -1203,10 +1210,11 @@ def prefetch_daily_data(
                         )
                         df_sym = client.get_stock_bars(req_sym).df
                         df_sym = df_sym.drop(columns=["symbol"], errors="ignore")
-                        idx = safe_to_datetime(df_sym.index)
-                        if idx is None:
+                        try:
+                            idx = safe_to_datetime(df_sym.index, context=f"fallback bulk {sym}")
+                        except ValueError as _e:
                             logger.warning(
-                                f"Invalid fallback bulk index for {sym}; skipping"
+                                f"Invalid fallback bulk index for {sym}; skipping | {_e}"
                             )
                             continue
                         df_sym.index = idx
@@ -3594,6 +3602,7 @@ def fetch_data(
             if not ohlc or ohlc.get("s") != "ok":
                 continue
 
+            idx = safe_to_datetime(ohlc.get("t", []), context=f"prefetch {sym}")
             df_sym = pd.DataFrame(
                 {
                     "open": ohlc.get("o", []),
@@ -3602,7 +3611,7 @@ def fetch_data(
                     "close": ohlc.get("c", []),
                     "volume": ohlc.get("v", []),
                 },
-                index=pd.to_datetime(ohlc.get("t", []), unit="s"),
+                index=idx,
             )
 
             df_sym.columns = pd.MultiIndex.from_product([[sym], df_sym.columns])
@@ -4154,9 +4163,10 @@ else:
         bars.index = [t[0] for t in bars.index]
 
     # 4) Now safely convert to a timezone-naive DatetimeIndex
-    idx = safe_to_datetime(bars.index)
-    if idx is None:
-        logger.warning("Invalid regime data index; skipping regime model train")
+    try:
+        idx = safe_to_datetime(bars.index, context="regime data")
+    except ValueError as e:
+        logger.warning("Invalid regime data index; skipping regime model train | %s", e)
         bars = pd.DataFrame()
     else:
         bars.index = idx

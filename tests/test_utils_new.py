@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 import types
 import pandas as pd
+import pytest
 from datetime import datetime, date, time, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -51,5 +52,18 @@ def test_ensure_utc_and_convert():
 def test_safe_to_datetime():
     vals = ['2024-01-01','2024-01-02']
     idx = utils.safe_to_datetime(vals)
-    assert list(idx) == [pd.Timestamp('2024-01-01'), pd.Timestamp('2024-01-02')]
-    assert utils.safe_to_datetime(['abc']) is None
+    assert list(idx) == [pd.Timestamp('2024-01-01', tz='UTC'), pd.Timestamp('2024-01-02', tz='UTC')]
+    with pytest.raises(ValueError):
+        utils.safe_to_datetime(['abc'])
+
+def test_safe_to_datetime_various_formats():
+    secs = [1700000000, 1700003600]
+    ms = [v * 1000 for v in secs]
+    idx_s = utils.safe_to_datetime(secs)
+    idx_ms = utils.safe_to_datetime(ms)
+    iso = utils.safe_to_datetime(['2024-01-01T00:00:00Z', '2024-01-02T00:00:00Z'])
+    assert idx_s.tz == timezone.utc
+    assert idx_ms.tz == timezone.utc
+    assert iso.tz == timezone.utc
+    assert len(utils.safe_to_datetime([])) == 0
+    assert len(utils.safe_to_datetime([float('nan'), None])) == 0
