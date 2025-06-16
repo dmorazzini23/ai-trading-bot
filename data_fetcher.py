@@ -199,14 +199,19 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
     df.columns = df.columns.str.lower()
 
     if df.empty:
-        logger.warning(f"No daily bars returned for {symbol}")
+        logger.warning(
+            f"No daily bars returned for {symbol}. Possible market holiday or API outage"
+        )
         return pd.DataFrame()
 
     if isinstance(df.index, pd.MultiIndex):
         df.index = df.index.get_level_values(0)
     idx = safe_to_datetime(df.index)
     if idx is None:
-        logger.warning(f"Invalid date index for {symbol}; skipping")
+        reason = "unparseable timestamps"
+        logger.warning(
+            f"Invalid date index for {symbol}; skipping. Data fetch reason: {reason}"
+        )
         return pd.DataFrame()
     df.index = idx
     df["timestamp"] = df.index
@@ -354,7 +359,10 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             return pd.DataFrame()
         idx = safe_to_datetime(df.index)
         if idx is None:
-            logger.warning(f"Invalid minute index for {symbol}; skipping")
+            reason = "unparseable timestamps"
+            logger.warning(
+                f"Invalid minute index for {symbol}; skipping. Data fetch reason: {reason}"
+            )
             return pd.DataFrame()
         df.index = idx
 

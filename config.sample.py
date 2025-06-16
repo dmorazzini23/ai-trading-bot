@@ -25,6 +25,7 @@ LIMIT_ORDER_SLIPPAGE = float(os.environ.get("LIMIT_ORDER_SLIPPAGE", "0.005"))
 HEALTHCHECK_PORT = int(os.environ.get("HEALTHCHECK_PORT", "8081"))
 RUN_HEALTHCHECK = os.environ.get("RUN_HEALTHCHECK", "0")
 BUY_THRESHOLD = float(os.environ.get("BUY_THRESHOLD", "0.5"))
+DISABLE_DAILY_RETRAIN = os.environ.get("DISABLE_DAILY_RETRAIN", "0")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", "9000"))
 
