@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 from zoneinfo import ZoneInfo
 import threading
+from contextlib import contextmanager
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -34,7 +35,36 @@ EASTERN_TZ = ZoneInfo("America/New_York")
 # Lock protecting portfolio state across threads
 portfolio_lock = threading.Lock()
 # Lock protecting model updates
-model_lock = threading.Lock()
+
+
+class _CallableLock:
+    """threading.Lock that can be used as a context manager or callable."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+
+    def __call__(self):
+        return self
+
+    def __enter__(self):
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self._lock.release()
+        return False
+
+    def acquire(self, *a, **k):
+        return self._lock.acquire(*a, **k)
+
+    def release(self):
+        self._lock.release()
+
+    def locked(self):
+        return self._lock.locked()
+
+
+model_lock = _CallableLock()
 
 
 def get_latest_close(df: pd.DataFrame) -> float:
@@ -119,6 +149,8 @@ def safe_to_datetime(values: Iterable[Any]) -> pd.DatetimeIndex | None:
     """Return ``DatetimeIndex`` from ``values`` or ``None`` on failure."""
     if values is None or len(values) == 0:
         return None
+    if isinstance(values, str):
+        raise ValueError("values must be iterable, not str")
     if isinstance(values, pd.MultiIndex):
         values = values.get_level_values(-1)
     sample = values[0]
@@ -179,27 +211,57 @@ def get_volume_column(df):
 
 # Datetime helper with advanced checks
 
+def _safe_get_column(df, options, label, **kwargs):
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return None
+    try:
+        return get_column(df, options, label, **kwargs)
+    except Exception:
+        return None
+
+
 def get_datetime_column(df):
-    return get_column(df, ["Datetime", "datetime", "timestamp", "date"], "datetime",
-                      dtype="datetime64[ns]", must_be_monotonic=True, must_be_non_null=True,
-                      must_be_timezone_aware=True)
+    return _safe_get_column(
+        df,
+        ["Datetime", "datetime", "timestamp", "date"],
+        "datetime",
+        dtype="datetime64[ns]",
+        must_be_monotonic=True,
+        must_be_non_null=True,
+        must_be_timezone_aware=True,
+    )
 
 # Ticker/symbol column
 
 def get_symbol_column(df):
-    return get_column(df, ["symbol", "ticker", "SYMBOL"], "symbol", dtype="O", must_be_unique=True)
+    return _safe_get_column(df, ["symbol", "ticker", "SYMBOL"], "symbol", dtype="O", must_be_unique=True)
 
 # Return/returns column
 
 def get_return_column(df):
-    return get_column(df, ["Return", "ret", "returns"], "return", dtype=None, must_be_non_null=True)
+    return _safe_get_column(df, ["Return", "ret", "returns"], "return", dtype=None, must_be_non_null=True)
 
 # Indicator column (pass a list, e.g. ["SMA", "sma", "EMA", ...])
 
 def get_indicator_column(df, possible_names):
-    return get_column(df, possible_names, "indicator")
+    return _safe_get_column(df, possible_names, "indicator")
 
 # Order/trade columns
 
 def get_order_column(df, name):
-    return get_column(df, [name, name.lower(), name.upper()], f"order/{name}", dtype=None, must_be_non_null=True)
+    return _safe_get_column(df, [name, name.lower(), name.upper()], f"order/{name}", dtype=None, must_be_non_null=True)
+
+
+def get_ohlcv_columns(df):
+    if not isinstance(df, pd.DataFrame):
+        return []
+    try:
+        return [
+            get_open_column(df),
+            get_high_column(df),
+            get_low_column(df),
+            get_close_column(df),
+            get_volume_column(df),
+        ]
+    except Exception:
+        return []

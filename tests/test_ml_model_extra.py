@@ -5,6 +5,7 @@ import pandas as pd
 
 import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import ml_model
 from ml_model import MLModel
 
 
@@ -48,3 +49,44 @@ def test_fit_and_predict(tmp_path):
     assert Path(save_path).exists()
     loaded = MLModel.load(save_path)
     assert isinstance(loaded.pipeline, DummyPipe)
+
+
+def test_train_model_invalid_algorithm():
+    with pytest.raises(ValueError):
+        ml_model.train_model([], [], algorithm="bad_algo")
+
+
+def test_train_model_invalid_data():
+    with pytest.raises(ValueError):
+        ml_model.train_model(None, None)
+
+
+def test_predict_model_untrained():
+    class DummyModel:
+        def predict(self, X):
+            raise AttributeError("not fitted")
+
+    with pytest.raises(AttributeError):
+        ml_model.predict_model(DummyModel(), [1, 2, 3])
+
+
+def test_predict_model_invalid_input():
+    class DummyModel:
+        def predict(self, X):
+            return [0] * len(X)
+    result = ml_model.predict_model(DummyModel(), [])
+    assert result == []
+
+
+def test_load_model_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        ml_model.load_model(str(tmp_path / "nonexistent.pkl"))
+
+
+def test_save_and_load_model(tmp_path):
+    import joblib
+    dummy_model = {"foo": "bar"}
+    model_path = tmp_path / "test_model.pkl"
+    ml_model.save_model(dummy_model, str(model_path))
+    loaded = ml_model.load_model(str(model_path))
+    assert loaded == dummy_model

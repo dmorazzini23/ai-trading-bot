@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 
 MAX_DRAWDOWN = 0.05
 
+# Simple global risk state used by utility helpers
+HARD_STOP = False
+MAX_TRADES = 10
+CURRENT_TRADES = 0
+
 
 class RiskEngine:
     """Cross-strategy risk manager."""
@@ -140,7 +145,34 @@ class RiskEngine:
         return {"volatility": vol}
 
 
-def calculate_position_size(signal: TradeSignal, cash: float, price: float, api=None) -> int:
-    """Convenience wrapper used in tests."""
+def calculate_position_size(*args, **kwargs) -> int:
+    """Convenience wrapper supporting simple and advanced usage."""
     engine = RiskEngine()
-    return engine.position_size(signal, cash, price, api)
+    if len(args) == 2 and not kwargs:
+        cash, price = args
+        dummy = TradeSignal(symbol="DUMMY", side="buy", confidence=1.0, strategy="default")
+        return engine.position_size(dummy, cash, price)
+    if len(args) >= 3:
+        signal, cash, price = args[:3]
+        api = args[3] if len(args) > 3 else kwargs.get("api")
+        return engine.position_size(signal, cash, price, api)
+    raise TypeError("Invalid arguments for calculate_position_size")
+
+
+def check_max_drawdown(state: Dict[str, float]) -> bool:
+    """Return True if current drawdown exceeds the maximum allowed."""
+    return state.get("current_drawdown", 0) > state.get("max_drawdown", 0)
+
+
+def can_trade() -> bool:
+    """Return False when trading should be halted."""
+    return not HARD_STOP and CURRENT_TRADES < MAX_TRADES
+
+
+def register_trade(size: int) -> dict | None:
+    """Register a trade and increment the count if allowed."""
+    global CURRENT_TRADES
+    if not can_trade() or size <= 0:
+        return None
+    CURRENT_TRADES += 1
+    return {"size": size}
