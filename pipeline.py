@@ -1,8 +1,9 @@
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.linear_model import SGDRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import SGDRegressor
+
 import config
 
 
@@ -21,6 +22,7 @@ class FeatureBuilder(BaseEstimator, TransformerMixin):
                 "vol": close.pct_change().rolling(10).std().fillna(0),
                 "sma_50": close.rolling(50).mean().bfill(),
                 "sma_200": close.rolling(200).mean().bfill(),
+                "price_change": (close.diff() > 0).astype(int),
             }
             arr = np.column_stack(
                 [
@@ -30,6 +32,7 @@ class FeatureBuilder(BaseEstimator, TransformerMixin):
                     features["vol"],
                     features["sma_50"],
                     features["sma_200"],
+                    features["price_change"],
                 ]
             )
             return arr
