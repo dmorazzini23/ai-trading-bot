@@ -1,8 +1,8 @@
-import time
-import os
-import logging
 import hashlib
 import io
+import logging
+import os
+import time
 from datetime import datetime
 from typing import Any
 
@@ -10,11 +10,15 @@ try:
     from sklearn.base import BaseEstimator
     from sklearn.metrics import mean_squared_error
 except Exception:  # pragma: no cover - sklearn optional
+
     class BaseEstimator:
-        pass
+        def __init__(self, *args, **kwargs) -> None:
+            logging.getLogger(__name__).error("scikit-learn is required")
+            raise ImportError("scikit-learn is required")
 
     def mean_squared_error(y_true, y_pred):
         return 0.0
+
 
 import joblib
 import pandas as pd
@@ -22,6 +26,7 @@ import pandas as pd
 try:
     from sklearn.linear_model import LinearRegression
 except Exception:  # pragma: no cover - allow tests without sklearn
+
     class LinearRegression:
         def fit(self, X, y):
             return self
@@ -98,7 +103,11 @@ class MLModel:
             pipeline = joblib.load(io.BytesIO(data))
             logger.info(
                 "MODEL_LOADED",
-                extra={"path": path, "sha256": digest, "version": getattr(pipeline, "version", "n/a")},
+                extra={
+                    "path": path,
+                    "sha256": digest,
+                    "version": getattr(pipeline, "version", "n/a"),
+                },
             )
         except Exception as exc:
             logger.exception(f"MODEL_LOAD_FAILED: {exc}")

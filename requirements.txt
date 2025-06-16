@@ -22,13 +22,13 @@ python-dotenv==1.0.1
 sentry-sdk==1.39.1
 prometheus-client==0.17.1
 finnhub-python>=2.4.0
-lightgbm==4.1.0
+lightgbm>=4.2.1
 pytz==2024.1
 pybreaker==1.0.0
 tzlocal==4.3
 torch==2.7.1
 # pin setuptools to avoid pandas_ta/pkg_resources deprecation warnings
-setuptools<81
+setuptools>=69,<80
 yfinance==0.2.36
 urllib3>=1.26,<2.0
 statsmodels==0.14.1

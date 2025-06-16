@@ -5,6 +5,7 @@ import io
 import os
 import zipfile
 from typing import Iterable, Set
+
 import requests
 
 REPO = "dmorazzini23/ai-trading-bot"
@@ -77,6 +78,7 @@ def main():
     token = args.token or os.getenv("GITHUB_TOKEN")
     if not token:
         p.error("You must supply --token or set GITHUB_TOKEN")
+
     for run in list_failed_runs(token):
         print(f"\nRun {run['id']} – {run.get('name')}\nURL: {run.get('html_url')}")
         steps = fetch_failed_steps(run["id"], token)
