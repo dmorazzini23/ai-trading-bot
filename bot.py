@@ -1,10 +1,13 @@
 import time
 import warnings
+
 try:
     from sklearn.exceptions import InconsistentVersionWarning
 except Exception:  # pragma: no cover - sklearn optional
+
     class InconsistentVersionWarning(UserWarning):
         pass
+
 
 warnings.filterwarnings(
     "ignore",
@@ -165,19 +168,25 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 from prometheus_client import start_http_server, Counter, Gauge, Histogram
 from finnhub import FinnhubAPIException
 import pybreaker
+
 try:
     from trade_execution import ExecutionEngine
 except Exception:  # pragma: no cover - allow tests with stubbed module
+
     class ExecutionEngine:
         def __init__(self, *args, **kwargs):
             pass
 
+
 try:
     from capital_scaling import CapitalScalingEngine
 except Exception:  # pragma: no cover - allow tests with stubbed module
+
     class CapitalScalingEngine:
         def __init__(self, *args, **kwargs):
             pass
+
+
 from data_fetcher import (
     finnhub_client,
     DataFetchError,
@@ -195,6 +204,7 @@ logger = get_logger(__name__)
 def market_is_open(now: datetime | None = None) -> bool:
     """Return True if the market is currently open."""
     return utils_market_open(now)
+
 
 # backward compatibility
 is_market_open = market_is_open
@@ -845,12 +855,8 @@ class DataFetcher:
         except APIError as e:
             err_msg = str(e).lower()
             if "subscription does not permit querying recent sip data" in err_msg:
-                logger.warning(
-                    f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}"
-                )
-                logger.info(
-                    f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}"
-                )
+                logger.warning(f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
+                logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
                     req.feed = "iex"
                     df_iex = client.get_stock_bars(req).df
@@ -875,9 +881,7 @@ class DataFetcher:
                     df_iex.index = idx
                     df = df_iex.rename(columns=lambda c: c.lower())
                 except Exception as iex_err:
-                    logger.warning(
-                        f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}"
-                    )
+                    logger.warning(f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
                     logger.info(
                         f"INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}"
                     )
@@ -898,9 +902,7 @@ class DataFetcher:
                         index=[dummy_date],
                     )
             else:
-                logger.warning(
-                    f"ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}"
-                )
+                logger.warning(f"ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
                 ts2 = pd.to_datetime(end_ts, utc=True, errors="coerce")
                 if ts2 is None:
                     ts2 = pd.Timestamp.utcnow()
@@ -910,9 +912,7 @@ class DataFetcher:
                     index=[dummy_date],
                 )
         except Exception as e:
-            logger.warning(
-                f"ALPACA DAILY FETCH EXCEPTION for {symbol}: {repr(e)}"
-            )
+            logger.warning(f"ALPACA DAILY FETCH EXCEPTION for {symbol}: {repr(e)}")
             ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
             if ts is None:
                 ts = pd.Timestamp.utcnow()
@@ -999,12 +999,8 @@ class DataFetcher:
                 "subscription does not permit querying recent sip data"
                 in err_msg.lower()
             ):
-                logger.warning(
-                    f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}"
-                )
-                logger.info(
-                    f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}"
-                )
+                logger.warning(f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
+                logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
                     req.feed = "iex"
                     df_iex = client.get_stock_bars(req).df
@@ -1019,29 +1015,27 @@ class DataFetcher:
                     try:
                         idx = safe_to_datetime(idx_vals, context=f"IEX minute {symbol}")
                     except ValueError as _e:
-                        reason = "empty data" if df_iex.empty else "unparseable timestamps"
+                        reason = (
+                            "empty data" if df_iex.empty else "unparseable timestamps"
+                        )
                         logger.warning(
                             f"Invalid IEX minute index for {symbol}; skipping. {reason} | {_e}"
                         )
                         df = pd.DataFrame()
                     else:
                         df_iex.index = idx
-                        df = df_iex.rename(columns=lambda c: c.lower())["open", "high", "low", "close", "volume"]
+                        df = df_iex.rename(columns=lambda c: c.lower())[
+                            "open", "high", "low", "close", "volume"
+                        ]
                 except Exception as iex_err:
-                    logger.warning(
-                        f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}"
-                    )
+                    logger.warning(f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
                     logger.info(f"NO ALTERNATIVE MINUTE DATA FOR {symbol}")
                     df = pd.DataFrame()
             else:
-                logger.warning(
-                    f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}"
-                )
+                logger.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
                 df = pd.DataFrame()
         except Exception as e:
-            logger.warning(
-                f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}"
-            )
+            logger.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
             df = pd.DataFrame()
 
         with cache_lock:
@@ -1084,7 +1078,10 @@ class DataFetcher:
                 try:
                     bars_day = ctx.data_client.get_stock_bars(bars_req).df
                 except APIError as e:
-                    if "subscription does not permit" in str(e).lower() and _DEFAULT_FEED != "iex":
+                    if (
+                        "subscription does not permit" in str(e).lower()
+                        and _DEFAULT_FEED != "iex"
+                    ):
                         logger.warning(
                             f"[historic_minute] subscription error for {symbol} {day_start}-{day_end}: {e}; retrying with IEX"
                         )
@@ -1107,7 +1104,9 @@ class DataFetcher:
                     bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
 
                 try:
-                    idx = safe_to_datetime(bars_day.index, context=f"historic minute {symbol}")
+                    idx = safe_to_datetime(
+                        bars_day.index, context=f"historic minute {symbol}"
+                    )
                 except ValueError as e:
                     reason = (
                         "empty data" if bars_day.empty else "unparseable timestamps"
@@ -1118,7 +1117,7 @@ class DataFetcher:
                     bars_day = None
                 else:
                     bars_day.index = idx
-                    bars_day = bars_day.rename(columns=lambda c: c.lower())[ 
+                    bars_day = bars_day.rename(columns=lambda c: c.lower())[
                         ["open", "high", "low", "close", "volume"]
                     ]
                     all_days.append(bars_day)
@@ -1200,16 +1199,16 @@ def prefetch_daily_data(
                     try:
                         idx = safe_to_datetime(df.index, context=f"IEX bulk {sym}")
                     except ValueError as e:
-                        logger.warning(f"Invalid IEX bulk index for {sym}; skipping | {e}")
+                        logger.warning(
+                            f"Invalid IEX bulk index for {sym}; skipping | {e}"
+                        )
                         continue
                     df.index = idx
                     df = df.rename(columns=lambda c: c.lower())
                     grouped[sym] = df
                 return grouped
             except Exception as iex_err:
-                logger.warning(
-                    f"ALPACA IEX BULK ERROR for {symbols}: {repr(iex_err)}"
-                )
+                logger.warning(f"ALPACA IEX BULK ERROR for {symbols}: {repr(iex_err)}")
                 daily_dict = {}
                 for sym in symbols:
                     try:
@@ -1223,7 +1222,9 @@ def prefetch_daily_data(
                         df_sym = client.get_stock_bars(req_sym).df
                         df_sym = df_sym.drop(columns=["symbol"], errors="ignore")
                         try:
-                            idx = safe_to_datetime(df_sym.index, context=f"fallback bulk {sym}")
+                            idx = safe_to_datetime(
+                                df_sym.index, context=f"fallback bulk {sym}"
+                            )
                         except ValueError as _e:
                             logger.warning(
                                 f"Invalid fallback bulk index for {sym}; skipping | {_e}"
@@ -1233,9 +1234,7 @@ def prefetch_daily_data(
                         df_sym = df_sym.rename(columns=lambda c: c.lower())
                         daily_dict[sym] = df_sym
                     except Exception as indiv_err:
-                        logger.warning(
-                            f"ALPACA IEX ERROR for {sym}: {repr(indiv_err)}"
-                        )
+                        logger.warning(f"ALPACA IEX ERROR for {sym}: {repr(indiv_err)}")
                         logger.info(
                             f"INSERTING DUMMY DAILY FOR {sym} ON {end_date.isoformat()}"
                         )
@@ -1258,9 +1257,7 @@ def prefetch_daily_data(
                         daily_dict[sym] = dummy_df
                 return daily_dict
         else:
-            logger.warning(
-                f"ALPACA BULK FETCH UNKNOWN ERROR for {symbols}: {repr(e)}"
-            )
+            logger.warning(f"ALPACA BULK FETCH UNKNOWN ERROR for {symbols}: {repr(e)}")
             daily_dict = {}
             for sym in symbols:
                 t2 = pd.to_datetime(end_date, utc=True, errors="coerce")
@@ -1274,9 +1271,7 @@ def prefetch_daily_data(
                 daily_dict[sym] = dummy_df
             return daily_dict
     except Exception as e:
-        logger.warning(
-            f"ALPACA BULK FETCH EXCEPTION for {symbols}: {repr(e)}"
-        )
+        logger.warning(f"ALPACA BULK FETCH EXCEPTION for {symbols}: {repr(e)}")
         daily_dict = {}
         for sym in symbols:
             t3 = pd.to_datetime(end_date, utc=True, errors="coerce")
@@ -1928,6 +1923,7 @@ try:
 except Exception as e:
     logger.warning(f"[warm_cache] failed to seed regime history: {e}")
 
+
 def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
     """Log warnings if no market data is available on startup."""
     missing: list[str] = []
@@ -1946,6 +1942,7 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
             "DATA_SOURCE_HEALTH_CHECK: missing data for %s",
             ", ".join(missing),
         )
+
 
 data_source_health_check(ctx, REGIME_SYMBOLS)
 
@@ -2560,7 +2557,9 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
 def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
     config.reload_env()
     if not market_is_open():
-        logger.warning("MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, 'symbol', '')})
+        logger.warning(
+            "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, "symbol", "")}
+        )
         return None
     for attempt in range(2):
         try:
@@ -3209,13 +3208,14 @@ def should_exit(
 
 def _safe_trade(
     ctx: BotContext,
+    state: BotState,
     symbol: str,
     balance: float,
     model: RandomForestClassifier,
     regime_ok: bool,
 ) -> bool:
     try:
-        return trade_logic(ctx, symbol, balance, model, regime_ok)
+        return trade_logic(ctx, state, symbol, balance, model, regime_ok)
     except RetryError as e:
         logger.warning(
             f"[trade_logic] retries exhausted for {symbol}: {e}",
@@ -3239,7 +3239,12 @@ def _safe_trade(
 
 
 def trade_logic(
-    ctx: BotContext, symbol: str, balance: float, model, regime_ok: bool
+    ctx: BotContext,
+    state: BotState,
+    symbol: str,
+    balance: float,
+    model,
+    regime_ok: bool,
 ) -> bool:
     """
     Core per-symbol logic: fetch data, compute features, evaluate signals, enter/exit orders.
@@ -3247,7 +3252,7 @@ def trade_logic(
     logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
 
     # Run pre-trade checks that enforce PDT, halt flags, market regime, etc.
-    if not pre_trade_checks(ctx, symbol, balance, regime_ok):
+    if not pre_trade_checks(ctx, state, symbol, balance, regime_ok):
         logger.debug("SKIP_PRE_TRADE_CHECKS", extra={"symbol": symbol})
         return False
 
@@ -4612,7 +4617,9 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                     logger.warning("DAILY_MODEL_TRAIN_SKIPPED_EMPTY")
                 else:
                     model_pipeline.fit(X_train, y_train)
-                    mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
+                    mse = float(
+                        np.mean((model_pipeline.predict(X_train) - y_train) ** 2)
+                    )
                     logger.info("TRAIN_METRIC", extra={"mse": mse})
             except Exception as e:
                 logger.error(f"Daily retrain failed: {e}")
@@ -4713,6 +4720,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
     proceeding.
     """
     import uuid
+
     loop_id = str(uuid.uuid4())
     if state.running:
         logger.warning("RUN_ALL_TRADES_SKIPPED_OVERLAP")
@@ -4776,7 +4784,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
                     return
                 processed.append(symbol)
-                _safe_trade(ctx, symbol, current_cash, model, regime_ok)
+                _safe_trade(ctx, state, symbol, current_cash, model, regime_ok)
             except Exception as e:
                 logger.error(f"Error processing {symbol}: {e}", exc_info=True)
 
@@ -4784,9 +4792,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             list(executor.map(process_symbol, symbols))
 
         if not processed:
-            logger.critical(
-                "DATA_SOURCE_EMPTY", extra={"symbols": symbols}
-            )
+            logger.critical("DATA_SOURCE_EMPTY", extra={"symbols": symbols})
             try:
                 with open(HALT_FLAG_PATH, "w") as f:
                     f.write("DATA_OUTAGE " + datetime.now(timezone.utc).isoformat())
@@ -4802,7 +4808,11 @@ def run_all_trades_worker(state: BotState, model) -> None:
             pnl = float(acct.equity) - float(acct.last_equity)
             logger.info(
                 "LOOP_PNL",
-                extra={"loop_id": loop_id, "pnl": pnl, "mode": "SHADOW" if SHADOW_MODE else "LIVE"},
+                extra={
+                    "loop_id": loop_id,
+                    "pnl": pnl,
+                    "mode": "SHADOW" if SHADOW_MODE else "LIVE",
+                },
             )
         except Exception as e:
             logger.warning(f"Failed P&L retrieval: {e}")
@@ -4884,7 +4894,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
             log_level = logging.ERROR if in_trading_hours(now_utc) else logging.WARNING
             logger.log(
                 log_level,
-                "INITIAL_REBALANCE: No valid prices for any symbol—skipping rebalance. Possible data outage or market holiday. Check data provider/API status."
+                "INITIAL_REBALANCE: No valid prices for any symbol—skipping rebalance. Possible data outage or market holiday. Check data provider/API status.",
             )
         else:
             # Compute equal weights on valid symbols only
@@ -4925,6 +4935,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
 
 def main() -> None:
     config.reload_env()
+
     def _handle_term(signum, frame):
         logger.info("PROCESS_TERMINATION", extra={"signal": signum})
         sys.exit(0)
@@ -4949,7 +4960,9 @@ def main() -> None:
         # --- Market hours check ---
 
         now_utc = pd.Timestamp.utcnow()
-        market_schedule = nyse.schedule(start_date=now_utc.date(), end_date=now_utc.date())
+        market_schedule = nyse.schedule(
+            start_date=now_utc.date(), end_date=now_utc.date()
+        )
         if market_schedule.empty:
             logger.warning(
                 f"No NYSE market schedule for {now_utc.date()}; skipping market open/close check."
@@ -4959,9 +4972,7 @@ def main() -> None:
             market_open = nyse.open_at_time(market_schedule, now_utc)
 
         if not market_open:
-            logger.info(
-                "Market is closed. Sleeping for 60 minutes before rechecking."
-            )
+            logger.info("Market is closed. Sleeping for 60 minutes before rechecking.")
             time.sleep(60 * 60)
             sys.exit(0)
 
