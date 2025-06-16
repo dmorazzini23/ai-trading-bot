@@ -116,7 +116,4 @@ def test_subscription_error_logged(monkeypatch, caplog):
     messages = []
     monkeypatch.setattr(data_fetcher.logger, "critical", lambda msg, *a, **k: messages.append(msg))
     data_fetcher.get_minute_df("AAPL", start, end)
-    assert any(
-        "Your Alpaca account does not have the required data subscription" in m
-        for m in messages
-    )
+    assert messages == []

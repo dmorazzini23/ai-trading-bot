@@ -3,6 +3,7 @@ import logging
 import os
 import requests
 from collections import defaultdict
+import pandas as pd
 
 from alerts import send_slack_alert
 
@@ -60,3 +61,24 @@ def submit_order(api, req, log: logging.Logger | None = None):
                 raise
             time.sleep(attempt * 2)
 
+
+def fetch_bars(api, symbols, timeframe, start=None, end=None):
+    """Return OHLCV bars DataFrame from Alpaca REST API."""
+    bars_df = api.get_bars(symbols, timeframe, start=start, end=end).df
+    if bars_df.empty:
+        logging.warning(f"No data received for symbols: {symbols}")
+        return pd.DataFrame()
+
+    bars_df.reset_index(inplace=True)
+    logging.info(
+        f"Fetched data shape: {bars_df.shape} with columns {bars_df.columns.tolist()}"
+    )
+    logging.debug(f"Fetched data sample:\n{bars_df.head()}")
+
+    if 'timestamp' not in bars_df.columns:
+        logging.error(
+            f"Timestamp column missing in bars_df for symbols: {symbols}"
+        )
+        return pd.DataFrame()
+
+    return bars_df[['timestamp', 'symbol', 'open', 'high', 'low', 'close', 'volume']]

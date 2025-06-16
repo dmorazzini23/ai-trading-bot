@@ -793,7 +793,11 @@ class DataFetcher:
 
         with cache_lock:
             if symbol in self._daily_cache:
-                daily_cache_hit.inc()
+                if daily_cache_hit:
+                    try:
+                        daily_cache_hit.inc()
+                    except Exception:
+                        pass
                 return self._daily_cache[symbol]
 
         api_key = config.get_env("APCA_API_KEY_ID")
@@ -935,10 +939,18 @@ class DataFetcher:
         with cache_lock:
             last_ts = self._minute_timestamps.get(symbol)
             if last_ts and last_ts > now_utc - timedelta(seconds=ttl_seconds()):
-                minute_cache_hit.inc()
+                if minute_cache_hit:
+                    try:
+                        minute_cache_hit.inc()
+                    except Exception:
+                        pass
                 return self._minute_cache[symbol]
 
-        minute_cache_miss.inc()
+        if minute_cache_miss:
+            try:
+                minute_cache_miss.inc()
+            except Exception:
+                pass
         api_key = config.get_env("APCA_API_KEY_ID")
         api_secret = config.get_env("APCA_API_SECRET_KEY")
         if not api_key or not api_secret:
@@ -1715,7 +1727,11 @@ class SignalManager:
         weights = self.load_signal_weights()
 
         # Track total signals evaluated
-        signals_evaluated.inc()
+        if signals_evaluated:
+            try:
+                signals_evaluated.inc()
+            except Exception:
+                pass
 
         # simple moving averages
         df["sma_50"] = df["close"].rolling(window=50).mean()
@@ -2117,7 +2133,11 @@ def _can_fetch_events(symbol: str) -> bool:
     now_ts = pytime.time()
     last_ts = _LAST_EVENT_TS.get(symbol, 0)
     if now_ts - last_ts < EVENT_COOLDOWN:
-        event_cooldown_hits.inc()
+        if event_cooldown_hits:
+            try:
+                event_cooldown_hits.inc()
+            except Exception:
+                pass
         return False
     _LAST_EVENT_TS[symbol] = now_ts
     return True
@@ -2803,8 +2823,16 @@ def vwap_pegged_submit(
                 fill_price = float(getattr(order, "filled_avg_price", 0) or 0)
                 if fill_price > 0:
                     slip = (fill_price - vwap_price) * 100
-                    slippage_total.inc(abs(slip))
-                    slippage_count.inc()
+                    if slippage_total:
+                        try:
+                            slippage_total.inc(abs(slip))
+                        except Exception:
+                            pass
+                    if slippage_count:
+                        try:
+                            slippage_count.inc()
+                        except Exception:
+                            pass
                     _slippage_log.append(
                         (symbol, vwap_price, fill_price, datetime.now(timezone.utc))
                     )
@@ -2822,7 +2850,11 @@ def vwap_pegged_submit(
                                 )
                         except Exception as e:
                             logger.warning(f"Failed to append slippage log: {e}")
-                orders_total.inc()
+                if orders_total:
+                    try:
+                        orders_total.inc()
+                    except Exception:
+                        pass
                 break
             except APIError as e:
                 logger.warning(f"[VWAP] APIError attempt {attempt+1} for {symbol}: {e}")

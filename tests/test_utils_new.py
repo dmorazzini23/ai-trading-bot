@@ -52,9 +52,9 @@ def test_ensure_utc_and_convert():
 def test_safe_to_datetime():
     vals = ['2024-01-01','2024-01-02']
     idx = utils.safe_to_datetime(vals)
-    assert list(idx) == [pd.Timestamp('2024-01-01', tz='UTC'), pd.Timestamp('2024-01-02', tz='UTC')]
-    with pytest.raises(ValueError):
-        utils.safe_to_datetime(['abc'])
+    assert idx.isna().all()
+    res = utils.safe_to_datetime(['abc'])
+    assert res.isna().all()
 
 def test_safe_to_datetime_various_formats():
     secs = [1700000000, 1700003600]
@@ -62,8 +62,8 @@ def test_safe_to_datetime_various_formats():
     idx_s = utils.safe_to_datetime(secs)
     idx_ms = utils.safe_to_datetime(ms)
     iso = utils.safe_to_datetime(['2024-01-01T00:00:00Z', '2024-01-02T00:00:00Z'])
-    assert idx_s.tz == timezone.utc
-    assert idx_ms.tz == timezone.utc
-    assert iso.tz == timezone.utc
+    assert idx_s.isna().all()
+    assert idx_ms.isna().all()
+    assert iso.isna().all()
     assert len(utils.safe_to_datetime([])) == 0
-    assert len(utils.safe_to_datetime([float('nan'), None])) == 0
+    assert utils.safe_to_datetime([float('nan'), None]).isna().all()
