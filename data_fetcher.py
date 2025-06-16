@@ -1,5 +1,5 @@
-import random
 import time as pytime
+import random
 from collections import deque
 from typing import Sequence
 from datetime import date, datetime, timedelta, timezone
@@ -193,35 +193,44 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
         except (APIError, RetryError):
             logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
             return pd.DataFrame()
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(-1)
-    df = df.drop(columns=["symbol"], errors="ignore")
-
-    df.columns = df.columns.str.lower()
-
-    if df.empty:
-        logger.warning(
-            f"No daily bars returned for {symbol}. Possible market holiday or API outage"
-        )
-        return pd.DataFrame()
-
-    if isinstance(df.index, pd.MultiIndex):
-        df.index = df.index.get_level_values(0)
-    idx = safe_to_datetime(df.index, symbol=symbol)
-    if idx is None:
-        reason = "unparseable timestamps"
-        logger.debug("Raw daily data for %s: %s", symbol, df.head().to_dict())
-        logger.warning(
-            f"Invalid date index for {symbol}; skipping. Data fetch reason: {reason}"
-        )
-        return pd.DataFrame()
-    df.index = idx
-    df["timestamp"] = df.index
-
     try:
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(-1)
+        df = df.drop(columns=["symbol"], errors="ignore")
+
+        df.columns = df.columns.str.lower()
+
+        if df.empty:
+            logger.warning(
+                f"No daily bars returned for {symbol}. Possible market holiday or API outage"
+            )
+            return pd.DataFrame()
+
+        if isinstance(df.index, pd.MultiIndex):
+            df.index = df.index.get_level_values(0)
+        idx = safe_to_datetime(df.index, symbol=symbol)
+        if idx is None:
+            reason = "unparseable timestamps"
+            logger.debug("Raw daily data for %s: %s", symbol, df.head().to_dict())
+            logger.warning(
+                f"Invalid date index for {symbol}; skipping. Data fetch reason: {reason}"
+            )
+            return pd.DataFrame()
+        df.index = idx
+        df["timestamp"] = df.index
+
         return df[["timestamp", "open", "high", "low", "close", "volume"]]
     except KeyError:
-        logger.warning(f"Missing OHLCV columns for {symbol}; returning empty DataFrame")
+        logger.warning(
+            f"Missing OHLCV columns for {symbol}; returning empty DataFrame"
+        )
+        return pd.DataFrame()
+    except Exception as e:
+        snippet = df.head().to_dict() if 'df' in locals() and isinstance(df, pd.DataFrame) else "N/A"
+        logger.error(
+            "get_daily_df processing error for %s: %s", symbol, e, exc_info=True
+        )
+        logger.debug("get_daily_df raw response for %s: %s", symbol, snippet)
         return pd.DataFrame()
 
 
@@ -375,7 +384,6 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             extra={"symbol": symbol, "rows": len(df), "cols": df.shape[1]},
         )
         return df
-
     except (APIError, KeyError):
         try:
             req = StockBarsRequest(
@@ -413,6 +421,13 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
         except Exception as daily_err:
             logger.debug(f"{symbol}: daily fallback fetch failed: {daily_err}")
             return pd.DataFrame()
+    except Exception as e:
+        snippet = df.head().to_dict() if 'df' in locals() and isinstance(df, pd.DataFrame) else "N/A"
+        logger.error(
+            "get_minute_df processing error for %s: %s", symbol, e, exc_info=True
+        )
+        logger.debug("get_minute_df raw response for %s: %s", symbol, snippet)
+        return pd.DataFrame()
 
 
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)

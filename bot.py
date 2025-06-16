@@ -1,3 +1,4 @@
+import time
 import warnings
 try:
     from sklearn.exceptions import InconsistentVersionWarning
@@ -29,7 +30,6 @@ import logging.handlers
 import csv
 import json
 import re
-import time
 import time as pytime
 
 import random
@@ -4727,6 +4727,11 @@ def run_all_trades_worker(state: BotState, model) -> None:
             logger.critical(
                 "DATA_SOURCE_EMPTY", extra={"symbols": symbols}
             )
+            try:
+                with open(HALT_FLAG_PATH, "w") as f:
+                    f.write("DATA_OUTAGE " + datetime.now(timezone.utc).isoformat())
+            except Exception as e:
+                logger.error(f"Failed to set halt flag: {e}")
             time.sleep(60)
             return
 
@@ -4899,7 +4904,6 @@ def main() -> None:
             logger.info(
                 "Market is closed. Sleeping for 60 minutes before rechecking."
             )
-            import time
             time.sleep(60 * 60)
             sys.exit(0)
 
