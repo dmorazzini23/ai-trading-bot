@@ -54,3 +54,8 @@ sudo systemctl enable --now ai-trading-scheduler.service
 ```
 
 The service writes logs to `/var/log/ai-trading-scheduler.log`.
+
+## Daily Retraining
+
+The bot can retrain the meta learner each day. To disable this behavior,
+set the environment variable `DISABLE_DAILY_RETRAIN=1` before starting the bot.

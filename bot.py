@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
 import os
 import config
-from config import SHADOW_MODE
+from config import SHADOW_MODE, DISABLE_DAILY_RETRAIN
 
 # Refresh environment variables on startup for reliability
 config.reload_env()
@@ -809,13 +809,21 @@ class DataFetcher:
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
+            if bars.empty:
+                logger.warning(
+                    f"No daily bars returned for {symbol}. Possible market holiday or API outage"
+                )
+                return None
             if len(bars.index) and isinstance(bars.index[0], tuple):
                 idx_vals = [t[0] for t in bars.index]
             else:
                 idx_vals = bars.index
             idx = safe_to_datetime(idx_vals)
             if idx is None:
-                logger.warning(f"Invalid daily index for {symbol}; skipping")
+                reason = "empty data" if bars.empty else "unparseable timestamps"
+                logger.warning(
+                    f"Invalid daily index for {symbol}; skipping. Data fetch reason: {reason}"
+                )
                 return None
             bars.index = idx
             df = bars.rename(columns=lambda c: c.lower()).drop(
@@ -843,7 +851,12 @@ class DataFetcher:
                         idx_vals = df_iex.index
                     idx = safe_to_datetime(idx_vals)
                     if idx is None:
-                        logger.warning(f"Invalid IEX daily index for {symbol}; skipping")
+                        reason = (
+                            "empty data" if df_iex.empty else "unparseable timestamps"
+                        )
+                        logger.warning(
+                            f"Invalid IEX daily index for {symbol}; skipping. Data fetch reason: {reason}"
+                        )
                         return None
                     df_iex.index = idx
                     df = df_iex.rename(columns=lambda c: c.lower())
@@ -936,13 +949,21 @@ class DataFetcher:
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
+            if bars.empty:
+                logger.warning(
+                    f"No minute bars returned for {symbol}. Possible market holiday or API outage"
+                )
+                return None
             if len(bars.index) and isinstance(bars.index[0], tuple):
                 idx_vals = [t[0] for t in bars.index]
             else:
                 idx_vals = bars.index
             idx = safe_to_datetime(idx_vals)
             if idx is None:
-                logger.warning(f"Invalid minute index for {symbol}; skipping")
+                reason = "empty data" if bars.empty else "unparseable timestamps"
+                logger.warning(
+                    f"Invalid minute index for {symbol}; skipping. Data fetch reason: {reason}"
+                )
                 return None
             bars.index = idx
             df = bars.rename(columns=lambda c: c.lower()).drop(
@@ -973,15 +994,14 @@ class DataFetcher:
                         idx_vals = df_iex.index
                     idx = safe_to_datetime(idx_vals)
                     if idx is None:
+                        reason = "empty data" if df_iex.empty else "unparseable timestamps"
                         logger.warning(
-                            f"Invalid IEX minute index for {symbol}; skipping"
+                            f"Invalid IEX minute index for {symbol}; skipping. Data fetch reason: {reason}"
                         )
                         df = pd.DataFrame()
                     else:
                         df_iex.index = idx
-                        df = df_iex.rename(columns=lambda c: c.lower())[ 
-                            ["open", "high", "low", "close", "volume"]
-                        ]
+                        df = df_iex.rename(columns=lambda c: c.lower())["open", "high", "low", "close", "volume"]
                 except Exception as iex_err:
                     logger.warning(
                         f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}"
@@ -1060,8 +1080,11 @@ class DataFetcher:
 
                 idx = safe_to_datetime(bars_day.index)
                 if idx is None:
+                    reason = (
+                        "empty data" if bars_day.empty else "unparseable timestamps"
+                    )
                     logger.warning(
-                        f"Invalid minute index for {symbol}; skipping day {day_start}"
+                        f"Invalid minute index for {symbol}; skipping day {day_start}. Data fetch reason: {reason}"
                     )
                     bars_day = None
                 else:
@@ -1860,6 +1883,28 @@ try:
     ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
 except Exception as e:
     logger.warning(f"[warm_cache] failed to seed regime history: {e}")
+
+def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
+    """Log warnings if no market data is available on startup."""
+    missing: list[str] = []
+    for sym in symbols:
+        df = ctx.data_fetcher.get_daily_df(ctx, sym)
+        if df is None or df.empty:
+            missing.append(sym)
+    if not symbols:
+        return
+    if len(missing) == len(symbols):
+        logger.error(
+            "DATA_SOURCE_HEALTH_CHECK: No data for any symbol. Possible API outage or market holiday."
+        )
+    elif missing:
+        logger.warning(
+            "DATA_SOURCE_HEALTH_CHECK: missing data for %s",
+            ", ".join(missing),
+        )
+
+data_source_health_check(ctx, REGIME_SYMBOLS)
+
 
 # ─── H. MARKET HOURS GUARD ────────────────────────────────────────────────────
 nyse = mcal.get_calendar("XNYS")
@@ -4419,6 +4464,9 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
     marker = RETRAIN_MARKER_FILE
 
     need_to_retrain = True
+    if DISABLE_DAILY_RETRAIN:
+        logger.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
+        need_to_retrain = False
     if os.path.isfile(marker):
         with open(marker, "r") as f:
             last_date = f.read().strip()
@@ -4433,7 +4481,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         need_to_retrain = True
 
     if need_to_retrain:
-        if retrain_meta_learner is None:
+        if not callable(globals().get("retrain_meta_learner")):
             logger.warning(
                 "Daily retraining requested, but retrain_meta_learner is unavailable."
             )
@@ -4763,8 +4811,10 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
             valid_prices[symbol] = price
 
         if not valid_symbols:
-            logger.warning(
-                "INITIAL_REBALANCE: No valid prices for any symbol—skipping rebalance."
+            log_level = logging.ERROR if in_trading_hours(now_utc) else logging.WARNING
+            logger.log(
+                log_level,
+                "INITIAL_REBALANCE: No valid prices for any symbol—skipping rebalance. Possible data outage or market holiday. Check data provider/API status."
             )
         else:
             # Compute equal weights on valid symbols only
@@ -4877,16 +4927,20 @@ def main() -> None:
             ).start()
         )
 
-        # ⮕ Only now import retrain_meta_learner, to avoid circular import / duplicated metrics
-        try:
-            from retrain import retrain_meta_learner as _tmp_retrain
+        # ⮕ Only now import retrain_meta_learner when not disabled
+        if not DISABLE_DAILY_RETRAIN:
+            try:
+                from retrain import retrain_meta_learner as _tmp_retrain
 
-            retrain_meta_learner = _tmp_retrain
-        except ImportError:
+                retrain_meta_learner = _tmp_retrain
+            except ImportError:
+                retrain_meta_learner = None
+                logger.warning(
+                    "retrain.py not found or retrain_meta_learner missing. Daily retraining disabled."
+                )
+        else:
             retrain_meta_learner = None
-            logger.warning(
-                "retrain.py not found or retrain_meta_learner missing. Daily retraining disabled."
-            )
+            logger.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
 
         try:
             model = load_or_retrain_daily(ctx)
