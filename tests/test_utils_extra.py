@@ -3,8 +3,8 @@ import utils
 
 
 def test_safe_to_datetime_invalid():
-    with pytest.raises(ValueError):
-        utils.safe_to_datetime("notadate")
+    result = utils.safe_to_datetime(["notadate"])
+    assert result.isna().all()
 
 
 def test_get_datetime_column_variants_empty():

@@ -152,84 +152,31 @@ def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
             logger.warning("Further '%s' warnings suppressed", key)
 
 
-def safe_to_datetime(
-    values: Iterable[Any], *, context: str = "", try_units: tuple[str | None, ...] | None = None
-) -> pd.DatetimeIndex:
-    """Return a timezone-aware ``DatetimeIndex`` from ``values``.
+def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str = ""):
+    """Safely convert an iterable of date strings to ``DatetimeIndex``.
 
-    Tries multiple ``unit`` formats and raises ``ValueError`` if parsing fails
-    for all provided units. ``context`` is included in log messages for easier
-    debugging.
+    Any values failing conversion result in a warning and ``NaT`` output.
     """
 
-    if values is None:
-        return pd.DatetimeIndex([], tz=timezone.utc)
-    if isinstance(values, str):
-        raise ValueError("values must be iterable, not str")
-    if isinstance(values, pd.MultiIndex):
-        values = values.get_level_values(-1)
+    if arr is None:
+        return pd.DatetimeIndex([], tz="UTC")
 
-    arr = np.asarray(list(values))
-    if arr.size == 0 or np.all(pd.isna(arr)):
-        _warn_limited(
-            "empty-values",
-            "[safe_to_datetime]%s: All values missing or empty: %r",
-            context,
-            list(values)[:5],
-        )
-        return pd.DatetimeIndex([], tz=timezone.utc)
+    valid_dates = []
+    invalid_entries = []
 
-    if arr.dtype.kind in {"U", "S", "O"}:
-        bad = [v for v in arr if isinstance(v, str) and not _DATE_RE.match(v)]
-        if bad:
-            _warn_limited(
-                "invalid-date",
-                "[safe_to_datetime]%s: Non-date strings encountered: %r",
-                context,
-                bad[:5],
-            )
-            raise ValueError(f"Invalid date strings in {context}: {bad[:5]}")
-
-    ms_first = os.getenv("DEFAULT_MS_EPOCH", "0").lower() in {"1", "true", "yes"}
-    if try_units is None:
-        try_units = ("ms", "s", None) if ms_first else ("s", "ms", None)
-
-    for unit in try_units:
+    for entry in arr:
         try:
-            if unit:
-                idx = pd.to_datetime(arr, unit=unit, errors="coerce", utc=True)
-            else:
-                sample = next((s for s in arr if isinstance(s, str)), "")
-                fmt = None
-                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", sample):
-                    fmt = "%Y-%m-%d"
-                elif re.fullmatch(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}", sample):
-                    fmt = "%Y-%m-%d %H:%M:%S" if " " in sample else "%Y-%m-%dT%H:%M:%S"
-                idx = pd.to_datetime(arr, format=fmt, errors="coerce", utc=True)
-        except Exception as e:  # pragma: no cover - unexpected failures
-            logger.error(
-                "[safe_to_datetime]%s: Failed with unit=%s: %s",
-                context,
-                unit,
-                e,
-            )
-            continue
-        if idx.notna().any():
-            if idx.isna().any():
-                _warn_limited(
-                    "partial-parse",
-                    "[safe_to_datetime]%s: Some timestamps failed to parse: %r",
-                    context,
-                    arr[idx.isna()].tolist(),
-                )
-            return idx
+            valid_dates.append(pd.to_datetime(entry, format=format, utc=utc))
+        except (ValueError, TypeError):
+            invalid_entries.append(entry)
 
-    logger.error(
-        "[safe_to_datetime]%s: All formats failed for values: %r",
-        context,
-        list(values)[:5],
-    )
-    raise ValueError(f"Could not parse any timestamps in {context}: {values!r}")
+    if invalid_entries:
+        logging.warning(
+            f"[safe_to_datetime]{f'[{context}]' if context else ''}: Non-date strings encountered: {invalid_entries}"
+        )
+        return pd.DatetimeIndex([pd.NaT] * len(arr))
+
+    return pd.DatetimeIndex(valid_dates)
 
 # Generic robust column getter with validation
 

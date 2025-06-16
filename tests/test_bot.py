@@ -41,10 +41,6 @@ mods = [
     "trade_execution",
     "capital_scaling",
     "strategy_allocator",
-    "risk_engine",
-    "strategies",
-    "strategies.momentum",
-    "strategies.mean_reversion",
 ]
 for name in mods:
     if name not in sys.modules:
