@@ -4908,8 +4908,6 @@ def main() -> None:
         logger.info(">>> BOT __main__ ENTERED – starting up")
 
         # --- Market hours check ---
-        import pandas_market_calendars as mcal
-        from datetime import datetime, timezone
 
         now_utc = pd.Timestamp.utcnow()
         market_schedule = nyse.schedule(start_date=now_utc.date(), end_date=now_utc.date())

@@ -1,6 +1,5 @@
 import pytest
 import utils
-from datetime import datetime
 
 
 def test_safe_to_datetime_invalid():

@@ -2,12 +2,22 @@ import time
 import logging
 import os
 import requests
+from collections import defaultdict
 
 from alerts import send_slack_alert
 
 SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
 logger = logging.getLogger(__name__)
+
+_warn_counts = defaultdict(int)
+
+def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
+    if _warn_counts[key] < limit:
+        logger.warning(msg, *args, **kwargs)
+        _warn_counts[key] += 1
+        if _warn_counts[key] == limit:
+            logger.warning("Further '%s' warnings suppressed", key)
 
 
 def submit_order(api, req, log: logging.Logger | None = None):
@@ -30,8 +40,12 @@ def submit_order(api, req, log: logging.Logger | None = None):
         except requests.exceptions.HTTPError as e:
             if "429" in str(e) or "rate limit" in str(e).lower():
                 wait = attempt * 2
-                log.warning(
-                    f"Rate limit hit for Alpaca order (attempt {attempt}/{max_retries}), sleeping {wait}s"
+                _warn_limited(
+                    "order-rate-limit",
+                    "Rate limit hit for Alpaca order (attempt %s/%s), sleeping %ss",
+                    attempt,
+                    max_retries,
+                    wait,
                 )
                 time.sleep(wait)
                 continue

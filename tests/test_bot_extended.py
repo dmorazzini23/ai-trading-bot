@@ -1,6 +1,5 @@
 import types
 import pandas as pd
-import pytest
 
 # Reuse stubs from existing bot tests to avoid heavy imports
 from tests import test_bot as base
