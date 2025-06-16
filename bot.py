@@ -4969,7 +4969,13 @@ def main() -> None:
             )
             market_open = False
         else:
-            market_open = nyse.open_at_time(market_schedule, now_utc)
+            try:
+                market_open = nyse.open_at_time(market_schedule, now_utc)
+            except ValueError as e:
+                logger.warning(
+                    f"Invalid schedule time {now_utc}: {e}; assuming market closed"
+                )
+                market_open = False
 
         if not market_open:
             logger.info("Market is closed. Sleeping for 60 minutes before rechecking.")
