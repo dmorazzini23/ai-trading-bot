@@ -1,6 +1,6 @@
+import time
 import logging
 import os
-import time
 import requests
 
 from alerts import send_slack_alert

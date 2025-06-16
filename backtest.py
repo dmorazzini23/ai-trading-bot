@@ -8,11 +8,11 @@ This will search over a default hyperparameter grid and write the best set to
 ``best_hyperparams.json``.
 """
 
+import time
 import argparse
 import json
 import os
 from dotenv import load_dotenv
-import time
 import warnings
 from itertools import product
 from datetime import datetime, timedelta

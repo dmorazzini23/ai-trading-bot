@@ -1,8 +1,8 @@
 """Alert utilities with throttling support."""
 
+import time
 import logging
 import os
-import time
 from threading import Lock
 import requests
 

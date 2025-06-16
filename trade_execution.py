@@ -1,7 +1,7 @@
+import time
 import os
 import csv
 import math
-import time
 import random
 import logging
 import logging.handlers
