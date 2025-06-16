@@ -4831,14 +4831,14 @@ def main() -> None:
         from datetime import datetime, timezone
 
         now_utc = pd.Timestamp.utcnow()
-        schedule = nyse.schedule(start_date=now_utc.date(), end_date=now_utc.date())
-        if schedule.empty:
+        market_schedule = nyse.schedule(start_date=now_utc.date(), end_date=now_utc.date())
+        if market_schedule.empty:
             logger.warning(
                 f"No NYSE market schedule for {now_utc.date()}; skipping market open/close check."
             )
             market_open = False
         else:
-            market_open = nyse.open_at_time(schedule, now_utc)
+            market_open = nyse.open_at_time(market_schedule, now_utc)
 
         if not market_open:
             logger.info(
