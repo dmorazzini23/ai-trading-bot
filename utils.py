@@ -6,6 +6,7 @@ import re
 import logging
 
 import pandas as pd
+import numpy as np
 from datetime import datetime, date, time, timezone
 from typing import Iterable, Any
 
@@ -146,41 +147,65 @@ from typing import Iterable, Any
 
 
 def safe_to_datetime(
-    values: Iterable[Any], *, symbol: str | None = None
-) -> pd.DatetimeIndex | None:
-    """Return ``DatetimeIndex`` from ``values`` or ``None`` on failure."""
-    if values is None or len(values) == 0:
-        return None
+    values: Iterable[Any], *, context: str = "", try_units: tuple[str | None, ...] | None = None
+) -> pd.DatetimeIndex:
+    """Return a timezone-aware ``DatetimeIndex`` from ``values``.
+
+    Tries multiple ``unit`` formats and raises ``ValueError`` if parsing fails
+    for all provided units. ``context`` is included in log messages for easier
+    debugging.
+    """
+
+    if values is None:
+        return pd.DatetimeIndex([], tz=timezone.utc)
     if isinstance(values, str):
         raise ValueError("values must be iterable, not str")
     if isinstance(values, pd.MultiIndex):
         values = values.get_level_values(-1)
-    sample = values[0]
-    if isinstance(sample, tuple):
-        sample = next(
-            (v for v in sample if isinstance(v, str) or hasattr(v, "year")), sample
-        )
-    if isinstance(sample, str) and not _DATE_RE.match(str(sample)):
-        return None
-    try:
-        idx = pd.to_datetime(values, errors="coerce", utc=True)
-    except Exception as e:
+
+    arr = np.asarray(list(values))
+    if arr.size == 0 or np.all(pd.isna(arr)):
         logger.warning(
-            "Failed to parse timestamps%s: %r | %s",
-            f" for {symbol}" if symbol else "",
-            list(values)[:5],
-            e,
-        )
-        return None
-    idx = idx.tz_convert(None)
-    if idx.isnull().all():
-        logger.warning(
-            "All timestamps unparseable%s: %r",
-            f" for {symbol}" if symbol else "",
+            "[safe_to_datetime]%s: All values missing or empty: %r",
+            context,
             list(values)[:5],
         )
-        return None
-    return idx
+        return pd.DatetimeIndex([], tz=timezone.utc)
+
+    ms_first = os.getenv("DEFAULT_MS_EPOCH", "0").lower() in {"1", "true", "yes"}
+    if try_units is None:
+        try_units = ("ms", "s", None) if ms_first else ("s", "ms", None)
+
+    for unit in try_units:
+        try:
+            idx = (
+                pd.to_datetime(arr, unit=unit, errors="coerce", utc=True)
+                if unit
+                else pd.to_datetime(arr, errors="coerce", utc=True)
+            )
+        except Exception as e:  # pragma: no cover - unexpected failures
+            logger.error(
+                "[safe_to_datetime]%s: Failed with unit=%s: %s",
+                context,
+                unit,
+                e,
+            )
+            continue
+        if idx.notna().any():
+            if idx.isna().any():
+                logger.warning(
+                    "[safe_to_datetime]%s: Some timestamps failed to parse: %r",
+                    context,
+                    arr[idx.isna()].tolist(),
+                )
+            return idx
+
+    logger.error(
+        "[safe_to_datetime]%s: All formats failed for values: %r",
+        context,
+        list(values)[:5],
+    )
+    raise ValueError(f"Could not parse any timestamps in {context}: {values!r}")
 
 # Generic robust column getter with validation
 

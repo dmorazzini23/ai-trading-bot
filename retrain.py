@@ -202,10 +202,10 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     else:
         df = df.reset_index().rename(columns={"index": "Date"})
     if "timestamp" in df.columns and df["Date"].dtype == object:
-        idx = safe_to_datetime(df["timestamp"])
+        idx = safe_to_datetime(df["timestamp"], context="retrain timestamp")
     else:
-        idx = safe_to_datetime(df["Date"])
-    if idx is None:
+        idx = safe_to_datetime(df["Date"], context="retrain date")
+    if idx.empty:
         raise ValueError("Invalid date values in dataframe")
     df["Date"] = idx
     df = df.sort_values("Date").set_index("Date")
