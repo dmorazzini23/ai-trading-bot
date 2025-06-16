@@ -19,6 +19,8 @@ except Exception:  # pragma: no cover - sklearn optional
 import joblib
 import pandas as pd
 
+from sklearn.linear_model import LinearRegression
+
 
 class MLModel:
     """Wrapper around an sklearn Pipeline with extra safety checks."""
@@ -94,3 +96,30 @@ class MLModel:
             logger.exception(f"MODEL_LOAD_FAILED: {exc}")
             raise
         return cls(pipeline)
+
+
+def train_model(X, y, algorithm="linear"):
+    """Train a simple model and return it."""
+    if X is None or y is None:
+        raise ValueError("Invalid training data")
+    if algorithm != "linear":
+        raise ValueError("Unsupported algorithm")
+    model = LinearRegression()
+    model.fit([[v] for v in X], y)
+    return model
+
+
+def predict_model(model, X):
+    """Return predictions from a fitted model."""
+    if X is None:
+        raise ValueError("Invalid input")
+    return list(model.predict(X))
+
+
+def save_model(model, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    joblib.dump(model, path)
+
+
+def load_model(path):
+    return joblib.load(path)
