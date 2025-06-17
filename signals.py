@@ -3,8 +3,9 @@
 import importlib
 import logging
 import time
-from typing import Any
+from typing import Any, Optional
 
+import pandas as pd
 import requests
 
 logger = logging.getLogger(__name__)
@@ -36,3 +37,93 @@ def _fetch_api(url: str, retries: int = 3, delay: float = 1.0) -> dict:
 
 def generate(ctx=None):
     return 0
+
+
+def calculate_macd(
+    close_prices: pd.Series,
+    fast_period: int = 12,
+    slow_period: int = 26,
+    signal_period: int = 9,
+) -> Optional[pd.DataFrame]:
+    """Calculate MACD indicator values with validation.
+
+    Parameters
+    ----------
+    close_prices : pd.Series
+        Series of closing prices.
+    fast_period : int
+        Fast EMA period. Defaults to ``12``.
+    slow_period : int
+        Slow EMA period. Defaults to ``26``.
+    signal_period : int
+        Signal line EMA period. Defaults to ``9``.
+
+    Returns
+    -------
+    Optional[pd.DataFrame]
+        DataFrame containing ``macd``, ``signal`` and ``histogram`` columns or
+        ``None`` if the calculation fails.
+    """
+
+    try:
+        if close_prices is None or len(close_prices) < slow_period:
+            logger.warning(
+                "Insufficient data for MACD calculation: data length %d",
+                len(close_prices) if close_prices is not None else 0,
+            )
+            return None
+
+        fast_ema = close_prices.ewm(span=fast_period, adjust=False).mean()
+        slow_ema = close_prices.ewm(span=slow_period, adjust=False).mean()
+        macd_line = fast_ema - slow_ema
+        signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+        histogram = macd_line - signal_line
+
+        macd_df = pd.DataFrame(
+            {"macd": macd_line, "signal": signal_line, "histogram": histogram}
+        )
+
+        if macd_df.isnull().values.any():
+            logger.warning("MACD calculation returned NaNs in the result")
+            return None
+
+        return macd_df
+
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("MACD calculation failed with exception: %s", exc, exc_info=True)
+        return None
+
+
+def prepare_indicators(data: pd.DataFrame) -> pd.DataFrame:
+    """Prepare indicator columns for a trading strategy.
+
+    Parameters
+    ----------
+    data : pd.DataFrame
+        Market data containing at least a ``close`` column.
+
+    Returns
+    -------
+    pd.DataFrame
+        Data enriched with indicator columns.
+
+    Raises
+    ------
+    ValueError
+        If the MACD indicator fails to calculate or ``close`` column is missing.
+    """
+
+    if "close" not in data.columns:
+        raise ValueError("Input data missing 'close' column")
+
+    macd_df = calculate_macd(data["close"])
+    if macd_df is None:
+        logger.warning("MACD indicator calculation failed, returning None")
+        raise ValueError("MACD calculation failed")
+
+    for col in macd_df.columns:
+        data[col] = macd_df[col]
+
+    # Additional indicators can be added here using similar defensive checks
+
+    return data
