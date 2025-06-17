@@ -132,3 +132,22 @@ def prepare_indicators(data: pd.DataFrame) -> pd.DataFrame:
     # Additional indicators can be added here using similar defensive checks
 
     return data
+
+
+def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
+    if df is None or df.empty:
+        logger.error("Dataframe is None or empty in generate_signal")
+        return pd.Series(dtype=float)
+
+    if column not in df.columns:
+        logger.error(f"Required column '{column}' not found in dataframe")
+        return pd.Series(dtype=float)
+
+    try:
+        signal = pd.Series(0, index=df.index)
+        signal[df[column] > 0] = 1
+        signal[df[column] < 0] = -1
+        return signal.fillna(0)
+    except Exception as e:
+        logger.error(f"Exception generating signal: {e}", exc_info=True)
+        return pd.Series(dtype=float)
