@@ -69,7 +69,10 @@ def validate_environment() -> None:
             "Missing required environment variables: " + ", ".join(missing)
         )
 
-validate_environment()
+
+def validate_env_vars() -> None:
+    _require_env_vars("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL")
+
 ALPACA_API_KEY = get_env("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = get_env("ALPACA_SECRET_KEY")
 ALPACA_BASE_URL = get_env("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
