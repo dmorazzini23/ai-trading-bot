@@ -116,7 +116,8 @@ class MLModel:
 
 
 def train_model(X, y, algorithm="linear"):
-    """Train a simple model and return it."""
+    """Train a trivial model and return it."""
+
     if X is None or y is None:
         raise ValueError("Invalid training data")
     if algorithm != "linear":
@@ -126,17 +127,22 @@ def train_model(X, y, algorithm="linear"):
     return model
 
 
-def predict_model(model, X):
+def predict_model(model: Any, X: Any) -> list:
     """Return predictions from a fitted model."""
+
     if X is None:
         raise ValueError("Invalid input")
     return list(model.predict(X))
 
 
-def save_model(model, path):
+def save_model(model: Any, path: str) -> None:
+    """Persist ``model`` to ``path``."""
+
     os.makedirs(os.path.dirname(path), exist_ok=True)
     joblib.dump(model, path)
 
 
-def load_model(path):
+def load_model(path: str) -> Any:
+    """Load a model previously saved with ``save_model``."""
+
     return joblib.load(path)

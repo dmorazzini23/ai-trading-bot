@@ -1,3 +1,5 @@
+"""Order execution engine with Alpaca integration and slippage logging."""
+
 import csv
 import logging
 import logging.handlers
@@ -234,6 +236,9 @@ class ExecutionEngine:
         return vol, avg1m, momentum
 
     def _prepare_order(self, symbol: str, side: str, qty: int) -> Tuple[object, Optional[float]]:
+        if qty <= 0:
+            raise ValueError("qty must be positive")
+
         bid, ask = self._latest_quote(symbol)
         spread = (ask - bid) if ask and bid else 0.0
         mid = (ask + bid) / 2 if ask and bid else None
@@ -328,6 +333,7 @@ class ExecutionEngine:
         side: str,
         slice_qty: int,
     ) -> Optional[Order]:
+        """Submit ``order_req`` with simple retry handling."""
         self.logger.info(
             "ORDER_SUBMIT",
             extra={

@@ -1,18 +1,22 @@
+"""Lightweight Alpaca REST helpers with retry and validation."""
+
+from __future__ import annotations
+
 import logging
 import os
-
-if "ALPACA_API_KEY" in os.environ:
-    os.environ.setdefault("APCA_API_KEY_ID", os.environ["ALPACA_API_KEY"])
-if "ALPACA_SECRET_KEY" in os.environ:
-    os.environ.setdefault("APCA_API_SECRET_KEY", os.environ["ALPACA_SECRET_KEY"])
 import time
 from collections import defaultdict
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 import pandas as pd
 import requests
 
 from alerts import send_slack_alert
+
+if "ALPACA_API_KEY" in os.environ:
+    os.environ.setdefault("APCA_API_KEY_ID", os.environ["ALPACA_API_KEY"])
+if "ALPACA_SECRET_KEY" in os.environ:
+    os.environ.setdefault("APCA_API_SECRET_KEY", os.environ["ALPACA_SECRET_KEY"])
 
 SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
@@ -28,6 +32,8 @@ HEADERS = {
 
 
 def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
+    """Log ``msg`` up to ``limit`` times for a given ``key``."""
+
     if _warn_counts[key] < limit:
         logger.warning(msg, *args, **kwargs)
         _warn_counts[key] += 1
@@ -41,6 +47,8 @@ def alpaca_get(
     retries: int = 3,
     backoff_factor: float = 0.5,
 ) -> Optional[Dict[str, Any]]:
+    """Perform a GET request to the Alpaca API with retries."""
+
     url = f"{ALPACA_BASE_URL}{endpoint}"
     for attempt in range(retries):
         try:
@@ -55,12 +63,15 @@ def alpaca_get(
             logger.warning(
                 f"Request error on Alpaca GET {url}: {req_err}, attempt {attempt+1}"
             )
-        time.sleep(backoff_factor * (2 ** attempt))
+        sleep = backoff_factor * (2 ** attempt)
+        time.sleep(sleep)
     logger.error(f"Failed Alpaca GET after {retries} attempts: {url}")
     return None
 
 
 def get_account() -> Optional[Dict[str, Any]]:
+    """Return account details or ``None`` on failure."""
+
     data = alpaca_get("/v2/account")
     if data is None:
         logger.error("Failed to get Alpaca account data")
@@ -68,7 +79,7 @@ def get_account() -> Optional[Dict[str, Any]]:
 
 
 def submit_order(api, req, log: logging.Logger | None = None):
-    """Submit an order with rate limit handling and optional shadow mode."""
+    """Submit an order with retry and optional shadow mode."""
     log = log or logger
     if SHADOW_MODE:
         log.info(
@@ -117,19 +128,42 @@ def submit_order(api, req, log: logging.Logger | None = None):
             time.sleep(attempt * 2)
 
 
-def fetch_bars(api, symbols, timeframe, start=None, end=None):
-    """Return OHLCV bars DataFrame from Alpaca REST API."""
-    bars_df = api.get_bars(symbols, timeframe, start=start, end=end).df
-    if bars_df.empty:
-        logging.warning(f"No data received for symbols: {symbols}")
+def fetch_bars(
+    api: Any,
+    symbols: list[str] | str,
+    timeframe: Any,
+    start: str | None = None,
+    end: str | None = None,
+    retries: int = 3,
+    backoff_factor: float = 0.5,
+) -> pd.DataFrame:
+    """Return OHLCV bars ``DataFrame`` from Alpaca REST API."""
+
+    for attempt in range(1, retries + 1):
+        try:
+            bars_df = api.get_bars(symbols, timeframe, start=start, end=end).df
+            break
+        except Exception as exc:
+            logger.warning(
+                "fetch_bars failed (%s/%s): %s", attempt, retries, exc
+            )
+            time.sleep(backoff_factor * (2 ** (attempt - 1)))
+    else:
+        logger.error("fetch_bars failed after retries for %s", symbols)
         return pd.DataFrame()
 
-    bars_df.reset_index(inplace=True)
-    logging.info(f"Fetched data shape: {bars_df.shape} with columns {bars_df.columns.tolist()}")
-    logging.debug(f"Fetched data sample:\n{bars_df.head()}")
+    if bars_df is None or bars_df.empty:
+        logger.warning("No data received for symbols: %s", symbols)
+        return pd.DataFrame()
 
+    bars_df = bars_df.reset_index()
+    logger.info(
+        "Fetched data shape: %s cols=%s",
+        bars_df.shape,
+        bars_df.columns.tolist(),
+    )
     if "timestamp" not in bars_df.columns:
-        logging.error(f"Timestamp column missing in bars_df for symbols: {symbols}")
+        logger.error("Timestamp column missing in bars_df for symbols: %s", symbols)
         return pd.DataFrame()
 
     return bars_df[["timestamp", "symbol", "open", "high", "low", "close", "volume"]]

@@ -25,6 +25,7 @@ def load_weights(path: str, default: np.ndarray | None = None) -> np.ndarray:
         if default.size > 0:
             try:
                 np.savetxt(p, default, delimiter=",")
+                logger.info("Initialized default weights at %s", path)
             except Exception as exc:
                 logger.exception("Failed initializing default weights: %s", exc)
         return default
