@@ -8,9 +8,15 @@ import time
 from collections import defaultdict
 from typing import Any, Dict, Optional
 
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
 import pandas as pd
 import requests
-
 from alerts import send_slack_alert
 
 if "ALPACA_API_KEY" in os.environ:
@@ -41,34 +47,30 @@ def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
             logger.warning("Further '%s' warnings suppressed", key)
 
 
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=16),
+    retry=retry_if_exception_type(Exception),
+    reraise=True,
+)
 def alpaca_get(
     endpoint: str,
     params: Optional[Dict[str, Any]] = None,
-    retries: int = 3,
-    backoff_factor: float = 0.5,
 ) -> Optional[Dict[str, Any]]:
     """Perform a GET request to the Alpaca API with retries."""
 
     url = f"{ALPACA_BASE_URL}{endpoint}"
-    for attempt in range(retries):
-        try:
-            response = requests.get(url, headers=HEADERS, params=params, timeout=10)
-            response.raise_for_status()
-            return response.json()
-        except requests.HTTPError as http_err:
-            logger.warning(
-                f"HTTP error on Alpaca GET {url}: {http_err}, attempt {attempt+1}"
-            )
-        except requests.RequestException as req_err:
-            logger.warning(
-                f"Request error on Alpaca GET {url}: {req_err}, attempt {attempt+1}"
-            )
-        sleep = backoff_factor * (2 ** attempt)
-        time.sleep(sleep)
-    logger.error(f"Failed Alpaca GET after {retries} attempts: {url}")
-    return None
+    response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+    response.raise_for_status()
+    return response.json()
 
 
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=16),
+    retry=retry_if_exception_type(Exception),
+    reraise=True,
+)
 def get_account() -> Optional[Dict[str, Any]]:
     """Return account details or ``None`` on failure."""
 
@@ -128,29 +130,22 @@ def submit_order(api, req, log: logging.Logger | None = None):
             time.sleep(attempt * 2)
 
 
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=1, min=1, max=16),
+    retry=retry_if_exception_type(Exception),
+    reraise=True,
+)
 def fetch_bars(
     api: Any,
     symbols: list[str] | str,
     timeframe: Any,
     start: str | None = None,
     end: str | None = None,
-    retries: int = 3,
-    backoff_factor: float = 0.5,
 ) -> pd.DataFrame:
     """Return OHLCV bars ``DataFrame`` from Alpaca REST API."""
 
-    for attempt in range(1, retries + 1):
-        try:
-            bars_df = api.get_bars(symbols, timeframe, start=start, end=end).df
-            break
-        except Exception as exc:
-            logger.warning(
-                "fetch_bars failed (%s/%s): %s", attempt, retries, exc
-            )
-            time.sleep(backoff_factor * (2 ** (attempt - 1)))
-    else:
-        logger.error("fetch_bars failed after retries for %s", symbols)
-        return pd.DataFrame()
+    bars_df = api.get_bars(symbols, timeframe, start=start, end=end).df
 
     if bars_df is None or bars_df.empty:
         logger.warning("No data received for symbols: %s", symbols)

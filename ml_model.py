@@ -130,9 +130,15 @@ def train_model(X: Sequence[float] | pd.Series | pd.DataFrame, y: Sequence[float
 def predict_model(model: Any, X: Sequence[Any] | pd.DataFrame) -> list[float]:
     """Return predictions from a fitted model."""
 
+    if model is None:
+        raise ValueError("Model cannot be None")
     if X is None:
         raise ValueError("Invalid input")
-    return list(model.predict(X))
+    try:
+        return list(model.predict(X))
+    except Exception as exc:  # pragma: no cover - model may fail unexpectedly
+        logging.getLogger(__name__).error("Model prediction failed: %s", exc)
+        raise
 
 
 def save_model(model: Any, path: str) -> None:

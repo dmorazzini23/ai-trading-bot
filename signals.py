@@ -120,16 +120,21 @@ def prepare_indicators(data: pd.DataFrame) -> pd.DataFrame:
         If the MACD indicator fails to calculate or ``close`` column is missing.
     """
 
+    if data is None or not isinstance(data, pd.DataFrame):
+        raise ValueError("Input must be a DataFrame")
     if "close" not in data.columns:
         raise ValueError("Input data missing 'close' column")
 
     macd_df = calculate_macd(data["close"])
-    if macd_df is None:
+    if macd_df is None or macd_df.empty:
         logger.warning("MACD indicator calculation failed, returning None")
         raise ValueError("MACD calculation failed")
 
-    for col in macd_df.columns:
-        data[col] = macd_df[col]
+    for col in ("macd", "signal", "histogram"):
+        series = macd_df.get(col)
+        if series is None:
+            raise ValueError(f"MACD output missing column '{col}'")
+        data[col] = series.astype(float)
 
     # Additional indicators can be added here using similar defensive checks
 

@@ -1,7 +1,5 @@
 """Helper for creating rotating log handlers."""
 
-from __future__ import annotations
-
 from logging.handlers import RotatingFileHandler
 import os
 
