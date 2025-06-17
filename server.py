@@ -1,8 +1,8 @@
-import hashlib
 import hmac
 import logging
 import os
 import subprocess
+from typing import Any
 
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
@@ -17,19 +17,16 @@ if not WEBHOOK_SECRET:
 SECRET = WEBHOOK_SECRET.encode()
 
 
+def verify_sig(payload: bytes, signature_header: str) -> bool:
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+    sig = signature_header.split("=", 1)[1]
+    expected = hmac.new(WEBHOOK_SECRET.encode(), payload, "sha256").hexdigest()
+    return hmac.compare_digest(expected, sig)
+
+
 def create_app() -> Flask:
     app = Flask(__name__)
-
-    def verify_sig(data: bytes, signature: str) -> bool:
-        try:
-            sha_name, sig = signature.split("=", 1)
-            if sha_name != "sha256":
-                return False
-            mac = hmac.new(SECRET, msg=data, digestmod=hashlib.sha256)
-            return hmac.compare_digest(mac.hexdigest(), sig)
-        except Exception as e:
-            logging.getLogger(__name__).error("verify_sig error: %s", e)
-            return False
 
     @app.route("/github-webhook", methods=["POST"])
     def hook():
@@ -44,6 +41,10 @@ def create_app() -> Flask:
         if request.headers.get("X-GitHub-Event") == "push":
             subprocess.Popen([os.path.join(os.path.dirname(__file__), "deploy.sh")])
         return jsonify({"status": "ok"})
+
+    @app.get("/health")
+    def health() -> Any:
+        return jsonify(status="ok")
 
     return app
 
