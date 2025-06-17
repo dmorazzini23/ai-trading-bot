@@ -6,6 +6,7 @@ import time
 from typing import Any, Optional
 
 import pandas as pd
+import numpy as np
 import requests
 
 logger = logging.getLogger(__name__)
@@ -66,11 +67,15 @@ def calculate_macd(
     """
 
     try:
-        if close_prices is None or len(close_prices) < slow_period:
+        min_len = slow_period + signal_period
+        if close_prices is None or len(close_prices) < min_len:
             logger.warning(
-                "Insufficient data for MACD calculation: data length %d",
-                len(close_prices) if close_prices is not None else 0,
+                "Insufficient data for MACD calculation: length=%s",
+                len(close_prices) if close_prices is not None else "None",
             )
+            return None
+        if close_prices.isna().any() or np.isinf(close_prices).any():
+            logger.warning("MACD input data contains NaN or Inf")
             return None
 
         fast_ema = close_prices.ewm(span=fast_period, adjust=False).mean()
