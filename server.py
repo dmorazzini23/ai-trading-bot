@@ -8,25 +8,25 @@ from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
 
 load_dotenv(dotenv_path=".env", override=True)
-from config import WEBHOOK_PORT, WEBHOOK_SECRET
+import config
 
-if not WEBHOOK_SECRET:
+if not config.WEBHOOK_SECRET:
     logging.getLogger(__name__).error("WEBHOOK_SECRET must be set")
     raise RuntimeError("WEBHOOK_SECRET must be set")
 
-SECRET = WEBHOOK_SECRET.encode()
 
 
-def verify_sig(payload: bytes, signature_header: str) -> bool:
+def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
     if not signature_header or not signature_header.startswith("sha256="):
         return False
     sig = signature_header.split("=", 1)[1]
-    expected = hmac.new(WEBHOOK_SECRET.encode(), payload, "sha256").hexdigest()
+    expected = hmac.new(secret, payload, "sha256").hexdigest()
     return hmac.compare_digest(expected, sig)
 
 
-def create_app() -> Flask:
+def create_app(cfg: Any = config) -> Flask:
     app = Flask(__name__)
+    secret = cfg.WEBHOOK_SECRET.encode()
 
     @app.route("/github-webhook", methods=["POST"])
     def hook():
@@ -36,7 +36,7 @@ def create_app() -> Flask:
         if not payload or "symbol" not in payload or "action" not in payload:
             return jsonify({"error": "Missing fields"}), 400
         sig = request.headers.get("X-Hub-Signature-256", "")
-        if not verify_sig(request.data, sig):
+        if not verify_sig(request.data, sig, secret):
             abort(403)
         if request.headers.get("X-GitHub-Event") == "push":
             subprocess.Popen([os.path.join(os.path.dirname(__file__), "deploy.sh")])
@@ -53,4 +53,4 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", WEBHOOK_PORT)), debug=False)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", config.WEBHOOK_PORT)), debug=False)

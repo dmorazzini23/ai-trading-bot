@@ -314,6 +314,89 @@ class ExecutionEngine:
         )
         monitor_slippage(expected, actual, symbol)
 
+    def _submit_with_retry(
+        self,
+        api: TradingClient,
+        order_req: object,
+        symbol: str,
+        side: str,
+        slice_qty: int,
+    ) -> Optional[Order]:
+        self.logger.info(
+            "ORDER_SUBMIT",
+            extra={
+                "symbol": symbol,
+                "side": side,
+                "qty": slice_qty,
+                "type": order_req.__class__.__name__,
+            },
+        )
+        for attempt in range(2):
+            try:
+                order = submit_order(api, order_req, self.logger)
+                self.logger.info(f"Order submit response for {symbol}: {order}")
+                if not getattr(order, "id", None) and not SHADOW_MODE:
+                    self.logger.error(f"Order failed for {symbol}: {order}")
+                return order
+            except (APIError, TimeoutError) as e:
+                time.sleep(1)
+                if attempt == 1:
+                    self.logger.warning(f"submit_order failed for {symbol}: {e}")
+                    return None
+            except APIError as e:
+                self.logger.warning(f"APIError placing order for {symbol}: {e}")
+                return None
+            except Exception as e:
+                self.logger.exception(f"Unexpected error placing order for {symbol}: {e}")
+                return None
+        return None
+
+    def _handle_order_result(
+        self,
+        symbol: str,
+        side: str,
+        order: Order,
+        expected_price: Optional[float],
+        slice_qty: int,
+        start_time: float,
+    ) -> bool:
+        status = getattr(order, "status", "")
+        if status == "rejected":
+            self.logger.error(
+                "ORDER_REJECTED",
+                extra={"symbol": symbol, "reason": getattr(order, "reject_reason", "")},
+            )
+            return False
+        if status == "canceled":
+            self.logger.error("ORDER_CANCELED", extra={"symbol": symbol})
+            return False
+        fill_price = float(getattr(order, "filled_avg_price", expected_price or 0) or 0)
+        latency = (time.monotonic() - start_time) * 1000.0
+        self._log_slippage(symbol, expected_price, fill_price)
+        if status == "filled":
+            self.logger.info(
+                "ORDER_FILLED",
+                extra={
+                    "symbol": symbol,
+                    "order_id": getattr(order, "id", ""),
+                    "latency_ms": latency,
+                    "price": fill_price,
+                },
+            )
+            log_trade(
+                symbol,
+                side,
+                slice_qty,
+                fill_price,
+                status,
+                "SHADOW" if SHADOW_MODE else "LIVE",
+            )
+        else:
+            self.logger.error("ORDER_STATUS", extra={"symbol": symbol, "status": status})
+        if self.orders_total is not None:
+            self.orders_total.inc()
+        return True
+
     def execute_order(self, symbol: str, qty: int, side: str, asset_class: str = "equity") -> Optional[Order]:
         """Execute an order for the given asset class."""
         remaining = int(math.floor(qty))
@@ -327,84 +410,11 @@ class ExecutionEngine:
             if side.lower() == "sell" and not self._can_sell(api, symbol):
                 break
             start = time.monotonic()
-            order = None
-            for attempt in range(2):
-                try:
-                    self.logger.info(
-                        "ORDER_SUBMIT",
-                        extra={
-                            "symbol": symbol,
-                            "side": side,
-                            "qty": slice_qty,
-                            "type": order_req.__class__.__name__,
-                        },
-                    )
-                    try:
-                        order = submit_order(api, order_req, self.logger)
-                        self.logger.info(f"Order submit response for {symbol}: {order}")
-                        if not getattr(order, "id", None) and not SHADOW_MODE:
-                            self.logger.error(f"Order failed for {symbol}: {order}")
-                    except Exception as e:
-                        self.logger.error(
-                            f"Order submission failed for {symbol}: {e}",
-                            exc_info=True,
-                        )
-                        break
-                    break
-                except (APIError, TimeoutError) as e:
-                    time.sleep(1)
-                    if attempt == 1:
-                        self.logger.warning(f"submit_order failed for {symbol}: {e}")
-                        return last_order
-                except APIError as e:
-                    self.logger.warning(f"APIError placing order for {symbol}: {e}")
-                    return last_order
-                except Exception as e:
-                    self.logger.exception(f"Unexpected error placing order for {symbol}: {e}")
-                    return last_order
+            order = self._submit_with_retry(api, order_req, symbol, side, slice_qty)
             if order is None:
                 break
-            status = getattr(order, "status", "")
-            if status == "rejected":
-                self.logger.error(
-                    "ORDER_REJECTED",
-                    extra={
-                        "symbol": symbol,
-                        "reason": getattr(order, "reject_reason", ""),
-                    },
-                )
+            if not self._handle_order_result(symbol, side, order, expected_price, slice_qty, start):
                 break
-            if status == "canceled":
-                self.logger.error(
-                    "ORDER_CANCELED",
-                    extra={"symbol": symbol},
-                )
-                break
-            fill_price = float(getattr(order, "filled_avg_price", expected_price or 0) or 0)
-            latency = (time.monotonic() - start) * 1000.0
-            self._log_slippage(symbol, expected_price, fill_price)
-            if status == "filled":
-                self.logger.info(
-                    "ORDER_FILLED",
-                    extra={
-                        "symbol": symbol,
-                        "order_id": getattr(order, "id", ""),
-                        "latency_ms": latency,
-                        "price": fill_price,
-                    },
-                )
-                log_trade(
-                    symbol,
-                    side,
-                    slice_qty,
-                    fill_price,
-                    status,
-                    "SHADOW" if SHADOW_MODE else "LIVE",
-                )
-            else:
-                self.logger.error("ORDER_STATUS", extra={"symbol": symbol, "status": status})
-            if self.orders_total is not None:
-                self.orders_total.inc()
             last_order = order
             remaining -= slice_qty
             if remaining > 0:
