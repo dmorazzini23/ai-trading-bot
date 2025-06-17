@@ -2066,6 +2066,12 @@ def pre_trade_health_check(
                 extra={"symbol": sym, "missing": ",".join(missing)},
             )
             summary["missing_columns"].append(sym)
+        if df[required].isna().any().any():
+            log_warning(
+                "HEALTH_INVALID_VALUES",
+                extra={"symbol": sym},
+            )
+            summary.setdefault("invalid_values", []).append(sym)
 
         if getattr(df.index, "tz", None) is None:
             log_warning("HEALTH_TZ_MISSING", extra={"symbol": sym})
@@ -2077,6 +2083,7 @@ def pre_trade_health_check(
         set(summary["failures"])
         | set(summary["insufficient_rows"])
         | set(summary["missing_columns"])
+        | set(summary.get("invalid_values", []))
         | set(summary["timezone_issues"])
     )
 
@@ -4424,7 +4431,11 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     feat = pd.DataFrame(index=df.index)
     feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
     feat["rsi"] = ta.rsi(df["close"], length=14)
-    feat["macd"] = ta.macd(df["close"], fast=12, slow=26, signal=9)["MACD_12_26_9"]
+    macd_df = calculate_macd(df["close"])
+    if macd_df is not None:
+        feat["macd"] = macd_df["macd"]
+    else:
+        feat["macd"] = np.nan
     feat["vol"] = df["close"].pct_change().rolling(14).std()
     return feat.dropna()
 

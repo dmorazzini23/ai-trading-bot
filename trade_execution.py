@@ -9,6 +9,8 @@ import warnings
 from datetime import datetime, timezone
 from typing import Any, Optional, Tuple
 
+import numpy as np
+
 from tenacity import (retry, retry_if_exception_type, stop_after_attempt,
                       wait_exponential, wait_random)
 
@@ -203,14 +205,18 @@ class ExecutionEngine:
     def _adv_volume(self, symbol: str) -> Optional[float]:
         df = self.ctx.data_fetcher.get_daily_df(self.ctx, symbol)
         if df is None or df.empty or "volume" not in df.columns:
-            # DataFrame missing or empty; return safe default
             self.logger.warning(f"ADV data unavailable for {symbol}")
             return 0.0
         if len(df) < 20:
-            # Not enough rows for a 20 day average
-            self.logger.warning(f"Not enough rows for ADV calculation of {symbol}: got {len(df)}")
+            self.logger.warning(
+                f"Not enough rows for ADV calculation of {symbol}: got {len(df)}"
+            )
             return 0.0
-        return float(df["volume"].tail(20).mean())
+        vol = df["volume"].tail(20)
+        if vol.isna().any() or np.isinf(vol).any():
+            self.logger.warning(f"Invalid volume data for {symbol} during ADV calc")
+            return 0.0
+        return float(vol.mean())
 
     def _minute_stats(self, symbol: str) -> Tuple[float, float, float]:
         df = self.ctx.data_fetcher.get_minute_df(self.ctx, symbol)
@@ -331,7 +337,7 @@ class ExecutionEngine:
                 "type": order_req.__class__.__name__,
             },
         )
-        for attempt in range(2):
+        for attempt in range(3):
             try:
                 order = submit_order(api, order_req, self.logger)
                 self.logger.info(f"Order submit response for {symbol}: {order}")
@@ -339,9 +345,12 @@ class ExecutionEngine:
                     self.logger.error(f"Order failed for {symbol}: {order}")
                 return order
             except (APIError, TimeoutError) as e:
-                time.sleep(1)
-                if attempt == 1:
-                    self.logger.warning(f"submit_order failed for {symbol}: {e}")
+                sleep = 1 * (attempt + 1)
+                time.sleep(sleep)
+                if attempt == 2:
+                    self.logger.warning(
+                        f"submit_order failed for {symbol} after retries: {e}"
+                    )
                     return None
             except APIError as e:
                 self.logger.warning(f"APIError placing order for {symbol}: {e}")
@@ -361,16 +370,25 @@ class ExecutionEngine:
         start_time: float,
     ) -> bool:
         status = getattr(order, "status", "")
+        order_id = getattr(order, "id", "")
         if status == "rejected":
             self.logger.error(
                 "ORDER_REJECTED",
-                extra={"symbol": symbol, "reason": getattr(order, "reject_reason", "")},
+                extra={
+                    "symbol": symbol,
+                    "order_id": order_id,
+                    "reason": getattr(order, "reject_reason", ""),
+                },
             )
             return False
         if status == "canceled":
-            self.logger.error("ORDER_CANCELED", extra={"symbol": symbol})
+            self.logger.error(
+                "ORDER_CANCELED", extra={"symbol": symbol, "order_id": order_id}
+            )
             return False
-        fill_price = float(getattr(order, "filled_avg_price", expected_price or 0) or 0)
+        fill_price = float(
+            getattr(order, "filled_avg_price", expected_price or 0) or 0
+        )
         latency = (time.monotonic() - start_time) * 1000.0
         self._log_slippage(symbol, expected_price, fill_price)
         if status == "filled":
@@ -378,7 +396,7 @@ class ExecutionEngine:
                 "ORDER_FILLED",
                 extra={
                     "symbol": symbol,
-                    "order_id": getattr(order, "id", ""),
+                    "order_id": order_id,
                     "latency_ms": latency,
                     "price": fill_price,
                 },
@@ -391,8 +409,20 @@ class ExecutionEngine:
                 status,
                 "SHADOW" if SHADOW_MODE else "LIVE",
             )
+        elif status == "partially_filled":
+            self.logger.info(
+                "ORDER_PARTIAL",
+                extra={
+                    "symbol": symbol,
+                    "order_id": order_id,
+                    "filled_qty": getattr(order, "filled_qty", 0),
+                },
+            )
         else:
-            self.logger.error("ORDER_STATUS", extra={"symbol": symbol, "status": status})
+            self.logger.error(
+                "ORDER_STATUS",
+                extra={"symbol": symbol, "order_id": order_id, "status": status},
+            )
         if self.orders_total is not None:
             self.orders_total.inc()
         return True
