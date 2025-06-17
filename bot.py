@@ -244,7 +244,10 @@ def get_latest_close(df: pd.DataFrame) -> float:
 
 
 def compute_time_range(minutes: int = 30) -> tuple[datetime, datetime]:
-    """Return start and end timestamps for the last `minutes` minutes."""
+    """Return start and end timestamps for the last ``minutes`` minutes."""
+
+    if minutes <= 0:
+        raise ValueError("minutes must be positive")
     end = datetime.now(timezone.utc)
     start = end - timedelta(minutes=minutes)
     return start, end
@@ -255,7 +258,14 @@ def fetch_minute_df_safe(ctx: "BotContext", symbol: str) -> pd.DataFrame:
     if not market_is_open():
         logger.warning("MARKET_CLOSED_MINUTE_FETCH_SKIP", extra={"symbol": symbol})
         return pd.DataFrame()
-    return ctx.data_fetcher.get_minute_df(ctx, symbol)
+    try:
+        df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+        if df is None or df.empty:
+            return pd.DataFrame()
+        return df
+    except Exception as exc:  # pragma: no cover - network errors
+        logger.error("fetch_minute_df_safe failed for %s: %s", symbol, exc)
+        return pd.DataFrame()
 
 
 def cancel_all_open_orders(ctx: "BotContext") -> None:
@@ -265,6 +275,8 @@ def cancel_all_open_orders(ctx: "BotContext") -> None:
     try:
         req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
         open_orders = ctx.api.get_orders(req)
+        if not open_orders:
+            return
         for od in open_orders:
             if getattr(od, "status", "").lower() == "open":
                 try:
@@ -292,7 +304,7 @@ def reconcile_positions(ctx: "BotContext") -> None:
                     ctx.stop_targets.pop(symbol, None)
                     ctx.take_profit_targets.pop(symbol, None)
     except Exception as e:
-        logger.warning(f"[reconcile_positions] failed: {e}")
+        logger.warning("reconcile_positions failed: %s", e)
 
 
 import warnings

@@ -329,6 +329,8 @@ def get_order_column(df, name):
 
 
 def get_ohlcv_columns(df):
+    """Return the names of the OHLCV columns if present."""
+
     if not isinstance(df, pd.DataFrame):
         return []
     try:
