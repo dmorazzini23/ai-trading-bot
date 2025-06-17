@@ -32,6 +32,13 @@ import csv
 import json
 import logging
 import logging.handlers
+
+_REQUIRED_ENV = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
+_missing_env = [v for v in _REQUIRED_ENV if not os.getenv(v)]
+if _missing_env:
+    logging.getLogger(__name__).error(
+        "Missing required environment variables: %s", _missing_env
+    )
 import random
 import re
 import signal
@@ -3033,6 +3040,54 @@ def _safe_trade(
         return False
 
 
+def _fetch_feature_data(
+    ctx: BotContext, symbol: str
+) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[bool]]:
+    """Fetch raw price data and compute indicators.
+
+    Returns ``(raw_df, feat_df, skip_flag)``. When data is missing returns
+    ``(None, None, False)``; when indicators are insufficient returns
+    ``(raw_df, None, True)``.
+    """
+    try:
+        raw_df = fetch_minute_df_safe(ctx, symbol)
+    except APIError as e:
+        msg = str(e).lower()
+        if "subscription does not permit querying recent sip data" in msg:
+            logger.debug(f"{symbol}: minute fetch failed, falling back to daily.")
+            raw_df = ctx.data_fetcher.get_daily_df(ctx, symbol)
+            if raw_df is None or raw_df.empty:
+                logger.debug(f"{symbol}: no daily data either; skipping.")
+                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+                return None, None, False
+        else:
+            raise
+    if raw_df is None or raw_df.empty:
+        logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+        return None, None, False
+
+    feat_df = prepare_indicators(raw_df, freq="intraday")
+    if feat_df.empty:
+        logger.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
+        return raw_df, None, True
+    return raw_df, feat_df, None
+
+
+def _model_feature_names(model) -> list[str]:
+    if hasattr(model, "feature_names_in_"):
+        return list(model.feature_names_in_)
+    return [
+        "rsi",
+        "macd",
+        "atr",
+        "vwap",
+        "macds",
+        "ichimoku_conv",
+        "ichimoku_base",
+        "stochrsi",
+    ]
+
+
 def trade_logic(
     ctx: BotContext,
     state: BotState,
@@ -3051,41 +3106,11 @@ def trade_logic(
         logger.debug("SKIP_PRE_TRADE_CHECKS", extra={"symbol": symbol})
         return False
 
-    try:
-        raw_df = fetch_minute_df_safe(ctx, symbol)
-    except APIError as e:
-        msg = str(e).lower()
-        if "subscription does not permit querying recent sip data" in msg:
-            logger.debug(f"{symbol}: minute fetch failed, falling back to daily.")
-            raw_df = ctx.data_fetcher.get_daily_df(ctx, symbol)
-            if raw_df is None or raw_df.empty:
-                logger.debug(f"{symbol}: no daily data either; skipping.")
-                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
-                return False
-        else:
-            raise
-    if raw_df is None or raw_df.empty:
-        logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
-        return False
+    raw_df, feat_df, skip_flag = _fetch_feature_data(ctx, symbol)
+    if feat_df is None:
+        return skip_flag if skip_flag is not None else False
 
-    feat_df = prepare_indicators(raw_df, freq="intraday")
-    if feat_df.empty:
-        logger.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
-        return True
-
-    if hasattr(model, "feature_names_in_"):
-        feature_names = list(model.feature_names_in_)
-    else:
-        feature_names = [
-            "rsi",
-            "macd",
-            "atr",
-            "vwap",
-            "macds",
-            "ichimoku_conv",
-            "ichimoku_base",
-            "stochrsi",
-        ]
+    feature_names = _model_feature_names(model)
 
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
