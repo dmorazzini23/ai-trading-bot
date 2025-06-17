@@ -109,22 +109,19 @@ from requests.exceptions import HTTPError
 from alerts import send_slack_alert
 from config import REBALANCE_INTERVAL_MIN
 from rebalancer import maybe_rebalance
+from alpaca_api import alpaca_get
 
 # Validate critical environment variables early
-REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
+REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL"]
 missing_env = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
 if missing_env:
-    print(
-        f"Error: Missing required environment variables: {', '.join(missing_env)}",
-        file=sys.stderr,
-        flush=True,
+    raise RuntimeError(
+        f"Missing required environment variables: {', '.join(missing_env)}"
     )
-    sys.exit(78)
 
 # for paper trading
-ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
+ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 import pickle
-import threading
 
 import joblib
 import sentry_sdk
@@ -3675,6 +3672,45 @@ def _manage_existing_position(
     return True
 
 
+def _evaluate_trade_signal(ctx: BotContext, state: BotState, feat_df: pd.DataFrame, symbol: str, model: Any) -> tuple[float, float, str]:
+    """Return ``(final_score, confidence, strategy)`` for ``symbol``."""
+
+    sig, conf, strat = ctx.signal_manager.evaluate(ctx, state, feat_df, symbol, model)
+    comp_list = [
+        {"signal": lab, "flag": s, "weight": w}
+        for s, w, lab in ctx.signal_manager.last_components
+    ]
+    logger.debug("COMPONENTS | symbol=%s  components=%r", symbol, comp_list)
+    final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
+    logger.info(
+        "SIGNAL_RESULT | symbol=%s  final_score=%.4f  confidence=%.4f",
+        symbol,
+        final_score,
+        conf,
+    )
+    if final_score is None or not np.isfinite(final_score) or final_score == 0:
+        raise ValueError("Invalid or empty signal")
+    return final_score, conf, strat
+
+
+def _current_position_qty(ctx: BotContext, symbol: str) -> int:
+    try:
+        pos = ctx.api.get_open_position(symbol)
+        return int(pos.qty)
+    except Exception:
+        return 0
+
+
+def _recent_rebalance_flag(ctx: BotContext, symbol: str) -> bool:
+    reb_time = ctx.rebalance_buys.get(symbol)
+    if not reb_time:
+        return False
+    if datetime.now(timezone.utc) - reb_time < timedelta(seconds=REBALANCE_HOLD_SECONDS):
+        return True
+    ctx.rebalance_buys.pop(symbol, None)
+    return False
+
+
 def trade_logic(
     ctx: BotContext,
     state: BotState,
@@ -3699,41 +3735,17 @@ def trade_logic(
     feature_names = _model_feature_names(model)
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
-        logger.info(f"SKIP_MISSING_FEATURES | symbol={symbol}  missing={missing}")
-        return True
-
-    sig, conf, strat = ctx.signal_manager.evaluate(ctx, state, feat_df, symbol, model)
-    comp_list = [
-        {"signal": lab, "flag": s, "weight": w}
-        for s, w, lab in ctx.signal_manager.last_components
-    ]
-    logger.debug(f"COMPONENTS | symbol={symbol}  components={comp_list!r}")
-
-    final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
-    logger.info(
-        f"SIGNAL_RESULT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
-    )
-    if final_score is None or not np.isfinite(final_score) or final_score == 0:
-        logger.error(
-            f"Invalid or empty signal for {symbol}. Data: {raw_df.describe() if not raw_df.empty else 'EMPTY'}"
-        )
+        logger.info("SKIP_MISSING_FEATURES | symbol=%s  missing=%s", symbol, missing)
         return True
 
     try:
-        pos = ctx.api.get_open_position(symbol)
-        current_qty = int(pos.qty)
-    except Exception:
-        current_qty = 0
+        final_score, conf, strat = _evaluate_trade_signal(ctx, state, feat_df, symbol, model)
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return True
 
-    reb_time = ctx.rebalance_buys.get(symbol)
-    recent_rebal = False
-    if reb_time:
-        if datetime.now(timezone.utc) - reb_time < timedelta(
-            seconds=REBALANCE_HOLD_SECONDS
-        ):
-            recent_rebal = True
-        else:
-            ctx.rebalance_buys.pop(symbol, None)
+    current_qty = _current_position_qty(ctx, symbol)
+    recent_rebal = _recent_rebalance_flag(ctx, symbol)
 
     if _exit_positions_if_needed(
         ctx, state, symbol, feat_df, final_score, conf, current_qty, recent_rebal
@@ -5369,14 +5381,13 @@ def main() -> None:
             try:
                 from retrain import retrain_meta_learner as _tmp_retrain
 
-                retrain_meta_learner = _tmp_retrain  # noqa: F841
+                globals()["retrain_meta_learner"] = _tmp_retrain
             except ImportError:
-                retrain_meta_learner = None  # noqa: F841
+                globals()["retrain_meta_learner"] = None
                 logger.warning(
                     "retrain.py not found or retrain_meta_learner missing. Daily retraining disabled."
                 )
         else:
-            retrain_meta_learner = None  # noqa: F841
             logger.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
 
         try:
@@ -5515,12 +5526,15 @@ def simple_calculate_macd(
 
 def get_latest_price(symbol: str):
     try:
-        price = get_price_from_api(symbol)
+        data = alpaca_get(f"/v2/stocks/{symbol}/quotes/latest")
+        price = float(data.get("ap", 0)) if data else None
         if price is None:
             raise ValueError(f"Price returned None for symbol {symbol}")
         return price
     except Exception as e:
-        logger.error(f"Failed to get latest price for {symbol}: {e}", exc_info=True)
+        logger.error(
+            "Failed to get latest price for %s: %s", symbol, e, exc_info=True
+        )
         return None
 
 
