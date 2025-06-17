@@ -26,8 +26,8 @@ class DummyEngine:
 
 
 def test_end_to_end_pipeline(monkeypatch):
-    os.environ.setdefault("APCA_API_KEY_ID", "k")
-    os.environ.setdefault("APCA_API_SECRET_KEY", "s")
+    os.environ.setdefault("ALPACA_API_KEY", "k")
+    os.environ.setdefault("ALPACA_SECRET_KEY", "s")
     config.reload_env()
 
     # prepare mock minute data

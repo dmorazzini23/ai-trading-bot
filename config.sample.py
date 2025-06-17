@@ -7,8 +7,8 @@ ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"
 load_dotenv(ENV_PATH)
 
-ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY") or os.environ.get("APCA_API_KEY_ID")
-ALPACA_SECRET_KEY = os.environ.get("ALPACA_SECRET_KEY") or os.environ.get("APCA_API_SECRET_KEY")
+ALPACA_API_KEY = os.environ.get("ALPACA_API_KEY")
+ALPACA_SECRET_KEY = os.environ.get("ALPACA_SECRET_KEY")
 ALPACA_BASE_URL = os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 ALPACA_PAPER = "paper" in ALPACA_BASE_URL.lower()
 ALPACA_DATA_FEED = os.environ.get("ALPACA_DATA_FEED", "iex")

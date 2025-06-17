@@ -287,8 +287,6 @@ sys.modules["capital_scaling"].CapitalScalingEngine = _CapScaler
 
 def test_bot_main_normal(monkeypatch):
     monkeypatch.setenv("TRADING_MODE", "shadow")
-    monkeypatch.setenv("APCA_API_KEY_ID", "k")
-    monkeypatch.setenv("APCA_API_SECRET_KEY", "s")
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
     monkeypatch.setenv("FINNHUB_API_KEY", "testkey")
@@ -317,8 +315,6 @@ def test_bot_main_normal(monkeypatch):
 
 
 def test_bot_main_data_fetch_error(monkeypatch):
-    monkeypatch.setenv("APCA_API_KEY_ID", "k")
-    monkeypatch.setenv("APCA_API_SECRET_KEY", "s")
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
     monkeypatch.setenv("FINNHUB_API_KEY", "testkey")
@@ -350,8 +346,6 @@ def test_bot_main_data_fetch_error(monkeypatch):
 
 
 def test_bot_main_signal_nan(monkeypatch):
-    monkeypatch.setenv("APCA_API_KEY_ID", "k")
-    monkeypatch.setenv("APCA_API_SECRET_KEY", "s")
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
     monkeypatch.setenv("FINNHUB_API_KEY", "testkey")

@@ -6,8 +6,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-os.environ.setdefault("APCA_API_KEY_ID", "dummy")
-os.environ.setdefault("APCA_API_SECRET_KEY", "dummy")
 os.environ.setdefault("ALPACA_API_KEY", "dummy")
 os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
 

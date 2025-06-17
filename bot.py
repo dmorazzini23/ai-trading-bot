@@ -18,6 +18,11 @@ warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
 import os
 
+if "ALPACA_API_KEY" in os.environ:
+    os.environ.setdefault("APCA_API_KEY_ID", os.environ["ALPACA_API_KEY"])
+if "ALPACA_SECRET_KEY" in os.environ:
+    os.environ.setdefault("APCA_API_SECRET_KEY", os.environ["ALPACA_SECRET_KEY"])
+
 import config
 from config import ALPACA_DATA_FEED, DISABLE_DAILY_RETRAIN, SHADOW_MODE
 
@@ -781,10 +786,10 @@ class DataFetcher:
                         raise
                 return self._daily_cache[symbol]
 
-        api_key = config.get_env("APCA_API_KEY_ID")
-        api_secret = config.get_env("APCA_API_SECRET_KEY")
+        api_key = config.get_env("ALPACA_API_KEY")
+        api_secret = config.get_env("ALPACA_SECRET_KEY")
         if not api_key or not api_secret:
-            raise RuntimeError("APCA_API_KEY_ID and APCA_API_SECRET_KEY must be set for data fetching")
+            raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching")
         client = StockHistoricalDataClient(api_key, api_secret)
 
         try:
@@ -906,10 +911,10 @@ class DataFetcher:
             except Exception as exc:
                 logger.exception("bot.py unexpected", exc_info=exc)
                 raise
-        api_key = config.get_env("APCA_API_KEY_ID")
-        api_secret = config.get_env("APCA_API_SECRET_KEY")
+        api_key = config.get_env("ALPACA_API_KEY")
+        api_secret = config.get_env("ALPACA_SECRET_KEY")
         if not api_key or not api_secret:
-            raise RuntimeError("APCA_API_KEY_ID and APCA_API_SECRET_KEY must be set for data fetching")
+            raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching")
         client = StockHistoricalDataClient(api_key, api_secret)
 
         try:
@@ -1063,10 +1068,10 @@ class DataFetcher:
 # Helper to prefetch daily data in bulk with Alpaca, handling SIP subscription
 # issues and falling back to IEX delayed feed per symbol if needed.
 def prefetch_daily_data(symbols: List[str], start_date: date, end_date: date) -> Dict[str, pd.DataFrame]:
-    alpaca_key = config.get_env("APCA_API_KEY_ID")
-    alpaca_secret = config.get_env("APCA_API_SECRET_KEY")
+    alpaca_key = config.get_env("ALPACA_API_KEY")
+    alpaca_secret = config.get_env("ALPACA_SECRET_KEY")
     if not alpaca_key or not alpaca_secret:
-        raise RuntimeError("APCA_API_KEY_ID and APCA_API_SECRET_KEY must be set for data fetching")
+        raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching")
     client = StockHistoricalDataClient(alpaca_key, alpaca_secret)
 
     try:

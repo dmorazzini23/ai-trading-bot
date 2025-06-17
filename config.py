@@ -62,8 +62,8 @@ def _require_env_vars(*keys: str) -> None:
 
 
 
-ALPACA_API_KEY = get_env("ALPACA_API_KEY") or get_env("APCA_API_KEY_ID")
-ALPACA_SECRET_KEY = get_env("ALPACA_SECRET_KEY") or get_env("APCA_API_SECRET_KEY")
+ALPACA_API_KEY = get_env("ALPACA_API_KEY")
+ALPACA_SECRET_KEY = get_env("ALPACA_SECRET_KEY")
 ALPACA_BASE_URL = get_env("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 ALPACA_PAPER = "paper" in ALPACA_BASE_URL.lower()
 ALPACA_DATA_FEED = get_env("ALPACA_DATA_FEED", "iex")
