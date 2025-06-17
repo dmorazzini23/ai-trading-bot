@@ -43,16 +43,6 @@ import json
 import logging
 import logging.handlers
 import sys
-
-REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
-missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
-if missing:
-    print(
-        f"Error: Missing required environment variables: {missing}",
-        file=sys.stderr,
-        flush=True,
-    )
-    sys.exit(78)
 import random
 import re
 import signal
@@ -118,6 +108,17 @@ from requests.exceptions import HTTPError
 from alerts import send_slack_alert
 from config import REBALANCE_INTERVAL_MIN
 from rebalancer import maybe_rebalance
+
+# Validate critical environment variables early
+REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
+missing_env = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
+if missing_env:
+    print(
+        f"Error: Missing required environment variables: {', '.join(missing_env)}",
+        file=sys.stderr,
+        flush=True,
+    )
+    sys.exit(78)
 
 # for paper trading
 ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
@@ -3201,7 +3202,11 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     if raw is None or raw.empty:
         logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
         return
-    df_ind = prepare_indicators(raw, freq="intraday", symbol=symbol, state=state)
+    try:
+        df_ind = prepare_indicators(raw, freq="intraday", symbol=symbol, state=state)
+    except ValueError as exc:
+        logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
+        return
     if df_ind.empty:
         logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
         return
@@ -3408,7 +3413,11 @@ def _fetch_feature_data(
         logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
         return None, None, False
 
-    feat_df = prepare_indicators(raw_df, freq="intraday", symbol=symbol, state=state)
+    try:
+        feat_df = prepare_indicators(raw_df, freq="intraday", symbol=symbol, state=state)
+    except ValueError as exc:
+        logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
+        return raw_df, None, True
     if feat_df.empty:
         logger.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
         return raw_df, None, True
@@ -4221,7 +4230,12 @@ def prepare_indicators(
 
     try:
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-        if macd is None or not isinstance(macd, pd.DataFrame):
+        if (
+            macd is None
+            or not isinstance(macd, pd.DataFrame)
+            or "MACD_12_26_9" not in macd
+            or "MACDs_12_26_9" not in macd
+        ):
             raise ValueError("MACD returned None")
         df["macd"] = macd["MACD_12_26_9"]
         df["macds"] = macd["MACDs_12_26_9"]
