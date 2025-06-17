@@ -1,4 +1,6 @@
 import config
+config.load_dotenv()
+config.validate_env_vars()
 config.reload_env()
 
 import time
