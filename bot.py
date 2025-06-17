@@ -32,17 +32,18 @@ import csv
 import json
 import logging
 import logging.handlers
+import sys
 
 _REQUIRED_ENV = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
 _missing_env = [v for v in _REQUIRED_ENV if not os.getenv(v)]
 if _missing_env:
-    logging.getLogger(__name__).error(
+    logging.getLogger(__name__).critical(
         "Missing required environment variables: %s", _missing_env
     )
+    sys.exit(1)
 import random
 import re
 import signal
-import sys
 import threading
 import time as pytime
 from argparse import ArgumentParser
