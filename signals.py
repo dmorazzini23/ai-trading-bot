@@ -42,6 +42,35 @@ def generate(ctx: Any | None = None) -> int:
     return 0
 
 
+def _validate_macd_input(close_prices: pd.Series, min_len: int) -> bool:
+    if close_prices is None or len(close_prices) < min_len:
+        logger.warning(
+            "Insufficient data for MACD calculation: length=%s",
+            len(close_prices) if close_prices is not None else "None",
+        )
+        return False
+    if close_prices.isna().any() or np.isinf(close_prices).any():
+        logger.warning("MACD input data contains NaN or Inf")
+        return False
+    return True
+
+
+def _compute_macd_df(
+    close_prices: pd.Series,
+    fast_period: int,
+    slow_period: int,
+    signal_period: int,
+) -> pd.DataFrame:
+    fast_ema = close_prices.ewm(span=fast_period, adjust=False).mean()
+    slow_ema = close_prices.ewm(span=slow_period, adjust=False).mean()
+    macd_line = fast_ema - slow_ema
+    signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
+    histogram = macd_line - signal_line
+    return pd.DataFrame(
+        {"macd": macd_line, "signal": signal_line, "histogram": histogram}
+    )
+
+
 def calculate_macd(
     close_prices: pd.Series,
     fast_period: int = 12,
@@ -70,25 +99,10 @@ def calculate_macd(
 
     try:
         min_len = slow_period + signal_period
-        if close_prices is None or len(close_prices) < min_len:
-            logger.warning(
-                "Insufficient data for MACD calculation: length=%s",
-                len(close_prices) if close_prices is not None else "None",
-            )
-            return None
-        if close_prices.isna().any() or np.isinf(close_prices).any():
-            logger.warning("MACD input data contains NaN or Inf")
+        if not _validate_macd_input(close_prices, min_len):
             return None
 
-        fast_ema = close_prices.ewm(span=fast_period, adjust=False).mean()
-        slow_ema = close_prices.ewm(span=slow_period, adjust=False).mean()
-        macd_line = fast_ema - slow_ema
-        signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
-        histogram = macd_line - signal_line
-
-        macd_df = pd.DataFrame(
-            {"macd": macd_line, "signal": signal_line, "histogram": histogram}
-        )
+        macd_df = _compute_macd_df(close_prices, fast_period, slow_period, signal_period)
 
         if macd_df.isnull().values.any():
             logger.warning("MACD calculation returned NaNs in the result")

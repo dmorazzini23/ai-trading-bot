@@ -15,7 +15,6 @@ if not config.WEBHOOK_SECRET:
     raise RuntimeError("WEBHOOK_SECRET must be set")
 
 
-
 def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
     if not signature_header or not signature_header.startswith("sha256="):
         return False

@@ -626,6 +626,7 @@ _slippage_log: List[
 # Ensure persistent slippage log file exists
 if not os.path.exists(SLIPPAGE_LOG_FILE):
     try:
+        os.makedirs(os.path.dirname(SLIPPAGE_LOG_FILE) or ".", exist_ok=True)
         with open(SLIPPAGE_LOG_FILE, "w", newline="") as f:
             csv.writer(f).writerow(
                 ["timestamp", "symbol", "expected", "actual", "slippage_cents"]
@@ -1343,6 +1344,7 @@ class TradeLogger:
                 )
         if not os.path.exists(REWARD_LOG_FILE):
             try:
+                os.makedirs(os.path.dirname(REWARD_LOG_FILE) or ".", exist_ok=True)
                 with open(REWARD_LOG_FILE, "w", newline="") as rf:
                     csv.writer(rf).writerow(
                         [
@@ -4431,6 +4433,23 @@ def prepare_indicators(
 
     _add_basic_indicators(frame, symbol, state)
     _add_macd(frame, symbol, state)
+    if "macd" not in frame or frame["macd"].isna().all():
+        log_warning(
+            "MACD_EMPTY",
+            extra={"symbol": symbol, "fallback": True},
+        )
+        try:
+            close_series = frame["close"].astype(float)
+            fast = close_series.ewm(span=12, adjust=False).mean()
+            slow = close_series.ewm(span=26, adjust=False).mean()
+            macd_line = fast - slow
+            signal_line = macd_line.ewm(span=9, adjust=False).mean()
+            frame["macd"] = macd_line
+            frame["macds"] = signal_line
+        except Exception as exc:  # pragma: no cover - defensive
+            log_warning("MACD_FALLBACK_FAIL", exc=exc, extra={"symbol": symbol})
+            frame["macd"] = np.nan
+            frame["macds"] = np.nan
     _add_additional_indicators(frame, symbol, state)
     _add_multi_timeframe_features(frame, symbol, state)
 

@@ -12,6 +12,7 @@ from logger_rotator import get_rotating_handler
 def setup_logger(name: str, log_file: str, level: int = logging.INFO) -> logging.Logger:
     """Return a logger writing to ``log_file`` and stdout."""
 
+    os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     handler = get_rotating_handler(log_file)
@@ -37,7 +38,7 @@ def get_logger(name: str = __name__) -> logging.Logger:
 
 def configure_root_logger(log_file: str, level: int = logging.INFO) -> logging.Logger:
     """Configure the root logger with a rotating file and stdout handler."""
-
+    os.makedirs(os.path.dirname(log_file) or ".", exist_ok=True)
     handler = get_rotating_handler(log_file)
     logging.basicConfig(
         level=level,

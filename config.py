@@ -61,10 +61,15 @@ def _require_env_vars(*keys: str) -> None:
         sys.exit(1)
 
 
-_require_env_vars("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL")
+def validate_environment() -> None:
+    """Validate that mandatory environment variables are present."""
+    missing = [v for v in REQUIRED_ENV_VARS if not os.environ.get(v)]
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables: " + ", ".join(missing)
+        )
 
-
-
+validate_environment()
 ALPACA_API_KEY = get_env("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = get_env("ALPACA_SECRET_KEY")
 ALPACA_BASE_URL = get_env("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 _shutdown = False
 
 
-def _handle_signal(signum: int, _frame) -> None:
+def _handle_signal(signum: int, _unused_frame) -> None:
     global _shutdown
     logger.info("Received signal %s, shutting down", signum)
     _shutdown = True
