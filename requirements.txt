@@ -9,7 +9,7 @@ pandas>=2.0.3,<3.0
 pandas_ta==0.3.14b0
 requests>=2.31.0,<3.0
 beautifulsoup4>=4.11.1
-flask>=2.2.5,<2.3
+flask>=2.2,<3.0
 pandas_market_calendars>=4.3.0
 schedule>=1.1.0
 portalocker==2.7.0

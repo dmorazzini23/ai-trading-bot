@@ -146,6 +146,40 @@ class ExecutionEngine:
         self.slippage_count = slippage_count
         self.orders_total = orders_total
 
+    # --- helper methods -------------------------------------------------
+
+    def _select_api(self, asset_class: str):
+        api = self.api
+        if asset_class == "crypto" and hasattr(self.ctx, "crypto_api"):
+            api = self.ctx.crypto_api
+        elif asset_class == "forex" and hasattr(self.ctx, "forex_api"):
+            api = self.ctx.forex_api
+        elif asset_class == "commodity" and hasattr(self.ctx, "commodity_api"):
+            api = self.ctx.commodity_api
+        return api
+
+    def _has_buy_power(self, api: TradingClient, qty: int, price: Optional[float]) -> bool:
+        if price is None:
+            return True
+        try:
+            acct = api.get_account()
+        except Exception as e:  # pragma: no cover - api may be stubbed
+            self.logger.error(f"Error fetching account information: {e}")
+            return False
+        need = qty * price
+        if float(getattr(acct, "cash", 0)) < need:
+            self.logger.error(f"Insufficient buying power: need {need}, have {acct.cash}")
+            return False
+        return True
+
+    def _can_sell(self, api: TradingClient, symbol: str) -> bool:
+        try:
+            api.get_position(symbol)
+            return True
+        except Exception as e:  # pragma: no cover - position may not exist
+            self.logger.error(f"No position to sell for {symbol}: {e}")
+            return False
+
     def submit_order(self, order_request):
         """Placeholder for order submission logic."""
         return submit_order(self.api, order_request, self.logger)
@@ -284,34 +318,14 @@ class ExecutionEngine:
         """Execute an order for the given asset class."""
         remaining = int(math.floor(qty))
         last_order = None
-        api = self.api
-        if asset_class == "crypto" and hasattr(self.ctx, "crypto_api"):
-            api = self.ctx.crypto_api
-        elif asset_class == "forex" and hasattr(self.ctx, "forex_api"):
-            api = self.ctx.forex_api
-        elif asset_class == "commodity" and hasattr(self.ctx, "commodity_api"):
-            api = self.ctx.commodity_api
+        api = self._select_api(asset_class)
         while remaining > 0:
             order_req, expected_price = self._prepare_order(symbol, side, remaining)
             slice_qty = getattr(order_req, "qty", remaining)
-            try:
-                acct = api.get_account()
-            except Exception as e:
-                # Log unexpected account retrieval errors
-                self.logger.error(f"Error fetching account information: {e}")
-                acct = None
-            if side.lower() == "buy" and acct:
-                need = slice_qty * (expected_price or 0)
-                if float(acct.cash) < need:
-                    self.logger.error(f"Insufficient buying power for {symbol}: need {need}, have {acct.cash}")
-                    break
-            if side.lower() == "sell":
-                try:
-                    api.get_position(symbol)
-                except Exception as e:
-                    # Log the exception to aid debugging of sell attempts
-                    self.logger.error(f"No position to sell for {symbol}: {e}")
-                    break
+            if side.lower() == "buy" and not self._has_buy_power(api, slice_qty, expected_price):
+                break
+            if side.lower() == "sell" and not self._can_sell(api, symbol):
+                break
             start = time.monotonic()
             order = None
             for attempt in range(2):
