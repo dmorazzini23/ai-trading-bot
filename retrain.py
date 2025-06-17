@@ -1,16 +1,17 @@
-import os
-import json
 import csv
-import random
-import joblib
+import json
 import logging
+import os
+import random
 import warnings
-import pandas as pd
+
+import joblib
 import numpy as np
-from metrics_logger import log_metrics
-from utils import safe_to_datetime
+import pandas as pd
 
 import config
+from metrics_logger import log_metrics
+from utils import safe_to_datetime
 
 config.reload_env()
 
@@ -24,15 +25,13 @@ try:
     torch.manual_seed(SEED)
 except ImportError:
     pass
-import requests
 from datetime import date, datetime, time, timedelta, timezone
-from sklearn.model_selection import (
-    ParameterSampler,
-    cross_val_score,
-)
+
+import requests
+from lightgbm import LGBMClassifier
+from sklearn.model_selection import ParameterSampler, cross_val_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-from lightgbm import LGBMClassifier
 
 logger = logging.getLogger(__name__)
 import pandas_ta as ta
@@ -46,6 +45,7 @@ except Exception as e:  # pragma: no cover - optional dependency
     optuna = None
 
 import config
+
 NEWS_API_KEY = config.NEWS_API_KEY
 
 if not NEWS_API_KEY:
@@ -67,11 +67,7 @@ def get_git_hash() -> str:
     try:
         import subprocess
 
-        return (
-            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])
-            .decode()
-            .strip()
-        )
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
     except Exception as e:
         logger.debug("git hash lookup failed: %s", e)
         return "unknown"
@@ -127,9 +123,7 @@ def fetch_sentiment(symbol: str) -> float:
         articles = resp.json().get("articles", [])
         if not articles:
             return 0.0
-        score = sum(
-            1 for a in articles if "positive" in (a.get("title") or "").lower()
-        ) / len(articles)
+        score = sum(1 for a in articles if "positive" in (a.get("title") or "").lower()) / len(articles)
         return float(score)
     except Exception as e:
         logger.exception("Failed to fetch sentiment for %s: %s", symbol, e)
@@ -190,9 +184,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     for col in ["high", "low", "close", "volume"]:
         if col not in df.columns:
-            raise KeyError(
-                f"Column '{col}' not found in DataFrame in prepare_indicators"
-            )
+            raise KeyError(f"Column '{col}' not found in DataFrame in prepare_indicators")
         df[col] = df[col].astype(float)
     if "open" in df.columns:
         df["open"] = df["open"].astype(float)
@@ -299,9 +291,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     df["willr"] = np.nan
     try:
-        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14).astype(
-            float
-        )
+        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14).astype(float)
     except Exception as e:
         logger.exception("Williams %R calculation failed: %s", e)
 
@@ -320,12 +310,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         ich = ta.ichimoku(high=df["high"], low=df["low"], close=df["close"])
         conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
         base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
-        df["ichimoku_conv"] = (
-            conv.iloc[:, 0] if hasattr(conv, "iloc") else conv
-        ).astype(float)
-        df["ichimoku_base"] = (
-            base.iloc[:, 0] if hasattr(base, "iloc") else base
-        ).astype(float)
+        df["ichimoku_conv"] = (conv.iloc[:, 0] if hasattr(conv, "iloc") else conv).astype(float)
+        df["ichimoku_base"] = (base.iloc[:, 0] if hasattr(base, "iloc") else base).astype(float)
     except Exception as e:
         logger.exception("Ichimoku calculation failed: %s", e)
 
@@ -356,9 +342,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ret_1h"] = df["close"].pct_change(60).astype(float)
         df["ret_d"] = df["close"].pct_change(390).astype(float)
         df["ret_w"] = df["close"].pct_change(1950).astype(float)
-        df["vol_norm"] = (
-            df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
-        ).astype(float)
+        df["vol_norm"] = (df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()).astype(float)
         df["5m_vs_1h"] = (df["ret_5m"] - df["ret_1h"]).astype(float)
         df["vol_5m"] = df["close"].pct_change().rolling(5).std().astype(float)
         df["vol_1h"] = df["close"].pct_change().rolling(60).std().astype(float)
@@ -451,9 +435,7 @@ def build_feature_label_df(
     for sym, raw in raw_store.items():
         try:
             if raw is None or raw.empty:
-                print(
-                    f"[build_feature_label_df] – {sym} returned no minute data; skipping symbol."
-                )
+                print(f"[build_feature_label_df] – {sym} returned no minute data; skipping symbol.")
                 continue
             min_required = max(int(MINUTES_REQUIRED * 0.7), 5)
             if raw.shape[0] < min_required:
@@ -472,9 +454,7 @@ def build_feature_label_df(
                 or "low" not in raw.columns
                 or "volume" not in raw.columns
             ):
-                print(
-                    f"[build_feature_label_df] – skipping {sym}, missing price/volume columns"
-                )
+                print(f"[build_feature_label_df] – skipping {sym}, missing price/volume columns")
                 continue
 
             for col in ["high", "low", "close", "volume"]:
@@ -504,9 +484,7 @@ def build_feature_label_df(
                 label = 1 if ret_pct >= threshold_pct else 0
 
                 row = feat.iloc[i].copy().to_dict()
-                row["regime"] = (
-                    regimes.iloc[i] if len(regimes) > i else regimes.iloc[-1]
-                )
+                row["regime"] = regimes.iloc[i] if len(regimes) > i else regimes.iloc[-1]
                 row["label"] = label
                 rows.append(row)
         except KeyError as e:
@@ -518,9 +496,7 @@ def build_feature_label_df(
     return df_all
 
 
-def log_hyperparam_result(
-    regime: str, generation: int, params: dict, score: float
-) -> None:
+def log_hyperparam_result(regime: str, generation: int, params: dict, score: float) -> None:
     row = [
         datetime.now(timezone.utc).isoformat(),
         regime,
@@ -593,9 +569,7 @@ def evolutionary_search(
     """Simple evolutionary hyperparameter search."""
     best_params = base_params.copy()
     best_score = -np.inf
-    population_params = list(
-        ParameterSampler(param_space, n_iter=population, random_state=SEED)
-    )
+    population_params = list(ParameterSampler(param_space, n_iter=population, random_state=SEED))
     for gen in range(generations):
         scores = []
         for params in population_params:
@@ -614,9 +588,7 @@ def evolutionary_search(
         if not scores:
             logger.warning("No successful CV scores in generation %s", gen)
             continue
-        ranked = sorted(
-            zip(scores, population_params), key=lambda t: t[0], reverse=True
-        )
+        ranked = sorted(zip(scores, population_params), key=lambda t: t[0], reverse=True)
         for rank, (scr, pr) in enumerate(ranked):
             log_hyperparam_result("", gen, pr, scr)
         if ranked[0][0] > best_score:
@@ -645,9 +617,7 @@ def optuna_search(
     """Hyperparameter tuning using Optuna if available."""
     if optuna is None:
         logger.warning("Optuna not installed; falling back to evolutionary search")
-        return evolutionary_search(
-            X, y, base_params, param_space, generations=3, population=n_trials
-        )
+        return evolutionary_search(X, y, base_params, param_space, generations=3, population=n_trials)
 
     def objective(trial):
         params = {k: trial.suggest_categorical(k, v) for k, v in param_space.items()}
@@ -706,9 +676,7 @@ def retrain_meta_learner(
         logger.warning("All minute DataFrames empty; skipping retrain")
         return False
 
-    df_all = build_feature_label_df(
-        raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct
-    )
+    df_all = build_feature_label_df(raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct)
     if df_all.empty:
         print("  ⚠️ No usable rows after building (Δ, threshold) → skipping retrain.")
         return False
@@ -734,9 +702,7 @@ def retrain_meta_learner(
 
         pos_ratio = y_train.mean()
         scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
-        print(
-            f"  ✔ Training {regime} model using scoring='{scoring}' (pos_ratio={pos_ratio:.3f})"
-        )
+        print(f"  ✔ Training {regime} model using scoring='{scoring}' (pos_ratio={pos_ratio:.3f})")
 
         base_params = dict(objective="binary", n_jobs=-1, random_state=SEED)
         search_space = {
@@ -758,9 +724,7 @@ def retrain_meta_learner(
         clf = LGBMClassifier(**best_hyper)
         pipe = make_pipeline(StandardScaler(), clf)
         if X_train.empty:
-            logger.warning(
-                f"[retrain_meta_learner] Training data empty for {regime}; skipping model fit"
-            )
+            logger.warning(f"[retrain_meta_learner] Training data empty for {regime}; skipping model fit")
             continue
         pipe.fit(X_train, y_train)
         print(f"  ✔ {regime} best params: {best_hyper}")
@@ -785,8 +749,7 @@ def retrain_meta_learner(
             print(importances.sort_values(ascending=False).head(10))
             imp_df = pd.DataFrame(
                 {
-                    "timestamp": [datetime.now(timezone.utc).isoformat()]
-                    * len(importances),
+                    "timestamp": [datetime.now(timezone.utc).isoformat()] * len(importances),
                     "feature": importances.index,
                     "importance": importances.values,
                 }

@@ -1,8 +1,9 @@
-from typing import List
-import pandas as pd
 import logging
-from .base import Strategy, TradeSignal, asset_class_for
+from typing import List
 
+import pandas as pd
+
+from .base import Strategy, TradeSignal, asset_class_for
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,7 @@ class MeanReversionStrategy(Strategy):
             df = ctx.data_fetcher.get_daily_df(ctx, sym)
             # Ensure we have data and enough rows before doing rolling calculations
             if df is None or df.empty or len(df) < self.lookback:
-                logger.warning(
-                    f"{sym}: insufficient data for lookback {self.lookback}"
-                )
+                logger.warning(f"{sym}: insufficient data for lookback {self.lookback}")
                 # Skip signal generation when we don't have enough history
                 continue
 

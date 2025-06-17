@@ -18,9 +18,7 @@ def make_df(cols, dtype="float64", values=None):
     dct = {}
     for c in cols:
         if "date" in c.lower() or "time" in c.lower():
-            dct[c] = pd.date_range(
-                "2024-01-01", periods=len(values), freq="D", tz="UTC"
-            )
+            dct[c] = pd.date_range("2024-01-01", periods=len(values), freq="D", tz="UTC")
         elif "symbol" in c.lower() or "ticker" in c.lower():
             dct[c] = [f"SYM{i}" for i in range(len(values))]
         elif "ret" in c.lower():
@@ -79,9 +77,7 @@ def test_get_datetime_column_variants():
     assert get_datetime_column(df) is None
     # Not monotonic
     df = make_df(["datetime"])
-    df["datetime"] = pd.to_datetime(
-        ["2024-01-02", "2024-01-01", "2024-01-03"], utc=True
-    )
+    df["datetime"] = pd.to_datetime(["2024-01-02", "2024-01-01", "2024-01-03"], utc=True)
     assert get_datetime_column(df) is None
     # Not timezone aware
     df = make_df(["datetime"])

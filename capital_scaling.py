@@ -30,4 +30,5 @@ class CapitalScalingEngine:
         # TODO: Implement capital scaling logic here.
         pass
 
+
 __all__ = ["CapitalScalingEngine"]

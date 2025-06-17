@@ -1,33 +1,26 @@
-import time
-import os
 import csv
-import math
-import random
 import logging
 import logging.handlers
+import math
+import os
+import random
+import time
 import warnings
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    wait_random,
-    retry_if_exception_type,
-)
-from datetime import datetime
-from datetime import timezone
-from typing import Any
-from typing import Optional
-from typing import Tuple
+from datetime import datetime, timezone
+from typing import Any, Optional, Tuple
+
+from tenacity import (retry, retry_if_exception_type, stop_after_attempt,
+                      wait_exponential, wait_random)
 
 # Updated Alpaca SDK imports
 try:
-    from alpaca.trading.client import TradingClient
-    from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
-    from alpaca.trading.enums import OrderSide, TimeInForce
-    from alpaca.trading.models import Order
     from alpaca.common.exceptions import APIError
     from alpaca.data.models import Quote
     from alpaca.data.requests import StockLatestQuoteRequest
+    from alpaca.trading.client import TradingClient
+    from alpaca.trading.enums import OrderSide, TimeInForce
+    from alpaca.trading.models import Order
+    from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 except Exception:  # pragma: no cover - allow running without Alpaca SDK
     TradingClient = object
 
@@ -71,14 +64,17 @@ except Exception:  # pragma: no cover - allow running without Alpaca SDK
         def __init__(self, symbol_or_symbols):
             self.symbols = symbol_or_symbols
 
+
 try:
     from alpaca_api import submit_order
 except Exception:  # pragma: no cover - allow running without Alpaca API config
+
     def submit_order(*args, **kwargs):
         raise RuntimeError("Alpaca API unavailable")
 
-from slippage import monitor_slippage
+
 from audit import log_trade
+from slippage import monitor_slippage
 
 SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
@@ -110,15 +106,14 @@ def place_order(symbol: str, qty: int, side: str):
     log_order(order)
     return order
 
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
 class ExecutionEngine:
     """Institutional-grade execution engine for dynamic order routing."""
 
-    def __init__(
-        self, ctx: Any, *, slippage_total=None, slippage_count=None, orders_total=None
-    ) -> None:
+    def __init__(self, ctx: Any, *, slippage_total=None, slippage_count=None, orders_total=None) -> None:
         self.ctx = ctx
         # Trading client from the new Alpaca SDK
         self.api: TradingClient = ctx.api
@@ -126,15 +121,11 @@ class ExecutionEngine:
         self.logger = logging.getLogger("execution")
         self.logger.setLevel(logging.INFO)
         try:
-            handler = logging.handlers.RotatingFileHandler(
-                log_path, maxBytes=5_000_000, backupCount=2
-            )
+            handler = logging.handlers.RotatingFileHandler(log_path, maxBytes=5_000_000, backupCount=2)
             self.logger.addHandler(handler)
         except Exception as e:
             self.logger.error(f"Failed to set up log handler {log_path}: {e}")
-        self.slippage_path = os.path.join(
-            os.path.dirname(__file__), "logs", "slippage.csv"
-        )
+        self.slippage_path = os.path.join(os.path.dirname(__file__), "logs", "slippage.csv")
         if not os.path.exists(self.slippage_path):
             # Protect file creation in case the logs directory is unwritable
             try:
@@ -150,16 +141,14 @@ class ExecutionEngine:
                         ]
                     )
             except OSError as e:
-                self.logger.error(
-                    f"Failed to create slippage log {self.slippage_path}: {e}"
-                )
+                self.logger.error(f"Failed to create slippage log {self.slippage_path}: {e}")
         self.slippage_total = slippage_total
         self.slippage_count = slippage_count
         self.orders_total = orders_total
+
     def submit_order(self, order_request):
         """Placeholder for order submission logic."""
         return submit_order(self.api, order_request, self.logger)
-
 
     @retry(
         stop=stop_after_attempt(3),
@@ -185,37 +174,26 @@ class ExecutionEngine:
             return 0.0
         if len(df) < 20:
             # Not enough rows for a 20 day average
-            self.logger.warning(
-                f"Not enough rows for ADV calculation of {symbol}: got {len(df)}"
-            )
+            self.logger.warning(f"Not enough rows for ADV calculation of {symbol}: got {len(df)}")
             return 0.0
         return float(df["volume"].tail(20).mean())
 
     def _minute_stats(self, symbol: str) -> Tuple[float, float, float]:
         df = self.ctx.data_fetcher.get_minute_df(self.ctx, symbol)
-        if (
-            df is None
-            or df.empty
-            or "volume" not in df.columns
-            or "close" not in df.columns
-        ):
+        if df is None or df.empty or "volume" not in df.columns or "close" not in df.columns:
             # Missing data means we can't compute stats safely
             self.logger.warning(f"Minute data unavailable for {symbol}")
             return 0.0, 0.0, 0.0
         if len(df) < 5:
             # Require at least 5 rows for momentum/average calculations
-            self.logger.warning(
-                f"Not enough rows for minute stats of {symbol}: got {len(df)}"
-            )
+            self.logger.warning(f"Not enough rows for minute stats of {symbol}: got {len(df)}")
             return 0.0, 0.0, 0.0
         vol = float(df["volume"].iloc[-1])
         avg1m = float(df["volume"].tail(5).mean())
         momentum = float(df["close"].iloc[-1] - df["close"].iloc[-5])
         return vol, avg1m, momentum
 
-    def _prepare_order(
-        self, symbol: str, side: str, qty: int
-    ) -> Tuple[object, Optional[float]]:
+    def _prepare_order(self, symbol: str, side: str, qty: int) -> Tuple[object, Optional[float]]:
         bid, ask = self._latest_quote(symbol)
         spread = (ask - bid) if ask and bid else 0.0
         mid = (ask + bid) / 2 if ask and bid else None
@@ -269,9 +247,7 @@ class ExecutionEngine:
 
         return order_request, expected
 
-    def _log_slippage(
-        self, symbol: str, expected: Optional[float], actual: float
-    ) -> None:
+    def _log_slippage(self, symbol: str, expected: Optional[float], actual: float) -> None:
         slip = ((actual - expected) * 100) if expected else 0.0
         try:
             # File I/O may fail; handle gracefully
@@ -304,9 +280,7 @@ class ExecutionEngine:
         )
         monitor_slippage(expected, actual, symbol)
 
-    def execute_order(
-        self, symbol: str, qty: int, side: str, asset_class: str = "equity"
-    ) -> Optional[Order]:
+    def execute_order(self, symbol: str, qty: int, side: str, asset_class: str = "equity") -> Optional[Order]:
         """Execute an order for the given asset class."""
         remaining = int(math.floor(qty))
         last_order = None
@@ -329,9 +303,7 @@ class ExecutionEngine:
             if side.lower() == "buy" and acct:
                 need = slice_qty * (expected_price or 0)
                 if float(acct.cash) < need:
-                    self.logger.error(
-                        f"Insufficient buying power for {symbol}: need {need}, have {acct.cash}"
-                    )
+                    self.logger.error(f"Insufficient buying power for {symbol}: need {need}, have {acct.cash}")
                     break
             if side.lower() == "sell":
                 try:
@@ -355,9 +327,7 @@ class ExecutionEngine:
                     )
                     try:
                         order = submit_order(api, order_req, self.logger)
-                        self.logger.info(
-                            f"Order submit response for {symbol}: {order}"
-                        )
+                        self.logger.info(f"Order submit response for {symbol}: {order}")
                         if not getattr(order, "id", None) and not SHADOW_MODE:
                             self.logger.error(f"Order failed for {symbol}: {order}")
                     except Exception as e:
@@ -376,9 +346,7 @@ class ExecutionEngine:
                     self.logger.warning(f"APIError placing order for {symbol}: {e}")
                     return last_order
                 except Exception as e:
-                    self.logger.exception(
-                        f"Unexpected error placing order for {symbol}: {e}"
-                    )
+                    self.logger.exception(f"Unexpected error placing order for {symbol}: {e}")
                     return last_order
             if order is None:
                 break
@@ -398,9 +366,7 @@ class ExecutionEngine:
                     extra={"symbol": symbol},
                 )
                 break
-            fill_price = float(
-                getattr(order, "filled_avg_price", expected_price or 0) or 0
-            )
+            fill_price = float(getattr(order, "filled_avg_price", expected_price or 0) or 0)
             latency = (time.monotonic() - start) * 1000.0
             self._log_slippage(symbol, expected_price, fill_price)
             if status == "filled":
@@ -413,11 +379,16 @@ class ExecutionEngine:
                         "price": fill_price,
                     },
                 )
-                log_trade(symbol, side, slice_qty, fill_price, status, "SHADOW" if SHADOW_MODE else "LIVE")
-            else:
-                self.logger.error(
-                    "ORDER_STATUS", extra={"symbol": symbol, "status": status}
+                log_trade(
+                    symbol,
+                    side,
+                    slice_qty,
+                    fill_price,
+                    status,
+                    "SHADOW" if SHADOW_MODE else "LIVE",
                 )
+            else:
+                self.logger.error("ORDER_STATUS", extra={"symbol": symbol, "status": status})
             if self.orders_total is not None:
                 self.orders_total.inc()
             last_order = order
@@ -425,5 +396,6 @@ class ExecutionEngine:
             if remaining > 0:
                 time.sleep(random.uniform(0.05, 0.15))
         return last_order
+
 
 __all__ = ["ExecutionEngine", "log_order"]

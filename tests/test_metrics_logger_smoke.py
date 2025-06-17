@@ -1,8 +1,9 @@
 import csv
-from pathlib import Path
 import importlib
-import pytest
 import sys
+from pathlib import Path
+
+import pytest
 
 sys.modules.pop("metrics_logger", None)
 metrics_logger = importlib.import_module("metrics_logger")

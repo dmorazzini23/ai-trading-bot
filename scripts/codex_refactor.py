@@ -12,10 +12,7 @@ def main():
     suggestions_dir = Path("refactor-suggestions")
     suggestions_dir.mkdir(exist_ok=True)
     output_file = suggestions_dir / "refactored_example.py"
-    output_file.write_text(
-        "# Auto-generated refactor suggestion\n\n"
-        + f"# Received diff length: {len(args.diff)}\n"
-    )
+    output_file.write_text("# Auto-generated refactor suggestion\n\n" + f"# Received diff length: {len(args.diff)}\n")
     print(f"Wrote refactor suggestion to {output_file}")
 
 

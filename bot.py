@@ -78,13 +78,13 @@ import requests
 import schedule
 import yfinance as yf
 from alpaca.common.exceptions import APIError
-
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, OrderStatus, QueryOrderStatus, TimeInForce
+from alpaca.trading.enums import (OrderSide, OrderStatus, QueryOrderStatus,
+                                  TimeInForce)
 from alpaca.trading.models import Order
-from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest
-
+from alpaca.trading.requests import (GetOrdersRequest, LimitOrderRequest,
+                                     MarketOrderRequest)
 # Legacy import removed; using alpaca-py trading stream instead
 from alpaca.trading.stream import TradingStream
 from bs4 import BeautifulSoup
@@ -268,7 +268,8 @@ def reconcile_positions(ctx: "BotContext") -> None:
 import warnings
 
 from ratelimit import limits, sleep_and_retry
-from tenacity import RetryError, retry, retry_if_exception_type, stop_after_attempt, wait_exponential, wait_random
+from tenacity import (RetryError, retry, retry_if_exception_type,
+                      stop_after_attempt, wait_exponential, wait_random)
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 RUN_HEALTH = RUN_HEALTHCHECK == "1"

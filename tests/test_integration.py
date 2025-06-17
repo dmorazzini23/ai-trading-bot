@@ -1,8 +1,9 @@
+import os
 import sys
 from pathlib import Path
-import pandas as pd
+
 import numpy as np
-import os
+import pandas as pd
 
 # ensure project root in path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -10,8 +11,10 @@ if "joblib" in sys.modules:
     del sys.modules["joblib"]
 
 import config
-from ml_model import MLModel
 import data_fetcher
+from ml_model import MLModel
+
+
 class DummyEngine:
     def __init__(self):
         self.orders = []

@@ -1,5 +1,7 @@
 from pathlib import Path
+
 import pytest
+
 import logger_rotator
 
 
@@ -20,9 +22,7 @@ def test_get_rotating_handler(monkeypatch):
             created["backupCount"] = backupCount
 
     monkeypatch.setattr(logger_rotator, "RotatingFileHandler", Dummy)
-    handler = logger_rotator.get_rotating_handler(
-        "foo.log", max_bytes=1, backup_count=2
-    )
+    handler = logger_rotator.get_rotating_handler("foo.log", max_bytes=1, backup_count=2)
     assert isinstance(handler, Dummy)
     assert created["path"] == "foo.log"
     force_coverage(logger_rotator)

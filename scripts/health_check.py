@@ -9,9 +9,7 @@ REPORT = "health_report.txt"
 
 def main():
     # 1) Check for uncaught exceptions in last 24h
-    since = (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
-        "%Y-%m-%d %H:%M:%S"
-    )
+    since = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
     grep = subprocess.run(
         ["grep", "-R", "Traceback", "--include", "*.log", LOG_FILE],
         stdout=subprocess.PIPE,

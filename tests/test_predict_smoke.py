@@ -9,9 +9,7 @@ import pytest
 
 def _import_predict(monkeypatch):
     req_mod = types.ModuleType("requests")
-    req_mod.get = lambda *a, **k: types.SimpleNamespace(
-        json=lambda: {"articles": []}, raise_for_status=lambda: None
-    )
+    req_mod.get = lambda *a, **k: types.SimpleNamespace(json=lambda: {"articles": []}, raise_for_status=lambda: None)
     req_mod.exceptions = types.SimpleNamespace(RequestException=Exception)
     monkeypatch.setitem(sys.modules, "requests", req_mod)
 

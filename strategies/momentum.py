@@ -1,6 +1,8 @@
-from typing import List
-import pandas as pd
 import logging
+from typing import List
+
+import pandas as pd
+
 from .base import Strategy, TradeSignal, asset_class_for
 
 # Logger added to allow warning messages when data is insufficient
@@ -22,9 +24,7 @@ class MomentumStrategy(Strategy):
             df = ctx.data_fetcher.get_daily_df(ctx, sym)
             # Skip ticker when no data or not enough history to compute momentum
             if df is None or df.empty or len(df) <= self.lookback:
-                logger.warning(
-                    "Insufficient data for %s; expected >%d rows", sym, self.lookback
-                )
+                logger.warning("Insufficient data for %s; expected >%d rows", sym, self.lookback)
                 continue
             # Data is safe to use; compute lookback return
             ret = df["close"].pct_change(self.lookback).iloc[-1]

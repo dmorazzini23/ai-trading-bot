@@ -42,7 +42,7 @@ def create_app() -> Flask:
             subprocess.Popen([os.path.join(os.path.dirname(__file__), "deploy.sh")])
         return jsonify({"status": "ok"})
 
-    @app.get("/health")
+    @app.route("/health")
     def health() -> Any:
         return jsonify(status="ok")
 

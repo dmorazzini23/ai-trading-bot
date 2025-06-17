@@ -1,7 +1,9 @@
-from pathlib import Path
 import importlib
-import pytest
 import sys
+from pathlib import Path
+
+import pytest
+
 from strategies import TradeSignal
 
 sys.modules.pop("strategy_allocator", None)

@@ -1,10 +1,11 @@
+import datetime
+import os
 import sys
 import types
 from pathlib import Path
+
 import pandas as pd
-import datetime
 import pytest
-import os
 
 os.environ.setdefault("APCA_API_KEY_ID", "dummy")
 os.environ.setdefault("APCA_API_SECRET_KEY", "dummy")
@@ -54,10 +55,13 @@ class _DummyHist:
 
 
 sys.modules["alpaca.data.historical"].StockHistoricalDataClient = _DummyHist
+
+
 class _DummyRequest:
     def __init__(self, *a, **k):
         for key, val in k.items():
             setattr(self, key, val)
+
 
 sys.modules["alpaca.data.requests"].StockBarsRequest = _DummyRequest
 sys.modules["alpaca.data.requests"].StockLatestQuoteRequest = _DummyRequest
@@ -91,10 +95,9 @@ def test_get_minute_df(monkeypatch):
         return FakeBars(df)
 
     monkeypatch.setattr(data_fetcher.client, "get_stock_bars", fake_get_stock_bars)
-    result = data_fetcher.get_minute_df(
-        "AAPL", datetime.date(2023, 1, 1), datetime.date(2023, 1, 2)
-    )
+    result = data_fetcher.get_minute_df("AAPL", datetime.date(2023, 1, 1), datetime.date(2023, 1, 2))
     assert not result.empty
+
 
 def test_subscription_error_logged(monkeypatch, caplog):
     df = pd.DataFrame(

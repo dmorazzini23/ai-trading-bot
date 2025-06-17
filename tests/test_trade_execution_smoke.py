@@ -1,9 +1,10 @@
-import types
-from pathlib import Path
-import pandas as pd
-import pytest
 import importlib
 import sys
+import types
+from pathlib import Path
+
+import pandas as pd
+import pytest
 
 sys.modules.pop("trade_execution", None)
 trade_execution = importlib.import_module("trade_execution")
@@ -17,19 +18,13 @@ def force_coverage(mod):
 
 class DummyCtx:
     def __init__(self):
-        self.api = types.SimpleNamespace(
-            get_account=lambda: types.SimpleNamespace(cash="1000")
-        )
+        self.api = types.SimpleNamespace(get_account=lambda: types.SimpleNamespace(cash="1000"))
         self.data_client = types.SimpleNamespace(
-            get_stock_latest_quote=lambda req: types.SimpleNamespace(
-                bid_price=1.0, ask_price=1.1
-            )
+            get_stock_latest_quote=lambda req: types.SimpleNamespace(bid_price=1.0, ask_price=1.1)
         )
         self.data_fetcher = types.SimpleNamespace(
             get_daily_df=lambda ctx, sym: pd.DataFrame({"volume": [1] * 20}),
-            get_minute_df=lambda ctx, sym: pd.DataFrame(
-                {"volume": [1] * 5, "close": [1, 2, 3, 4, 5]}
-            ),
+            get_minute_df=lambda ctx, sym: pd.DataFrame({"volume": [1] * 5, "close": [1, 2, 3, 4, 5]}),
         )
         self.capital_band = "small"
 
