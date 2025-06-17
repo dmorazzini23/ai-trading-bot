@@ -24,6 +24,19 @@ logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
+
+def log_warning(
+    msg: str, *, exc: Exception | None = None, extra: dict | None = None
+) -> None:
+    """Standardized warning logger used across the project."""
+    if extra is None:
+        extra = {}
+    if exc is not None:
+        logger.warning(f"{msg}: {exc}", extra=extra, exc_info=True)
+    else:
+        logger.warning(msg, extra=extra)
+
+
 MARKET_OPEN_TIME = time(9, 30)
 MARKET_CLOSE_TIME = time(16, 0)
 EASTERN_TZ = ZoneInfo("America/New_York")
@@ -164,7 +177,9 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
             return pd.DatetimeIndex([pd.NaT] * len(arr), tz="UTC")
 
 
-def parse_timestamp(value: str, format: str = "%Y-%m-%d %H:%M:%S", utc: bool = True) -> pd.Timestamp:
+def parse_timestamp(
+    value: str, format: str = "%Y-%m-%d %H:%M:%S", utc: bool = True
+) -> pd.Timestamp:
     """Parse a single timestamp string safely."""
     if not value:
         logger.warning("parse_timestamp received empty value")
@@ -196,20 +211,30 @@ def get_column(
     for col in options:
         if col in df.columns:
             if dtype is not None:
-                if dtype == "datetime64[ns]" and pd.api.types.is_datetime64_any_dtype(df[col]):
+                if dtype == "datetime64[ns]" and pd.api.types.is_datetime64_any_dtype(
+                    df[col]
+                ):
                     pass
                 elif not pd.api.types.is_dtype_equal(df[col].dtype, dtype):
-                    raise TypeError(f"{label}: column '{col}' is not of dtype {dtype}, got {df[col].dtype}")
+                    raise TypeError(
+                        f"{label}: column '{col}' is not of dtype {dtype}, got {df[col].dtype}"
+                    )
             if must_be_monotonic and not df[col].is_monotonic_increasing:
                 raise ValueError(f"{label}: column '{col}' is not monotonic increasing")
             if must_be_non_null and df[col].isnull().all():
                 raise ValueError(f"{label}: column '{col}' is all null")
             if must_be_unique and not df[col].is_unique:
                 raise ValueError(f"{label}: column '{col}' is not unique")
-            if must_be_timezone_aware and hasattr(df[col], "dt") and df[col].dt.tz is None:
+            if (
+                must_be_timezone_aware
+                and hasattr(df[col], "dt")
+                and df[col].dt.tz is None
+            ):
                 raise ValueError(f"{label}: column '{col}' is not timezone-aware")
             return col
-    raise ValueError(f"No recognized {label} column found in DataFrame: {df.columns.tolist()}")
+    raise ValueError(
+        f"No recognized {label} column found in DataFrame: {df.columns.tolist()}"
+    )
 
 
 # OHLCV helpers
@@ -269,14 +294,18 @@ def get_datetime_column(df):
 
 
 def get_symbol_column(df):
-    return _safe_get_column(df, ["symbol", "ticker", "SYMBOL"], "symbol", dtype="O", must_be_unique=True)
+    return _safe_get_column(
+        df, ["symbol", "ticker", "SYMBOL"], "symbol", dtype="O", must_be_unique=True
+    )
 
 
 # Return/returns column
 
 
 def get_return_column(df):
-    return _safe_get_column(df, ["Return", "ret", "returns"], "return", dtype=None, must_be_non_null=True)
+    return _safe_get_column(
+        df, ["Return", "ret", "returns"], "return", dtype=None, must_be_non_null=True
+    )
 
 
 # Indicator column (pass a list, e.g. ["SMA", "sma", "EMA", ...])
