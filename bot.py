@@ -80,6 +80,7 @@ np.NaN = np.nan
 import pandas as pd
 import pandas_market_calendars as mcal
 import pandas_ta as ta
+from signals import calculate_macd
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -4155,34 +4156,21 @@ def load_global_signal_performance(
     return filtered
 
 
-def prepare_indicators(
-    df: pd.DataFrame,
-    freq: str = "daily",
-    *,
-    symbol: str = "",
-    state: BotState | None = None,
-) -> pd.DataFrame:
-    """Compute technical indicators with defensive guards."""
-    df = df.copy()
-    required_cols = ["open", "high", "low", "close", "volume"]
-    missing_req = [c for c in required_cols if c not in df]
-    if missing_req:
-        log_warning(
-            "INDICATOR_MISSING_COLS",
-            extra={"symbol": symbol, "missing": ",".join(missing_req)},
-        )
-        if state:
-            state.indicator_failures += 1
-        return pd.DataFrame()
-    if df.index.name:
-        df = df.reset_index().rename(columns={df.index.name: "date"})
+def _normalize_index(data: pd.DataFrame) -> pd.DataFrame:
+    """Return ``data`` with a clean UTC index named ``date``."""
+    if data.index.name:
+        data = data.reset_index().rename(columns={data.index.name: "date"})
     else:
-        df = df.reset_index().rename(columns={"index": "date"})
-    df["date"] = pd.to_datetime(df["date"], utc=True)
-    df = df.sort_values("date").set_index("date")
-    if df.index.tz is not None:
-        df.index = df.index.tz_convert("UTC").tz_localize(None)
+        data = data.reset_index().rename(columns={"index": "date"})
+    data["date"] = pd.to_datetime(data["date"], utc=True)
+    data = data.sort_values("date").set_index("date")
+    if data.index.tz is not None:
+        data.index = data.index.tz_convert("UTC").tz_localize(None)
+    return data
 
+
+def _add_basic_indicators(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
+    """Add VWAP, RSI, ATR and simple moving averages."""
     try:
         df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
     except Exception as exc:
@@ -4204,12 +4192,32 @@ def prepare_indicators(
         if state:
             state.indicator_failures += 1
         df["atr"] = np.nan
-
-    # ensure rolling simple moving averages are available for ML
     df["sma_50"] = df["close"].astype(float).rolling(window=50).mean()
     df["sma_200"] = df["close"].astype(float).rolling(window=200).mean()
 
-    # ── New advanced indicators ───────────────────────────────────────────
+
+def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
+    """Add MACD indicators using the defensive helper."""
+    try:
+        macd_df = calculate_macd(df["close"])
+        if macd_df is None:
+            raise ValueError("MACD calculation failed")
+        df["macd"] = macd_df["macd"]
+        df["macds"] = macd_df["signal"]
+    except Exception as exc:
+        log_warning(
+            "INDICATOR_MACD_FAIL",
+            exc=exc,
+            extra={"symbol": symbol, "snapshot": df["close"].tail(5).to_dict()},
+        )
+        if state:
+            state.indicator_failures += 1
+        df["macd"] = np.nan
+        df["macds"] = np.nan
+
+
+def _add_additional_indicators(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
+    """Add a suite of secondary technical indicators."""
     try:
         kc = ta.kc(df["high"], df["low"], df["close"], length=20)
         df["kc_lower"] = kc.iloc[:, 0]
@@ -4228,25 +4236,6 @@ def prepare_indicators(
     df["avg_vol_20"] = df["volume"].rolling(20).mean()
     df["dow"] = df.index.dayofweek
 
-    try:
-        macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-        if (
-            macd is None
-            or not isinstance(macd, pd.DataFrame)
-            or "MACD_12_26_9" not in macd
-            or "MACDs_12_26_9" not in macd
-        ):
-            raise ValueError("MACD returned None")
-        df["macd"] = macd["MACD_12_26_9"]
-        df["macds"] = macd["MACDs_12_26_9"]
-    except Exception as exc:
-        log_warning("INDICATOR_MACD_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["macd"] = np.nan
-        df["macds"] = np.nan
-
-    # Additional indicators for richer ML features
     try:
         bb = ta.bbands(df["close"], length=20)
         df["bb_upper"] = bb["BBU_20_2.0"]
@@ -4281,18 +4270,15 @@ def prepare_indicators(
             state.indicator_failures += 1
         df["cci"] = np.nan
 
-    # Ensure numeric dtype before computing MFI
-    df[["high", "low", "close", "volume"]] = df[
-        ["high", "low", "close", "volume"]
-    ].astype(float)
+    df[["high", "low", "close", "volume"]] = df[["high", "low", "close", "volume"]].astype(float)
     try:
         mfi_vals = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
         df["mfi"] = mfi_vals.astype(float)
-    except Exception as e:
-        log_warning("INDICATOR_MFI_FAIL", exc=e, extra={"symbol": symbol})
+    except Exception as exc:
+        log_warning("INDICATOR_MFI_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
-        df["mfi"] = None
+        df["mfi"] = np.nan
 
     try:
         df["tema"] = ta.tema(df["close"], length=10)
@@ -4343,15 +4329,15 @@ def prepare_indicators(
             state.indicator_failures += 1
         df["stochrsi"] = np.nan
 
-    # --- Multi-timeframe fusion ---
+
+def _add_multi_timeframe_features(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
+    """Add multi-timeframe and lag-based features."""
     try:
         df["ret_5m"] = df["close"].pct_change(5)
         df["ret_1h"] = df["close"].pct_change(60)
         df["ret_d"] = df["close"].pct_change(390)
         df["ret_w"] = df["close"].pct_change(1950)
-        df["vol_norm"] = (
-            df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
-        )
+        df["vol_norm"] = df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
         df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
         df["vol_5m"] = df["close"].pct_change().rolling(5).std()
         df["vol_1h"] = df["close"].pct_change().rolling(60).std()
@@ -4370,8 +4356,45 @@ def prepare_indicators(
         df["vol_5m"] = df["vol_1h"] = df["vol_d"] = df["vol_w"] = np.nan
         df["vol_ratio"] = df["mom_agg"] = df["lag_close_1"] = df["lag_close_3"] = np.nan
 
-    df.ffill(inplace=True)
-    df.bfill(inplace=True)
+
+def _drop_inactive_features(df: pd.DataFrame) -> None:
+    """Remove features listed in ``INACTIVE_FEATURES_FILE`` if present."""
+    if os.path.exists(INACTIVE_FEATURES_FILE):
+        try:
+            with open(INACTIVE_FEATURES_FILE) as f:
+                inactive = set(json.load(f))
+            df.drop(columns=[c for c in inactive if c in df.columns], inplace=True, errors="ignore")
+        except Exception as exc:  # pragma: no cover - unexpected I/O
+            logger.exception("bot.py unexpected", exc_info=exc)
+            raise
+
+
+def prepare_indicators(
+    df: pd.DataFrame,
+    freq: str = "daily",
+    *,
+    symbol: str = "",
+    state: BotState | None = None,
+) -> pd.DataFrame:
+    """Compute technical indicators with defensive guards."""
+    frame = df.copy()
+    required_cols = ["open", "high", "low", "close", "volume"]
+    missing = [c for c in required_cols if c not in frame]
+    if missing:
+        log_warning("INDICATOR_MISSING_COLS", extra={"symbol": symbol, "missing": ",".join(missing)})
+        if state:
+            state.indicator_failures += 1
+        return pd.DataFrame()
+
+    frame = _normalize_index(frame)
+
+    _add_basic_indicators(frame, symbol, state)
+    _add_macd(frame, symbol, state)
+    _add_additional_indicators(frame, symbol, state)
+    _add_multi_timeframe_features(frame, symbol, state)
+
+    frame.ffill(inplace=True)
+    frame.bfill(inplace=True)
 
     required = [
         "vwap",
@@ -4384,28 +4407,17 @@ def prepare_indicators(
         "stochrsi",
     ]
     if freq == "daily":
-        df["sma_50"] = ta.sma(df["close"], length=50)
-        df["sma_200"] = ta.sma(df["close"], length=200)
+        frame["sma_50"] = ta.sma(frame["close"], length=50)
+        frame["sma_200"] = ta.sma(frame["close"], length=200)
         required += ["sma_50", "sma_200"]
-        df.dropna(subset=required, how="any", inplace=True)
+        frame.dropna(subset=required, how="any", inplace=True)
     else:  # intraday
-        df.dropna(subset=required, how="all", inplace=True)
-        df.reset_index(drop=True, inplace=True)
+        frame.dropna(subset=required, how="all", inplace=True)
+        frame.reset_index(drop=True, inplace=True)
 
-    if os.path.exists(INACTIVE_FEATURES_FILE):
-        try:
-            with open(INACTIVE_FEATURES_FILE) as f:
-                inactive = set(json.load(f))
-            df.drop(
-                columns=[c for c in inactive if c in df.columns],
-                inplace=True,
-                errors="ignore",
-            )
-        except Exception as exc:
-            logger.exception("bot.py unexpected", exc_info=exc)
-            raise
+    _drop_inactive_features(frame)
 
-    return df
+    return frame
 
 
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
