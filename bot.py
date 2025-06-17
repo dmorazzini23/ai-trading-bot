@@ -4244,9 +4244,14 @@ def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
             raise ValueError("No close price data available for MACD")
         macd_df = signals_calculate_macd(close_series)
         if macd_df is None:
+            logger.warning("MACD returned None for %s", symbol)
             raise ValueError("MACD calculation returned None")
-        df["macd"] = macd_df["macd"].astype(float)
-        df["macds"] = macd_df["signal"].astype(float)
+        macd_col = macd_df.get("macd")
+        signal_col = macd_df.get("signal")
+        if macd_col is None or signal_col is None:
+            raise KeyError("MACD dataframe missing required columns")
+        df["macd"] = macd_col.astype(float)
+        df["macds"] = signal_col.astype(float)
     except Exception as exc:
         log_warning(
             "INDICATOR_MACD_FAIL",
@@ -4485,9 +4490,10 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
     feat["rsi"] = ta.rsi(df["close"], length=14)
     macd_df = signals_calculate_macd(df["close"])
-    if macd_df is not None:
+    if macd_df is not None and "macd" in macd_df:
         feat["macd"] = macd_df["macd"]
     else:
+        logger.warning("Regime MACD calculation failed")
         feat["macd"] = np.nan
     feat["vol"] = df["close"].pct_change().rolling(14).std()
     return feat.dropna()
