@@ -58,7 +58,9 @@ def _require_env_vars(*keys: str) -> None:
     missing = [v for v in keys if not os.environ.get(v)]
     if missing:
         logger.critical("Missing required environment variables: %s", missing)
-        sys.exit(1)
+        raise RuntimeError(
+            "Missing required environment variables: " + ", ".join(missing)
+        )
 
 
 def validate_environment() -> None:
@@ -68,10 +70,6 @@ def validate_environment() -> None:
         raise RuntimeError(
             "Missing required environment variables: " + ", ".join(missing)
         )
-
-
-def validate_env_vars() -> None:
-    _require_env_vars("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL")
 
 ALPACA_API_KEY = get_env("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = get_env("ALPACA_SECRET_KEY")
@@ -119,3 +117,8 @@ def validate_alpaca_credentials() -> None:
             "Missing Alpaca credentials. Please set ALPACA_API_KEY, "
             "ALPACA_SECRET_KEY and ALPACA_BASE_URL in your environment"
         )
+
+
+def validate_env_vars() -> None:
+    load_dotenv()
+    _require_env_vars("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL")
