@@ -34,13 +34,15 @@ import logging
 import logging.handlers
 import sys
 
-_REQUIRED_ENV = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
-_missing_env = [v for v in _REQUIRED_ENV if not os.getenv(v)]
-if _missing_env:
-    logging.getLogger(__name__).critical(
-        "Missing required environment variables: %s", _missing_env
+REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
+missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
+if missing:
+    print(
+        f"Error: Missing required environment variables: {missing}",
+        file=sys.stderr,
+        flush=True,
     )
-    sys.exit(1)
+    sys.exit(78)
 import random
 import re
 import signal
