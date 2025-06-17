@@ -7,8 +7,6 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-os.environ.setdefault("APCA_API_KEY_ID", "dummy")
-os.environ.setdefault("APCA_API_SECRET_KEY", "dummy")
 os.environ.setdefault("ALPACA_API_KEY", "dummy")
 os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
 

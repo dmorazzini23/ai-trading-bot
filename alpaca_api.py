@@ -1,5 +1,10 @@
 import logging
 import os
+
+if "ALPACA_API_KEY" in os.environ:
+    os.environ.setdefault("APCA_API_KEY_ID", os.environ["ALPACA_API_KEY"])
+if "ALPACA_SECRET_KEY" in os.environ:
+    os.environ.setdefault("APCA_API_SECRET_KEY", os.environ["ALPACA_SECRET_KEY"])
 import time
 from collections import defaultdict
 

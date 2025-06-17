@@ -25,6 +25,17 @@ When starting the live bot (`python bot.py`), the bot will automatically load
 `best_hyperparams.json` if it exists. Otherwise it falls back to the default
 values in `hyperparams.json`.
 
+## Configuration
+
+Copy `.env.example` to `.env` and provide your Alpaca API credentials:
+
+```bash
+ALPACA_API_KEY=your_key
+ALPACA_SECRET_KEY=your_secret
+```
+
+Only these variables are required for Alpaca access.
+
 ## Development
 
 Install the dependencies listed in `requirements-dev.txt` which in turn
