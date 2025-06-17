@@ -4,7 +4,8 @@ import logging
 import os
 import re
 import warnings
-from datetime import date, datetime, time, timezone
+import datetime as dt
+from datetime import date, time, timezone
 
 import pandas as pd
 
@@ -79,12 +80,12 @@ def get_latest_close(df: pd.DataFrame) -> float:
     return float(last)
 
 
-def is_market_open(now: datetime | None = None) -> bool:
+def is_market_open(now: dt.datetime | None = None) -> bool:
     """Return True if current time is within NYSE trading hours."""
     try:
         import pandas_market_calendars as mcal
 
-        check_time = (now or datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
+        check_time = (now or dt.datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
         cal = getattr(mcal, "get_calendar", None)
         if cal is None:
             raise AttributeError
@@ -103,7 +104,7 @@ def is_market_open(now: datetime | None = None) -> bool:
     except Exception as e:
         logger.debug("market calendar unavailable: %s", e)
         # Fallback to simple weekday/time check when calendar unavailable
-        now_et = (now or datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
+        now_et = (now or dt.datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
         if now_et.weekday() >= 5:
             return False
         current = now_et.time()
@@ -124,16 +125,16 @@ def convert_to_local(df: pd.DataFrame) -> pd.DataFrame:
     return df.tz_convert(local_tz)
 
 
-def ensure_utc(dt: datetime | date) -> datetime:
+def ensure_utc(value: dt.datetime | date) -> dt.datetime:
     """Return a timezone-aware UTC datetime for ``dt``."""
-    assert isinstance(dt, (datetime, date)), "dt must be date or datetime"
-    if isinstance(dt, datetime):
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    if isinstance(dt, date):
-        return datetime.combine(dt, time.min, tzinfo=timezone.utc)
-    raise TypeError(f"Unsupported type for ensure_utc: {type(dt)!r}")
+    assert isinstance(value, (dt.datetime, date)), "dt must be date or datetime"
+    if isinstance(value, dt.datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if isinstance(value, date):
+        return dt.datetime.combine(value, time.min, tzinfo=timezone.utc)
+    raise TypeError(f"Unsupported type for ensure_utc: {type(value)!r}")
 
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
@@ -158,9 +159,22 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
 
     try:
         return pd.to_datetime(arr, format=format, utc=utc)
-    except ValueError as exc:
+    except Exception as exc:  # catch all parsing errors
         logger.warning("safe_to_datetime coercing invalid values – %s", exc)
-        return pd.to_datetime(arr, format=format, errors="coerce", utc=True)
+        try:
+            return pd.to_datetime(arr, format=format, errors="coerce", utc=utc)
+        except Exception as exc2:
+            logger.error("safe_to_datetime failed: %s", exc2)
+            return pd.DatetimeIndex([pd.NaT] * len(arr), tz="UTC")
+
+
+def parse_timestamp(value: str, format: str = "%Y-%m-%d %H:%M:%S", utc: bool = True) -> pd.Timestamp:
+    """Parse a single timestamp string safely."""
+    try:
+        return pd.to_datetime(value, format=format, utc=utc)
+    except Exception as exc:  # pragma: no cover - safety net
+        logger.warning("parse_timestamp failed for %r: %s", value, exc)
+        return pd.NaT
 
 
 # Generic robust column getter with validation
