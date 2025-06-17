@@ -12,9 +12,7 @@ import config
 
 if not config.WEBHOOK_SECRET:
     logging.getLogger(__name__).error("WEBHOOK_SECRET must be set")
-    raise RuntimeError("WEBHOOK_SECRET must be set")
-
-
+raise RuntimeError("WEBHOOK_SECRET must be set")
 
 def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
     if not signature_header or not signature_header.startswith("sha256="):

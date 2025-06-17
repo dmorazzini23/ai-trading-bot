@@ -61,7 +61,6 @@ def _require_env_vars(*keys: str) -> None:
         sys.exit(1)
 
 
-
 ALPACA_API_KEY = get_env("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = get_env("ALPACA_SECRET_KEY")
 ALPACA_BASE_URL = get_env("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
