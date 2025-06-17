@@ -4436,6 +4436,73 @@ def run_multi_strategy(ctx: BotContext) -> None:
         ctx.risk_engine.register_fill(sig)
 
 
+def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[str]]:
+    """Prepare trading run by syncing positions and generating symbols."""
+    cancel_all_open_orders(ctx)
+    audit_positions(ctx)
+    try:
+        equity = float(ctx.api.get_account().equity)
+    except Exception:
+        equity = 0.0
+    ctx.capital_scaler.update(ctx, equity)
+    params["CAPITAL_CAP"] = ctx.params["CAPITAL_CAP"]
+    compute_spy_vol_stats(ctx)
+
+    full_watchlist = load_tickers(TICKERS_FILE)
+    symbols = screen_candidates()
+    if not symbols:
+        logger.warning("No tickers passed screening—using fallback watchlist.")
+        symbols = full_watchlist
+    logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
+    ctx.tickers = symbols
+    with portfolio_lock:
+        ctx.portfolio_weights = compute_portfolio_weights(symbols)
+    acct = ctx.api.get_account()
+    current_cash = float(acct.cash)
+    regime_ok = check_market_regime(state)
+    return current_cash, regime_ok, symbols
+
+
+def _process_symbols(
+    symbols: list[str],
+    current_cash: float,
+    model,
+    regime_ok: bool,
+) -> list[str]:
+    processed: list[str] = []
+
+    def process_symbol(symbol: str) -> None:
+        try:
+            logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
+            if not is_market_open():
+                logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
+                return
+            price_df = fetch_minute_df_safe(ctx, symbol)
+            if price_df.empty or "close" not in price_df.columns:
+                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+                return
+            processed.append(symbol)
+            _safe_trade(ctx, state, symbol, current_cash, model, regime_ok)
+        except Exception as exc:
+            logger.error(f"Error processing {symbol}: {exc}", exc_info=True)
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        list(executor.map(process_symbol, symbols))
+    return processed
+
+
+def _log_loop_heartbeat(loop_id: str, start: float) -> None:
+    duration = time.monotonic() - start
+    logger.info(
+        "HEARTBEAT",
+        extra={
+            "loop_id": loop_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "duration": duration,
+        },
+    )
+
+
 def run_all_trades_worker(state: BotState, model) -> None:
     """Run the full trading cycle for all candidate symbols.
 
@@ -4455,65 +4522,18 @@ def run_all_trades_worker(state: BotState, model) -> None:
     state.running = True
     loop_start = time.monotonic()
     try:
-        # On each run, clear open orders and correct any position mismatches
-        cancel_all_open_orders(ctx)
-        audit_positions(ctx)
-        try:
-            equity = float(ctx.api.get_account().equity)
-        except Exception:
-            equity = 0.0
-        ctx.capital_scaler.update(ctx, equity)
-        params["CAPITAL_CAP"] = ctx.params["CAPITAL_CAP"]
-        now_utc = pd.Timestamp.utcnow()
-        start_date = (now_utc - timedelta(days=5)).date()  # noqa: F841
-        end_date = now_utc.date()  # noqa: F841
-
-        # Update SPY vol stats first
-        compute_spy_vol_stats(ctx)
-
         logger.info(
             "RUN_ALL_TRADES_START",
             extra={"timestamp": datetime.now(timezone.utc).isoformat()},
         )
 
-        full_watchlist = load_tickers(TICKERS_FILE)
-        symbols = screen_candidates()
-        if not symbols:
-            logger.warning("No tickers passed screening—using fallback watchlist.")
-            symbols = full_watchlist
-        logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
-        ctx.tickers = symbols
-        with portfolio_lock:  # FIXED: protect shared portfolio state
-            ctx.portfolio_weights = compute_portfolio_weights(symbols)
+        current_cash, regime_ok, symbols = _prepare_run(ctx, state)
 
         if check_halt_flag():
             logger.info("TRADING_HALTED_VIA_FLAG")
             return
 
-        acct = ctx.api.get_account()
-        current_cash = float(acct.cash)
-        regime_ok = check_market_regime(state)
-
-        processed: list[str] = []
-
-        def process_symbol(symbol: str) -> None:
-            """Fetch data and execute trading logic for a single symbol."""
-            try:
-                logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
-                if not is_market_open():
-                    logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
-                    return
-                price_df = fetch_minute_df_safe(ctx, symbol)
-                if price_df.empty or "close" not in price_df.columns:
-                    logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
-                    return
-                processed.append(symbol)
-                _safe_trade(ctx, state, symbol, current_cash, model, regime_ok)
-            except Exception as e:
-                logger.error(f"Error processing {symbol}: {e}", exc_info=True)
-
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            list(executor.map(process_symbol, symbols))
+        processed = _process_symbols(symbols, current_cash, model, regime_ok)
 
         if not processed:
             logger.critical("DATA_SOURCE_EMPTY", extra={"symbols": symbols})
@@ -4545,15 +4565,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
     finally:
         # Always reset running flag
         state.running = False
-        duration = time.monotonic() - loop_start
-        logger.info(
-            "HEARTBEAT",
-            extra={
-                "loop_id": loop_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "duration": duration,
-            },
-        )
+        _log_loop_heartbeat(loop_id, loop_start)
 
 
 def schedule_run_all_trades(model):

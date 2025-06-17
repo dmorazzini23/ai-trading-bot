@@ -8,23 +8,19 @@ import datetime as dt
 from datetime import date, time, timezone
 
 import pandas as pd
+from zoneinfo import ZoneInfo
+import threading
 
 try:
     from tzlocal import get_localzone
 except ImportError:  # pragma: no cover - optional dependency
-    import pytz
-
     logging.warning("tzlocal not installed; defaulting to UTC")
 
-    def get_localzone():
-        return pytz.UTC
+    def get_localzone() -> ZoneInfo:
+        return ZoneInfo("UTC")
 
 
 logger = logging.getLogger(__name__)
-
-
-import threading
-from zoneinfo import ZoneInfo
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
