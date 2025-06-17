@@ -5,9 +5,7 @@ import os
 import re
 import warnings
 from datetime import date, datetime, time, timezone
-from typing import Any, Iterable
 
-import numpy as np
 import pandas as pd
 
 try:
@@ -153,30 +151,16 @@ def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
 
 
 def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str = ""):
-    """Safely convert an iterable of date strings to ``DatetimeIndex``.
-
-    Any values failing conversion result in a warning and ``NaT`` output.
-    """
+    """Safely convert an iterable of date strings to ``DatetimeIndex``."""
 
     if arr is None:
         return pd.DatetimeIndex([], tz="UTC")
 
-    valid_dates = []
-    invalid_entries = []
-
-    for entry in arr:
-        try:
-            valid_dates.append(pd.to_datetime(entry, format=format, utc=utc))
-        except (ValueError, TypeError):
-            invalid_entries.append(entry)
-
-    if invalid_entries:
-        logging.warning(
-            f"[safe_to_datetime]{f'[{context}]' if context else ''}: Non-date strings encountered: {invalid_entries}"
-        )
-        return pd.DatetimeIndex([pd.NaT] * len(arr))
-
-    return pd.DatetimeIndex(valid_dates)
+    try:
+        return pd.to_datetime(arr, format=format, utc=utc)
+    except ValueError as exc:
+        logger.warning("safe_to_datetime coercing invalid values – %s", exc)
+        return pd.to_datetime(arr, errors="coerce", utc=True)
 
 
 # Generic robust column getter with validation

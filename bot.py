@@ -1726,16 +1726,16 @@ risk_engine = RiskEngine()
 allocator = StrategyAllocator()
 strategies = [MomentumStrategy(), MeanReversionStrategy()]
 API_KEY = ALPACA_API_KEY
-SECRET_KEY = ALPACA_SECRET_KEY
+API_SECRET = ALPACA_SECRET_KEY
 BASE_URL = ALPACA_BASE_URL
 paper = ALPACA_PAPER
 
-if not (API_KEY and SECRET_KEY) and not SHADOW_MODE:
+if not (API_KEY and API_SECRET) and not SHADOW_MODE:
     logger.critical("Alpaca credentials missing – aborting startup")
     sys.exit(1)
-trading_client = TradingClient(API_KEY, SECRET_KEY, paper=paper)
+trading_client = TradingClient(API_KEY, API_SECRET, paper=paper)
 # alias get_order for v2 SDK differences
-data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
+data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
 # WebSocket for order status updates
 # use the new Stream class; explicitly set feed and base_url
@@ -1743,7 +1743,7 @@ data_client = StockHistoricalDataClient(API_KEY, SECRET_KEY)
 # Create a trading stream for order status updates
 stream = TradingStream(
     API_KEY,
-    SECRET_KEY,
+    API_SECRET,
     paper=True,
 )
 
@@ -4401,8 +4401,8 @@ def run_all_trades_worker(state: BotState, model) -> None:
         ctx.capital_scaler.update(ctx, equity)
         params["CAPITAL_CAP"] = ctx.params["CAPITAL_CAP"]
         now_utc = pd.Timestamp.utcnow()
-        start_date = (now_utc - timedelta(days=5)).date()
-        end_date = now_utc.date()
+        start_date = (now_utc - timedelta(days=5)).date()  # noqa: F841
+        end_date = now_utc.date()  # noqa: F841
 
         # Update SPY vol stats first
         compute_spy_vol_stats(ctx)
@@ -4656,12 +4656,12 @@ def main() -> None:
             try:
                 from retrain import retrain_meta_learner as _tmp_retrain
 
-                retrain_meta_learner = _tmp_retrain
+                retrain_meta_learner = _tmp_retrain  # noqa: F841
             except ImportError:
-                retrain_meta_learner = None
+                retrain_meta_learner = None  # noqa: F841
                 logger.warning("retrain.py not found or retrain_meta_learner missing. Daily retraining disabled.")
         else:
-            retrain_meta_learner = None
+            retrain_meta_learner = None  # noqa: F841
             logger.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
 
         try:
