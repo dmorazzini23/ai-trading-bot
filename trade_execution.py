@@ -325,6 +325,25 @@ class ExecutionEngine:
         )
         monitor_slippage(expected, actual, symbol)
 
+    def _check_order_active(self, symbol: str, order: Order, status: str, order_id: str) -> bool:
+        """Return ``True`` if order status indicates the order is active."""
+        if status == "rejected":
+            self.logger.error(
+                "ORDER_REJECTED",
+                extra={
+                    "symbol": symbol,
+                    "order_id": order_id,
+                    "reason": getattr(order, "reject_reason", ""),
+                },
+            )
+            return False
+        if status == "canceled":
+            self.logger.error(
+                "ORDER_CANCELED", extra={"symbol": symbol, "order_id": order_id}
+            )
+            return False
+        return True
+
     def _submit_with_retry(
         self,
         api: TradingClient,
@@ -377,20 +396,7 @@ class ExecutionEngine:
     ) -> bool:
         status = getattr(order, "status", "")
         order_id = getattr(order, "id", "")
-        if status == "rejected":
-            self.logger.error(
-                "ORDER_REJECTED",
-                extra={
-                    "symbol": symbol,
-                    "order_id": order_id,
-                    "reason": getattr(order, "reject_reason", ""),
-                },
-            )
-            return False
-        if status == "canceled":
-            self.logger.error(
-                "ORDER_CANCELED", extra={"symbol": symbol, "order_id": order_id}
-            )
+        if not self._check_order_active(symbol, order, status, order_id):
             return False
         fill_price = float(
             getattr(order, "filled_avg_price", expected_price or 0) or 0
