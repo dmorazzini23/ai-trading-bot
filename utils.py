@@ -170,11 +170,18 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
 
 def parse_timestamp(value: str, format: str = "%Y-%m-%d %H:%M:%S", utc: bool = True) -> pd.Timestamp:
     """Parse a single timestamp string safely."""
+    if not value:
+        logger.warning("parse_timestamp received empty value")
+        return pd.NaT
     try:
         return pd.to_datetime(value, format=format, utc=utc)
     except Exception as exc:  # pragma: no cover - safety net
         logger.warning("parse_timestamp failed for %r: %s", value, exc)
-        return pd.NaT
+        try:
+            return pd.to_datetime(value, utc=utc, errors="coerce")
+        except Exception as exc2:  # pragma: no cover - extreme fallback
+            logger.error("parse_timestamp fallback failed for %r: %s", value, exc2)
+            return pd.NaT
 
 
 # Generic robust column getter with validation
