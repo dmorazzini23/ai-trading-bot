@@ -49,6 +49,6 @@ def force_coverage(mod):
 
 @pytest.mark.smoke
 def test_verify_sig():
-    sig = hmac.new(server.SECRET, b"x", "sha256").hexdigest()
-    assert server.verify_sig(b"x", f"sha256={sig}")
+    sig = hmac.new(b"secret", b"x", "sha256").hexdigest()
+    assert server.verify_sig(b"x", f"sha256={sig}", b"secret")
     force_coverage(server)

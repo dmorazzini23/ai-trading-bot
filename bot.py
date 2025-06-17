@@ -3088,6 +3088,208 @@ def _model_feature_names(model) -> list[str]:
     ]
 
 
+def _exit_positions_if_needed(
+    ctx: BotContext,
+    state: BotState,
+    symbol: str,
+    feat_df: pd.DataFrame,
+    final_score: float,
+    conf: float,
+    current_qty: int,
+    recent_rebal: bool,
+) -> bool:
+    if not recent_rebal and final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
+        price = get_latest_close(feat_df)
+        logger.info(
+            f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
+        )
+        send_exit_order(ctx, symbol, current_qty, price, "reversal")
+        ctx.trade_logger.log_exit(state, symbol, price)
+        with targets_lock:
+            ctx.stop_targets.pop(symbol, None)
+            ctx.take_profit_targets.pop(symbol, None)
+        return True
+
+    if not recent_rebal and final_score > 0 and current_qty < 0 and abs(conf) >= CONF_THRESHOLD:
+        price = get_latest_close(feat_df)
+        logger.info(
+            f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
+        )
+        send_exit_order(ctx, symbol, abs(current_qty), price, "reversal")
+        ctx.trade_logger.log_exit(state, symbol, price)
+        with targets_lock:
+            ctx.stop_targets.pop(symbol, None)
+            ctx.take_profit_targets.pop(symbol, None)
+        return True
+    return False
+
+
+def _enter_long(
+    ctx: BotContext,
+    state: BotState,
+    symbol: str,
+    balance: float,
+    feat_df: pd.DataFrame,
+    final_score: float,
+    conf: float,
+    strat: str,
+) -> bool:
+    current_price = get_latest_close(feat_df)
+    target_weight = ctx.portfolio_weights.get(symbol, 0.0)
+    raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
+    if raw_qty is None or not np.isfinite(raw_qty) or raw_qty <= 0:
+        logger.error(
+            f"Invalid order size for {symbol}: {raw_qty}. Signal: {final_score}, Price: {current_price}"
+        )
+        return True
+    logger.info(
+        f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={raw_qty}"
+    )
+    if not sector_exposure_ok(ctx, symbol, raw_qty, current_price):
+        logger.info("SKIP_SECTOR_CAP", extra={"symbol": symbol})
+        return True
+    order = submit_order(ctx, symbol, raw_qty, "buy")
+    if order is None:
+        logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
+    else:
+        logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
+        ctx.trade_logger.log_entry(
+            symbol,
+            current_price,
+            raw_qty,
+            "buy",
+            strat,
+            signal_tags=strat,
+            confidence=conf,
+        )
+        now_pac = datetime.now(PACIFIC)
+        mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
+        mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
+        tp_factor = TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
+        stop, take = scaled_atr_stop(
+            entry_price=current_price,
+            atr=feat_df["atr"].iloc[-1],
+            now=now_pac,
+            market_open=mo,
+            market_close=mc,
+            max_factor=tp_factor,
+            min_factor=0.5,
+        )
+        with targets_lock:
+            ctx.stop_targets[symbol] = stop
+            ctx.take_profit_targets[symbol] = take
+    return True
+
+
+def _enter_short(
+    ctx: BotContext,
+    state: BotState,
+    symbol: str,
+    feat_df: pd.DataFrame,
+    final_score: float,
+    conf: float,
+    strat: str,
+) -> bool:
+    current_price = get_latest_close(feat_df)
+    atr = feat_df["atr"].iloc[-1]
+    qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
+    try:
+        asset = ctx.api.get_asset(symbol)
+        if hasattr(asset, "shortable") and not asset.shortable:
+            logger.info(f"SKIP_NOT_SHORTABLE | symbol={symbol}")
+            return True
+        avail = getattr(asset, "shortable_shares", None)
+        if avail is not None:
+            qty = min(qty, int(avail))
+    except Exception as exc:
+        logger.exception("bot.py unexpected", exc_info=exc)
+        raise
+    if qty is None or not np.isfinite(qty) or qty <= 0:
+        logger.error(
+            f"Invalid order size for {symbol}: {qty}. Signal: {final_score}, Price: {current_price}"
+        )
+        return True
+    logger.info(
+        f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={qty}"
+    )
+    if not sector_exposure_ok(ctx, symbol, qty, current_price):
+        logger.info("SKIP_SECTOR_CAP", extra={"symbol": symbol})
+        return True
+    order = submit_order(ctx, symbol, qty, "sell")
+    if order is None:
+        logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
+    else:
+        logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
+        ctx.trade_logger.log_entry(
+            symbol,
+            current_price,
+            qty,
+            "sell",
+            strat,
+            signal_tags=strat,
+            confidence=conf,
+        )
+        now_pac = datetime.now(PACIFIC)
+        mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
+        mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
+        tp_factor = TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
+        long_stop, long_take = scaled_atr_stop(
+            entry_price=current_price,
+            atr=atr,
+            now=now_pac,
+            market_open=mo,
+            market_close=mc,
+            max_factor=tp_factor,
+            min_factor=0.5,
+        )
+        stop, take = long_take, long_stop
+        with targets_lock:
+            ctx.stop_targets[symbol] = stop
+            ctx.take_profit_targets[symbol] = take
+    return True
+
+
+def _manage_existing_position(
+    ctx: BotContext,
+    state: BotState,
+    symbol: str,
+    feat_df: pd.DataFrame,
+    conf: float,
+    recent_rebal: bool,
+    atr: float,
+    current_qty: int,
+) -> bool:
+    price = get_latest_close(feat_df)
+    if not recent_rebal:
+        should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
+    else:
+        should_exit_flag, exit_qty, reason = False, 0, ""
+    if should_exit_flag and exit_qty > 0:
+        logger.info(
+            f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price:.4f}"
+        )
+        send_exit_order(ctx, symbol, exit_qty, price, reason)
+        ctx.trade_logger.log_exit(state, symbol, price)
+        try:
+            pos_after = ctx.api.get_open_position(symbol)
+            if int(pos_after.qty) == 0:
+                with targets_lock:
+                    ctx.stop_targets.pop(symbol, None)
+                    ctx.take_profit_targets.pop(symbol, None)
+        except Exception as exc:
+            logger.exception("bot.py unexpected", exc_info=exc)
+            raise
+    else:
+        try:
+            pos = ctx.api.get_open_position(symbol)
+            entry_price = float(pos.avg_entry_price)
+            maybe_pyramid(ctx, symbol, entry_price, price, atr, conf)
+        except Exception as exc:
+            logger.exception("bot.py unexpected", exc_info=exc)
+            raise
+    return True
+
+
 def trade_logic(
     ctx: BotContext,
     state: BotState,
@@ -3101,7 +3303,6 @@ def trade_logic(
     """
     logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
 
-    # Run pre-trade checks that enforce PDT, halt flags, market regime, etc.
     if not pre_trade_checks(ctx, state, symbol, balance, regime_ok):
         logger.debug("SKIP_PRE_TRADE_CHECKS", extra={"symbol": symbol})
         return False
@@ -3111,19 +3312,21 @@ def trade_logic(
         return skip_flag if skip_flag is not None else False
 
     feature_names = _model_feature_names(model)
-
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
         logger.info(f"SKIP_MISSING_FEATURES | symbol={symbol}  missing={missing}")
         return True
 
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, feat_df, symbol, model)
-    comp_list = [{"signal": lab, "flag": s, "weight": w} for s, w, lab in ctx.signal_manager.last_components]
+    comp_list = [
+        {"signal": lab, "flag": s, "weight": w} for s, w, lab in ctx.signal_manager.last_components
+    ]
     logger.debug(f"COMPONENTS | symbol={symbol}  components={comp_list!r}")
 
     final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
-    # ←← Log actual numeric values in the message itself:
-    logger.info(f"SIGNAL_RESULT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}")
+    logger.info(
+        f"SIGNAL_RESULT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
+    )
     if final_score is None or not np.isfinite(final_score) or final_score == 0:
         logger.error(
             f"Invalid or empty signal for {symbol}. Data: {raw_df.describe() if not raw_df.empty else 'EMPTY'}"
@@ -3144,188 +3347,23 @@ def trade_logic(
         else:
             ctx.rebalance_buys.pop(symbol, None)
 
-    # Exit: bearish reversal for longs
-    if not recent_rebal and final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
-        price = get_latest_close(feat_df)
-        logger.info(f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}")
-        send_exit_order(ctx, symbol, current_qty, price, "reversal")
-        ctx.trade_logger.log_exit(state, symbol, price)
-        with targets_lock:
-            ctx.stop_targets.pop(symbol, None)
-            ctx.take_profit_targets.pop(symbol, None)
-        return
+    if _exit_positions_if_needed(
+        ctx, state, symbol, feat_df, final_score, conf, current_qty, recent_rebal
+    ):
+        return True
 
-    # Exit: bullish reversal for shorts
-    if not recent_rebal and final_score > 0 and current_qty < 0 and abs(conf) >= CONF_THRESHOLD:
-        price = get_latest_close(feat_df)
-        logger.info(f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}")
-        send_exit_order(ctx, symbol, abs(current_qty), price, "reversal")
-        ctx.trade_logger.log_exit(state, symbol, price)
-        with targets_lock:
-            ctx.stop_targets.pop(symbol, None)
-            ctx.take_profit_targets.pop(symbol, None)
-        return
-
-    # Entry: bullish
     if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
-        current_price = get_latest_close(feat_df)
-        target_weight = ctx.portfolio_weights.get(symbol, 0.0)
-        raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
+        return _enter_long(ctx, state, symbol, balance, feat_df, final_score, conf, strat)
 
-        if raw_qty is None or not np.isfinite(raw_qty) or raw_qty <= 0:
-            logger.error(
-                f"Invalid order size for {symbol}: {raw_qty}. Signal: {final_score}, Price: {current_price}, Data: {raw_df.describe() if not raw_df.empty else 'EMPTY'}"
-            )
-            return True
-
-        logger.info(
-            f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  " f"confidence={conf:.4f}  qty={raw_qty}"
-        )
-
-        if not sector_exposure_ok(ctx, symbol, raw_qty, current_price):
-            logger.info("SKIP_SECTOR_CAP", extra={"symbol": symbol})
-            return True
-
-        order = submit_order(ctx, symbol, raw_qty, "buy")
-        if order is None:
-            logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
-        else:
-            logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
-            ctx.trade_logger.log_entry(
-                symbol,
-                current_price,
-                raw_qty,
-                "buy",
-                strat,
-                signal_tags=strat,
-                confidence=conf,
-            )
-
-            now_pac = datetime.now(PACIFIC)
-            mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
-            mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
-
-            if is_high_vol_regime():
-                tp_factor = TAKE_PROFIT_FACTOR * 1.1
-            else:
-                tp_factor = TAKE_PROFIT_FACTOR
-
-            stop, take = scaled_atr_stop(
-                entry_price=current_price,
-                atr=feat_df["atr"].iloc[-1],
-                now=now_pac,
-                market_open=mo,
-                market_close=mc,
-                max_factor=tp_factor,
-                min_factor=0.5,
-            )
-            with targets_lock:
-                ctx.stop_targets[symbol] = stop
-                ctx.take_profit_targets[symbol] = take
-
-        return True
-
-    # Entry: bearish short
     if final_score < 0 and conf >= BUY_THRESHOLD and current_qty == 0:
-        current_price = get_latest_close(feat_df)
-        atr = feat_df["atr"].iloc[-1]
-        qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
-
-        try:
-            asset = ctx.api.get_asset(symbol)
-            if hasattr(asset, "shortable") and not asset.shortable:
-                logger.info(f"SKIP_NOT_SHORTABLE | symbol={symbol}")
-                return True
-            avail = getattr(asset, "shortable_shares", None)
-            if avail is not None:
-                qty = min(qty, int(avail))
-        except Exception as exc:
-            logger.exception("bot.py unexpected", exc_info=exc)
-            raise
-
-        if qty is None or not np.isfinite(qty) or qty <= 0:
-            logger.error(
-                f"Invalid order size for {symbol}: {qty}. Signal: {final_score}, Price: {current_price}, Data: {raw_df.describe() if not raw_df.empty else 'EMPTY'}"
-            )
-            return True
-
-        logger.info(
-            f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  " f"confidence={conf:.4f}  qty={qty}"
-        )
-        if not sector_exposure_ok(ctx, symbol, qty, current_price):
-            logger.info("SKIP_SECTOR_CAP", extra={"symbol": symbol})
-            return True
-
-        order = submit_order(ctx, symbol, qty, "sell")
-        if order is None:
-            logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
-        else:
-            logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
-            ctx.trade_logger.log_entry(
-                symbol,
-                current_price,
-                qty,
-                "sell",
-                strat,
-                signal_tags=strat,
-                confidence=conf,
-            )
-
-            now_pac = datetime.now(PACIFIC)
-            mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
-            mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
-
-            if is_high_vol_regime():
-                tp_factor = TAKE_PROFIT_FACTOR * 1.1
-            else:
-                tp_factor = TAKE_PROFIT_FACTOR
-
-            long_stop, long_take = scaled_atr_stop(
-                entry_price=current_price,
-                atr=atr,
-                now=now_pac,
-                market_open=mo,
-                market_close=mc,
-                max_factor=tp_factor,
-                min_factor=0.5,
-            )
-            stop, take = long_take, long_stop
-            with targets_lock:
-                ctx.stop_targets[symbol] = stop
-                ctx.take_profit_targets[symbol] = take
-
-        return True
+        return _enter_short(ctx, state, symbol, feat_df, final_score, conf, strat)
 
     # If holding, check for stops/take/trailing
     if current_qty != 0:
-        price = get_latest_close(feat_df)
         atr = feat_df["atr"].iloc[-1]
-        if not recent_rebal:
-            should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
-        else:
-            should_exit_flag, exit_qty, reason = False, 0, ""
-        if should_exit_flag and exit_qty > 0:
-            logger.info(f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  " f"exit_qty={exit_qty}  price={price:.4f}")
-            send_exit_order(ctx, symbol, exit_qty, price, reason)
-            ctx.trade_logger.log_exit(state, symbol, price)
-            try:
-                pos_after = ctx.api.get_open_position(symbol)
-                if int(pos_after.qty) == 0:
-                    with targets_lock:
-                        ctx.stop_targets.pop(symbol, None)
-                        ctx.take_profit_targets.pop(symbol, None)
-            except Exception as exc:
-                logger.exception("bot.py unexpected", exc_info=exc)
-                raise
-        else:
-            try:
-                pos = ctx.api.get_open_position(symbol)
-                entry_price = float(pos.avg_entry_price)
-                maybe_pyramid(ctx, symbol, entry_price, price, atr, conf)
-            except Exception as exc:
-                logger.exception("bot.py unexpected", exc_info=exc)
-                raise
-        return True
+        return _manage_existing_position(
+            ctx, state, symbol, feat_df, conf, recent_rebal, atr, current_qty
+        )
 
     # Else hold / no action
     logger.info(f"SKIP_LOW_OR_NO_SIGNAL | symbol={symbol}  " f"final_score={final_score:.4f}  confidence={conf:.4f}")
@@ -4350,8 +4388,8 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
 app = Flask(__name__)
 
 
-@app.route("/health")
-@app.route("/health_check")
+@app.route("/health", methods=["GET"])
+@app.route("/health_check", methods=["GET"])
 def health() -> str:
     """Simple health endpoint for liveness probes."""
     return "OK", 200
