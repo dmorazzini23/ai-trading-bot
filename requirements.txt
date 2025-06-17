@@ -33,6 +33,6 @@ yfinance==0.2.36
 urllib3>=1.26,<2.0
 statsmodels==0.14.1
 transformers==4.35.2
-python-dateutil==2.8.2
+python-dateutil==2.9.0.post0
 optuna==3.6.1
 
