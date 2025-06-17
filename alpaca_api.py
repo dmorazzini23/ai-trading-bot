@@ -7,6 +7,7 @@ if "ALPACA_SECRET_KEY" in os.environ:
     os.environ.setdefault("APCA_API_SECRET_KEY", os.environ["ALPACA_SECRET_KEY"])
 import time
 from collections import defaultdict
+from typing import Optional, Dict, Any
 
 import pandas as pd
 import requests
@@ -19,6 +20,12 @@ logger = logging.getLogger(__name__)
 
 _warn_counts = defaultdict(int)
 
+ALPACA_BASE_URL = "https://api.alpaca.markets"
+HEADERS = {
+    "APCA-API-KEY-ID": "your_key_id",  # Replace with your env var or config loader
+    "APCA-API-SECRET-KEY": "your_secret_key",
+}
+
 
 def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
     if _warn_counts[key] < limit:
@@ -26,6 +33,38 @@ def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
         _warn_counts[key] += 1
         if _warn_counts[key] == limit:
             logger.warning("Further '%s' warnings suppressed", key)
+
+
+def alpaca_get(
+    endpoint: str,
+    params: Optional[Dict[str, Any]] = None,
+    retries: int = 3,
+    backoff_factor: float = 0.5,
+) -> Optional[Dict[str, Any]]:
+    url = f"{ALPACA_BASE_URL}{endpoint}"
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except requests.HTTPError as http_err:
+            logger.warning(
+                f"HTTP error on Alpaca GET {url}: {http_err}, attempt {attempt+1}"
+            )
+        except requests.RequestException as req_err:
+            logger.warning(
+                f"Request error on Alpaca GET {url}: {req_err}, attempt {attempt+1}"
+            )
+        time.sleep(backoff_factor * (2 ** attempt))
+    logger.error(f"Failed Alpaca GET after {retries} attempts: {url}")
+    return None
+
+
+def get_account() -> Optional[Dict[str, Any]]:
+    data = alpaca_get("/v2/account")
+    if data is None:
+        logger.error("Failed to get Alpaca account data")
+    return data
 
 
 def submit_order(api, req, log: logging.Logger | None = None):

@@ -77,6 +77,31 @@ def update_weights(
     return True
 
 
+def update_signal_weights(weights: Dict[str, float], performance: Dict[str, float]) -> Optional[Dict[str, float]]:
+    if not weights or not performance:
+        logger.error("Empty weights or performance dict passed to update_signal_weights")
+        return None
+    try:
+        total_perf = sum(performance.values())
+        if total_perf == 0:
+            logger.warning("Total performance sum is zero, skipping weight update")
+            return weights
+        updated_weights = {}
+        for key in weights.keys():
+            perf = performance.get(key, 0)
+            updated_weights[key] = weights[key] * (perf / total_perf)
+        norm_factor = sum(updated_weights.values())
+        if norm_factor == 0:
+            logger.warning("Normalization factor zero in weight update")
+            return weights
+        for key in updated_weights:
+            updated_weights[key] /= norm_factor
+        return updated_weights
+    except Exception as e:
+        logger.error(f"Exception in update_signal_weights: {e}", exc_info=True)
+        return weights
+
+
 def save_model_checkpoint(model: Any, filepath: str) -> None:
     """Serialize ``model`` to ``filepath`` using :mod:`pickle`."""
     try:

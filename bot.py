@@ -80,7 +80,7 @@ np.NaN = np.nan
 import pandas as pd
 import pandas_market_calendars as mcal
 import pandas_ta as ta
-from signals import calculate_macd
+from signals import calculate_macd as signals_calculate_macd
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -4206,7 +4206,7 @@ def _add_basic_indicators(df: pd.DataFrame, symbol: str, state: BotState | None)
 def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
     """Add MACD indicators using the defensive helper."""
     try:
-        macd_df = calculate_macd(df["close"])
+        macd_df = signals_calculate_macd(df["close"])
         if macd_df is None:
             raise ValueError("MACD calculation failed")
         df["macd"] = macd_df["macd"]
@@ -4431,7 +4431,7 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     feat = pd.DataFrame(index=df.index)
     feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
     feat["rsi"] = ta.rsi(df["close"], length=14)
-    macd_df = calculate_macd(df["close"])
+    macd_df = signals_calculate_macd(df["close"])
     if macd_df is not None:
         feat["macd"] = macd_df["macd"]
     else:
@@ -5445,6 +5445,61 @@ def main() -> None:
     except Exception as e:
         logger.exception(f"Fatal error in main: {e}")
         raise
+
+
+def prepare_indicators_simple(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        logger.error("Input dataframe is None or empty in prepare_indicators.")
+        raise ValueError("Input dataframe is None or empty")
+
+    try:
+        macd_line, signal_line, hist = simple_calculate_macd(df["close"])
+    except Exception as e:
+        logger.error(f"MACD calculation failed: {e}", exc_info=True)
+        raise ValueError("MACD calculation failed") from e
+
+    if macd_line is None or signal_line is None or hist is None:
+        logger.error("MACD returned None")
+        raise ValueError("MACD returned None")
+
+    df["macd_line"] = macd_line
+    df["signal_line"] = signal_line
+    df["histogram"] = hist
+
+    return df
+
+
+def simple_calculate_macd(
+    close_prices: pd.Series,
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> Tuple[Optional[pd.Series], Optional[pd.Series], Optional[pd.Series]]:
+    if close_prices is None or close_prices.empty:
+        logger.warning("Empty or None close_prices passed to calculate_macd.")
+        return None, None, None
+
+    try:
+        exp1 = close_prices.ewm(span=fast, adjust=False).mean()
+        exp2 = close_prices.ewm(span=slow, adjust=False).mean()
+        macd_line = exp1 - exp2
+        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+        histogram = macd_line - signal_line
+        return macd_line, signal_line, histogram
+    except Exception as e:
+        logger.error(f"Exception in MACD calculation: {e}", exc_info=True)
+        return None, None, None
+
+
+def get_latest_price(symbol: str):
+    try:
+        price = get_price_from_api(symbol)
+        if price is None:
+            raise ValueError(f"Price returned None for symbol {symbol}")
+        return price
+    except Exception as e:
+        logger.error(f"Failed to get latest price for {symbol}: {e}", exc_info=True)
+        return None
 
 
 if __name__ == "__main__":
