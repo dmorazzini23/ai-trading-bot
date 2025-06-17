@@ -73,8 +73,11 @@ def alpaca_get(
 )
 def get_account() -> Optional[Dict[str, Any]]:
     """Return account details or ``None`` on failure."""
-
-    data = alpaca_get("/v2/account")
+    try:
+        data = alpaca_get("/v2/account")
+    except Exception as e:  # pragma: no cover - network issues
+        logger.exception("Error fetching Alpaca account info: %s", e)
+        return None
     if data is None:
         logger.error("Failed to get Alpaca account data")
     return data
@@ -125,7 +128,9 @@ def submit_order(api, req, log: logging.Logger | None = None):
                 exc_info=True,
             )
             if attempt == max_retries:
-                send_slack_alert(f"Failed to submit order after {max_retries} attempts: {e}")
+                send_slack_alert(
+                    f"Failed to submit order after {max_retries} attempts: {e}"
+                )
                 raise
             time.sleep(attempt * 2)
 

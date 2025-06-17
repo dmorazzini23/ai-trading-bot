@@ -35,4 +35,5 @@ optuna==3.6.1
 # For Python 3.12 wheels:
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch==2.7.1+cpu
+python-dotenv>=0.21.0
 

@@ -1,3 +1,6 @@
+import config
+config.reload_env()
+
 import time
 import warnings
 
@@ -28,7 +31,6 @@ if "ALPACA_API_KEY" in os.environ:
 if "ALPACA_SECRET_KEY" in os.environ:
     os.environ.setdefault("APCA_API_SECRET_KEY", os.environ["ALPACA_SECRET_KEY"])
 
-import config
 from config import ALPACA_DATA_FEED, DISABLE_DAILY_RETRAIN, SHADOW_MODE
 
 # Refresh environment variables on startup for reliability
@@ -112,13 +114,12 @@ from rebalancer import maybe_rebalance
 from alpaca_api import alpaca_get
 
 # Validate critical environment variables early
-REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL"]
+REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
 missing_env = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
 if missing_env:
     raise RuntimeError(
         f"Missing required environment variables: {', '.join(missing_env)}"
     )
-
 # for paper trading
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 import pickle
@@ -132,8 +133,6 @@ from alpaca.data.timeframe import TimeFrame
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import BayesianRidge, Ridge
-
-import config
 from metrics_logger import log_metrics
 from pipeline import model_pipeline
 from utils import model_lock, safe_to_datetime, log_warning
@@ -202,7 +201,7 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
             pass
 
 
-from data_fetcher import DataFetchError, finnhub_client
+from data_fetcher import DataFetchError, finnhub_client, get_minute_df
 from logger import get_logger
 from risk_engine import RiskEngine
 from strategies import MeanReversionStrategy, MomentumStrategy, TradeSignal
@@ -256,7 +255,8 @@ def fetch_minute_df_safe(ctx: "BotContext", symbol: str) -> pd.DataFrame:
         logger.warning("MARKET_CLOSED_MINUTE_FETCH_SKIP", extra={"symbol": symbol})
         return pd.DataFrame()
     try:
-        df = ctx.data_fetcher.get_minute_df(ctx, symbol)
+        today = date.today()
+        df = get_minute_df(today)
         if df is None or df.empty:
             return pd.DataFrame()
         return df
