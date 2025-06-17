@@ -1,5 +1,5 @@
-import sys
 import importlib
+import sys
 import types
 from pathlib import Path
 
@@ -32,9 +32,7 @@ def _import_retrain(monkeypatch):
     pta.mfi = lambda *a, **k: pd.Series([1.0])
     pta.tema = lambda *a, **k: pd.Series([1.0])
     pta.willr = lambda *a, **k: pd.Series([1.0])
-    pta.psar = lambda *a, **k: pd.DataFrame(
-        {"PSARl_0.02_0.2": [1.0], "PSARs_0.02_0.2": [1.0]}
-    )
+    pta.psar = lambda *a, **k: pd.DataFrame({"PSARl_0.02_0.2": [1.0], "PSARs_0.02_0.2": [1.0]})
     pta.ichimoku = lambda *a, **k: (
         pd.DataFrame({0: [1.0]}),
         pd.DataFrame({0: [1.0]}),
@@ -64,9 +62,7 @@ def _import_retrain(monkeypatch):
     monkeypatch.setitem(sys.modules, "torch", types.ModuleType("torch"))
     sys.modules["torch"].manual_seed = lambda *a, **k: None
     opt = types.ModuleType("optuna")
-    opt.create_study = lambda direction: types.SimpleNamespace(
-        optimize=lambda f, n_trials: None, best_params={}
-    )
+    opt.create_study = lambda direction: types.SimpleNamespace(optimize=lambda f, n_trials: None, best_params={})
     monkeypatch.setitem(sys.modules, "optuna", opt)
     jb = types.ModuleType("joblib")
     jb.dump = lambda obj, path: None
@@ -76,9 +72,7 @@ def _import_retrain(monkeypatch):
     skl_ms.cross_val_score = lambda *a, **k: [0.0]
     monkeypatch.setitem(sys.modules, "sklearn.model_selection", skl_ms)
     skl_pipe = types.ModuleType("sklearn.pipeline")
-    skl_pipe.make_pipeline = lambda *a, **k: types.SimpleNamespace(
-        fit=lambda X, y: None
-    )
+    skl_pipe.make_pipeline = lambda *a, **k: types.SimpleNamespace(fit=lambda X, y: None)
     monkeypatch.setitem(sys.modules, "sklearn.pipeline", skl_pipe)
     skl_pre = types.ModuleType("sklearn.preprocessing")
     skl_pre.StandardScaler = lambda *a, **k: None

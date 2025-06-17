@@ -87,9 +87,7 @@ class RiskEngine:
             logger.error("check_max_drawdown failed: %s", exc)
             return False
 
-    def position_size(
-        self, signal: TradeSignal, cash: float, price: float, api=None
-    ) -> int:
+    def position_size(self, signal: TradeSignal, cash: float, price: float, api=None) -> int:
         if self.hard_stop:
             logger.error("HARD_STOP_ACTIVE")
             return 0
@@ -101,9 +99,7 @@ class RiskEngine:
             return 0
 
         if cash <= 0 or price <= 0:
-            logger.error(
-                "Invalid cash %.2f or price %.2f for position sizing", cash, price
-            )
+            logger.error("Invalid cash %.2f or price %.2f for position sizing", cash, price)
             return 0
 
         if not self.can_trade(signal):
@@ -114,14 +110,10 @@ class RiskEngine:
         strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
         weight = signal.weight
         if weight > asset_rem:
-            logger.info(
-                "ADJUST_WEIGHT_ASSET", extra={"orig": weight, "new": asset_rem}
-            )
+            logger.info("ADJUST_WEIGHT_ASSET", extra={"orig": weight, "new": asset_rem})
             weight = asset_rem
         if weight > strat_cap:
-            logger.info(
-                "ADJUST_WEIGHT_STRATEGY", extra={"orig": weight, "new": strat_cap}
-            )
+            logger.info("ADJUST_WEIGHT_STRATEGY", extra={"orig": weight, "new": strat_cap})
             weight = strat_cap
 
         dollars = cash * min(weight, 1.0)

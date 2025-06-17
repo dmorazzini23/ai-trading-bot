@@ -38,9 +38,7 @@ if "pandas_ta" in sys.modules:
         mod.momentum = types.SimpleNamespace(rsi=MagicMock())
     mod.atr = getattr(mod, "atr", MagicMock(return_value=MagicMock()))
     mod.rsi = getattr(mod, "rsi", MagicMock(return_value=MagicMock()))
-    mod.macd = getattr(
-        mod, "macd", MagicMock(return_value={"MACD_12_26_9": MagicMock()})
-    )
+    mod.macd = getattr(mod, "macd", MagicMock(return_value={"MACD_12_26_9": MagicMock()}))
     mod.sma = getattr(mod, "sma", MagicMock(return_value=MagicMock()))
 
 try:
@@ -125,9 +123,7 @@ class _Req:
 sys.modules["alpaca.trading.requests"].LimitOrderRequest = _Req
 sys.modules["alpaca.trading.requests"].MarketOrderRequest = _Req
 sys.modules["alpaca.trading.requests"].GetOrdersRequest = _Req
-sys.modules["alpaca.trading.enums"].OrderSide = types.SimpleNamespace(
-    BUY="buy", SELL="sell"
-)
+sys.modules["alpaca.trading.enums"].OrderSide = types.SimpleNamespace(BUY="buy", SELL="sell")
 sys.modules["alpaca.trading.enums"].TimeInForce = types.SimpleNamespace(DAY="day")
 sys.modules["alpaca.trading.enums"].QueryOrderStatus = object
 sys.modules["alpaca.trading.enums"].OrderStatus = object
@@ -302,9 +298,7 @@ def test_bot_main_normal(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["bot.py"])
     with patch("data_fetcher.get_minute_df", return_value=MagicMock()), patch(
         "alpaca_api.submit_order", return_value={"status": "mocked"}
-    ), patch("signals.generate", return_value=1), patch(
-        "risk_engine.calculate_position_size", return_value=10
-    ), patch(
+    ), patch("signals.generate", return_value=1), patch("risk_engine.calculate_position_size", return_value=10), patch(
         "data_fetcher.get_daily_df",
         return_value=pd.DataFrame(
             {

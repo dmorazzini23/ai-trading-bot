@@ -2,6 +2,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
+
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,13 @@ def load_weights(path: str, default: np.ndarray | None = None) -> np.ndarray:
         return default
 
 
-def update_weights(weight_path: str, new_weights: np.ndarray, metrics: dict, history_file: str = "metrics.json", n_history: int = 5) -> bool:
+def update_weights(
+    weight_path: str,
+    new_weights: np.ndarray,
+    metrics: dict,
+    history_file: str = "metrics.json",
+    n_history: int = 5,
+) -> bool:
     """Update signal weights if changed and persist metric history."""
     p = Path(weight_path)
     prev = None

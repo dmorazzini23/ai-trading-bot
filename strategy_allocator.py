@@ -1,9 +1,8 @@
 print("=== STRATEGY_ALLOCATOR LOADED ===", __file__, flush=True)
 
-from typing import Dict
-from typing import List
 import logging
 import math
+from typing import Dict, List
 
 from strategies import TradeSignal
 
@@ -22,9 +21,7 @@ class StrategyAllocator:
             logger.warning("update_reward called with empty strategy name")
             return
         if not isinstance(reward, (int, float)) or math.isnan(reward):
-            logger.warning(
-                "update_reward received invalid reward %r for %s", reward, strategy
-            )
+            logger.warning("update_reward received invalid reward %r for %s", reward, strategy)
             return
 
         w = self.weights.get(strategy, 1.0)
@@ -63,9 +60,7 @@ class StrategyAllocator:
                     logger.warning("Invalid TradeSignal %r in %s", s, strat)
                     continue
                 if not isinstance(s.weight, (int, float)) or math.isnan(s.weight):
-                    logger.warning(
-                        "Signal weight invalid for %s; using default 1.0", s.symbol
-                    )
+                    logger.warning("Signal weight invalid for %s; using default 1.0", s.symbol)
                     s.weight = 1.0
                 # apply strategy weight
                 s.weight *= weight
@@ -79,5 +74,6 @@ class StrategyAllocator:
             )
 
         return results
+
 
 __all__ = ["StrategyAllocator"]

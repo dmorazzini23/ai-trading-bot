@@ -9,11 +9,11 @@ pandas==2.1.4
 pandas_ta==0.3.14b0
 requests>=2.31.0,<3.0
 beautifulsoup4>=4.11.1
-flask==2.2.5
+flask>=2.2.5,<2.3
 pandas_market_calendars>=4.3.0
 schedule>=1.1.0
 portalocker==2.7.0
-alpaca-py==0.40.1        # new official SDK
+alpaca-py==0.40.1
 scikit-learn==1.6.1
 joblib==1.3.2
 python-dotenv==1.0.1

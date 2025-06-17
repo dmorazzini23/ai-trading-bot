@@ -1,5 +1,6 @@
 import logging
 import os
+
 from alerts import send_slack_alert
 
 SLIPPAGE_THRESHOLD = float(os.getenv("SLIPPAGE_THRESHOLD", "0.003"))

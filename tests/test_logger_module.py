@@ -6,7 +6,7 @@ import logger
 
 
 def test_get_logger_singleton(tmp_path):
-    lg1 = logger.get_logger('test')
-    lg2 = logger.get_logger('test')
+    lg1 = logger.get_logger("test")
+    lg2 = logger.get_logger("test")
     assert lg1 is lg2
     assert lg1.handlers

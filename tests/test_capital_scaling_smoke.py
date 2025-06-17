@@ -1,7 +1,8 @@
-from pathlib import Path
 import importlib
-import pytest
 import sys
+from pathlib import Path
+
+import pytest
 
 sys.modules.pop("capital_scaling", None)
 capital_scaling = importlib.import_module("capital_scaling")

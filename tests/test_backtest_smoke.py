@@ -1,6 +1,7 @@
+from pathlib import Path
+
 import pandas as pd
 import pytest
-from pathlib import Path
 
 
 def force_coverage(mod):
@@ -26,9 +27,7 @@ def test_backtest_run_and_optimize(monkeypatch):
     result = backtest.run_backtest(["A"], "2024-01-01", "2024-01-02", params)
     assert "net_pnl" in result
 
-    monkeypatch.setattr(
-        backtest, "run_backtest", lambda *a, **k: {"net_pnl": 1, "sharpe": 0.5}
-    )
+    monkeypatch.setattr(backtest, "run_backtest", lambda *a, **k: {"net_pnl": 1, "sharpe": 0.5})
     best = backtest.optimize_hyperparams(
         None,
         ["A"],

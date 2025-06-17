@@ -1,8 +1,8 @@
 import csv
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
-import logging
 
 TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", "trades.csv")
 
@@ -31,4 +31,3 @@ def log_trade(symbol: str, side: str, qty: int, price: float, result: str, mode:
             writer.writerow(row)
     except Exception as exc:  # pragma: no cover - I/O issues
         logger.error("Failed to log trade: %s", exc)
-

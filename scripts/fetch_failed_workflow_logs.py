@@ -30,9 +30,7 @@ def list_failed_runs(token: str) -> Iterable[dict]:
         "Accept": "application/vnd.github+json",
     }
     params = {"status": "failure", "per_page": 10}
-    resp = requests.get(
-        f"{API}/repos/{REPO}/actions/runs", headers=headers, params=params
-    )
+    resp = requests.get(f"{API}/repos/{REPO}/actions/runs", headers=headers, params=params)
     resp.raise_for_status()
     return resp.json().get("workflow_runs", [])
 
@@ -60,9 +58,7 @@ def fetch_failed_steps(run_id: int, token: str) -> Set[str]:
         "Authorization": f"token {token}",
         "Accept": "application/vnd.github+json",
     }
-    resp = requests.get(
-        f"{API}/repos/{REPO}/actions/runs/{run_id}/jobs", headers=headers
-    )
+    resp = requests.get(f"{API}/repos/{REPO}/actions/runs/{run_id}/jobs", headers=headers)
     if resp.ok:
         for job in resp.json().get("jobs", []):
             for step in job.get("steps", []):

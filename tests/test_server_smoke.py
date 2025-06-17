@@ -1,7 +1,8 @@
+import hmac
 import sys
 import types
 from pathlib import Path
-import hmac
+
 import pytest
 
 flask_mod = types.ModuleType("flask")
@@ -29,8 +30,8 @@ flask_mod.request = types.SimpleNamespace(
 )
 sys.modules["flask"] = flask_mod
 
-import os
 import importlib
+import os
 
 os.environ["WEBHOOK_SECRET"] = "secret"
 os.environ["WEBHOOK_PORT"] = "1"

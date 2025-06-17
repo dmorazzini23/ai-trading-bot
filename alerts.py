@@ -1,9 +1,10 @@
 """Alert utilities with throttling support."""
 
-import time
 import logging
 import os
+import time
 from threading import Lock
+
 import requests
 
 SLACK_WEBHOOK = os.getenv("SLACK_WEBHOOK")
@@ -41,4 +42,3 @@ def send_slack_alert(message: str, *, key: str | None = None) -> None:
         requests.post(SLACK_WEBHOOK, json={"text": message}, timeout=5)
     except Exception as exc:  # pragma: no cover - network issues
         logger.error("Failed to send Slack alert: %s", exc)
-

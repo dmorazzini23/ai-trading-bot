@@ -8,24 +8,26 @@ This will search over a default hyperparameter grid and write the best set to
 ``best_hyperparams.json``.
 """
 
-import time
 import argparse
 import json
 import os
-from dotenv import load_dotenv
+import time
 import warnings
-from itertools import product
 from datetime import datetime, timedelta
+from itertools import product
+
+from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=".env", override=True)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 BACKTEST_WINDOW_DAYS = 365
-import pandas as pd
 import numpy as np
-from data_fetcher import get_historical_data, DataFetchError
+import pandas as pd
 from alpaca.common.exceptions import APIError
 from tenacity import RetryError
+
+from data_fetcher import DataFetchError, get_historical_data
 
 
 def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
@@ -57,14 +59,10 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
             break
         except (APIError, DataFetchError, RetryError) as e:
             if attempt < 3:
-                print(
-                    f"  ▶ Failed to fetch {symbol} (attempt {attempt}/3): {e!r}. Sleeping 2s…"
-                )
+                print(f"  ▶ Failed to fetch {symbol} (attempt {attempt}/3): {e!r}. Sleeping 2s…")
                 time.sleep(2)
             else:
-                print(
-                    f"  ▶ Final attempt failed for {symbol}; proceeding with empty DataFrame."
-                )
+                print(f"  ▶ Final attempt failed for {symbol}; proceeding with empty DataFrame.")
     # 3) Save to cache (even if empty)
     try:
         df_final.to_csv(cache_fname)
@@ -118,13 +116,8 @@ def run_backtest(symbols, start, end, params) -> dict:
                 peak_price[sym] = max(peak_price[sym], price)
                 drawdown = (price - peak_price[sym]) / peak_price[sym]
                 gain = (price - entry_price[sym]) / entry_price[sym]
-                if (
-                    gain >= params["TAKE_PROFIT_FACTOR"]
-                    or abs(drawdown) >= params["TRAILING_FACTOR"]
-                ):
-                    cash += (
-                        positions[sym] * price * (1 - params["LIMIT_ORDER_SLIPPAGE"])
-                    )
+                if gain >= params["TAKE_PROFIT_FACTOR"] or abs(drawdown) >= params["TRAILING_FACTOR"]:
+                    cash += positions[sym] * price * (1 - params["LIMIT_ORDER_SLIPPAGE"])
                     positions[sym] = 0
                     entry_price[sym] = 0
                     peak_price[sym] = 0
@@ -151,9 +144,7 @@ def run_backtest(symbols, start, end, params) -> dict:
     return {"net_pnl": net_pnl, "sharpe": sharpe}
 
 
-def optimize_hyperparams(
-    ctx, symbols, backtest_data, param_grid: dict, metric: str = "sharpe"
-) -> dict:
+def optimize_hyperparams(ctx, symbols, backtest_data, param_grid: dict, metric: str = "sharpe") -> dict:
     """
     Grid search over hyperparameters.
 
@@ -171,9 +162,7 @@ def optimize_hyperparams(
 
     for combo in combos:
         params = dict(zip(keys, combo))
-        result = run_backtest(
-            symbols, backtest_data["start"], backtest_data["end"], params
-        )
+        result = run_backtest(symbols, backtest_data["start"], backtest_data["end"], params)
         score_sh = result.get(metric, 0.0)
         netp = result.get("net_pnl", 0.0)
 
@@ -198,9 +187,7 @@ def optimize_hyperparams(
         return best_params_sharpe
     else:
         # All Sharpe‐ratios were NaN → fallback to net_pnl
-        print(
-            f"\n⚠ All Sharpe‐ratios = NaN → falling back to highest net_pnl ({best_score_pnl:.2f})"
-        )
+        print(f"\n⚠ All Sharpe‐ratios = NaN → falling back to highest net_pnl ({best_score_pnl:.2f})")
         return best_params_pnl or {}
 
 
@@ -241,9 +228,7 @@ def main():
     }
 
     data_cfg = {"start": args.start, "end": args.end}
-    print(
-        f"▶ Starting grid search over {len(symbols)} symbols from {args.start} to {args.end}...\n"
-    )
+    print(f"▶ Starting grid search over {len(symbols)} symbols from {args.start} to {args.end}...\n")
     best = optimize_hyperparams(None, symbols, data_cfg, param_grid, metric="sharpe")
 
     # Write results
