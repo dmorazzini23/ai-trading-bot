@@ -32,7 +32,9 @@ def fetch_sentiment(symbol: str) -> float:
         arts = resp.json().get("articles", [])
         if not arts:
             return 0.0
-        score = sum(1 for a in arts if "positive" in (a.get("title") or "").lower()) / len(arts)
+        score = sum(
+            1 for a in arts if "positive" in (a.get("title") or "").lower()
+        ) / len(arts)
         return float(score)
     except Exception as e:
         logger.error("fetch_sentiment failed for %s: %s", symbol, e)
@@ -68,11 +70,22 @@ def load_model(regime: str):
 
 def predict(csv_path: str, freq: str = "intraday"):
     df = pd.read_csv(csv_path)
-    feat = prepare_indicators(df, freq=freq)
+    symbol = os.path.splitext(os.path.basename(csv_path))[0]
+    try:
+        import inspect
+
+        if "symbol" in inspect.signature(prepare_indicators).parameters:
+            feat = prepare_indicators(df, freq=freq, symbol=symbol)
+        else:
+            feat = prepare_indicators(df, freq=freq)
+    except Exception:
+        feat = prepare_indicators(df, freq=freq)
     if os.path.exists(INACTIVE_FEATURES_FILE):
         try:
             inactive = set(json.load(open(INACTIVE_FEATURES_FILE)))
-            feat = feat.drop(columns=[c for c in inactive if c in feat.columns], errors="ignore")
+            feat = feat.drop(
+                columns=[c for c in inactive if c in feat.columns], errors="ignore"
+            )
         except Exception as e:
             logger.warning("Failed loading inactive features: %s", e)
     symbol = os.path.splitext(os.path.basename(csv_path))[0]
@@ -85,7 +98,11 @@ def predict(csv_path: str, freq: str = "intraday"):
     missing = set(expected_features) - set(feat.columns)
     if missing:
         raise ValueError(f"Missing features: {missing}")
-    X = feat[expected_features].iloc[-1:].astype({col: "float64" for col in expected_features})
+    X = (
+        feat[expected_features]
+        .iloc[-1:]
+        .astype({col: "float64" for col in expected_features})
+    )
     try:
         pred = model.predict(X)[0]
         proba = model.predict_proba(X)[0][pred]
