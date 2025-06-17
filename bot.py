@@ -1,7 +1,5 @@
 import config
-config.load_dotenv()
 config.validate_env_vars()
-config.reload_env()
 
 import time
 import warnings
@@ -33,7 +31,7 @@ if "ALPACA_API_KEY" in os.environ:
 if "ALPACA_SECRET_KEY" in os.environ:
     os.environ.setdefault("APCA_API_SECRET_KEY", os.environ["ALPACA_SECRET_KEY"])
 
-from config import ALPACA_DATA_FEED, DISABLE_DAILY_RETRAIN, SHADOW_MODE
+
 
 # Refresh environment variables on startup for reliability
 config.reload_env()
@@ -76,7 +74,7 @@ try:
 except ImportError:
     pass
 
-_DEFAULT_FEED = ALPACA_DATA_FEED or "iex"
+_DEFAULT_FEED = config.ALPACA_DATA_FEED or "iex"
 
 # Ensure numpy.NaN exists for pandas_ta compatibility
 np.NaN = np.nan
@@ -111,17 +109,10 @@ from flask import Flask
 from requests.exceptions import HTTPError
 
 from alerts import send_slack_alert
-from config import REBALANCE_INTERVAL_MIN
+
 from rebalancer import maybe_rebalance
 from alpaca_api import alpaca_get
 
-# Validate critical environment variables early
-REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
-missing_env = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
-if missing_env:
-    raise RuntimeError(
-        f"Missing required environment variables: {', '.join(missing_env)}"
-    )
 # for paper trading
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 import pickle
@@ -1912,7 +1903,7 @@ API_SECRET = ALPACA_SECRET_KEY
 BASE_URL = ALPACA_BASE_URL
 paper = ALPACA_PAPER
 
-if not (API_KEY and API_SECRET) and not SHADOW_MODE:
+if not (API_KEY and API_SECRET) and not config.SHADOW_MODE:
     logger.critical("Alpaca credentials missing – aborting startup")
     sys.exit(1)
 trading_client = TradingClient(API_KEY, API_SECRET, paper=paper)
@@ -4894,7 +4885,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
     marker = RETRAIN_MARKER_FILE
 
     need_to_retrain = True
-    if DISABLE_DAILY_RETRAIN:
+    if config.DISABLE_DAILY_RETRAIN:
         logger.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
         need_to_retrain = False
     if os.path.isfile(marker):
@@ -5211,7 +5202,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 extra={
                     "loop_id": loop_id,
                     "pnl": pnl,
-                    "mode": "SHADOW" if SHADOW_MODE else "LIVE",
+                    "mode": "SHADOW" if config.SHADOW_MODE else "LIVE",
                 },
             )
         except Exception as e:
@@ -5404,7 +5395,7 @@ def main() -> None:
         )
 
         # ⮕ Only now import retrain_meta_learner when not disabled
-        if not DISABLE_DAILY_RETRAIN:
+        if not config.DISABLE_DAILY_RETRAIN:
             try:
                 from retrain import retrain_meta_learner as _tmp_retrain
 
@@ -5478,7 +5469,7 @@ def main() -> None:
                 target=adaptive_risk_scaling, args=(ctx,), daemon=True
             ).start()
         )
-        schedule.every(REBALANCE_INTERVAL_MIN).minutes.do(
+        schedule.every(config.REBALANCE_INTERVAL_MIN).minutes.do(
             lambda: Thread(target=maybe_rebalance, args=(ctx,), daemon=True).start()
         )
         schedule.every().day.at("23:55").do(

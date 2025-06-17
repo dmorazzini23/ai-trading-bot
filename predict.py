@@ -12,7 +12,6 @@ import config
 from retrain import prepare_indicators
 
 config.reload_env()
-from config import NEWS_API_KEY
 
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -23,10 +22,10 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 
 def fetch_sentiment(symbol: str) -> float:
-    if not NEWS_API_KEY:
+    if not config.NEWS_API_KEY:
         return 0.0
     try:
-        url = f"https://newsapi.org/v2/everything?q={symbol}&pageSize=5&sortBy=publishedAt&apiKey={NEWS_API_KEY}"
+        url = f"https://newsapi.org/v2/everything?q={symbol}&pageSize=5&sortBy=publishedAt&apiKey={config.NEWS_API_KEY}"
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         arts = resp.json().get("articles", [])
