@@ -2935,8 +2935,11 @@ def exit_all_positions(ctx: BotContext) -> None:
 
 
 # ─── L. SIGNAL & TRADE LOGIC ───────────────────────────────────────────────────
-def signal_and_confirm(ctx: BotContext, symbol: str, df: pd.DataFrame, model) -> Tuple[int, float, str]:
-    sig, conf, strat = ctx.signal_manager.evaluate(ctx, df, symbol, model)
+def signal_and_confirm(
+    ctx: BotContext, state: BotState, symbol: str, df: pd.DataFrame, model
+) -> Tuple[int, float, str]:
+    """Helper to evaluate signals and ensure confidence threshold."""
+    sig, conf, strat = ctx.signal_manager.evaluate(ctx, state, df, symbol, model)
     if sig == -1 or conf < CONF_THRESHOLD:
         logger.debug("SKIP_LOW_SIGNAL", extra={"symbol": symbol, "sig": sig, "conf": conf})
         return -1, 0.0, ""
@@ -3325,7 +3328,7 @@ def trade_logic(
         logger.info(f"SKIP_MISSING_FEATURES | symbol={symbol}  missing={missing}")
         return True
 
-    sig, conf, strat = ctx.signal_manager.evaluate(ctx, feat_df, symbol, model)
+    sig, conf, strat = ctx.signal_manager.evaluate(ctx, state, feat_df, symbol, model)
     comp_list = [
         {"signal": lab, "flag": s, "weight": w} for s, w, lab in ctx.signal_manager.last_components
     ]
@@ -3749,7 +3752,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df = df.reset_index().rename(columns={df.index.name: "date"})
     else:
         df = df.reset_index().rename(columns={"index": "date"})
-    df["date"] = pd.to_datetime(df["date"])
+    df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
     df = df.sort_values("date").set_index("date")
 
     df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
@@ -3816,10 +3819,12 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df[["high", "low", "close", "volume"]] = df[["high", "low", "close", "volume"]].astype(float)
     try:
         mfi_vals = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
+        if mfi_vals is None:
+            raise ValueError("ta.mfi returned None")
         df["mfi"] = mfi_vals.astype(float)
     except Exception as e:
         logger.warning(f"prepare_indicators: failed to compute MFI: {e}")
-        df["mfi"] = None
+        df["mfi"] = np.nan
 
     try:
         df["tema"] = ta.tema(df["close"], length=10)
