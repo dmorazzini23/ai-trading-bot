@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Sequence
 
 try:
     from sklearn.base import BaseEstimator
@@ -115,7 +115,7 @@ class MLModel:
         return cls(pipeline)
 
 
-def train_model(X, y, algorithm="linear"):
+def train_model(X: Sequence[float] | pd.Series | pd.DataFrame, y: Sequence[float] | pd.Series, algorithm: str = "linear") -> Any:
     """Train a trivial model and return it."""
 
     if X is None or y is None:
@@ -127,7 +127,7 @@ def train_model(X, y, algorithm="linear"):
     return model
 
 
-def predict_model(model: Any, X: Any) -> list:
+def predict_model(model: Any, X: Sequence[Any] | pd.DataFrame) -> list[float]:
     """Return predictions from a fitted model."""
 
     if X is None:

@@ -5,17 +5,16 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from logging.handlers import RotatingFileHandler
+
+from logger_rotator import get_rotating_handler
 
 
 def setup_logger(name: str, log_file: str, level: int = logging.INFO) -> logging.Logger:
     """Return a logger writing to ``log_file`` and stdout."""
 
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-    handler = RotatingFileHandler(log_file, maxBytes=10 * 1024 * 1024, backupCount=5)
+    handler = get_rotating_handler(log_file)
     handler.setFormatter(formatter)
 
     logger = logging.getLogger(name)
@@ -33,8 +32,20 @@ def get_logger(name: str = __name__) -> logging.Logger:
     """Return a logger configured for the standard bot log file."""
 
     log_file = os.path.join(os.path.dirname(__file__), "logs", "bot.log")
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
     return setup_logger(name, log_file)
+
+
+def configure_root_logger(log_file: str, level: int = logging.INFO) -> logging.Logger:
+    """Configure the root logger with a rotating file and stdout handler."""
+
+    handler = get_rotating_handler(log_file)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[handler, logging.StreamHandler(sys.stdout)],
+        force=True,
+    )
+    return logging.getLogger()
 
 
 def log_uncaught_exceptions(ex_cls, ex, tb):

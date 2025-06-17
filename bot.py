@@ -3680,7 +3680,7 @@ def trade_logic(
     state: BotState,
     symbol: str,
     balance: float,
-    model,
+    model: Any,
     regime_ok: bool,
 ) -> bool:
     """
@@ -4211,18 +4211,28 @@ def _add_basic_indicators(df: pd.DataFrame, symbol: str, state: BotState | None)
         if state:
             state.indicator_failures += 1
         df["atr"] = np.nan
-    df["sma_50"] = df["close"].astype(float).rolling(window=50).mean()
-    df["sma_200"] = df["close"].astype(float).rolling(window=200).mean()
+    if "close" not in df.columns:
+        raise KeyError("'close' column missing for SMA calculations")
+    close = df["close"].dropna()
+    if close.empty:
+        raise ValueError("No close price data available for SMA calculations")
+    df["sma_50"] = close.astype(float).rolling(window=50).mean()
+    df["sma_200"] = close.astype(float).rolling(window=200).mean()
 
 
 def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
     """Add MACD indicators using the defensive helper."""
     try:
-        macd_df = signals_calculate_macd(df["close"])
+        if "close" not in df.columns:
+            raise KeyError("'close' column missing for MACD calculation")
+        close_series = df["close"].dropna()
+        if close_series.empty:
+            raise ValueError("No close price data available for MACD")
+        macd_df = signals_calculate_macd(close_series)
         if macd_df is None:
-            raise ValueError("MACD calculation failed")
-        df["macd"] = macd_df["macd"]
-        df["macds"] = macd_df["signal"]
+            raise ValueError("MACD calculation returned None")
+        df["macd"] = macd_df["macd"].astype(float)
+        df["macds"] = macd_df["signal"].astype(float)
     except Exception as exc:
         log_warning(
             "INDICATOR_MACD_FAIL",
