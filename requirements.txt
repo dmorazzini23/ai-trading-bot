@@ -25,7 +25,7 @@ pybreaker==1.0.0
 tzlocal==4.3
 pytz>=2023.3
 # pin setuptools to avoid pandas_ta/pkg_resources deprecation warnings
-setuptools>=69,<80
+setuptools>=69,<81
 yfinance>=0.2.18
 urllib3>=1.26,<2.0
 statsmodels==0.14.1
