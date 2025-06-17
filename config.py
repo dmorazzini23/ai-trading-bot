@@ -11,6 +11,12 @@ ENV_PATH = ROOT_DIR / ".env"
 # should call ``reload_env()`` to refresh values if needed.
 load_dotenv(ENV_PATH)
 
+REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
+_missing = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
+if _missing:
+    print(f"Error: Missing required environment variables: {_missing}")
+    sys.exit(1)
+
 logger = logging.getLogger(__name__)
 
 
@@ -59,7 +65,6 @@ def _require_env_vars(*keys: str) -> None:
         sys.exit(1)
 
 
-_require_env_vars("APCA_API_KEY_ID", "APCA_API_SECRET_KEY")
 
 ALPACA_API_KEY = get_env("ALPACA_API_KEY") or get_env("APCA_API_KEY_ID")
 ALPACA_SECRET_KEY = get_env("ALPACA_SECRET_KEY") or get_env("APCA_API_SECRET_KEY")

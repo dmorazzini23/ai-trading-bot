@@ -35,6 +35,8 @@ import os
 
 os.environ["WEBHOOK_SECRET"] = "secret"
 os.environ["WEBHOOK_PORT"] = "1"
+os.environ.setdefault("ALPACA_API_KEY", "dummy")
+os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
 import config
 
 importlib.reload(config)

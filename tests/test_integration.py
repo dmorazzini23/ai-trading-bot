@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 if "joblib" in sys.modules:
     del sys.modules["joblib"]
 
+os.environ.setdefault("ALPACA_API_KEY", "dummy")
+os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
 import config
 import data_fetcher
 from ml_model import MLModel
