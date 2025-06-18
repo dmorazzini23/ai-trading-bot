@@ -217,3 +217,17 @@ def retrain_meta_learner(
         extra={"samples": len(y), "model": model_path},
     )
     return True
+
+
+def optimize_signals(signal_data: Any, cfg: Any, model: Any | None = None) -> Any:
+    """Optimize trading signals using ``model`` if provided."""
+    if model is None:
+        model = load_model_checkpoint(cfg.MODEL_PATH)
+    if model is None:
+        return signal_data
+    try:
+        preds = model.predict(signal_data)
+        return preds
+    except Exception as exc:  # pragma: no cover - model may fail
+        logger.error("optimize_signals failed: %s", exc)
+        return signal_data

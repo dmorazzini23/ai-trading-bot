@@ -2,7 +2,6 @@
 
 import logging
 import os
-import re
 import socket
 import warnings
 import datetime as dt
@@ -176,7 +175,6 @@ def to_serializable(obj):
     return obj
 
 
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 _WARN_COUNTS: dict[str, int] = {}
 
 
