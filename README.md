@@ -32,6 +32,7 @@ Copy `.env.example` to `.env` and provide your Alpaca API credentials:
 ```bash
 ALPACA_API_KEY=your_key
 ALPACA_SECRET_KEY=your_secret
+FLASK_PORT=9000
 ```
 
 Only these variables are required for Alpaca access.

@@ -69,8 +69,10 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    # Disable Flask’s reloader so no extra watcher process is spawned.
-    flask_port = int(os.getenv("FLASK_PORT", 9000))
+    # Disable Flask's reloader so no extra watcher process is spawned.
+    flask_port = int(os.getenv("FLASK_PORT", "9000"))
+    # If the port was not set, ensure the env var is populated for consistency
+    os.environ.setdefault("FLASK_PORT", str(flask_port))
     if not check_port_available(flask_port):
         raise RuntimeError(f"Port {flask_port} is already in use")
     os.environ["WEBHOOK_PORT"] = str(flask_port)
