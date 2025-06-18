@@ -1,9 +1,11 @@
 import config
+
 config.validate_env_vars()
 
+import datetime
 import time
 import warnings
-import datetime
+
 import pandas as pd
 
 try:
@@ -34,7 +36,6 @@ if "ALPACA_SECRET_KEY" in os.environ:
     os.environ.setdefault("APCA_API_SECRET_KEY", os.environ["ALPACA_SECRET_KEY"])
 
 
-
 # Refresh environment variables on startup for reliability
 config.reload_env()
 
@@ -43,13 +44,13 @@ BOT_MODE = config.get_env("BOT_MODE", "balanced")
 assert BOT_MODE is not None, "BOT_MODE must be set before using BotState"
 import atexit
 import csv
+import datetime as dt
 import json
 import logging
-import datetime as dt
-import sys
 import random
 import re
 import signal
+import sys
 import threading
 import time as pytime
 from argparse import ArgumentParser
@@ -84,6 +85,7 @@ np.NaN = np.nan
 import pandas as pd
 import pandas_market_calendars as mcal
 import pandas_ta as ta
+
 from signals import calculate_macd as signals_calculate_macd
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -93,17 +95,13 @@ import requests
 import schedule
 import yfinance as yf
 from alpaca.common.exceptions import APIError
-
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, OrderStatus, QueryOrderStatus, TimeInForce
+from alpaca.trading.enums import (OrderSide, OrderStatus, QueryOrderStatus,
+                                  TimeInForce)
 from alpaca.trading.models import Order
-from alpaca.trading.requests import (
-    GetOrdersRequest,
-    LimitOrderRequest,
-    MarketOrderRequest,
-)
-
+from alpaca.trading.requests import (GetOrdersRequest, LimitOrderRequest,
+                                     MarketOrderRequest)
 # Legacy import removed; using alpaca-py trading stream instead
 from alpaca.trading.stream import TradingStream
 from bs4 import BeautifulSoup
@@ -111,9 +109,8 @@ from flask import Flask
 from requests.exceptions import HTTPError
 
 from alerts import send_slack_alert
-
-from rebalancer import maybe_rebalance
 from alpaca_api import alpaca_get
+from rebalancer import maybe_rebalance
 
 # for paper trading
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
@@ -128,9 +125,10 @@ from alpaca.data.timeframe import TimeFrame
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import BayesianRidge, Ridge
+
 from metrics_logger import log_metrics
 from pipeline import model_pipeline
-from utils import model_lock, safe_to_datetime, log_warning
+from utils import log_warning, model_lock, safe_to_datetime
 
 try:
     from meta_learning import retrain_meta_learner
@@ -196,8 +194,8 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
             pass
 
 
-from data_fetcher import DataFetchError, finnhub_client, get_minute_df
 import logger as log_module
+from data_fetcher import DataFetchError, finnhub_client, get_minute_df
 from logger import logger
 from risk_engine import RiskEngine
 from strategies import MeanReversionStrategy, MomentumStrategy, TradeSignal
@@ -246,10 +244,7 @@ def compute_time_range(minutes: int = 30) -> tuple[datetime, datetime]:
 
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
-    """Return the last day's minute bars or an empty DataFrame on failure."""
-    if not market_is_open():
-        logger.warning("MARKET_CLOSED_MINUTE_FETCH_SKIP", extra={"symbol": symbol})
-        return pd.DataFrame()
+    """Fetches minute-level data, returning an empty DataFrame on error."""
     try:
         today = datetime.date.today()
         yesterday = today - datetime.timedelta(days=1)
@@ -261,11 +256,9 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         if isinstance(df.index, pd.MultiIndex):
             df.index = df.index.get_level_values(1)
         df.index = pd.to_datetime(df.index)
-        if df is None or df.empty:
-            return pd.DataFrame()
         return df
-    except Exception as exc:  # pragma: no cover - network errors
-        logger.error("fetch_minute_df_safe failed for %s: %s", symbol, exc)
+    except HistoricalDataError as e:
+        logger.error(f"fetch_minute_df_safe failed for {symbol}: {e}")
         return pd.DataFrame()
 
 
@@ -311,14 +304,8 @@ def reconcile_positions(ctx: "BotContext") -> None:
 import warnings
 
 from ratelimit import limits, sleep_and_retry
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-    wait_random,
-)
+from tenacity import (RetryError, retry, retry_if_exception_type,
+                      stop_after_attempt, wait_exponential, wait_random)
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 RUN_HEALTH = RUN_HEALTHCHECK == "1"
@@ -3421,7 +3408,9 @@ def _fetch_feature_data(
         return None, None, False
 
     try:
-        feat_df = prepare_indicators(raw_df, freq="intraday", symbol=symbol, state=state)
+        feat_df = prepare_indicators(
+            raw_df, freq="intraday", symbol=symbol, state=state
+        )
     except ValueError as exc:
         logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
         return raw_df, None, True
@@ -3662,7 +3651,9 @@ def _manage_existing_position(
     return True
 
 
-def _evaluate_trade_signal(ctx: BotContext, state: BotState, feat_df: pd.DataFrame, symbol: str, model: Any) -> tuple[float, float, str]:
+def _evaluate_trade_signal(
+    ctx: BotContext, state: BotState, feat_df: pd.DataFrame, symbol: str, model: Any
+) -> tuple[float, float, str]:
     """Return ``(final_score, confidence, strategy)`` for ``symbol``."""
 
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, state, feat_df, symbol, model)
@@ -3695,7 +3686,9 @@ def _recent_rebalance_flag(ctx: BotContext, symbol: str) -> bool:
     reb_time = ctx.rebalance_buys.get(symbol)
     if not reb_time:
         return False
-    if datetime.now(timezone.utc) - reb_time < timedelta(seconds=REBALANCE_HOLD_SECONDS):
+    if datetime.now(timezone.utc) - reb_time < timedelta(
+        seconds=REBALANCE_HOLD_SECONDS
+    ):
         return True
     ctx.rebalance_buys.pop(symbol, None)
     return False
@@ -3729,7 +3722,9 @@ def trade_logic(
         return True
 
     try:
-        final_score, conf, strat = _evaluate_trade_signal(ctx, state, feat_df, symbol, model)
+        final_score, conf, strat = _evaluate_trade_signal(
+            ctx, state, feat_df, symbol, model
+        )
     except ValueError as exc:
         logger.error("%s", exc)
         return True
@@ -4190,7 +4185,9 @@ def _normalize_index(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def _add_basic_indicators(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
+def _add_basic_indicators(
+    df: pd.DataFrame, symbol: str, state: BotState | None
+) -> None:
     """Add VWAP, RSI, ATR and simple moving averages."""
     try:
         df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
@@ -4252,7 +4249,9 @@ def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
         df["macds"] = np.nan
 
 
-def _add_additional_indicators(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
+def _add_additional_indicators(
+    df: pd.DataFrame, symbol: str, state: BotState | None
+) -> None:
     """Add a suite of secondary technical indicators."""
     try:
         kc = ta.kc(df["high"], df["low"], df["close"], length=20)
@@ -4306,7 +4305,9 @@ def _add_additional_indicators(df: pd.DataFrame, symbol: str, state: BotState | 
             state.indicator_failures += 1
         df["cci"] = np.nan
 
-    df[["high", "low", "close", "volume"]] = df[["high", "low", "close", "volume"]].astype(float)
+    df[["high", "low", "close", "volume"]] = df[
+        ["high", "low", "close", "volume"]
+    ].astype(float)
     try:
         mfi_vals = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
         df["mfi"] = mfi_vals.astype(float)
@@ -4366,14 +4367,18 @@ def _add_additional_indicators(df: pd.DataFrame, symbol: str, state: BotState | 
         df["stochrsi"] = np.nan
 
 
-def _add_multi_timeframe_features(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
+def _add_multi_timeframe_features(
+    df: pd.DataFrame, symbol: str, state: BotState | None
+) -> None:
     """Add multi-timeframe and lag-based features."""
     try:
         df["ret_5m"] = df["close"].pct_change(5)
         df["ret_1h"] = df["close"].pct_change(60)
         df["ret_d"] = df["close"].pct_change(390)
         df["ret_w"] = df["close"].pct_change(1950)
-        df["vol_norm"] = df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
+        df["vol_norm"] = (
+            df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
+        )
         df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
         df["vol_5m"] = df["close"].pct_change().rolling(5).std()
         df["vol_1h"] = df["close"].pct_change().rolling(60).std()
@@ -4399,7 +4404,11 @@ def _drop_inactive_features(df: pd.DataFrame) -> None:
         try:
             with open(INACTIVE_FEATURES_FILE) as f:
                 inactive = set(json.load(f))
-            df.drop(columns=[c for c in inactive if c in df.columns], inplace=True, errors="ignore")
+            df.drop(
+                columns=[c for c in inactive if c in df.columns],
+                inplace=True,
+                errors="ignore",
+            )
         except Exception as exc:  # pragma: no cover - unexpected I/O
             logger.exception("bot.py unexpected", exc_info=exc)
             raise
@@ -4417,7 +4426,10 @@ def prepare_indicators(
     required_cols = ["open", "high", "low", "close", "volume"]
     missing = [c for c in required_cols if c not in frame]
     if missing:
-        log_warning("INDICATOR_MISSING_COLS", extra={"symbol": symbol, "missing": ",".join(missing)})
+        log_warning(
+            "INDICATOR_MISSING_COLS",
+            extra={"symbol": symbol, "missing": ",".join(missing)},
+        )
         if state:
             state.indicator_failures += 1
         return pd.DataFrame()
@@ -5545,9 +5557,7 @@ def get_latest_price(symbol: str):
             raise ValueError(f"Price returned None for symbol {symbol}")
         return price
     except Exception as e:
-        logger.error(
-            "Failed to get latest price for %s: %s", symbol, e, exc_info=True
-        )
+        logger.error("Failed to get latest price for %s: %s", symbol, e, exc_info=True)
         return None
 
 
