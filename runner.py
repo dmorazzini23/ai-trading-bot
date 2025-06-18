@@ -7,8 +7,7 @@ import signal
 import time
 
 from bot import main
-
-logger = logging.getLogger(__name__)
+from logger import logger
 
 _shutdown = False
 

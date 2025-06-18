@@ -18,6 +18,7 @@ from tenacity import (
 import pandas as pd
 import requests
 from alerts import send_slack_alert
+from logger import logger
 
 if "ALPACA_API_KEY" in os.environ:
     os.environ.setdefault("APCA_API_KEY_ID", os.environ["ALPACA_API_KEY"])
@@ -26,7 +27,6 @@ if "ALPACA_SECRET_KEY" in os.environ:
 
 SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
-logger = logging.getLogger(__name__)
 
 _warn_counts = defaultdict(int)
 

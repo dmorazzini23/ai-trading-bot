@@ -6,6 +6,8 @@ import time
 from datetime import datetime
 from typing import Any, Sequence
 
+from logger import logger
+
 try:
     from sklearn.base import BaseEstimator
     from sklearn.metrics import mean_squared_error
@@ -13,7 +15,7 @@ except Exception:  # pragma: no cover - sklearn optional
 
     class BaseEstimator:
         def __init__(self, *args, **kwargs) -> None:
-            logging.getLogger(__name__).error("scikit-learn is required")
+            logger.error("scikit-learn is required")
             raise ImportError("scikit-learn is required")
 
     def mean_squared_error(y_true, y_pred):
@@ -40,7 +42,7 @@ class MLModel:
 
     def __init__(self, pipeline: BaseEstimator) -> None:
         self.pipeline: BaseEstimator = pipeline
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger
 
     def _validate_inputs(self, X: pd.DataFrame) -> None:
         if not isinstance(X, pd.DataFrame):
@@ -95,7 +97,6 @@ class MLModel:
 
     @classmethod
     def load(cls, path: str) -> "MLModel":
-        logger = logging.getLogger(__name__)
         try:
             with open(path, "rb") as f:
                 data = f.read()
@@ -137,7 +138,7 @@ def predict_model(model: Any, X: Sequence[Any] | pd.DataFrame) -> list[float]:
     try:
         return list(model.predict(X))
     except Exception as exc:  # pragma: no cover - model may fail unexpectedly
-        logging.getLogger(__name__).error("Model prediction failed: %s", exc)
+        logger.error("Model prediction failed: %s", exc)
         raise
 
 

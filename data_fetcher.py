@@ -17,6 +17,7 @@ ALPACA_DATA_FEED = config.ALPACA_DATA_FEED
 HALT_FLAG_PATH = config.HALT_FLAG_PATH
 
 from alpaca.data.historical import StockHistoricalDataClient
+from logger import logger
 
 # Global Alpaca data client using config credentials
 client = StockHistoricalDataClient(
@@ -24,7 +25,6 @@ client = StockHistoricalDataClient(
     secret_key=ALPACA_SECRET_KEY,
 )
 
-logger = logging.getLogger(__name__)
 _rate_limit_lock = threading.Lock()
 try:
     import requests
@@ -44,9 +44,6 @@ MINUTES_REQUIRED = 31
 HISTORICAL_START = "2025-06-01"
 HISTORICAL_END = "2025-06-06"
 import logging
-
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 import finnhub

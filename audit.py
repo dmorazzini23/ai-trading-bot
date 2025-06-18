@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", "trades.csv")
 
-logger = logging.getLogger(__name__)
+from logger import logger
 _fields = ["id", "timestamp", "symbol", "side", "qty", "price", "mode", "result"]
 
 

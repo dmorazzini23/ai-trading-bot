@@ -8,8 +8,8 @@ from typing import Any, Optional
 import pandas as pd
 import numpy as np
 import requests
+from logger import logger
 
-logger = logging.getLogger(__name__)
 
 
 def load_module(name: str) -> Any:

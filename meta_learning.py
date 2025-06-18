@@ -10,7 +10,7 @@ from typing import Any, Optional, Dict
 import numpy as np
 import pandas as pd
 
-logger = logging.getLogger(__name__)
+from logger import logger
 
 
 def load_weights(path: str, default: np.ndarray | None = None) -> np.ndarray:
