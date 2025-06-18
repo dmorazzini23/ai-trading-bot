@@ -42,9 +42,7 @@ config.reload_env()
 # BOT_MODE must be defined before any classes that reference it
 BOT_MODE = config.get_env("BOT_MODE", "balanced")
 assert BOT_MODE is not None, "BOT_MODE must be set before using BotState"
-import atexit
 import csv
-import datetime as dt
 import json
 import logging
 import random
@@ -168,7 +166,6 @@ ALPACA_SECRET_KEY = _require_cfg(ALPACA_SECRET_KEY, "ALPACA_SECRET_KEY")
 if not callable(validate_alpaca_credentials):
     raise RuntimeError("validate_alpaca_credentials not found in config")
 BOT_MODE_ENV = _require_cfg(BOT_MODE_ENV, "BOT_MODE")
-FINNHUB_API_KEY = _require_cfg(FINNHUB_API_KEY, "FINNHUB_API_KEY")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -257,7 +254,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             df.index = df.index.get_level_values(1)
         df.index = pd.to_datetime(df.index)
         return df
-    except HistoricalDataError as e:
+    except Exception as e:
         logger.error(f"fetch_minute_df_safe failed for {symbol}: {e}")
         return pd.DataFrame()
 

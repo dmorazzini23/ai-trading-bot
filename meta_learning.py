@@ -1,7 +1,6 @@
 """Utility helpers for meta-learning weight management."""
 
 import json
-import logging
 import pickle
 from datetime import datetime, timezone
 from pathlib import Path
