@@ -243,7 +243,7 @@ def compute_time_range(minutes: int = 30) -> tuple[datetime, datetime]:
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     """Fetches minute-level data, returning an empty DataFrame on error."""
     try:
-        today = datetime.date.today()
+        today = date.today()
         yesterday = today - datetime.timedelta(days=1)
         df = get_minute_df(
             symbol,
@@ -5000,7 +5000,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "type": "daily_retrain",
                 "batch_mse": batch_mse,
-                "hyperparams": json.dumps(config.SGD_PARAMS),
+                "hyperparams": json.dumps(dict(config.SGD_PARAMS)),
                 "seed": SEED,
                 "model": "SGDRegressor",
                 "git_hash": get_git_hash(),
