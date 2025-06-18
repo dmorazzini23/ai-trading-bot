@@ -3,7 +3,7 @@ set -eo pipefail
 
 echo "🔁 Starting AI Trading Bot..."
 
-# Change to project directory
+# ensure we’re in the project root
 cd /root/ai-trading-bot
 
 # Load environment variables from .env if present
@@ -28,6 +28,7 @@ source venv/bin/activate
 
 # Force-reinstall setuptools/pip/wheel, upgrade pip, then install requirements
 pip install --upgrade --force-reinstall setuptools pip wheel || exit 1
+# install all requirements into the venv
 pip install -r requirements.txt            || exit 1
 
 # Launch HTTP server if available
@@ -37,5 +38,5 @@ else
   echo "⚠️ gunicorn not found; skipping server"
 fi
 
-# Finally, run the bot
-exec "$PYTHON_BIN" -u bot.py
+# Finally, run the bot using the venv’s Python
+exec python -u bot.py
