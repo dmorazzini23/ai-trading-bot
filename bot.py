@@ -94,8 +94,16 @@ import yfinance as yf
 from alpaca.common.exceptions import APIError
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import (OrderSide, OrderStatus, QueryOrderStatus,
-                                  TimeInForce)
+from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
+try:
+    from alpaca.trading.enums import OrderStatus
+except Exception:  # pragma: no cover - older alpaca-trade-api
+    from enum import Enum
+
+    class OrderStatus(str, Enum):
+        """Fallback enumeration for pre-v3 Alpaca SDKs."""
+
+        PENDING_NEW = "pending_new"
 from alpaca.trading.models import Order
 from alpaca.trading.requests import (GetOrdersRequest, LimitOrderRequest,
                                      MarketOrderRequest)

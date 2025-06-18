@@ -31,7 +31,7 @@ def test_end_to_end_pipeline(monkeypatch):
     config.reload_env()
 
     # prepare mock minute data
-    idx = pd.date_range("2024-01-01", periods=2, freq="T", tz="UTC")
+    idx = pd.date_range("2024-01-01", periods=2, freq="min", tz="UTC")
     df = pd.DataFrame(
         {
             "open": [1.0, 1.1],
