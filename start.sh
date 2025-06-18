@@ -14,7 +14,7 @@ if [ -f .env ]; then
   set -u
 fi
 
-# Now require WEBHOOK_SECRET
+# Now require WEBHOOK_SECRET (placeholder or real)
 export WEBHOOK_SECRET=${WEBHOOK_SECRET:?ERROR: WEBHOOK_SECRET must be set in .env}
 
 # Ensure Python 3.12 venv exists
@@ -28,18 +28,13 @@ else
   source venv/bin/activate
 fi
 
-# Launch HTTP server if available, passing through WEBHOOK_SECRET
-if command -v gunicorn >/dev/null; then
-  exec gunicorn \
-    --worker-class gthread \
-    --workers 1 \
-    --threads 4 \
-    --bind 0.0.0.0:${WEBHOOK_PORT:-9000} \
-    --env WEBHOOK_SECRET="$WEBHOOK_SECRET" \
-    server:app &
+# If you still need the HTTP endpoints, run the Flask server directly
+if [ -f server.py ]; then
+  echo "🌐 Launching Flask server..."
+  python -u server.py &
 else
-  echo "⚠️ gunicorn not found; skipping server"
+  echo "⚠️ server.py not found; skipping HTTP server"
 fi
 
-# Finally, run the bot using venv’s Python
+# Finally, run the trading bot
 exec python -u bot.py
