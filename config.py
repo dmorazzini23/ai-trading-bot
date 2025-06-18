@@ -1,6 +1,4 @@
-import logging
 import os
-import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -13,8 +11,6 @@ ENV_PATH = ROOT_DIR / ".env"
 load_dotenv(ENV_PATH)
 
 REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
-
-
 
 def get_env(
     key: str,
@@ -120,5 +116,10 @@ def validate_alpaca_credentials() -> None:
 
 
 def validate_env_vars() -> None:
+    """Ensure critical environment variables are present.
+
+    This function is intended to be called at startup. It reloads ``.env``
+    and raises ``RuntimeError`` if any required variables are missing.
+    """
     load_dotenv()
-    _require_env_vars("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL")
+    _require_env_vars("ALPACA_API_KEY", "ALPACA_SECRET_KEY")

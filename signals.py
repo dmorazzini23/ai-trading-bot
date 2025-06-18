@@ -1,17 +1,13 @@
 """Simple signal generation module for tests."""
 
 import importlib
-import logging
 import time
 from typing import Any, Optional
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import requests
 from logger import logger
-
-
-
 def load_module(name: str) -> Any:
     """Dynamically import a module using :mod:`importlib`."""
     try:
@@ -115,6 +111,26 @@ def calculate_macd(
         return None
 
 
+def _validate_input_df(data: pd.DataFrame) -> None:
+    if data is None or not isinstance(data, pd.DataFrame):
+        raise ValueError("Input must be a DataFrame")
+    if "close" not in data.columns:
+        raise ValueError("Input data missing 'close' column")
+
+
+def _apply_macd(data: pd.DataFrame) -> pd.DataFrame:
+    macd_df = calculate_macd(data["close"])
+    if macd_df is None or macd_df.empty:
+        logger.warning("MACD indicator calculation failed, returning None")
+        raise ValueError("MACD calculation failed")
+    for col in ("macd", "signal", "histogram"):
+        series = macd_df.get(col)
+        if series is None:
+            raise ValueError(f"MACD output missing column '{col}'")
+        data[col] = series.astype(float)
+    return data
+
+
 def prepare_indicators(data: pd.DataFrame) -> pd.DataFrame:
     """Prepare indicator columns for a trading strategy.
 
@@ -134,24 +150,9 @@ def prepare_indicators(data: pd.DataFrame) -> pd.DataFrame:
         If the MACD indicator fails to calculate or ``close`` column is missing.
     """
 
-    if data is None or not isinstance(data, pd.DataFrame):
-        raise ValueError("Input must be a DataFrame")
-    if "close" not in data.columns:
-        raise ValueError("Input data missing 'close' column")
-
-    macd_df = calculate_macd(data["close"])
-    if macd_df is None or macd_df.empty:
-        logger.warning("MACD indicator calculation failed, returning None")
-        raise ValueError("MACD calculation failed")
-
-    for col in ("macd", "signal", "histogram"):
-        series = macd_df.get(col)
-        if series is None:
-            raise ValueError(f"MACD output missing column '{col}'")
-        data[col] = series.astype(float)
-
+    _validate_input_df(data)
+    data = _apply_macd(data)
     # Additional indicators can be added here using similar defensive checks
-
     return data
 
 

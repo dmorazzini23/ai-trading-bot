@@ -123,12 +123,16 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 
 
-def data_filepath(filename: str) -> str:
-    """Return absolute path to a data file shipped with the project."""
+# Deprecated helpers kept for backward compatibility. They are no longer
+# referenced anywhere in the codebase but remain for historical reasons.
+# pylint: disable=unused-function
+def data_filepath(filename: str) -> str:  # pragma: no cover - deprecated
+    """Return absolute path to bundled data file."""
     return os.path.join(BASE_PATH, "data", filename)
 
 
-def convert_to_local(df: pd.DataFrame) -> pd.DataFrame:
+def convert_to_local(df: pd.DataFrame) -> pd.DataFrame:  # pragma: no cover
+    """Convert DataFrame index to local timezone."""
     local_tz = get_localzone()
     assert df.index.tz is not None, "DataFrame index must be timezone aware"
     return df.tz_convert(local_tz)
