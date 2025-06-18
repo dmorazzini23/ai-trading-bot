@@ -3,7 +3,6 @@ set -eo pipefail
 
 echo "🔁 Starting AI Trading Bot..."
 
-# ensure we’re in the project root
 cd /root/ai-trading-bot
 
 # Load environment variables from .env if present
@@ -15,21 +14,18 @@ if [ -f .env ]; then
   set -u
 fi
 
-# Ensure Python 3.12 binary exists
-PYTHON_BIN=$(command -v python3.12 || echo "/usr/bin/python3.12")
-
-# Create virtualenv if missing
+# Ensure Python 3.12 venv exists
 if [ ! -d venv ]; then
-  "$PYTHON_BIN" -m venv venv
+  echo "🛠 Creating new virtualenv and installing dependencies..."
+  python3.12 -m venv venv
+  # Activate and install only once
+  source venv/bin/activate
+  pip install --upgrade pip setuptools wheel
+  pip install -r requirements.txt
+else
+  # Activate existing venv
+  source venv/bin/activate
 fi
-
-# Activate virtualenv
-source venv/bin/activate
-
-# Force-reinstall setuptools/pip/wheel, upgrade pip, then install requirements
-pip install --upgrade --force-reinstall setuptools pip wheel || exit 1
-# install all requirements into the venv
-pip install -r requirements.txt            || exit 1
 
 # Launch HTTP server if available
 if command -v gunicorn >/dev/null; then
@@ -38,5 +34,5 @@ else
   echo "⚠️ gunicorn not found; skipping server"
 fi
 
-# Finally, run the bot using the venv’s Python
+# Finally, run the bot using venv’s Python
 exec python -u bot.py
