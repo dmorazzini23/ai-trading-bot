@@ -20,8 +20,8 @@ fi
 # Activate virtualenv
 source venv/bin/activate
 
-# Upgrade pip and install requirements
-pip install --upgrade pip setuptools >/dev/null
-pip install --quiet -r requirements.txt
+# Force-reinstall setuptools, upgrade pip, then install requirements (show errors)
+pip install --upgrade --force-reinstall setuptools pip wheel || exit 1
+pip install -r requirements.txt || exit 1
 gunicorn -w 2 -b 0.0.0.0:${WEBHOOK_PORT:-9000} server:app &
 python3.12 bot.py

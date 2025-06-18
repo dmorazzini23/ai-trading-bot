@@ -37,3 +37,4 @@ optuna==3.6.1
 torch==2.7.1+cpu
 python-dotenv>=0.21.0
 
+numpy>=1.25.0
