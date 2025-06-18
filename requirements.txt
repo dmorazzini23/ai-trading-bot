@@ -1,6 +1,6 @@
 # Ensure PyYAML can build under Python 3.12
 Cython>=0.29.36         # needed to build PyYAML on Python 3.12
-PyYAML==6.0.1             # ensure a wheel install
+PyYAML==6.0.2             # ensure a wheel install
 
 tenacity==8.2.2
 ratelimit==2.2.1
