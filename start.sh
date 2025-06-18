@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
+# Require WEBHOOK_SECRET in environment or .env
+export WEBHOOK_SECRET=${WEBHOOK_SECRET:?ERROR: WEBHOOK_SECRET must be set in .env}
+
 echo "🔁 Starting AI Trading Bot..."
 
 cd /root/ai-trading-bot
@@ -25,9 +28,13 @@ else
   source venv/bin/activate
 fi
 
-# Launch HTTP server if available
+# Launch HTTP server if available, passing through WEBHOOK_SECRET
 if command -v gunicorn >/dev/null; then
-  gunicorn -w2 -b0.0.0.0:${WEBHOOK_PORT:-9000} server:app &
+  exec gunicorn \
+    --workers 2 \
+    --bind 0.0.0.0:${WEBHOOK_PORT:-9000} \
+    --env WEBHOOK_SECRET="$WEBHOOK_SECRET" \
+    server:app &
 else
   echo "⚠️ gunicorn not found; skipping server"
 fi
