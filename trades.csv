@@ -1,1 +1,4 @@
 symbol,entry_time,entry_price,exit_time,exit_price,qty,side,strategy,classification,signal_tags
+NVDA,2025-06-12T17:52:36.126384+00:00,144.54,,,41,buy,momentum+mean_reversion+ml+sentiment+regime+stochrsi+obv+vsa,,momentum+mean_reversion+ml+sentiment+regime+stochrsi+obv+vsa,0.24559532161796804,
+ADBE,2025-06-12T18:00:00.685246+00:00,414.2,,,1,buy,momentum+mean_reversion+ml+sentiment+regime+stochrsi+obv+vsa,,momentum+mean_reversion+ml+sentiment+regime+stochrsi+obv+vsa,1.0,
+META,2025-06-12T18:02:43.821029+00:00,691.81,2025-06-12T18:07:04.712283+00:00,691.76,1,buy,momentum+mean_reversion+ml+sentiment+regime+stochrsi+obv+vsa,day_trade,momentum+mean_reversion+ml+sentiment+regime+stochrsi+obv+vsa,1.0,-0.049999999999954525
