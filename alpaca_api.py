@@ -60,9 +60,13 @@ def alpaca_get(
     """Perform a GET request to the Alpaca API with retries."""
 
     url = f"{ALPACA_BASE_URL}{endpoint}"
-    response = requests.get(url, headers=HEADERS, params=params, timeout=10)
-    response.raise_for_status()
-    return response.json()
+    try:
+        response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as exc:
+        logger.error("alpaca_get request failed for %s: %s", endpoint, exc)
+        raise
 
 
 @retry(

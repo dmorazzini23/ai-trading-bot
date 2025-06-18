@@ -1,9 +1,8 @@
 import hashlib
 import io
-import logging
-import os
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Sequence
 
 from logger import logger
@@ -85,15 +84,16 @@ class MLModel:
 
     def save(self, path: str | None = None) -> str:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = path or os.path.join("models", f"model_{ts}.pkl")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        model_dir = Path(__file__).parent / "models"
+        path = Path(path) if path else model_dir / f"model_{ts}.pkl"
+        path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            joblib.dump(self.pipeline, path)
-            self.logger.info("MODEL_SAVED", extra={"path": path})
+            joblib.dump(self.pipeline, str(path))
+            self.logger.info("MODEL_SAVED", extra={"path": str(path)})
         except Exception as exc:
             self.logger.exception(f"MODEL_SAVE_FAILED: {exc}")
             raise
-        return path
+        return str(path)
 
     @classmethod
     def load(cls, path: str) -> "MLModel":
@@ -144,12 +144,11 @@ def predict_model(model: Any, X: Sequence[Any] | pd.DataFrame) -> list[float]:
 
 def save_model(model: Any, path: str) -> None:
     """Persist ``model`` to ``path``."""
-
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    joblib.dump(model, path)
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, str(p))
 
 
 def load_model(path: str) -> Any:
     """Load a model previously saved with ``save_model``."""
-
-    return joblib.load(path)
+    return joblib.load(str(Path(path)))

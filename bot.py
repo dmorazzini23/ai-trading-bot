@@ -56,7 +56,7 @@ from argparse import ArgumentParser
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import date, time as dt_time, timedelta, timezone
+from datetime import date, time as dt_time, timedelta
 from threading import Lock, Semaphore, Thread
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
@@ -126,6 +126,7 @@ from sklearn.linear_model import BayesianRidge, Ridge
 from metrics_logger import log_metrics
 from pipeline import model_pipeline
 from utils import log_warning, model_lock, safe_to_datetime
+from meta_learning import optimize_signals
 
 try:
     from meta_learning import retrain_meta_learner
@@ -3973,6 +3974,7 @@ def update_signal_weights() -> None:
         )
         df["confidence"] = df.get("confidence", 0.5)
         df["reward"] = df["pnl"] * df["confidence"]
+        optimize_signals(df, config)
         recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
         recent_mask = recent_cut >= (datetime.datetime.now(datetime.timezone.utc) - timedelta(days=30))
         df_recent = df[recent_mask]

@@ -10,6 +10,13 @@ ENV_PATH = ROOT_DIR / ".env"
 # should call ``reload_env()`` to refresh values if needed.
 load_dotenv(ENV_PATH)
 
+required_env_vars = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "FLASK_PORT"]
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    raise RuntimeError(
+        f"Missing required environment variables: {', '.join(missing_vars)}"
+    )
+
 REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
 
 def get_env(

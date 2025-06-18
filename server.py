@@ -17,15 +17,14 @@ if not config.WEBHOOK_SECRET:
     logger.error("WEBHOOK_SECRET must be set")
     raise RuntimeError("WEBHOOK_SECRET must be set")
 
-
-def find_free_port(default_port: int = 9000) -> int:
-    """Return ``default_port`` if available otherwise an ephemeral port."""
+def check_port_available(port: int) -> bool:
+    """Return ``True`` if ``port`` can be bound."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        if s.connect_ex(("localhost", default_port)) != 0:
-            return default_port
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
+        try:
+            s.bind(("", port))
+            return True
+        except OSError:
+            return False
 
 
 def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
@@ -72,6 +71,7 @@ app = create_app()
 if __name__ == "__main__":
     # Disable Flask’s reloader so no extra watcher process is spawned.
     flask_port = int(os.getenv("FLASK_PORT", 9000))
-    flask_port = find_free_port(flask_port)
+    if not check_port_available(flask_port):
+        raise RuntimeError(f"Port {flask_port} is already in use")
     os.environ["WEBHOOK_PORT"] = str(flask_port)
     app.run(host="0.0.0.0", port=flask_port, debug=False, use_reloader=False)
