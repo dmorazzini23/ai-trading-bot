@@ -9,7 +9,13 @@ class HTTPError(Exception):
     pass
 
 
-alpaca_api.requests = types.SimpleNamespace(exceptions=types.SimpleNamespace(HTTPError=HTTPError))
+class RequestException(Exception):
+    pass
+
+
+alpaca_api.requests = types.SimpleNamespace(
+    exceptions=types.SimpleNamespace(HTTPError=HTTPError, RequestException=RequestException)
+)
 
 
 class DummyAPI:

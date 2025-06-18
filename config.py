@@ -10,7 +10,14 @@ ENV_PATH = ROOT_DIR / ".env"
 # should call ``reload_env()`` to refresh values if needed.
 load_dotenv(ENV_PATH)
 
-required_env_vars = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "FLASK_PORT"]
+# Relax environment variable validation when running under pytest so the
+# configuration module can be imported without all production variables set.
+TESTING = os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TESTING")
+
+required_env_vars = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
+if not TESTING:
+    required_env_vars.append("FLASK_PORT")
+
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]
 if missing_vars:
     raise RuntimeError(
