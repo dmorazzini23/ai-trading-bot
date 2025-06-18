@@ -43,6 +43,7 @@ import atexit
 import csv
 import json
 import logging
+import datetime as dt
 import sys
 import random
 import re
@@ -242,14 +243,15 @@ def compute_time_range(minutes: int = 30) -> tuple[datetime, datetime]:
     return start, end
 
 
-def fetch_minute_df_safe(ctx: "BotContext", symbol: str) -> pd.DataFrame:
-    """Return minute bars if market is open; otherwise an empty DataFrame."""
+def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
+    """Return the last day's minute bars or an empty DataFrame on failure."""
     if not market_is_open():
         logger.warning("MARKET_CLOSED_MINUTE_FETCH_SKIP", extra={"symbol": symbol})
         return pd.DataFrame()
     try:
-        today = date.today()
-        df = get_minute_df(today)
+        today = dt.date.today()
+        yesterday = today - dt.timedelta(days=1)
+        df = get_minute_df(symbol, start_date=yesterday, end_date=today)
         if df is None or df.empty:
             return pd.DataFrame()
         return df
@@ -2589,7 +2591,7 @@ def scaled_atr_stop(
 
 
 def liquidity_factor(ctx: BotContext, symbol: str) -> float:
-    df = fetch_minute_df_safe(ctx, symbol)
+    df = fetch_minute_df_safe(symbol)
     if df is None or df.empty:
         return 0.0
     if "volume" not in df.columns:
@@ -2901,7 +2903,7 @@ def vwap_pegged_submit(
     start_time = pytime.time()
     placed = 0
     while placed < total_qty and pytime.time() - start_time < duration:
-        df = fetch_minute_df_safe(ctx, symbol)
+        df = fetch_minute_df_safe(symbol)
         if df is None or df.empty:
             logger.warning(
                 "[VWAP] missing bars, aborting VWAP slice", extra={"symbol": symbol}
@@ -3041,7 +3043,7 @@ def pov_submit(
     retries = 0
     interval = cfg.sleep_interval
     while placed < total_qty:
-        df = fetch_minute_df_safe(ctx, symbol)
+        df = fetch_minute_df_safe(symbol)
         if df is None or df.empty:
             retries += 1
             if retries > cfg.max_retries:
@@ -3194,7 +3196,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
         logger.info("MARKET_ENTRY", extra={"symbol": symbol, "qty": qty})
         submit_order(ctx, symbol, qty, side)
 
-    raw = fetch_minute_df_safe(ctx, symbol)
+    raw = fetch_minute_df_safe(symbol)
     if raw is None or raw.empty:
         logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
         return
@@ -3234,7 +3236,7 @@ def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> Non
     if qty is None or not np.isfinite(qty) or qty <= 0:
         logger.error(f"Invalid order size for {symbol}: {qty}")
         return
-    raw = fetch_minute_df_safe(ctx, symbol)
+    raw = fetch_minute_df_safe(symbol)
     exit_price = get_latest_close(raw) if raw is not None else 1.0
     send_exit_order(ctx, symbol, qty, exit_price, "manual_exit")
     ctx.trade_logger.log_exit(state, symbol, exit_price)
@@ -3393,7 +3395,7 @@ def _fetch_feature_data(
     ``(raw_df, None, True)``.
     """
     try:
-        raw_df = fetch_minute_df_safe(ctx, symbol)
+        raw_df = fetch_minute_df_safe(symbol)
     except APIError as e:
         msg = str(e).lower()
         if "subscription does not permit querying recent sip data" in msg:
@@ -3780,7 +3782,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     total_value = float(ctx.api.get_account().portfolio_value)
     for sym, w in current.items():
         target_dollar = w * total_value
-        raw = fetch_minute_df_safe(ctx, sym)
+        raw = fetch_minute_df_safe(sym)
         price = get_latest_close(raw) if raw is not None else 1.0
         if price <= 0:
             continue
@@ -4901,7 +4903,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                     )
                     valid_symbols = []
                     for symbol in symbols:
-                        df_min = fetch_minute_df_safe(ctx, symbol)
+                        df_min = fetch_minute_df_safe(symbol)
                         if df_min is None or df_min.empty:
                             logger.info(
                                 f"{symbol} returned no minute data; skipping symbol."
@@ -5050,7 +5052,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
             continue
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty is None or not np.isfinite(qty) or qty <= 0:
-            bars = fetch_minute_df_safe(ctx, sig.symbol)
+            bars = fetch_minute_df_safe(sig.symbol)
             logger.error(
                 f"Invalid order size for {sig.symbol}: {qty}. Signal: {sig.weight}, Price: {price}, Data: {bars.describe() if not bars.empty else 'EMPTY'}"
             )
@@ -5108,7 +5110,7 @@ def _process_symbols(
             if not is_market_open():
                 logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
                 return
-            price_df = fetch_minute_df_safe(ctx, symbol)
+            price_df = fetch_minute_df_safe(symbol)
             if price_df.empty or "close" not in price_df.columns:
                 logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
                 return
