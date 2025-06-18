@@ -234,7 +234,7 @@ def compute_time_range(minutes: int = 30) -> tuple[datetime.datetime, datetime.d
 
     if minutes <= 0:
         raise ValueError("minutes must be positive")
-    end = datetime.now(timezone.utc)
+    end = datetime.datetime.now(datetime.timezone.utc)
     start = end - timedelta(minutes=minutes)
     return start, end
 
@@ -799,7 +799,7 @@ class DataFetcher:
 
     def get_daily_df(self, ctx: "BotContext", symbol: str) -> Optional[pd.DataFrame]:
         symbol = symbol.upper()
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
         end_ts = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         start_ts = end_ts - timedelta(days=5)
 
@@ -933,7 +933,7 @@ class DataFetcher:
         self, ctx: "BotContext", symbol: str, lookback_minutes: int = 30
     ) -> Optional[pd.DataFrame]:
         symbol = symbol.upper()
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
         last_closed_minute = now_utc.replace(second=0, microsecond=0) - timedelta(
             minutes=1
         )
@@ -1064,8 +1064,8 @@ class DataFetcher:
         current_day = start_date
 
         while current_day <= end_date:
-            day_start = datetime.datetime.combine(current_day, dt_time.min, timezone.utc)
-            day_end = datetime.datetime.combine(current_day, dt_time.max, timezone.utc)
+            day_start = datetime.datetime.combine(current_day, dt_time.min, datetime.timezone.utc)
+            day_end = datetime.datetime.combine(current_day, dt_time.max, datetime.timezone.utc)
             if isinstance(day_start, tuple):
                 day_start, _tmp = day_start
             if isinstance(day_end, tuple):
@@ -1340,7 +1340,7 @@ class TradeLogger:
         signal_tags: str = "",
         confidence: float = 0.0,
     ) -> None:
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with portalocker.Lock(self.path, "a", timeout=5) as f:
             csv.writer(f).writerow(
                 [
@@ -1368,7 +1368,7 @@ class TradeLogger:
             for row in data:
                 if row[0] == symbol and row[3] == "":
                     entry_t = datetime.fromisoformat(row[1])
-                    days = (datetime.now(timezone.utc) - entry_t).days
+                    days = (datetime.datetime.now(datetime.timezone.utc) - entry_t).days
                     cls = (
                         "day_trade"
                         if days == 0
@@ -1377,7 +1377,7 @@ class TradeLogger:
                         else "long_trade"
                     )
                     row[3], row[4], row[8] = (
-                        datetime.now(timezone.utc).isoformat(),
+                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         exit_price,
                         cls,
                     )
@@ -1406,7 +1406,7 @@ class TradeLogger:
             with open(REWARD_LOG_FILE, "a", newline="") as rf:
                 csv.writer(rf).writerow(
                     [
-                        datetime.now(timezone.utc).isoformat(),
+                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         symbol,
                         pnl * conf,
                         pnl,
@@ -1424,7 +1424,7 @@ class TradeLogger:
         else:
             state.loss_streak = 0
         if state.loss_streak >= 3:
-            state.streak_halt_until = datetime.now(PACIFIC) + timedelta(minutes=60)
+            state.streak_halt_until = datetime.datetime.now(PACIFIC) + timedelta(minutes=60)
             logger.warning(
                 "STREAK_HALT_TRIGGERED",
                 extra={
@@ -1515,7 +1515,7 @@ def validate_open_orders(ctx: "BotContext") -> None:
     except Exception:
         return
 
-    now = datetime.now(timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)
     for od in open_orders:
         created = pd.to_datetime(getattr(od, "created_at", now))
         age = (now - created).total_seconds() / 60.0
@@ -2449,7 +2449,7 @@ def check_halt_flag() -> bool:
     if not os.path.exists(HALT_FLAG_PATH):
         return False
     mtime = os.path.getmtime(HALT_FLAG_PATH)
-    age = datetime.now(timezone.utc) - datetime.fromtimestamp(mtime, timezone.utc)
+    age = datetime.datetime.now(datetime.timezone.utc) - datetime.fromtimestamp(mtime, datetime.timezone.utc)
     try:
         with open(HALT_FLAG_PATH, "r") as f:
             content = f.read().strip()
@@ -2557,7 +2557,7 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
     """Return True if current time is during regular Eastern trading hours."""
-    now_et = datetime.now(ZoneInfo("America/New_York"))
+    now_et = datetime.datetime.now(ZoneInfo("America/New_York"))
     start = dt_time(9, 30)
     end = dt_time(16, 0)
     if not (start <= now_et.time() <= end):
@@ -2566,7 +2566,7 @@ def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
             extra={"start": start, "end": end, "now": now_et.time()},
         )
         return False
-    if state.streak_halt_until and datetime.now(PACIFIC) < state.streak_halt_until:
+    if state.streak_halt_until and datetime.datetime.now(PACIFIC) < state.streak_halt_until:
         logger.info("SKIP_STREAK_HALT", extra={"until": state.streak_halt_until})
         return False
     return True
@@ -2933,7 +2933,7 @@ def vwap_pegged_submit(
                 logger.info(
                     "ORDER_SENT",
                     extra={
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                         "symbol": symbol,
                         "side": side,
                         "qty": slice_qty,
@@ -2979,14 +2979,14 @@ def vwap_pegged_submit(
                             logger.exception("bot.py unexpected", exc_info=exc)
                             raise
                     _slippage_log.append(
-                        (symbol, vwap_price, fill_price, datetime.now(timezone.utc))
+                        (symbol, vwap_price, fill_price, datetime.datetime.now(datetime.timezone.utc))
                     )
                     with slippage_lock:
                         try:
                             with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
                                 csv.writer(sf).writerow(
                                     [
-                                        datetime.now(timezone.utc).isoformat(),
+                                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
                                         symbol,
                                         vwap_price,
                                         fill_price,
@@ -3211,7 +3211,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     entry_price = get_latest_close(df_ind)
     ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "", confidence=0.5)
 
-    now_pac = datetime.now(PACIFIC)
+    now_pac = datetime.datetime.now(PACIFIC)
     mo = datetime.datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
     mc = datetime.datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
     if is_high_vol_regime():
@@ -3272,7 +3272,7 @@ def pre_trade_checks(
     ctx: BotContext, state: BotState, symbol: str, balance: float, regime_ok: bool
 ) -> bool:
     # Streak kill-switch check
-    if state.streak_halt_until and datetime.now(PACIFIC) < state.streak_halt_until:
+    if state.streak_halt_until and datetime.datetime.now(PACIFIC) < state.streak_halt_until:
         logger.info(
             "SKIP_STREAK_HALT",
             extra={"symbol": symbol, "until": state.streak_halt_until},
@@ -3317,7 +3317,7 @@ def should_exit(
     rebalance_time = ctx.rebalance_buys.get(symbol)
     recent_rebalance = False
     if rebalance_time:
-        if datetime.now(timezone.utc) - rebalance_time < timedelta(
+        if datetime.datetime.now(datetime.timezone.utc) - rebalance_time < timedelta(
             seconds=REBALANCE_HOLD_SECONDS
         ):
             recent_rebalance = True
@@ -3523,7 +3523,7 @@ def _enter_long(
             signal_tags=strat,
             confidence=conf,
         )
-        now_pac = datetime.now(PACIFIC)
+        now_pac = datetime.datetime.now(PACIFIC)
         mo = datetime.datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
         mc = datetime.datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
         tp_factor = (
@@ -3592,7 +3592,7 @@ def _enter_short(
             signal_tags=strat,
             confidence=conf,
         )
-        now_pac = datetime.now(PACIFIC)
+        now_pac = datetime.datetime.now(PACIFIC)
         mo = datetime.datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
         mc = datetime.datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
         tp_factor = (
@@ -3690,7 +3690,7 @@ def _recent_rebalance_flag(ctx: BotContext, symbol: str) -> bool:
     reb_time = ctx.rebalance_buys.get(symbol)
     if not reb_time:
         return False
-    if datetime.now(timezone.utc) - reb_time < timedelta(
+    if datetime.datetime.now(datetime.timezone.utc) - reb_time < timedelta(
         seconds=REBALANCE_HOLD_SECONDS
     ):
         return True
@@ -3841,7 +3841,7 @@ def fetch_data(
     ctx: BotContext, symbols: List[str], period: str, interval: str
 ) -> Optional[pd.DataFrame]:
     frames: List[pd.DataFrame] = []
-    now = datetime.now(timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)
     if period.endswith("d"):
         delta = timedelta(days=int(period[:-1]))
     elif period.endswith("mo"):
@@ -3948,7 +3948,7 @@ def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
     online_error = float(np.mean((pred - y_new) ** 2))
     log_metrics(
         {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "type": "online_update",
             "symbol": symbol,
             "error": online_error,
@@ -3974,7 +3974,7 @@ def update_signal_weights() -> None:
         df["confidence"] = df.get("confidence", 0.5)
         df["reward"] = df["pnl"] * df["confidence"]
         recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
-        recent_mask = recent_cut >= (datetime.now(timezone.utc) - timedelta(days=30))
+        recent_mask = recent_cut >= (datetime.datetime.now(datetime.timezone.utc) - timedelta(days=30))
         df_recent = df[recent_mask]
 
         stats_all: Dict[str, List[float]] = {}
@@ -4067,7 +4067,7 @@ def run_meta_learning_weight_optimizer(
         logger.info("META_MODEL_TRAINED", extra={"samples": len(y)})
         log_metrics(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "type": "meta_model_train",
                 "samples": len(y),
                 "hyperparams": json.dumps({"alpha": alpha}),
@@ -4129,7 +4129,7 @@ def run_bayesian_meta_learning_optimizer(
         logger.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
         log_metrics(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "type": "meta_model_bayes_train",
                 "samples": len(y),
                 "seed": SEED,
@@ -4530,9 +4530,9 @@ if os.path.exists(REGIME_MODEL_PATH):
 else:
     today_date = date.today()
     start_dt = datetime.datetime.combine(
-        today_date - timedelta(days=365), dt_time.min, timezone.utc
+        today_date - timedelta(days=365), dt_time.min, datetime.timezone.utc
     )
-    end_dt = datetime.datetime.combine(today_date, dt_time.max, timezone.utc)
+    end_dt = datetime.datetime.combine(today_date, dt_time.max, datetime.timezone.utc)
     if isinstance(start_dt, tuple):
         start_dt, _tmp = start_dt
     if isinstance(end_dt, tuple):
@@ -4877,7 +4877,7 @@ def check_disaster_halt() -> None:
         dd = _current_drawdown()
         if dd >= DISASTER_DD_LIMIT:
             with open(HALT_FLAG_PATH, "w") as f:
-                f.write("DISASTER " + datetime.now(timezone.utc).isoformat())
+                f.write("DISASTER " + datetime.datetime.now(datetime.timezone.utc).isoformat())
             logger.error("DISASTER_HALT_TRIGGERED", extra={"drawdown": dd})
     except Exception as e:
         logger.exception(f"check_disaster_halt failed: {e}")
@@ -4892,7 +4892,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
     2. If missing or older than today, call retrain_meta_learner(ctx, symbols) and update marker.
     3. Then load the (new) model from MODEL_PATH.
     """
-    today_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    today_str = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     marker = RETRAIN_MARKER_FILE
 
     need_to_retrain = True
@@ -4987,7 +4987,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
             except Exception as e:
                 logger.error(f"Daily retrain failed: {e}")
 
-        date_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M")
         os.makedirs("models", exist_ok=True)
         path = f"models/sgd_{date_str}.pkl"
         atomic_joblib_dump(model_pipeline, path)
@@ -4998,15 +4998,15 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 dt = datetime.datetime.strptime(
                     f.split("_")[1].split(".")[0], "%Y%m%d"
                 ).replace(
-                    tzinfo=timezone.utc
+                    tzinfo=datetime.timezone.utc
                 )
-                if datetime.now(timezone.utc) - dt > timedelta(days=30):
+                if datetime.datetime.now(datetime.timezone.utc) - dt > timedelta(days=30):
                     os.remove(os.path.join("models", f))
 
         batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
         log_metrics(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                 "type": "daily_retrain",
                 "batch_mse": batch_mse,
                 "hyperparams": json.dumps(utils.to_serializable(config.SGD_PARAMS)),
@@ -5171,7 +5171,7 @@ def _log_loop_heartbeat(loop_id: str, start: float) -> None:
         "HEARTBEAT",
         extra={
             "loop_id": loop_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "duration": duration,
         },
     )
@@ -5198,7 +5198,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
     try:
         logger.info(
             "RUN_ALL_TRADES_START",
-            extra={"timestamp": datetime.now(timezone.utc).isoformat()},
+            extra={"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()},
         )
 
         current_cash, regime_ok, symbols = _prepare_run(ctx, state)
@@ -5213,7 +5213,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             logger.critical("DATA_SOURCE_EMPTY", extra={"symbols": symbols})
             try:
                 with open(HALT_FLAG_PATH, "w") as f:
-                    f.write("DATA_OUTAGE " + datetime.now(timezone.utc).isoformat())
+                    f.write("DATA_OUTAGE " + datetime.datetime.now(datetime.timezone.utc).isoformat())
             except Exception as e:
                 logger.error(f"Failed to set halt flag: {e}")
             time.sleep(60)
@@ -5264,7 +5264,7 @@ def schedule_run_all_trades_with_delay(model):
 
 
 def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
-    now_pac = datetime.now(PACIFIC)
+    now_pac = datetime.datetime.now(PACIFIC)
     if not in_trading_hours(now_pac):
         logger.info("INITIAL_REBALANCE_MARKET_CLOSED")
         return
@@ -5283,7 +5283,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
         return
 
     # Determine current UTC time
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
     # If it’s between 00:00 and 00:15 UTC, daily bars may not be published yet.
     if now_utc.hour == 0 and now_utc.minute < 15:
         logger.info("INITIAL_REBALANCE: Too early—daily bars not live yet.")
@@ -5325,7 +5325,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                     try:
                         submit_order(ctx, sym, qty_to_buy, "buy")
                         logger.info(f"INITIAL_REBALANCE: Bought {qty_to_buy} {sym}")
-                        ctx.rebalance_buys[sym] = datetime.now(timezone.utc)
+                        ctx.rebalance_buys[sym] = datetime.datetime.now(datetime.timezone.utc)
                     except Exception as e:
                         logger.error(
                             f"INITIAL_REBALANCE: Buy failed for {sym}: {repr(e)}"
