@@ -3,6 +3,8 @@ config.validate_env_vars()
 
 import time
 import warnings
+import datetime
+import pandas as pd
 
 try:
     from sklearn.exceptions import InconsistentVersionWarning
@@ -249,9 +251,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         logger.warning("MARKET_CLOSED_MINUTE_FETCH_SKIP", extra={"symbol": symbol})
         return pd.DataFrame()
     try:
-        today = dt.date.today()
-        yesterday = today - dt.timedelta(days=1)
-        df = get_minute_df(symbol, start_date=yesterday, end_date=today)
+        today = datetime.date.today()
+        yesterday = today - datetime.timedelta(days=1)
+        df = get_minute_df(
+            symbol,
+            start_date=yesterday.isoformat(),
+            end_date=today.isoformat(),
+        )
+        if isinstance(df.index, pd.MultiIndex):
+            df.index = df.index.get_level_values(1)
+        df.index = pd.to_datetime(df.index)
         if df is None or df.empty:
             return pd.DataFrame()
         return df
