@@ -18,12 +18,10 @@ fi
 if [ ! -d venv ]; then
   echo "🛠 Creating new virtualenv and installing dependencies..."
   python3.12 -m venv venv
-  # Activate and install only once
   source venv/bin/activate
   pip install --upgrade pip setuptools wheel
   pip install -r requirements.txt
 else
-  # Activate existing venv
   source venv/bin/activate
 fi
 
