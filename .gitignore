@@ -1,13 +1,35 @@
+# Virtual environments
 venv/
 .venv/
+
+# Python caches and bytecode
 __pycache__/
 *.pyc
+
+# Environment files and keys
 .env
+
+# Ignore config if you have a local-only config
 config.py
+
+# SSH keys
 *.pub
 id_rsa*
+
+# Swap and editor backups
 *~
+
+# Logs and runtime artifacts
 logs/
 slippage.csv
 reward_log.csv
 
+# Generated data files
+=*                     # e.g. “=0.29.36”
+cache_*.csv
+halt.flag
+peak_equity.txt
+metrics/
+models/
+regime_model.pkl
+__init__.py
