@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
-# Require WEBHOOK_SECRET in environment or .env
-export WEBHOOK_SECRET=${WEBHOOK_SECRET:?ERROR: WEBHOOK_SECRET must be set in .env}
-
 echo "🔁 Starting AI Trading Bot..."
 
 cd /root/ai-trading-bot
@@ -16,6 +13,9 @@ if [ -f .env ]; then
   set +a
   set -u
 fi
+
+# Now require WEBHOOK_SECRET
+export WEBHOOK_SECRET=${WEBHOOK_SECRET:?ERROR: WEBHOOK_SECRET must be set in .env}
 
 # Ensure Python 3.12 venv exists
 if [ ! -d venv ]; then
