@@ -6,6 +6,7 @@ import time
 from threading import Lock
 
 import requests
+from logger import logger
 
 SLACK_WEBHOOK = os.getenv("SLACK_WEBHOOK")
 
@@ -13,7 +14,6 @@ _alert_lock = Lock()
 _last_sent = {}
 THROTTLE_SEC = 30
 
-logger = logging.getLogger(__name__)
 
 
 def send_slack_alert(message: str, *, key: str | None = None) -> None:

@@ -10,10 +10,9 @@ import requests
 
 import config
 from retrain import prepare_indicators
+from logger import logger
 
 config.reload_env()
-
-logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

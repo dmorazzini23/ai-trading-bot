@@ -43,7 +43,6 @@ import atexit
 import csv
 import json
 import logging
-import logging.handlers
 import sys
 import random
 import re
@@ -195,7 +194,8 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
 
 
 from data_fetcher import DataFetchError, finnhub_client, get_minute_df
-from logger import get_logger
+import logger as log_module
+from logger import logger
 from risk_engine import RiskEngine
 from strategies import MeanReversionStrategy, MomentumStrategy, TradeSignal
 from strategy_allocator import StrategyAllocator
@@ -203,7 +203,7 @@ from utils import is_market_open as utils_market_open
 from utils import portfolio_lock
 
 # Basic logger setup so early code can log before full configuration below
-logger = get_logger(__name__)
+log_module.logger.info("🔍 Logging setup OK")
 
 
 def market_is_open(now: datetime | None = None) -> bool:
@@ -313,22 +313,6 @@ from tenacity import (
 RUN_HEALTH = RUN_HEALTHCHECK == "1"
 
 # Logging: set root logger to INFO, send to both stderr and a log file
-default_log_path = "/var/log/ai-trading-bot.log"
-# Use a rotating file handler so the log file cannot grow without bound.
-file_handler = logging.handlers.RotatingFileHandler(
-    default_log_path, maxBytes=10_000_000, backupCount=5
-)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        file_handler,
-    ],
-    force=True,
-)
-atexit.register(logging.shutdown)
-logger = get_logger(__name__)
 logging.getLogger("alpaca_trade_api").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("requests").setLevel(logging.WARNING)

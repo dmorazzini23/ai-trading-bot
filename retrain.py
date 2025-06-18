@@ -12,6 +12,7 @@ import pandas as pd
 import config
 from metrics_logger import log_metrics
 from utils import safe_to_datetime
+from logger import logger
 
 config.reload_env()
 
@@ -33,10 +34,7 @@ from sklearn.model_selection import ParameterSampler, cross_val_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
-logger = logging.getLogger(__name__)
 import pandas_ta as ta
-
-logger = logging.getLogger(__name__)
 
 try:
     import optuna

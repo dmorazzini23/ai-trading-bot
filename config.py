@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+from logger import logger
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"
@@ -13,7 +14,6 @@ load_dotenv(ENV_PATH)
 
 REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
 
-logger = logging.getLogger(__name__)
 
 
 def get_env(

@@ -4,8 +4,8 @@ from typing import List
 import pandas as pd
 
 from .base import Strategy, TradeSignal, asset_class_for
+from logger import logger
 
-logger = logging.getLogger(__name__)
 
 
 class MeanReversionStrategy(Strategy):

@@ -9,9 +9,10 @@ from flask import Flask, abort, jsonify, request
 
 load_dotenv(dotenv_path=".env", override=True)
 import config
+from logger import logger
 
 if not config.WEBHOOK_SECRET:
-    logging.getLogger(__name__).error("WEBHOOK_SECRET must be set")
+    logger.error("WEBHOOK_SECRET must be set")
     raise RuntimeError("WEBHOOK_SECRET must be set")
 
 
