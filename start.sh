@@ -31,7 +31,9 @@ fi
 # Launch HTTP server if available, passing through WEBHOOK_SECRET
 if command -v gunicorn >/dev/null; then
   exec gunicorn \
-    --workers 2 \
+    --worker-class gthread \
+    --workers 1 \
+    --threads 4 \
     --bind 0.0.0.0:${WEBHOOK_PORT:-9000} \
     --env WEBHOOK_SECRET="$WEBHOOK_SECRET" \
     server:app &
