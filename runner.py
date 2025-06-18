@@ -7,6 +7,7 @@ import time
 
 from bot import main
 from logger import logger
+import requests
 
 _shutdown = False
 
@@ -29,7 +30,11 @@ if __name__ == "__main__":
             if exc.code == 0:
                 break
             logger.error("Bot exited with code %s", exc.code)
+        except requests.exceptions.RequestException as e:
+            logger.error(f"API request failed: {e}")
+            raise
         except Exception as exc:  # pragma: no cover - safety
-            logger.exception("Unhandled exception in bot: %s", exc)
+            logger.error(f"Unexpected error: {exc}")
+            raise
         if not _shutdown:
             time.sleep(5)

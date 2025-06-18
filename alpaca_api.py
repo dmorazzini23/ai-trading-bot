@@ -75,9 +75,12 @@ def get_account() -> Optional[Dict[str, Any]]:
     """Return account details or ``None`` on failure."""
     try:
         data = alpaca_get("/v2/account")
-    except Exception as e:  # pragma: no cover - network issues
-        logger.exception("Error fetching Alpaca account info: %s", e)
-        return None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"API request failed: {e}")
+        raise
+    except Exception as e:  # pragma: no cover - safety
+        logger.error(f"Unexpected error: {e}")
+        raise
     if data is None:
         logger.error("Failed to get Alpaca account data")
     return data
@@ -120,10 +123,12 @@ def submit_order(api, req, log: logging.Logger | None = None):
             send_slack_alert(f"HTTP error submitting order: {e}")
             if attempt == max_retries:
                 raise
+        except requests.exceptions.RequestException as e:
+            log.error(f"API request failed: {e}")
+            raise
         except Exception as e:
             log.error(
-                "Error in Alpaca submit_order (attempt %s): %s",
-                attempt,
+                "Unexpected error: %s",
                 e,
                 exc_info=True,
             )
