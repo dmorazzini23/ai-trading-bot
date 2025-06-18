@@ -7,6 +7,7 @@ import time
 import warnings
 
 import pandas as pd
+import utils
 
 try:
     from sklearn.exceptions import InconsistentVersionWarning
@@ -55,9 +56,7 @@ from argparse import ArgumentParser
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import date, datetime
-from datetime import time as dt_time
-from datetime import timedelta, timezone
+from datetime import date, time as dt_time, timedelta, timezone
 from threading import Lock, Semaphore, Thread
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
@@ -204,7 +203,7 @@ from utils import portfolio_lock
 log_module.logger.info("🔍 Logging setup OK")
 
 
-def market_is_open(now: datetime | None = None) -> bool:
+def market_is_open(now: datetime.datetime | None = None) -> bool:
     """Return True if the market is currently open."""
     return utils_market_open(now)
 
@@ -230,7 +229,7 @@ def get_latest_close(df: pd.DataFrame) -> float:
     return float(last)
 
 
-def compute_time_range(minutes: int = 30) -> tuple[datetime, datetime]:
+def compute_time_range(minutes: int = 30) -> tuple[datetime.datetime, datetime.datetime]:
     """Return start and end timestamps for the last ``minutes`` minutes."""
 
     if minutes <= 0:
@@ -244,7 +243,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     """Fetches minute-level data, returning an empty DataFrame on error."""
     try:
         today = datetime.date.today()
-        yesterday = today - datetime.timedelta(days=1)
+        yesterday = today - timedelta(days=1)
         df = get_minute_df(
             symbol,
             start_date=yesterday.isoformat(),
@@ -510,7 +509,7 @@ class BotMode:
 @dataclass
 class BotState:
     loss_streak: int = 0
-    streak_halt_until: Optional[datetime] = None
+    streak_halt_until: Optional[datetime.datetime] = None
     day_start_equity: Optional[tuple[date, float]] = None
     week_start_equity: Optional[tuple[date, float]] = None
     last_drawdown: float = 0.0
@@ -1065,8 +1064,8 @@ class DataFetcher:
         current_day = start_date
 
         while current_day <= end_date:
-            day_start = datetime.combine(current_day, dt_time.min, timezone.utc)
-            day_end = datetime.combine(current_day, dt_time.max, timezone.utc)
+            day_start = datetime.datetime.combine(current_day, dt_time.min, timezone.utc)
+            day_end = datetime.datetime.combine(current_day, dt_time.max, timezone.utc)
             if isinstance(day_start, tuple):
                 day_start, _tmp = day_start
             if isinstance(day_end, tuple):
@@ -2040,6 +2039,7 @@ def pre_trade_health_check(
         if rows < min_rows:
             log_warning("HEALTH_INSUFFICIENT_ROWS", extra={"symbol": sym, "rows": rows})
             summary["insufficient_rows"].append(sym)
+            continue
 
         required = ["open", "high", "low", "close", "volume"]
         missing = [c for c in required if c not in df.columns or df[c].isnull().all()]
@@ -2058,9 +2058,16 @@ def pre_trade_health_check(
 
         if getattr(df.index, "tz", None) is None:
             log_warning("HEALTH_TZ_MISSING", extra={"symbol": sym})
+            df.index = df.index.tz_localize("UTC", errors="coerce")
             summary["timezone_issues"].append(sym)
         else:
             df.index = df.index.tz_convert("UTC").tz_localize(None)
+
+        # Require data to be recent
+        last_ts = df.index[-1]
+        if last_ts < pd.Timestamp.utcnow() - pd.Timedelta(days=2):
+            log_warning("HEALTH_STALE_DATA", extra={"symbol": sym})
+            summary.setdefault("stale_data", []).append(sym)
 
     failures = (
         set(summary["failures"])
@@ -2243,7 +2250,7 @@ def fetch_form4_filings(ticker: str) -> List[dict]:
             continue
         date_str = cols[3].get_text(strip=True)
         try:
-            fdate = datetime.strptime(date_str, "%Y-%m-%d")
+            fdate = datetime.datetime.strptime(date_str, "%Y-%m-%d")
         except Exception:
             continue
         txn_type = cols[4].get_text(strip=True).lower()  # "purchase" or "sale"
@@ -3205,8 +3212,8 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "", confidence=0.5)
 
     now_pac = datetime.now(PACIFIC)
-    mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
-    mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
+    mo = datetime.datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
+    mc = datetime.datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
     if is_high_vol_regime():
         tp_factor = TAKE_PROFIT_FACTOR * 1.1
     else:
@@ -3517,8 +3524,8 @@ def _enter_long(
             confidence=conf,
         )
         now_pac = datetime.now(PACIFIC)
-        mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
-        mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
+        mo = datetime.datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
+        mc = datetime.datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
         tp_factor = (
             TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
         )
@@ -3586,8 +3593,8 @@ def _enter_short(
             confidence=conf,
         )
         now_pac = datetime.now(PACIFIC)
-        mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
-        mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
+        mo = datetime.datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
+        mc = datetime.datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
         tp_factor = (
             TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
         )
@@ -4522,10 +4529,10 @@ if os.path.exists(REGIME_MODEL_PATH):
         )
 else:
     today_date = date.today()
-    start_dt = datetime.combine(
+    start_dt = datetime.datetime.combine(
         today_date - timedelta(days=365), dt_time.min, timezone.utc
     )
-    end_dt = datetime.combine(today_date, dt_time.max, timezone.utc)
+    end_dt = datetime.datetime.combine(today_date, dt_time.max, timezone.utc)
     if isinstance(start_dt, tuple):
         start_dt, _tmp = start_dt
     if isinstance(end_dt, tuple):
@@ -4988,7 +4995,9 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
 
         for f in os.listdir("models"):
             if f.endswith(".pkl"):
-                dt = datetime.strptime(f.split("_")[1].split(".")[0], "%Y%m%d").replace(
+                dt = datetime.datetime.strptime(
+                    f.split("_")[1].split(".")[0], "%Y%m%d"
+                ).replace(
                     tzinfo=timezone.utc
                 )
                 if datetime.now(timezone.utc) - dt > timedelta(days=30):
@@ -5000,7 +5009,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "type": "daily_retrain",
                 "batch_mse": batch_mse,
-                "hyperparams": json.dumps(config.SGD_PARAMS),
+                "hyperparams": json.dumps(utils.to_serializable(config.SGD_PARAMS)),
                 "seed": SEED,
                 "model": "SGDRegressor",
                 "git_hash": get_git_hash(),
@@ -5046,6 +5055,20 @@ def start_healthcheck() -> None:
         )
     except Exception as e:
         logger.exception(f"start_healthcheck failed: {e}")
+
+
+def start_metrics_server(default_port: int = 9200) -> None:
+    """Start Prometheus metrics server on a free port."""
+    port = utils.get_free_port(default_port, default_port + 50)
+    if port is None:
+        logger.warning("No free port available for metrics server")
+        return
+    if port != default_port:
+        logger.warning("Metrics port %d in use; using %d", default_port, port)
+    try:
+        start_http_server(port)
+    except Exception as exc:
+        logger.warning("Failed to start metrics server on %d: %s", port, exc)
 
 
 def run_multi_strategy(ctx: BotContext) -> None:
@@ -5369,13 +5392,8 @@ def main() -> None:
             time.sleep(60 * 60)
             sys.exit(0)
 
-        # Try to start Prometheus metrics server; if port is already in use, log and continue
-        try:
-            start_http_server(9200)
-        except OSError as e:
-            logger.warning(
-                f"Metrics server port 9200 already in use; skipping start_http_server: {e!r}"
-            )
+        # Start Prometheus metrics server on an available port
+        start_metrics_server(9200)
 
         if RUN_HEALTH:
             Thread(target=start_healthcheck, daemon=True).start()

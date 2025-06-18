@@ -3,6 +3,7 @@
 import logging
 import os
 import re
+import socket
 import warnings
 import datetime as dt
 from datetime import date, time, timezone
@@ -148,6 +149,31 @@ def ensure_utc(value: dt.datetime | date) -> dt.datetime:
     if isinstance(value, date):
         return dt.datetime.combine(value, time.min, tzinfo=timezone.utc)
     raise TypeError(f"Unsupported type for ensure_utc: {type(value)!r}")
+
+
+def get_free_port(start: int = 9200, end: int = 9300) -> int | None:
+    """Return an available TCP port in the range [start, end]."""
+    for port in range(start, end + 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("", port))
+                return port
+            except OSError:
+                continue
+    return None
+
+
+def to_serializable(obj):
+    """Recursively convert unsupported types for JSON serialization."""
+    from types import MappingProxyType
+
+    if isinstance(obj, MappingProxyType):
+        obj = dict(obj)
+    if isinstance(obj, dict):
+        return {k: to_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [to_serializable(v) for v in obj]
+    return obj
 
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")

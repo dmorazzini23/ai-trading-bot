@@ -176,13 +176,22 @@ class ExecutionEngine:
             return False
         return True
 
-    def _can_sell(self, api: TradingClient, symbol: str) -> bool:
+    def _available_qty(self, api: TradingClient, symbol: str) -> float:
         try:
-            api.get_position(symbol)
-            return True
+            pos = api.get_position(symbol)
+            return float(getattr(pos, "qty", 0))
         except Exception as e:  # pragma: no cover - position may not exist
-            self.logger.error(f"No position to sell for {symbol}: {e}")
+            self.logger.error(f"No position for {symbol}: {e}")
+            return 0.0
+
+    def _can_sell(self, api: TradingClient, symbol: str, qty: int) -> bool:
+        avail = self._available_qty(api, symbol)
+        if avail < qty:
+            self.logger.error(
+                f"Insufficient qty for {symbol}: have {avail}, requested {qty}"
+            )
             return False
+        return True
 
     def submit_order(self, order_request):
         """Placeholder for order submission logic."""
@@ -444,12 +453,22 @@ class ExecutionEngine:
         remaining = int(math.floor(qty))
         last_order = None
         api = self._select_api(asset_class)
+        if side.lower() == "sell":
+            avail = self._available_qty(api, symbol)
+            if avail <= 0:
+                self.logger.error(f"No position to sell for {symbol}")
+                return None
+            if remaining > avail:
+                self.logger.warning(
+                    f"Requested {remaining} but only {avail} available for {symbol}; adjusting"
+                )
+                remaining = int(avail)
         while remaining > 0:
             order_req, expected_price = self._prepare_order(symbol, side, remaining)
             slice_qty = getattr(order_req, "qty", remaining)
             if side.lower() == "buy" and not self._has_buy_power(api, slice_qty, expected_price):
                 break
-            if side.lower() == "sell" and not self._can_sell(api, symbol):
+            if side.lower() == "sell" and not self._can_sell(api, symbol, slice_qty):
                 break
             start = time.monotonic()
             order = self._submit_with_retry(api, order_req, symbol, side, slice_qty)
