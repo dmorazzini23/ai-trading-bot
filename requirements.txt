@@ -38,3 +38,4 @@ torch==2.7.1+cpu
 python-dotenv>=0.21.0
 
 numpy>=1.25.0
+gunicorn>=20.1.0
