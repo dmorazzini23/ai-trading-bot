@@ -47,7 +47,6 @@ Key environment variables include:
 - `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` – trading API credentials
 - `BOT_MODE` – running mode (`balanced`, `production`, etc.)
 - `SLACK_WEBHOOK` – optional webhook URL for alert notifications
-- `SENTRY_DSN` – optional DSN for Sentry error reporting
 
 ### Logging and Alerting
 
@@ -69,8 +68,6 @@ To expose the webhook server locally run:
 python server.py
 ```
 
-Both `bot.py` and `server.py` will send uncaught exceptions to Slack and report
-errors to Sentry if `SENTRY_DSN` is configured.
 
 ### Profiling
 

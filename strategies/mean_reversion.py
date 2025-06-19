@@ -8,7 +8,6 @@ from .base import Strategy, TradeSignal, asset_class_for
 logger = logging.getLogger(__name__)
 
 
-
 class MeanReversionStrategy(Strategy):
     """Simple mean reversion strategy using z-score."""
 

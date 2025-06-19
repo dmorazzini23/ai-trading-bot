@@ -1,24 +1,14 @@
-from logger import setup_logging
-import config
-
-import sys
-import traceback
-from alerting import send_slack_alert
 import logging
 import os
-import sentry_sdk
+import sys
+import traceback
+
+import config
+from alerting import send_slack_alert
+from logger import setup_logging
 
 setup_logging()
-
 config.validate_env_vars()
-
-if not os.environ.get("TESTING"):
-    sentry_sdk.init(
-        dsn=os.getenv("SENTRY_DSN"),
-        traces_sample_rate=1.0,
-        environment=os.getenv("BOT_MODE", "production"),
-    )
-
 
 def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
@@ -36,6 +26,7 @@ import time
 import warnings
 
 import pandas as pd
+
 import utils
 
 try:
@@ -85,7 +76,9 @@ from argparse import ArgumentParser
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import date, time as dt_time, timedelta
+from datetime import date
+from datetime import time as dt_time
+from datetime import timedelta
 from threading import Lock, Semaphore, Thread
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
@@ -121,9 +114,11 @@ import requests
 import schedule
 import yfinance as yf
 from alpaca.common.exceptions import APIError
+
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
+
 try:
     from alpaca.trading.enums import OrderStatus
 except Exception:  # pragma: no cover - older alpaca-trade-api
@@ -134,8 +129,12 @@ except Exception:  # pragma: no cover - older alpaca-trade-api
 
         PENDING_NEW = "pending_new"
 from alpaca.trading.models import Order
-from alpaca.trading.requests import (GetOrdersRequest, LimitOrderRequest,
-                                     MarketOrderRequest)
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    LimitOrderRequest,
+    MarketOrderRequest,
+)
+
 # Legacy import removed; using alpaca-py trading stream instead
 from alpaca.trading.stream import TradingStream
 from bs4 import BeautifulSoup
@@ -150,7 +149,6 @@ ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets
 import pickle
 
 import joblib
-import sentry_sdk
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
@@ -159,10 +157,10 @@ from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import BayesianRidge, Ridge
 
+from meta_learning import optimize_signals
 from metrics_logger import log_metrics
 from pipeline import model_pipeline
 from utils import log_warning, model_lock, safe_to_datetime
-from meta_learning import optimize_signals
 
 try:
     from meta_learning import retrain_meta_learner
@@ -175,7 +173,6 @@ ALPACA_PAPER = getattr(config, "ALPACA_PAPER", None)
 validate_alpaca_credentials = getattr(config, "validate_alpaca_credentials", None)
 CONFIG_NEWS_API_KEY = getattr(config, "NEWS_API_KEY", None)
 FINNHUB_API_KEY = getattr(config, "FINNHUB_API_KEY", None)
-SENTRY_DSN = getattr(config, "SENTRY_DSN", None)
 BOT_MODE_ENV = getattr(config, "BOT_MODE", BOT_MODE)
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
 
@@ -228,14 +225,13 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
 
 
 from data_fetcher import DataFetchError, finnhub_client, get_minute_df
+
 logger = logging.getLogger(__name__)
 from risk_engine import RiskEngine
 from strategies import MeanReversionStrategy, MomentumStrategy, TradeSignal
 from strategy_allocator import StrategyAllocator
 from utils import is_market_open as utils_market_open
 from utils import portfolio_lock
-
-
 
 
 def market_is_open(now: datetime.datetime | None = None) -> bool:
@@ -335,8 +331,14 @@ def reconcile_positions(ctx: "BotContext") -> None:
 import warnings
 
 from ratelimit import limits, sleep_and_retry
-from tenacity import (RetryError, retry, retry_if_exception_type,
-                      stop_after_attempt, wait_exponential, wait_random)
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random,
+)
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 RUN_HEALTH = RUN_HEALTHCHECK == "1"
@@ -2386,7 +2388,7 @@ def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
     loss = (state.day_start_equity[1] - equity) / state.day_start_equity[1]
     daily_drawdown.set(loss)
     if loss > 0.05:
-        sentry_sdk.capture_message(f"[WARNING] Daily drawdown = {loss:.2%}")
+        logger.warning("[WARNING] Daily drawdown = %.2f%%", loss * 100)
     return loss >= limit
 
 

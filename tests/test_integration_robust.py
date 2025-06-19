@@ -257,8 +257,6 @@ sys.modules["joblib"] = types.ModuleType("joblib")
 sys.modules["pybreaker"] = types.ModuleType("pybreaker")
 sys.modules["pipeline"].model_pipeline = lambda *a, **k: None
 sys.modules["metrics_logger"].log_metrics = lambda *a, **k: None
-sys.modules["sentry_sdk"] = types.ModuleType("sentry_sdk")
-sys.modules["sentry_sdk"].init = MagicMock()
 sys.modules["ratelimit"].limits = MagicMock(return_value=lambda f: f)
 sys.modules["ratelimit"].sleep_and_retry = MagicMock(return_value=lambda f: f)
 sys.modules["pybreaker"].CircuitBreaker = MagicMock()

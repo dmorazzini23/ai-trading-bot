@@ -1,35 +1,25 @@
-from logger import setup_logging
 import hmac
+import logging
 import os
 import socket
 import subprocess
-from typing import Any
 import sys
 import traceback
-import logging
-
-import sentry_sdk
-from sentry_sdk.integrations.flask import FlaskIntegration
-from alerting import send_slack_alert
+from typing import Any
 
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
 
+from alerting import send_slack_alert
+from logger import setup_logging
+
 # Load .env early so config.WEBHOOK_SECRET is set
 load_dotenv(dotenv_path=".env", override=True)
-
-sentry_sdk.init(
-    dsn=os.getenv("SENTRY_DSN"),
-    integrations=[FlaskIntegration()],
-    traces_sample_rate=1.0,
-    send_default_pii=True,
-    environment=os.getenv("BOT_MODE", "production"),
-)
-
 
 app = Flask(__name__)
 
 import config
+
 logger = logging.getLogger(__name__)
 
 setup_logging()
@@ -101,11 +91,6 @@ def create_app(cfg: Any = config) -> Flask:
 
 
 app = create_app()
-
-
-@app.route("/debug-sentry")
-def trigger_error():
-    1 / 0  # This will raise a ZeroDivisionError and trigger Sentry error reporting
 
 
 if __name__ == "__main__":
