@@ -1,17 +1,16 @@
 from logger import setup_logging
 import config
 
+import sys
+import traceback
+from alerting import send_slack_alert
+import logging
+import os
+import sentry_sdk
+
 setup_logging()
 
 config.validate_env_vars()
-
-import os
-import sys
-import logging
-import traceback
-import sentry_sdk
-
-from alerting import send_slack_alert
 
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN"),
