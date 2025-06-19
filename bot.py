@@ -12,11 +12,12 @@ setup_logging()
 
 config.validate_env_vars()
 
-sentry_sdk.init(
-    dsn=os.getenv("SENTRY_DSN"),
-    traces_sample_rate=1.0,
-    environment=os.getenv("BOT_MODE", "production"),
-)
+if not os.environ.get("TESTING"):
+    sentry_sdk.init(
+        dsn=os.getenv("SENTRY_DSN"),
+        traces_sample_rate=1.0,
+        environment=os.getenv("BOT_MODE", "production"),
+    )
 
 
 def handle_exception(exc_type, exc_value, exc_traceback):
