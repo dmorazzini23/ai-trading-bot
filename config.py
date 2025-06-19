@@ -2,7 +2,8 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from logger import logger
+import logging
+logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"

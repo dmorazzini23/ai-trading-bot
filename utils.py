@@ -20,7 +20,7 @@ except ImportError:  # pragma: no cover - optional dependency
         return ZoneInfo("UTC")
 
 
-from logger import logger
+logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 

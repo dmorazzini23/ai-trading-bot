@@ -10,7 +10,8 @@ import requests
 
 import config
 from retrain import prepare_indicators
-from logger import logger
+
+logger = logging.getLogger(__name__)
 
 config.reload_env()
 warnings.filterwarnings("ignore", category=FutureWarning)

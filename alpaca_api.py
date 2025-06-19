@@ -18,7 +18,8 @@ from tenacity import (
 import pandas as pd
 import requests
 from alerts import send_slack_alert
-from logger import logger
+
+logger = logging.getLogger(__name__)
 
 if "ALPACA_API_KEY" in os.environ:
     os.environ.setdefault("APCA_API_KEY_ID", os.environ["ALPACA_API_KEY"])

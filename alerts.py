@@ -6,7 +6,8 @@ import time
 from threading import Lock
 
 import requests
-from logger import logger
+
+logger = logging.getLogger(__name__)
 
 SLACK_WEBHOOK = os.getenv("SLACK_WEBHOOK")
 

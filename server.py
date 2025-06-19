@@ -12,13 +12,12 @@ from flask import Flask, abort, jsonify, request
 load_dotenv(dotenv_path=".env", override=True)
 
 import config
-from logger import logger
+import logging
+logger = logging.getLogger(__name__)
 
 setup_logging()
 
-import os
 import sys
-import logging
 import traceback
 import requests
 

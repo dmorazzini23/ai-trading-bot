@@ -17,7 +17,8 @@ ALPACA_DATA_FEED = config.ALPACA_DATA_FEED
 HALT_FLAG_PATH = config.HALT_FLAG_PATH
 
 from alpaca.data.historical import StockHistoricalDataClient
-from logger import logger
+
+logger = logging.getLogger(__name__)
 
 # Global Alpaca data client using config credentials
 client = StockHistoricalDataClient(
