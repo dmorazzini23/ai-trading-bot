@@ -12,7 +12,6 @@ pip install sentry-sdk==2.18.0
 
 echo "==> Verifying FlaskIntegration import from sentry-sdk"
 python -c "
-import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
 print('FlaskIntegration import succeeded')
 "
