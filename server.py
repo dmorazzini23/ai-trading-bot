@@ -5,11 +5,20 @@ import socket
 import subprocess
 from typing import Any
 
+import sentry_sdk
+from alerting import send_slack_alert
+
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
 
 # Load .env early so config.WEBHOOK_SECRET is set
 load_dotenv(dotenv_path=".env", override=True)
+
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN"),
+    traces_sample_rate=1.0,
+    environment=os.getenv("BOT_MODE", "production"),
+)
 
 import config
 import logging
@@ -19,17 +28,6 @@ setup_logging()
 
 import sys
 import traceback
-import requests
-
-
-def send_slack_alert(message: str):
-    webhook_url = os.getenv("SLACK_WEBHOOK")
-    if webhook_url:
-        payload = {"text": message}
-        try:
-            requests.post(webhook_url, json=payload)
-        except Exception as e:
-            logging.error(f"Failed to send Slack alert: {e}")
 
 
 def handle_exception(exc_type, exc_value, exc_traceback):
@@ -90,6 +88,10 @@ def create_app(cfg: Any = config) -> Flask:
 
     @app.route("/health", methods=["GET"])
     def health() -> Any:
+        return jsonify(status="ok")
+
+    @app.route("/healthz", methods=["GET"])
+    def healthz() -> Any:
         return jsonify(status="ok")
 
     return app

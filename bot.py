@@ -9,17 +9,15 @@ import os
 import sys
 import logging
 import traceback
-import requests
+import sentry_sdk
 
+from alerting import send_slack_alert
 
-def send_slack_alert(message: str):
-    webhook_url = os.getenv("SLACK_WEBHOOK")
-    if webhook_url:
-        payload = {"text": message}
-        try:
-            requests.post(webhook_url, json=payload)
-        except Exception as e:
-            logging.error(f"Failed to send Slack alert: {e}")
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN"),
+    traces_sample_rate=1.0,
+    environment=os.getenv("BOT_MODE", "production"),
+)
 
 
 def handle_exception(exc_type, exc_value, exc_traceback):
@@ -347,14 +345,6 @@ RUN_HEALTH = RUN_HEALTHCHECK == "1"
 logging.getLogger("alpaca_trade_api").setLevel(logging.WARNING)
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 logging.getLogger("requests").setLevel(logging.WARNING)
-
-# Sentry
-sentry_sdk.init(
-    dsn=SENTRY_DSN,
-    traces_sample_rate=0.1,
-    environment=BOT_MODE_ENV,
-    default_integrations=False,  # FIXED: disable threading integration
-)
 
 # Suppress specific pandas_ta warnings
 warnings.filterwarnings(

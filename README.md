@@ -1,5 +1,5 @@
 # AI Trading Bot
-![CI](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/python-app.yml/badge.svg)
 [![codecov](https://codecov.io/gh/dmorazzini23/ai-trading-bot/branch/main/graph/badge.svg)](https://codecov.io/gh/dmorazzini23/ai-trading-bot)
 
 This repository contains a simple trading bot together with a backtesting
@@ -36,6 +36,46 @@ FLASK_PORT=9000
 ```
 
 Only these variables are required for Alpaca access.
+
+> **Note**: The `.env` file in this repository contains sample secrets only for
+> testing. Real credentials should never be committed to git. In production use
+> a secret manager or environment variables provided by your deployment
+> platform.
+
+Key environment variables include:
+
+- `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` – trading API credentials
+- `BOT_MODE` – running mode (`balanced`, `production`, etc.)
+- `SLACK_WEBHOOK` – optional webhook URL for alert notifications
+- `SENTRY_DSN` – optional DSN for Sentry error reporting
+
+### Logging and Alerting
+
+Logs are written to `logs/ai_trading_bot.log` and automatically rotated when the
+file exceeds **10&nbsp;MB** with up to five backups retained. Set
+`SLACK_WEBHOOK` in your environment to enable Slack alerts for critical errors.
+
+### Running the Bot
+
+Start the trading bot with:
+
+```bash
+python bot.py
+```
+
+To expose the webhook server locally run:
+
+```bash
+python server.py
+```
+
+Both `bot.py` and `server.py` will send uncaught exceptions to Slack and report
+errors to Sentry if `SENTRY_DSN` is configured.
+
+### Profiling
+
+For performance investigations consider running the bot under `python -m cProfile`
+or with `pyinstrument` to identify bottlenecks.
 
 ## Development
 
