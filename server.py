@@ -4,6 +4,9 @@ import os
 import socket
 import subprocess
 from typing import Any
+import sys
+import traceback
+import logging
 
 import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
@@ -27,14 +30,9 @@ sentry_sdk.init(
 app = Flask(__name__)
 
 import config
-import logging
 logger = logging.getLogger(__name__)
 
 setup_logging()
-
-import sys
-import traceback
-
 
 def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
