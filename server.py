@@ -1,3 +1,4 @@
+from logger import setup_logging
 import hmac
 import os
 import socket
@@ -12,6 +13,8 @@ load_dotenv(dotenv_path=".env", override=True)
 
 import config
 from logger import logger
+
+setup_logging()
 
 if not config.WEBHOOK_SECRET:
     logger.error("WEBHOOK_SECRET must be set")

@@ -1,4 +1,7 @@
+from logger import setup_logging
 import config
+
+setup_logging()
 
 config.validate_env_vars()
 
