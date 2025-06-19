@@ -3,11 +3,9 @@ import types
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 # Ensure repository root on path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 # Minimal stubs so that importing bot succeeds without optional deps
 mods = [
     "pandas_ta",
@@ -63,8 +61,6 @@ if "capital_scaling" in sys.modules:
     sys.modules["capital_scaling"].CapitalScalingEngine = _CapScaler
 
 sys.modules.setdefault("yfinance", types.ModuleType("yfinance"))
-sys.modules.setdefault("sentry_sdk", types.ModuleType("sentry_sdk"))
-sys.modules["sentry_sdk"].init = lambda *a, **k: None
 if "pandas_market_calendars" in sys.modules:
     sys.modules["pandas_market_calendars"].get_calendar = lambda *a, **k: types.SimpleNamespace(schedule=lambda *a, **k: pd.DataFrame())
 if "pandas_ta" in sys.modules:
@@ -76,6 +72,7 @@ sys.modules["pipeline"].model_pipeline = lambda *a, **k: None
 class _DummyStream:
     def __init__(self, *a, **k):
         pass
+
     def subscribe_trade_updates(self, *a, **k):
         pass
 
@@ -182,9 +179,12 @@ sys.modules["strategy_allocator"].StrategyAllocator = object
 sys.modules.setdefault("ratelimit", types.ModuleType("ratelimit"))
 sys.modules["ratelimit"].limits = lambda *a, **k: lambda f: f
 sys.modules["ratelimit"].sleep_and_retry = lambda f: f
+
+
 class _DummyBreaker:
     def __init__(self, *a, **k):
         pass
+
     def __call__(self, func):
         return func
 

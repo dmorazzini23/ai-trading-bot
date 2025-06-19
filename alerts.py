@@ -16,7 +16,6 @@ _last_sent = {}
 THROTTLE_SEC = 30
 
 
-
 def send_slack_alert(message: str, *, key: str | None = None) -> None:
     """Send a Slack alert with basic throttling.
 
