@@ -5,6 +5,34 @@ setup_logging()
 
 config.validate_env_vars()
 
+import os
+import sys
+import logging
+import traceback
+import requests
+
+
+def send_slack_alert(message: str):
+    webhook_url = os.getenv("SLACK_WEBHOOK")
+    if webhook_url:
+        payload = {"text": message}
+        try:
+            requests.post(webhook_url, json=payload)
+        except Exception as e:
+            logging.error(f"Failed to send Slack alert: {e}")
+
+
+def handle_exception(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    error_message = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    send_slack_alert(f"🚨 AI Trading Bot Exception:\n```{error_message}```")
+    logging.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+
+sys.excepthook = handle_exception
+
 import datetime
 import time
 import warnings
@@ -116,7 +144,6 @@ from bs4 import BeautifulSoup
 from flask import Flask
 from requests.exceptions import HTTPError
 
-from alerts import send_slack_alert
 from alpaca_api import alpaca_get
 from rebalancer import maybe_rebalance
 
