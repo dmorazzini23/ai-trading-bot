@@ -1,40 +1,32 @@
-"""Utility helpers for consistent logging setup across the project."""
-
-from __future__ import annotations
-
 import logging
 import os
-import sys
-
 from logger_rotator import get_rotating_handler
 
+LOG_DIR = os.getenv("LOG_DIR", "logs")
+LOG_FILE_NAME = os.getenv("LOG_FILE_NAME", "ai_trading_bot.log")
+LOG_PATH = os.path.join(LOG_DIR, LOG_FILE_NAME)
 
-LOG_FILE = os.path.join(os.path.dirname(__file__), "logs", "bot.log")
+LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", 10_000_000))  # 10MB default
+LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", 5))
 
-logger = logging.getLogger("ai_trading_bot")
-if not logger.handlers:
+def setup_logging():
+    """Configure root logger with rotating file handler and console output."""
+
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+    logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    _formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
-    _stream = logging.StreamHandler(sys.stdout)
-    _stream.setFormatter(_formatter)
-    _file_handler = get_rotating_handler(LOG_FILE)
-    _file_handler.setFormatter(_formatter)
-    logger.addHandler(_stream)
-    logger.addHandler(_file_handler)
 
-logger.propagate = False
+    # Rotating file handler
+    file_handler = get_rotating_handler(LOG_PATH, max_bytes=LOG_MAX_BYTES, backup_count=LOG_BACKUP_COUNT)
+    file_formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
 
+    # Console handler (optional, recommended for dev/debug)
+    console_handler = logging.StreamHandler()
+    console_formatter = logging.Formatter('%(levelname)s - %(message)s')
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
 
-def log_uncaught_exceptions(ex_cls, ex, tb):
-    """Log unhandled exceptions via the global logger."""
-
-    logger.critical("Uncaught exception", exc_info=(ex_cls, ex, tb))
-
-
-sys.excepthook = log_uncaught_exceptions
-
-
-def get_logger(name: str | None = None) -> logging.Logger:
-    """Return the global logger (backwards compatibility)."""
-
-    return logger
+    logger.info("Logging initialized. Writing logs to %s", LOG_PATH)
