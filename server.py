@@ -6,6 +6,7 @@ import subprocess
 from typing import Any
 
 import sentry_sdk
+from sentry_sdk.integrations.flask import FlaskIntegration
 from alerting import send_slack_alert
 
 from dotenv import load_dotenv
@@ -16,9 +17,15 @@ load_dotenv(dotenv_path=".env", override=True)
 
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN"),
-    traces_sample_rate=1.0,
+    integrations=[FlaskIntegration()],
+    traces_sample_rate=1.0,               # Capture 100% of transactions for performance monitoring
+    profile_session_sample_rate=1.0,      # Enable profiling for 100% of sessions
+    profile_lifecycle="trace",            # Automatically profile during active transactions
+    send_default_pii=True,                # Capture user info like IP if available
     environment=os.getenv("BOT_MODE", "production"),
 )
+
+app = Flask(__name__)
 
 import config
 import logging
@@ -64,7 +71,6 @@ def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
 
 
 def create_app(cfg: Any = config) -> Flask:
-    app = Flask(__name__)
     secret = cfg.WEBHOOK_SECRET.encode()
 
     @app.route("/github-webhook", methods=["POST"])
@@ -98,6 +104,11 @@ def create_app(cfg: Any = config) -> Flask:
 
 
 app = create_app()
+
+
+@app.route("/debug-sentry")
+def trigger_error():
+    1 / 0  # This will raise a ZeroDivisionError and trigger Sentry error reporting
 
 
 if __name__ == "__main__":
