@@ -1,10 +1,9 @@
 from pathlib import Path
 import sys
-
 from dotenv import load_dotenv
 import os
 import pytest
-
+import urllib3
 
 def pytest_configure() -> None:
     """Load environment variables for tests."""
@@ -24,6 +23,15 @@ def pytest_configure() -> None:
     os.environ.setdefault("FLASK_PORT", "9000")
     os.environ.setdefault("TESTING", "1")
 
+    # Diagnostic debug prints
+    print(f"PYTHONPATH: {sys.path}")
+    print(f"urllib3.__file__: {urllib3.__file__}")
+    print(f"Has urllib3.util? {hasattr(urllib3, 'util')}")
+    try:
+        from urllib3.util import Retry
+        print(f"urllib3.util.Retry imported successfully: {Retry}")
+    except Exception as e:
+        print(f"Failed to import urllib3.util.Retry: {e}")
 
 @pytest.fixture(autouse=True, scope="session")
 def cleanup_test_env_vars():
