@@ -43,3 +43,4 @@ loguru>=0.7.0
 requests>=2.31.0
 schedule>=1.1.0
 psutil>=5.9.0
+sentry-sdk>=2.30.0,<3.0
