@@ -2,7 +2,7 @@ import csv
 import logging
 import os
 
-from logger import logger
+logger = logging.getLogger(__name__)
 
 
 def log_metrics(record, filename="metrics/model_performance.csv"):

@@ -229,17 +229,15 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
             pass
 
 
-import logger as log_module
 from data_fetcher import DataFetchError, finnhub_client, get_minute_df
-from logger import logger
+logger = logging.getLogger(__name__)
 from risk_engine import RiskEngine
 from strategies import MeanReversionStrategy, MomentumStrategy, TradeSignal
 from strategy_allocator import StrategyAllocator
 from utils import is_market_open as utils_market_open
 from utils import portfolio_lock
 
-# Basic logger setup so early code can log before full configuration below
-log_module.logger.info("🔍 Logging setup OK")
+
 
 
 def market_is_open(now: datetime.datetime | None = None) -> bool:

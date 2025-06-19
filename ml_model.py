@@ -5,7 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
-from logger import logger
+import logging
+logger = logging.getLogger(__name__)
 
 try:
     from sklearn.base import BaseEstimator

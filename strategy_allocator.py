@@ -5,7 +5,8 @@ import math
 from typing import Dict, List
 
 from strategies import TradeSignal
-from logger import logger
+
+logger = logging.getLogger(__name__)
 
 
 class StrategyAllocator:

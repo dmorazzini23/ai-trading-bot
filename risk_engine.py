@@ -5,7 +5,8 @@ from typing import Dict
 import numpy as np
 
 from strategies import TradeSignal
-from logger import logger
+
+logger = logging.getLogger(__name__)
 
 random.seed(42)
 np.random.seed(42)

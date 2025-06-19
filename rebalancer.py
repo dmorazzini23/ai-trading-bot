@@ -2,7 +2,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from alerts import send_slack_alert
-from logger import logger
+
+logger = logging.getLogger(__name__)
 import config
 
 REBALANCE_INTERVAL_MIN = int(config.get_env("REBALANCE_INTERVAL_MIN", "1440"))

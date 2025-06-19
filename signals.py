@@ -7,7 +7,8 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 import requests
-from logger import logger
+import logging
+logger = logging.getLogger(__name__)
 def load_module(name: str) -> Any:
     """Dynamically import a module using :mod:`importlib`."""
     try:

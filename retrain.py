@@ -12,7 +12,8 @@ import pandas as pd
 import config
 from metrics_logger import log_metrics
 from utils import safe_to_datetime
-from logger import logger
+
+logger = logging.getLogger(__name__)
 
 config.reload_env()
 
