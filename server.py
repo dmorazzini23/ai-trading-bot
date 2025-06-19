@@ -18,12 +18,11 @@ load_dotenv(dotenv_path=".env", override=True)
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN"),
     integrations=[FlaskIntegration()],
-    traces_sample_rate=1.0,               # Capture 100% of transactions for performance monitoring
-    profile_session_sample_rate=1.0,      # Enable profiling for 100% of sessions
-    profile_lifecycle="trace",            # Automatically profile during active transactions
-    send_default_pii=True,                # Capture user info like IP if available
+    traces_sample_rate=1.0,
+    send_default_pii=True,
     environment=os.getenv("BOT_MODE", "production"),
 )
+
 
 app = Flask(__name__)
 
