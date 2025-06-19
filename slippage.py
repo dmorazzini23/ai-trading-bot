@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 SLIPPAGE_THRESHOLD = float(os.getenv("SLIPPAGE_THRESHOLD", "0.003"))
 
 
-
 def monitor_slippage(expected: float | None, actual: float, symbol: str) -> None:
     """Check slippage and send alert when above threshold."""
     if expected:

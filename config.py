@@ -1,8 +1,9 @@
+import logging
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-import logging
+
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -91,7 +92,6 @@ FINNHUB_API_KEY = get_env("FINNHUB_API_KEY")
 FUNDAMENTAL_API_KEY = get_env("FUNDAMENTAL_API_KEY")
 NEWS_API_KEY = get_env("NEWS_API_KEY")
 IEX_API_TOKEN = get_env("IEX_API_TOKEN")
-SENTRY_DSN = get_env("SENTRY_DSN")
 BOT_MODE = get_env("BOT_MODE", "balanced")
 MODEL_PATH = get_env("MODEL_PATH", "trained_model.pkl")
 HALT_FLAG_PATH = get_env("HALT_FLAG_PATH", "halt.flag")
