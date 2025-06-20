@@ -32,23 +32,24 @@ else
   source venv/bin/activate
 fi
 
-# Optionally launch the Flask server in the background if server.py exists
-#if [ -f server.py ]; then
-  #echo "🌐 Launching Flask server..."
-  #FLASK_PORT=${FLASK_PORT:-9000}
+# Disable Gunicorn launch for now — comment out this entire block
 
-  #if lsof -ti tcp:"$FLASK_PORT" >/dev/null; then
-    #echo "🔪 Port $FLASK_PORT in use, terminating existing processes..."
-    #lsof -ti tcp:"$FLASK_PORT" | xargs -r kill -TERM || true
-    #sleep 2
-    #lsof -ti tcp:"$FLASK_PORT" | xargs -r kill -KILL 2>/dev/null || true
-  #fi
-
-  gunicorn -w 4 -b 0.0.0.0:"$FLASK_PORT" \
-    --access-logfile - --error-logfile - server:app &
-else
-  echo "⚠️ server.py not found; skipping HTTP server"
-fi
+# if [ -f server.py ]; then
+#   echo "🌐 Launching Flask server..."
+#   FLASK_PORT=${FLASK_PORT:-9000}
+#
+#   if lsof -ti tcp:"$FLASK_PORT" >/dev/null; then
+#     echo "🔪 Port $FLASK_PORT in use, terminating existing processes..."
+#     lsof -ti tcp:"$FLASK_PORT" | xargs -r kill -TERM || true
+#     sleep 2
+#     lsof -ti tcp:"$FLASK_PORT" | xargs -r kill -KILL 2>/dev/null || true
+#   fi
+#
+#   gunicorn -w 4 -b 0.0.0.0:"$FLASK_PORT" \
+#     --access-logfile - --error-logfile - server:app &
+# else
+#   echo "⚠️ server.py not found; skipping HTTP server"
+# fi
 
 # Run the trading bot as the main foreground process
 exec python -u bot.py
