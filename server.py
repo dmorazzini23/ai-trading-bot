@@ -17,43 +17,30 @@ from alerting import send_slack_alert
 # Load .env early so config.WEBHOOK_SECRET is set
 load_dotenv(dotenv_path=".env", override=True)
 
-# Configure robust logging
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-root_logger.handlers.clear()
-
-log_format = "%(asctime)s %(levelname)s %(message)s"
-formatter = logging.Formatter(log_format)
-
-# RotatingFileHandler for persistent logs on disk
-log_file = "/home/aiuser/ai-trading-bot/logs/trading_bot.log"
-os.makedirs(os.path.dirname(log_file), exist_ok=True)
-file_handler = RotatingFileHandler(log_file, maxBytes=10_485_760, backupCount=5)
-file_handler.setFormatter(formatter)
-root_logger.addHandler(file_handler)
-
-# Forward logs to Gunicorn error logger handlers so systemd/journalctl captures them
-def setup_logging_to_gunicorn():
-    gunicorn_error_logger = logging.getLogger("gunicorn.error")
-    # Clear existing handlers (e.g. file_handler) so no duplicates
-    root_logger.handlers.clear()
-    # Attach Gunicorn's error handlers to root logger
-    for handler in gunicorn_error_logger.handlers:
-        root_logger.addHandler(handler)
-    root_logger.setLevel(gunicorn_error_logger.level)
-
-setup_logging_to_gunicorn()
-
 app = Flask(__name__)
 
 import config
 
-logger = logging.getLogger(__name__)
+# Configure root logger to NOT add handlers manually,
+# instead, we will forward Flask's and our app logs
+# through Gunicorn's error logger handlers
+def configure_logging():
+    gunicorn_logger = logging.getLogger('gunicorn.error')
+    app.logger.handlers = gunicorn_logger.handlers
+    app.logger.setLevel(gunicorn_logger.level)
+
+    # Set root logger too, so any other logs propagate properly
+    logging.root.handlers = gunicorn_logger.handlers
+    logging.root.setLevel(gunicorn_logger.level)
+
+configure_logging()
+
+logger = app.logger
 
 _shutdown = threading.Event()
 
 def _handle_shutdown(signum: int, _unused_frame) -> None:
-    logger.info("Received signal %s, shutting down", signum)
+    logger.info(f"Received signal {signum}, shutting down")
     _shutdown.set()
 
 signal.signal(signal.SIGTERM, _handle_shutdown)
@@ -65,7 +52,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
         return
     error_message = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
     send_slack_alert(f"🚨 AI Trading Bot Exception:\n```{error_message}```")
-    logging.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+    logger.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
 
 sys.excepthook = handle_exception
 
@@ -137,5 +124,3 @@ if __name__ == "__main__":
         "server:app",
     ]
     run()
-
-
