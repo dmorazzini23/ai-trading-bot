@@ -10,7 +10,6 @@ from typing import Any
 
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
-from logging.handlers import RotatingFileHandler
 
 from alerting import send_slack_alert
 
@@ -22,14 +21,13 @@ app = Flask(__name__)
 import config
 
 # Configure root logger to NOT add handlers manually,
-# instead, we will forward Flask's and our app logs
-# through Gunicorn's error logger handlers
+# instead, forward Flask and app logs through Gunicorn's error logger handlers
 def configure_logging():
     gunicorn_logger = logging.getLogger('gunicorn.error')
     app.logger.handlers = gunicorn_logger.handlers
     app.logger.setLevel(gunicorn_logger.level)
 
-    # Set root logger too, so any other logs propagate properly
+    # Set root logger handlers and level for other loggers to propagate correctly
     logging.root.handlers = gunicorn_logger.handlers
     logging.root.setLevel(gunicorn_logger.level)
 
@@ -124,3 +122,4 @@ if __name__ == "__main__":
         "server:app",
     ]
     run()
+
