@@ -21,28 +21,28 @@ load_dotenv(dotenv_path=".env", override=True)
 root_logger = logging.getLogger()
 root_logger.setLevel(logging.INFO)
 root_logger.handlers.clear()
+
 log_format = "%(asctime)s %(levelname)s %(message)s"
 formatter = logging.Formatter(log_format)
 
-# StreamHandler to stdout for systemd journal capture
-stream_handler = logging.StreamHandler(sys.stdout)
-stream_handler.setFormatter(formatter)
-
+# RotatingFileHandler for persistent logs on disk
 log_file = "/home/aiuser/ai-trading-bot/logs/trading_bot.log"
 os.makedirs(os.path.dirname(log_file), exist_ok=True)
 file_handler = RotatingFileHandler(log_file, maxBytes=10_485_760, backupCount=5)
 file_handler.setFormatter(formatter)
-
-root_logger.addHandler(stream_handler)
 root_logger.addHandler(file_handler)
 
-# Integrate Gunicorn logging with root logger
-def setup_gunicorn_logger():
-    gunicorn_error_logger = logging.getLogger('gunicorn.error')
-    root_logger.handlers = gunicorn_error_logger.handlers
+# Forward logs to Gunicorn error logger handlers so systemd/journalctl captures them
+def setup_logging_to_gunicorn():
+    gunicorn_error_logger = logging.getLogger("gunicorn.error")
+    # Clear existing handlers (e.g. file_handler) so no duplicates
+    root_logger.handlers.clear()
+    # Attach Gunicorn's error handlers to root logger
+    for handler in gunicorn_error_logger.handlers:
+        root_logger.addHandler(handler)
     root_logger.setLevel(gunicorn_error_logger.level)
 
-setup_gunicorn_logger()
+setup_logging_to_gunicorn()
 
 app = Flask(__name__)
 
@@ -137,4 +137,5 @@ if __name__ == "__main__":
         "server:app",
     ]
     run()
+
 
