@@ -1,9 +1,17 @@
-import hmac
 import logging
+import sys
+
+# Basic config: all INFO+ logs to stderr, consistent formatting
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    stream=sys.stderr,
+)
+
+import hmac
 import os
 import signal
 import subprocess
-import sys
 import threading
 import traceback
 from typing import Any
@@ -13,26 +21,10 @@ from flask import Flask, abort, jsonify, request
 
 from alerting import send_slack_alert
 
-# Load .env early so config.WEBHOOK_SECRET is set
 load_dotenv(dotenv_path=".env", override=True)
 
 app = Flask(__name__)
-
-import config
-
-# Configure root logger to NOT add handlers manually,
-# instead, forward Flask and app logs through Gunicorn's error logger handlers
-def configure_logging():
-    gunicorn_logger = logging.getLogger('gunicorn.error')
-    if hasattr(app, 'logger'):
-        app.logger.handlers = gunicorn_logger.handlers
-        app.logger.setLevel(gunicorn_logger.level)
-
-    # Set root logger handlers and level for other loggers to propagate correctly
-    logging.root.handlers = gunicorn_logger.handlers
-    logging.root.setLevel(gunicorn_logger.level)
-
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ai_trading_bot")
 
 _shutdown = threading.Event()
 
@@ -53,6 +45,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = handle_exception
 
+import config
 if not config.WEBHOOK_SECRET:
     logger.error("WEBHOOK_SECRET must be set")
     raise RuntimeError("WEBHOOK_SECRET must be set")
@@ -70,23 +63,22 @@ def create_app(cfg: Any = config) -> Flask:
     @app.route("/github-webhook", methods=["POST"])
     def hook():
         load_dotenv(dotenv_path=".env", override=True)
-
         payload = request.get_json(force=True)
         if not payload or "symbol" not in payload or "action" not in payload:
             return jsonify({"error": "Missing fields"}), 400
-
         sig = request.headers.get("X-Hub-Signature-256", "")
         if not verify_sig(request.data, sig, secret):
             abort(403)
-
         if request.headers.get("X-GitHub-Event") == "push":
             subprocess.Popen([
                 os.path.join(os.path.dirname(__file__), "deploy.sh")
             ])
+        logger.info("Received valid webhook push event")
         return jsonify({"status": "ok"})
 
     @app.route("/health", methods=["GET"])
     def health() -> Any:
+        logger.info("Health check called")
         return jsonify(status="ok")
 
     @app.route("/healthz", methods=["GET"])
@@ -97,28 +89,22 @@ def create_app(cfg: Any = config) -> Flask:
     return app
 
 app = create_app()
-configure_logging()
 
 if __name__ == "__main__":
     flask_port = int(os.getenv("FLASK_PORT", "9000"))
     os.environ.setdefault("FLASK_PORT", str(flask_port))
     os.environ["WEBHOOK_PORT"] = str(flask_port)
     from gunicorn.app.wsgiapp import run
-
     sys.argv = [
         "gunicorn",
-        "-w",
-        "4",
-        "-b",
-        f"0.0.0.0:{flask_port}",
-        "--log-level",
-        "info",
-        "--access-logfile",
-        "-",
-        "--error-logfile",
-        "-",
+        "-w", "4",
+        "-b", f"0.0.0.0:{flask_port}",
+        "--log-level", "info",
+        "--access-logfile", "-",
+        "--error-logfile", "-",
         "--capture-output",
         "--enable-stdio-inheritance",
         "server:app",
     ]
     run()
+
