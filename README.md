@@ -52,7 +52,16 @@ Key environment variables include:
 
 All logs are written to standard output so they can be captured by the
 systemd journal or Docker logs. Set `SLACK_WEBHOOK` in your environment to
-enable Slack alerts for critical errors.
+enable Slack alerts for critical errors. Configure logging once at startup:
+
+```python
+from logger import setup_logging
+import logging
+
+setup_logging()  # clears existing handlers and logs to stdout
+logger = logging.getLogger(__name__)
+logger.info("Bot starting up")
+```
 
 ### Running the Bot
 
@@ -102,7 +111,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ai-trading-scheduler.service
 ```
 
-The service writes logs to `/var/log/ai-trading-scheduler.log`.
+Logs are written to stdout and captured by the systemd journal.
 
 ## Daily Retraining
 
