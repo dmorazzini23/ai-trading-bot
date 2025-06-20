@@ -11,19 +11,35 @@ from typing import Any
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
 
+from logging.handlers import RotatingFileHandler
+
 from alerting import send_slack_alert
-from logger import setup_logging
 
 # Load .env early so config.WEBHOOK_SECRET is set
 load_dotenv(dotenv_path=".env", override=True)
+
+# Configure robust logging
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.handlers.clear()
+log_format = "%(asctime)s %(levelname)s %(message)s"
+formatter = logging.Formatter(log_format)
+stream_handler = logging.StreamHandler(sys.stdout)
+stream_handler.setFormatter(formatter)
+
+log_file = "/home/aiuser/ai-trading-bot/logs/trading_bot.log"
+os.makedirs(os.path.dirname(log_file), exist_ok=True)
+file_handler = RotatingFileHandler(log_file, maxBytes=10_485_760, backupCount=5)
+file_handler.setFormatter(formatter)
+
+root_logger.addHandler(stream_handler)
+root_logger.addHandler(file_handler)
 
 app = Flask(__name__)
 
 import config
 
 logger = logging.getLogger(__name__)
-
-setup_logging()
 
 _shutdown = threading.Event()
 
