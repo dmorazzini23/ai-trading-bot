@@ -9,7 +9,7 @@ echo "Installing test requirements..."
 pip install -r requirements-test.txt
 
 # Ensure linting tools are available
-pip install flake8 isort pylint pytest-cov >/dev/null
+pip install flake8 isort==5.12.0 pylint pytest-cov >/dev/null
 
 echo "Running flake8..."
 flake8
