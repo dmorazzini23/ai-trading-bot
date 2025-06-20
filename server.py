@@ -1,17 +1,8 @@
-import logging
-import sys
-
-# Basic config: all INFO+ logs to stderr, consistent formatting
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-    stream=sys.stderr,
-)
-
 import hmac
 import os
 import signal
 import subprocess
+import sys
 import threading
 import traceback
 from typing import Any
@@ -24,7 +15,9 @@ from alerting import send_slack_alert
 load_dotenv(dotenv_path=".env", override=True)
 
 app = Flask(__name__)
-logger = logging.getLogger("ai_trading_bot")
+logger = app.logger
+logger.setLevel("INFO")
+logger.propagate = True  # Ensure logs propagate to Gunicorn's handlers
 
 _shutdown = threading.Event()
 
@@ -97,6 +90,7 @@ if __name__ == "__main__":
     os.environ.setdefault("FLASK_PORT", str(flask_port))
     os.environ["WEBHOOK_PORT"] = str(flask_port)
     from gunicorn.app.wsgiapp import run
+
     sys.argv = [
         "gunicorn",
         "-w", "4",
@@ -109,4 +103,3 @@ if __name__ == "__main__":
         "server:app",
     ]
     run()
-
