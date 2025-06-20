@@ -24,16 +24,15 @@ import config
 # instead, forward Flask and app logs through Gunicorn's error logger handlers
 def configure_logging():
     gunicorn_logger = logging.getLogger('gunicorn.error')
-    app.logger.handlers = gunicorn_logger.handlers
-    app.logger.setLevel(gunicorn_logger.level)
+    if hasattr(app, 'logger'):
+        app.logger.handlers = gunicorn_logger.handlers
+        app.logger.setLevel(gunicorn_logger.level)
 
     # Set root logger handlers and level for other loggers to propagate correctly
     logging.root.handlers = gunicorn_logger.handlers
     logging.root.setLevel(gunicorn_logger.level)
 
-configure_logging()
-
-logger = app.logger
+logger = logging.getLogger(__name__)
 
 _shutdown = threading.Event()
 
@@ -98,6 +97,7 @@ def create_app(cfg: Any = config) -> Flask:
     return app
 
 app = create_app()
+configure_logging()
 
 if __name__ == "__main__":
     flask_port = int(os.getenv("FLASK_PORT", "9000"))
@@ -122,4 +122,3 @@ if __name__ == "__main__":
         "server:app",
     ]
     run()
-
