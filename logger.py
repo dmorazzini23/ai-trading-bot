@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from typing import Dict
 
@@ -10,14 +11,24 @@ _configured = False
 _loggers: Dict[str, logging.Logger] = {}
 
 
-def setup_logging() -> None:
-    """Configure the root logger once."""
+def setup_logging(debug: bool = False) -> None:
+    """Configure the root logger once.
+
+    Parameters
+    ----------
+    debug : bool, optional
+        If ``True``, set log level to ``DEBUG`` regardless of the ``LOG_LEVEL``
+        environment variable. Defaults to ``False``.
+    """
     global _configured
     if _configured:
         return
 
+    level_name = os.getenv("LOG_LEVEL", "DEBUG" if debug else "INFO").upper()
+    level = logging.DEBUG if level_name == "DEBUG" else logging.INFO
+
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+    logger.setLevel(level)
 
     formatter = logging.Formatter(
         '%(asctime)s %(levelname)s %(name)s - %(message)s'
@@ -31,7 +42,8 @@ def setup_logging() -> None:
     logger.addHandler(stream_handler)
 
     logger.info(
-        "Logging initialized: outputting only to stdout (systemd journal)"
+        "Logging initialized: outputting only to stdout (level %s)",
+        logging.getLevelName(level),
     )
     _configured = True
 
@@ -44,7 +56,8 @@ def get_logger(name: str) -> logging.Logger:
         if not lg.handlers:
             for h in logging.getLogger().handlers:
                 lg.addHandler(h)
-        lg.setLevel(logging.INFO)
+        # Propagate level from root logger
+        lg.setLevel(logging.NOTSET)
         _loggers[name] = lg
     return _loggers[name]
 
