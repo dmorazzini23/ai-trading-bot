@@ -51,4 +51,4 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ai-trading-scheduler.service
 ```
 
-The service writes logs to `/var/log/ai-trading-scheduler.log`.
+The service outputs logs to stdout so they can be captured by `journalctl`.

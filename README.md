@@ -50,9 +50,9 @@ Key environment variables include:
 
 ### Logging and Alerting
 
-Logs are written to `logs/ai_trading_bot.log` and automatically rotated when the
-file exceeds **10&nbsp;MB** with up to five backups retained. Set
-`SLACK_WEBHOOK` in your environment to enable Slack alerts for critical errors.
+All logs are written to standard output so they can be captured by the
+systemd journal or Docker logs. Set `SLACK_WEBHOOK` in your environment to
+enable Slack alerts for critical errors.
 
 ### Running the Bot
 
