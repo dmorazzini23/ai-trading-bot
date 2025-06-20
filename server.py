@@ -10,7 +10,6 @@ from typing import Any
 
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
-
 from logging.handlers import RotatingFileHandler
 
 from alerting import send_slack_alert
@@ -24,6 +23,8 @@ root_logger.setLevel(logging.INFO)
 root_logger.handlers.clear()
 log_format = "%(asctime)s %(levelname)s %(message)s"
 formatter = logging.Formatter(log_format)
+
+# StreamHandler to stdout for systemd journal capture
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(formatter)
 
@@ -51,6 +52,7 @@ def _handle_shutdown(signum: int, _unused_frame) -> None:
 
 signal.signal(signal.SIGTERM, _handle_shutdown)
 signal.signal(signal.SIGINT, _handle_shutdown)
+
 
 def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
@@ -105,7 +107,6 @@ def create_app(cfg: Any = config) -> Flask:
     @app.route("/healthz", methods=["GET"])
     def healthz() -> Any:
         from flask import Response
-
         return Response("OK", status=200)
 
     return app
@@ -126,6 +127,10 @@ if __name__ == "__main__":
         "4",
         "-b",
         f"0.0.0.0:{flask_port}",
+        "--log-level",
+        "info",
+        "--capture-output",
+        "--enable-stdio-inheritance",
         "server:app",
     ]
     run()
