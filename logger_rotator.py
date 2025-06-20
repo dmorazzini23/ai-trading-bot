@@ -1,7 +1,7 @@
-"""Helper for creating rotating log handlers."""
+"""Deprecated helper for creating rotating log handlers."""
 
-from logging.handlers import RotatingFileHandler
 import os
+from logging.handlers import RotatingFileHandler
 
 
 def get_rotating_handler(
@@ -11,15 +11,10 @@ def get_rotating_handler(
 ) -> RotatingFileHandler:
     """Return a configured :class:`RotatingFileHandler`.
 
-    Parameters
-    ----------
-    path : str
-        File to write logs to.
-    max_bytes : int, optional
-        Maximum size of each log file before rotation. Defaults to ``10_000_000``.
-    backup_count : int, optional
-        Number of rotated log files to keep. Defaults to ``5``.
+    .. deprecated:: 1.0
+       File based logging is disabled; logs should be captured via ``stdout``.
     """
 
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    return RotatingFileHandler(path, maxBytes=max_bytes, backupCount=backup_count)
+    raise NotImplementedError(
+        "File logging is disabled; use centralized stdout logging instead"
+    )

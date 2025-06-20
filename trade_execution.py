@@ -125,8 +125,8 @@ class ExecutionEngine:
         self.ctx = ctx
         # Trading client from the new Alpaca SDK
         self.api: TradingClient = ctx.api
-        self.logger = logging.getLogger("execution")
-        self.logger.setLevel(logging.INFO)
+        # Use module-level logger so configuration is centralized
+        self.logger = logging.getLogger(__name__)
         self.slippage_path = os.path.join(os.path.dirname(__file__), "logs", "slippage.csv")
         if not os.path.exists(self.slippage_path):
             # Protect file creation in case the logs directory is unwritable
