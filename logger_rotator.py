@@ -1,6 +1,5 @@
 """Deprecated helper for creating rotating log handlers."""
 
-import os
 from logging.handlers import RotatingFileHandler
 
 
