@@ -24,7 +24,8 @@ from alerting import send_slack_alert
 load_dotenv(dotenv_path=".env", override=True)
 
 app = Flask(__name__)
-logger = logging.getLogger("ai_trading_bot")
+logger = logging.getLogger(__name__)
+logger.info("Server starting up")
 
 _shutdown = threading.Event()
 
@@ -46,6 +47,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 sys.excepthook = handle_exception
 
 import config
+
 if not config.WEBHOOK_SECRET:
     logger.error("WEBHOOK_SECRET must be set")
     raise RuntimeError("WEBHOOK_SECRET must be set")
@@ -78,7 +80,7 @@ def create_app(cfg: Any = config) -> Flask:
 
     @app.route("/health", methods=["GET"])
     def health() -> Any:
-        logger.info("Health check called")
+        logging.getLogger(__name__).info("Health endpoint called")
         return jsonify(status="ok")
 
     @app.route("/healthz", methods=["GET"])
@@ -107,4 +109,3 @@ if __name__ == "__main__":
         "server:app",
     ]
     run()
-
