@@ -36,6 +36,14 @@ file_handler.setFormatter(formatter)
 root_logger.addHandler(stream_handler)
 root_logger.addHandler(file_handler)
 
+# Integrate Gunicorn logging with root logger
+def setup_gunicorn_logger():
+    gunicorn_error_logger = logging.getLogger('gunicorn.error')
+    root_logger.handlers = gunicorn_error_logger.handlers
+    root_logger.setLevel(gunicorn_error_logger.level)
+
+setup_gunicorn_logger()
+
 app = Flask(__name__)
 
 import config
@@ -44,15 +52,12 @@ logger = logging.getLogger(__name__)
 
 _shutdown = threading.Event()
 
-
 def _handle_shutdown(signum: int, _unused_frame) -> None:
     logger.info("Received signal %s, shutting down", signum)
     _shutdown.set()
 
-
 signal.signal(signal.SIGTERM, _handle_shutdown)
 signal.signal(signal.SIGINT, _handle_shutdown)
-
 
 def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
@@ -62,13 +67,11 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     send_slack_alert(f"🚨 AI Trading Bot Exception:\n```{error_message}```")
     logging.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
 
-
 sys.excepthook = handle_exception
 
 if not config.WEBHOOK_SECRET:
     logger.error("WEBHOOK_SECRET must be set")
     raise RuntimeError("WEBHOOK_SECRET must be set")
-
 
 def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
     if not signature_header or not signature_header.startswith("sha256="):
@@ -77,13 +80,11 @@ def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
     expected = hmac.new(secret, payload, "sha256").hexdigest()
     return hmac.compare_digest(expected, sig)
 
-
 def create_app(cfg: Any = config) -> Flask:
     secret = cfg.WEBHOOK_SECRET.encode()
 
     @app.route("/github-webhook", methods=["POST"])
     def hook():
-        # Refresh environment variables on each webhook event
         load_dotenv(dotenv_path=".env", override=True)
 
         payload = request.get_json(force=True)
@@ -111,9 +112,7 @@ def create_app(cfg: Any = config) -> Flask:
 
     return app
 
-
 app = create_app()
-
 
 if __name__ == "__main__":
     flask_port = int(os.getenv("FLASK_PORT", "9000"))
@@ -129,6 +128,10 @@ if __name__ == "__main__":
         f"0.0.0.0:{flask_port}",
         "--log-level",
         "info",
+        "--access-logfile",
+        "-",
+        "--error-logfile",
+        "-",
         "--capture-output",
         "--enable-stdio-inheritance",
         "server:app",
