@@ -24,7 +24,7 @@ finnhub-python>=2.4.0
 lightgbm>=4.2.1
 pybreaker==1.0.0
 tzlocal==4.3
-pytz>=2023.3
+pytz>=2024.1
 # pin setuptools to avoid pandas_ta/pkg_resources deprecation warnings
 setuptools>=69,<80
 yfinance>=0.2.18
