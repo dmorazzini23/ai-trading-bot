@@ -3,7 +3,7 @@ set -euo pipefail
 
 echo "🔁 Starting AI Trading Bot..."
 
-cd /home/aiuser/ai-trading-bot
+/home/aiuser/ai-trading-bot
 
 # Load environment variables from .env if present
 if [ -f .env ]; then
