@@ -1,7 +1,7 @@
 import hmac
+import logging
 import os
 import signal
-import subprocess
 import sys
 import threading
 import traceback
@@ -12,12 +12,24 @@ from flask import Flask, abort, jsonify, request
 
 from alerting import send_slack_alert
 
+# Load .env early for configuration
 load_dotenv(dotenv_path=".env", override=True)
 
 app = Flask(__name__)
+
+import config
+
+# Configure Flask and root logger to integrate with Gunicorn's error logger
+def configure_logging():
+    gunicorn_logger = logging.getLogger('gunicorn.error')
+    app.logger.handlers = gunicorn_logger.handlers
+    app.logger.setLevel(gunicorn_logger.level)
+    logging.root.handlers = gunicorn_logger.handlers
+    logging.root.setLevel(gunicorn_logger.level)
+
+configure_logging()
+
 logger = app.logger
-logger.setLevel("INFO")
-logger.propagate = True  # Ensure logs propagate to Gunicorn's handlers
 
 _shutdown = threading.Event()
 
@@ -38,7 +50,6 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = handle_exception
 
-import config
 if not config.WEBHOOK_SECRET:
     logger.error("WEBHOOK_SECRET must be set")
     raise RuntimeError("WEBHOOK_SECRET must be set")
@@ -58,16 +69,17 @@ def create_app(cfg: Any = config) -> Flask:
         load_dotenv(dotenv_path=".env", override=True)
         payload = request.get_json(force=True)
         if not payload or "symbol" not in payload or "action" not in payload:
-            logger.warning("Webhook missing required fields")
             return jsonify({"error": "Missing fields"}), 400
         sig = request.headers.get("X-Hub-Signature-256", "")
         if not verify_sig(request.data, sig, secret):
-            logger.warning("Webhook signature verification failed")
             abort(403)
         if request.headers.get("X-GitHub-Event") == "push":
-            subprocess.Popen([
-                os.path.join(os.path.dirname(__file__), "deploy.sh")
-            ])
+            # Use subprocess with stdout/stderr inherited for logging visibility
+            subprocess.Popen(
+                [os.path.join(os.path.dirname(__file__), "deploy.sh")],
+                stdout=sys.stdout,
+                stderr=sys.stderr,
+            )
         logger.info("Received valid webhook push event")
         return jsonify({"status": "ok"})
 
@@ -93,11 +105,16 @@ if __name__ == "__main__":
 
     sys.argv = [
         "gunicorn",
-        "-w", "4",
-        "-b", f"0.0.0.0:{flask_port}",
-        "--log-level", "info",
-        "--access-logfile", "-",
-        "--error-logfile", "-",
+        "-w",
+        "4",
+        "-b",
+        f"0.0.0.0:{flask_port}",
+        "--log-level",
+        "info",
+        "--access-logfile",
+        "-",
+        "--error-logfile",
+        "-",
         "--capture-output",
         "--enable-stdio-inheritance",
         "server:app",
