@@ -8,6 +8,8 @@ import threading
 import traceback
 from typing import Any
 
+from pydantic import BaseModel, ValidationError
+
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
 
@@ -17,26 +19,30 @@ from validate_env import settings
 # Load .env early for configuration
 load_dotenv(dotenv_path=".env", override=True)
 
-app = Flask(__name__)
-
 import config
 
 # Configure Flask and root logger to integrate with Gunicorn's error logger
-def configure_logging() -> None:
+def configure_logging(flask_app: Flask) -> None:
     gunicorn_logger = logging.getLogger("gunicorn.error")
-    if hasattr(app, "logger"):
-        app.logger.handlers = gunicorn_logger.handlers
-        app.logger.setLevel(gunicorn_logger.level)
+    if hasattr(flask_app, "logger"):
+        flask_app.logger.handlers = gunicorn_logger.handlers
+        flask_app.logger.setLevel(gunicorn_logger.level)
         logging.root.handlers = gunicorn_logger.handlers
         logging.root.setLevel(gunicorn_logger.level)
     else:  # pragma: no cover - test stubs
         logging.basicConfig(level=gunicorn_logger.level)
 
-configure_logging()
 
-logger = getattr(app, "logger", logging.getLogger(__name__))
+logger = logging.getLogger(__name__)
 
 _shutdown = threading.Event()
+
+
+class WebhookPayload(BaseModel):
+    """Schema for incoming webhook requests."""
+
+    symbol: str
+    action: str
 
 def _handle_shutdown(signum: int, _unused_frame) -> None:
     logger.info(f"Received signal {signum}, shutting down")
@@ -70,16 +76,21 @@ def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
 def create_app(cfg: Any = config) -> Flask:
     """Return a Flask application configured for webhook handling."""
     cfg.validate_env_vars()
+    flask_app = Flask(__name__)
     secret = cfg.WEBHOOK_SECRET.encode()
+    configure_logging(flask_app)
 
-    @app.route("/github-webhook", methods=["POST"])
+    @flask_app.route("/github-webhook", methods=["POST"])
     def hook():
         load_dotenv(dotenv_path=".env", override=True)
-        payload = request.get_json(force=True)
-        if not payload or "symbol" not in payload or "action" not in payload:
-            return jsonify({"error": "Missing fields"}), 400
-        symbol = str(payload.get("symbol", ""))
-        action = str(payload.get("action", "")).lower()
+        try:
+            data = request.get_json(force=True)
+            payload = WebhookPayload.model_validate(data)
+        except (TypeError, ValidationError):
+            return jsonify({"error": "Invalid payload"}), 400
+
+        symbol = payload.symbol
+        action = payload.action.lower()
         if not re.fullmatch(r"[A-Z]{1,5}", symbol):
             return jsonify({"error": "Invalid symbol"}), 400
         if action not in {"buy", "sell"}:
@@ -97,17 +108,17 @@ def create_app(cfg: Any = config) -> Flask:
         logger.info("Received valid webhook push event")
         return jsonify({"status": "ok"})
 
-    @app.route("/health", methods=["GET"])
+    @flask_app.route("/health", methods=["GET"])
     def health() -> Any:
         logger.info("Health check called")
         return jsonify(status="ok")
 
-    @app.route("/healthz", methods=["GET"])
+    @flask_app.route("/healthz", methods=["GET"])
     def healthz() -> Any:
         from flask import Response
         return Response("OK", status=200)
 
-    return app
+    return flask_app
 
 app = create_app()
 
@@ -133,4 +144,8 @@ if __name__ == "__main__":
         "--enable-stdio-inheritance",
         "server:app",
     ]
-    run()
+    try:
+        run()
+    except Exception as exc:
+        logger.exception("Failed to start gunicorn: %s", exc)
+        raise

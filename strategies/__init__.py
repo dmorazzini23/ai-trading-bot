@@ -1,6 +1,6 @@
-from .base import Strategy, TradeSignal, asset_class_for
-from .mean_reversion import MeanReversionStrategy
-from .momentum import MomentumStrategy
+from strategies.base import Strategy, TradeSignal, asset_class_for
+from strategies.mean_reversion import MeanReversionStrategy
+from strategies.momentum import MomentumStrategy
 
 __all__ = (
     "Strategy",

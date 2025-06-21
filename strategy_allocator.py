@@ -1,12 +1,10 @@
-print("=== STRATEGY_ALLOCATOR LOADED ===", __file__, flush=True)
-
 import logging
 import math
 from typing import Dict, List
 
 from strategies import TradeSignal
-
 logger = logging.getLogger(__name__)
+logger.debug("=== STRATEGY_ALLOCATOR LOADED === %s", __file__)
 
 
 class StrategyAllocator:
