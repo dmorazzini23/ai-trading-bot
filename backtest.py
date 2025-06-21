@@ -74,7 +74,9 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
     return df_final
 
 
-def run_backtest(symbols, start, end, params) -> dict:
+def run_backtest(
+    symbols: list[str], start: str, end: str, params: dict[str, float]
+) -> dict:
     """
     Run a very small simulated backtest using cached Alpaca data.
     Returns a dict with "net_pnl" and "sharpe".

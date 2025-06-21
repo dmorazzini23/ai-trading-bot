@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# WARNING: This script is unreferenced in main app/tests. Document its purpose or remove.
 import json
 import sys
 

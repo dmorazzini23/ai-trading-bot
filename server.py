@@ -59,6 +59,7 @@ if not config.WEBHOOK_SECRET:
     raise RuntimeError("WEBHOOK_SECRET must be set")
 
 def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
+    """Validate the GitHub webhook signature."""
     if not signature_header or not signature_header.startswith("sha256="):
         return False
     sig = signature_header.split("=", 1)[1]
@@ -66,6 +67,7 @@ def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
     return hmac.compare_digest(expected, sig)
 
 def create_app(cfg: Any = config) -> Flask:
+    """Return a Flask application configured for webhook handling."""
     secret = cfg.WEBHOOK_SECRET.encode()
 
     @app.route("/github-webhook", methods=["POST"])

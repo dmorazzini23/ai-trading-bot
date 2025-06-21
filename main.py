@@ -16,6 +16,7 @@ import config
 from alerting import send_slack_alert
 
 def create_flask_app() -> Flask:
+    """Return a minimal Flask application with health endpoints."""
     app = Flask(__name__)
 
     @app.route("/health")
@@ -30,11 +31,13 @@ def create_flask_app() -> Flask:
 
     return app
 
-def run_flask_app(port: int):
+def run_flask_app(port: int) -> None:
+    """Start the Flask application on ``port``."""
     app = create_flask_app()
     app.run(host="0.0.0.0", port=port)
 
-def run_bot(venv_path: str, bot_script: str):
+def run_bot(venv_path: str, bot_script: str) -> int:
+    """Execute ``bot_script`` using the Python from ``venv_path``."""
     python_executable = os.path.join(venv_path, "bin", "python3.12")
     if not os.path.isfile(python_executable):
         raise RuntimeError(f"Python executable not found at {python_executable}")
@@ -47,11 +50,13 @@ def run_bot(venv_path: str, bot_script: str):
     )
     return process.wait()
 
-def validate_environment():
+def validate_environment() -> None:
+    """Ensure mandatory environment variables are present."""
     if not config.WEBHOOK_SECRET:
         raise RuntimeError("WEBHOOK_SECRET must be set")
 
-def main():
+def main() -> None:
+    """Entry point for running the unified bot or API server."""
     parser = argparse.ArgumentParser(description="Unified AI Trading Bot runner")
     parser.add_argument(
         "--serve-api", action="store_true", help="Run the Flask API server"

@@ -117,7 +117,11 @@ class MLModel:
         return cls(pipeline)
 
 
-def train_model(X: Sequence[float] | pd.Series | pd.DataFrame, y: Sequence[float] | pd.Series, algorithm: str = "linear") -> Any:
+def train_model(
+    X: Sequence[float] | pd.Series | pd.DataFrame,
+    y: Sequence[float] | pd.Series,
+    algorithm: str = "linear",
+) -> Any:
     """Train a trivial model and return it."""
 
     if X is None or y is None:

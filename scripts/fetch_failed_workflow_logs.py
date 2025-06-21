@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# WARNING: This script is unreferenced in main app/tests. Document its purpose or remove.
 """Download logs for recent failed GitHub Actions runs and report failing steps."""
 import argparse
 import io
