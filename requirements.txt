@@ -34,11 +34,7 @@ transformers==4.35.2
 # Address dateutil utcfromtimestamp deprecation
 python-dateutil==2.9.0.post0
 optuna==3.6.1
-# For Python 3.12 wheels:
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.7.1+cpu
-
+# For Python 3.12 wheels use the CPU index when installing PyTorch locally
+torch==2.7.1
 gunicorn>=20.1.0
-loguru>=0.7.0
-psutil>=5.9.0
 

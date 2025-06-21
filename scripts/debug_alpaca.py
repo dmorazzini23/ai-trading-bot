@@ -1,3 +1,4 @@
+# WARNING: This script is unreferenced in main app/tests. Document its purpose or remove.
 import os
 
 from alpaca_trade_api import REST

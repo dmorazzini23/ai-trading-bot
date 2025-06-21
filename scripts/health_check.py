@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# WARNING: This script is unreferenced in main app/tests. Document its purpose or remove.
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
