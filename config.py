@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from validate_env import settings as env_settings
 
 logger = logging.getLogger(__name__)
 
@@ -83,31 +84,31 @@ def validate_environment() -> None:
             "Missing required environment variables: " + ", ".join(missing)
         )
 
-ALPACA_API_KEY = get_env("ALPACA_API_KEY")
-ALPACA_SECRET_KEY = get_env("ALPACA_SECRET_KEY")
-ALPACA_BASE_URL = get_env("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+ALPACA_API_KEY = env_settings.ALPACA_API_KEY
+ALPACA_SECRET_KEY = env_settings.ALPACA_SECRET_KEY
+ALPACA_BASE_URL = env_settings.ALPACA_BASE_URL
 ALPACA_PAPER = "paper" in ALPACA_BASE_URL.lower()
-ALPACA_DATA_FEED = get_env("ALPACA_DATA_FEED", "iex")
-FINNHUB_API_KEY = get_env("FINNHUB_API_KEY")
-FUNDAMENTAL_API_KEY = get_env("FUNDAMENTAL_API_KEY")
-NEWS_API_KEY = get_env("NEWS_API_KEY")
-IEX_API_TOKEN = get_env("IEX_API_TOKEN")
-BOT_MODE = get_env("BOT_MODE", "balanced")
-MODEL_PATH = get_env("MODEL_PATH", "trained_model.pkl")
-HALT_FLAG_PATH = get_env("HALT_FLAG_PATH", "halt.flag")
-MAX_PORTFOLIO_POSITIONS = int(get_env("MAX_PORTFOLIO_POSITIONS", "20"))
-LIMIT_ORDER_SLIPPAGE = float(get_env("LIMIT_ORDER_SLIPPAGE", "0.005"))
-HEALTHCHECK_PORT = int(get_env("HEALTHCHECK_PORT", "8081"))
-RUN_HEALTHCHECK = get_env("RUN_HEALTHCHECK", "0")
-BUY_THRESHOLD = float(get_env("BUY_THRESHOLD", "0.5"))
-WEBHOOK_SECRET = get_env("WEBHOOK_SECRET", "")
-WEBHOOK_PORT = int(get_env("WEBHOOK_PORT", "9000"))
-SLACK_WEBHOOK = get_env("SLACK_WEBHOOK")
-SLIPPAGE_THRESHOLD = float(get_env("SLIPPAGE_THRESHOLD", "0.003"))
-REBALANCE_INTERVAL_MIN = int(get_env("REBALANCE_INTERVAL_MIN", "1440"))
-SHADOW_MODE = get_env("SHADOW_MODE", "0") == "1"
-DISABLE_DAILY_RETRAIN = get_env("DISABLE_DAILY_RETRAIN", "0") == "1"
-TRADE_LOG_FILE = get_env("TRADE_LOG_FILE", "trades.csv")
+ALPACA_DATA_FEED = env_settings.ALPACA_DATA_FEED
+FINNHUB_API_KEY = env_settings.FINNHUB_API_KEY
+FUNDAMENTAL_API_KEY = env_settings.FUNDAMENTAL_API_KEY
+NEWS_API_KEY = env_settings.NEWS_API_KEY
+IEX_API_TOKEN = env_settings.IEX_API_TOKEN
+BOT_MODE = env_settings.BOT_MODE
+MODEL_PATH = env_settings.MODEL_PATH
+HALT_FLAG_PATH = env_settings.HALT_FLAG_PATH
+MAX_PORTFOLIO_POSITIONS = env_settings.MAX_PORTFOLIO_POSITIONS
+LIMIT_ORDER_SLIPPAGE = env_settings.LIMIT_ORDER_SLIPPAGE
+HEALTHCHECK_PORT = env_settings.HEALTHCHECK_PORT
+RUN_HEALTHCHECK = env_settings.RUN_HEALTHCHECK
+BUY_THRESHOLD = env_settings.BUY_THRESHOLD
+WEBHOOK_SECRET = env_settings.WEBHOOK_SECRET
+WEBHOOK_PORT = env_settings.WEBHOOK_PORT
+SLACK_WEBHOOK = env_settings.SLACK_WEBHOOK
+SLIPPAGE_THRESHOLD = env_settings.SLIPPAGE_THRESHOLD
+REBALANCE_INTERVAL_MIN = env_settings.REBALANCE_INTERVAL_MIN
+SHADOW_MODE = env_settings.SHADOW_MODE
+DISABLE_DAILY_RETRAIN = env_settings.DISABLE_DAILY_RETRAIN
+TRADE_LOG_FILE = env_settings.TRADE_LOG_FILE
 
 # centralize SGDRegressor hyperparameters
 SGD_PARAMS = MappingProxyType(

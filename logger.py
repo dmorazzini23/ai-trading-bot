@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from logging.handlers import RotatingFileHandler
 from typing import Dict
 
 _configured = False
 _loggers: Dict[str, logging.Logger] = {}
 
 
-def setup_logging(debug: bool = False) -> None:
+def setup_logging(debug: bool = False, log_file: str | None = None) -> None:
     """Configure the root logger once.
 
     Parameters
@@ -34,15 +35,31 @@ def setup_logging(debug: bool = False) -> None:
         '%(asctime)s %(levelname)s %(name)s - %(message)s'
     )
 
+    handlers = []
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setFormatter(formatter)
+    handlers.append(stream_handler)
 
-    # Clear existing handlers and set only stream handler
+    if log_file:
+        try:
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+            file_handler = RotatingFileHandler(
+                log_file, maxBytes=10_485_760, backupCount=5
+            )
+            file_handler.setFormatter(formatter)
+            handlers.append(file_handler)
+        except OSError as exc:  # pragma: no cover - file permission errors
+            logging.getLogger(__name__).error(
+                "Failed to configure log file %s: %s", log_file, exc
+            )
+
     logger.handlers.clear()
-    logger.addHandler(stream_handler)
+    for h in handlers:
+        logger.addHandler(h)
 
     logger.info(
-        "Logging initialized: outputting only to stdout (level %s)",
+        "Logging initialized%s (level %s)",
+        f" with file {log_file}" if log_file else "",
         logging.getLevelName(level),
     )
     _configured = True

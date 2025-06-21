@@ -1,0 +1,15 @@
+[project]
+name = "ai-trading-bot"
+version = "0.1.0"
+description = "AI trading bot"
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "flake8",
+  "black",
+  "mkdocs",
+]
+test = [
+  "pytest",
+]

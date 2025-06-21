@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import logging
 import pytest
 
 import logger_rotator
@@ -12,7 +13,9 @@ def force_coverage(mod):
 
 
 @pytest.mark.smoke
-def test_get_rotating_handler(monkeypatch):
-    with pytest.raises(NotImplementedError):
-        logger_rotator.get_rotating_handler("foo.log", max_bytes=1, backup_count=2)
+def test_get_rotating_handler(tmp_path):
+    handler = logger_rotator.get_rotating_handler(
+        str(tmp_path / "foo.log"), max_bytes=1, backup_count=2
+    )
+    assert isinstance(handler, logging.Handler)
     force_coverage(logger_rotator)

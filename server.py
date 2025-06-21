@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
 
 from alerting import send_slack_alert
+from validate_env import settings
 
 # Load .env early for configuration
 load_dotenv(dotenv_path=".env", override=True)
@@ -20,16 +21,19 @@ app = Flask(__name__)
 import config
 
 # Configure Flask and root logger to integrate with Gunicorn's error logger
-def configure_logging():
-    gunicorn_logger = logging.getLogger('gunicorn.error')
-    app.logger.handlers = gunicorn_logger.handlers
-    app.logger.setLevel(gunicorn_logger.level)
-    logging.root.handlers = gunicorn_logger.handlers
-    logging.root.setLevel(gunicorn_logger.level)
+def configure_logging() -> None:
+    gunicorn_logger = logging.getLogger("gunicorn.error")
+    if hasattr(app, "logger"):
+        app.logger.handlers = gunicorn_logger.handlers
+        app.logger.setLevel(gunicorn_logger.level)
+        logging.root.handlers = gunicorn_logger.handlers
+        logging.root.setLevel(gunicorn_logger.level)
+    else:  # pragma: no cover - test stubs
+        logging.basicConfig(level=gunicorn_logger.level)
 
 configure_logging()
 
-logger = app.logger
+logger = getattr(app, "logger", logging.getLogger(__name__))
 
 _shutdown = threading.Event()
 
@@ -98,7 +102,7 @@ def create_app(cfg: Any = config) -> Flask:
 app = create_app()
 
 if __name__ == "__main__":
-    flask_port = int(os.getenv("FLASK_PORT", "9000"))
+    flask_port = settings.FLASK_PORT
     os.environ.setdefault("FLASK_PORT", str(flask_port))
     os.environ["WEBHOOK_PORT"] = str(flask_port)
     from gunicorn.app.wsgiapp import run
