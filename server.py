@@ -1,6 +1,7 @@
 import hmac
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -68,6 +69,7 @@ def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
 
 def create_app(cfg: Any = config) -> Flask:
     """Return a Flask application configured for webhook handling."""
+    cfg.validate_env_vars()
     secret = cfg.WEBHOOK_SECRET.encode()
 
     @app.route("/github-webhook", methods=["POST"])
@@ -76,6 +78,12 @@ def create_app(cfg: Any = config) -> Flask:
         payload = request.get_json(force=True)
         if not payload or "symbol" not in payload or "action" not in payload:
             return jsonify({"error": "Missing fields"}), 400
+        symbol = str(payload.get("symbol", ""))
+        action = str(payload.get("action", "")).lower()
+        if not re.fullmatch(r"[A-Z]{1,5}", symbol):
+            return jsonify({"error": "Invalid symbol"}), 400
+        if action not in {"buy", "sell"}:
+            return jsonify({"error": "Invalid action"}), 400
         sig = request.headers.get("X-Hub-Signature-256", "")
         if not verify_sig(request.data, sig, secret):
             abort(403)

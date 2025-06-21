@@ -123,21 +123,6 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 
 
-# Deprecated helpers kept for backward compatibility. They are no longer
-# referenced anywhere in the codebase but remain for historical reasons.
-# pylint: disable=unused-function
-def data_filepath(filename: str) -> str:  # pragma: no cover - deprecated
-    """Return absolute path to bundled data file."""
-    return os.path.join(BASE_PATH, "data", filename)
-
-
-def convert_to_local(df: pd.DataFrame) -> pd.DataFrame:  # pragma: no cover
-    """Convert DataFrame index to local timezone."""
-    local_tz = get_localzone()
-    assert df.index.tz is not None, "DataFrame index must be timezone aware"
-    return df.tz_convert(local_tz)
-
-
 def ensure_utc(value: dt.datetime | date) -> dt.datetime:
     """Return a timezone-aware UTC datetime for ``dt``."""
     assert isinstance(value, (dt.datetime, date)), "dt must be date or datetime"
@@ -196,31 +181,15 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
 
     try:
         return pd.to_datetime(arr, format=format, utc=utc)
-    except Exception as exc:  # catch all parsing errors
+    except (TypeError, ValueError) as exc:
         logger.warning("safe_to_datetime coercing invalid values – %s", exc)
         try:
             return pd.to_datetime(arr, format=format, errors="coerce", utc=utc)
-        except Exception as exc2:
+        except (TypeError, ValueError) as exc2:
             logger.error("safe_to_datetime failed: %s", exc2)
             return pd.DatetimeIndex([pd.NaT] * len(arr), tz="UTC")
 
 
-def parse_timestamp(
-    value: str, format: str = "%Y-%m-%d %H:%M:%S", utc: bool = True
-) -> pd.Timestamp:
-    """Parse a single timestamp string safely."""
-    if not value:
-        logger.warning("parse_timestamp received empty value")
-        return pd.NaT
-    try:
-        return pd.to_datetime(value, format=format, utc=utc)
-    except Exception as exc:  # pragma: no cover - safety net
-        logger.warning("parse_timestamp failed for %r: %s", value, exc)
-        try:
-            return pd.to_datetime(value, utc=utc, errors="coerce")
-        except Exception as exc2:  # pragma: no cover - extreme fallback
-            logger.error("parse_timestamp fallback failed for %r: %s", value, exc2)
-            return pd.NaT
 
 
 # Generic robust column getter with validation
