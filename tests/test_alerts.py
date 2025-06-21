@@ -12,9 +12,14 @@ def test_alert_throttling(monkeypatch):
     sent = []
     monkeypatch.setattr(alerts, "SLACK_WEBHOOK", "http://example.com")
     monkeypatch.setattr(alerts.requests, "post", lambda *a, **k: sent.append(k))
+    monkeypatch.setattr(alerts, "THROTTLE_SEC", 0.1)
+    monkeypatch.setattr(alerts, "_last_sent", {}, raising=False)
+
     alerts.send_slack_alert("msg", key="err")
     alerts.send_slack_alert("msg", key="err")
     assert len(sent) == 1
+
     time.sleep(alerts.THROTTLE_SEC)
+
     alerts.send_slack_alert("msg", key="err")
     assert len(sent) == 2
