@@ -16,7 +16,12 @@ _last_sent = {}
 THROTTLE_SEC = 30
 
 
-def send_slack_alert(message: str, *, key: str | None = None) -> None:
+def send_slack_alert(
+    message: str,
+    *,
+    key: str | None = None,
+    throttle_sec: float | None = None,
+) -> None:
     """Send a Slack alert with basic throttling.
 
     Parameters
@@ -25,7 +30,10 @@ def send_slack_alert(message: str, *, key: str | None = None) -> None:
         Text to send.
     key : str, optional
         Distinct alert type for throttling. Defaults to ``message``.
+    throttle_sec : float | None, optional
+        Custom throttling interval for this call. Defaults to ``THROTTLE_SEC``.
     """
+    throttle = THROTTLE_SEC if throttle_sec is None else throttle_sec
     if not SLACK_WEBHOOK:
         return
 
@@ -33,7 +41,7 @@ def send_slack_alert(message: str, *, key: str | None = None) -> None:
     now = time.monotonic()
     with _alert_lock:
         last = _last_sent.get(ident, 0.0)
-        if now - last < THROTTLE_SEC:
+        if now - last < throttle:
             logger.info("Alert throttled: %s", ident)
             return
         _last_sent[ident] = now
