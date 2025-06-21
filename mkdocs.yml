@@ -1,6 +1,0 @@
-site_name: AI Trading Bot
-nav:
-  - Home: index.md
-theme:
-  name: material
-plugins: []
