@@ -395,7 +395,12 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.Dat
     end_dt = date.today()
     start_dt = end_dt - timedelta(days=lookback_days)
 
-    print(f"[gather_minute_data] start={start_dt}, end={end_dt}, symbols={symbols}")
+    logger.info(
+        "[gather_minute_data] start=%s, end=%s, symbols=%s",
+        start_dt,
+        end_dt,
+        symbols,
+    )
     for sym in symbols:
         bars = None
         try:
@@ -403,12 +408,18 @@ def gather_minute_data(ctx, symbols, lookback_days: int = 5) -> dict[str, pd.Dat
         except Exception as e:
             bars = None
             logger.exception("[gather_minute_data] %s fetch failed: %s", sym, e)
-            print(f"[gather_minute_data] ✗ {sym} → exception {start_dt}→{end_dt}: {e}")
+            logger.warning(
+                "[gather_minute_data] %s exception %s→%s: %s",
+                sym,
+                start_dt,
+                end_dt,
+                e,
+            )
 
         if bars is None or bars.empty:
-            print(f"[gather_minute_data] – {sym} → 0 rows")
+            logger.info("[gather_minute_data] – %s → 0 rows", sym)
         else:
-            print(f"[gather_minute_data] ✓ {sym} → {len(bars)} rows")
+            logger.info("[gather_minute_data] ✓ %s → %s rows", sym, len(bars))
             raw_store[sym] = bars
 
     if not raw_store:
@@ -434,13 +445,19 @@ def build_feature_label_df(
     for sym, raw in raw_store.items():
         try:
             if raw is None or raw.empty:
-                print(f"[build_feature_label_df] – {sym} returned no minute data; skipping symbol.")
+                logger.info(
+                    "[build_feature_label_df] – %s returned no minute data; skipping symbol.",
+                    sym,
+                )
                 continue
             min_required = max(int(MINUTES_REQUIRED * 0.7), 5)
             if raw.shape[0] < min_required:
-                print(
-                    f"[build_feature_label_df] – skipping {sym}, only {raw.shape[0]} < {min_required} "
-                    f"(70% of {MINUTES_REQUIRED})"
+                logger.info(
+                    "[build_feature_label_df] – skipping %s, only %s < %s (70%% of %s)",
+                    sym,
+                    raw.shape[0],
+                    min_required,
+                    MINUTES_REQUIRED,
                 )
                 continue
 
@@ -453,7 +470,10 @@ def build_feature_label_df(
                 or "low" not in raw.columns
                 or "volume" not in raw.columns
             ):
-                print(f"[build_feature_label_df] – skipping {sym}, missing price/volume columns")
+                logger.info(
+                    "[build_feature_label_df] – skipping %s, missing price/volume columns",
+                    sym,
+                )
                 continue
 
             for col in ["high", "low", "close", "volume"]:
@@ -463,7 +483,10 @@ def build_feature_label_df(
 
             feat = prepare_indicators(raw, freq="intraday")
             if feat.empty:
-                print(f"[build_feature_label_df] – {sym} indicators empty after dropna")
+                logger.info(
+                    "[build_feature_label_df] – %s indicators empty after dropna",
+                    sym,
+                )
                 continue
 
             sent = fetch_sentiment(sym)
@@ -487,8 +510,12 @@ def build_feature_label_df(
                 row["label"] = label
                 rows.append(row)
         except KeyError as e:
-            logger.exception("[build_feature_label_df] %s missing data: %s", sym, e)
-            print(f"[build_feature_label_df] – skipping {sym}, KeyError: {e}")
+            logger.exception(
+                "[build_feature_label_df] %s missing data: %s", sym, e
+            )
+            logger.warning(
+                "[build_feature_label_df] – skipping %s, KeyError: %s", sym, e
+            )
             continue
 
     df_all = pd.DataFrame(rows).dropna()
@@ -677,7 +704,9 @@ def retrain_meta_learner(
 
     df_all = build_feature_label_df(raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct)
     if df_all.empty:
-        print("  ⚠️ No usable rows after building (Δ, threshold) → skipping retrain.")
+        logger.warning(
+            "No usable rows after building (Δ, threshold) → skipping retrain."
+        )
         return False
 
     trained_any = False
@@ -701,7 +730,12 @@ def retrain_meta_learner(
 
         pos_ratio = y_train.mean()
         scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
-        print(f"  ✔ Training {regime} model using scoring='{scoring}' (pos_ratio={pos_ratio:.3f})")
+        logger.info(
+            "Training %s model using scoring='%s' (pos_ratio=%.3f)",
+            regime,
+            scoring,
+            pos_ratio,
+        )
 
         base_params = dict(objective="binary", n_jobs=-1, random_state=SEED)
         search_space = {
@@ -726,26 +760,25 @@ def retrain_meta_learner(
             logger.warning(f"[retrain_meta_learner] Training data empty for {regime}; skipping model fit")
             continue
         pipe.fit(X_train, y_train)
-        print(f"  ✔ {regime} best params: {best_hyper}")
+        logger.info("%s best params: %s", regime, best_hyper)
 
         from sklearn.metrics import f1_score, roc_auc_score
 
         if scoring == "f1":
             val_pred = pipe.predict(X_val)
             metric = f1_score(y_val, val_pred)
-            print(f"  ✔ {regime} holdout F1 = {metric:.4f}")
+            logger.info("%s holdout F1 = %.4f", regime, metric)
         else:
             val_probs = pipe.predict_proba(X_val)[:, 1]
             metric = roc_auc_score(y_val, val_probs)
-            print(f"  ✔ {regime} holdout AUC = {metric:.4f}")
+            logger.info("%s holdout AUC = %.4f", regime, metric)
 
         try:
             importances = pd.Series(
                 pipe.named_steps["lgbmclassifier"].feature_importances_,
                 index=X.columns,
             )
-            print("  ✔ Top feature importances:")
-            print(importances.sort_values(ascending=False).head(10))
+            logger.info("Top feature importances:\n%s", importances.sort_values(ascending=False).head(10))
             imp_df = pd.DataFrame(
                 {
                     "timestamp": [datetime.now(timezone.utc).isoformat()] * len(importances),
@@ -761,7 +794,7 @@ def retrain_meta_learner(
             logger.exception("Failed to log feature importances for %s: %s", regime, e)
 
         path = save_model_version(pipe, regime)
-        print(f"  ✔ Saved {regime} model to {path}")
+        logger.info("Saved %s model to %s", regime, path)
         log_metrics(
             {
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -801,8 +834,13 @@ def retrain_meta_learner(
     try:
         band_rewards = load_reward_by_band()
         if band_rewards:
-            print(f"  ✔ Avg rewards by band: {band_rewards}")
+            logger.info("Avg rewards by band: %s", band_rewards)
     except Exception as e:
         logger.exception("Failed to load reward by band: %s", e)
 
     return trained_any
+
+
+if __name__ == "__main__":  # pragma: no cover - manual invocation
+    logging.basicConfig(level=logging.INFO)
+    logger.info("Retrain module loaded; use retrain_meta_learner() from code.")

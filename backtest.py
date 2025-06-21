@@ -10,6 +10,7 @@ This will search over a default hyperparameter grid and write the best set to
 
 import argparse
 import json
+import logging
 import os
 import time
 import warnings
@@ -20,6 +21,8 @@ from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=".env", override=True)
 warnings.filterwarnings("ignore", category=FutureWarning)
+
+logger = logging.getLogger(__name__)
 
 BACKTEST_WINDOW_DAYS = 365
 import numpy as np
@@ -59,10 +62,18 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
             break
         except (APIError, DataFetchError, RetryError) as e:
             if attempt < 3:
-                print(f"  ▶ Failed to fetch {symbol} (attempt {attempt}/3): {e!r}. Sleeping 2s…")
+                logger.warning(
+                    "Failed to fetch %s (attempt %s/3): %s – sleeping 2s",
+                    symbol,
+                    attempt,
+                    e,
+                )
                 time.sleep(2)
             else:
-                print(f"  ▶ Final attempt failed for {symbol}; proceeding with empty DataFrame.")
+                logger.error(
+                    "Final attempt failed for %s; proceeding with empty DataFrame",
+                    symbol,
+                )
     # 3) Save to cache (even if empty)
     try:
         df_final.to_csv(cache_fname)
@@ -74,7 +85,9 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
     return df_final
 
 
-def run_backtest(symbols, start, end, params) -> dict:
+def run_backtest(
+    symbols: list[str], start: str, end: str, params: dict[str, float]
+) -> dict:
     """
     Run a very small simulated backtest using cached Alpaca data.
     Returns a dict with "net_pnl" and "sharpe".
@@ -170,7 +183,13 @@ def optimize_hyperparams(ctx, symbols, backtest_data, param_grid: dict, metric: 
         if isinstance(score_sh, float) and np.isnan(score_sh):
             score_sh = -float("inf")
 
-        print(f"  ▶ Testing {params}  →  {metric}={score_sh:.6f},  net_pnl={netp:.2f}")
+        logger.info(
+            "Testing %s → %s=%.6f, net_pnl=%.2f",
+            params,
+            metric,
+            score_sh,
+            netp,
+        )
 
         # Track best by Sharpe
         if score_sh > best_score_sharpe:
@@ -183,11 +202,14 @@ def optimize_hyperparams(ctx, symbols, backtest_data, param_grid: dict, metric: 
 
     if best_score_sharpe > -float("inf"):
         # At least one combo had a finite Sharpe
-        print(f"\n✔ Selected by Sharpe (best Sharpe={best_score_sharpe:.6f})")
+        logger.info("Selected by Sharpe (best Sharpe=%.6f)", best_score_sharpe)
         return best_params_sharpe
     else:
         # All Sharpe‐ratios were NaN → fallback to net_pnl
-        print(f"\n⚠ All Sharpe‐ratios = NaN → falling back to highest net_pnl ({best_score_pnl:.2f})")
+        logger.warning(
+            "All Sharpe-ratios = NaN → falling back to highest net_pnl (%.2f)",
+            best_score_pnl,
+        )
         return best_params_pnl or {}
 
 
@@ -228,14 +250,19 @@ def main():
     }
 
     data_cfg = {"start": args.start, "end": args.end}
-    print(f"▶ Starting grid search over {len(symbols)} symbols from {args.start} to {args.end}...\n")
+    logger.info(
+        "Starting grid search over %s symbols from %s to %s",
+        len(symbols),
+        args.start,
+        args.end,
+    )
     best = optimize_hyperparams(None, symbols, data_cfg, param_grid, metric="sharpe")
 
     # Write results
     with open("best_hyperparams.json", "w") as f:
         json.dump(best, f, indent=2)
 
-    print(f"\n✔ Best hyperparameters: {best}")
+    logger.info("Best hyperparameters: %s", best)
 
 
 if __name__ == "__main__":

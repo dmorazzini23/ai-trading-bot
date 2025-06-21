@@ -1,15 +1,15 @@
 """Alert utilities with throttling support."""
 
 import logging
-import os
 import time
 from threading import Lock
+from validate_env import settings
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-SLACK_WEBHOOK = os.getenv("SLACK_WEBHOOK")
+SLACK_WEBHOOK = settings.SLACK_WEBHOOK
 
 _alert_lock = Lock()
 _last_sent = {}

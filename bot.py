@@ -7,7 +7,7 @@ import config
 from alerting import send_slack_alert
 from logger import setup_logging
 
-setup_logging()
+setup_logging(log_file=os.getenv("BOT_LOG_FILE"))
 config.validate_env_vars()
 
 def handle_exception(exc_type, exc_value, exc_traceback):
@@ -1117,7 +1117,14 @@ class DataFetcher:
                         and _DEFAULT_FEED != "iex"
                     ):
                         logger.warning(
-                            f"[historic_minute] subscription error for {symbol} {day_start}-{day_end}: {e}; retrying with IEX"
+                            (
+                                "[historic_minute] subscription error for %s %s-%s: %s; "
+                                "retrying with IEX"
+                            ),
+                            symbol,
+                            day_start,
+                            day_end,
+                            e,
                         )
                         bars_req.feed = "iex"
                         bars_day = ctx.data_client.get_stock_bars(bars_req).df
@@ -2740,7 +2747,10 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                 need = float(price or 0) * float(getattr(req, "qty", 0))
                 if need > float(getattr(acct, "buying_power", 0)):
                     logger.warning(
-                        f"insufficient buying power for {req.symbol}: requested {req.qty}, available {acct.buying_power}"
+                        "insufficient buying power for %s: requested %s, available %s",
+                        req.symbol,
+                        req.qty,
+                        acct.buying_power,
                     )
                     return None
             if getattr(req, "side", "").lower() == "sell":
@@ -5124,8 +5134,14 @@ def run_multi_strategy(ctx: BotContext) -> None:
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty is None or not np.isfinite(qty) or qty <= 0:
             bars = fetch_minute_df_safe(sig.symbol)
+            desc = bars.describe() if not bars.empty else "EMPTY"
             logger.error(
-                f"Invalid order size for {sig.symbol}: {qty}. Signal: {sig.weight}, Price: {price}, Data: {bars.describe() if not bars.empty else 'EMPTY'}"
+                "Invalid order size for %s: %s. Signal: %s, Price: %s, Data: %s",
+                sig.symbol,
+                qty,
+                sig.weight,
+                price,
+                desc,
             )
             continue
         ctx.execution_engine.execute_order(
@@ -5334,7 +5350,11 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
             log_level = logging.ERROR if in_trading_hours(now_utc) else logging.WARNING
             logger.log(
                 log_level,
-                "INITIAL_REBALANCE: No valid prices for any symbol—skipping rebalance. Possible data outage or market holiday. Check data provider/API status.",
+                (
+                    "INITIAL_REBALANCE: No valid prices for any symbol—skipping "
+                    "rebalance. Possible data outage or market holiday. "
+                    "Check data provider/API status."
+                ),
             )
         else:
             # Compute equal weights on valid symbols only

@@ -18,12 +18,13 @@ alpaca-py>=0.7.0
 scikit-learn>=1.2
 joblib==1.3.2
 python-dotenv>=1.0.0
+pydantic-settings>=2.0
 prometheus-client==0.17.1
 finnhub-python>=2.4.0
 lightgbm>=4.2.1
 pybreaker==1.0.0
 tzlocal==4.3
-pytz>=2023.3
+pytz>=2024.1
 # pin setuptools to avoid pandas_ta/pkg_resources deprecation warnings
 setuptools>=69,<80
 yfinance>=0.2.18
@@ -33,13 +34,7 @@ transformers==4.35.2
 # Address dateutil utcfromtimestamp deprecation
 python-dateutil==2.9.0.post0
 optuna==3.6.1
-# For Python 3.12 wheels:
---extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.7.1+cpu
-
+# For Python 3.12 wheels use the CPU index when installing PyTorch locally
+torch==2.7.1
 gunicorn>=20.1.0
-loguru>=0.7.0
-requests>=2.31.0
-schedule>=1.1.0
-psutil>=5.9.0
 

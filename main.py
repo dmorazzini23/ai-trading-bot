@@ -6,33 +6,17 @@ import signal
 import subprocess
 import sys
 import threading
-from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify
+from logger import setup_logging
 
 import config
 from alerting import send_slack_alert
 
-def setup_logging(log_file: str) -> logging.Logger:
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
-    file_handler = RotatingFileHandler(log_file, maxBytes=10_485_760, backupCount=5)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
-
-    return logger
-
 def create_flask_app() -> Flask:
+    """Return a minimal Flask application with health endpoints."""
     app = Flask(__name__)
 
     @app.route("/health")
@@ -47,11 +31,13 @@ def create_flask_app() -> Flask:
 
     return app
 
-def run_flask_app(port: int):
+def run_flask_app(port: int) -> None:
+    """Start the Flask application on ``port``."""
     app = create_flask_app()
     app.run(host="0.0.0.0", port=port)
 
-def run_bot(venv_path: str, bot_script: str):
+def run_bot(venv_path: str, bot_script: str) -> int:
+    """Execute ``bot_script`` using the Python from ``venv_path``."""
     python_executable = os.path.join(venv_path, "bin", "python3.12")
     if not os.path.isfile(python_executable):
         raise RuntimeError(f"Python executable not found at {python_executable}")
@@ -64,11 +50,13 @@ def run_bot(venv_path: str, bot_script: str):
     )
     return process.wait()
 
-def validate_environment():
+def validate_environment() -> None:
+    """Ensure mandatory environment variables are present."""
     if not config.WEBHOOK_SECRET:
         raise RuntimeError("WEBHOOK_SECRET must be set")
 
-def main():
+def main() -> None:
+    """Entry point for running the unified bot or API server."""
     parser = argparse.ArgumentParser(description="Unified AI Trading Bot runner")
     parser.add_argument(
         "--serve-api", action="store_true", help="Run the Flask API server"

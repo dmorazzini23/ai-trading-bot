@@ -1,6 +1,7 @@
 import hmac
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -11,6 +12,7 @@ from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
 
 from alerting import send_slack_alert
+from validate_env import settings
 
 # Load .env early for configuration
 load_dotenv(dotenv_path=".env", override=True)
@@ -20,16 +22,19 @@ app = Flask(__name__)
 import config
 
 # Configure Flask and root logger to integrate with Gunicorn's error logger
-def configure_logging():
-    gunicorn_logger = logging.getLogger('gunicorn.error')
-    app.logger.handlers = gunicorn_logger.handlers
-    app.logger.setLevel(gunicorn_logger.level)
-    logging.root.handlers = gunicorn_logger.handlers
-    logging.root.setLevel(gunicorn_logger.level)
+def configure_logging() -> None:
+    gunicorn_logger = logging.getLogger("gunicorn.error")
+    if hasattr(app, "logger"):
+        app.logger.handlers = gunicorn_logger.handlers
+        app.logger.setLevel(gunicorn_logger.level)
+        logging.root.handlers = gunicorn_logger.handlers
+        logging.root.setLevel(gunicorn_logger.level)
+    else:  # pragma: no cover - test stubs
+        logging.basicConfig(level=gunicorn_logger.level)
 
 configure_logging()
 
-logger = app.logger
+logger = getattr(app, "logger", logging.getLogger(__name__))
 
 _shutdown = threading.Event()
 
@@ -55,6 +60,7 @@ if not config.WEBHOOK_SECRET:
     raise RuntimeError("WEBHOOK_SECRET must be set")
 
 def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
+    """Validate the GitHub webhook signature."""
     if not signature_header or not signature_header.startswith("sha256="):
         return False
     sig = signature_header.split("=", 1)[1]
@@ -62,6 +68,8 @@ def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
     return hmac.compare_digest(expected, sig)
 
 def create_app(cfg: Any = config) -> Flask:
+    """Return a Flask application configured for webhook handling."""
+    cfg.validate_env_vars()
     secret = cfg.WEBHOOK_SECRET.encode()
 
     @app.route("/github-webhook", methods=["POST"])
@@ -70,6 +78,12 @@ def create_app(cfg: Any = config) -> Flask:
         payload = request.get_json(force=True)
         if not payload or "symbol" not in payload or "action" not in payload:
             return jsonify({"error": "Missing fields"}), 400
+        symbol = str(payload.get("symbol", ""))
+        action = str(payload.get("action", "")).lower()
+        if not re.fullmatch(r"[A-Z]{1,5}", symbol):
+            return jsonify({"error": "Invalid symbol"}), 400
+        if action not in {"buy", "sell"}:
+            return jsonify({"error": "Invalid action"}), 400
         sig = request.headers.get("X-Hub-Signature-256", "")
         if not verify_sig(request.data, sig, secret):
             abort(403)
@@ -98,7 +112,7 @@ def create_app(cfg: Any = config) -> Flask:
 app = create_app()
 
 if __name__ == "__main__":
-    flask_port = int(os.getenv("FLASK_PORT", "9000"))
+    flask_port = settings.FLASK_PORT
     os.environ.setdefault("FLASK_PORT", str(flask_port))
     os.environ["WEBHOOK_PORT"] = str(flask_port)
     from gunicorn.app.wsgiapp import run

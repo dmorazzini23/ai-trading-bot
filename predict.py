@@ -108,7 +108,12 @@ def predict(csv_path: str, freq: str = "intraday"):
     except (ValueError, TypeError) as e:
         logger.error(f"Prediction failed for {symbol}: {e}")
         return None, None
-    print(f"Regime: {regime}, Prediction: {pred}, Probability: {proba:.4f}")
+    logger.info(
+        "Regime: %s, Prediction: %s, Probability: %.4f",
+        regime,
+        pred,
+        proba,
+    )
     return pred, proba
 
 
