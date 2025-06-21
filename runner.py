@@ -32,10 +32,10 @@ if __name__ == "__main__":
                 break
             logger.error("Bot exited with code %s", exc.code)
         except requests.exceptions.RequestException as e:
-            logger.error(f"API request failed: {e}")
+            logger.exception("API request failed", exc_info=e)
             raise
         except Exception as exc:  # pragma: no cover - safety
-            logger.error(f"Unexpected error: {exc}")
+            logger.exception("Unexpected error", exc_info=exc)
             raise
         if not _shutdown:
             time.sleep(5)

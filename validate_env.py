@@ -1,6 +1,9 @@
 """Environment validation using pydantic-settings."""
 
+import logging
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -53,7 +56,7 @@ settings = Settings()
 
 
 def _main() -> None:  # pragma: no cover - simple CLI helper
-    print("Environment variables successfully validated")
+    logger.info("Environment variables successfully validated")
 
 
 if __name__ == "__main__":

@@ -177,20 +177,20 @@ BOT_MODE_ENV = getattr(config, "BOT_MODE", BOT_MODE)
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
 
 
-def _require_cfg(value, name):
-    """Require a config value; sleep-and-retry in production."""
+def _require_cfg(value: str | None, name: str) -> str:
+    """Return ``value`` or load from config, retrying in production."""
     if value:
         return value
     if BOT_MODE_ENV == "production":
         while not value:
-            logger.critical(f"Missing {name}; retrying in 60s")
+            logger.critical("Missing %s; retrying in 60s", name)
             time.sleep(60)
             config.reload_env()
             import importlib
 
             importlib.reload(config)
             value = getattr(config, name, None)
-        return value
+        return str(value)
     raise RuntimeError(f"{name} must be defined in the configuration or environment")
 
 

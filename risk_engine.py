@@ -106,6 +106,18 @@ class RiskEngine:
         if not self.can_trade(signal):
             return 0
 
+        weight = self._apply_weight_limits(signal)
+
+        dollars = cash * min(weight, 1.0)
+        try:
+            qty = int(dollars / price)
+        except Exception as exc:
+            logger.error("position_size division error: %s", exc)
+            return 0
+        return max(qty, 0)
+
+    def _apply_weight_limits(self, signal: TradeSignal) -> float:
+        """Return signal weight after applying asset and strategy caps."""
         asset_cap = self.asset_limits.get(signal.asset_class, self.global_limit)
         asset_rem = max(asset_cap - self.exposure.get(signal.asset_class, 0.0), 0.0)
         strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
@@ -116,14 +128,7 @@ class RiskEngine:
         if weight > strat_cap:
             logger.info("ADJUST_WEIGHT_STRATEGY", extra={"orig": weight, "new": strat_cap})
             weight = strat_cap
-
-        dollars = cash * min(weight, 1.0)
-        try:
-            qty = int(dollars / price)
-        except Exception as exc:
-            logger.error("position_size division error: %s", exc)
-            return 0
-        return max(qty, 0)
+        return weight
 
     def compute_volatility(self, returns: np.ndarray) -> dict:
         if not isinstance(returns, np.ndarray) or returns.size == 0:
