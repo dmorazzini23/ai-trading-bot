@@ -6,31 +6,14 @@ import signal
 import subprocess
 import sys
 import threading
-from logging.handlers import RotatingFileHandler
 from typing import Any
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify
+from logger import setup_logging
 
 import config
 from alerting import send_slack_alert
-
-def setup_logging(log_file: str) -> logging.Logger:
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
-    file_handler = RotatingFileHandler(log_file, maxBytes=10_485_760, backupCount=5)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
-
-    return logger
 
 def create_flask_app() -> Flask:
     app = Flask(__name__)

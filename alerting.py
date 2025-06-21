@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import logging
-import os
 import requests
+from validate_env import settings
 
 logger = logging.getLogger(__name__)
 
 
 def send_slack_alert(message: str) -> None:
     """Send a Slack alert if ``SLACK_WEBHOOK`` is configured."""
-    webhook = os.getenv("SLACK_WEBHOOK")
+    webhook = settings.SLACK_WEBHOOK
     if not webhook:
         logger.warning("SLACK_WEBHOOK not set; cannot send alert")
         return

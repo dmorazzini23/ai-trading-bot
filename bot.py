@@ -7,7 +7,7 @@ import config
 from alerting import send_slack_alert
 from logger import setup_logging
 
-setup_logging()
+setup_logging(log_file=os.getenv("BOT_LOG_FILE"))
 config.validate_env_vars()
 
 def handle_exception(exc_type, exc_value, exc_traceback):

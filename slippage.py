@@ -1,11 +1,10 @@
 import logging
-import os
-
 from alerts import send_slack_alert
+from validate_env import settings
 
 logger = logging.getLogger(__name__)
 
-SLIPPAGE_THRESHOLD = float(os.getenv("SLIPPAGE_THRESHOLD", "0.003"))
+SLIPPAGE_THRESHOLD = settings.SLIPPAGE_THRESHOLD
 
 
 def monitor_slippage(expected: float | None, actual: float, symbol: str) -> None:

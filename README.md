@@ -50,15 +50,17 @@ Key environment variables include:
 
 ### Logging and Alerting
 
-All logs are written to standard output so they can be captured by the
-systemd journal or Docker logs. Set `SLACK_WEBHOOK` in your environment to
-enable Slack alerts for critical errors. Configure logging once at startup:
+Logs are written to standard output by default so they can be captured by the
+systemd journal or Docker logs. If the optional `BOT_LOG_FILE` environment
+variable is set a rotating log file handler will also be configured.
+Set `SLACK_WEBHOOK` in your environment to enable Slack alerts for critical
+errors. Configure logging once at startup:
 
 ```python
 from logger import setup_logging
 import logging
 
-setup_logging()  # clears existing handlers and logs to stdout
+setup_logging(log_file=os.getenv("BOT_LOG_FILE"))
 logger = logging.getLogger(__name__)
 logger.info("Bot starting up")
 ```
