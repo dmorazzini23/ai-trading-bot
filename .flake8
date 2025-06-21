@@ -1,4 +1,0 @@
-[flake8]
-max-line-length = 160
-extend-ignore = E302, E305, E402, E203, E501, F811
-exclude = .github/, __pycache__/, scripts/
