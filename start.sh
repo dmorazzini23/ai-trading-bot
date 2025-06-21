@@ -3,7 +3,7 @@ set -euo pipefail
 
 echo "🔁 Starting AI Trading Bot..."
 
-cd /root/ai-trading-bot
+cd /home/aiuser/ai-trading-bot
 
 # Load environment variables from .env if present
 if [ -f .env ]; then
@@ -19,7 +19,7 @@ export WEBHOOK_SECRET=${WEBHOOK_SECRET:?ERROR: WEBHOOK_SECRET must be set in .en
 
 # Run environment validation script to catch missing vars early
 echo "🔍 Validating environment variables..."
-python validate_env.py
+python3.12 validate_env.py
 
 # Ensure Python 3.12 venv exists and activate it
 if [ ! -d venv ]; then
@@ -52,4 +52,4 @@ fi
 # fi
 
 # Run the trading bot as the main foreground process
-exec python -u bot.py
+exec ./venv/bin/python -u bot.py
