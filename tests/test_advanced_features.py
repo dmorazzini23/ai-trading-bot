@@ -24,6 +24,7 @@ import slippage
 
 
 def test_send_slack_alert(monkeypatch):
+    """Slack alert helper should post messages using requests."""
     messages = []
     monkeypatch.setattr(alerts, "SLACK_WEBHOOK", "http://example.com")
 
@@ -36,6 +37,7 @@ def test_send_slack_alert(monkeypatch):
 
 
 def test_submit_order_shadow(monkeypatch):
+    """submit_order returns a shadow status when SHADOW_MODE is enabled."""
     class DummyAPI:
         def submit_order(self, order_data=None):
             raise AssertionError("should not call in shadow")
@@ -51,6 +53,7 @@ def test_submit_order_shadow(monkeypatch):
 
 
 def test_monitor_slippage_alert(monkeypatch):
+    """An alert is sent when slippage exceeds the threshold."""
     alerts_sent = []
     monkeypatch.setattr(slippage, "SLIPPAGE_THRESHOLD", 0.001)
     monkeypatch.setattr(slippage, "send_slack_alert", lambda m: alerts_sent.append(m))
@@ -59,6 +62,7 @@ def test_monitor_slippage_alert(monkeypatch):
 
 
 def test_maybe_rebalance(monkeypatch):
+    """maybe_rebalance triggers a rebalance after the interval."""
     calls = []
     monkeypatch.setattr(rebalancer, "REBALANCE_INTERVAL_MIN", 0)
     monkeypatch.setattr(rebalancer, "rebalance_portfolio", lambda ctx: calls.append(ctx))

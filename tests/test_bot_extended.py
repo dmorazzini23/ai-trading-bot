@@ -62,7 +62,11 @@ if "capital_scaling" in sys.modules:
 
 sys.modules.setdefault("yfinance", types.ModuleType("yfinance"))
 if "pandas_market_calendars" in sys.modules:
-    sys.modules["pandas_market_calendars"].get_calendar = lambda *a, **k: types.SimpleNamespace(schedule=lambda *a, **k: pd.DataFrame())
+    sys.modules["pandas_market_calendars"].get_calendar = (
+        lambda *a, **k: types.SimpleNamespace(
+            schedule=lambda *a, **k: pd.DataFrame()
+        )
+    )
 if "pandas_ta" in sys.modules:
     sys.modules["pandas_ta"].atr = lambda *a, **k: pd.Series([0])
     sys.modules["pandas_ta"].rsi = lambda *a, **k: pd.Series([0])
@@ -194,11 +198,13 @@ import bot
 
 
 def test_compute_time_range():
+    """compute_time_range should span the requested minutes."""
     start, end = bot.compute_time_range(5)
     assert (end - start).total_seconds() == 300
 
 
 def test_get_latest_close_edge_cases():
+    """get_latest_close handles missing data gracefully."""
     assert bot.get_latest_close(pd.DataFrame()) == 0.0
     assert bot.get_latest_close(None) == 0.0
     df = pd.DataFrame({"close": [1.5]}, index=[pd.Timestamp("2024-01-01")])
@@ -206,12 +212,14 @@ def test_get_latest_close_edge_cases():
 
 
 def test_fetch_minute_df_safe_market_closed(monkeypatch):
+    """No data is returned when the market is closed."""
     monkeypatch.setattr(bot, "market_is_open", lambda now=None: False)
     result = bot.fetch_minute_df_safe("AAPL")
     assert result.empty
 
 
 def test_fetch_minute_df_safe_open(monkeypatch):
+    """DataFrame is returned when the market is open."""
     monkeypatch.setattr(bot, "market_is_open", lambda now=None: True)
     df = pd.DataFrame({"close": [1]}, index=[pd.Timestamp("2024-01-01")])
     monkeypatch.setattr(bot, "get_minute_df", lambda symbol, start_date, end_date: df)

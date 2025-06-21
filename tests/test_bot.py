@@ -177,7 +177,11 @@ class _CapScaler:
 
 sys.modules["capital_scaling"].CapitalScalingEngine = _CapScaler
 if "pandas_market_calendars" in sys.modules:
-    sys.modules["pandas_market_calendars"].get_calendar = lambda *a, **k: types.SimpleNamespace(schedule=lambda *a, **k: pd.DataFrame())
+    sys.modules["pandas_market_calendars"].get_calendar = (
+        lambda *a, **k: types.SimpleNamespace(
+            schedule=lambda *a, **k: pd.DataFrame()
+        )
+    )
 if "pandas_ta" in sys.modules:
     sys.modules["pandas_ta"].atr = lambda *a, **k: pd.Series([0])
     sys.modules["pandas_ta"].rsi = lambda *a, **k: pd.Series([0])
@@ -188,6 +192,7 @@ bot = pytest.importorskip("bot")
 
 
 def test_screen_candidates_empty(monkeypatch):
+    """screen_candidates returns an empty list when none pass."""
     monkeypatch.setattr(bot, "load_tickers", lambda path=bot.TICKERS_FILE: ["AAA"])
     monkeypatch.setattr(bot, "screen_universe", lambda candidates, ctx: [])
     assert bot.screen_candidates() == []

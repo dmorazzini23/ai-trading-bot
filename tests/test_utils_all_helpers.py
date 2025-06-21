@@ -13,6 +13,8 @@ from utils import (get_close_column, get_datetime_column, get_high_column,
 
 
 def make_df(cols, dtype="float64", values=None):
+    """Return a small DataFrame with columns tailored for testing."""
+
     if values is None:
         values = [1, 2, 3]
     dct = {}
@@ -39,6 +41,7 @@ def make_df(cols, dtype="float64", values=None):
 
 
 def test_ohlcv_variants():
+    """Validate helper functions that identify OHLCV columns."""
     for fn, names in [
         (get_open_column, ["Open", "open", "o"]),
         (get_high_column, ["High", "high", "h"]),
@@ -67,6 +70,7 @@ def test_ohlcv_variants():
 
 
 def test_get_datetime_column_variants():
+    """Ensure datetime column detection handles edge cases."""
     for name in ["Datetime", "datetime", "timestamp", "date"]:
         df = make_df([name])
         df[name] = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
@@ -86,6 +90,7 @@ def test_get_datetime_column_variants():
 
 
 def test_get_symbol_column_variants():
+    """Check detection of symbol column names and uniqueness."""
     for name in ["symbol", "ticker", "SYMBOL"]:
         df = make_df([name])
         assert get_symbol_column(df) == name
@@ -96,6 +101,7 @@ def test_get_symbol_column_variants():
 
 
 def test_get_return_column_variants():
+    """Verify return column detection with valid and null data."""
     for name in ["Return", "ret", "returns"]:
         df = make_df([name])
         assert get_return_column(df) == name
@@ -106,6 +112,7 @@ def test_get_return_column_variants():
 
 
 def test_get_indicator_column():
+    """Test selection of technical indicator columns."""
     df = make_df(["SMA", "ema", "RSI"])
     assert get_indicator_column(df, ["SMA", "EMA"]) == "SMA"
     assert get_indicator_column(df, ["EMA", "ema"]) == "ema"
@@ -113,6 +120,7 @@ def test_get_indicator_column():
 
 
 def test_get_order_column():
+    """Confirm order identifier columns are correctly resolved."""
     df = make_df(["OrderID", "TradeID"])
     assert get_order_column(df, "OrderID") == "OrderID"
     assert get_order_column(df, "TradeID") == "TradeID"

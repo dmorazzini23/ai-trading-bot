@@ -8,6 +8,7 @@ import alerts
 
 
 def test_alert_throttling(monkeypatch):
+    """Verify repeated alerts are rate limited."""
     sent = []
     monkeypatch.setattr(alerts, "SLACK_WEBHOOK", "http://example.com")
     monkeypatch.setattr(alerts.requests, "post", lambda *a, **k: sent.append(k))
