@@ -14,16 +14,16 @@ if [ -f .env ]; then
   set -u
 fi
 
-# Require WEBHOOK_SECRET environment variable
-export WEBHOOK_SECRET=${WEBHOOK_SECRET:?ERROR: WEBHOOK_SECRET must be set in .env}
+# Provide a default port if FLASK_PORT is not set
+export FLASK_PORT=${FLASK_PORT:-9000}
 
-# Run environment validation script to catch missing vars early
+# Validate env (optional, your script)
 echo "🔍 Validating environment variables..."
-python3.12 validate_env.py
+python validate_env.py
 
-# Ensure Python 3.12 venv exists and activate it
+# Activate virtualenv
 if [ ! -d venv ]; then
-  echo "🛠 Creating new virtualenv and installing dependencies..."
+  echo "🛠 Creating virtualenv and installing dependencies..."
   python3.12 -m venv venv
   source venv/bin/activate
   pip install --upgrade pip setuptools wheel
@@ -52,3 +52,7 @@ exec gunicorn -w 4 -b 0.0.0.0:${FLASK_PORT:-9000} \
 # Run the trading bot as the main foreground process
 exec ./venv/bin/python -u bot.py
 
+# Launch Gunicorn with explicit port variable
+echo "🌐 Launching Gunicorn server on port $FLASK_PORT..."
+exec ./venv/bin/gunicorn -w 4 -b 0.0.0.0:$FLASK_PORT \
+  --access-logfile - --error-logfile - server:app
