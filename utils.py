@@ -8,6 +8,7 @@ import datetime as dt
 from datetime import date, time, timezone
 
 import pandas as pd
+from typing import Any
 from zoneinfo import ZoneInfo
 import threading
 
@@ -147,7 +148,7 @@ def get_free_port(start: int = 9200, end: int = 9300) -> int | None:
     return None
 
 
-def to_serializable(obj):
+def to_serializable(obj: Any) -> Any:
     """Recursively convert unsupported types for JSON serialization."""
     from types import MappingProxyType
 
@@ -211,7 +212,7 @@ def get_column(
                 if dtype == "datetime64[ns]" and pd.api.types.is_datetime64_any_dtype(
                     df[col]
                 ):
-                    pass
+                    ...
                 elif not pd.api.types.is_dtype_equal(df[col].dtype, dtype):
                     raise TypeError(
                         f"{label}: column '{col}' is not of dtype {dtype}, got {df[col].dtype}"

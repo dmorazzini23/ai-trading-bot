@@ -5,10 +5,7 @@ from pathlib import Path
 
 import pytest
 
-flask_mod = types.ModuleType("flask")
-
-
-class Flask:
+class _DummyFlask:
     def __init__(self, *a, **k):
         pass
 
@@ -22,13 +19,27 @@ class Flask:
         pass
 
 
-flask_mod.Flask = Flask
+flask_mod = types.ModuleType("flask")
+flask_mod.Flask = _DummyFlask
 flask_mod.abort = lambda code: (_ for _ in ()).throw(Exception(code))
 flask_mod.jsonify = lambda obj: obj
 flask_mod.request = types.SimpleNamespace(
     get_json=lambda force=True: {"symbol": "A", "action": "b"}, headers={}, data=b""
 )
+
+_orig_flask = sys.modules.get("flask")
 sys.modules["flask"] = flask_mod
+
+@pytest.fixture(autouse=True)
+def _restore_flask():
+    yield
+    if _orig_flask is not None:
+        sys.modules["flask"] = _orig_flask
+    else:
+        sys.modules.pop("flask", None)
+    sys.modules.pop("server", None)
+
+
 
 import importlib
 import os

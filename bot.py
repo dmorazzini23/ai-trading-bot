@@ -9,6 +9,7 @@ from logger import setup_logging
 
 setup_logging(log_file=os.getenv("BOT_LOG_FILE"))
 config.validate_env_vars()
+config.log_config(config.REQUIRED_ENV_VARS)
 
 def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
@@ -284,8 +285,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             df.index = df.index.get_level_values(1)
         df.index = pd.to_datetime(df.index)
         return df
-    except Exception as e:
-        logger.error(f"fetch_minute_df_safe failed for {symbol}: {e}")
+    except Exception as exc:
+        logger.exception("fetch_minute_df_safe failed for %s", symbol, exc_info=exc)
         return pd.DataFrame()
 
 
@@ -324,8 +325,8 @@ def reconcile_positions(ctx: "BotContext") -> None:
                 if symbol not in live_positions or live_positions[symbol] == 0:
                     ctx.stop_targets.pop(symbol, None)
                     ctx.take_profit_targets.pop(symbol, None)
-    except Exception as e:
-        logger.warning("reconcile_positions failed: %s", e)
+    except Exception as exc:
+        logger.exception("reconcile_positions failed", exc_info=exc)
 
 
 import warnings

@@ -33,7 +33,7 @@ def _fetch_api(url: str, retries: int = 3, delay: float = 1.0) -> dict:
     return {}
 
 
-def generate(ctx: Any | None = None) -> int:
+def generate() -> int:
     """Placeholder generate function used in tests."""
 
     return 0
