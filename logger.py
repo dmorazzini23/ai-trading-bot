@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from logging.handlers import RotatingFileHandler
+from logger_rotator import get_rotating_handler
 from typing import Dict
 
 _configured = False
@@ -42,10 +42,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> None:
 
     if log_file:
         try:
-            os.makedirs(os.path.dirname(log_file), exist_ok=True)
-            file_handler = RotatingFileHandler(
-                log_file, maxBytes=10_485_760, backupCount=5
-            )
+            file_handler = get_rotating_handler(log_file, max_bytes=10_485_760)
             file_handler.setFormatter(formatter)
             handlers.append(file_handler)
         except OSError as exc:  # pragma: no cover - file permission errors

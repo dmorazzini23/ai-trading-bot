@@ -36,3 +36,11 @@ def test_validate_alpaca_credentials_missing(monkeypatch):
     monkeypatch.setattr(config, "ALPACA_BASE_URL", "", raising=False)
     with pytest.raises(RuntimeError):
         config.validate_alpaca_credentials()
+
+
+def test_log_config_masks_secrets(monkeypatch, caplog):
+    monkeypatch.setenv("ALPACA_API_KEY", "secret1234")
+    caplog.set_level("INFO")
+    config.log_config(["ALPACA_API_KEY"])
+    assert "****1234" in caplog.text
+    assert "secret1234" not in caplog.text

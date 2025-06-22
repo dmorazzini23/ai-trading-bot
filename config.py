@@ -17,7 +17,7 @@ load_dotenv(ENV_PATH)
 # configuration module can be imported without all production variables set.
 TESTING = os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TESTING")
 
-required_env_vars = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
+required_env_vars = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL", "WEBHOOK_SECRET"]
 if not TESTING:
     required_env_vars.append("FLASK_PORT")
 
@@ -27,7 +27,7 @@ if missing_vars:
         f"Missing required environment variables: {', '.join(missing_vars)}"
     )
 
-REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
+REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL", "WEBHOOK_SECRET"]
 
 def get_env(
     key: str,
@@ -65,6 +65,26 @@ def reload_env() -> None:
 
 
 from types import MappingProxyType
+
+
+def mask_secret(value: str, show_last: int = 4) -> str:
+    """Return ``value`` with all but the last ``show_last`` characters masked."""
+    if value is None:
+        return ""
+    return "*" * max(0, len(value) - show_last) + value[-show_last:]
+
+
+def log_config(keys: list[str] | None = None) -> None:
+    """Log key configuration values with secrets masked."""
+    if keys is None:
+        keys = REQUIRED_ENV_VARS
+    cfg = {}
+    for k in keys:
+        val = os.getenv(k, "")
+        if "KEY" in k or "SECRET" in k:
+            val = mask_secret(val)
+        cfg[k] = val
+    logger.info("Configuration: %s", cfg)
 
 
 def _require_env_vars(*keys: str) -> None:
@@ -138,4 +158,25 @@ def validate_env_vars() -> None:
     and raises ``RuntimeError`` if any required variables are missing.
     """
     load_dotenv()
-    _require_env_vars("ALPACA_API_KEY", "ALPACA_SECRET_KEY")
+    _require_env_vars(*REQUIRED_ENV_VARS)
+    log_config(REQUIRED_ENV_VARS)
+
+
+__all__ = [
+    "get_env",
+    "reload_env",
+    "validate_environment",
+    "validate_env_vars",
+    "validate_alpaca_credentials",
+    "mask_secret",
+    "log_config",
+    "ALPACA_API_KEY",
+    "ALPACA_SECRET_KEY",
+    "ALPACA_BASE_URL",
+    "ALPACA_PAPER",
+    "ALPACA_DATA_FEED",
+    "FINNHUB_API_KEY",
+    "NEWS_API_KEY",
+    "WEBHOOK_SECRET",
+    "WEBHOOK_PORT",
+]

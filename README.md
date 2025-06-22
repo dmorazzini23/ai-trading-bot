@@ -5,6 +5,24 @@
 This repository contains a simple trading bot together with a backtesting
 harness for optimizing its tunable hyperparameters.
 
+The project targets **Python 3.12.3**.
+
+## Installation
+
+Create a virtual environment and install dependencies:
+
+```bash
+python3.12 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+For development and testing install the additional tools:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 ## Running the Backtester
 
 ```
@@ -97,8 +115,10 @@ pip install -r requirements-dev.txt
 ### Running Tests
 
 ```bash
-pytest
+pytest --cov
 ```
+
+Test coverage should report at least **90%** for a successful run.
 
 
 ## Systemd Service

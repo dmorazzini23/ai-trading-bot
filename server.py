@@ -23,6 +23,7 @@ import config
 
 # Configure Flask and root logger to integrate with Gunicorn's error logger
 def configure_logging(flask_app: Flask) -> None:
+    """Configure log handlers using Gunicorn's logger when available."""
     gunicorn_logger = logging.getLogger("gunicorn.error")
     if hasattr(flask_app, "logger"):
         flask_app.logger.handlers = gunicorn_logger.handlers
@@ -76,6 +77,7 @@ def verify_sig(payload: bytes, signature_header: str, secret: bytes) -> bool:
 def create_app(cfg: Any = config) -> Flask:
     """Return a Flask application configured for webhook handling."""
     cfg.validate_env_vars()
+    cfg.log_config(cfg.REQUIRED_ENV_VARS)
     flask_app = Flask(__name__)
     secret = cfg.WEBHOOK_SECRET.encode()
     configure_logging(flask_app)
@@ -85,12 +87,15 @@ def create_app(cfg: Any = config) -> Flask:
         load_dotenv(dotenv_path=".env", override=True)
         try:
             data = request.get_json(force=True)
+            if not isinstance(data, dict):
+                raise TypeError("Payload must be JSON object")
             payload = WebhookPayload.model_validate(data)
-        except (TypeError, ValidationError):
+        except (TypeError, ValidationError) as exc:
+            logger.warning("Invalid webhook payload: %s", exc)
             return jsonify({"error": "Invalid payload"}), 400
 
-        symbol = payload.symbol
-        action = payload.action.lower()
+        symbol = str(payload.symbol).upper()
+        action = str(payload.action).lower()
         if not re.fullmatch(r"[A-Z]{1,5}", symbol):
             return jsonify({"error": "Invalid symbol"}), 400
         if action not in {"buy", "sell"}:
