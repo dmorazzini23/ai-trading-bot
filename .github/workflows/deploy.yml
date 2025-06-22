@@ -7,7 +7,6 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -21,7 +20,7 @@ jobs:
 
     - name: Deploy and restart
       run: |
-        ssh ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }} << 'ENDSSH'
+        ssh -o StrictHostKeyChecking=no ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }} << 'ENDSSH'
           cd /home/aiuser/ai-trading-bot
           git pull origin main
           source venv/bin/activate
