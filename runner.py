@@ -5,15 +5,18 @@ from __future__ import annotations
 import signal
 import time
 
-from bot import main
 import logging
-logger = logging.getLogger(__name__)
 import requests
+
+from bot import main
+
+logger = logging.getLogger(__name__)
 
 _shutdown = False
 
 
 def _handle_signal(signum: int, _unused_frame) -> None:
+    """Handle termination signals and set shutdown flag."""
     global _shutdown
     logger.info("Received signal %s, shutting down", signum)
     _shutdown = True
@@ -34,7 +37,7 @@ if __name__ == "__main__":
         except requests.exceptions.RequestException as e:
             logger.exception("API request failed", exc_info=e)
             raise
-        except Exception as exc:  # pragma: no cover - safety
+        except Exception as exc:  # TODO: narrow exception type
             logger.exception("Unexpected error", exc_info=exc)
             raise
         if not _shutdown:

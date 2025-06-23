@@ -33,7 +33,7 @@ def log_warning(
     if extra is None:
         extra = {}
     if exc is not None:
-        logger.warning(f"{msg}: {exc}", extra=extra, exc_info=True)
+        logger.warning("%s: %s", msg, exc, extra=extra, exc_info=True)
     else:
         logger.warning(msg, extra=extra)
 
@@ -111,7 +111,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         market_close = sched.iloc[0]["market_close"].tz_convert(EASTERN_TZ).time()
         current = check_time.time()
         return market_open <= current <= market_close
-    except Exception as e:
+    except Exception as e:  # TODO: narrow exception type
         logger.debug("market calendar unavailable: %s", e)
         # Fallback to simple weekday/time check when calendar unavailable
         now_et = (now or dt.datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
@@ -339,5 +339,5 @@ def get_ohlcv_columns(df):
             get_close_column(df),
             get_volume_column(df),
         ]
-    except Exception:
+    except Exception:  # TODO: narrow exception type
         return []

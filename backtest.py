@@ -259,7 +259,7 @@ def main():
     best = optimize_hyperparams(None, symbols, data_cfg, param_grid, metric="sharpe")
 
     # Write results
-    with open("best_hyperparams.json", "w") as f:
+    with open("best_hyperparams.json", "w", encoding="utf-8") as f:
         json.dump(best, f, indent=2)
 
     logger.info("Best hyperparameters: %s", best)

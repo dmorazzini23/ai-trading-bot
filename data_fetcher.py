@@ -134,7 +134,7 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
     if df.empty:
         logger.critical("NO_DATA_RETURNED_%s", symbol)
         try:
-            with open(HALT_FLAG_PATH, "w") as f:
+            with open(HALT_FLAG_PATH, "w", encoding="utf-8") as f:
                 f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
         except Exception as e:
             logger.error("Failed to write halt flag: %s", e)
@@ -219,7 +219,7 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
         if df.empty:
             logger.critical("NO_DATA_RETURNED_%s", symbol)
             try:
-                with open(HALT_FLAG_PATH, "w") as f:
+                with open(HALT_FLAG_PATH, "w", encoding="utf-8") as f:
                     f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
             except Exception as e:
                 logger.error("Failed to write halt flag: %s", e)
@@ -343,7 +343,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
         if bars is None or not getattr(bars, "df", pd.DataFrame()).size:
             logger.critical("NO_DATA_RETURNED_%s", symbol)
             try:
-                with open(HALT_FLAG_PATH, "w") as f:
+                with open(HALT_FLAG_PATH, "w", encoding="utf-8") as f:
                     f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
             except Exception as e:
                 logger.error("Failed to write halt flag: %s", e)
@@ -392,7 +392,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
         if df.empty:
             logger.critical("NO_DATA_RETURNED_%s", symbol)
             try:
-                with open(HALT_FLAG_PATH, "w") as f:
+                with open(HALT_FLAG_PATH, "w", encoding="utf-8") as f:
                     f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
             except Exception as e:
                 logger.error("Failed to write halt flag: %s", e)
@@ -441,7 +441,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             if df.empty:
                 logger.critical("NO_DATA_RETURNED_%s", symbol)
                 try:
-                    with open(HALT_FLAG_PATH, "w") as f:
+                    with open(HALT_FLAG_PATH, "w", encoding="utf-8") as f:
                         f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
                 except Exception as e:
                     logger.error("Failed to write halt flag: %s", e)
