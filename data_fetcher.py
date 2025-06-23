@@ -70,8 +70,8 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
 
     Accepts ``datetime`` objects, ``pandas.Timestamp`` objects, ``date`` objects,
     or strings in several supported formats. Strings may be ISO 8601
-    (with optional timezone),
-    ``"%Y-%m-%d"``, ``"%Y-%m-%d %H:%M:%S"`` or ``"%Y%m%d"``.
+    (with optional timezone), ``"%Y-%m-%d"``, ``"%Y-%m-%d %H:%M:%S"`` or
+    ``"%Y%m%d"``.
 
     Raises
     ------
@@ -81,6 +81,8 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
     TypeError
         If ``dt`` is of an unsupported type.
     """
+
+    logger.debug("ensure_datetime called with %r (%s)", dt, type(dt).__name__)
 
     if dt is None:
         logger.error("ensure_datetime received None", stack_info=True)
@@ -179,8 +181,17 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
                 f"{name} must be date, datetime, pandas.Timestamp or str"
             )
 
-    start_dt = pd.to_datetime(ensure_utc(ensure_datetime(start_date)))
-    end_dt = pd.to_datetime(ensure_utc(ensure_datetime(end_date)))
+    try:
+        start_dt = pd.to_datetime(ensure_utc(ensure_datetime(start_date)))
+    except (ValueError, TypeError) as e:
+        logger.error("get_historical_data start_date error: %s", e, exc_info=True)
+        raise
+
+    try:
+        end_dt = pd.to_datetime(ensure_utc(ensure_datetime(end_date)))
+    except (ValueError, TypeError) as e:
+        logger.error("get_historical_data end_date error: %s", e, exc_info=True)
+        raise
 
     tf_map = {
         "1Min": TimeFrame.Minute,
@@ -289,22 +300,38 @@ def get_daily_df(
     df = pd.DataFrame()
     for attempt in range(3):
         try:
+            start_dt = ensure_datetime(start)
+            end_dt = ensure_datetime(end)
+        except (ValueError, TypeError) as dt_err:
+            logger.error("get_daily_df datetime error: %s", dt_err, exc_info=True)
+            raise
+
+        try:
             df = get_historical_data(
                 symbol,
-                ensure_datetime(start),
-                ensure_datetime(end),
+                start_dt,
+                end_dt,
                 "1Day",
             )
             break
         except (APIError, RetryError) as e:
-            logger.debug(f"get_daily_df attempt {attempt+1} failed for {symbol}: {e}")
+            logger.debug(
+                f"get_daily_df attempt {attempt+1} failed for {symbol}: {e}"
+            )
             pytime.sleep(1)
     else:
         try:
+            start_dt = ensure_datetime(start)
+            end_dt = ensure_datetime(end)
+        except (ValueError, TypeError) as dt_err:
+            logger.error("get_daily_df datetime error: %s", dt_err, exc_info=True)
+            raise
+
+        try:
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
-                start=ensure_utc(ensure_datetime(start)),
-                end=ensure_utc(ensure_datetime(end)),
+                start=ensure_utc(start_dt),
+                end=ensure_utc(end_dt),
                 timeframe=TimeFrame.Day,
                 feed=_DEFAULT_FEED,
             )
@@ -428,8 +455,24 @@ def get_minute_df(
                 f"{name} must be date, datetime, pandas.Timestamp or str"
             )
 
-    start_date = ensure_datetime(start_date)
-    end_date = ensure_datetime(end_date)
+    logger.debug(
+        "get_minute_df converting dates start=%r (%s) end=%r (%s)",
+        start_date,
+        type(start_date).__name__,
+        end_date,
+        type(end_date).__name__,
+    )
+    try:
+        start_date = ensure_datetime(start_date)
+        end_date = ensure_datetime(end_date)
+    except (ValueError, TypeError) as dt_err:
+        logger.error("get_minute_df datetime error: %s", dt_err, exc_info=True)
+        raise
+    logger.debug(
+        "get_minute_df parsed dates start=%s end=%s",
+        start_date,
+        end_date,
+    )
 
     # Skip network calls when requesting near real-time data outside market hours
     if not is_market_open():
@@ -554,11 +597,20 @@ def get_minute_df(
         return df
     except (APIError, KeyError):
         try:
+            start_dt = ensure_datetime(start_date)
+            end_dt = ensure_datetime(end_date)
+        except (ValueError, TypeError) as dt_err:
+            logger.error(
+                "get_minute_df fallback datetime error: %s", dt_err, exc_info=True
+            )
+            return pd.DataFrame()
+
+        try:
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
                 timeframe=TimeFrame.Day,
-                start=ensure_utc(ensure_datetime(start_date)),
-                end=ensure_utc(ensure_datetime(end_date)) + timedelta(days=1),
+                start=ensure_utc(start_dt),
+                end=ensure_utc(end_dt) + timedelta(days=1),
                 feed=_DEFAULT_FEED,
             )
             try:
