@@ -1,3 +1,7 @@
+"""Machine learning utilities for model training and inference."""
+
+from __future__ import annotations
+
 import hashlib
 import io
 import time
@@ -6,12 +10,13 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 try:
     from sklearn.base import BaseEstimator
     from sklearn.metrics import mean_squared_error
-except Exception:  # pragma: no cover - sklearn optional
+except ImportError:  # pragma: no cover - sklearn optional
 
     class BaseEstimator:
         def __init__(self, *args, **kwargs) -> None:
@@ -27,7 +32,7 @@ import pandas as pd
 
 try:
     from sklearn.linear_model import LinearRegression
-except Exception:  # pragma: no cover - allow tests without sklearn
+except ImportError:  # pragma: no cover - allow tests without sklearn
 
     class LinearRegression:
         def fit(self, X, y):
@@ -55,7 +60,7 @@ class MLModel:
         if not all(pd.api.types.is_numeric_dtype(dt) for dt in X.dtypes):
             raise TypeError("All input columns must be numeric")
 
-    def fit(self, X: pd.DataFrame, y) -> float:
+    def fit(self, X: pd.DataFrame, y: Sequence[float] | pd.Series) -> float:
         self._validate_inputs(X)
         start = time.time()
         self.logger.info("MODEL_TRAIN_START", extra={"rows": len(X)})
@@ -69,16 +74,16 @@ class MLModel:
                 extra={"duration": round(dur, 2), "mse": mse},
             )
             return mse
-        except Exception as exc:
-            self.logger.exception(f"MODEL_TRAIN_FAILED: {exc}")
+        except Exception as exc:  # TODO: narrow exception type
+            self.logger.exception("MODEL_TRAIN_FAILED: %s", exc)
             raise
 
     def predict(self, X: pd.DataFrame) -> Any:
         self._validate_inputs(X)
         try:
             preds = self.pipeline.predict(X)
-        except Exception as exc:
-            self.logger.exception(f"MODEL_PREDICT_FAILED: {exc}")
+        except Exception as exc:  # TODO: narrow exception type
+            self.logger.exception("MODEL_PREDICT_FAILED: %s", exc)
             raise
         self.logger.info("MODEL_PREDICT", extra={"rows": len(X)})
         return preds
@@ -91,13 +96,14 @@ class MLModel:
         try:
             joblib.dump(self.pipeline, str(path))
             self.logger.info("MODEL_SAVED", extra={"path": str(path)})
-        except Exception as exc:
-            self.logger.exception(f"MODEL_SAVE_FAILED: {exc}")
+        except Exception as exc:  # TODO: narrow exception type
+            self.logger.exception("MODEL_SAVE_FAILED: %s", exc)
             raise
         return str(path)
 
     @classmethod
     def load(cls, path: str) -> "MLModel":
+        """Deserialize a saved model from ``path`` and return an ``MLModel``."""
         try:
             with open(path, "rb") as f:
                 data = f.read()
@@ -111,8 +117,8 @@ class MLModel:
                     "version": getattr(pipeline, "version", "n/a"),
                 },
             )
-        except Exception as exc:
-            logger.exception(f"MODEL_LOAD_FAILED: {exc}")
+        except Exception as exc:  # TODO: narrow exception type
+            logger.exception("MODEL_LOAD_FAILED: %s", exc)
             raise
         return cls(pipeline)
 
@@ -121,8 +127,8 @@ def train_model(
     X: Sequence[float] | pd.Series | pd.DataFrame,
     y: Sequence[float] | pd.Series,
     algorithm: str = "linear",
-) -> Any:
-    """Train a trivial model and return it."""
+) -> BaseEstimator:
+    """Train a simple linear model and return the estimator."""
 
     if X is None or y is None:
         raise ValueError("Invalid training data")
@@ -134,7 +140,20 @@ def train_model(
 
 
 def predict_model(model: Any, X: Sequence[Any] | pd.DataFrame) -> list[float]:
-    """Return predictions from a fitted model."""
+    """Return predictions from a fitted model.
+
+    Parameters
+    ----------
+    model : Any
+        Trained model instance implementing ``predict``.
+    X : Sequence[Any] | pd.DataFrame
+        Input features for prediction.
+
+    Returns
+    -------
+    list[float]
+        Model predictions as a list of floats.
+    """
 
     if model is None:
         raise ValueError("Model cannot be None")
@@ -148,12 +167,31 @@ def predict_model(model: Any, X: Sequence[Any] | pd.DataFrame) -> list[float]:
 
 
 def save_model(model: Any, path: str) -> None:
-    """Persist ``model`` to ``path``."""
+    """Persist ``model`` to ``path``.
+
+    Parameters
+    ----------
+    model : Any
+        Trained model object supporting ``joblib`` serialization.
+    path : str
+        Filesystem location to write the model to.
+    """
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, str(p))
 
 
 def load_model(path: str) -> Any:
-    """Load a model previously saved with ``save_model``."""
+    """Load a model previously saved with ``save_model``.
+
+    Parameters
+    ----------
+    path : str
+        Filesystem path to the serialized model.
+
+    Returns
+    -------
+    Any
+        Deserialized model object.
+    """
     return joblib.load(str(Path(path)))
