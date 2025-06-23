@@ -6,7 +6,7 @@ echo "Installing main requirements..."
 pip install -r requirements.txt
 
 echo "Installing test requirements..."
-pip install -r requirements-test.txt
+pip install -r requirements-dev.txt
 
 # Ensure linting tools are available
 pip install flake8 isort==5.12.0 pylint pytest-cov >/dev/null
