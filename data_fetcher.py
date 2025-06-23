@@ -65,12 +65,68 @@ _MINUTE_CACHE: dict[str, tuple[pd.DataFrame, pd.Timestamp]] = {}
 
 
 # Helper to coerce dates into datetimes
-def ensure_datetime(dt: date | datetime) -> datetime:
-    """Return ``datetime`` object for ``dt`` without timezone."""
+def ensure_datetime(dt: date | datetime | str | None) -> datetime:
+    """Coerce ``dt`` into a ``datetime`` instance.
+
+    Accepts ``datetime`` objects, ``date`` objects, or strings in several
+    supported formats. Strings may be ISO 8601 (with optional timezone),
+    ``"%Y-%m-%d"``, ``"%Y-%m-%d %H:%M:%S"`` or ``"%Y%m%d"``.
+
+    Raises
+    ------
+    ValueError
+        If ``dt`` is ``None``, an empty string, or a string that cannot be
+        parsed using the supported formats.
+    TypeError
+        If ``dt`` is of an unsupported type.
+    """
+
     if isinstance(dt, datetime):
         return dt
+
     if isinstance(dt, date):
         return datetime.combine(dt, datetime.min.time())
+
+    if dt is None:
+        logger.error("ensure_datetime received None", stack_info=True)
+        raise ValueError("datetime value cannot be None")
+
+    if isinstance(dt, str):
+        value = dt.strip()
+        if not value:
+            logger.error("ensure_datetime received empty string", stack_info=True)
+            raise ValueError("datetime string is empty")
+
+        formats = [
+            "ISO 8601",
+            "%Y-%m-%d",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y%m%d",
+        ]
+
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed
+        except ValueError:
+            pass
+
+        for fmt in formats[1:]:
+            try:
+                return datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+
+        logger.error(
+            "ensure_datetime failed to parse %r with formats %s",
+            value,
+            formats,
+            stack_info=True,
+        )
+        raise ValueError(f"Invalid datetime string {value!r}; tried {formats}")
+
+    logger.error(
+        "ensure_datetime unsupported type: %r", dt, stack_info=True
+    )
     raise TypeError(f"Unsupported type for ensure_datetime: {type(dt)!r}")
 
 
@@ -87,6 +143,15 @@ class DataFetchError(Exception):
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
 def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd.DataFrame:
     """Fetch historical bars from Alpaca and ensure OHLCV float columns."""
+
+    if start_date is None or end_date is None:
+        logger.error(
+            "get_historical_data called with None dates: %r, %r",
+            start_date,
+            end_date,
+            stack_info=True,
+        )
+        raise ValueError("start_date and end_date must not be None")
 
     start_dt = pd.to_datetime(ensure_utc(ensure_datetime(start_date)))
     end_dt = pd.to_datetime(ensure_utc(ensure_datetime(end_date)))
@@ -170,6 +235,15 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
 
 def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
     """Fetch daily bars with retry and IEX fallback."""
+    if start is None or end is None:
+        logger.error(
+            "get_daily_df called with None dates: %r, %r",
+            start,
+            end,
+            stack_info=True,
+        )
+        raise ValueError("start and end must not be None")
+
     df = pd.DataFrame()
     for attempt in range(3):
         try:
@@ -286,6 +360,15 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
         For network-related failures handled by ``tenacity`` retry.
     """
     import pandas as pd
+
+    if start_date is None or end_date is None:
+        logger.error(
+            "get_minute_df called with None dates: %r, %r",
+            start_date,
+            end_date,
+            stack_info=True,
+        )
+        raise ValueError("start_date and end_date must not be None")
 
     start_date = ensure_datetime(start_date)
     end_date = ensure_datetime(end_date)
