@@ -24,13 +24,13 @@ def load_weights(path: str, default: np.ndarray | None = None) -> np.ndarray:
             try:
                 np.savetxt(p, default, delimiter=",")
                 logger.info("Initialized default weights at %s", path)
-            except Exception as exc:
+            except OSError as exc:
                 logger.exception("Failed initializing default weights: %s", exc)
         return default
     try:
         weights = np.loadtxt(p, delimiter=",")
         return weights
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         logger.exception("Failed to load signal weights: %s", exc)
         return default
 
@@ -56,7 +56,7 @@ def update_weights(
             "META_WEIGHTS_UPDATED",
             extra={"previous": prev, "current": new_weights.tolist()},
         )
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         logger.exception("META_WEIGHT_UPDATE_FAILED: %s", exc)
         return False
     try:
@@ -65,7 +65,7 @@ def update_weights(
                 hist = json.load(f)
         else:
             hist = []
-    except Exception as e:
+    except (OSError, json.JSONDecodeError) as e:
         logger.error("Failed to read metric history: %s", e)
         hist = []
     hist.append({"ts": datetime.now(timezone.utc).isoformat(), **metrics})
@@ -96,8 +96,8 @@ def update_signal_weights(weights: Dict[str, float], performance: Dict[str, floa
         for key in updated_weights:
             updated_weights[key] /= norm_factor
         return updated_weights
-    except Exception as exc:
-        logger.error("Exception in update_signal_weights: %s", exc, exc_info=True)
+    except Exception as exc:  # TODO: narrow exception type
+        logger.exception("Exception in update_signal_weights: %s", exc)
         return weights
 
 
@@ -107,7 +107,7 @@ def save_model_checkpoint(model: Any, filepath: str) -> None:
         with open(filepath, "wb") as f:
             pickle.dump(model, f)
         logger.info("MODEL_CHECKPOINT_SAVED", extra={"path": filepath})
-    except Exception as exc:  # pragma: no cover - unexpected I/O
+    except (OSError, pickle.PickleError) as exc:  # pragma: no cover - unexpected I/O
         logger.error("Failed to save model checkpoint: %s", exc, exc_info=True)
 
 
@@ -121,7 +121,7 @@ def load_model_checkpoint(filepath: str) -> Optional[Any]:
             model = pickle.load(f)
         logger.info("MODEL_CHECKPOINT_LOADED", extra={"path": filepath})
         return model
-    except Exception as exc:  # pragma: no cover - unexpected I/O
+    except (OSError, pickle.PickleError) as exc:  # pragma: no cover - unexpected I/O
         logger.error("Failed to load model checkpoint: %s", exc, exc_info=True)
         return None
 
@@ -161,7 +161,7 @@ def retrain_meta_learner(
         return False
     try:
         df = pd.read_csv(trade_log_path)
-    except Exception as exc:  # pragma: no cover - I/O failures
+    except (OSError, pd.errors.ParserError) as exc:  # pragma: no cover - I/O failures
         logger.error("Failed reading trade log: %s", exc, exc_info=True)
         return False
 
@@ -189,8 +189,8 @@ def retrain_meta_learner(
     model = Ridge(alpha=1.0, fit_intercept=True)
     try:
         model.fit(X, y, sample_weight=sample_w)
-    except Exception as exc:  # pragma: no cover - sklearn failure
-        logger.error("Meta-learner training failed: %s", exc, exc_info=True)
+    except Exception as exc:  # TODO: narrow exception type; pragma: no cover - sklearn failure
+        logger.exception("Meta-learner training failed: %s", exc)
         return False
 
     save_model_checkpoint(model, model_path)
@@ -210,7 +210,7 @@ def retrain_meta_learner(
     try:
         with open(history_path, "wb") as f:
             pickle.dump(hist, f)
-    except Exception as exc:  # pragma: no cover - unexpected I/O
+    except (OSError, pickle.PickleError) as exc:  # pragma: no cover - unexpected I/O
         logger.error("Failed to update retrain history: %s", exc, exc_info=True)
 
     logger.info(
@@ -229,6 +229,6 @@ def optimize_signals(signal_data: Any, cfg: Any, model: Any | None = None) -> An
     try:
         preds = model.predict(signal_data)
         return preds
-    except Exception as exc:  # pragma: no cover - model may fail
-        logger.error("optimize_signals failed: %s", exc)
+    except Exception as exc:  # TODO: narrow exception type; pragma: no cover - model may fail
+        logger.exception("optimize_signals failed: %s", exc)
         return signal_data
