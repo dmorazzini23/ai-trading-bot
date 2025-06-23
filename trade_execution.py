@@ -11,6 +11,8 @@ import warnings
 from datetime import datetime, timezone
 from typing import Any, Optional, Tuple
 
+import pandas as pd
+
 import numpy as np
 from tenacity import (
     retry,
@@ -118,6 +120,37 @@ def place_order(symbol: str, qty: int, side: str):
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
+def calculate_adv(df: pd.DataFrame, symbol: str, window: int = 30) -> Optional[float]:
+    """Return the average daily volume for ``symbol`` using ``df``.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame containing a ``volume`` column.
+    symbol : str
+        Trading symbol for logging context.
+    window : int, optional
+        Number of trailing days to average, by default ``30``.
+
+    Returns
+    -------
+    Optional[float]
+        The calculated ADV or ``None`` if not enough data.
+    """
+
+    if df is None or df.empty or "volume" not in df.columns:
+        logging.warning("ADV data unavailable for %s", symbol)
+        return None
+    if len(df) < 20:
+        logging.debug("ADV skipped for %s, only %s rows", symbol, len(df))
+        return None
+    vol = df["volume"].tail(window)
+    if vol.isna().any() or np.isinf(vol).any():
+        logging.warning("Invalid volume data for %s during ADV calc", symbol)
+        return None
+    return float(vol.mean())
+
+
 class ExecutionEngine:
     """Institutional-grade execution engine for dynamic order routing."""
 
@@ -222,23 +255,9 @@ class ExecutionEngine:
             self.logger.warning("_latest_quote APIError for %s: %s", symbol, exc)
             raise
 
-    def _adv_volume(self, symbol: str) -> Optional[float]:
+    def _adv_volume(self, symbol: str, window: int = 30) -> Optional[float]:
         df = self.ctx.data_fetcher.get_daily_df(self.ctx, symbol)
-        if df is None or df.empty or "volume" not in df.columns:
-            self.logger.warning("ADV data unavailable for %s", symbol)
-            return 0.0
-        if len(df) < 20:
-            self.logger.warning(
-                "Not enough rows for ADV calculation of %s: got %s",
-                symbol,
-                len(df),
-            )
-            return 0.0
-        vol = df["volume"].tail(20)
-        if vol.isna().any() or np.isinf(vol).any():
-            self.logger.warning("Invalid volume data for %s during ADV calc", symbol)
-            return 0.0
-        return float(vol.mean())
+        return calculate_adv(df, symbol, window)
 
     def _minute_stats(self, symbol: str) -> Tuple[float, float, float]:
         df = self.ctx.data_fetcher.get_minute_df(self.ctx, symbol)
@@ -460,6 +479,10 @@ class ExecutionEngine:
                 },
             )
             filled_qty = int(getattr(order, "filled_qty", 0) or 0)
+        elif status in ("pending_new", "new"):
+            self.logger.info("Order status for %s: %s", symbol, status)
+        elif status in ("rejected", "failed"):
+            self.logger.error("Order failed for %s: %s", symbol, status)
         else:
             self.logger.error(
                 "ORDER_STATUS",
@@ -500,7 +523,9 @@ class ExecutionEngine:
                     remaining = int(round(avail))
                     if remaining <= 0:
                         break
-            order_req, expected_price = self._prepare_order(symbol, side, remaining)
+            order_req, expected_price = self._prepare_order(
+                symbol, side, remaining
+            )
             slice_qty = getattr(order_req, "qty", remaining)
             if side.lower() == "sell" and slice_qty > self._available_qty(api, symbol):
                 slice_qty = int(round(self._available_qty(api, symbol)))
@@ -508,15 +533,23 @@ class ExecutionEngine:
                     order_req["qty"] = slice_qty
                 else:
                     setattr(order_req, "qty", slice_qty)
-            if side.lower() == "buy" and not self._has_buy_power(api, slice_qty, expected_price):
+            if side.lower() == "buy" and not self._has_buy_power(
+                api, slice_qty, expected_price
+            ):
                 break
-            if side.lower() == "sell" and not self._can_sell(api, symbol, slice_qty):
+            if side.lower() == "sell" and not self._can_sell(
+                api, symbol, slice_qty
+            ):
                 break
             start = time.monotonic()
-            order = self._submit_with_retry(api, order_req, symbol, side, slice_qty)
+            order = self._submit_with_retry(
+                api, order_req, symbol, side, slice_qty
+            )
             if order is None:
                 break
-            filled = self._handle_order_result(symbol, side, order, expected_price, slice_qty, start)
+            filled = self._handle_order_result(
+                symbol, side, order, expected_price, slice_qty, start
+            )
             if filled <= 0:
                 break
             last_order = order

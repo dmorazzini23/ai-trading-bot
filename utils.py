@@ -98,12 +98,17 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
     try:
         import pandas_market_calendars as mcal
 
-        check_time = (now or dt.datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
+        check_time = (
+            now or dt.datetime.now(tz=EASTERN_TZ)
+        ).astimezone(EASTERN_TZ)
         cal = getattr(mcal, "get_calendar", None)
         if cal is None:
             raise AttributeError
         cal = cal("NYSE")
-        sched = cal.schedule(start_date=check_time.date(), end_date=check_time.date())
+        sched = cal.schedule(
+            start_date=check_time.date(),
+            end_date=check_time.date(),
+        )
         if sched.empty:
             logger.warning(
                 "No market schedule for %s in is_market_open; returning False.",
@@ -117,7 +122,9 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
     except (ImportError, AttributeError, KeyError, ValueError) as exc:
         logger.debug("market calendar unavailable: %s", exc)
         # Fallback to simple weekday/time check when calendar unavailable
-        now_et = (now or dt.datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
+        now_et = (
+            now or dt.datetime.now(tz=EASTERN_TZ)
+        ).astimezone(EASTERN_TZ)
         if now_et.weekday() >= 5:
             return False
         current = now_et.time()
@@ -208,9 +215,8 @@ def health_check(df: pd.DataFrame, resolution: str) -> bool:
                 f"DAILY_HEALTH_INSUFFICIENT_ROWS: got {rows}, need {MIN_HEALTH_ROWS_D}"
             )
             return False
+# End of health_check
     return True
-
-
 
 
 # Generic robust column getter with validation
@@ -361,3 +367,40 @@ def get_ohlcv_columns(df):
         ]
     except KeyError:
         return []
+
+
+def pre_trade_health_check(symbols: list[str]) -> dict[str, bool]:
+    """Check data availability for ``symbols`` prior to trading.
+
+    Parameters
+    ----------
+    symbols : list[str]
+        Symbols to validate.
+
+    Returns
+    -------
+    dict[str, bool]
+        Mapping of symbol to health status.
+    """
+
+    symbol_health: dict[str, bool] = {}
+    for sym in symbols:
+        try:
+            path = os.path.join("data", f"{sym}.csv")
+            df = pd.read_csv(path)
+        except Exception as exc:  # pragma: no cover - I/O error
+            logging.warning(
+                "Health check fetch failed for %s: %s", sym, exc
+            )
+            symbol_health[sym] = False
+            continue
+        symbol_health[sym] = health_check(df, "daily")
+
+    for sym, ok in symbol_health.items():
+        if not ok:
+            logging.warning(
+                "Health check skipped for %s: insufficient data",
+                sym,
+            )
+    # do not halt all trading; proceed with symbols that passed
+    return symbol_health

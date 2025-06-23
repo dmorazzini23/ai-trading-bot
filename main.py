@@ -8,6 +8,8 @@ import sys
 import threading
 from typing import Any
 
+from alpaca_trade_api.rest import APIError  # noqa: F401
+
 from dotenv import load_dotenv
 from flask import Flask, jsonify
 from logger import setup_logging

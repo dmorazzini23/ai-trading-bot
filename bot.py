@@ -117,7 +117,7 @@ import portalocker
 import requests
 import schedule
 import yfinance as yf
-from alpaca.common.exceptions import APIError
+from alpaca_trade_api.rest import APIError
 
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
@@ -2773,7 +2773,26 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                     )
                     return None
 
-            order = api.submit_order(order_data=req)
+            try:
+                order = api.submit_order(order_data=req)
+            except APIError as e:
+                if getattr(e, "code", None) == 40310000:
+                    available = int(getattr(e, "_raw_errors", [{}])[0].get("available", 0))
+                    if available > 0:
+                        logger.info(
+                            f"Adjusting order for {req.symbol} to available qty={available}"
+                        )
+                        if isinstance(req, dict):
+                            req["qty"] = available
+                        else:
+                            req.qty = available
+                        order = api.submit_order(order_data=req)
+                    else:
+                        logger.warning(f"Skipping {req.symbol}, no available qty")
+                        continue
+                else:
+                    raise
+
             while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
                 time.sleep(0.5)
                 order = api.get_order_by_id(order.id)
@@ -2801,34 +2820,9 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                 )
             return order
         except APIError as e:
-            err = e.args[0] or {}
             if "insufficient qty" in str(e).lower():
                 logger.warning(f"insufficient qty available for {req.symbol}: {e}")
                 return None
-            if (
-                getattr(req, "side", "").lower() == "sell"
-                and err.get("code") == 40310000
-            ):
-                try:
-                    pos_qty = float(api.get_position(req.symbol).qty)
-                except Exception:
-                    pos_qty = 0.0
-                if pos_qty > 0:
-                    logger.warning(
-                        f"Requested {req.qty} but only {pos_qty} available, selling that"
-                    )
-                    req.qty = pos_qty
-                    order = api.submit_order(order_data=req)
-                    while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
-                        time.sleep(0.5)
-                        order = api.get_order_by_id(order.id)
-                    logger.info(
-                        f"Order status for {req.symbol}: {getattr(order, 'status', '')}"
-                    )
-                    return order
-                else:
-                    logger.warning(f"No shares of {req.symbol} to sell, skipping")
-                    return None
             time.sleep(1)
             if attempt == 1:
                 logger.warning(f"submit_order failed for {req.symbol}: {e}")
