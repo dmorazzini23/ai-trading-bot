@@ -369,7 +369,25 @@ def get_ohlcv_columns(df):
         return []
 
 
-def pre_trade_health_check(symbols: list[str]) -> dict[str, bool]:
+from typing import List, Dict
+try:
+    from alpaca_trade_api.rest import REST
+except Exception:  # pragma: no cover - optional dependency
+    REST = object  # type: ignore
+
+
+def check_symbol(symbol: str, api: REST) -> bool:
+    """Return ``True`` if ``symbol`` has sufficient data via ``api``."""
+    try:
+        path = os.path.join("data", f"{symbol}.csv")
+        df = pd.read_csv(path)
+    except Exception as exc:  # pragma: no cover - I/O error
+        logging.warning("Health check fetch failed for %s: %s", symbol, exc)
+        return False
+    return health_check(df, "daily")
+
+
+def pre_trade_health_check(symbols: List[str], api: REST) -> Dict[str, bool]:
     """Check data availability for ``symbols`` prior to trading.
 
     Parameters
@@ -383,24 +401,12 @@ def pre_trade_health_check(symbols: list[str]) -> dict[str, bool]:
         Mapping of symbol to health status.
     """
 
-    symbol_health: dict[str, bool] = {}
+    symbol_health: Dict[str, bool] = {}
     for sym in symbols:
-        try:
-            path = os.path.join("data", f"{sym}.csv")
-            df = pd.read_csv(path)
-        except Exception as exc:  # pragma: no cover - I/O error
-            logging.warning(
-                "Health check fetch failed for %s: %s", sym, exc
-            )
-            symbol_health[sym] = False
-            continue
-        symbol_health[sym] = health_check(df, "daily")
-
-    for sym, ok in symbol_health.items():
+        ok = check_symbol(sym, api)
+        symbol_health[sym] = ok
         if not ok:
             logging.warning(
-                "Health check skipped for %s: insufficient data",
-                sym,
+                f"Health check skipped for {sym}: insufficient data"
             )
-    # do not halt all trading; proceed with symbols that passed
     return symbol_health
