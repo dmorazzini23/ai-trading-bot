@@ -80,6 +80,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from datetime import time as dt_time
 from datetime import timedelta
+from datetime import datetime as dt_, timezone
 from threading import Lock, Semaphore, Thread
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
@@ -831,7 +832,7 @@ class DataFetcher:
         symbol = symbol.upper()
         now_utc = datetime.datetime.now(datetime.timezone.utc)
         end_ts = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        start_ts = end_ts - timedelta(days=5)
+        start_ts = end_ts - timedelta(days=30)
 
         with cache_lock:
             if symbol in self._daily_cache:
@@ -2486,7 +2487,7 @@ def check_halt_flag() -> bool:
     if not os.path.exists(HALT_FLAG_PATH):
         return False
     mtime = os.path.getmtime(HALT_FLAG_PATH)
-    age = datetime.datetime.now(datetime.timezone.utc) - datetime.fromtimestamp(mtime, datetime.timezone.utc)
+    age = dt_.now(timezone.utc) - dt_.fromtimestamp(mtime, timezone.utc)
     try:
         with open(HALT_FLAG_PATH, "r") as f:
             content = f.read().strip()

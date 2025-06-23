@@ -193,7 +193,7 @@ class ExecutionEngine:
     def _can_sell(self, api: TradingClient, symbol: str, qty: int) -> bool:
         avail = self._available_qty(api, symbol)
         if avail < qty:
-            self.logger.error(
+            self.logger.warning(
                 "Insufficient qty for %s: have %s, requested %s",
                 symbol,
                 avail,
@@ -420,16 +420,17 @@ class ExecutionEngine:
         expected_price: Optional[float],
         slice_qty: int,
         start_time: float,
-    ) -> bool:
+    ) -> int:
         status = getattr(order, "status", "")
         order_id = getattr(order, "id", "")
         if not self._check_order_active(symbol, order, status, order_id):
-            return False
+            return 0
         fill_price = float(
             getattr(order, "filled_avg_price", expected_price or 0) or 0
         )
         latency = (time.monotonic() - start_time) * 1000.0
         self._log_slippage(symbol, expected_price, fill_price)
+        filled_qty = 0
         if status == "filled":
             self.logger.info(
                 "ORDER_FILLED",
@@ -448,6 +449,7 @@ class ExecutionEngine:
                 status,
                 "SHADOW" if SHADOW_MODE else "LIVE",
             )
+            filled_qty = slice_qty
         elif status == "partially_filled":
             self.logger.info(
                 "ORDER_PARTIAL",
@@ -457,6 +459,7 @@ class ExecutionEngine:
                     "filled_qty": getattr(order, "filled_qty", 0),
                 },
             )
+            filled_qty = int(getattr(order, "filled_qty", 0) or 0)
         else:
             self.logger.error(
                 "ORDER_STATUS",
@@ -464,7 +467,7 @@ class ExecutionEngine:
             )
         if self.orders_total is not None:
             self.orders_total.inc()
-        return True
+        return filled_qty
 
     def execute_order(self, symbol: str, qty: int, side: str, asset_class: str = "equity") -> Optional[Order]:
         """Execute an order for the given asset class."""
@@ -485,8 +488,26 @@ class ExecutionEngine:
                 )
                 remaining = int(round(avail))
         while remaining > 0:
+            if side.lower() == "sell":
+                avail = self._available_qty(api, symbol)
+                if avail < remaining:
+                    self.logger.warning(
+                        "Available qty reduced for %s: %s -> %s",
+                        symbol,
+                        remaining,
+                        avail,
+                    )
+                    remaining = int(round(avail))
+                    if remaining <= 0:
+                        break
             order_req, expected_price = self._prepare_order(symbol, side, remaining)
             slice_qty = getattr(order_req, "qty", remaining)
+            if side.lower() == "sell" and slice_qty > self._available_qty(api, symbol):
+                slice_qty = int(round(self._available_qty(api, symbol)))
+                if isinstance(order_req, dict):
+                    order_req["qty"] = slice_qty
+                else:
+                    setattr(order_req, "qty", slice_qty)
             if side.lower() == "buy" and not self._has_buy_power(api, slice_qty, expected_price):
                 break
             if side.lower() == "sell" and not self._can_sell(api, symbol, slice_qty):
@@ -495,10 +516,11 @@ class ExecutionEngine:
             order = self._submit_with_retry(api, order_req, symbol, side, slice_qty)
             if order is None:
                 break
-            if not self._handle_order_result(symbol, side, order, expected_price, slice_qty, start):
+            filled = self._handle_order_result(symbol, side, order, expected_price, slice_qty, start)
+            if filled <= 0:
                 break
             last_order = order
-            remaining -= slice_qty
+            remaining -= filled
             if remaining > 0:
                 time.sleep(random.uniform(0.05, 0.15))
         return last_order
