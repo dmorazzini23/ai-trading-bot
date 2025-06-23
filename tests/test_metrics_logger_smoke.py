@@ -18,7 +18,14 @@ def force_coverage(mod):
 @pytest.mark.smoke
 def test_log_metrics(tmp_path):
     file = tmp_path / "m.csv"
-    metrics_logger.log_metrics({"a": 1}, filename=str(file))
-    rows = list(csv.DictReader(open(file)))
-    assert rows and rows[0]["a"] == "1"
+    metrics_logger.log_metrics({"a": 1}, filename=str(file), equity_curve=[1, 2, 1.5])
+    rows = list(csv.DictReader(open(file, encoding="utf-8")))
+    assert rows and rows[0]["a"] == "1" and "max_drawdown" in rows[0]
     force_coverage(metrics_logger)
+
+
+def test_compute_max_drawdown():
+    curve = [100.0, 120.0, 110.0, 90.0, 95.0]
+    expected = (120.0 - 90.0) / 120.0
+    assert metrics_logger.compute_max_drawdown(curve) == pytest.approx(expected)
+
