@@ -384,9 +384,6 @@ class ExecutionEngine:
                         f"submit_order failed for {symbol} after retries: {e}"
                     )
                     return None
-            except APIError as e:
-                self.logger.warning(f"APIError placing order for {symbol}: {e}")
-                return None
             except Exception as e:
                 self.logger.exception(f"Unexpected error placing order for {symbol}: {e}")
                 return None
