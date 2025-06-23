@@ -2700,7 +2700,7 @@ def fractional_kelly_size(
     cap_pos = (balance * CAPITAL_CAP) / price if price > 0 else 0
     risk_cap = (balance * DOLLAR_RISK_LIMIT) / atr if atr > 0 else raw_pos
     dollar_cap = ctx.max_position_dollars / price if price > 0 else raw_pos
-    size = int(min(raw_pos, cap_pos, risk_cap, dollar_cap, MAX_POSITION_SIZE))
+    size = int(round(min(raw_pos, cap_pos, risk_cap, dollar_cap, MAX_POSITION_SIZE)))
     return max(size, 1)
 
 
@@ -2711,7 +2711,7 @@ def vol_target_position_size(
     if sigma <= 0 or price <= 0:
         return 1
     dollar_alloc = cash * (target_vol / sigma)
-    qty = int(dollar_alloc / price)
+    qty = int(round(dollar_alloc / price))
     return max(qty, 1)
 
 
@@ -3196,7 +3196,7 @@ def calculate_entry_size(
 ) -> int:
     cash = float(ctx.api.get_account().cash)
     cap_pct = ctx.params.get("CAPITAL_CAP", CAPITAL_CAP)
-    cap_sz = int((cash * cap_pct) / price) if price > 0 else 0
+    cap_sz = int(round((cash * cap_pct) / price)) if price > 0 else 0
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
     rets = (
         df["close"].pct_change().dropna().values
@@ -3206,12 +3206,12 @@ def calculate_entry_size(
     kelly_sz = fractional_kelly_size(ctx, cash, price, atr, win_prob)
     vol_sz = vol_target_position_size(cash, price, rets, target_vol=0.02)
     dollar_cap = ctx.max_position_dollars / price if price > 0 else kelly_sz
-    base = int(min(kelly_sz, vol_sz, cap_sz, dollar_cap, MAX_POSITION_SIZE))
+    base = int(round(min(kelly_sz, vol_sz, cap_sz, dollar_cap, MAX_POSITION_SIZE)))
     factor = max(0.5, min(1.5, 1 + (win_prob - 0.5)))
     liq = liquidity_factor(ctx, symbol)
     if liq < 0.2:
         return 0
-    size = int(base * factor * liq)
+    size = int(round(base * factor * liq))
     return max(size, 1)
 
 
@@ -3834,7 +3834,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
         price = get_latest_close(raw) if raw is not None else 1.0
         if price <= 0:
             continue
-        target_shares = int(target_dollar / price)
+        target_shares = int(round(target_dollar / price))
         try:
             submit_order(
                 ctx,

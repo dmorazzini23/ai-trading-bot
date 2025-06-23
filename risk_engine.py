@@ -110,7 +110,7 @@ class RiskEngine:
 
         dollars = cash * min(weight, 1.0)
         try:
-            qty = int(dollars / price)
+            qty = int(round(dollars / price))
         except (ZeroDivisionError, OverflowError, TypeError) as exc:
             logger.error("position_size division error: %s", exc)
             return 0

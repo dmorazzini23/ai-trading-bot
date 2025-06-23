@@ -468,7 +468,7 @@ class ExecutionEngine:
 
     def execute_order(self, symbol: str, qty: int, side: str, asset_class: str = "equity") -> Optional[Order]:
         """Execute an order for the given asset class."""
-        remaining = int(math.floor(qty))
+        remaining = int(round(qty))
         last_order = None
         api = self._select_api(asset_class)
         if side.lower() == "sell":
@@ -483,7 +483,7 @@ class ExecutionEngine:
                     avail,
                     symbol,
                 )
-                remaining = int(avail)
+                remaining = int(round(avail))
         while remaining > 0:
             order_req, expected_price = self._prepare_order(symbol, side, remaining)
             slice_qty = getattr(order_req, "qty", remaining)
