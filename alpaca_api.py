@@ -31,11 +31,20 @@ SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
 _warn_counts = defaultdict(int)
 
-ALPACA_BASE_URL = "https://api.alpaca.markets"
-HEADERS = {
-    "APCA-API-KEY-ID": "your_key_id",  # Replace with your env var or config loader
-    "APCA-API-SECRET-KEY": "your_secret_key",
-}
+ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
+
+
+def _build_headers() -> dict:
+    """Return authorization headers constructed from the current environment.
+
+    Secrets are read at call time so that a configuration reload will be
+    respected without keeping credentials in memory longer than necessary.
+    """
+
+    return {
+        "APCA-API-KEY-ID": os.getenv("ALPACA_API_KEY", ""),
+        "APCA-API-SECRET-KEY": os.getenv("ALPACA_SECRET_KEY", ""),
+    }
 
 
 def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
@@ -62,7 +71,7 @@ def alpaca_get(
 
     url = f"{ALPACA_BASE_URL}{endpoint}"
     try:
-        response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        response = requests.get(url, headers=_build_headers(), params=params, timeout=10)
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as exc:
