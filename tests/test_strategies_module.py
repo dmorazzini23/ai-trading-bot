@@ -4,10 +4,20 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-for m in ["strategies", "strategies.momentum", "strategies.mean_reversion"]:
+for m in [
+    "strategies",
+    "strategies.momentum",
+    "strategies.mean_reversion",
+    "strategies.moving_average_crossover",
+]:
     sys.modules.pop(m, None)
 
-from strategies import MeanReversionStrategy, MomentumStrategy, asset_class_for
+from strategies import (
+    MeanReversionStrategy,
+    MomentumStrategy,
+    MovingAverageCrossoverStrategy,
+    asset_class_for,
+)
 
 
 class DummyFetcher:
