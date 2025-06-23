@@ -65,11 +65,12 @@ _MINUTE_CACHE: dict[str, tuple[pd.DataFrame, pd.Timestamp]] = {}
 
 
 # Helper to coerce dates into datetimes
-def ensure_datetime(dt: date | datetime | str | None) -> datetime:
+def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime:
     """Coerce ``dt`` into a ``datetime`` instance.
 
-    Accepts ``datetime`` objects, ``date`` objects, or strings in several
-    supported formats. Strings may be ISO 8601 (with optional timezone),
+    Accepts ``datetime`` objects, ``pandas.Timestamp`` objects, ``date`` objects,
+    or strings in several supported formats. Strings may be ISO 8601
+    (with optional timezone),
     ``"%Y-%m-%d"``, ``"%Y-%m-%d %H:%M:%S"`` or ``"%Y%m%d"``.
 
     Raises
@@ -81,15 +82,25 @@ def ensure_datetime(dt: date | datetime | str | None) -> datetime:
         If ``dt`` is of an unsupported type.
     """
 
-    if isinstance(dt, datetime):
-        return dt
-
-    if isinstance(dt, date):
-        return datetime.combine(dt, datetime.min.time())
-
     if dt is None:
         logger.error("ensure_datetime received None", stack_info=True)
         raise ValueError("datetime value cannot be None")
+
+    if dt is pd.NaT or (isinstance(dt, pd.Timestamp) and pd.isna(dt)):
+        logger.error("ensure_datetime received NaT", stack_info=True)
+        raise ValueError("datetime value cannot be NaT")
+
+    if isinstance(dt, pd.Timestamp):
+        logger.debug("ensure_datetime using pandas.Timestamp %r", dt)
+        return dt.to_pydatetime()
+
+    if isinstance(dt, datetime):
+        logger.debug("ensure_datetime received datetime %r", dt)
+        return dt
+
+    if isinstance(dt, date):
+        logger.debug("ensure_datetime converting date %r", dt)
+        return datetime.combine(dt, datetime.min.time())
 
     if isinstance(dt, str):
         value = dt.strip()
@@ -106,13 +117,16 @@ def ensure_datetime(dt: date | datetime | str | None) -> datetime:
 
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            logger.debug("ensure_datetime parsed %r via ISO", value)
             return parsed
         except ValueError:
             pass
 
         for fmt in formats[1:]:
             try:
-                return datetime.strptime(value, fmt)
+                parsed = datetime.strptime(value, fmt)
+                logger.debug("ensure_datetime parsed %r with %s", value, fmt)
+                return parsed
             except ValueError:
                 continue
 
@@ -152,6 +166,18 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
             stack_info=True,
         )
         raise ValueError("start_date and end_date must not be None")
+
+    for name, val in (("start_date", start_date), ("end_date", end_date)):
+        if not isinstance(val, (date, datetime, str, pd.Timestamp)):
+            logger.error(
+                "get_historical_data invalid %s type: %r",
+                name,
+                type(val),
+                stack_info=True,
+            )
+            raise TypeError(
+                f"{name} must be date, datetime, pandas.Timestamp or str"
+            )
 
     start_dt = pd.to_datetime(ensure_utc(ensure_datetime(start_date)))
     end_dt = pd.to_datetime(ensure_utc(ensure_datetime(end_date)))
@@ -233,7 +259,11 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
     return df[["timestamp", "open", "high", "low", "close", "volume"]]
 
 
-def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
+def get_daily_df(
+    symbol: str,
+    start: date | datetime | pd.Timestamp | str,
+    end: date | datetime | pd.Timestamp | str,
+) -> pd.DataFrame:
     """Fetch daily bars with retry and IEX fallback."""
     if start is None or end is None:
         logger.error(
@@ -243,6 +273,18 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
             stack_info=True,
         )
         raise ValueError("start and end must not be None")
+
+    for name, val in (("start", start), ("end", end)):
+        if not isinstance(val, (date, datetime, str, pd.Timestamp)):
+            logger.error(
+                "get_daily_df invalid %s type: %r",
+                name,
+                type(val),
+                stack_info=True,
+            )
+            raise TypeError(
+                f"{name} must be date, datetime, pandas.Timestamp or str"
+            )
 
     df = pd.DataFrame()
     for attempt in range(3):
@@ -331,7 +373,11 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
     stop=stop_after_attempt(3),
     retry=retry_if_exception_type((APIError, KeyError, ConnectionError)),
 )
-def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame:
+def get_minute_df(
+    symbol: str,
+    start_date: date | datetime | pd.Timestamp | str,
+    end_date: date | datetime | pd.Timestamp | str,
+) -> pd.DataFrame:
     """Return minute-level OHLCV DataFrame for ``symbol``.
 
     Falls back to daily bars if minute data is unavailable.
@@ -340,9 +386,9 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
     ----------
     symbol : str
         Ticker symbol to fetch.
-    start_date : date
+    start_date : datetime-like or str
         Start date of the range.
-    end_date : date
+    end_date : datetime-like or str
         End date of the range.
 
     Returns
@@ -369,6 +415,18 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             stack_info=True,
         )
         raise ValueError("start_date and end_date must not be None")
+
+    for name, val in (("start_date", start_date), ("end_date", end_date)):
+        if not isinstance(val, (date, datetime, str, pd.Timestamp)):
+            logger.error(
+                "get_minute_df invalid %s type: %r",
+                name,
+                type(val),
+                stack_info=True,
+            )
+            raise TypeError(
+                f"{name} must be date, datetime, pandas.Timestamp or str"
+            )
 
     start_date = ensure_datetime(start_date)
     end_date = ensure_datetime(end_date)

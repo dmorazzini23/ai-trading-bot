@@ -69,3 +69,11 @@ def test_get_minute_df_missing_columns(monkeypatch):
     data_fetcher._MINUTE_CACHE.clear()
     result = data_fetcher.get_minute_df("AAPL", datetime.date(2024, 1, 1), datetime.date(2024, 1, 1))
     assert result.empty
+
+
+def test_get_minute_df_invalid_inputs(monkeypatch):
+    monkeypatch.setattr(data_fetcher, "is_market_open", lambda: True)
+    with pytest.raises(ValueError):
+        data_fetcher.get_minute_df("AAPL", None, datetime.date.today())
+    with pytest.raises(TypeError):
+        data_fetcher.get_minute_df("AAPL", 123, datetime.date.today())

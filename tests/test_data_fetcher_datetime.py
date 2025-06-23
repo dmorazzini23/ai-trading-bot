@@ -1,5 +1,7 @@
 import sys
 from datetime import datetime, timezone
+
+import pandas as pd
 from pathlib import Path
 
 import pytest
@@ -36,3 +38,19 @@ def test_ensure_datetime_empty_str():
 def test_ensure_datetime_invalid_str():
     with pytest.raises(ValueError):
         data_fetcher.ensure_datetime("notadate")
+
+
+def test_ensure_datetime_pandas_timestamp():
+    ts = pd.Timestamp("2024-02-02T15:00:00", tz="UTC")
+    result = data_fetcher.ensure_datetime(ts)
+    assert result == ts.to_pydatetime()
+
+
+def test_ensure_datetime_nat():
+    with pytest.raises(ValueError):
+        data_fetcher.ensure_datetime(pd.NaT)
+
+
+def test_ensure_datetime_bad_type():
+    with pytest.raises(TypeError):
+        data_fetcher.ensure_datetime(123)
