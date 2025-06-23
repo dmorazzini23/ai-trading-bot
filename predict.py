@@ -1,3 +1,7 @@
+"""Prediction utilities using trained models."""
+
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -22,6 +26,8 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 
 def fetch_sentiment(symbol: str) -> float:
+    """Return a naive sentiment score for ``symbol`` using NewsAPI."""
+
     if not config.NEWS_API_KEY:
         return 0.0
     try:
@@ -38,12 +44,14 @@ def fetch_sentiment(symbol: str) -> float:
             1 for a in arts if "positive" in (a.get("title") or "").lower()
         ) / len(arts)
         return float(score)
-    except Exception as e:
-        logger.error("fetch_sentiment failed for %s: %s", symbol, e)
+    except (requests.RequestException, ValueError) as exc:
+        logger.error("fetch_sentiment failed for %s: %s", symbol, exc)
         return 0.0
 
 
 def detect_regime(df: pd.DataFrame) -> str:
+    """Classify a market regime based on moving average crossovers."""
+
     if df is None or df.empty or "close" not in df:
         return "chop"
     close = df["close"].astype(float)
@@ -64,13 +72,17 @@ MODEL_FILES = {
 
 
 def load_model(regime: str):
+    """Load and return the model for the specified ``regime``."""
+
     path = MODEL_FILES.get(regime)
     if not path or not os.path.exists(path):
         raise FileNotFoundError(f"Model for regime '{regime}' not found: {path}")
     return joblib.load(path)
 
 
-def predict(csv_path: str, freq: str = "intraday"):
+def predict(csv_path: str, freq: str = "intraday") -> tuple[int | None, float | None]:
+    """Return the predicted class and probability for the data in ``csv_path``."""
+
     df = pd.read_csv(csv_path)
     symbol = os.path.splitext(os.path.basename(csv_path))[0]
     try:
@@ -80,16 +92,17 @@ def predict(csv_path: str, freq: str = "intraday"):
             feat = prepare_indicators(df, freq=freq, symbol=symbol)
         else:
             feat = prepare_indicators(df, freq=freq)
-    except Exception:
+    except Exception:  # TODO: narrow exception type
         feat = prepare_indicators(df, freq=freq)
     if os.path.exists(INACTIVE_FEATURES_FILE):
         try:
-            inactive = set(json.load(open(INACTIVE_FEATURES_FILE)))
+            with open(INACTIVE_FEATURES_FILE, encoding="utf-8") as f:
+                inactive = set(json.load(f))
             feat = feat.drop(
                 columns=[c for c in inactive if c in feat.columns], errors="ignore"
             )
-        except Exception as e:
-            logger.warning("Failed loading inactive features: %s", e)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed loading inactive features: %s", exc)
     symbol = os.path.splitext(os.path.basename(csv_path))[0]
     feat["sentiment"] = fetch_sentiment(symbol)
     regime = detect_regime(df)
@@ -100,16 +113,16 @@ def predict(csv_path: str, freq: str = "intraday"):
     missing = set(expected_features) - set(feat.columns)
     if missing:
         raise ValueError(f"Missing features: {missing}")
-    X = (
+    features = (
         feat[expected_features]
         .iloc[-1:]
         .astype({col: "float64" for col in expected_features})
     )
     try:
-        pred = model.predict(X)[0]
-        proba = model.predict_proba(X)[0][pred]
-    except (ValueError, TypeError) as e:
-        logger.error(f"Prediction failed for {symbol}: {e}")
+        pred = model.predict(features)[0]
+        proba = model.predict_proba(features)[0][pred]
+    except (ValueError, TypeError) as exc:
+        logger.error("Prediction failed for %s: %s", symbol, exc)
         return None, None
     logger.info(
         "Regime: %s, Prediction: %s, Probability: %.4f",
