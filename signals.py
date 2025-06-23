@@ -107,7 +107,7 @@ def calculate_macd(
 
         return macd_df
 
-    except Exception as exc:  # pragma: no cover - defensive
+    except (ValueError, TypeError) as exc:  # pragma: no cover - defensive
         logger.error("MACD calculation failed with exception: %s", exc, exc_info=True)
         return None
 
@@ -171,6 +171,6 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
         signal[df[column] > 0] = 1
         signal[df[column] < 0] = -1
         return signal.fillna(0)
-    except Exception as e:  # TODO: narrow exception type
-        logger.error("Exception generating signal: %s", e, exc_info=True)
+    except (ValueError, TypeError) as exc:
+        logger.error("Exception generating signal: %s", exc, exc_info=True)
         return pd.Series(dtype=float)
