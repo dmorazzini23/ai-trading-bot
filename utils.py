@@ -111,8 +111,8 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         market_close = sched.iloc[0]["market_close"].tz_convert(EASTERN_TZ).time()
         current = check_time.time()
         return market_open <= current <= market_close
-    except Exception as e:  # TODO: narrow exception type
-        logger.debug("market calendar unavailable: %s", e)
+    except (ImportError, AttributeError, KeyError, ValueError) as exc:
+        logger.debug("market calendar unavailable: %s", exc)
         # Fallback to simple weekday/time check when calendar unavailable
         now_et = (now or dt.datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
         if now_et.weekday() >= 5:
@@ -339,5 +339,5 @@ def get_ohlcv_columns(df):
             get_close_column(df),
             get_volume_column(df),
         ]
-    except Exception:  # TODO: narrow exception type
+    except KeyError:
         return []

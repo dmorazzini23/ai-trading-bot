@@ -473,10 +473,10 @@ def load_hyperparams() -> dict:
         logger.warning(f"Hyperparameter file {path} not found; using defaults")
         return {}
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception as e:
-        logger.warning(f"Failed to load hyperparameters from {path}: {e}")
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("Failed to load hyperparameters from %s: %s", path, exc)
         return {}
 
 
