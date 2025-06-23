@@ -163,7 +163,7 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
         return pd.Series(dtype=float)
 
     if column not in df.columns:
-        logger.error(f"Required column '{column}' not found in dataframe")
+        logger.error("Required column '%s' not found in dataframe", column)
         return pd.Series(dtype=float)
 
     try:
@@ -171,6 +171,6 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
         signal[df[column] > 0] = 1
         signal[df[column] < 0] = -1
         return signal.fillna(0)
-    except Exception as e:
-        logger.error(f"Exception generating signal: {e}", exc_info=True)
+    except Exception as e:  # TODO: narrow exception type
+        logger.error("Exception generating signal: %s", e, exc_info=True)
         return pd.Series(dtype=float)

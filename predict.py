@@ -92,7 +92,7 @@ def predict(csv_path: str, freq: str = "intraday") -> tuple[int | None, float | 
             feat = prepare_indicators(df, freq=freq, symbol=symbol)
         else:
             feat = prepare_indicators(df, freq=freq)
-    except Exception:  # TODO: narrow exception type
+    except (TypeError, ValueError, AttributeError):
         feat = prepare_indicators(df, freq=freq)
     if os.path.exists(INACTIVE_FEATURES_FILE):
         try:

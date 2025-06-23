@@ -151,7 +151,11 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
             idx = safe_to_datetime(df.index, context=f"{symbol} minute")
         except ValueError as e:
             logger.debug("Raw data for %s: %s", symbol, df.head().to_dict())
-            logger.warning(f"Unexpected index format for {symbol}; skipping | {e}")
+            logger.warning(
+                "Unexpected index format for %s; skipping | %s",
+                symbol,
+                e,
+            )
             return pd.DataFrame()
         df.index = idx
         df["timestamp"] = df.index
@@ -203,7 +207,7 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
                 else:
                     raise
         except (APIError, RetryError):
-            logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+            logger.info("SKIP_NO_PRICE_DATA | %s", symbol)
             return pd.DataFrame()
     try:
         if isinstance(df.columns, pd.MultiIndex):
@@ -228,7 +232,7 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
             idx = safe_to_datetime(df.index, context=f"{symbol} daily")
         except ValueError as e:
             logger.debug("Raw daily data for %s: %s", symbol, df.head().to_dict())
-            logger.warning(f"Invalid date index for {symbol}; skipping. {e}")
+            logger.warning("Invalid date index for %s; skipping. %s", symbol, e)
             return pd.DataFrame()
         logger.debug("%s parsed daily timestamps: %s", symbol, list(idx[:5]))
         df.index = idx
@@ -236,7 +240,10 @@ def get_daily_df(symbol: str, start: date, end: date) -> pd.DataFrame:
 
         return df[["timestamp", "open", "high", "low", "close", "volume"]]
     except KeyError:
-        logger.warning(f"Missing OHLCV columns for {symbol}; returning empty DataFrame")
+        logger.warning(
+            "Missing OHLCV columns for %s; returning empty DataFrame",
+            symbol,
+        )
         return pd.DataFrame()
     except Exception as e:
         snippet = df.head().to_dict() if "df" in locals() and isinstance(df, pd.DataFrame) else "N/A"
@@ -394,7 +401,7 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
             idx = safe_to_datetime(df.index, context=f"{symbol} minute")
         except ValueError as e:
             logger.debug("Raw minute data for %s: %s", symbol, df.head().to_dict())
-            logger.warning(f"Invalid minute index for {symbol}; skipping. {e}")
+            logger.warning("Invalid minute index for %s; skipping. %s", symbol, e)
             return pd.DataFrame()
         df.index = idx
 
@@ -443,12 +450,20 @@ def get_minute_df(symbol: str, start_date: date, end_date: date) -> pd.DataFrame
                 idx = safe_to_datetime(df.index, context=f"{symbol} fallback")
             except ValueError as e:
                 logger.debug("Raw fallback data for %s: %s", symbol, df.head().to_dict())
-                logger.warning(f"Invalid fallback index for {symbol}; skipping | {e}")
+                logger.warning(
+                    "Invalid fallback index for %s; skipping | %s",
+                    symbol,
+                    e,
+                )
                 return pd.DataFrame()
             logger.debug("%s fallback raw timestamps: %s", symbol, list(df.index[:5]))
             logger.debug("%s fallback parsed timestamps: %s", symbol, list(idx[:5]))
             df.index = idx
-            logger.info(f"Falling back to daily bars for {symbol} ({len(df)} rows)")
+            logger.info(
+                "Falling back to daily bars for %s (%s rows)",
+                symbol,
+                len(df),
+            )
             _MINUTE_CACHE[symbol] = (df, pd.Timestamp.utcnow())
             logger.info(
                 "MINUTE_FETCHED",

@@ -46,7 +46,7 @@ class WebhookPayload(BaseModel):
     action: str
 
 def _handle_shutdown(signum: int, _unused_frame) -> None:
-    logger.info(f"Received signal {signum}, shutting down")
+    logger.info("Received signal %s, shutting down", signum)
     _shutdown.set()
 
 signal.signal(signal.SIGTERM, _handle_shutdown)
@@ -151,6 +151,6 @@ if __name__ == "__main__":
     ]
     try:
         run()
-    except Exception as exc:
+    except Exception as exc:  # TODO: narrow exception type
         logger.exception("Failed to start gunicorn: %s", exc)
         raise
