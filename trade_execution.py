@@ -142,8 +142,12 @@ class ExecutionEngine:
                             "band",
                         ]
                     )
-            except OSError as e:
-                self.logger.error(f"Failed to create slippage log {self.slippage_path}: {e}")
+            except OSError as exc:
+                self.logger.error(
+                    "Failed to create slippage log %s: %s",
+                    self.slippage_path,
+                    exc,
+                )
         self.slippage_total = slippage_total
         self.slippage_count = slippage_count
         self.orders_total = orders_total
@@ -165,12 +169,16 @@ class ExecutionEngine:
             return True
         try:
             acct = api.get_account()
-        except Exception as e:  # pragma: no cover - api may be stubbed
-            self.logger.error(f"Error fetching account information: {e}")
+        except Exception as exc:  # pragma: no cover - api may be stubbed
+            self.logger.error("Error fetching account information: %s", exc)
             return False
         need = qty * price
         if float(getattr(acct, "cash", 0)) < need:
-            self.logger.error(f"Insufficient buying power: need {need}, have {acct.cash}")
+            self.logger.error(
+                "Insufficient buying power: need %s, have %s",
+                need,
+                getattr(acct, "cash", 0),
+            )
             return False
         return True
 
@@ -178,15 +186,18 @@ class ExecutionEngine:
         try:
             pos = api.get_position(symbol)
             return float(getattr(pos, "qty", 0))
-        except Exception as e:  # pragma: no cover - position may not exist
-            self.logger.error(f"No position for {symbol}: {e}")
+        except Exception as exc:  # pragma: no cover - position may not exist
+            self.logger.error("No position for %s: %s", symbol, exc)
             return 0.0
 
     def _can_sell(self, api: TradingClient, symbol: str, qty: int) -> bool:
         avail = self._available_qty(api, symbol)
         if avail < qty:
             self.logger.error(
-                f"Insufficient qty for {symbol}: have {avail}, requested {qty}"
+                "Insufficient qty for %s: have %s, requested %s",
+                symbol,
+                avail,
+                qty,
             )
             return False
         return True
@@ -207,23 +218,25 @@ class ExecutionEngine:
             bid = float(getattr(q, "bid_price", 0) or 0)
             ask = float(getattr(q, "ask_price", 0) or 0)
             return bid, ask
-        except APIError as e:
-            self.logger.warning(f"_latest_quote APIError for {symbol}: {e}")
+        except APIError as exc:
+            self.logger.warning("_latest_quote APIError for %s: %s", symbol, exc)
             raise
 
     def _adv_volume(self, symbol: str) -> Optional[float]:
         df = self.ctx.data_fetcher.get_daily_df(self.ctx, symbol)
         if df is None or df.empty or "volume" not in df.columns:
-            self.logger.warning(f"ADV data unavailable for {symbol}")
+            self.logger.warning("ADV data unavailable for %s", symbol)
             return 0.0
         if len(df) < 20:
             self.logger.warning(
-                f"Not enough rows for ADV calculation of {symbol}: got {len(df)}"
+                "Not enough rows for ADV calculation of %s: got %s",
+                symbol,
+                len(df),
             )
             return 0.0
         vol = df["volume"].tail(20)
         if vol.isna().any() or np.isinf(vol).any():
-            self.logger.warning(f"Invalid volume data for {symbol} during ADV calc")
+            self.logger.warning("Invalid volume data for %s during ADV calc", symbol)
             return 0.0
         return float(vol.mean())
 
@@ -231,11 +244,15 @@ class ExecutionEngine:
         df = self.ctx.data_fetcher.get_minute_df(self.ctx, symbol)
         if df is None or df.empty or "volume" not in df.columns or "close" not in df.columns:
             # Missing data means we can't compute stats safely
-            self.logger.warning(f"Minute data unavailable for {symbol}")
+            self.logger.warning("Minute data unavailable for %s", symbol)
             return 0.0, 0.0, 0.0
         if len(df) < 5:
             # Require at least 5 rows for momentum/average calculations
-            self.logger.warning(f"Not enough rows for minute stats of {symbol}: got {len(df)}")
+            self.logger.warning(
+                "Not enough rows for minute stats of %s: got %s",
+                symbol,
+                len(df),
+            )
             return 0.0, 0.0, 0.0
         vol = float(df["volume"].iloc[-1])
         avg1m = float(df["volume"].tail(5).mean())
@@ -314,8 +331,8 @@ class ExecutionEngine:
                         getattr(self.ctx, "capital_band", "small"),
                     ]
                 )
-        except OSError as e:
-            self.logger.error(f"Failed to write slippage log: {e}")
+        except OSError as exc:
+            self.logger.error("Failed to write slippage log: %s", exc)
         if self.slippage_total is not None:
             self.slippage_total.inc(abs(slip))
         if self.slippage_count is not None:
@@ -372,20 +389,26 @@ class ExecutionEngine:
         for attempt in range(3):
             try:
                 order = submit_order(api, order_req, self.logger)
-                self.logger.info(f"Order submit response for {symbol}: {order}")
+                self.logger.info("Order submit response for %s: %s", symbol, order)
                 if not getattr(order, "id", None) and not SHADOW_MODE:
-                    self.logger.error(f"Order failed for {symbol}: {order}")
+                    self.logger.error("Order failed for %s: %s", symbol, order)
                 return order
             except (APIError, TimeoutError) as e:
                 sleep = 1 * (attempt + 1)
                 time.sleep(sleep)
                 if attempt == 2:
                     self.logger.warning(
-                        f"submit_order failed for {symbol} after retries: {e}"
+                        "submit_order failed for %s after retries: %s",
+                        symbol,
+                        e,
                     )
                     return None
-            except Exception as e:
-                self.logger.exception(f"Unexpected error placing order for {symbol}: {e}")
+            except Exception as exc:
+                self.logger.exception(
+                    "Unexpected error placing order for %s: %s",
+                    symbol,
+                    exc,
+                )
                 return None
         return None
 
@@ -451,11 +474,14 @@ class ExecutionEngine:
         if side.lower() == "sell":
             avail = self._available_qty(api, symbol)
             if avail <= 0:
-                self.logger.error(f"No position to sell for {symbol}")
+                self.logger.error("No position to sell for %s", symbol)
                 return None
             if remaining > avail:
                 self.logger.warning(
-                    f"Requested {remaining} but only {avail} available for {symbol}; adjusting"
+                    "Requested %s but only %s available for %s; adjusting",
+                    remaining,
+                    avail,
+                    symbol,
                 )
                 remaining = int(avail)
         while remaining > 0:

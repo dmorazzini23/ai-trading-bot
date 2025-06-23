@@ -89,11 +89,11 @@ def get_account() -> Optional[Dict[str, Any]]:
     """Return account details or ``None`` on failure."""
     try:
         data = alpaca_get("/v2/account")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"API request failed: {e}")
+    except requests.exceptions.RequestException as exc:
+        logger.error("API request failed: %s", exc)
         raise
-    except Exception as e:  # pragma: no cover - safety
-        logger.error(f"Unexpected error: {e}")
+    except Exception as exc:  # pragma: no cover - safety
+        logger.error("Unexpected error: %s", exc)
         raise
     if data is None:
         logger.error("Failed to get Alpaca account data")
@@ -105,8 +105,12 @@ def submit_order(api, req, log: logging.Logger | None = None):
     log = log or logger
     if SHADOW_MODE:
         log.info(
-            f"SHADOW_MODE: Would place order: {getattr(req, 'symbol', '')} {getattr(req, 'qty', '')} "
-            f"{getattr(req, 'side', '')} {req.__class__.__name__} {getattr(req, 'time_in_force', '')}"
+            "SHADOW_MODE: Would place order: %s %s %s %s %s",
+            getattr(req, "symbol", ""),
+            getattr(req, "qty", ""),
+            getattr(req, "side", ""),
+            req.__class__.__name__,
+            getattr(req, "time_in_force", ""),
         )
         return {
             "status": "shadow",
@@ -134,21 +138,21 @@ def submit_order(api, req, log: logging.Logger | None = None):
                 time.sleep(wait)
                 continue
             log.error("HTTPError in Alpaca submit_order: %s", e, exc_info=True)
-            send_slack_alert(f"HTTP error submitting order: {e}")
+            send_slack_alert("HTTP error submitting order: %s" % e)
             if attempt == max_retries:
                 raise
-        except requests.exceptions.RequestException as e:
-            log.error(f"API request failed: {e}")
+        except requests.exceptions.RequestException as exc:
+            log.error("API request failed: %s", exc)
             raise
-        except Exception as e:
+        except Exception as exc:
             log.error(
                 "Unexpected error: %s",
-                e,
+                exc,
                 exc_info=True,
             )
             if attempt == max_retries:
                 send_slack_alert(
-                    f"Failed to submit order after {max_retries} attempts: {e}"
+                    "Failed to submit order after %s attempts: %s" % (max_retries, exc)
                 )
                 raise
             time.sleep(attempt * 2)

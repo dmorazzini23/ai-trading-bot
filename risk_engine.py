@@ -84,7 +84,7 @@ class RiskEngine:
                 self.hard_stop = True
                 return False
             return True
-        except Exception as exc:
+        except Exception as exc:  # TODO: narrow exception type
             logger.error("check_max_drawdown failed: %s", exc)
             return False
 
@@ -111,7 +111,7 @@ class RiskEngine:
         dollars = cash * min(weight, 1.0)
         try:
             qty = int(dollars / price)
-        except Exception as exc:
+        except (ZeroDivisionError, OverflowError, TypeError) as exc:
             logger.error("position_size division error: %s", exc)
             return 0
         return max(qty, 0)
@@ -137,7 +137,7 @@ class RiskEngine:
 
         try:
             vol = float(np.std(returns))
-        except Exception as exc:
+        except (ValueError, TypeError) as exc:
             logger.error("Failed computing volatility: %s", exc)
             vol = 0.0
         return {"volatility": vol}
