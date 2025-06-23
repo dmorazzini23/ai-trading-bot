@@ -129,6 +129,8 @@ REBALANCE_INTERVAL_MIN = env_settings.REBALANCE_INTERVAL_MIN
 SHADOW_MODE = env_settings.SHADOW_MODE
 DISABLE_DAILY_RETRAIN = env_settings.DISABLE_DAILY_RETRAIN
 TRADE_LOG_FILE = env_settings.TRADE_LOG_FILE
+MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "30"))
+MIN_HEALTH_ROWS_DAILY = int(os.getenv("MIN_HEALTH_ROWS_DAILY", "5"))
 
 # centralize SGDRegressor hyperparameters
 SGD_PARAMS = MappingProxyType(
@@ -179,4 +181,6 @@ __all__ = [
     "NEWS_API_KEY",
     "WEBHOOK_SECRET",
     "WEBHOOK_PORT",
+    "MIN_HEALTH_ROWS",
+    "MIN_HEALTH_ROWS_DAILY",
 ]

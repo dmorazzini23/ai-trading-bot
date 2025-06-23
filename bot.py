@@ -3,6 +3,8 @@ import os
 import sys
 import traceback
 
+assert sys.version_info >= (3, 12, 3), "Requires Python 3.12.3 or newer"
+
 import config
 from alerting import send_slack_alert
 from logger import setup_logging
@@ -282,6 +284,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             start_date=yesterday.isoformat(),
             end_date=today.isoformat(),
         )
+        if df is None or df.empty:
+            return pd.DataFrame()
         if isinstance(df.index, pd.MultiIndex):
             df.index = df.index.get_level_values(1)
         df.index = pd.to_datetime(df.index)
@@ -4710,7 +4714,10 @@ def screen_universe(
         if df.empty:
             continue
         series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH)
-        atr_val = series.iloc[-1] if not series.empty else np.nan
+        if series is None or not hasattr(series, "empty") or series.empty:
+            logger.warning(f"ATR returned None or empty for {sym}; skipping screening.")
+            continue
+        atr_val = series.iloc[-1]
         if not pd.isna(atr_val):
             atrs[sym] = float(atr_val)
     ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)

@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
+MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "30"))
+MIN_HEALTH_ROWS_D = int(os.getenv("MIN_HEALTH_ROWS_DAILY", "5"))
+
 
 def log_warning(
     msg: str, *, exc: Exception | None = None, extra: dict | None = None
@@ -189,6 +192,23 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
         except (TypeError, ValueError) as exc2:
             logger.error("safe_to_datetime failed: %s", exc2)
             return pd.DatetimeIndex([pd.NaT] * len(arr), tz="UTC")
+
+
+def health_check(df: pd.DataFrame, resolution: str) -> bool:
+    rows = len(df)
+    if resolution == "minute":
+        if rows < MIN_HEALTH_ROWS:
+            logger.warning(
+                f"HEALTH_INSUFFICIENT_ROWS: got {rows}, need {MIN_HEALTH_ROWS}"
+            )
+            return False
+    else:
+        if rows < MIN_HEALTH_ROWS_D:
+            logger.warning(
+                f"DAILY_HEALTH_INSUFFICIENT_ROWS: got {rows}, need {MIN_HEALTH_ROWS_D}"
+            )
+            return False
+    return True
 
 
 

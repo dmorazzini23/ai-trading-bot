@@ -5,7 +5,11 @@ import time as pytime
 import warnings
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
-from typing import Sequence
+from typing import Optional, Sequence
+
+import sys
+
+assert sys.version_info >= (3, 12, 3), "Requires Python 3.12.3 or newer"
 
 import config
 
@@ -240,7 +244,7 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
                 f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
         except Exception as e:
             logger.error("Failed to write halt flag: %s", e)
-        return pd.DataFrame()
+        return None
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(-1)
@@ -258,7 +262,7 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
                 symbol,
                 e,
             )
-            return pd.DataFrame()
+            return None
         df.index = idx
         df["timestamp"] = df.index
 
@@ -351,7 +355,7 @@ def get_daily_df(
                     raise
         except (APIError, RetryError):
             logger.info("SKIP_NO_PRICE_DATA | %s", symbol)
-            return pd.DataFrame()
+            return None
     try:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(-1)
@@ -366,7 +370,7 @@ def get_daily_df(
                     f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
             except Exception as e:
                 logger.error("Failed to write halt flag: %s", e)
-            return pd.DataFrame()
+            return None
 
         if isinstance(df.index, pd.MultiIndex):
             df.index = df.index.get_level_values(0)
@@ -376,7 +380,7 @@ def get_daily_df(
         except ValueError as e:
             logger.debug("Raw daily data for %s: %s", symbol, df.head().to_dict())
             logger.warning("Invalid date index for %s; skipping. %s", symbol, e)
-            return pd.DataFrame()
+            return None
         logger.debug("%s parsed daily timestamps: %s", symbol, list(idx[:5]))
         df.index = idx
         df["timestamp"] = df.index
@@ -387,12 +391,12 @@ def get_daily_df(
             "Missing OHLCV columns for %s; returning empty DataFrame",
             symbol,
         )
-        return pd.DataFrame()
+        return None
     except Exception as e:
         snippet = df.head().to_dict() if "df" in locals() and isinstance(df, pd.DataFrame) else "N/A"
         logger.error("get_daily_df processing error for %s: %s", symbol, e, exc_info=True)
         logger.debug("get_daily_df raw response for %s: %s", symbol, snippet)
-        return pd.DataFrame()
+        return None
 
 
 @retry(
@@ -404,7 +408,7 @@ def get_minute_df(
     symbol: str,
     start_date: date | datetime | pd.Timestamp | str,
     end_date: date | datetime | pd.Timestamp | str,
-) -> pd.DataFrame:
+) -> Optional[pd.DataFrame]:
     """Return minute-level OHLCV DataFrame for ``symbol``.
 
     Falls back to daily bars if minute data is unavailable.
@@ -478,7 +482,7 @@ def get_minute_df(
     if not is_market_open():
         logger.info("MARKET_CLOSED_MINUTE_FETCH", extra={"symbol": symbol})
         _MINUTE_CACHE.pop(symbol, None)
-        return pd.DataFrame()
+        return None
 
     start_dt = ensure_utc(start_date) - timedelta(minutes=1)
     end_dt = ensure_utc(end_date)
@@ -519,10 +523,10 @@ def get_minute_df(
                     bars = client.get_stock_bars(req)
                 except Exception as iex_err:
                     logger.exception("IEX fallback failed for %s: %s", symbol, iex_err)
-                    return pd.DataFrame()
+                    return None
             else:
                 logger.error(f"API error for {symbol}: {e}")
-                return pd.DataFrame()
+                return None
 
         if bars is None or not getattr(bars, "df", pd.DataFrame()).size:
             logger.critical("NO_DATA_RETURNED_%s", symbol)
@@ -531,14 +535,14 @@ def get_minute_df(
                     f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
             except Exception as e:
                 logger.error("Failed to write halt flag: %s", e)
-            return pd.DataFrame()
+            return None
 
         bars = bars.df
         logger.debug("%s raw minute timestamps: %s", symbol, list(bars.index[:5]))
         if bars.empty:
             logger.error(f"Data fetch failed for {symbol} on {end_dt.date()} during trading hours! Skipping symbol.")
             # Optionally, alert or set error counter here
-            return pd.DataFrame()
+            return None
         # drop MultiIndex if present, otherwise drop the stray "symbol" column
         if isinstance(bars.columns, pd.MultiIndex):
             bars = bars.xs(symbol, level=0, axis=1)
@@ -580,13 +584,13 @@ def get_minute_df(
                     f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
             except Exception as e:
                 logger.error("Failed to write halt flag: %s", e)
-            return pd.DataFrame()
+            return None
         try:
             idx = safe_to_datetime(df.index, context=f"{symbol} minute")
         except ValueError as e:
             logger.debug("Raw minute data for %s: %s", symbol, df.head().to_dict())
             logger.warning("Invalid minute index for %s; skipping. %s", symbol, e)
-            return pd.DataFrame()
+            return None
         df.index = idx
 
         _MINUTE_CACHE[symbol] = (df, pd.Timestamp.utcnow())
@@ -603,7 +607,7 @@ def get_minute_df(
             logger.error(
                 "get_minute_df fallback datetime error: %s", dt_err, exc_info=True
             )
-            return pd.DataFrame()
+            return None
 
         try:
             req = StockBarsRequest(
@@ -638,7 +642,7 @@ def get_minute_df(
                         f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
                 except Exception as e:
                     logger.error("Failed to write halt flag: %s", e)
-                return pd.DataFrame()
+                return None
             try:
                 idx = safe_to_datetime(df.index, context=f"{symbol} fallback")
             except ValueError as e:
@@ -648,7 +652,7 @@ def get_minute_df(
                     symbol,
                     e,
                 )
-                return pd.DataFrame()
+                return None
             logger.debug("%s fallback raw timestamps: %s", symbol, list(df.index[:5]))
             logger.debug("%s fallback parsed timestamps: %s", symbol, list(idx[:5]))
             df.index = idx
@@ -665,12 +669,12 @@ def get_minute_df(
             return df
         except Exception as daily_err:
             logger.debug(f"{symbol}: daily fallback fetch failed: {daily_err}")
-            return pd.DataFrame()
+            return None
     except Exception as e:
         snippet = df.head().to_dict() if "df" in locals() and isinstance(df, pd.DataFrame) else "N/A"
         logger.error("get_minute_df processing error for %s: %s", symbol, e, exc_info=True)
         logger.debug("get_minute_df raw response for %s: %s", symbol, snippet)
-        return pd.DataFrame()
+        return None
 
 
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
@@ -744,7 +748,7 @@ class FinnhubFetcher:
             df["timestamp"] = df.index
             frames.append(df)
         if not frames:
-            return pd.DataFrame()
+            return None
         if len(frames) == 1:
             return frames[0]
         return pd.concat(frames, axis=0, keys=syms, names=["symbol"]).reset_index(level=0)
