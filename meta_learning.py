@@ -57,7 +57,7 @@ def update_weights(
             extra={"previous": prev, "current": new_weights.tolist()},
         )
     except Exception as exc:
-        logger.exception(f"META_WEIGHT_UPDATE_FAILED: {exc}")
+        logger.exception("META_WEIGHT_UPDATE_FAILED: %s", exc)
         return False
     try:
         if Path(history_file).exists():
@@ -96,8 +96,8 @@ def update_signal_weights(weights: Dict[str, float], performance: Dict[str, floa
         for key in updated_weights:
             updated_weights[key] /= norm_factor
         return updated_weights
-    except Exception as e:
-        logger.error(f"Exception in update_signal_weights: {e}", exc_info=True)
+    except Exception as exc:
+        logger.error("Exception in update_signal_weights: %s", exc, exc_info=True)
         return weights
 
 
