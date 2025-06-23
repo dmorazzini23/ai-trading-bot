@@ -105,9 +105,25 @@ _DEFAULT_FEED = config.ALPACA_DATA_FEED or "iex"
 # Ensure numpy.NaN exists for pandas_ta compatibility
 np.NaN = np.nan
 
+from functools import lru_cache
+
 import pandas as pd
 import pandas_market_calendars as mcal
 import pandas_ta as ta
+
+NY = mcal.get_calendar("NYSE")
+MARKET_SCHEDULE = NY.schedule(start_date="2020-01-01", end_date="2030-12-31")
+FULL_DATETIME_RANGE = pd.date_range(start="09:30", end="16:00", freq="1T")
+
+@lru_cache(maxsize=None)
+def is_holiday(ts: pd.Timestamp) -> bool:
+    ts = pd.Timestamp(ts)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    ts = ts.normalize()
+    return ts not in MARKET_SCHEDULE.index
 
 from signals import calculate_macd as signals_calculate_macd
 
@@ -2125,20 +2141,23 @@ def pre_trade_health_check(
     return summary
 
 
+
 # ─── H. MARKET HOURS GUARD ────────────────────────────────────────────────────
-nyse = mcal.get_calendar("XNYS")
 
 
 def in_trading_hours(ts: pd.Timestamp) -> bool:
-    schedule_today = nyse.schedule(start_date=ts.date(), end_date=ts.date())
-    if schedule_today.empty:
+    if is_holiday(ts):
         logger.warning(
             f"No NYSE market schedule for {ts.date()}; skipping market open/close check."
         )
         return False
-    return (
-        schedule_today.market_open.iloc[0] <= ts <= schedule_today.market_close.iloc[0]
-    )
+    try:
+        return NY.open_at_time(MARKET_SCHEDULE, ts)
+    except ValueError as exc:
+        logger.warning(
+            f"Invalid schedule time {ts}: {exc}; assuming market closed"
+        )
+        return False
 
 
 # ─── I. SENTIMENT & EVENTS ────────────────────────────────────────────────────
@@ -4692,6 +4711,9 @@ def check_market_regime(state: BotState) -> bool:
     return True
 
 
+_SCREEN_CACHE: Dict[str, float] = {}
+
+
 def screen_universe(
     candidates: Sequence[str],
     ctx: BotContext,
@@ -4699,8 +4721,14 @@ def screen_universe(
     interval: str = "1d",
     top_n: int = 20,
 ) -> list[str]:
-    atrs: Dict[str, float] = {}
-    for sym in candidates:
+    cand_set = set(candidates)
+
+    for sym in list(_SCREEN_CACHE):
+        if sym not in cand_set:
+            _SCREEN_CACHE.pop(sym, None)
+
+    new_syms = cand_set - _SCREEN_CACHE.keys()
+    for sym in new_syms:
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
         if df is None or len(df) < ATR_LENGTH:
             continue
@@ -4713,7 +4741,9 @@ def screen_universe(
             continue
         atr_val = series.iloc[-1]
         if not pd.isna(atr_val):
-            atrs[sym] = float(atr_val)
+            _SCREEN_CACHE[sym] = float(atr_val)
+
+    atrs = {sym: _SCREEN_CACHE[sym] for sym in cand_set if sym in _SCREEN_CACHE}
     ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
     return [sym for sym, _ in ranked[:top_n]]
 
@@ -5423,17 +5453,14 @@ def main() -> None:
         # --- Market hours check ---
 
         now_utc = pd.Timestamp.utcnow()
-        market_schedule = nyse.schedule(
-            start_date=now_utc.date(), end_date=now_utc.date()
-        )
-        if market_schedule.empty:
+        if is_holiday(now_utc):
             logger.warning(
                 f"No NYSE market schedule for {now_utc.date()}; skipping market open/close check."
             )
             market_open = False
         else:
             try:
-                market_open = nyse.open_at_time(market_schedule, now_utc)
+                market_open = NY.open_at_time(MARKET_SCHEDULE, now_utc)
             except ValueError as e:
                 logger.warning(
                     f"Invalid schedule time {now_utc}: {e}; assuming market closed"
