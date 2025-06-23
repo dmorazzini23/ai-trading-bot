@@ -25,7 +25,7 @@ def log_trade(symbol: str, side: str, qty: int, price: float, result: str, mode:
     }
     try:
         write_header = not os.path.exists(TRADE_LOG_FILE)
-        with open(TRADE_LOG_FILE, "a", newline="") as f:
+        with open(TRADE_LOG_FILE, "a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=_fields)
             if write_header:
                 writer.writeheader()

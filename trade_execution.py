@@ -29,7 +29,7 @@ try:
     from alpaca.trading.enums import OrderSide, TimeInForce
     from alpaca.trading.models import Order
     from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
-except Exception:  # pragma: no cover - allow running without Alpaca SDK
+except Exception:  # TODO: narrow exception type
     TradingClient = object
 
     class MarketOrderRequest(dict):
@@ -75,7 +75,7 @@ except Exception:  # pragma: no cover - allow running without Alpaca SDK
 
 try:
     from alpaca_api import submit_order
-except Exception:  # pragma: no cover - allow running without Alpaca API config
+except Exception:  # TODO: narrow exception type
 
     def submit_order(*args, **kwargs):
         raise RuntimeError("Alpaca API unavailable")
@@ -131,7 +131,7 @@ class ExecutionEngine:
         if not os.path.exists(self.slippage_path):
             # Protect file creation in case the logs directory is unwritable
             try:
-                with open(self.slippage_path, "w", newline="") as f:
+                with open(self.slippage_path, "w", newline="", encoding="utf-8") as f:
                     csv.writer(f).writerow(
                         [
                             "timestamp",
@@ -169,7 +169,7 @@ class ExecutionEngine:
             return True
         try:
             acct = api.get_account()
-        except Exception as exc:  # pragma: no cover - api may be stubbed
+        except Exception as exc:  # TODO: narrow exception type
             self.logger.error("Error fetching account information: %s", exc)
             return False
         need = qty * price
@@ -186,7 +186,7 @@ class ExecutionEngine:
         try:
             pos = api.get_position(symbol)
             return float(getattr(pos, "qty", 0))
-        except Exception as exc:  # pragma: no cover - position may not exist
+        except Exception as exc:  # TODO: narrow exception type
             self.logger.error("No position for %s: %s", symbol, exc)
             return 0.0
 
@@ -320,7 +320,7 @@ class ExecutionEngine:
         slip = ((actual - expected) * 100) if expected else 0.0
         try:
             # File I/O may fail; handle gracefully
-            with open(self.slippage_path, "a", newline="") as f:
+            with open(self.slippage_path, "a", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(
                     [
                         datetime.now(timezone.utc).isoformat(),
@@ -403,7 +403,7 @@ class ExecutionEngine:
                         e,
                     )
                     return None
-            except Exception as exc:
+            except Exception as exc:  # TODO: narrow exception type
                 self.logger.exception(
                     "Unexpected error placing order for %s: %s",
                     symbol,
