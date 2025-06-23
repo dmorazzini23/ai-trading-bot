@@ -1,3 +1,5 @@
+"""Mean reversion trading strategy implementation."""
+
 import logging
 from typing import List
 
@@ -24,7 +26,11 @@ class MeanReversionStrategy(Strategy):
             df = ctx.data_fetcher.get_daily_df(ctx, sym)
             # Ensure we have data and enough rows before doing rolling calculations
             if df is None or df.empty or len(df) < self.lookback:
-                logger.warning(f"{sym}: insufficient data for lookback {self.lookback}")
+                logger.warning(
+                    "%s: insufficient data for lookback %s",
+                    sym,
+                    self.lookback,
+                )
                 # Skip signal generation when we don't have enough history
                 continue
 
@@ -32,14 +38,14 @@ class MeanReversionStrategy(Strategy):
             sd = df["close"].rolling(self.lookback).std().iloc[-1]
             # Validate rolling mean/std results before computing the z-score
             if pd.isna(ma) or pd.isna(sd) or sd == 0:
-                logger.warning(f"{sym}: invalid rolling statistics")
+                logger.warning("%s: invalid rolling statistics", sym)
                 # Avoid division by zero or propagating NaNs
                 continue
 
             last_close = df["close"].iloc[-1]
             # Guard against NaN closing prices before computing z-score
             if pd.isna(last_close):
-                logger.warning(f"{sym}: last close is NaN")
+                logger.warning("%s: last close is NaN", sym)
                 continue
 
             # Calculate the z-score of the latest close price

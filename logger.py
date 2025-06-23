@@ -54,9 +54,10 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> None:
     for h in handlers:
         logger.addHandler(h)
 
+    file_part = " with file %s" % log_file if log_file else ""
     logger.info(
         "Logging initialized%s (level %s)",
-        f" with file {log_file}" if log_file else "",
+        file_part,
         logging.getLevelName(level),
     )
     _configured = True

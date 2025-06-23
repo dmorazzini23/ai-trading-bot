@@ -61,7 +61,7 @@ def update_weights(
         return False
     try:
         if Path(history_file).exists():
-            with open(history_file) as f:
+            with open(history_file, encoding="utf-8") as f:
                 hist = json.load(f)
         else:
             hist = []
@@ -70,7 +70,7 @@ def update_weights(
         hist = []
     hist.append({"ts": datetime.now(timezone.utc).isoformat(), **metrics})
     hist = hist[-n_history:]
-    with open(history_file, "w") as f:
+    with open(history_file, "w", encoding="utf-8") as f:
         json.dump(hist, f)
     logger.info("META_METRICS", extra={"recent": hist})
     return True

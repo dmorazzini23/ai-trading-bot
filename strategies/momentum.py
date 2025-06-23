@@ -1,3 +1,5 @@
+"""Momentum trading strategy implementation."""
+
 import logging
 from typing import List
 
