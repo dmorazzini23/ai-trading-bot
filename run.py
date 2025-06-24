@@ -80,7 +80,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--bot-script",
-        default=os.path.join(os.getcwd(), "bot.py"),
+        default=os.path.join(os.getcwd(), "bot_engine.py"),
         help="Path to the bot main script",
     )
     parser.add_argument(
