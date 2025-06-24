@@ -9,7 +9,9 @@ import config
 from alerting import send_slack_alert
 from logger import setup_logging
 
-setup_logging(log_file=os.getenv("BOT_LOG_FILE"))
+LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
+setup_logging(log_file=LOG_PATH)
+MIN_CYCLE = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
 config.validate_env_vars()
 config.log_config(config.REQUIRED_ENV_VARS)
 
@@ -5586,14 +5588,19 @@ def main() -> None:
 
         # Scheduler loop
         while True:
+            start_ts = time.time()
             try:
                 schedule.run_pending()
             except Exception as e:
                 logger.exception(f"Scheduler error: {e}")
-                time.sleep(5)
+                time.sleep(MIN_CYCLE)
                 continue
-            time_to_sleep = max(0.5, schedule.idle_seconds())
-            time.sleep(time_to_sleep)
+            idle = schedule.idle_seconds()
+            sleep_secs = idle if (idle and idle > MIN_CYCLE) else MIN_CYCLE
+            logger.debug(
+                f"Scheduler sleeping {sleep_secs:.1f}s (idle_seconds={idle})"
+            )
+            time.sleep(sleep_secs)
 
     except Exception as e:
         logger.exception(f"Fatal error in main: {e}")

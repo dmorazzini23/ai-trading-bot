@@ -65,12 +65,14 @@ Key environment variables include:
 - `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` – trading API credentials
 - `BOT_MODE` – running mode (`balanced`, `production`, etc.)
 - `SLACK_WEBHOOK` – optional webhook URL for alert notifications
+- `BOT_LOG_FILE` – optional path for a rotating scheduler log file
+- `SCHEDULER_SLEEP_SECONDS` – minimum delay between scheduler ticks (default 30)
 
 ### Logging and Alerting
 
-Logs are written to standard output by default so they can be captured by the
-systemd journal or Docker logs. If the optional `BOT_LOG_FILE` environment
-variable is set a rotating log file handler will also be configured.
+Logs are written to `logs/scheduler.log` by default and can be viewed with
+`tail -F logs/scheduler.log`. If `BOT_LOG_FILE` is set, that path will be used
+instead. Logs are still emitted to stdout for systemd or Docker capture.
 Set `SLACK_WEBHOOK` in your environment to enable Slack alerts for critical
 errors. Configure logging once at startup:
 
@@ -133,7 +135,9 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ai-trading-scheduler.service
 ```
 
-Logs are written to stdout and captured by the systemd journal.
+Logs are written to `logs/scheduler.log` (or `$BOT_LOG_FILE`) and can be tailed
+with `tail -F logs/scheduler.log`. They are also output to stdout for the
+systemd journal.
 
 ## Daily Retraining
 
