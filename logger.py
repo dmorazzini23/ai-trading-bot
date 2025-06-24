@@ -12,7 +12,6 @@ from alpaca_trade_api.rest import APIError  # noqa: F401
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify
-from logger import setup_logging
 
 import config
 from alerting import send_slack_alert
