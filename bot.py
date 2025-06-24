@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 import sys
 import traceback
 
@@ -27,7 +28,6 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 sys.excepthook = handle_exception
 
 import datetime
-import time
 import warnings
 
 import pandas as pd
@@ -5472,7 +5472,7 @@ def main() -> None:
         if not market_open:
             logger.info("Market is closed. Sleeping for 60 minutes before rechecking.")
             time.sleep(60 * 60)
-            sys.exit(0)
+            return
 
         # Start Prometheus metrics server on an available port
         start_metrics_server(9200)
@@ -5664,10 +5664,23 @@ def get_latest_price(symbol: str):
 
 
 if __name__ == "__main__":
+    # Throttle interval in seconds (set via systemd or .env)
+    MIN_CYCLE = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
+
     while True:
+        start_ts = time.time()
         try:
             main()
         except Exception as exc:
             logger.critical("UNCAUGHT_EXCEPTION: %s", exc, exc_info=True)
             send_slack_alert(f"Bot crashed: {exc}. Restarting in 5s")
             time.sleep(5)
+
+        # Run any due scheduled jobs (daily_summary, etc.)
+        schedule.run_pending()
+
+        # Sleep the remainder of the cycle so we only loop once every MIN_CYCLE
+        elapsed = time.time() - start_ts
+        to_sleep = max(MIN_CYCLE - elapsed, 0)
+        logger.debug(f"Cycle took {elapsed:.1f}s; sleeping {to_sleep:.1f}s")
+        time.sleep(to_sleep)
