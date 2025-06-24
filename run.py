@@ -1,6 +1,5 @@
 #!/usr/bin/env python3.12
 import argparse
-import logging
 import os
 import signal
 import subprocess
@@ -16,6 +15,7 @@ from logger import setup_logging
 
 import config
 from alerting import send_slack_alert
+
 
 def create_flask_app() -> Flask:
     """Return a minimal Flask application with health endpoints."""
@@ -33,10 +33,12 @@ def create_flask_app() -> Flask:
 
     return app
 
+
 def run_flask_app(port: int) -> None:
     """Start the Flask application on ``port``."""
     app = create_flask_app()
     app.run(host="0.0.0.0", port=port)
+
 
 def run_bot(venv_path: str, bot_script: str) -> int:
     """Execute ``bot_script`` using the Python from ``venv_path``."""
@@ -52,10 +54,12 @@ def run_bot(venv_path: str, bot_script: str) -> int:
     )
     return process.wait()
 
+
 def validate_environment() -> None:
     """Ensure mandatory environment variables are present."""
     if not config.WEBHOOK_SECRET:
         raise RuntimeError("WEBHOOK_SECRET must be set")
+
 
 def main() -> None:
     """Entry point for running the unified bot or API server."""
@@ -86,7 +90,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logger = setup_logging(args.log_file)
+    # ✅ Fix: get configured logger object from setup_logging
+    logger = setup_logging(log_file=args.log_file)
     logger.info("Starting AI Trading Bot unified runner")
 
     load_dotenv(dotenv_path=".env", override=True)
