@@ -25,11 +25,11 @@ def get_rotating_handler(
     return handler
 
 
-def setup_logging(debug: bool = False, log_file: str | None = None) -> None:
-    """Configure the root logger once."""
+def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.Logger:
+    """Configure the root logger once and return it."""
     global _configured
     if _configured:
-        return
+        return logging.getLogger()
 
     level_name = os.getenv("LOG_LEVEL", "DEBUG" if debug else "INFO").upper()
     level = logging.DEBUG if level_name == "DEBUG" else logging.INFO
@@ -37,9 +37,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> None:
     logger = logging.getLogger()
     logger.setLevel(level)
 
-    formatter = logging.Formatter(
-        '%(asctime)s %(levelname)s %(name)s - %(message)s'
-    )
+    formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s - %(message)s')
 
     handlers = []
     stream_handler = logging.StreamHandler(sys.stdout)
@@ -67,6 +65,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> None:
         logging.getLevelName(level),
     )
     _configured = True
+    return logger
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -85,4 +84,5 @@ def get_logger(name: str) -> logging.Logger:
 logger = logging.getLogger(__name__)
 
 __all__ = ["setup_logging", "get_logger", "logger"]
+
 
