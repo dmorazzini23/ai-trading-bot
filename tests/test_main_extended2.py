@@ -17,7 +17,7 @@ class Flask:
 flask_mod.Flask = Flask
 flask_mod.jsonify = lambda *a, **k: {}
 sys.modules["flask"] = flask_mod
-import main
+import run as main
 
 
 def test_run_flask_app(monkeypatch):
@@ -63,7 +63,7 @@ def test_validate_environment_missing(monkeypatch):
 
 def test_main_bot_only(monkeypatch):
     """main runs bot and exits with its return code."""
-    monkeypatch.setattr(sys, 'argv', ['main.py', '--bot-only'])
+    monkeypatch.setattr(sys, 'argv', ['run.py', '--bot-only'])
     monkeypatch.setattr(main, 'run_bot', lambda v, s: 5)
     monkeypatch.setattr(main, 'run_flask_app', lambda port: None)
     monkeypatch.setattr(main, 'setup_logging', lambda *a, **k: logging.getLogger('t'))

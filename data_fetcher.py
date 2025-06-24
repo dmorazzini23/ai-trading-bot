@@ -399,6 +399,26 @@ def get_daily_df(
         return None
 
 
+def fetch_daily_data_async(symbols: Sequence[str], start, end) -> dict[str, pd.DataFrame]:
+    """Fetch daily data for multiple ``symbols`` concurrently."""
+    results: dict[str, pd.DataFrame] = {}
+
+    def worker(sym: str) -> None:
+        try:
+            df = get_daily_df(sym, start, end)
+            if df is not None:
+                results[sym] = df
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.error("fetch_daily_data_async failed for %s: %s", sym, exc)
+
+    threads = [threading.Thread(target=worker, args=(s,)) for s in symbols]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return results
+
+
 @retry(
     wait=wait_exponential(multiplier=1, min=1, max=10),
     stop=stop_after_attempt(3),

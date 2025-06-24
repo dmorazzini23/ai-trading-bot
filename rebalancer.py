@@ -2,9 +2,11 @@
 
 import logging
 from datetime import datetime, timedelta, timezone
+import time
 
 from alerts import send_slack_alert
 import config
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -27,3 +29,19 @@ def maybe_rebalance(ctx) -> None:
     if (now - _last_rebalance) >= timedelta(minutes=REBALANCE_INTERVAL_MIN):
         rebalance_portfolio(ctx)
         _last_rebalance = now
+
+
+def start_rebalancer(ctx) -> threading.Thread:
+    """Run :func:`maybe_rebalance` every minute in a background thread."""
+    def loop() -> None:
+        while True:
+            try:
+                maybe_rebalance(ctx)
+            except Exception as exc:  # pragma: no cover - background errors
+                logger.error("Rebalancer loop error: %s", exc)
+            time.sleep(60)
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    return t
+

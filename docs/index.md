@@ -19,7 +19,7 @@ different ranges for each hyperparameter.
 
 ## Using Optimized Hyperparameters
 
-When starting the live bot (`python bot.py`), the bot will automatically load
+When starting the live bot (`python bot_engine.py`), the bot will automatically load
 `best_hyperparams.json` if it exists. Otherwise it falls back to the default
 values in `hyperparams.json`.
 

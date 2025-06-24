@@ -13,7 +13,7 @@ import pytest
 
 import alerts
 import config
-import main
+import run as main
 import meta_learning
 import ml_model
 import risk_engine
@@ -79,7 +79,7 @@ def test_create_flask_routes():
 
 def test_main_serve_api(monkeypatch):
     """main launches Flask thread and bot when --serve-api used."""
-    monkeypatch.setattr(sys, "argv", ["main.py", "--serve-api"])
+    monkeypatch.setattr(sys, "argv", ["run.py", "--serve-api"])
     monkeypatch.setattr(main, "run_bot", lambda v, s: 0)
     called = {}
 

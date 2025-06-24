@@ -1,6 +1,7 @@
 # AI Trading Bot
 ![CI](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/python-app.yml/badge.svg)
 [![codecov](https://codecov.io/gh/dmorazzini23/ai-trading-bot/branch/main/graph/badge.svg)](https://codecov.io/gh/dmorazzini23/ai-trading-bot)
+[![deploy](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/deploy.yml/badge.svg)](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/deploy.yml)
 
 This repository contains a simple trading bot together with a backtesting
 harness for optimizing its tunable hyperparameters.
@@ -39,7 +40,7 @@ different ranges for each hyperparameter.
 
 ## Using Optimized Hyperparameters
 
-When starting the live bot (`python bot.py`), the bot will automatically load
+When starting the live bot (`python bot_engine.py`), the bot will automatically load
 `best_hyperparams.json` if it exists. Otherwise it falls back to the default
 values in `hyperparams.json`.
 
@@ -90,7 +91,7 @@ logger.info("Bot starting up")
 Start the trading bot with:
 
 ```bash
-python bot.py
+python bot_engine.py
 ```
 
 To expose the webhook server locally run:

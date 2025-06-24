@@ -620,6 +620,8 @@ meta_lock = Lock()
 
 breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
 executor = ThreadPoolExecutor(max_workers=4)
+# Separate executor for ML predictions and trade execution
+prediction_executor = ThreadPoolExecutor(max_workers=2)
 
 # EVENT cooldown
 _LAST_EVENT_TS = {}
@@ -5256,8 +5258,9 @@ def _process_symbols(
         except Exception as exc:
             logger.error(f"Error processing {symbol}: {exc}", exc_info=True)
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        list(executor.map(process_symbol, symbols))
+    futures = [prediction_executor.submit(process_symbol, s) for s in symbols]
+    for f in futures:
+        f.result()
     return processed
 
 
