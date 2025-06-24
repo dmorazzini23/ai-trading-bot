@@ -572,6 +572,7 @@ class BotState:
     no_signal_events: int = 0
     fallback_watchlist_events: int = 0
     indicator_failures: int = 0
+    pdt_blocked: bool = False
 
 
 state = BotState()
@@ -3352,7 +3353,7 @@ def pre_trade_checks(
             extra={"symbol": symbol, "until": state.streak_halt_until},
         )
         return False
-    if check_pdt_rule(ctx):
+    if getattr(state, "pdt_blocked", False):
         logger.info("SKIP_PDT_RULE", extra={"symbol": symbol})
         return False
     if check_halt_flag():
@@ -4423,9 +4424,9 @@ def _add_additional_indicators(
         df["psar_short"] = np.nan
 
     try:
-        ich = ta.ichimoku(high=df.high, low=df.low, close=df.close)
-        for col in ich.columns:
-            df[col] = ich[col]
+        ich_df, _ = ichimoku_indicator(df, symbol, state)
+        for col in ich_df.columns:
+            df[col] = ich_df[col]
     except (KeyError, IndexError):
         logger.warning("Skipping Ichimoku: empty or irregular index")
 
@@ -5296,6 +5297,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
     if not is_market_open():
         logger.info("MARKET_CLOSED_NO_FETCH")
         return  # FIXED: skip work when market closed
+    state.pdt_blocked = check_pdt_rule(ctx)
+    if state.pdt_blocked:
+        return
     state.running = True
     loop_start = time.monotonic()
     try:
@@ -5693,6 +5697,28 @@ def simple_calculate_macd(
     except Exception as e:
         logger.error(f"Exception in MACD calculation: {e}", exc_info=True)
         return None, None, None
+
+
+def ichimoku_indicator(
+    df: pd.DataFrame,
+    symbol: str,
+    state: BotState | None = None,
+) -> Tuple[pd.DataFrame, Any | None]:
+    """Return Ichimoku indicator DataFrame and optional params."""
+    try:
+        ich = ta.ichimoku(high=df["high"], low=df["low"], close=df["close"])
+        if isinstance(ich, tuple):
+            ich_df = ich[0]
+            params = ich[1] if len(ich) > 1 else None
+        else:
+            ich_df = ich
+            params = None
+        return ich_df, params
+    except Exception as exc:  # pragma: no cover - defensive
+        log_warning("INDICATOR_ICHIMOKU_FAIL", exc=exc, extra={"symbol": symbol})
+        if state:
+            state.indicator_failures += 1
+        return pd.DataFrame(), None
 
 
 def get_latest_price(symbol: str):
