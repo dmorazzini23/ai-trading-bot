@@ -6,7 +6,7 @@ import pandas as pd
 
 
 def test_ichimoku_indicator_returns_dataframe(monkeypatch):
-    import bot
+    import bot_engine as bot
 
     # Patch pandas_ta.ichimoku to return a tuple (DataFrame, params)
     ich_df = pd.DataFrame({"ITS_9": [1.0], "IKS_26": [1.0]})
@@ -21,7 +21,7 @@ def test_ichimoku_indicator_returns_dataframe(monkeypatch):
 
 
 def test_compute_ichimoku_returns_df_pair(monkeypatch):
-    import bot
+    import bot_engine as bot
     ich_df = pd.DataFrame({"ITS_9": [1.0]})
     signal_df = pd.DataFrame({"ITSs_9": [1.0]})
     monkeypatch.setattr(bot.ta, "ichimoku", lambda *a, **k: (ich_df, signal_df))

@@ -713,13 +713,14 @@ def retrain_meta_learner(
     for regime, subset in df_all.groupby("regime"):
         if subset.empty or regime not in MODEL_FILES:
             continue
+        
+        try:
+            X = subset.drop(columns=["label", "regime"])
+            y = subset["label"]
 
-        X = subset.drop(columns=["label", "regime"])
-        y = subset["label"]
-
-        split_idx = int(len(subset) * 0.8)
-        X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
-        y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
+            split_idx = int(len(subset) * 0.8)
+            X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
+            y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
 
         if len(y_train) < 3:
             logger.warning(
@@ -757,9 +758,15 @@ def retrain_meta_learner(
         clf = LGBMClassifier(**best_hyper)
         pipe = make_pipeline(StandardScaler(), clf)
         if X_train.empty:
-            logger.warning(f"[retrain_meta_learner] Training data empty for {regime}; skipping model fit")
+            logger.warning(
+                f"[retrain_meta_learner] Training data empty for {regime}; skipping model fit"
+            )
             continue
-        pipe.fit(X_train, y_train)
+        try:
+            pipe.fit(X_train, y_train)
+        except Exception as train_exc:
+            logger.exception("Model fit failed for %s: %s", regime, train_exc)
+            continue
         logger.info("%s best params: %s", regime, best_hyper)
 
         from sklearn.metrics import f1_score, roc_auc_score
@@ -807,7 +814,10 @@ def retrain_meta_learner(
                 "git_hash": get_git_hash(),
             }
         )
-        trained_any = True
+            trained_any = True
+        except Exception as exc:
+            logger.exception("Model training failed for %s: %s", regime, exc)
+            continue
 
     try:
         if os.path.exists(FEATURE_PERF_FILE):

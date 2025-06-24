@@ -13,6 +13,7 @@ import pandas as pd
 import requests
 
 import config
+from metrics_logger import log_metrics
 from retrain import prepare_indicators
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,13 @@ def predict(csv_path: str, freq: str = "intraday") -> tuple[int | None, float | 
         pred,
         proba,
     )
+    log_metrics({
+        "timestamp": pd.Timestamp.utcnow().isoformat(),
+        "symbol": symbol,
+        "regime": regime,
+        "prediction": int(pred),
+        "probability": float(proba),
+    }, filename="metrics/predictions.csv")
     return pred, proba
 
 

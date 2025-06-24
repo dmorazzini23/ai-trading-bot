@@ -133,10 +133,11 @@ if __name__ == "__main__":
     os.environ["WEBHOOK_PORT"] = str(flask_port)
     from gunicorn.app.wsgiapp import run
 
+    workers = os.getenv("WEB_CONCURRENCY", "1")
     sys.argv = [
         "gunicorn",
         "-w",
-        "4",
+        workers,
         "-b",
         f"0.0.0.0:{flask_port}",
         "--log-level",
@@ -146,7 +147,6 @@ if __name__ == "__main__":
         "--error-logfile",
         "-",
         "--capture-output",
-        "--enable-stdio-inheritance",
         "server:app",
     ]
     try:

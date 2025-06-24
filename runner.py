@@ -11,7 +11,7 @@ from typing import NoReturn
 
 import requests
 
-from bot import main
+from bot_engine import main
 
 logger = logging.getLogger(__name__)
 

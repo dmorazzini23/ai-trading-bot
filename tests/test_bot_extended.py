@@ -194,7 +194,7 @@ class _DummyBreaker:
 
 sys.modules["pybreaker"].CircuitBreaker = _DummyBreaker
 
-import bot
+import bot_engine as bot
 
 
 def test_compute_time_range():

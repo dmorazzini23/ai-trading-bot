@@ -27,9 +27,10 @@ fi
 
 # Activate the virtualenv
 source venv/bin/activate
+export WEB_CONCURRENCY=${WEB_CONCURRENCY:-1}
 
 echo "🔍 Validating environment variables..."
 python validate_env.py
 
 echo "🤖 Launching scheduler loop..."
-exec python -u bot.py
+exec python -u bot_engine.py

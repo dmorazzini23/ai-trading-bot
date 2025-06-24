@@ -306,7 +306,7 @@ def test_bot_main_normal(monkeypatch):
             }
         ),
     ):
-        import bot
+        import bot_engine as bot
 
         monkeypatch.setattr(bot, "main", lambda: True)
         assert bot.main() is True
@@ -332,7 +332,7 @@ def test_bot_main_data_fetch_error(monkeypatch):
             }
         ),
     ):
-        import bot
+        import bot_engine as bot
 
         monkeypatch.setattr(
             bot,
@@ -365,7 +365,7 @@ def test_bot_main_signal_nan(monkeypatch):
             }
         ),
     ):
-        import bot
+        import bot_engine as bot
 
         monkeypatch.setattr(bot, "main", lambda: None)
         try:

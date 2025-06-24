@@ -21,9 +21,15 @@ jobs:
     - name: Deploy and restart
       run: |
         ssh -o StrictHostKeyChecking=no ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }} << 'ENDSSH'
+          set -e
           cd /home/aiuser/ai-trading-bot
+          PREV_COMMIT=$(git rev-parse HEAD)
           git pull origin main
           source venv/bin/activate
           pip install -r requirements.txt
-          sudo systemctl restart ai-trading-scheduler.service
+          if ! sudo systemctl restart ai-trading-scheduler.service; then
+            echo "Restart failed, rolling back" >&2
+            git reset --hard "$PREV_COMMIT"
+            sudo systemctl restart ai-trading-scheduler.service
+          fi
         ENDSSH

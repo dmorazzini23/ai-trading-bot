@@ -2,7 +2,7 @@ import types
 import pandas as pd
 import datetime as dt
 
-import bot
+import bot_engine as bot
 import data_fetcher
 from utils import health_check
 
