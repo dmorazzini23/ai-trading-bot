@@ -5601,12 +5601,19 @@ def main() -> None:
         # Recurring jobs
         def gather_minute_data_with_delay():
             try:
-                time.sleep(30)
+                # delay can be configured via env SCHEDULER_SLEEP_SECONDS
+                time.sleep(config.SCHEDULER_SLEEP_SECONDS)
                 schedule_run_all_trades(model)
             except Exception as e:
                 logger.exception(f"gather_minute_data_with_delay failed: {e}")
 
         schedule.every().minute.do(gather_minute_data_with_delay)
+
+        # --- run one fetch right away, before entering the loop ---
+        try:
+            gather_minute_data_with_delay()
+        except Exception as e:
+            logger.exception("Initial data fetch failed", exc_info=e)
         schedule.every(1).minutes.do(
             lambda: Thread(
                 target=validate_open_orders, args=(ctx,), daemon=True
