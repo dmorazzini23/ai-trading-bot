@@ -1,10 +1,13 @@
-import pandas as pd
 import importlib
-import types
 import sys
+import types
+
+import pandas as pd
+
 
 def test_ichimoku_indicator_returns_dataframe(monkeypatch):
     import bot
+
     # Patch pandas_ta.ichimoku to return a tuple (DataFrame, params)
     ich_df = pd.DataFrame({"ITS_9": [1.0], "IKS_26": [1.0]})
     monkeypatch.setattr(bot.ta, "ichimoku", lambda *a, **k: (ich_df, {"foo": 1}))
@@ -15,3 +18,16 @@ def test_ichimoku_indicator_returns_dataframe(monkeypatch):
     assert isinstance(out_df, pd.DataFrame)
     assert "ITS_9" in out_df.columns
     assert "IKS_26" in out_df.columns
+
+
+def test_compute_ichimoku_returns_df_pair(monkeypatch):
+    import bot
+    ich_df = pd.DataFrame({"ITS_9": [1.0]})
+    signal_df = pd.DataFrame({"ITSs_9": [1.0]})
+    monkeypatch.setattr(bot.ta, "ichimoku", lambda *a, **k: (ich_df, signal_df))
+    df1, df2 = bot.compute_ichimoku(pd.Series([1, 2]), pd.Series([1, 2]), pd.Series([1, 2]))
+    assert isinstance(df1, pd.DataFrame)
+    assert isinstance(df2, pd.DataFrame)
+    assert "ITS_9" in df1.columns
+    assert "ITSs_9" in df2.columns
+

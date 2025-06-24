@@ -1,7 +1,7 @@
 import logging
 import os
-import time
 import sys
+import time
 import traceback
 
 assert sys.version_info >= (3, 12, 3), "Requires Python 3.12.3 or newer"
@@ -82,9 +82,9 @@ from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
+from datetime import datetime as dt_
 from datetime import time as dt_time
-from datetime import timedelta
-from datetime import datetime as dt_, timezone
+from datetime import timedelta, timezone
 from threading import Lock, Semaphore, Thread
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
@@ -133,11 +133,10 @@ import portalocker
 import requests
 import schedule
 import yfinance as yf
-from alpaca_trade_api.rest import APIError
-
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
+from alpaca_trade_api.rest import APIError
 
 try:
     from alpaca.trading.enums import OrderStatus
@@ -149,12 +148,8 @@ except Exception:  # pragma: no cover - older alpaca-trade-api
 
         PENDING_NEW = "pending_new"
 from alpaca.trading.models import Order
-from alpaca.trading.requests import (
-    GetOrdersRequest,
-    LimitOrderRequest,
-    MarketOrderRequest,
-)
-
+from alpaca.trading.requests import (GetOrdersRequest, LimitOrderRequest,
+                                     MarketOrderRequest)
 # Legacy import removed; using alpaca-py trading stream instead
 from alpaca.trading.stream import TradingStream
 from bs4 import BeautifulSoup
@@ -353,14 +348,8 @@ def reconcile_positions(ctx: "BotContext") -> None:
 import warnings
 
 from ratelimit import limits, sleep_and_retry
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-    wait_random,
-)
+from tenacity import (RetryError, retry, retry_if_exception_type,
+                      stop_after_attempt, wait_exponential, wait_random)
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 RUN_HEALTH = RUN_HEALTHCHECK == "1"
@@ -4424,9 +4413,12 @@ def _add_additional_indicators(
         df["psar_short"] = np.nan
 
     try:
-        ich_df, _ = ichimoku_indicator(df, symbol, state)
+        # compute_ichimoku returns the indicator dataframe and the signal dataframe
+        ich_df, ich_signal_df = compute_ichimoku(df["high"], df["low"], df["close"])
         for col in ich_df.columns:
-            df[col] = ich_df[col]
+            df[f"ich_{col}"] = ich_df[col]
+        for col in ich_signal_df.columns:
+            df[f"ichi_signal_{col}"] = ich_signal_df[col]
     except (KeyError, IndexError):
         logger.warning("Skipping Ichimoku: empty or irregular index")
 
@@ -5575,6 +5567,16 @@ def main() -> None:
                 sys.exit(1)
             else:
                 logger.info("HEALTH_OK")
+            # Prefetch minute history so health check rows are available
+            for sym in initial_list:
+                try:
+                    ctx.data_fetcher.get_minute_df(
+                        ctx, sym, lookback_minutes=config.MIN_HEALTH_ROWS
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Initial minute prefetch failed for %s: %s", sym, exc
+                    )
         except Exception as exc:
             logger.error(f"startup health check failed: {exc}")
             sys.exit(1)
@@ -5699,6 +5701,28 @@ def simple_calculate_macd(
         return None, None, None
 
 
+def compute_ichimoku(
+    high: pd.Series, low: pd.Series, close: pd.Series
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return Ichimoku lines and signal DataFrames."""
+    try:
+        ich = ta.ichimoku(high=high, low=low, close=close)
+        if isinstance(ich, tuple):
+            ich_df = ich[0]
+            signal_df = ich[1] if len(ich) > 1 else pd.DataFrame(index=ich_df.index)
+        else:
+            ich_df = ich
+            signal_df = pd.DataFrame(index=ich_df.index)
+        if not isinstance(ich_df, pd.DataFrame):
+            ich_df = pd.DataFrame(ich_df)
+        if not isinstance(signal_df, pd.DataFrame):
+            signal_df = pd.DataFrame(signal_df)
+        return ich_df, signal_df
+    except Exception as exc:  # pragma: no cover - defensive
+        log_warning("INDICATOR_ICHIMOKU_FAIL", exc=exc)
+        return pd.DataFrame(), pd.DataFrame()
+
+
 def ichimoku_indicator(
     df: pd.DataFrame,
     symbol: str,
@@ -5734,7 +5758,8 @@ def get_latest_price(symbol: str):
 
 
 if __name__ == "__main__":
-    import os, time
+    import os
+    import time
 
     # Minimum cycle interval (seconds), configurable via env var
     MIN_CYCLE = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
