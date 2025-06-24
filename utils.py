@@ -190,6 +190,16 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
     if arr is None:
         return pd.DatetimeIndex([], tz="UTC")
 
+    # if someone passed (symbol, Timestamp), extract the Timestamp
+    if isinstance(arr, tuple) and len(arr) == 2 and isinstance(arr[1], pd.Timestamp):
+        arr = arr[1]
+    elif (
+        isinstance(arr, (list, pd.Index, pd.Series))
+        and len(arr) > 0
+        and isinstance(arr[0], tuple)
+    ):
+        arr = [x[1] if isinstance(x, tuple) and len(x) == 2 else x for x in arr]
+
     try:
         return pd.to_datetime(arr, format=format, utc=utc)
     except (TypeError, ValueError) as exc:

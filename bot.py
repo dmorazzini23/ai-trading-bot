@@ -4216,6 +4216,8 @@ def load_global_signal_performance(
     df = pd.read_csv(TRADE_LOG_FILE).dropna(
         subset=["exit_price", "entry_price", "signal_tags"]
     )
+    df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
+    df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
     df["pnl"] = (df.exit_price - df.entry_price) * df.side.apply(
         lambda s: 1 if s == "buy" else -1
     )
@@ -4316,6 +4318,8 @@ def _add_additional_indicators(
     df: pd.DataFrame, symbol: str, state: BotState | None
 ) -> None:
     """Add a suite of secondary technical indicators."""
+    # dedupe any duplicate timestamps
+    df = df[~df.index.duplicated(keep="first")]
     try:
         kc = ta.kc(df["high"], df["low"], df["close"], length=20)
         df["kc_lower"] = kc.iloc[:, 0]
@@ -4368,17 +4372,12 @@ def _add_additional_indicators(
             state.indicator_failures += 1
         df["cci"] = np.nan
 
-    df[["high", "low", "close", "volume"]] = df[
-        ["high", "low", "close", "volume"]
-    ].astype(float)
+    df[["high", "low", "close", "volume"]] = df[["high", "low", "close", "volume"]].astype(float)
     try:
-        mfi_vals = ta.mfi(df["high"], df["low"], df["close"], df["volume"], length=14)
-        df["mfi"] = mfi_vals.astype(float)
-    except Exception as exc:
-        log_warning("INDICATOR_MFI_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["mfi"] = np.nan
+        mfi_vals = ta.mfi(df.high, df.low, df.close, df.volume, length=14)
+        df["+mfi"] = mfi_vals
+    except ValueError:
+        logger.warning("Skipping MFI: insufficient or duplicate data")
 
     try:
         df["tema"] = ta.tema(df["close"], length=10)
@@ -4408,17 +4407,11 @@ def _add_additional_indicators(
         df["psar_short"] = np.nan
 
     try:
-        ich = ta.ichimoku(high=df["high"], low=df["low"], close=df["close"])
-        conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
-        base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
-        df["ichimoku_conv"] = conv.iloc[:, 0] if hasattr(conv, "iloc") else conv
-        df["ichimoku_base"] = base.iloc[:, 0] if hasattr(base, "iloc") else base
-    except Exception as exc:
-        log_warning("INDICATOR_ICHIMOKU_FAIL", exc=exc, extra={"symbol": symbol})
-        if state:
-            state.indicator_failures += 1
-        df["ichimoku_conv"] = np.nan
-        df["ichimoku_base"] = np.nan
+        ich = ta.ichimoku(high=df.high, low=df.low, close=df.close)
+        for col in ich.columns:
+            df[col] = ich[col]
+    except (KeyError, IndexError):
+        logger.warning("Skipping Ichimoku: empty or irregular index")
 
     try:
         st = ta.stochrsi(df["close"])
