@@ -27,8 +27,8 @@ sys.modules.pop("config", None)
 import config
 importlib.reload(config)
 
-sys.modules.pop("main", None)
-main = importlib.import_module("main")
+sys.modules.pop("run", None)
+main = importlib.import_module("run")  # was: "main"
 
 
 def force_coverage(mod):
