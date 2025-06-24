@@ -5607,7 +5607,9 @@ def main() -> None:
             except Exception as e:
                 logger.exception(f"gather_minute_data_with_delay failed: {e}")
 
-        schedule.every().minute.do(gather_minute_data_with_delay)
+        schedule.every(1).minutes.do(
+            lambda: Thread(target=gather_minute_data_with_delay, daemon=True).start()
+        )
 
         # --- run one fetch right away, before entering the loop ---
         try:
@@ -5643,21 +5645,6 @@ def main() -> None:
             daemon=True,
         ).start()
 
-        # Scheduler loop
-        while True:
-            start_ts = time.time()
-            try:
-                schedule.run_pending()
-            except Exception as e:
-                logger.exception(f"Scheduler error: {e}")
-                time.sleep(MIN_CYCLE)
-                continue
-            idle = schedule.idle_seconds()
-            sleep_secs = idle if (idle and idle > MIN_CYCLE) else MIN_CYCLE
-            logger.debug(
-                f"Scheduler sleeping {sleep_secs:.1f}s (idle_seconds={idle})"
-            )
-            time.sleep(sleep_secs)
 
     except Exception as e:
         logger.exception(f"Fatal error in main: {e}")
@@ -5765,26 +5752,11 @@ def get_latest_price(symbol: str):
 
 
 if __name__ == "__main__":
-    import os
-    import time
+    # One-time startup: loads model, runs initial health check & schedules all jobs
+    main()
 
-    # Minimum cycle interval (seconds), configurable via env var
-    MIN_CYCLE = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
-
+    # Then run only pending scheduled jobs in a tight loop
+    import schedule, time
     while True:
-        start_ts = time.time()
-        try:
-            main()
-        except Exception as exc:
-            logger.critical("UNCAUGHT_EXCEPTION: %s", exc, exc_info=True)
-            send_slack_alert(f"Bot crashed: {exc}. Restarting shortly")
-            time.sleep(5)
-
-        # Execute any scheduled jobs
         schedule.run_pending()
-
-        # Throttle: sleep remaining time to enforce MIN_CYCLE per iteration
-        elapsed = time.time() - start_ts
-        sleep_secs = max(MIN_CYCLE - elapsed, 0)
-        logger.debug(f"Cycle took {elapsed:.1f}s; sleeping {sleep_secs:.1f}s")
-        time.sleep(sleep_secs)
+        time.sleep(config.SCHEDULER_SLEEP_SECONDS)
