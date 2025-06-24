@@ -1,82 +1,134 @@
-"""Logging helpers for the AI trading bot."""
-
-from __future__ import annotations
-
+#!/usr/bin/env python3.12
+import argparse
 import logging
 import os
+import signal
+import subprocess
 import sys
-from logger_rotator import get_rotating_handler
-from typing import Dict
+import threading
+from typing import Any
 
-_configured = False
-_loggers: Dict[str, logging.Logger] = {}
+from alpaca_trade_api.rest import APIError  # noqa: F401
+
+from dotenv import load_dotenv
+from flask import Flask, jsonify
+from logger import setup_logging
+
+import config
+from alerting import send_slack_alert
 
 
-def setup_logging(debug: bool = False, log_file: str | None = None) -> None:
-    """Configure the root logger once.
+def create_flask_app() -> Flask:
+    \"\"\"Return a minimal Flask application with health endpoints.\"\"\"
+    app = Flask(__name__)
 
-    Parameters
-    ----------
-    debug : bool, optional
-        If ``True``, set log level to ``DEBUG`` regardless of the ``LOG_LEVEL``
-        environment variable. Defaults to ``False``.
-    """
-    global _configured
-    if _configured:
-        return
+    @app.route("/health")
+    def health():
+        app.logger.info("Health check called")
+        return jsonify(status="ok")
 
-    level_name = os.getenv("LOG_LEVEL", "DEBUG" if debug else "INFO").upper()
-    level = logging.DEBUG if level_name == "DEBUG" else logging.INFO
+    @app.route("/healthz")
+    def healthz():
+        from flask import Response
+        return Response("OK", status=200)
 
-    logger = logging.getLogger()
-    logger.setLevel(level)
+    return app
 
-    formatter = logging.Formatter(
-        '%(asctime)s %(levelname)s %(name)s - %(message)s'
+
+def run_flask_app(port: int) -> None:
+    \"\"\"Start the Flask application on ``port``.\"\"\"
+    app = create_flask_app()
+    app.run(host="0.0.0.0", port=port)
+
+
+def run_bot(venv_path: str, bot_script: str) -> int:
+    \"\"\"Execute ``bot_script`` using the Python from ``venv_path``.\"\"\"
+    python_executable = os.path.join(venv_path, "bin", "python3.12")
+    if not os.path.isfile(python_executable):
+        raise RuntimeError(f"Python executable not found at {python_executable}")
+
+    process = subprocess.Popen(
+        [python_executable, "-u", bot_script],
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+        env=os.environ.copy(),
     )
+    return process.wait()
 
-    handlers = []
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(formatter)
-    handlers.append(stream_handler)
 
-    if log_file:
-        try:
-            file_handler = get_rotating_handler(log_file, max_bytes=10_485_760)
-            file_handler.setFormatter(formatter)
-            handlers.append(file_handler)
-        except OSError as exc:  # pragma: no cover - file permission errors
-            logging.getLogger(__name__).error(
-                "Failed to configure log file %s: %s", log_file, exc
-            )
+def validate_environment() -> None:
+    \"\"\"Ensure mandatory environment variables are present.\"\"\"
+    if not config.WEBHOOK_SECRET:
+        raise RuntimeError("WEBHOOK_SECRET must be set")
 
-    logger.handlers.clear()
-    for h in handlers:
-        logger.addHandler(h)
 
-    file_part = " with file %s" % log_file if log_file else ""
-    logger.info(
-        "Logging initialized%s (level %s)",
-        file_part,
-        logging.getLevelName(level),
+def main() -> None:
+    \"\"\"Entry point for running the unified bot or API server.\"\"\"
+    parser = argparse.ArgumentParser(description="Unified AI Trading Bot runner")
+    parser.add_argument(
+        "--serve-api", action="store_true", help="Run the Flask API server"
     )
-    _configured = True
+    parser.add_argument(
+        "--bot-only", action="store_true", help="Run only the trading bot"
+    )
+    parser.add_argument(
+        "--flask-port", type=int, default=9000, help="Port for Flask server"
+    )
+    parser.add_argument(
+        "--venv-path",
+        default=os.path.join(os.getcwd(), "venv"),
+        help="Path to the Python virtual environment",
+    )
+    parser.add_argument(
+        "--bot-script",
+        default=os.path.join(os.getcwd(), "bot_engine.py"),
+        help="Path to the bot main script",
+    )
+    parser.add_argument(
+        "--log-file",
+        default=os.getenv("BOT_LOG_FILE", os.path.join(os.getcwd(), "logs", "trading_bot.log")),
+        help="Path to the log file",
+    )
+    args = parser.parse_args()
+
+    setup_logging(log_file=args.log_file)
+    logger = logging.getLogger(__name__)
+    logger.info("Starting AI Trading Bot unified runner")
+
+    load_dotenv(dotenv_path=".env", override=True)
+    validate_environment()
+
+    shutdown_event = threading.Event()
+
+    def handle_signal(signum, frame):
+        logger.info(f"Received signal {signum}, shutting down")
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    if args.serve_api and not args.bot_only:
+        from threading import Thread
+
+        flask_thread = Thread(target=run_flask_app, args=(args.flask_port,), daemon=True)
+        flask_thread.start()
+        logger.info(f"Flask server started on port {args.flask_port}")
+
+        bot_exit_code = run_bot(args.venv_path, args.bot_script)
+        logger.info(f"Bot process exited with code {bot_exit_code}")
+    else:
+        bot_exit_code = run_bot(args.venv_path, args.bot_script)
+        logger.info(f"Bot process exited with code {bot_exit_code}")
+
+    logger.info("AI Trading Bot runner shutting down")
+    sys.exit(bot_exit_code)
 
 
-def get_logger(name: str) -> logging.Logger:
-    """Return a named logger, configuring logging on first use."""
-    if name not in _loggers:
-        setup_logging()
-        lg = logging.getLogger(name)
-        if not lg.handlers:
-            for h in logging.getLogger().handlers:
-                lg.addHandler(h)
-        # Propagate level from root logger
-        lg.setLevel(logging.NOTSET)
-        _loggers[name] = lg
-    return _loggers[name]
+if __name__ == "__main__":
+    main()
+"""
 
-
-logger = logging.getLogger(__name__)
-
-__all__ = ["setup_logging", "get_logger", "logger"]
+# Write the updated file back to disk
+updated_run_py_path = os.path.join(new_project_root, "run.py")
+with open(updated_run_py_path, "w") as f:
+    f.write(updated_run_py)
