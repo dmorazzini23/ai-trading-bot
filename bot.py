@@ -5469,10 +5469,11 @@ def main() -> None:
                 )
                 market_open = False
 
-        if not market_open:
-            logger.info("Market is closed. Sleeping for 60 minutes before rechecking.")
-            time.sleep(60 * 60)
-            sys.exit(0)
+    if not market_open:
+        logger.info("Market is closed. Sleeping for 60 minutes before rechecking.")
+        time.sleep(60 * 60)
+        # don’t exit the whole process—just return to the scheduler loop
+        return
 
         # Start Prometheus metrics server on an available port
         start_metrics_server(9200)
@@ -5664,10 +5665,21 @@ def get_latest_price(symbol: str):
 
 
 if __name__ == "__main__":
+    import os, time
+    # throttle interval (in seconds)
+    MIN_CYCLE = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
+
     while True:
+        start_ts = time.time()
         try:
+            # run one iteration of your main logic
             main()
         except Exception as exc:
             logger.critical("UNCAUGHT_EXCEPTION: %s", exc, exc_info=True)
-            send_slack_alert(f"Bot crashed: {exc}. Restarting in 5s")
+            send_slack_alert(f"Bot crashed: {exc}. Restarting shortly")
             time.sleep(5)
+        # ensure at least MIN_CYCLE between iterations
+        elapsed = time.time() - start_ts
+        to_sleep = max(MIN_CYCLE - elapsed, 0)
+        logger.debug(f"Cycle took {elapsed:.1f}s; sleeping {to_sleep:.1f}s")
+        time.sleep(to_sleep)
