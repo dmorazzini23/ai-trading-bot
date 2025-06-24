@@ -5,6 +5,9 @@ echo "🔁 Starting AI Trading Bot Scheduler..."
 
 cd /home/aiuser/ai-trading-bot
 
+# Avoid git "dubious ownership" warnings when the repo is mounted by root
+git config --global --add safe.directory /home/aiuser/ai-trading-bot
+
 # Load environment variables from .env if present
 if [ -f .env ]; then
   set +u

@@ -872,6 +872,7 @@ class DataFetcher:
             )
         client = StockHistoricalDataClient(api_key, api_secret)
 
+        health_ok = False
         try:
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
@@ -2045,7 +2046,7 @@ data_source_health_check(ctx, REGIME_SYMBOLS)
 
 
 def pre_trade_health_check(
-    ctx: BotContext, symbols: Sequence[str], min_rows: int = 20
+    ctx: BotContext, symbols: Sequence[str], min_rows: int = 30
 ) -> dict:
     """Validate API connectivity and data sanity prior to trading.
 
@@ -2056,7 +2057,7 @@ def pre_trade_health_check(
     symbols : Sequence[str]
         Symbols to validate.
     min_rows : int, optional
-        Minimum required row count per symbol, by default ``20``.
+        Minimum required row count per symbol, by default ``30``.
 
     Returns
     -------
@@ -2080,23 +2081,38 @@ def pre_trade_health_check(
 
     for sym in symbols:
         summary["checked"] += 1
-        try:
-            df = ctx.data_fetcher.get_daily_df(ctx, sym)
-        except Exception as exc:  # pragma: no cover - network dep
-            log_warning("HEALTH_FETCH_ERROR", exc=exc, extra={"symbol": sym})
-            summary["failures"].append(sym)
-            continue
+        attempts = 0
+        df = None
+        rows = 0
+        while attempts < 3:
+            try:
+                df = ctx.data_fetcher.get_daily_df(ctx, sym)
+            except Exception as exc:  # pragma: no cover - network dep
+                log_warning("HEALTH_FETCH_ERROR", exc=exc, extra={"symbol": sym})
+                summary["failures"].append(sym)
+                df = None
+                break
 
-        if df is None or df.empty:
-            log_warning("HEALTH_NO_DATA", extra={"symbol": sym})
-            summary["failures"].append(sym)
-            continue
+            if df is None or df.empty:
+                log_warning("HEALTH_NO_DATA", extra={"symbol": sym})
+                summary["failures"].append(sym)
+                break
 
-        rows = len(df)
-        logger.info("HEALTH_ROWS", extra={"symbol": sym, "rows": rows})
-        if rows < min_rows:
-            log_warning("HEALTH_INSUFFICIENT_ROWS", extra={"symbol": sym, "rows": rows})
-            summary["insufficient_rows"].append(sym)
+            rows = len(df)
+            logger.info("HEALTH_ROWS", extra={"symbol": sym, "rows": rows})
+            if rows < min_rows:
+                log_warning(
+                    "HEALTH_INSUFFICIENT_ROWS",
+                    extra={"symbol": sym, "rows": rows},
+                )
+                summary["insufficient_rows"].append(sym)
+                attempts += 1
+                if attempts < 3:
+                    time.sleep(60)
+                continue
+            break
+
+        if df is None or df.empty or rows < min_rows:
             continue
 
         required = ["open", "high", "low", "close", "volume"]
@@ -5087,6 +5103,21 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
     return model_pipeline
 
 
+def on_market_close() -> None:
+    """Trigger daily retraining after the market closes."""
+    now_est = dt_.now(ZoneInfo("America/New_York"))
+    if market_is_open(now_est):
+        logger.info("RETRAIN_SKIP_MARKET_OPEN")
+        return
+    if now_est.time() < dt_time(16, 0):
+        logger.info("RETRAIN_SKIP_EARLY", extra={"time": now_est.isoformat()})
+        return
+    try:
+        load_or_retrain_daily(ctx)
+    except Exception as exc:
+        logger.exception(f"on_market_close failed: {exc}")
+
+
 # ─── M. MAIN LOOP & SCHEDULER ─────────────────────────────────────────────────
 app = Flask(__name__)
 
@@ -5490,6 +5521,17 @@ def main() -> None:
             ).start()
         )
 
+        # Retraining after market close (~16:05 US/Eastern)
+        close_time = (
+            dt_.now(ZoneInfo("America/New_York"))
+            .replace(hour=16, minute=5, second=0, microsecond=0)
+            .astimezone(timezone.utc)
+            .strftime("%H:%M")
+        )
+        schedule.every().day.at(close_time).do(
+            lambda: Thread(target=on_market_close, daemon=True).start()
+        )
+
         # ⮕ Only now import retrain_meta_learner when not disabled
         if not config.DISABLE_DAILY_RETRAIN:
             try:
@@ -5505,14 +5547,10 @@ def main() -> None:
             logger.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
 
         try:
-            model = load_or_retrain_daily(ctx)
+            model = load_model(MODEL_PATH)
         except Exception as e:
-            logger.error(f"MODEL_LOAD_FAILED: {e}")
-            try:
-                model = load_model(MODEL_PATH)
-            except Exception as e2:
-                logger.fatal("Could not load existing model; aborting", exc_info=e2)
-                sys.exit(1)
+            logger.fatal("Could not load model", exc_info=e)
+            sys.exit(1)
         logger.info("BOT_LAUNCHED")
         cancel_all_open_orders(ctx)
         audit_positions(ctx)
@@ -5520,8 +5558,22 @@ def main() -> None:
             initial_list = load_tickers(TICKERS_FILE)
             summary = pre_trade_health_check(ctx, initial_list)
             logger.info("STARTUP_HEALTH", extra=summary)
+            failures = (
+                summary["failures"]
+                or summary["insufficient_rows"]
+                or summary["missing_columns"]
+                or summary.get("invalid_values")
+                or summary["timezone_issues"]
+            )
+            health_ok = not failures
+            if not health_ok:
+                logger.error("HEALTH_CHECK_FAILED", extra=summary)
+                sys.exit(1)
+            else:
+                logger.info("HEALTH_OK")
         except Exception as exc:
-            logger.warning(f"startup health check failed: {exc}")
+            logger.error(f"startup health check failed: {exc}")
+            sys.exit(1)
 
         # ─── WARM-CACHE SENTIMENT FOR ALL TICKERS ─────────────────────────────────────
         # This will prevent the initial burst of NewsAPI calls and 429s
@@ -5531,9 +5583,9 @@ def main() -> None:
             for t in all_tickers:
                 _SENTIMENT_CACHE[t] = (now_ts, 0.0)
 
-        # Initial rebalance (once)
+        # Initial rebalance (once) only if health check passed
         try:
-            if not getattr(ctx, "_rebalance_done", False):
+            if health_ok and not getattr(ctx, "_rebalance_done", False):
                 universe = load_tickers(TICKERS_FILE)
                 initial_rebalance(ctx, universe)
                 ctx._rebalance_done = True
