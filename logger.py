@@ -131,4 +131,4 @@ if __name__ == "__main__":
 # Write the updated file back to disk
 updated_run_py_path = os.path.join(new_project_root, "run.py")
 with open(updated_run_py_path, "w") as f:
-    f.write(updated_run_py)
+    f.write(updated_run_py)"""
