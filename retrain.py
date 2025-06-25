@@ -730,8 +730,9 @@ def retrain_meta_learner(
                 )
                 continue
         except Exception as e:
-            logger.exception("Error checking training sample size: %s", e)
+            logger.exception("Error during sample size check for %s: %s", regime, e)
             continue
+
 
         pos_ratio = y_train.mean()
         scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
