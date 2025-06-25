@@ -851,7 +851,8 @@ class DataFetcher:
         symbol = symbol.upper()
         now_utc = datetime.datetime.now(datetime.timezone.utc)
         end_ts = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        start_ts = end_ts - timedelta(days=30)
+        # fetch ~6 months of daily bars for health checks and indicators
+        start_ts = end_ts - timedelta(days=150)
 
         with cache_lock:
             if symbol in self._daily_cache:
