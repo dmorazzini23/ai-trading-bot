@@ -119,7 +119,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         market_close = sched.iloc[0]["market_close"].tz_convert(EASTERN_TZ).time()
         current = check_time.time()
         return market_open <= current <= market_close
-    except (ImportError, AttributeError, KeyError, ValueError) as exc:
+    except Exception as exc:
         logger.debug("market calendar unavailable: %s", exc)
         # Fallback to simple weekday/time check when calendar unavailable
         now_et = (
@@ -275,19 +275,19 @@ def get_column(
 
 
 def get_open_column(df):
-    return get_column(df, ["Open", "open", "o"], "open price", dtype=None)
+    return _safe_get_column(df, ["Open", "open", "o"], "open price", dtype=None)
 
 
 def get_high_column(df):
-    return get_column(df, ["High", "high", "h"], "high price", dtype=None)
+    return _safe_get_column(df, ["High", "high", "h"], "high price", dtype=None)
 
 
 def get_low_column(df):
-    return get_column(df, ["Low", "low", "l"], "low price", dtype=None)
+    return _safe_get_column(df, ["Low", "low", "l"], "low price", dtype=None)
 
 
 def get_close_column(df):
-    return get_column(
+    return _safe_get_column(
         df,
         ["Close", "close", "c", "adj_close", "Adj Close", "adjclose", "adjusted_close"],
         "close price",
@@ -296,7 +296,7 @@ def get_close_column(df):
 
 
 def get_volume_column(df):
-    return get_column(df, ["Volume", "volume", "v"], "volume", dtype=None)
+    return _safe_get_column(df, ["Volume", "volume", "v"], "volume", dtype=None)
 
 
 # Datetime helper with advanced checks
@@ -367,16 +367,16 @@ def get_ohlcv_columns(df):
 
     if not isinstance(df, pd.DataFrame):
         return []
-    try:
-        return [
-            get_open_column(df),
-            get_high_column(df),
-            get_low_column(df),
-            get_close_column(df),
-            get_volume_column(df),
-        ]
-    except KeyError:
+    cols = [
+        get_open_column(df),
+        get_high_column(df),
+        get_low_column(df),
+        get_close_column(df),
+        get_volume_column(df),
+    ]
+    if any(c is None for c in cols):
         return []
+    return cols
 
 
 from typing import List, Dict
