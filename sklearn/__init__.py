@@ -25,9 +25,11 @@ def _load_real_sklearn() -> ModuleType | None:
         if spec and spec.origin and os.path.abspath(os.path.dirname(spec.origin)) != os.path.abspath(_THIS_DIR):
             mod = importlib.util.module_from_spec(spec)
             assert spec.loader
+            sys.modules[__name__] = mod
             try:
                 spec.loader.exec_module(mod)
             except Exception:
+                sys.modules.pop(__name__, None)
                 # If the real sklearn fails to import (e.g. incomplete install),
                 # fall back to the lightweight stub rather than raising.
                 return None
