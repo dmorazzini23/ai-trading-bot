@@ -109,9 +109,12 @@ class RiskEngine:
         weight = self._apply_weight_limits(signal)
 
         dollars = cash * min(weight, 1.0)
+        if np.isnan(dollars) or np.isnan(price):
+            logger.error("position_size received NaN inputs")
+            return 0
         try:
             qty = int(round(dollars / price))
-        except (ZeroDivisionError, OverflowError, TypeError) as exc:
+        except (ZeroDivisionError, OverflowError, TypeError, ValueError) as exc:
             logger.error("position_size division error: %s", exc)
             return 0
         return max(qty, 0)

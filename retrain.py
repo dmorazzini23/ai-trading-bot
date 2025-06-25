@@ -721,6 +721,9 @@ def retrain_meta_learner(
             split_idx = int(len(subset) * 0.8)
             X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
             y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
+        except Exception as exc:
+            logger.exception("Feature preparation failed for %s: %s", regime, exc)
+            continue
 
         if len(y_train) < 3:
             logger.warning(
@@ -800,20 +803,21 @@ def retrain_meta_learner(
         except Exception as e:
             logger.exception("Failed to log feature importances for %s: %s", regime, e)
 
-        path = save_model_version(pipe, regime)
-        logger.info("Saved %s model to %s", regime, path)
-        log_metrics(
-            {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "type": "retrain_model",
-                "regime": regime,
-                "metric": metric,
-                "scoring": scoring,
-                "params": json.dumps(best_hyper),
-                "seed": SEED,
-                "git_hash": get_git_hash(),
-            }
-        )
+        try:
+            path = save_model_version(pipe, regime)
+            logger.info("Saved %s model to %s", regime, path)
+            log_metrics(
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "type": "retrain_model",
+                    "regime": regime,
+                    "metric": metric,
+                    "scoring": scoring,
+                    "params": json.dumps(best_hyper),
+                    "seed": SEED,
+                    "git_hash": get_git_hash(),
+                }
+            )
             trained_any = True
         except Exception as exc:
             logger.exception("Model training failed for %s: %s", regime, exc)

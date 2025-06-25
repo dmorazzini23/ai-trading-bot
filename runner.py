@@ -1,6 +1,7 @@
-"""Entry point for running the trading bot with graceful shutdown."""
+"""Entry point for running the trading bot with graceful shutdown.
 
-"""Simple runner that restarts the trading bot on failures."""
+Simple runner that restarts the trading bot on failures.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +12,10 @@ from typing import NoReturn
 
 import requests
 
-from bot_engine import main
+try:  # prefer 'bot' module for backward compat
+    from bot import main  # type: ignore
+except Exception:
+    from bot_engine import main
 
 logger = logging.getLogger(__name__)
 
