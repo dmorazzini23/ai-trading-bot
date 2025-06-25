@@ -43,9 +43,26 @@ else:
 
     base = ModuleType("sklearn.base")
 
-    class BaseEstimator: ...
+    class BaseEstimator:
+        """Minimal stand-in for :class:`sklearn.base.BaseEstimator`."""
+
+        def get_params(self, deep: bool = True):
+            return {}
+
+        def set_params(self, **params):
+            return self
+
+    class TransformerMixin:
+        """Lightweight version of :class:`sklearn.base.TransformerMixin`."""
+
+        def fit(self, X, y=None):
+            return self
+
+        def transform(self, X):
+            return X
 
     base.BaseEstimator = BaseEstimator
+    base.TransformerMixin = TransformerMixin
     base.clone = lambda est: est
 
     linear_model = ModuleType("sklearn.linear_model")
