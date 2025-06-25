@@ -9,13 +9,14 @@ import threading
 from typing import Any
 
 from alpaca_trade_api.rest import APIError  # noqa: F401
-
 from dotenv import load_dotenv
 from flask import Flask, jsonify
-from logger import setup_logging
 
 import config
 from alerting import send_slack_alert
+from idle_status import idle_status
+from logger import setup_logging
+
 
 def create_flask_app() -> Flask:
     """Return a minimal Flask application with health endpoints."""
@@ -24,6 +25,12 @@ def create_flask_app() -> Flask:
     @app.route("/health")
     def health():
         app.logger.info("Health check called")
+        if idle_status.reason == "Market closed" and idle_status.next_check:
+            return jsonify(
+                status="idle",
+                reason=idle_status.reason,
+                next_check=idle_status.next_check.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
         return jsonify(status="ok")
 
     @app.route("/healthz")

@@ -33,6 +33,7 @@ import warnings
 import pandas as pd
 
 import utils
+from idle_status import idle_status
 
 try:
     from sklearn.exceptions import InconsistentVersionWarning
@@ -5119,6 +5120,16 @@ app = Flask(__name__)
 @app.route("/health_check", methods=["GET"])
 def health() -> str:
     """Health endpoint exposing basic system metrics."""
+    if idle_status.reason == "Market closed" and idle_status.next_check:
+        from flask import jsonify
+        return (
+            jsonify(
+                status="idle",
+                reason=idle_status.reason,
+                next_check=idle_status.next_check.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            ),
+            200,
+        )
     try:
         pre_trade_health_check(ctx, ctx.tickers or REGIME_SYMBOLS)
         status = "ok"
@@ -5488,10 +5499,21 @@ def main() -> None:
                 market_open = False
 
         if not market_open:
-            logger.info("Market is closed. Sleeping for 60 minutes before rechecking.")
-            time.sleep(60 * 60)
-            # Return control to outer loop instead of exiting
-            return
+            idle_status.reason = "Market closed"
+            idle_status.next_check = datetime.datetime.utcnow() + datetime.timedelta(minutes=60)
+            logger.info(
+                f"Market is closed. Sleeping until {idle_status.next_check} UTC."
+            )
+            for _ in range(12):
+                logger.info("Market closed; waiting 5 minutes before recheck")
+                time.sleep(5 * 60)
+                if market_is_open():
+                    break
+            idle_status.reason = None
+            idle_status.next_check = None
+            if not market_is_open():
+                # Return control to outer loop instead of exiting
+                return
 
         # Start Prometheus metrics server on an available port
         start_metrics_server(9200)
@@ -5756,7 +5778,9 @@ if __name__ == "__main__":
     main()
 
     # Then run only pending scheduled jobs in a tight loop
-    import schedule, time
+    import time
+
+    import schedule
     while True:
         schedule.run_pending()
         time.sleep(config.SCHEDULER_SLEEP_SECONDS)

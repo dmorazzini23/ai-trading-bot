@@ -8,18 +8,19 @@ import threading
 import traceback
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
-
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
+from pydantic import BaseModel, ValidationError
 
 from alerting import send_slack_alert
+from idle_status import idle_status
 from validate_env import settings
 
 # Load .env early for configuration
 load_dotenv(dotenv_path=".env", override=True)
 
 import config
+
 
 # Configure Flask and root logger to integrate with Gunicorn's error logger
 def configure_logging(flask_app: Flask) -> None:
@@ -116,6 +117,12 @@ def create_app(cfg: Any = config) -> Flask:
     @flask_app.route("/health", methods=["GET"])
     def health() -> Any:
         logger.info("Health check called")
+        if idle_status.reason == "Market closed" and idle_status.next_check:
+            return jsonify(
+                status="idle",
+                reason=idle_status.reason,
+                next_check=idle_status.next_check.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
         return jsonify(status="ok")
 
     @flask_app.route("/healthz", methods=["GET"])
