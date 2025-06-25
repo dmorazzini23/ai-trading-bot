@@ -27,6 +27,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "30"))
 MIN_HEALTH_ROWS_D = int(os.getenv("MIN_HEALTH_ROWS_DAILY", "5"))
+HEALTH_MIN_ROWS = int(os.getenv("HEALTH_MIN_ROWS", "100"))
 
 
 def log_warning(
@@ -212,20 +213,21 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
 
 
 def health_check(df: pd.DataFrame, resolution: str) -> bool:
+    """Validate that ``df`` has enough rows for reliable analysis."""
+    min_rows = int(os.getenv("HEALTH_MIN_ROWS", HEALTH_MIN_ROWS))
     rows = len(df)
-    if resolution == "minute":
-        if rows < MIN_HEALTH_ROWS:
-            logger.warning(
-                f"HEALTH_INSUFFICIENT_ROWS: got {rows}, need {MIN_HEALTH_ROWS}"
-            )
-            return False
-    else:
-        if rows < MIN_HEALTH_ROWS_D:
-            logger.warning(
-                f"DAILY_HEALTH_INSUFFICIENT_ROWS: got {rows}, need {MIN_HEALTH_ROWS_D}"
-            )
-            return False
-# End of health_check
+    if rows < min_rows:
+        logger.debug("DataFrame shape: %s", df.shape)
+        logger.debug("DF Preview:\n%s", df.head())
+        logger.warning(
+            "HEALTH_INSUFFICIENT_ROWS: Only %d rows. Columns: %s",
+            rows,
+            df.columns.tolist(),
+        )
+        if rows == 0:
+            logger.critical("HEALTH_FAILURE: DataFrame is completely empty.")
+        return False
+    logger.info("HEALTH_ROW_CHECK_PASSED: %d rows", rows)
     return True
 
 
