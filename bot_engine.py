@@ -5509,7 +5509,10 @@ def main() -> None:
 
         # --- Market hours check ---
 
-        now_utc = pd.Timestamp.utcnow().tz_localize("UTC")
+        # pd.Timestamp.utcnow() already returns a timezone-aware UTC timestamp,
+        # so calling tz_localize("UTC") would raise an error. Simply use the
+        # timestamp directly to avoid "Cannot localize tz-aware Timestamp".
+        now_utc = pd.Timestamp.utcnow()
         if is_holiday(now_utc):
             logger.warning(
                 f"No NYSE market schedule for {now_utc.date()}; skipping market open/close check."
