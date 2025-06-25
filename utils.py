@@ -1,16 +1,16 @@
 """Utility functions for common operations across the bot."""
 
+import datetime as dt
 import logging
 import os
 import socket
+import threading
 import warnings
-import datetime as dt
 from datetime import date, time, timezone
-
-import pandas as pd
 from typing import Any
 from zoneinfo import ZoneInfo
-import threading
+
+import pandas as pd
 
 try:
     from tzlocal import get_localzone
@@ -212,22 +212,28 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
             return pd.DatetimeIndex([pd.NaT] * len(arr), tz="UTC")
 
 
-def health_check(df: pd.DataFrame, resolution: str) -> bool:
+def health_check(df: pd.DataFrame | None, resolution: str) -> bool:
     """Validate that ``df`` has enough rows for reliable analysis."""
-    min_rows = int(os.getenv("HEALTH_MIN_ROWS", HEALTH_MIN_ROWS))
+    min_rows = int(os.getenv("HEALTH_MIN_ROWS", 100))
+
+    if df is None:
+        logger.critical("HEALTH_FAILURE: DataFrame is None.")
+        return False
+
     rows = len(df)
     if rows < min_rows:
-        logger.debug("DataFrame shape: %s", df.shape)
-        logger.debug("DF Preview:\n%s", df.head())
         logger.warning(
-            "HEALTH_INSUFFICIENT_ROWS: Only %d rows. Columns: %s",
+            "HEALTH_INSUFFICIENT_ROWS: only %d rows (min expected %d)",
             rows,
-            df.columns.tolist(),
+            min_rows,
         )
+        logger.debug("Shape: %s | Columns: %s", df.shape, df.columns.tolist())
+        logger.debug("Preview:\n%s", df.head(3))
         if rows == 0:
-            logger.critical("HEALTH_FAILURE: DataFrame is completely empty.")
+            logger.critical("HEALTH_FAILURE: empty DataFrame received")
         return False
-    logger.info("HEALTH_ROW_CHECK_PASSED: %d rows", rows)
+
+    logger.info("HEALTH_ROW_CHECK_PASSED: received %d rows", rows)
     return True
 
 
@@ -381,7 +387,8 @@ def get_ohlcv_columns(df):
     return cols
 
 
-from typing import List, Dict
+from typing import Dict, List
+
 try:
     from alpaca_trade_api.rest import REST
 except Exception:  # pragma: no cover - optional dependency

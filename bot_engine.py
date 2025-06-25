@@ -114,6 +114,7 @@ from functools import lru_cache
 import pandas as pd
 import pandas_market_calendars as mcal
 import pandas_ta as ta
+
 if not hasattr(ta, "ichimoku"):
     def _ichimoku_placeholder(*a, **k):
         return pd.DataFrame(), pd.DataFrame()
@@ -174,13 +175,13 @@ from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame
-from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import BayesianRidge, Ridge
 
 from meta_learning import optimize_signals
 from metrics_logger import log_metrics
 from pipeline import model_pipeline
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import BayesianRidge, Ridge
 from utils import log_warning, model_lock, safe_to_datetime
 
 try:
@@ -2063,7 +2064,7 @@ def pre_trade_health_check(
         Summary dictionary of issues encountered.
     """
 
-    min_rows = int(os.getenv("HEALTH_MIN_ROWS", "100"))
+    min_rows = int(os.getenv("HEALTH_MIN_ROWS", 100))
 
     summary = {
         "checked": 0,
@@ -2093,7 +2094,14 @@ def pre_trade_health_check(
                 df = None
                 break
 
-            if df is None or df.empty:
+            if df is None:
+                logger.critical(
+                    "HEALTH_FAILURE: DataFrame is None.",
+                    extra={"symbol": sym},
+                )
+                summary["failures"].append(sym)
+                break
+            if df.empty:
                 log_warning("HEALTH_NO_DATA", extra={"symbol": sym})
                 summary["failures"].append(sym)
                 break
@@ -2101,15 +2109,20 @@ def pre_trade_health_check(
             rows = len(df)
             logger.info("HEALTH_ROWS", extra={"symbol": sym, "rows": rows})
             if rows < min_rows:
-                logger.debug("DataFrame shape: %s", df.shape)
-                logger.debug("DF Preview:\n%s", df.head())
-                log_warning(
-                    "HEALTH_INSUFFICIENT_ROWS",
-                    extra={"symbol": sym, "rows": rows, "cols": df.columns.tolist()},
+                logger.warning(
+                    "HEALTH_INSUFFICIENT_ROWS: only %d rows (min expected %d)",
+                    rows,
+                    min_rows,
                 )
+                logger.debug(
+                    "Shape: %s | Columns: %s",
+                    df.shape,
+                    df.columns.tolist(),
+                )
+                logger.debug("Preview:\n%s", df.head(3))
                 if rows == 0:
                     logger.critical(
-                        "HEALTH_FAILURE: DataFrame is completely empty.",
+                        "HEALTH_FAILURE: empty DataFrame received",
                         extra={"symbol": sym},
                     )
                 summary["insufficient_rows"].append(sym)
@@ -2118,7 +2131,10 @@ def pre_trade_health_check(
                     time.sleep(60)
                 continue
             else:
-                logger.info("HEALTH_ROW_CHECK_PASSED: %d rows", rows)
+                logger.info(
+                    "HEALTH_ROW_CHECK_PASSED: received %d rows",
+                    rows,
+                )
             break
 
         if df is None or df.empty or rows < min_rows:
@@ -5787,7 +5803,9 @@ if __name__ == "__main__":
     main()
 
     # Then run only pending scheduled jobs in a tight loop
-    import schedule, time
+    import time
+
+    import schedule
     while True:
         schedule.run_pending()
         time.sleep(config.SCHEDULER_SLEEP_SECONDS)
