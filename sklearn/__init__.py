@@ -1,26 +1,80 @@
-"""Minimal sklearn stub for tests."""
+"""Minimal sklearn stub for tests.
+
+When the real :mod:`scikit-learn` package is installed this module will
+defer to it so the application can use the full implementation.  The
+lightweight stub defined here is only used when the dependency is missing
+which is the case in the test environment.
+"""
+
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+import os
 import sys
 from types import ModuleType
 
-base = ModuleType("sklearn.base")
-class BaseEstimator: ...
-base.BaseEstimator = BaseEstimator
-base.clone = lambda est: est
+_THIS_DIR = os.path.dirname(__file__)
 
-linear_model = ModuleType("sklearn.linear_model")
-class Ridge: ...
-class BayesianRidge: ...
-linear_model.Ridge = Ridge
-linear_model.BayesianRidge = BayesianRidge
-ensemble = ModuleType("sklearn.ensemble")
-class RandomForestClassifier: ...
-ensemble.RandomForestClassifier = RandomForestClassifier
-decomposition = ModuleType("sklearn.decomposition")
-model_selection = ModuleType("sklearn.model_selection")
-pipeline = ModuleType("sklearn.pipeline")
-preprocessing = ModuleType("sklearn.preprocessing")
+def _load_real_sklearn() -> ModuleType | None:
+    """Attempt to load the real scikit-learn package if installed."""
+    for path in sys.path:
+        if os.path.abspath(path) == os.path.abspath(_THIS_DIR):
+            continue
+        spec = importlib.machinery.PathFinder.find_spec(__name__, [path])
+        if spec and spec.origin and os.path.abspath(os.path.dirname(spec.origin)) != os.path.abspath(_THIS_DIR):
+            mod = importlib.util.module_from_spec(spec)
+            assert spec.loader
+            spec.loader.exec_module(mod)
+            return mod
+    return None
 
-for mod in [base, linear_model, ensemble, decomposition, model_selection, pipeline, preprocessing]:
-    sys.modules[mod.__name__] = mod
+_real = _load_real_sklearn()
+if _real is not None:
+    globals().update(_real.__dict__)
+    sys.modules[__name__] = _real
+    __all__ = getattr(_real, "__all__", [])
+else:
 
-__all__ = ["base", "linear_model", "ensemble", "decomposition", "model_selection", "pipeline", "preprocessing"]
+    base = ModuleType("sklearn.base")
+
+    class BaseEstimator: ...
+
+    base.BaseEstimator = BaseEstimator
+    base.clone = lambda est: est
+
+    linear_model = ModuleType("sklearn.linear_model")
+
+    class Ridge: ...
+
+    class BayesianRidge: ...
+
+    linear_model.Ridge = Ridge
+    linear_model.BayesianRidge = BayesianRidge
+    ensemble = ModuleType("sklearn.ensemble")
+
+    class RandomForestClassifier: ...
+
+    ensemble.RandomForestClassifier = RandomForestClassifier
+    decomposition = ModuleType("sklearn.decomposition")
+    
+    class PCA: ...
+    
+    decomposition.PCA = PCA
+
+    model_selection = ModuleType("sklearn.model_selection")
+    pipeline = ModuleType("sklearn.pipeline")
+    preprocessing = ModuleType("sklearn.preprocessing")
+
+    for mod in [base, linear_model, ensemble, decomposition, model_selection, pipeline, preprocessing]:
+        sys.modules[mod.__name__] = mod
+
+    __all__ = [
+        "base",
+        "linear_model",
+        "ensemble",
+        "decomposition",
+        "model_selection",
+        "pipeline",
+        "preprocessing",
+    ]
