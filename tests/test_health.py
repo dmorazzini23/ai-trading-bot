@@ -20,19 +20,21 @@ class DummyCtx:
         self.api = DummyAPI()
 
 
-def test_health_check_empty_dataframe_raises():
+def test_health_check_empty_dataframe_raises(monkeypatch):
+    monkeypatch.setenv("HEALTH_MIN_ROWS", "30")
     ctx = DummyCtx(pd.DataFrame())
     with pytest.raises(RuntimeError):
         pre_trade_health_check(ctx, ["AAA"])
 
 
-def test_health_check_succeeds():
+def test_health_check_succeeds(monkeypatch):
+    monkeypatch.setenv("HEALTH_MIN_ROWS", "30")
     df = pd.DataFrame({
-        "open": [1]*30,
-        "high": [1]*30,
-        "low": [1]*30,
-        "close": [1]*30,
-        "volume": [1]*30,
+        "open": [1] * 30,
+        "high": [1] * 30,
+        "low": [1] * 30,
+        "close": [1] * 30,
+        "volume": [1] * 30,
     })
     ctx = DummyCtx(df)
     pre_trade_health_check(ctx, ["AAA"])

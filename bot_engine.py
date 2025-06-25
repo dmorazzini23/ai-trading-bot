@@ -2063,6 +2063,8 @@ def pre_trade_health_check(
         Summary dictionary of issues encountered.
     """
 
+    min_rows = int(os.getenv("HEALTH_MIN_ROWS", "100"))
+
     summary = {
         "checked": 0,
         "failures": [],
@@ -2099,15 +2101,24 @@ def pre_trade_health_check(
             rows = len(df)
             logger.info("HEALTH_ROWS", extra={"symbol": sym, "rows": rows})
             if rows < min_rows:
+                logger.debug("DataFrame shape: %s", df.shape)
+                logger.debug("DF Preview:\n%s", df.head())
                 log_warning(
                     "HEALTH_INSUFFICIENT_ROWS",
-                    extra={"symbol": sym, "rows": rows},
+                    extra={"symbol": sym, "rows": rows, "cols": df.columns.tolist()},
                 )
+                if rows == 0:
+                    logger.critical(
+                        "HEALTH_FAILURE: DataFrame is completely empty.",
+                        extra={"symbol": sym},
+                    )
                 summary["insufficient_rows"].append(sym)
                 attempts += 1
                 if attempts < 3:
                     time.sleep(60)
                 continue
+            else:
+                logger.info("HEALTH_ROW_CHECK_PASSED: %d rows", rows)
             break
 
         if df is None or df.empty or rows < min_rows:
