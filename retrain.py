@@ -722,11 +722,15 @@ def retrain_meta_learner(
             X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
             y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
 
-        if len(y_train) < 3:
-            logger.warning(
-                "[retrain_meta_learner] Not enough training samples for %s; skipping",
-                regime,
-            )
+        try:
+            if len(y_train) < 3:
+                logger.warning(
+                    "[retrain_meta_learner] Not enough training samples for %s; skipping",
+                    regime,
+                )
+                continue
+        except Exception as e:
+            logger.exception("Error checking training sample size: %s", e)
             continue
 
         pos_ratio = y_train.mean()
