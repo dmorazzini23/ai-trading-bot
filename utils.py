@@ -227,10 +227,11 @@ def health_check(df: pd.DataFrame | None, resolution: str) -> bool:
             rows,
             min_rows,
         )
-        logger.debug("Shape: %s | Columns: %s", df.shape, df.columns.tolist())
+        logger.debug("Shape: %s", df.shape)
+        logger.debug("Columns: %s", df.columns.tolist())
         logger.debug("Preview:\n%s", df.head(3))
         if rows == 0:
-            logger.critical("HEALTH_FAILURE: empty DataFrame received")
+            logger.critical("HEALTH_FAILURE: empty dataset loaded")
         return False
 
     logger.info("HEALTH_ROW_CHECK_PASSED: received %d rows", rows)
