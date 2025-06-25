@@ -5509,7 +5509,7 @@ def main() -> None:
 
         # --- Market hours check ---
 
-        now_utc = pd.Timestamp.utcnow()
+        now_utc = pd.Timestamp.utcnow().tz_localize("UTC")
         if is_holiday(now_utc):
             logger.warning(
                 f"No NYSE market schedule for {now_utc.date()}; skipping market open/close check."
