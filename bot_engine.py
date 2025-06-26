@@ -4579,13 +4579,14 @@ def prepare_indicators(
 
     existing = [col for col in required if col in frame.columns]
     missing = [col for col in required if col not in frame.columns]
+
     if missing:
         logger.warning(
             "[prepare_indicators] Missing expected columns: %s", missing
         )
+
     if existing:
-        how = "any" if freq == "daily" else "all"
-        frame.dropna(subset=existing, how=how, inplace=True)
+        frame.dropna(subset=existing, how="all", inplace=True)
 
     if freq != "daily":
         frame.reset_index(drop=True, inplace=True)
