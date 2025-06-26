@@ -1,14 +1,13 @@
 import logging
 import random
+import sys
 import threading
 import time as pytime
+import types
 import warnings
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional, Sequence
-import types
-
-import sys
 
 # Do not hard fail when running under older Python versions in tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
@@ -55,6 +54,7 @@ MINUTES_REQUIRED = 31
 HISTORICAL_START = "2025-06-01"
 HISTORICAL_END = "2025-06-06"
 import logging
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 try:
@@ -62,6 +62,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     finnhub = types.SimpleNamespace(Client=lambda *a, **k: None)
 import pandas as pd
+
 try:
     from alpaca.common.exceptions import APIError
     from alpaca.data.requests import StockBarsRequest

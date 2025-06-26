@@ -1,13 +1,14 @@
 """Simple signal generation module for tests."""
 
 import importlib
+import logging
 import time
 from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
 import requests
-import logging
+
 logger = logging.getLogger(__name__)
 def load_module(name: str) -> Any:
     """Dynamically import a module using :mod:`importlib`."""

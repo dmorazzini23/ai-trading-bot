@@ -1,7 +1,9 @@
+import datetime as dt
 import sys
 import types
-import datetime as dt
+
 import pandas as pd
+
 import data_fetcher
 from utils import health_check
 

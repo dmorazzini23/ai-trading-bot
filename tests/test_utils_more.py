@@ -1,9 +1,10 @@
-import types
-import sys
-from types import MappingProxyType
-from datetime import datetime, timezone
-import pandas as pd
 import socket
+import sys
+import types
+from datetime import datetime, timezone
+from types import MappingProxyType
+
+import pandas as pd
 import pytest
 
 import utils

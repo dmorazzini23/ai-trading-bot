@@ -1,12 +1,12 @@
 """Portfolio rebalancing utilities."""
 
 import logging
-from datetime import datetime, timedelta, timezone
-import time
-
-from alerts import send_slack_alert
-import config
 import threading
+import time
+from datetime import datetime, timedelta, timezone
+
+import config
+from alerts import send_slack_alert
 
 logger = logging.getLogger(__name__)
 

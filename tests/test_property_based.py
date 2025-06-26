@@ -1,14 +1,16 @@
 import sys
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 # Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import signals
 import risk_engine
+import signals
 import utils
 
 

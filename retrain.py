@@ -29,13 +29,13 @@ except ImportError:
     pass
 from datetime import date, datetime, time, timedelta, timezone
 
+import pandas_ta as ta
 import requests
 from lightgbm import LGBMClassifier
+
 from sklearn.model_selection import ParameterSampler, cross_val_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
-
-import pandas_ta as ta
 
 try:
     import optuna

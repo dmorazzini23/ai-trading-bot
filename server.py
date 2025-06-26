@@ -8,10 +8,9 @@ import threading
 import traceback
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
-
 from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request
+from pydantic import BaseModel, ValidationError
 
 from alerting import send_slack_alert
 from validate_env import settings
@@ -20,6 +19,7 @@ from validate_env import settings
 load_dotenv(dotenv_path=".env", override=True)
 
 import config
+
 
 # Configure Flask and root logger to integrate with Gunicorn's error logger
 def configure_logging(flask_app: Flask) -> None:
