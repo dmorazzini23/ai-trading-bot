@@ -132,7 +132,7 @@ def predict(csv_path: str, freq: str = "intraday") -> tuple[int | None, float | 
         proba,
     )
     log_metrics({
-        "timestamp": pd.Timestamp.utcnow().isoformat(),
+        "timestamp": pd.Timestamp.now(tz="UTC").isoformat(),
         "symbol": symbol,
         "regime": regime,
         "prediction": int(pred),

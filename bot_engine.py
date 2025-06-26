@@ -942,7 +942,7 @@ class DataFetcher:
                     )
                     ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
                     if ts is None:
-                        ts = pd.Timestamp.utcnow()
+                        ts = pd.Timestamp.now(tz="UTC")
                     dummy_date = ts
                     df = pd.DataFrame(
                         [
@@ -960,7 +960,7 @@ class DataFetcher:
                 logger.warning(f"ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
                 ts2 = pd.to_datetime(end_ts, utc=True, errors="coerce")
                 if ts2 is None:
-                    ts2 = pd.Timestamp.utcnow()
+                    ts2 = pd.Timestamp.now(tz="UTC")
                 dummy_date = ts2
                 df = pd.DataFrame(
                     [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
@@ -970,7 +970,7 @@ class DataFetcher:
             logger.warning(f"ALPACA DAILY FETCH EXCEPTION for {symbol}: {repr(e)}")
             ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
             if ts is None:
-                ts = pd.Timestamp.utcnow()
+                ts = pd.Timestamp.now(tz="UTC")
             dummy_date = ts
             df = pd.DataFrame(
                 [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
@@ -1304,7 +1304,7 @@ def prefetch_daily_data(
                         )
                         tsd = pd.to_datetime(end_date, utc=True, errors="coerce")
                         if tsd is None:
-                            tsd = pd.Timestamp.utcnow()
+                            tsd = pd.Timestamp.now(tz="UTC")
                         dummy_date = tsd
                         dummy_df = pd.DataFrame(
                             [
@@ -1326,7 +1326,7 @@ def prefetch_daily_data(
             for sym in symbols:
                 t2 = pd.to_datetime(end_date, utc=True, errors="coerce")
                 if t2 is None:
-                    t2 = pd.Timestamp.utcnow()
+                    t2 = pd.Timestamp.now(tz="UTC")
                 dummy_date = t2
                 dummy_df = pd.DataFrame(
                     [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
@@ -1340,7 +1340,7 @@ def prefetch_daily_data(
         for sym in symbols:
             t3 = pd.to_datetime(end_date, utc=True, errors="coerce")
             if t3 is None:
-                t3 = pd.Timestamp.utcnow()
+                t3 = pd.Timestamp.now(tz="UTC")
             dummy_date = t3
             dummy_df = pd.DataFrame(
                 [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
@@ -1619,7 +1619,7 @@ class SignalManager:
         if df is None or len(df) <= self.momentum_lookback:
             return -1, 0.0, "momentum"
         try:
-            df["momentum"] = df["close"].pct_change(self.momentum_lookback)
+            df["momentum"] = df["close"].pct_change(self.momentum_lookback, fill_method=None)
             val = df["momentum"].iloc[-1]
             s = 1 if val > 0 else -1 if val < 0 else -1
             w = min(abs(val) * 10, 1.0)
@@ -2166,7 +2166,7 @@ def pre_trade_health_check(
         # Require data to be recent
         if not orig_range:
             last_ts = df.index[-1]
-            if last_ts < pd.Timestamp.utcnow() - pd.Timedelta(days=2):
+            if last_ts < pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=2):
                 log_warning("HEALTH_STALE_DATA", extra={"symbol": sym})
                 summary.setdefault("stale_data", []).append(sym)
 
@@ -2587,11 +2587,11 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
         # Handle DataFrame with MultiIndex columns (symbol, field) or single-level
         if isinstance(d.columns, pd.MultiIndex):
             if (s, "close") in d.columns:
-                series = d[(s, "close")].pct_change().dropna()
+                series = d[(s, "close")].pct_change(fill_method=None).dropna()
             else:
                 continue
         else:
-            series = d["close"].pct_change().dropna()
+            series = d["close"].pct_change(fill_method=None).dropna()
         if not series.empty:
             rets[s] = series
 
@@ -3259,7 +3259,7 @@ def calculate_entry_size(
     cap_sz = int(round((cash * cap_pct) / price)) if price > 0 else 0
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
     rets = (
-        df["close"].pct_change().dropna().values
+        df["close"].pct_change(fill_method=None).dropna().values
         if df is not None and not df.empty
         else np.array([0.0])
     )
@@ -4473,18 +4473,18 @@ def _add_multi_timeframe_features(
 ) -> None:
     """Add multi-timeframe and lag-based features."""
     try:
-        df["ret_5m"] = df["close"].pct_change(5)
-        df["ret_1h"] = df["close"].pct_change(60)
-        df["ret_d"] = df["close"].pct_change(390)
-        df["ret_w"] = df["close"].pct_change(1950)
+        df["ret_5m"] = df["close"].pct_change(5, fill_method=None)
+        df["ret_1h"] = df["close"].pct_change(60, fill_method=None)
+        df["ret_d"] = df["close"].pct_change(390, fill_method=None)
+        df["ret_w"] = df["close"].pct_change(1950, fill_method=None)
         df["vol_norm"] = (
             df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
         )
         df["5m_vs_1h"] = df["ret_5m"] - df["ret_1h"]
-        df["vol_5m"] = df["close"].pct_change().rolling(5).std()
-        df["vol_1h"] = df["close"].pct_change().rolling(60).std()
-        df["vol_d"] = df["close"].pct_change().rolling(390).std()
-        df["vol_w"] = df["close"].pct_change().rolling(1950).std()
+        df["vol_5m"] = df["close"].pct_change(fill_method=None).rolling(5).std()
+        df["vol_1h"] = df["close"].pct_change(fill_method=None).rolling(60).std()
+        df["vol_d"] = df["close"].pct_change(fill_method=None).rolling(390).std()
+        df["vol_w"] = df["close"].pct_change(fill_method=None).rolling(1950).std()
         df["vol_ratio"] = df["vol_5m"] / df["vol_1h"]
         df["mom_agg"] = df["ret_5m"] + df["ret_1h"] + df["ret_d"]
         df["lag_close_1"] = df["close"].shift(1)
@@ -4596,7 +4596,7 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     else:
         logger.warning("Regime MACD calculation failed")
         feat["macd"] = np.nan
-    feat["vol"] = df["close"].pct_change().rolling(14).std()
+    feat["vol"] = df["close"].pct_change(fill_method=None).rolling(14).std()
     return feat.dropna()
 
 
@@ -4848,7 +4848,7 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
         if df is None or len(df) < 90:
             continue
-        rts = df["close"].pct_change().tail(90).reset_index(drop=True)
+        rts = df["close"].pct_change(fill_method=None).tail(90).reset_index(drop=True)
         returns_df[sym] = rts
     returns_df = returns_df.dropna(axis=1, how="any")
     if returns_df.shape[1] < 2:
@@ -5084,7 +5084,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
             .iloc[:-1]
             .values
         )
-        y_train = df_train["close"].pct_change().shift(-1).fillna(0).values[:-1]
+        y_train = df_train["close"].pct_change(fill_method=None).shift(-1).fillna(0).values[:-1]
         with model_lock:
             try:
                 if len(X_train) == 0:
@@ -5512,7 +5512,7 @@ def main() -> None:
         # pd.Timestamp.utcnow() already returns a timezone-aware UTC timestamp,
         # so calling tz_localize("UTC") would raise an error. Simply use the
         # timestamp directly to avoid "Cannot localize tz-aware Timestamp".
-        now_utc = pd.Timestamp.utcnow()
+        now_utc = pd.Timestamp.now(tz="UTC")
         if is_holiday(now_utc):
             logger.warning(
                 f"No NYSE market schedule for {now_utc.date()}; skipping market open/close check."

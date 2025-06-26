@@ -1,6 +1,7 @@
 import types
-import pandas as pd
 import datetime as dt
+import pandas as pd
+import sys
 
 import bot_engine as bot
 import data_fetcher
@@ -14,21 +15,29 @@ def _stub_df() -> pd.DataFrame:
             "high": [1.1],
             "low": [0.9],
             "close": [1.05],
-            "volume": [100],
+            "volume": [100000],
         },
         index=[pd.Timestamp("2024-01-01T09:30:00Z")],
     )
 
 
-if __name__ == "__main__":
+def test_fetch_fallback_to_daily(monkeypatch):
+    """Minute fetch None triggers daily fallback and screening."""
     df = _stub_df()
-    data_fetcher.get_minute_df = lambda symbol, start_date, end_date: df
-    data_fetcher.get_daily_df = lambda symbol, start, end: df
+    monkeypatch.setattr(data_fetcher, "get_minute_df", lambda *a, **k: None)
+    monkeypatch.setattr(data_fetcher, "get_daily_df", lambda *a, **k: df)
+    monkeypatch.setitem(sys.modules, "pandas_ta", types.SimpleNamespace(atr=lambda *a, **k: pd.Series([1])))
     ctx = types.SimpleNamespace(data_fetcher=data_fetcher)
     result = data_fetcher.get_minute_df("AAPL", dt.date.today(), dt.date.today())
     if result is None:
         result = data_fetcher.get_daily_df("AAPL", dt.date.today(), dt.date.today())
-    health_check(result, "minute")
-    bot.screen_universe(["AAPL"], ctx)
+    assert health_check(result, "minute")
+    assert bot.screen_universe(["AAPL"], ctx) == ["AAPL"]
 
 
+def test_fetch_minute_success(monkeypatch):
+    """Minute fetch success path."""
+    df = _stub_df()
+    monkeypatch.setattr(data_fetcher, "get_minute_df", lambda *a, **k: df)
+    result = data_fetcher.get_minute_df("AAPL", dt.date.today(), dt.date.today())
+    assert health_check(result, "minute")

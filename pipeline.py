@@ -16,10 +16,10 @@ class FeatureBuilder(BaseEstimator, TransformerMixin):
         if hasattr(df, "columns"):
             close = df["close"].astype(float)
             features = {
-                "returns": close.pct_change().fillna(0),
+                "returns": close.pct_change(fill_method=None).fillna(0),
                 "ma10": close.rolling(10).mean().bfill(),
                 "ma30": close.rolling(30).mean().bfill(),
-                "vol": close.pct_change().rolling(10).std().fillna(0),
+                "vol": close.pct_change(fill_method=None).rolling(10).std().fillna(0),
                 "sma_50": close.rolling(50).mean().bfill(),
                 "sma_200": close.rolling(200).mean().bfill(),
                 "price_change": (close.diff() > 0).astype(int),

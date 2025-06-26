@@ -97,7 +97,7 @@ def run_backtest(
     for s in symbols:
         df_sym = load_price_data(s, start, end)
         if not df_sym.empty:
-            df_sym["ret"] = df_sym["Close"].pct_change().fillna(0)
+            df_sym["ret"] = df_sym["Close"].pct_change(fill_method=None).fillna(0)
         data[s] = df_sym
 
     cash = 100000.0
@@ -146,7 +146,7 @@ def run_backtest(
         return {"net_pnl": 0.0, "sharpe": float("nan")}
 
     series = pd.Series(portfolio, index=dates)
-    pct = series.pct_change().dropna()
+    pct = series.pct_change(fill_method=None).dropna()
 
     if pct.empty or pct.std() == 0:
         sharpe = float("nan")
