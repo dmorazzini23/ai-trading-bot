@@ -7,9 +7,17 @@ from conftest import reload_module
 
 def test_get_rotating_handler_fallback(monkeypatch, tmp_path, caplog):
     caplog.set_level("ERROR")
-    monkeypatch.setattr(logger, "RotatingFileHandler", lambda *a, **k: (_ for _ in ()).throw(OSError("fail")))
-    h = logger.get_rotating_handler(str(tmp_path / "x.log"))
-    assert isinstance(h, logging.StreamHandler)
+
+    def raise_os(*_a, **_k):
+        raise OSError("fail")
+
+    monkeypatch.setattr(logger, "RotatingFileHandler", raise_os)
+    try:
+        handler = logger.get_rotating_handler(str(tmp_path / "x.log"))
+    except OSError:
+        pytest.fail("OSError should be handled inside get_rotating_handler")
+
+    assert isinstance(handler, logging.StreamHandler)
     assert "Cannot open log file" in caplog.text
 
 
