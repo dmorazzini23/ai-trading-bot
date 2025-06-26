@@ -8,15 +8,17 @@ import logging
 import time
 from datetime import datetime, timedelta
 
-# After running with ``--profile``, view ``backtest_profile.prof`` using
-# ``snakeviz backtest_profile.prof`` or
-# ``gprof2dot -f pstats backtest_profile.prof | dot -Tpng -o profile.png``.
-
 from dotenv import load_dotenv
 
 from backtester import optimize_hyperparams as _optimize_hyperparams
 from backtester import run_backtest as _run_backtest
 from backtester.core import load_price_data as _load_price_data
+
+# After running with ``--profile``, view ``backtest_profile.prof`` using
+# ``snakeviz backtest_profile.prof`` or
+# ``gprof2dot -f pstats backtest_profile.prof | dot -Tpng -o profile.png``.
+
+
 
 load_dotenv(dotenv_path=".env", override=True)
 logger = logging.getLogger(__name__)

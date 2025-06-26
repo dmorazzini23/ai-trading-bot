@@ -1,7 +1,7 @@
-import pandas as pd
 import types
-
 from pathlib import Path
+
+import pandas as pd
 
 import backtester.data_loader as data_loader
 

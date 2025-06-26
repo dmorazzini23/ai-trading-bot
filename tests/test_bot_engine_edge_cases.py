@@ -1,6 +1,6 @@
 import ast
-import types
 import sys
+import types
 from pathlib import Path
 
 import numpy as np
