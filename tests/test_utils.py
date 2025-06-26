@@ -1,13 +1,13 @@
 import os
 import socket
 import types
-from datetime import datetime, date, timezone
+from datetime import date, datetime, timezone
 
 import numpy as np
 import pandas as pd
 import pytest
-import utils
 
+import utils
 
 # Basic utils behaviour
 

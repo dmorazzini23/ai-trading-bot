@@ -2158,10 +2158,10 @@ def pre_trade_health_check(
             df.index = pd.to_datetime(df.index, errors="coerce")
         if getattr(df.index, "tz", None) is None:
             log_warning("HEALTH_TZ_MISSING", extra={"symbol": sym})
-            df.index = pd.to_datetime(df.index, utc=True).tz_localize(None)
+            df.index = pd.to_datetime(df.index, utc=True)
             summary["timezone_issues"].append(sym)
         else:
-            df.index = df.index.tz_convert("UTC").tz_localize(None)
+            df.index = df.index.tz_convert("UTC")
 
         # Require data to be recent
         if not orig_range:

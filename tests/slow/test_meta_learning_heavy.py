@@ -1,9 +1,11 @@
 import io
 import types
+
 import pandas as pd
 import pytest
-import sklearn.linear_model
+
 import meta_learning
+import sklearn.linear_model
 
 
 @pytest.mark.slow
