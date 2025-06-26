@@ -10,7 +10,9 @@ os.environ.setdefault("ALPACA_API_KEY", "dummy")
 os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
 
 # stub missing deps
-sys.modules.setdefault("requests", types.SimpleNamespace(post=lambda *a, **k: None))
+req_mod = types.ModuleType("requests")
+req_mod.post = lambda *a, **k: None
+sys.modules.setdefault("requests", req_mod)
 for _m in ["dotenv"]:
     mod = types.ModuleType(_m)
     if _m == "dotenv":
