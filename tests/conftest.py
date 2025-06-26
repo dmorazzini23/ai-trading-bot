@@ -40,3 +40,29 @@ def cleanup_test_env_vars():
     """Clean up testing flag after session."""
     yield
     os.environ.pop("TESTING", None)
+
+
+import importlib
+import types
+
+
+def reload_module(mod):
+    """Reload a module within tests."""
+    return importlib.reload(mod)
+
+
+@pytest.fixture(autouse=True)
+def reload_utils_module():
+    """Ensure utils is reloaded for each test."""
+    import utils
+    importlib.reload(utils)
+    yield
+
+
+def load_runner(monkeypatch):
+    """Import and reload the runner module with a dummy bot."""
+    bot_mod = types.ModuleType("bot")
+    bot_mod.main = lambda: None
+    monkeypatch.setitem(sys.modules, "bot", bot_mod)
+    import runner as r
+    return importlib.reload(r)
