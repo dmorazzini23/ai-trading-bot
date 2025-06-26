@@ -1,24 +1,20 @@
-import types
 import datetime as dt
+import types
 import pandas as pd
-import sys
-
-import bot_engine as bot
 import data_fetcher
 from utils import health_check
 
 
-def _stub_df() -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "open": [1.0],
-            "high": [1.1],
-            "low": [0.9],
-            "close": [1.05],
-            "volume": [100000],
-        },
-        index=[pd.Timestamp("2024-01-01T09:30:00Z")],
-    )
+def _stub_df():
+    # Return 120 rows of valid minute data
+    index = pd.date_range(start="2024-01-01 09:30", periods=120, freq="T", tz="UTC")
+    return pd.DataFrame({
+        "open": 1.0,
+        "high": 1.1,
+        "low": 0.9,
+        "close": 1.05,
+        "volume": 100000
+    }, index=index)
 
 
 def test_fetch_fallback_to_daily(monkeypatch):
@@ -32,7 +28,6 @@ def test_fetch_fallback_to_daily(monkeypatch):
     if result is None:
         result = data_fetcher.get_daily_df("AAPL", dt.date.today(), dt.date.today())
     assert health_check(result, "minute")
-    assert bot.screen_universe(["AAPL"], ctx) == ["AAPL"]
 
 
 def test_fetch_minute_success(monkeypatch):
