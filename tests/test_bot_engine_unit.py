@@ -32,8 +32,10 @@ MOD.os = __import__("os")
 MOD.utils = __import__("utils")
 MOD.types = types
 import joblib
+
 MOD.joblib = joblib
 import logging
+
 MOD.logger = logging.getLogger("test")
 MOD.MODEL_PATH = "model.pkl"
 MOD.MODEL_RF_PATH = "model_rf.pkl"
