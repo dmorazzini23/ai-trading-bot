@@ -39,4 +39,3 @@ def test_fetch_minute_success(monkeypatch):
     monkeypatch.setattr(data_fetcher, "get_minute_df", lambda *a, **k: df)
     result = data_fetcher.get_minute_df("AAPL", dt.date.today(), dt.date.today())
     assert health_check(result, "minute")
-
