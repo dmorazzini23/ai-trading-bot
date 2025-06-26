@@ -94,8 +94,13 @@ def run_backtest(
 ) -> BacktestResult:
     """Execute a simple backtest over daily bars."""
     data: dict[str, pd.DataFrame] = {}
+    required_cols = {"Open", "High", "Low", "Close", "Volume"}
     for sym in symbols:
         df_sym = load_price_data(sym, start, end)
+        missing = required_cols - set(df_sym.columns)
+        if missing:
+            logger.warning("Missing required columns for %s: %s", sym, missing)
+            continue
         if not df_sym.empty:
             df_sym["ret"] = df_sym["Close"].pct_change(fill_method=None).fillna(0)
         data[sym] = df_sym
