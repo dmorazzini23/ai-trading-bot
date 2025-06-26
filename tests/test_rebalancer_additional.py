@@ -1,4 +1,3 @@
-import types
 import rebalancer
 
 
@@ -21,12 +20,14 @@ def test_maybe_rebalance_skip(monkeypatch):
 
 def test_start_rebalancer(monkeypatch):
     called = []
+
     def fake_thread(target, daemon=False):
         class T:
             def start(self):
-                target()
+                called.append("start-called")
         return T()
+
     monkeypatch.setattr(rebalancer.threading, "Thread", fake_thread)
-    monkeypatch.setattr(rebalancer, "maybe_rebalance", lambda ctx: called.append(True))
+    monkeypatch.setattr(rebalancer, "maybe_rebalance", lambda ctx: called.append("maybe-rebalance"))
     t = rebalancer.start_rebalancer("ctx")
-    assert called and isinstance(t, object)
+    assert "start-called" in called
