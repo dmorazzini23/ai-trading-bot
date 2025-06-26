@@ -4520,7 +4520,14 @@ def _drop_inactive_features(df: pd.DataFrame) -> None:
 
 
 def prepare_indicators(frame, symbol=None, ctx=None):
-    """Validate and clean indicator columns."""
+    """Validate and clean indicator columns.
+
+    Ensures a minimal set of technical indicators are present. If fewer
+    than eight of the required indicators are available the function
+    returns ``None``. When ``stochrsi`` is missing but ``rsi`` exists it
+    is substituted automatically. Rows where all available indicators are
+    NaN are dropped before returning the cleaned DataFrame.
+    """
     required = [
         "rsi",
         "macd",
