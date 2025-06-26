@@ -19,6 +19,7 @@ if 'bot_engine' not in sys.modules:
     mod.ta = types.SimpleNamespace(
         rsi=lambda close, length=14: pd.Series(np.arange(len(close)), dtype=float)
     )
+    mod.profile = lambda f: f
     exec(compile(ast.Module([func], []), filename=str(src_path), mode='exec'), mod.__dict__)
     sys.modules['bot_engine'] = mod
 

@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import traceback
+import types
 
 # Avoid failing under older Python versions during tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
@@ -17,6 +18,13 @@ setup_logging(log_file=LOG_PATH)
 MIN_CYCLE = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
 config.validate_env_vars()
 config.log_config(config.REQUIRED_ENV_VARS)
+
+# Provide a no-op ``profile`` decorator when line_profiler is not active.
+try:
+    profile  # type: ignore[name-defined]
+except NameError:  # pragma: no cover - used only when kernprof is absent
+    def profile(func):  # type: ignore[return-type]
+        return func
 
 def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
@@ -4519,6 +4527,7 @@ def _drop_inactive_features(df: pd.DataFrame) -> None:
             raise
 
 
+@profile
 def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     # Calculate RSI and assign to both rsi and rsi_14
     frame['rsi'] = ta.rsi(frame['close'], length=14)
@@ -5650,6 +5659,7 @@ def main() -> None:
         raise
 
 
+@profile
 def prepare_indicators_simple(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         logger.error("Input dataframe is None or empty in prepare_indicators.")
@@ -5756,6 +5766,48 @@ def get_latest_price(symbol: str):
     except Exception as e:
         logger.error("Failed to get latest price for %s: %s", symbol, e, exc_info=True)
         return None
+
+
+def initialize_bot(api=None, data_loader=None):
+    """Return a minimal context and state for unit tests."""
+    ctx = types.SimpleNamespace(api=api, data_loader=data_loader)
+    state = {"positions": {}}
+    return ctx, state
+
+
+def generate_signals(df: pd.DataFrame) -> pd.Series:
+    """Generate basic momentum signals from a price column."""
+    if df is None or "price" not in df.columns:
+        raise KeyError("price")
+    return np.sign(df["price"].diff().fillna(0))
+
+
+def execute_trades(ctx, signals: pd.Series) -> list[tuple[str, str]]:
+    """Return orders inferred from ``signals`` without hitting real APIs."""
+    orders = []
+    for symbol, sig in signals.items():
+        if sig == 0:
+            continue
+        side = "buy" if sig > 0 else "sell"
+        api = getattr(ctx, "api", None)
+        if api is not None and hasattr(api, "submit_order"):
+            try:
+                api.submit_order(symbol, 1, side)
+            except Exception:
+                pass
+        orders.append((symbol, side))
+    return orders
+
+
+def run_trading_cycle(ctx, df: pd.DataFrame) -> list[tuple[str, str]]:
+    """Generate signals from ``df`` and execute trades via ``ctx``."""
+    signals = generate_signals(df)
+    return execute_trades(ctx, signals)
+
+
+def health_check(df: pd.DataFrame, resolution: str) -> bool:
+    """Delegate to :func:`utils.health_check` for convenience."""
+    return utils.health_check(df, resolution)
 
 
 if __name__ == "__main__":

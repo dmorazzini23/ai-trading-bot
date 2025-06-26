@@ -8,6 +8,10 @@ import logging
 import time
 from datetime import datetime, timedelta
 
+# After running with ``--profile``, view ``backtest_profile.prof`` using
+# ``snakeviz backtest_profile.prof`` or
+# ``gprof2dot -f pstats backtest_profile.prof | dot -Tpng -o profile.png``.
+
 from dotenv import load_dotenv
 
 from backtester import optimize_hyperparams as _optimize_hyperparams
@@ -53,6 +57,11 @@ def main() -> None:
         help="Backtest end date YYYY-MM-DD",
     )
     parser.add_argument("--mode", choices=["grid"], default="grid")
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Enable cProfile and save output to backtest_profile.prof",
+    )
     args = parser.parse_args()
 
     start = args.start or str(default_start)
@@ -76,11 +85,23 @@ def main() -> None:
         start,
         end,
     )
+    profiler = None
+    if args.profile:
+        import cProfile
+
+        profiler = cProfile.Profile()
+        profiler.enable()
+
     best = optimize_hyperparams_wrapper(None, symbols, data_cfg, param_grid, metric="sharpe_ratio")
 
     with open("best_hyperparams.json", "w", encoding="utf-8") as f:
         json.dump(best, f, indent=2)
     logger.info("Best hyperparameters: %s", best)
+
+    if profiler is not None:
+        profiler.disable()
+        profiler.dump_stats("backtest_profile.prof")
+        logger.info("cProfile results saved to backtest_profile.prof")
 
 
 if __name__ == "__main__":
