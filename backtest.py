@@ -40,25 +40,27 @@ def main() -> None:
     parser.add_argument(
         "--symbols",
         required=False,
-        default="AAPL,MSFT,SPY",
-        help="Comma separated symbols (default: AAPL,MSFT,SPY)",
+        help="Comma separated symbols",
     )
     parser.add_argument(
         "--start",
         required=False,
-        default=str(default_start),
-        help=f"Backtest start date YYYY-MM-DD (default: {default_start})",
+        help="Backtest start date YYYY-MM-DD",
     )
     parser.add_argument(
         "--end",
         required=False,
-        default=str(default_end),
-        help=f"Backtest end date YYYY-MM-DD (default: {default_end})",
+        help="Backtest end date YYYY-MM-DD",
     )
     parser.add_argument("--mode", choices=["grid"], default="grid")
     args = parser.parse_args()
 
-    symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+    start = args.start or str(default_start)
+    end = args.end or str(default_end)
+    if args.symbols:
+        symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+    else:
+        symbols = ["AAPL", "MSFT"]
     param_grid = {
         "BUY_THRESHOLD": [0.15, 0.2, 0.25],
         "TRAILING_FACTOR": [1.0, 1.2, 1.5],
@@ -67,12 +69,12 @@ def main() -> None:
         "LIMIT_ORDER_SLIPPAGE": [0.001, 0.005],
     }
 
-    data_cfg = {"start": args.start, "end": args.end}
+    data_cfg = {"start": start, "end": end}
     logger.info(
         "Starting grid search over %s symbols from %s to %s",
         len(symbols),
-        args.start,
-        args.end,
+        start,
+        end,
     )
     best = optimize_hyperparams_wrapper(None, symbols, data_cfg, param_grid, metric="sharpe_ratio")
 
