@@ -3302,7 +3302,10 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
         logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
         return
     try:
-        df_ind = prepare_indicators(raw, freq="intraday", symbol=symbol, state=state)
+        df_ind = prepare_indicators(raw, symbol=symbol, ctx=ctx)
+        if df_ind is None:
+            logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
+            return
     except ValueError as exc:
         logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
         return
@@ -4516,71 +4519,8 @@ def _drop_inactive_features(df: pd.DataFrame) -> None:
             raise
 
 
-def prepare_indicators(
-    df: pd.DataFrame,
-    freq: str = "daily",
-    *,
-    symbol: str = "",
-    state: BotState | None = None,
-    ctx: Optional["BotContext"] = None,
-) -> pd.DataFrame | None:
-    """Compute technical indicators with defensive guards."""
-    frame = df.copy()
-    required_cols = ["open", "high", "low", "close", "volume"]
-    missing = [c for c in required_cols if c not in frame]
-    if missing:
-        log_warning(
-            "INDICATOR_MISSING_COLS",
-            extra={"symbol": symbol, "missing": ",".join(missing)},
-        )
-        if state:
-            state.indicator_failures += 1
-        return pd.DataFrame()
-
-    frame = _normalize_index(frame)
-
-    _add_basic_indicators(frame, symbol, state)
-    _add_macd(frame, symbol, state)
-    if "macd" not in frame or frame["macd"].isna().all():
-        log_warning(
-            "MACD_EMPTY",
-            extra={"symbol": symbol, "fallback": True},
-        )
-        try:
-            close_series = frame["close"].astype(float)
-            fast = close_series.ewm(span=12, adjust=False).mean()
-            slow = close_series.ewm(span=26, adjust=False).mean()
-            macd_line = fast - slow
-            signal_line = macd_line.ewm(span=9, adjust=False).mean()
-            frame["macd"] = macd_line
-            frame["macds"] = signal_line
-        except Exception as exc:  # pragma: no cover - defensive
-            log_warning("MACD_FALLBACK_FAIL", exc=exc, extra={"symbol": symbol})
-            frame["macd"] = np.nan
-            frame["macds"] = np.nan
-    _add_additional_indicators(frame, symbol, state)
-    _add_multi_timeframe_features(frame, symbol, state)
-
-    frame.ffill(inplace=True)
-    frame.bfill(inplace=True)
-
-    alias_map = {
-        "macd_signal": "macds",
-        "boll_upper": "bb_upper",
-        "boll_lower": "bb_lower",
-        "sma_fast": "sma_50",
-        "sma_slow": "sma_200",
-        "ichimoku_conv": "ich_ITS_9",
-        "ichimoku_base": "ich_IKS_26",
-    }
-
-    for target, source in alias_map.items():
-        if target not in frame.columns and source in frame.columns:
-            frame[target] = frame[source]
-
-    if "stochrsi" not in frame.columns and "rsi" in frame.columns:
-        frame["stochrsi"] = frame["rsi"]
-
+def prepare_indicators(frame, symbol=None, ctx=None):
+    """Validate and clean indicator columns."""
     required = [
         "rsi",
         "macd",
@@ -4601,27 +4541,27 @@ def prepare_indicators(
         "stochrsi",
     ]
 
-    existing = [col for col in required if col in frame.columns]
     missing = [col for col in required if col not in frame.columns]
 
-    if missing and ctx:
-        ctx.logger.warning(f"[{symbol}] Missing indicators: {missing}")
+    if "stochrsi" in missing and "rsi" in frame.columns:
+        frame["stochrsi"] = frame["rsi"]
+        missing.remove("stochrsi")
 
-    if len(existing) < 8:
-        if ctx:
+    if missing and ctx and symbol:
+        ctx.logger.warning(
+            "[prepare_indicators] Missing indicators for %s: %s", symbol, missing
+        )
+
+    available = [col for col in required if col in frame.columns]
+    if len(available) < 8:
+        if ctx and symbol:
             ctx.logger.warning(
-                f"[{symbol}] Skipping due to insufficient indicators ({len(existing)})"
+                "[prepare_indicators] Too few usable indicators for %s; skipping.",
+                symbol,
             )
         return None
 
-    if existing:
-        frame.dropna(subset=existing, how="all", inplace=True)
-
-    if freq != "daily":
-        frame.reset_index(drop=True, inplace=True)
-
-    _drop_inactive_features(frame)
-
+    frame.dropna(subset=available, how="all", inplace=True)
     return frame
 
 
