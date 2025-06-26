@@ -4576,9 +4576,18 @@ def prepare_indicators(
         frame["sma_50"] = ta.sma(frame["close"], length=50)
         frame["sma_200"] = ta.sma(frame["close"], length=200)
         required += ["sma_50", "sma_200"]
-        frame.dropna(subset=required, how="any", inplace=True)
-    else:  # intraday
-        frame.dropna(subset=required, how="all", inplace=True)
+
+    existing = [col for col in required if col in frame.columns]
+    missing = [col for col in required if col not in frame.columns]
+    if missing:
+        logger.warning(
+            "[prepare_indicators] Missing expected columns: %s", missing
+        )
+    if existing:
+        how = "any" if freq == "daily" else "all"
+        frame.dropna(subset=existing, how=how, inplace=True)
+
+    if freq != "daily":
         frame.reset_index(drop=True, inplace=True)
 
     _drop_inactive_features(frame)
