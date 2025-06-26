@@ -526,7 +526,7 @@ def get_minute_df(
     cached = _MINUTE_CACHE.get(symbol)
     if cached is not None:
         df_cached, ts = cached
-        if not df_cached.empty and ts >= pd.Timestamp.utcnow() - pd.Timedelta(minutes=1):
+        if not df_cached.empty and ts >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=1):
             logger.debug("minute cache hit for %s", symbol)
             return df_cached.copy()
 
@@ -629,7 +629,7 @@ def get_minute_df(
             return None
         df.index = idx
 
-        _MINUTE_CACHE[symbol] = (df, pd.Timestamp.utcnow())
+        _MINUTE_CACHE[symbol] = (df, pd.Timestamp.now(tz="UTC"))
         logger.info(
             "MINUTE_FETCHED",
             extra={"symbol": symbol, "rows": len(df), "cols": df.shape[1]},
@@ -697,7 +697,7 @@ def get_minute_df(
                 symbol,
                 len(df),
             )
-            _MINUTE_CACHE[symbol] = (df, pd.Timestamp.utcnow())
+            _MINUTE_CACHE[symbol] = (df, pd.Timestamp.now(tz="UTC"))
             logger.info(
                 "MINUTE_FETCHED",
                 extra={"symbol": symbol, "rows": len(df), "cols": df.shape[1]},

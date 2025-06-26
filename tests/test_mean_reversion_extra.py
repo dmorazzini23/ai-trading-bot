@@ -30,7 +30,7 @@ def test_generate_invalid_stats(caplog):
     ctx = Ctx(df)
     strat = MeanReversionStrategy(lookback=3)
     caplog.set_level('WARNING')
-    ctx.data_fetcher.df["close"][-1] = float('nan')
+    ctx.data_fetcher.df.loc[ctx.data_fetcher.df.index[-1], "close"] = float('nan')
     assert strat.generate(ctx) == []
     assert "invalid rolling" in caplog.text
 

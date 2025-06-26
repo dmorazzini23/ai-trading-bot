@@ -30,7 +30,7 @@ class MomentumStrategy(Strategy):
                 logger.warning("Insufficient data for %s; expected >%d rows", sym, self.lookback)
                 continue
             # Data is safe to use; compute lookback return
-            ret = df["close"].pct_change(self.lookback).iloc[-1]
+            ret = df["close"].pct_change(self.lookback, fill_method=None).iloc[-1]
             if pd.isna(ret):
                 continue
             side = "buy" if ret > 0 else "sell"
