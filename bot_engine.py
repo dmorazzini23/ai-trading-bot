@@ -4520,27 +4520,27 @@ def _drop_inactive_features(df: pd.DataFrame) -> None:
 
 
 def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
-    # Compute RSI
+    # Calculate RSI and assign to both rsi and rsi_14
     frame['rsi'] = ta.rsi(frame['close'], length=14)
     frame['rsi_14'] = frame['rsi']
 
-    # Compute Ichimoku conversion and base lines manually
+    # Ichimoku conversion and base lines
     frame['ichimoku_conv'] = (frame['high'].rolling(window=9).max() + frame['low'].rolling(window=9).min()) / 2
     frame['ichimoku_base'] = (frame['high'].rolling(window=26).max() + frame['low'].rolling(window=26).min()) / 2
 
-    # Compute Stochastic RSI
+    # Stochastic RSI calculation
     rsi_min = frame['rsi_14'].rolling(window=14).min()
     rsi_max = frame['rsi_14'].rolling(window=14).max()
     frame['stochrsi'] = (frame['rsi_14'] - rsi_min) / (rsi_max - rsi_min)
 
-    # Ensure all required indicators exist (fill with NaN if missing)
+    # Guarantee all required columns exist
     required = ['ichimoku_conv', 'ichimoku_base', 'stochrsi']
     for col in required:
         if col not in frame.columns:
             frame[col] = np.nan
 
-    # Drop rows where *all* required indicators are missing
-    frame.dropna(subset=required, how='all', inplace=True)
+    # Only drop rows where all are missing
+    frame.dropna(subset=required, how="all", inplace=True)
 
     return frame
 
