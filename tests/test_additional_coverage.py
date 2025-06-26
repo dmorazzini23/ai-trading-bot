@@ -220,7 +220,9 @@ def test_risk_engine_branches(monkeypatch):
 
 def test_runner_main_loop(monkeypatch):
     """Runner exits on SystemExit 0 from bot.main."""
-    sys.modules['bot'] = types.SimpleNamespace(main=lambda: (_ for _ in ()).throw(SystemExit(0)))
+    bot_mod = types.ModuleType('bot')
+    bot_mod.main = lambda: (_ for _ in ()).throw(SystemExit(0))
+    sys.modules['bot'] = bot_mod
     module = runpy.run_module("runner", run_name="__main__")
 
 
