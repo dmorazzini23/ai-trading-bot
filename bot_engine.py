@@ -4520,35 +4520,28 @@ def _drop_inactive_features(df: pd.DataFrame) -> None:
 
 
 def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
-    """Compute core indicators needed by the trading engine.
+    # Compute RSI
+    frame['rsi'] = ta.rsi(frame['close'], length=14)
+    frame['rsi_14'] = frame['rsi']
 
-    This simplified implementation ensures the key columns exist even when
-    some indicator calculations fail or input data is incomplete.
-    """
+    # Compute Ichimoku conversion and base lines manually
+    frame['ichimoku_conv'] = (frame['high'].rolling(window=9).max() + frame['low'].rolling(window=9).min()) / 2
+    frame['ichimoku_base'] = (frame['high'].rolling(window=26).max() + frame['low'].rolling(window=26).min()) / 2
 
-    # Calculate basic indicators
-    frame["rsi"] = ta.rsi(frame["close"], length=14)
-    frame["rsi_14"] = frame["rsi"]
+    # Compute Stochastic RSI
+    rsi_min = frame['rsi_14'].rolling(window=14).min()
+    rsi_max = frame['rsi_14'].rolling(window=14).max()
+    frame['stochrsi'] = (frame['rsi_14'] - rsi_min) / (rsi_max - rsi_min)
 
-    # Ichimoku Conversion and Base Lines
-    frame["ichimoku_conv"] = (
-        frame["high"].rolling(window=9).max() + frame["low"].rolling(window=9).min()
-    ) / 2
-    frame["ichimoku_base"] = (
-        frame["high"].rolling(window=26).max() + frame["low"].rolling(window=26).min()
-    ) / 2
-
-    # Stochastic RSI derived from the 14-period RSI
-    rsi_min = frame["rsi_14"].rolling(window=14).min()
-    rsi_max = frame["rsi_14"].rolling(window=14).max()
-    frame["stochrsi"] = (frame["rsi_14"] - rsi_min) / (rsi_max - rsi_min)
-
-    required = ["ichimoku_conv", "ichimoku_base", "stochrsi"]
+    # Ensure all required indicators exist (fill with NaN if missing)
+    required = ['ichimoku_conv', 'ichimoku_base', 'stochrsi']
     for col in required:
         if col not in frame.columns:
             frame[col] = np.nan
 
-    frame.dropna(subset=required, how="all", inplace=True)
+    # Drop rows where *all* required indicators are missing
+    frame.dropna(subset=required, how='all', inplace=True)
+
     return frame
 
 
