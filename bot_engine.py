@@ -3513,13 +3513,11 @@ def _fetch_feature_data(
         return None, None, False
 
     try:
-        feat_df = prepare_indicators(
-            raw_df, freq="intraday", symbol=symbol, state=state, ctx=ctx
-        )
+        feat_df = prepare_indicators(raw_df.copy(), symbol=symbol, ctx=ctx)
+        if feat_df is None:
+            return raw_df, None, True
     except ValueError as exc:
         logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
-        return raw_df, None, True
-    if feat_df is None:
         return raw_df, None, True
     if feat_df.empty:
         logger.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
@@ -4566,26 +4564,45 @@ def prepare_indicators(
     frame.ffill(inplace=True)
     frame.bfill(inplace=True)
 
-    required = [
-        "vwap",
-        "rsi",
-        "atr",
-        "macd",
-        "macds",
-        "ichimoku_conv",
-        "ichimoku_base",
-        "stochrsi",
-    ]
-    if freq == "daily":
-        frame["sma_50"] = ta.sma(frame["close"], length=50)
-        frame["sma_200"] = ta.sma(frame["close"], length=200)
-        required += ["sma_50", "sma_200"]
+    alias_map = {
+        "macd_signal": "macds",
+        "boll_upper": "bb_upper",
+        "boll_lower": "bb_lower",
+        "sma_fast": "sma_50",
+        "sma_slow": "sma_200",
+        "ichimoku_conv": "ich_ITS_9",
+        "ichimoku_base": "ich_IKS_26",
+    }
+
+    for target, source in alias_map.items():
+        if target not in frame.columns and source in frame.columns:
+            frame[target] = frame[source]
 
     if "stochrsi" not in frame.columns and "rsi" in frame.columns:
         frame["stochrsi"] = frame["rsi"]
 
+    required = [
+        "rsi",
+        "macd",
+        "macd_signal",
+        "boll_upper",
+        "boll_lower",
+        "sma_fast",
+        "sma_slow",
+        "ema_fast",
+        "ema_slow",
+        "adx",
+        "atr",
+        "roc",
+        "cmf",
+        "obv",
+        "ichimoku_conv",
+        "ichimoku_base",
+        "stochrsi",
+    ]
+
     existing = [col for col in required if col in frame.columns]
-    missing = list(set(required) - set(existing))
+    missing = [col for col in required if col not in frame.columns]
 
     if missing and ctx:
         ctx.logger.warning(f"[{symbol}] Missing indicators: {missing}")
