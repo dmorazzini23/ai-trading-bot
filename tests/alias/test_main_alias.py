@@ -1,8 +1,9 @@
 # This test modifies sys.modules and should be run serially. Use: pytest -n0 tests/alias/test_main_alias.py
 import importlib
 import runpy
-import types
 import sys
+import types
+
 from conftest import reload_module
 
 

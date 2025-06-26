@@ -3302,7 +3302,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
         logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
         return
     try:
-        df_ind = prepare_indicators(raw, symbol=symbol, ctx=ctx)
+        df_ind = prepare_indicators(raw)
         if df_ind is None:
             logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
             return
@@ -3516,7 +3516,7 @@ def _fetch_feature_data(
         return None, None, False
 
     try:
-        feat_df = prepare_indicators(raw_df.copy(), symbol=symbol, ctx=ctx)
+        feat_df = prepare_indicators(raw_df.copy())
         if feat_df is None:
             return raw_df, None, True
     except ValueError as exc:
@@ -4519,109 +4519,36 @@ def _drop_inactive_features(df: pd.DataFrame) -> None:
             raise
 
 
-def prepare_indicators(frame, symbol=None, ctx=None):
-    """Validate and clean indicator columns.
+def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
+    """Compute core indicators needed by the trading engine.
 
-    Ensures a minimal set of technical indicators are present. If fewer
-    than eight of the required indicators are available the function
-    returns ``None``. When ``stochrsi`` is missing but ``rsi`` exists it
-    is substituted automatically. Rows where all available indicators are
-    NaN are dropped before returning the cleaned DataFrame.
+    This simplified implementation ensures the key columns exist even when
+    some indicator calculations fail or input data is incomplete.
     """
-    required = [
-        "rsi",
-        "macd",
-        "macd_signal",
-        "boll_upper",
-        "boll_lower",
-        "sma_fast",
-        "sma_slow",
-        "ema_fast",
-        "ema_slow",
-        "adx",
-        "atr",
-        "roc",
-        "cmf",
-        "obv",
-        "ichimoku_conv",
-        "ichimoku_base",
-        "stochrsi",
-    ]
 
-    # ------------------------------------------------------------------
-    # Ensure key indicators exist prior to validation. This mirrors the
-    # behaviour of ``retrain.prepare_indicators`` which computes these
-    # columns before dropping rows.  Runtime errors were occurring when
-    # ``dropna`` was called with missing columns.  We defensively compute
-    # them here using pandas_ta when available, otherwise fall back to a
-    # minimal implementation.
-    # ------------------------------------------------------------------
-    if {"high", "low", "close"}.issubset(frame.columns):
-        # Ichimoku conversion/base lines
-        if "ichimoku_conv" not in frame.columns or "ichimoku_base" not in frame.columns:
-            try:
-                ich_func = getattr(ta, "ichimoku", None)
-                if ich_func is None:
-                    from indicators import ichimoku_fallback
-                    ich_func = ichimoku_fallback
-                ich = ich_func(high=frame["high"], low=frame["low"], close=frame["close"])
-                conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
-                base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
-                if "ichimoku_conv" not in frame.columns:
-                    frame["ichimoku_conv"] = (conv.iloc[:, 0] if hasattr(conv, "iloc") else conv).astype(float)
-                if "ichimoku_base" not in frame.columns:
-                    frame["ichimoku_base"] = (base.iloc[:, 0] if hasattr(base, "iloc") else base).astype(float)
-            except Exception:
-                if "ichimoku_conv" not in frame.columns:
-                    frame["ichimoku_conv"] = (
-                        frame["high"].rolling(9).max() + frame["low"].rolling(9).min()
-                    ) / 2
-                if "ichimoku_base" not in frame.columns:
-                    frame["ichimoku_base"] = (
-                        frame["high"].rolling(26).max() + frame["low"].rolling(26).min()
-                    ) / 2
+    # Calculate basic indicators
+    frame["rsi"] = ta.rsi(frame["close"], length=14)
+    frame["rsi_14"] = frame["rsi"]
 
-        # Stochastic RSI
-        if "stochrsi" not in frame.columns:
-            try:
-                st = ta.stochrsi(frame["close"])
-                frame["stochrsi"] = st["STOCHRSIk_14_14_3_3"].astype(float)
-            except Exception:
-                if "rsi" not in frame.columns:
-                    frame["rsi"] = ta.rsi(frame["close"], length=14)
-                rsi_series = frame["rsi"]
-                frame["stochrsi"] = (
-                    (rsi_series - rsi_series.rolling(14).min())
-                    / (rsi_series.rolling(14).max() - rsi_series.rolling(14).min())
-                )
-    else:
-        # Price columns missing; still ensure indicator columns exist to avoid
-        # KeyError later.
-        for col in ["ichimoku_conv", "ichimoku_base", "stochrsi"]:
-            if col not in frame.columns:
-                frame[col] = np.nan
+    # Ichimoku Conversion and Base Lines
+    frame["ichimoku_conv"] = (
+        frame["high"].rolling(window=9).max() + frame["low"].rolling(window=9).min()
+    ) / 2
+    frame["ichimoku_base"] = (
+        frame["high"].rolling(window=26).max() + frame["low"].rolling(window=26).min()
+    ) / 2
 
-    missing = [col for col in required if col not in frame.columns]
+    # Stochastic RSI derived from the 14-period RSI
+    rsi_min = frame["rsi_14"].rolling(window=14).min()
+    rsi_max = frame["rsi_14"].rolling(window=14).max()
+    frame["stochrsi"] = (frame["rsi_14"] - rsi_min) / (rsi_max - rsi_min)
 
-    if "stochrsi" in missing and "rsi" in frame.columns:
-        frame["stochrsi"] = frame["rsi"]
-        missing.remove("stochrsi")
+    required = ["ichimoku_conv", "ichimoku_base", "stochrsi"]
+    for col in required:
+        if col not in frame.columns:
+            frame[col] = np.nan
 
-    if missing and ctx and symbol:
-        ctx.logger.warning(
-            "[prepare_indicators] Missing indicators for %s: %s", symbol, missing
-        )
-
-    available = [col for col in required if col in frame.columns]
-    if len(available) < 8:
-        if ctx and symbol:
-            ctx.logger.warning(
-                "[prepare_indicators] Too few usable indicators for %s; skipping.",
-                symbol,
-            )
-        return None
-
-    frame.dropna(subset=available, how="all", inplace=True)
+    frame.dropna(subset=required, how="all", inplace=True)
     return frame
 
 
