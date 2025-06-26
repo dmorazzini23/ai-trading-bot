@@ -1927,6 +1927,7 @@ class BotContext:
     allocator: StrategyAllocator | None = None
     strategies: List[Any] = field(default_factory=list)
     execution_engine: ExecutionEngine | None = None
+    logger: logging.Logger = logger
 
 
 data_fetcher = DataFetcher()
@@ -3513,10 +3514,12 @@ def _fetch_feature_data(
 
     try:
         feat_df = prepare_indicators(
-            raw_df, freq="intraday", symbol=symbol, state=state
+            raw_df, freq="intraday", symbol=symbol, state=state, ctx=ctx
         )
     except ValueError as exc:
         logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
+        return raw_df, None, True
+    if feat_df is None:
         return raw_df, None, True
     if feat_df.empty:
         logger.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
@@ -4521,7 +4524,8 @@ def prepare_indicators(
     *,
     symbol: str = "",
     state: BotState | None = None,
-) -> pd.DataFrame:
+    ctx: Optional["BotContext"] = None,
+) -> pd.DataFrame | None:
     """Compute technical indicators with defensive guards."""
     frame = df.copy()
     required_cols = ["open", "high", "low", "close", "volume"]
@@ -4577,13 +4581,21 @@ def prepare_indicators(
         frame["sma_200"] = ta.sma(frame["close"], length=200)
         required += ["sma_50", "sma_200"]
 
-    existing = [col for col in required if col in frame.columns]
-    missing = [col for col in required if col not in frame.columns]
+    if "stochrsi" not in frame.columns and "rsi" in frame.columns:
+        frame["stochrsi"] = frame["rsi"]
 
-    if missing:
-        logger.warning(
-            "[prepare_indicators] Missing expected columns: %s", missing
-        )
+    existing = [col for col in required if col in frame.columns]
+    missing = list(set(required) - set(existing))
+
+    if missing and ctx:
+        ctx.logger.warning(f"[{symbol}] Missing indicators: {missing}")
+
+    if len(existing) < 8:
+        if ctx:
+            ctx.logger.warning(
+                f"[{symbol}] Skipping due to insufficient indicators ({len(existing)})"
+            )
+        return None
 
     if existing:
         frame.dropna(subset=existing, how="all", inplace=True)
