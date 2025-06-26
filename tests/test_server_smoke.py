@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+
 class _DummyFlask:
     def __init__(self, *a, **k):
         pass

@@ -3,6 +3,7 @@ import math
 from typing import Dict, List
 
 from strategies import TradeSignal
+
 logger = logging.getLogger(__name__)
 logger.debug("=== STRATEGY_ALLOCATOR LOADED === %s", __file__)
 

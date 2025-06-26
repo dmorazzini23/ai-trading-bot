@@ -1,4 +1,5 @@
 import logging
+
 from alerts import send_slack_alert
 from validate_env import settings
 

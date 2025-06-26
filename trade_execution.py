@@ -11,16 +11,10 @@ import warnings
 from datetime import datetime, timezone
 from typing import Any, Optional, Tuple
 
-import pandas as pd
-
 import numpy as np
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-    wait_random,
-)
+import pandas as pd
+from tenacity import (retry, retry_if_exception_type, stop_after_attempt,
+                      wait_exponential, wait_random)
 
 # Updated Alpaca SDK imports
 try:

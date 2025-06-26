@@ -1,4 +1,5 @@
 import pytest
+
 from server import WebhookPayload
 
 
@@ -24,7 +25,8 @@ def test_hook_invalid_symbol(monkeypatch):
     monkeypatch.setenv("WEBHOOK_SECRET", "x")
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
-    import importlib, sys
+    import importlib
+    import sys
     sys.modules.pop("server", None)
     import server
     importlib.reload(server)

@@ -25,6 +25,7 @@ os.environ.setdefault("ALPACA_SECRET_KEY", "x")
 
 sys.modules.pop("config", None)
 import config
+
 importlib.reload(config)
 
 sys.modules.pop("run", None)

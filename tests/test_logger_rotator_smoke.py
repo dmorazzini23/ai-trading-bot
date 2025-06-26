@@ -1,6 +1,6 @@
+import logging
 from pathlib import Path
 
-import logging
 import pytest
 
 import logger_rotator

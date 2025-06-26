@@ -1,6 +1,8 @@
 """Alias to run module for backward compatibility."""
 import importlib
+
 import run as _run
+
 _run = importlib.reload(_run)
 
 create_flask_app = _run.create_flask_app

@@ -1,8 +1,10 @@
 import types
+
 import pandas as pd
 import pytest
 
 from bot_engine import pre_trade_health_check
+
 
 class DummyFetcher:
     def __init__(self, df):

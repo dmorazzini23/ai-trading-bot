@@ -8,15 +8,11 @@ import time
 from collections import defaultdict
 from typing import Any, Dict, Optional
 
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
-
 import pandas as pd
 import requests
+from tenacity import (retry, retry_if_exception_type, stop_after_attempt,
+                      wait_exponential)
+
 from alerts import send_slack_alert
 
 logger = logging.getLogger(__name__)

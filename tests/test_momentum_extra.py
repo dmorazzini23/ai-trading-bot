@@ -1,4 +1,5 @@
 import pandas as pd
+
 from strategies import momentum
 from strategies.momentum import MomentumStrategy
 

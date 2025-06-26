@@ -1,9 +1,11 @@
-from pathlib import Path
-import sys
-from dotenv import load_dotenv
 import os
+import sys
+from pathlib import Path
+
 import pytest
 import urllib3
+from dotenv import load_dotenv
+
 
 def pytest_configure() -> None:
     """Load environment variables for tests."""

@@ -1,10 +1,10 @@
 import numpy as np
+
+import config
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.linear_model import SGDRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
-
-import config
 
 
 class FeatureBuilder(BaseEstimator, TransformerMixin):

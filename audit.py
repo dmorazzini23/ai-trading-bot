@@ -3,6 +3,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
+
 from validate_env import settings
 
 TRADE_LOG_FILE = settings.TRADE_LOG_FILE

@@ -1,224 +1,42 @@
-"""Simple backtesting and hyperparameter optimization.
+"""Legacy wrapper for the modular backtester."""
 
-Usage::
-
-    python3 backtest.py --symbols SPY,AAPL --start 2023-01-01 --end 2023-06-30 --mode grid
-
-This will search over a default hyperparameter grid and write the best set to
-``best_hyperparams.json``.
-"""
+from __future__ import annotations
 
 import argparse
 import json
 import logging
-import os
 import time
-import warnings
 from datetime import datetime, timedelta
-from itertools import product
 
 from dotenv import load_dotenv
 
-load_dotenv(dotenv_path=".env", override=True)
-warnings.filterwarnings("ignore", category=FutureWarning)
+from backtester import optimize_hyperparams as _optimize_hyperparams
+from backtester import run_backtest as _run_backtest
+from backtester.core import load_price_data as _load_price_data
 
+load_dotenv(dotenv_path=".env", override=True)
 logger = logging.getLogger(__name__)
 
-BACKTEST_WINDOW_DAYS = 365
-import numpy as np
-import pandas as pd
-from alpaca.common.exceptions import APIError
-from tenacity import RetryError
 
-from data_fetcher import DataFetchError, get_historical_data
+def run_backtest_wrapper(symbols, start, end, params):
+    """Wrapper returning dict results for legacy callers."""
+    return _run_backtest(symbols, start, end, params).to_dict()
 
 
-def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
-    """Load (or fetch and cache) historical daily data via Alpaca."""
-    cache_fname = f"cache_{symbol}_{start}_{end}.csv"
-
-    # 1) If cached file exists, load it and return
-    if os.path.exists(cache_fname):
-        try:
-            df_cached = pd.read_csv(cache_fname, index_col=0, parse_dates=True)
-            return df_cached
-        except (OSError, pd.errors.ParserError, ValueError):
-            # If cache is corrupted, remove it and re‐download
-            try:
-                os.remove(cache_fname)
-            except OSError:
-                pass
-
-    # 2) Otherwise, attempt to fetch from Alpaca with retries
-    df_final = pd.DataFrame()
-    for attempt in range(1, 4):
-        try:
-            df_final = get_historical_data(
-                symbol,
-                datetime.fromisoformat(start).date(),
-                datetime.fromisoformat(end).date(),
-                "1Day",
-            )
-            break
-        except (APIError, DataFetchError, RetryError) as e:
-            if attempt < 3:
-                logger.warning(
-                    "Failed to fetch %s (attempt %s/3): %s – sleeping 2s",
-                    symbol,
-                    attempt,
-                    e,
-                )
-                time.sleep(2)
-            else:
-                logger.error(
-                    "Final attempt failed for %s; proceeding with empty DataFrame",
-                    symbol,
-                )
-    # 3) Save to cache (even if empty)
-    try:
-        df_final.to_csv(cache_fname)
-    except OSError:
-        pass
-
-    # 4) Polite 1s pause before next symbol
-    time.sleep(1)
-    return df_final
+def optimize_hyperparams_wrapper(ctx, symbols, backtest_data, param_grid, metric="sharpe_ratio"):
+    """Thin wrapper for compatibility with old scripts."""
+    return _optimize_hyperparams(symbols, backtest_data, param_grid, metric=metric)
 
 
-def run_backtest(
-    symbols: list[str], start: str, end: str, params: dict[str, float]
-) -> dict:
-    """
-    Run a very small simulated backtest using cached Alpaca data.
-    Returns a dict with "net_pnl" and "sharpe".
-    """
-    # 1) Load (or download+cache) each symbol’s DataFrame
-    data: dict[str, pd.DataFrame] = {}
-    for s in symbols:
-        df_sym = load_price_data(s, start, end)
-        if not df_sym.empty:
-            df_sym["ret"] = df_sym["Close"].pct_change(fill_method=None).fillna(0)
-        data[s] = df_sym
-
-    cash = 100000.0
-    positions = {s: 0 for s in symbols}
-    entry_price = {s: 0.0 for s in symbols}
-    peak_price = {s: 0.0 for s in symbols}
-    portfolio = []
-
-    dates = pd.date_range(start, end, freq="B")
-    for d in dates:
-        for sym, df in data.items():
-            if d not in df.index:
-                continue
-            price = df.loc[d, "Open"]
-            ret = df.loc[d, "ret"]
-
-            if positions[sym] == 0:
-                # Entry logic
-                if (not np.isnan(ret)) and ret > params["BUY_THRESHOLD"] and cash > 0:
-                    qty = int((cash * params["SCALING_FACTOR"]) / price)
-                    if qty > 0:
-                        cost = qty * price * (1 + params["LIMIT_ORDER_SLIPPAGE"])
-                        cash -= cost
-                        positions[sym] += qty
-                        entry_price[sym] = price
-                        peak_price[sym] = price
-            else:
-                # Update peak, possibly exit
-                peak_price[sym] = max(peak_price[sym], price)
-                drawdown = (price - peak_price[sym]) / peak_price[sym]
-                gain = (price - entry_price[sym]) / entry_price[sym]
-                if gain >= params["TAKE_PROFIT_FACTOR"] or abs(drawdown) >= params["TRAILING_FACTOR"]:
-                    cash += positions[sym] * price * (1 - params["LIMIT_ORDER_SLIPPAGE"])
-                    positions[sym] = 0
-                    entry_price[sym] = 0
-                    peak_price[sym] = 0
-
-        # Compute portfolio value at close
-        total_value = cash
-        for sym, df in data.items():
-            if d in df.index:
-                total_value += positions[sym] * df.loc[d, "Close"]
-        portfolio.append(total_value)
-
-    if not portfolio:
-        return {"net_pnl": 0.0, "sharpe": float("nan")}
-
-    series = pd.Series(portfolio, index=dates)
-    pct = series.pct_change(fill_method=None).dropna()
-
-    if pct.empty or pct.std() == 0:
-        sharpe = float("nan")
-    else:
-        sharpe = (pct.mean() / pct.std()) * np.sqrt(252)
-
-    net_pnl = portfolio[-1] - portfolio[0]
-    return {"net_pnl": net_pnl, "sharpe": sharpe}
+run_backtest = run_backtest_wrapper
+optimize_hyperparams = optimize_hyperparams_wrapper
+load_price_data = _load_price_data
 
 
-def optimize_hyperparams(ctx, symbols, backtest_data, param_grid: dict, metric: str = "sharpe") -> dict:
-    """
-    Grid search over hyperparameters.
-
-    1) Compute Sharpe for each combination.
-    2) If at least one combination yields a finite Sharpe, pick the highest‐Sharpe combo.
-    3) Otherwise, fall back to whichever combo gave the highest net_pnl.
-    """
-    keys = list(param_grid.keys())
-    combos = list(product(*param_grid.values()))
-
-    best_params_sharpe: dict = {}
-    best_score_sharpe = -float("inf")
-    best_params_pnl: dict = {}
-    best_score_pnl = -float("inf")
-
-    for combo in combos:
-        params = dict(zip(keys, combo))
-        result = run_backtest(symbols, backtest_data["start"], backtest_data["end"], params)
-        score_sh = result.get(metric, 0.0)
-        netp = result.get("net_pnl", 0.0)
-
-        # If Sharpe is nan, treat it as extremely low
-        if isinstance(score_sh, float) and np.isnan(score_sh):
-            score_sh = -float("inf")
-
-        logger.info(
-            "Testing %s → %s=%.6f, net_pnl=%.2f",
-            params,
-            metric,
-            score_sh,
-            netp,
-        )
-
-        # Track best by Sharpe
-        if score_sh > best_score_sharpe:
-            best_score_sharpe = score_sh
-            best_params_sharpe = params.copy()
-        # Track best by net_pnl (in case we need fallback)
-        if netp > best_score_pnl:
-            best_score_pnl = netp
-            best_params_pnl = params.copy()
-
-    if best_score_sharpe > -float("inf"):
-        # At least one combo had a finite Sharpe
-        logger.info("Selected by Sharpe (best Sharpe=%.6f)", best_score_sharpe)
-        return best_params_sharpe
-    else:
-        # All Sharpe‐ratios were NaN → fallback to net_pnl
-        logger.warning(
-            "All Sharpe-ratios = NaN → falling back to highest net_pnl (%.2f)",
-            best_score_pnl,
-        )
-        return best_params_pnl or {}
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Hyperparameter optimizer")
-
     default_end = datetime.today().date()
     default_start = default_end - timedelta(days=30)
-
     parser.add_argument(
         "--symbols",
         required=False,
@@ -256,12 +74,10 @@ def main():
         args.start,
         args.end,
     )
-    best = optimize_hyperparams(None, symbols, data_cfg, param_grid, metric="sharpe")
+    best = optimize_hyperparams_wrapper(None, symbols, data_cfg, param_grid, metric="sharpe_ratio")
 
-    # Write results
     with open("best_hyperparams.json", "w", encoding="utf-8") as f:
         json.dump(best, f, indent=2)
-
     logger.info("Best hyperparameters: %s", best)
 
 

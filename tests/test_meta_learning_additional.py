@@ -1,11 +1,12 @@
 import json
-from pathlib import Path
-import numpy as np
-import types
-import sklearn.linear_model
 import sys
+import types
+from pathlib import Path
+
+import numpy as np
 
 import meta_learning
+import sklearn.linear_model
 
 
 def test_load_weights_save_fail(monkeypatch, tmp_path, caplog):

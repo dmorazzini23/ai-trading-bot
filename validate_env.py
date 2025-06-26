@@ -1,6 +1,7 @@
 """Environment validation using pydantic-settings."""
 
 import logging
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)

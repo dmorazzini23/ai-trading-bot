@@ -1,4 +1,5 @@
 import pandas as pd
+
 from strategies.mean_reversion import MeanReversionStrategy
 
 

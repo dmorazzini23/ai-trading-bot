@@ -1,6 +1,6 @@
 import logging
-import types
 import sys
+import types
 
 import pytest
 
