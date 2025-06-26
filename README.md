@@ -123,6 +123,14 @@ pytest --cov
 
 Test coverage should report at least **90%** for a successful run.
 
+To profile coverage for the indicator preparation logic only:
+
+```bash
+pytest --cov=bot_engine --cov-report=term --cov-report=html tests/test_bot_engine*.py
+```
+
+This outputs a terminal summary and an HTML report at `htmlcov/index.html`.
+
 
 ## Systemd Service
 

@@ -16,7 +16,7 @@ if 'bot_engine' not in sys.modules:
     mod.pd = pd
     mod.np = np
     mod.ta = types.SimpleNamespace(rsi=lambda close, length=14: pd.Series(np.arange(len(close))))
-    exec(compile(ast.Module([func], []), filename='bot_engine_stub', mode='exec'), mod.__dict__)
+    exec(compile(ast.Module([func], []), filename=str(src_path), mode='exec'), mod.__dict__)
     sys.modules['bot_engine'] = mod
 
 from bot_engine import prepare_indicators
