@@ -1,8 +1,10 @@
 import importlib
 import logging
+
 import pytest
-import logger
 from conftest import reload_module
+
+import logger
 
 
 def test_get_rotating_handler_fallback(monkeypatch, tmp_path, caplog):

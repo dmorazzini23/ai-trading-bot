@@ -1,10 +1,12 @@
 import pickle
 import types
+
 import numpy as np
 import pandas as pd
 import pytest
-import sklearn.linear_model
+
 import meta_learning
+import sklearn.linear_model
 
 
 def test_load_weights_creates_default(tmp_path):

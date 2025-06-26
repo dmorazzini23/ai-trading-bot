@@ -1,8 +1,9 @@
-import types
 import runpy
 import sys
-import requests
+import types
+
 import pytest
+import requests
 from conftest import load_runner
 
 
