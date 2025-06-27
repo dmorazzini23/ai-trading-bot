@@ -439,6 +439,14 @@ event_cooldown_hits = Counter("bot_event_cooldown_hits", "Event cooldown hits")
 slippage_total = Counter("bot_slippage_total", "Cumulative slippage in cents")
 slippage_count = Counter("bot_slippage_count", "Number of orders with slippage logged")
 weekly_drawdown = Gauge("bot_weekly_drawdown", "Current weekly drawdown fraction")
+skipped_duplicates = Counter(
+    "bot_skipped_duplicates",
+    "Trades skipped due to open position",
+)
+skipped_cooldown = Counter(
+    "bot_skipped_cooldown",
+    "Trades skipped due to recent execution",
+)
 
 DISASTER_DD_LIMIT = float(config.get_env("DISASTER_DD_LIMIT", "0.2"))
 
@@ -5341,6 +5349,31 @@ def _process_symbols(
 ) -> list[str]:
     processed: list[str] = []
 
+    try:
+        live_positions = {p.symbol: int(p.qty) for p in ctx.api.get_all_positions()}
+    except Exception as exc:  # pragma: no cover - network issues
+        logger.warning(f"LIVE_POSITION_FETCH_FAIL: {exc}")
+        live_positions = {}
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    filtered: list[str] = []
+    for symbol in symbols:
+        qty = live_positions.get(symbol, 0)
+        if qty != 0:
+            logger.info(
+                f"SKIPPING_DUPLICATE_POSITION | {symbol} already held, skipping trade."
+            )
+            skipped_duplicates.inc()
+            continue
+        cd_ts = state.trade_cooldowns.get(symbol)
+        if cd_ts and (now - cd_ts).total_seconds() < 60:
+            logger.info(f"SKIPPING_COOLDOWN | {symbol} traded too recently.")
+            skipped_cooldown.inc()
+            continue
+        filtered.append(symbol)
+
+    symbols = filtered
+
     def process_symbol(symbol: str) -> None:
         try:
             logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
@@ -5388,6 +5421,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
         logger.warning("RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
     now = datetime.datetime.now(datetime.timezone.utc)
+    for sym, ts in list(state.trade_cooldowns.items()):
+        if (now - ts).total_seconds() > TRADE_COOLDOWN_MIN * 60:
+            state.trade_cooldowns.pop(sym, None)
     if (
         state.last_run_at
         and (now - state.last_run_at).total_seconds() < RUN_INTERVAL_SECONDS
