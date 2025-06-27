@@ -24,16 +24,22 @@ config.log_config(config.REQUIRED_ENV_VARS)
 try:
     profile  # type: ignore[name-defined]
 except NameError:  # pragma: no cover - used only when kernprof is absent
+
     def profile(func):  # type: ignore[return-type]
         return func
+
 
 def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
-    error_message = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+    error_message = "".join(
+        traceback.format_exception(exc_type, exc_value, exc_traceback)
+    )
     send_slack_alert(f"🚨 AI Trading Bot Exception:\n```{error_message}```")
-    logging.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+    logging.critical(
+        "Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback)
+    )
 
 
 sys.excepthook = handle_exception
@@ -125,13 +131,16 @@ import pandas_market_calendars as mcal
 import pandas_ta as ta
 
 if not hasattr(ta, "ichimoku"):
+
     def _ichimoku_placeholder(*a, **k):
         return pd.DataFrame(), pd.DataFrame()
+
     ta.ichimoku = _ichimoku_placeholder
 
 NY = mcal.get_calendar("NYSE")
 MARKET_SCHEDULE = NY.schedule(start_date="2020-01-01", end_date="2030-12-31")
 FULL_DATETIME_RANGE = pd.date_range(start="09:30", end="16:00", freq="1T")
+
 
 @lru_cache(maxsize=None)
 def is_holiday(ts: pd.Timestamp) -> bool:
@@ -141,6 +150,7 @@ def is_holiday(ts: pd.Timestamp) -> bool:
     trading_dates = {d.date() for d in MARKET_SCHEDULE.index}
     return dt not in trading_dates
 
+
 from signals import calculate_macd as signals_calculate_macd
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -149,6 +159,7 @@ import portalocker
 import requests
 import schedule
 import yfinance as yf
+
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
@@ -163,9 +174,15 @@ except Exception:  # pragma: no cover - older alpaca-trade-api
         """Fallback enumeration for pre-v3 Alpaca SDKs."""
 
         PENDING_NEW = "pending_new"
+
+
 from alpaca.trading.models import Order
-from alpaca.trading.requests import (GetOrdersRequest, LimitOrderRequest,
-                                     MarketOrderRequest)
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    LimitOrderRequest,
+    MarketOrderRequest,
+)
+
 # Legacy import removed; using alpaca-py trading stream instead
 from alpaca.trading.stream import TradingStream
 from bs4 import BeautifulSoup
@@ -291,7 +308,9 @@ def get_latest_close(df: pd.DataFrame) -> float:
     return float(last)
 
 
-def compute_time_range(minutes: int = 30) -> tuple[datetime.datetime, datetime.datetime]:
+def compute_time_range(
+    minutes: int = 30,
+) -> tuple[datetime.datetime, datetime.datetime]:
     """Return start and end timestamps for the last ``minutes`` minutes."""
 
     if minutes <= 0:
@@ -364,8 +383,14 @@ def reconcile_positions(ctx: "BotContext") -> None:
 import warnings
 
 from ratelimit import limits, sleep_and_retry
-from tenacity import (RetryError, retry, retry_if_exception_type,
-                      stop_after_attempt, wait_exponential, wait_random)
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random,
+)
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 RUN_HEALTH = RUN_HEALTHCHECK == "1"
@@ -578,6 +603,14 @@ class BotState:
     fallback_watchlist_events: int = 0
     indicator_failures: int = 0
     pdt_blocked: bool = False
+    # Cached positions from broker for the current cycle
+    position_cache: Dict[str, int] = field(default_factory=dict)
+    long_positions: set[str] = field(default_factory=set)
+    short_positions: set[str] = field(default_factory=set)
+    # Timestamp of last run to prevent duplicate cycles
+    last_run_at: Optional[datetime.datetime] = None
+    # Record of last exit/entry time per symbol for cooldowns
+    trade_cooldowns: Dict[str, datetime.datetime] = field(default_factory=dict)
 
 
 state = BotState()
@@ -643,6 +676,8 @@ prediction_executor = ThreadPoolExecutor(max_workers=2)
 _LAST_EVENT_TS = {}
 EVENT_COOLDOWN = 15.0  # seconds
 REBALANCE_HOLD_SECONDS = 600  # skip selling shortly after rebalance buys
+RUN_INTERVAL_SECONDS = 60  # don't run trading loop more often than this
+TRADE_COOLDOWN_MIN = int(config.get_env("TRADE_COOLDOWN_MIN", "5"))  # minutes
 
 # Loss streak kill-switch (managed via BotState)
 
@@ -650,9 +685,9 @@ REBALANCE_HOLD_SECONDS = 600  # skip selling shortly after rebalance buys
 _VOL_STATS = {"mean": None, "std": None, "last_update": None, "last": None}
 
 # Slippage logs (in-memory for quick access)
-_slippage_log: List[
-    Tuple[str, float, float, datetime]
-] = []  # (symbol, expected, actual, timestamp)
+_slippage_log: List[Tuple[str, float, float, datetime]] = (
+    []
+)  # (symbol, expected, actual, timestamp)
 # Ensure persistent slippage log file exists
 if not os.path.exists(SLIPPAGE_LOG_FILE):
     try:
@@ -1125,8 +1160,12 @@ class DataFetcher:
         current_day = start_date
 
         while current_day <= end_date:
-            day_start = datetime.datetime.combine(current_day, dt_time.min, datetime.timezone.utc)
-            day_end = datetime.datetime.combine(current_day, dt_time.max, datetime.timezone.utc)
+            day_start = datetime.datetime.combine(
+                current_day, dt_time.min, datetime.timezone.utc
+            )
+            day_end = datetime.datetime.combine(
+                current_day, dt_time.max, datetime.timezone.utc
+            )
             if isinstance(day_start, tuple):
                 day_start, _tmp = day_start
             if isinstance(day_end, tuple):
@@ -1440,9 +1479,7 @@ class TradeLogger:
                     cls = (
                         "day_trade"
                         if days == 0
-                        else "swing_trade"
-                        if days < 5
-                        else "long_trade"
+                        else "swing_trade" if days < 5 else "long_trade"
                     )
                     row[3], row[4], row[8] = (
                         datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1492,7 +1529,9 @@ class TradeLogger:
         else:
             state.loss_streak = 0
         if state.loss_streak >= 3:
-            state.streak_halt_until = datetime.datetime.now(PACIFIC) + timedelta(minutes=60)
+            state.streak_halt_until = datetime.datetime.now(PACIFIC) + timedelta(
+                minutes=60
+            )
             logger.warning(
                 "STREAK_HALT_TRIGGERED",
                 extra={
@@ -1628,7 +1667,9 @@ class SignalManager:
         if df is None or len(df) <= self.momentum_lookback:
             return -1, 0.0, "momentum"
         try:
-            df["momentum"] = df["close"].pct_change(self.momentum_lookback, fill_method=None)
+            df["momentum"] = df["close"].pct_change(
+                self.momentum_lookback, fill_method=None
+            )
             val = df["momentum"].iloc[-1]
             s = 1 if val > 0 else -1 if val < 0 else -1
             w = min(abs(val) * 10, 1.0)
@@ -1650,9 +1691,7 @@ class SignalManager:
             s = (
                 -1
                 if val > self.mean_rev_zscore_threshold
-                else 1
-                if val < -self.mean_rev_zscore_threshold
-                else -1
+                else 1 if val < -self.mean_rev_zscore_threshold else -1
             )
             w = min(abs(val) / 3, 1.0)
             return s, w, "mean_reversion"
@@ -1698,9 +1737,7 @@ class SignalManager:
             s = (
                 1
                 if df["close"].iloc[-1] > df["open"].iloc[-1]
-                else -1
-                if df["close"].iloc[-1] < df["open"].iloc[-1]
-                else -1
+                else -1 if df["close"].iloc[-1] < df["open"].iloc[-1] else -1
             )
             w = min(score / avg, 1.0)
             return s, w, "vsa"
@@ -2193,7 +2230,6 @@ def pre_trade_health_check(
     return summary
 
 
-
 # ─── H. MARKET HOURS GUARD ────────────────────────────────────────────────────
 
 
@@ -2206,9 +2242,7 @@ def in_trading_hours(ts: pd.Timestamp) -> bool:
     try:
         return NY.open_at_time(MARKET_SCHEDULE, ts)
     except ValueError as exc:
-        logger.warning(
-            f"Invalid schedule time {ts}: {exc}; assuming market closed"
-        )
+        logger.warning(f"Invalid schedule time {ts}: {exc}; assuming market closed")
         return False
 
 
@@ -2679,7 +2713,10 @@ def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
             extra={"start": start, "end": end, "now": now_et.time()},
         )
         return False
-    if state.streak_halt_until and datetime.datetime.now(PACIFIC) < state.streak_halt_until:
+    if (
+        state.streak_halt_until
+        and datetime.datetime.now(PACIFIC) < state.streak_halt_until
+    ):
         logger.info("SKIP_STREAK_HALT", extra={"until": state.streak_halt_until})
         return False
     return True
@@ -2848,7 +2885,9 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                 order = api.submit_order(order_data=req)
             except APIError as e:
                 if getattr(e, "code", None) == 40310000:
-                    available = int(getattr(e, "_raw_errors", [{}])[0].get("available", 0))
+                    available = int(
+                        getattr(e, "_raw_errors", [{}])[0].get("available", 0)
+                    )
                     if available > 0:
                         logger.info(
                             f"Adjusting order for {req.symbol} to available qty={available}"
@@ -3043,7 +3082,9 @@ def vwap_pegged_submit(
                 logger.info(
                     "ORDER_SENT",
                     extra={
-                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "timestamp": datetime.datetime.now(
+                            datetime.timezone.utc
+                        ).isoformat(),
                         "symbol": symbol,
                         "side": side,
                         "qty": slice_qty,
@@ -3089,14 +3130,21 @@ def vwap_pegged_submit(
                             logger.exception("bot.py unexpected", exc_info=exc)
                             raise
                     _slippage_log.append(
-                        (symbol, vwap_price, fill_price, datetime.datetime.now(datetime.timezone.utc))
+                        (
+                            symbol,
+                            vwap_price,
+                            fill_price,
+                            datetime.datetime.now(datetime.timezone.utc),
+                        )
                     )
                     with slippage_lock:
                         try:
                             with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
                                 csv.writer(sf).writerow(
                                     [
-                                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                                        datetime.datetime.now(
+                                            datetime.timezone.utc
+                                        ).isoformat(),
                                         symbol,
                                         vwap_price,
                                         fill_price,
@@ -3313,7 +3361,9 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     try:
         df_ind = prepare_indicators(raw)
         if df_ind is None:
-            logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
+            logger.warning(
+                "INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol}
+            )
             return
     except ValueError as exc:
         logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
@@ -3385,7 +3435,10 @@ def pre_trade_checks(
     ctx: BotContext, state: BotState, symbol: str, balance: float, regime_ok: bool
 ) -> bool:
     # Streak kill-switch check
-    if state.streak_halt_until and datetime.datetime.now(PACIFIC) < state.streak_halt_until:
+    if (
+        state.streak_halt_until
+        and datetime.datetime.now(PACIFIC) < state.streak_halt_until
+    ):
         logger.info(
             "SKIP_STREAK_HALT",
             extra={"symbol": symbol, "until": state.streak_halt_until},
@@ -3577,6 +3630,7 @@ def _exit_positions_if_needed(
         with targets_lock:
             ctx.stop_targets.pop(symbol, None)
             ctx.take_profit_targets.pop(symbol, None)
+        state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
         return True
 
     if (
@@ -3594,6 +3648,7 @@ def _exit_positions_if_needed(
         with targets_lock:
             ctx.stop_targets.pop(symbol, None)
             ctx.take_profit_targets.pop(symbol, None)
+        state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
         return True
     return False
 
@@ -3627,6 +3682,7 @@ def _enter_long(
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
         logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
+        state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
         ctx.trade_logger.log_entry(
             symbol,
             current_price,
@@ -3696,6 +3752,7 @@ def _enter_short(
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
         logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
+        state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
         ctx.trade_logger.log_entry(
             symbol,
             current_price,
@@ -3849,17 +3906,38 @@ def trade_logic(
     current_qty = _current_position_qty(ctx, symbol)
     recent_rebal = _recent_rebalance_flag(ctx, symbol)
 
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    signal = "buy" if final_score > 0 else "sell" if final_score < 0 else "hold"
+
     if _exit_positions_if_needed(
         ctx, state, symbol, feat_df, final_score, conf, current_qty, recent_rebal
     ):
         return True
 
+    cd_ts = state.trade_cooldowns.get(symbol)
+    if cd_ts and (now - cd_ts).total_seconds() < TRADE_COOLDOWN_MIN * 60:
+        logger.info("SKIP_COOLDOWN", extra={"symbol": symbol})
+        return True
+
     if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
+        if symbol in state.long_positions:
+            held = state.position_cache.get(symbol, 0)
+            logger.info(
+                f"Skipping BUY for {symbol} — position already LONG {held} shares"
+            )
+            return True
         return _enter_long(
             ctx, state, symbol, balance, feat_df, final_score, conf, strat
         )
 
     if final_score < 0 and conf >= BUY_THRESHOLD and current_qty == 0:
+        if symbol in state.short_positions:
+            held = abs(state.position_cache.get(symbol, 0))
+            logger.info(
+                f"Skipping SELL for {symbol} — position already SHORT {held} shares"
+            )
+            return True
         return _enter_short(ctx, state, symbol, feat_df, final_score, conf, strat)
 
     # If holding, check for stops/take/trailing
@@ -4088,7 +4166,9 @@ def update_signal_weights() -> None:
         df["reward"] = df["pnl"] * df["confidence"]
         optimize_signals(df, config)
         recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
-        recent_mask = recent_cut >= (datetime.datetime.now(datetime.timezone.utc) - timedelta(days=30))
+        recent_mask = recent_cut >= (
+            datetime.datetime.now(datetime.timezone.utc) - timedelta(days=30)
+        )
         df_recent = df[recent_mask]
 
         stats_all: Dict[str, List[float]] = {}
@@ -4427,7 +4507,9 @@ def _add_additional_indicators(
             state.indicator_failures += 1
         df["cci"] = np.nan
 
-    df[["high", "low", "close", "volume"]] = df[["high", "low", "close", "volume"]].astype(float)
+    df[["high", "low", "close", "volume"]] = df[
+        ["high", "low", "close", "volume"]
+    ].astype(float)
     try:
         mfi_vals = ta.mfi(df.high, df.low, df.close, df.volume, length=14)
         df["+mfi"] = mfi_vals
@@ -4531,20 +4613,24 @@ def _drop_inactive_features(df: pd.DataFrame) -> None:
 @profile
 def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     # Calculate RSI and assign to both rsi and rsi_14
-    frame['rsi'] = ta.rsi(frame['close'], length=14)
-    frame['rsi_14'] = frame['rsi']
+    frame["rsi"] = ta.rsi(frame["close"], length=14)
+    frame["rsi_14"] = frame["rsi"]
 
     # Ichimoku conversion and base lines
-    frame['ichimoku_conv'] = (frame['high'].rolling(window=9).max() + frame['low'].rolling(window=9).min()) / 2
-    frame['ichimoku_base'] = (frame['high'].rolling(window=26).max() + frame['low'].rolling(window=26).min()) / 2
+    frame["ichimoku_conv"] = (
+        frame["high"].rolling(window=9).max() + frame["low"].rolling(window=9).min()
+    ) / 2
+    frame["ichimoku_base"] = (
+        frame["high"].rolling(window=26).max() + frame["low"].rolling(window=26).min()
+    ) / 2
 
     # Stochastic RSI calculation
-    rsi_min = frame['rsi_14'].rolling(window=14).min()
-    rsi_max = frame['rsi_14'].rolling(window=14).max()
-    frame['stochrsi'] = (frame['rsi_14'] - rsi_min) / (rsi_max - rsi_min)
+    rsi_min = frame["rsi_14"].rolling(window=14).min()
+    rsi_max = frame["rsi_14"].rolling(window=14).max()
+    frame["stochrsi"] = (frame["rsi_14"] - rsi_min) / (rsi_max - rsi_min)
 
     # Guarantee all required columns exist
-    required = ['ichimoku_conv', 'ichimoku_base', 'stochrsi']
+    required = ["ichimoku_conv", "ichimoku_base", "stochrsi"]
     for col in required:
         if col not in frame.columns:
             frame[col] = np.nan
@@ -4957,7 +5043,10 @@ def check_disaster_halt() -> None:
         dd = _current_drawdown()
         if dd >= DISASTER_DD_LIMIT:
             with open(HALT_FLAG_PATH, "w") as f:
-                f.write("DISASTER " + datetime.datetime.now(datetime.timezone.utc).isoformat())
+                f.write(
+                    "DISASTER "
+                    + datetime.datetime.now(datetime.timezone.utc).isoformat()
+                )
             logger.error("DISASTER_HALT_TRIGGERED", extra={"drawdown": dd})
     except Exception as e:
         logger.exception(f"check_disaster_halt failed: {e}")
@@ -5053,7 +5142,13 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
             .iloc[:-1]
             .values
         )
-        y_train = df_train["close"].pct_change(fill_method=None).shift(-1).fillna(0).values[:-1]
+        y_train = (
+            df_train["close"]
+            .pct_change(fill_method=None)
+            .shift(-1)
+            .fillna(0)
+            .values[:-1]
+        )
         with model_lock:
             try:
                 if len(X_train) == 0:
@@ -5077,10 +5172,10 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
             if f.endswith(".pkl"):
                 dt = datetime.datetime.strptime(
                     f.split("_")[1].split(".")[0], "%Y%m%d"
-                ).replace(
-                    tzinfo=datetime.timezone.utc
-                )
-                if datetime.datetime.now(datetime.timezone.utc) - dt > timedelta(days=30):
+                ).replace(tzinfo=datetime.timezone.utc)
+                if datetime.datetime.now(datetime.timezone.utc) - dt > timedelta(
+                    days=30
+                ):
                     os.remove(os.path.join("models", f))
 
         batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
@@ -5292,6 +5387,13 @@ def run_all_trades_worker(state: BotState, model) -> None:
     if state.running:
         logger.warning("RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if (
+        state.last_run_at
+        and (now - state.last_run_at).total_seconds() < RUN_INTERVAL_SECONDS
+    ):
+        logger.warning("RUN_ALL_TRADES_SKIPPED_RECENT")
+        return
     if not is_market_open():
         logger.info("MARKET_CLOSED_NO_FETCH")
         return  # FIXED: skip work when market closed
@@ -5299,12 +5401,24 @@ def run_all_trades_worker(state: BotState, model) -> None:
     if state.pdt_blocked:
         return
     state.running = True
+    state.last_run_at = now
     loop_start = time.monotonic()
     try:
         logger.info(
             "RUN_ALL_TRADES_START",
-            extra={"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+            extra={
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+            },
         )
+
+        try:
+            pos_list = ctx.api.get_all_positions()
+            state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
+        except Exception as e:
+            logger.warning(f"POSITION_FETCH_FAILED: {e}")
+            state.position_cache = {}
+        state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
+        state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
 
         current_cash, regime_ok, symbols = _prepare_run(ctx, state)
 
@@ -5318,7 +5432,10 @@ def run_all_trades_worker(state: BotState, model) -> None:
             logger.critical("DATA_SOURCE_EMPTY", extra={"symbols": symbols})
             try:
                 with open(HALT_FLAG_PATH, "w") as f:
-                    f.write("DATA_OUTAGE " + datetime.datetime.now(datetime.timezone.utc).isoformat())
+                    f.write(
+                        "DATA_OUTAGE "
+                        + datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    )
             except Exception as e:
                 logger.error(f"Failed to set halt flag: {e}")
             time.sleep(60)
@@ -5434,7 +5551,9 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                     try:
                         submit_order(ctx, sym, qty_to_buy, "buy")
                         logger.info(f"INITIAL_REBALANCE: Bought {qty_to_buy} {sym}")
-                        ctx.rebalance_buys[sym] = datetime.datetime.now(datetime.timezone.utc)
+                        ctx.rebalance_buys[sym] = datetime.datetime.now(
+                            datetime.timezone.utc
+                        )
                     except Exception as e:
                         logger.error(
                             f"INITIAL_REBALANCE: Buy failed for {sym}: {repr(e)}"
@@ -5651,11 +5770,12 @@ def main() -> None:
         # Start listening for trade updates in a background thread
         threading.Thread(
             target=lambda: asyncio.run(
-                start_trade_updates_stream(API_KEY, API_SECRET, trading_client, paper=True)
+                start_trade_updates_stream(
+                    API_KEY, API_SECRET, trading_client, paper=True
+                )
             ),
             daemon=True,
         ).start()
-
 
     except Exception as e:
         logger.exception(f"Fatal error in main: {e}")
@@ -5715,6 +5835,7 @@ def compute_ichimoku(
         ich_func = getattr(ta, "ichimoku", None)
         if ich_func is None:
             from indicators import ichimoku_fallback
+
             ich_func = ichimoku_fallback
         ich = ich_func(high=high, low=low, close=close)
         if isinstance(ich, tuple):
@@ -5743,6 +5864,7 @@ def ichimoku_indicator(
         ich_func = getattr(ta, "ichimoku", None)
         if ich_func is None:
             from indicators import ichimoku_fallback
+
             ich_func = ichimoku_fallback
         ich = ich_func(high=df["high"], low=df["low"], close=df["close"])
         if isinstance(ich, tuple):
@@ -5821,6 +5943,7 @@ if __name__ == "__main__":
     import time
 
     import schedule
+
     while True:
         schedule.run_pending()
         time.sleep(config.SCHEDULER_SLEEP_SECONDS)
