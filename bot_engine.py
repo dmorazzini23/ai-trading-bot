@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -171,7 +172,7 @@ from bs4 import BeautifulSoup
 from flask import Flask
 from requests.exceptions import HTTPError
 
-from alpaca_api import alpaca_get
+from alpaca_api import alpaca_get, start_trade_updates_stream
 from rebalancer import maybe_rebalance
 
 # for paper trading
@@ -5649,7 +5650,9 @@ def main() -> None:
 
         # Start listening for trade updates in a background thread
         threading.Thread(
-            target=stream.run,
+            target=lambda: asyncio.run(
+                start_trade_updates_stream(API_KEY, API_SECRET, trading_client, paper=True)
+            ),
             daemon=True,
         ).start()
 
