@@ -608,6 +608,8 @@ class BotState:
     last_run_at: Optional[datetime.datetime] = None
     # Record of last exit/entry time per symbol for cooldowns
     trade_cooldowns: Dict[str, datetime.datetime] = field(default_factory=dict)
+    # Track direction of last filled trade per symbol
+    last_trade_direction: Dict[str, str] = field(default_factory=dict)
 
 
 state = BotState()
@@ -3648,7 +3650,6 @@ def _exit_positions_if_needed(
         with targets_lock:
             ctx.stop_targets.pop(symbol, None)
             ctx.take_profit_targets.pop(symbol, None)
-        state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
         return True
 
     if (
@@ -3666,7 +3667,6 @@ def _exit_positions_if_needed(
         with targets_lock:
             ctx.stop_targets.pop(symbol, None)
             ctx.take_profit_targets.pop(symbol, None)
-        state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
         return True
     return False
 
@@ -3700,7 +3700,6 @@ def _enter_long(
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
         logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
-        state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
         ctx.trade_logger.log_entry(
             symbol,
             current_price,
@@ -3770,7 +3769,6 @@ def _enter_short(
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
         logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
-        state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
         ctx.trade_logger.log_entry(
             symbol,
             current_price,
@@ -3935,6 +3933,13 @@ def trade_logic(
 
     cd_ts = state.trade_cooldowns.get(symbol)
     if cd_ts and (now - cd_ts).total_seconds() < TRADE_COOLDOWN_MIN * 60:
+        prev = state.last_trade_direction.get(symbol)
+        if prev and (
+            (prev == "buy" and signal == "sell")
+            or (prev == "sell" and signal == "buy")
+        ):
+            logger.info("SKIP_REVERSED_SIGNAL", extra={"symbol": symbol})
+            return True
         logger.info("SKIP_COOLDOWN", extra={"symbol": symbol})
         return True
 
@@ -5371,7 +5376,6 @@ def _process_symbols(
     state.long_positions = {s for s, q in live_positions.items() if q > 0}
     state.short_positions = {s for s, q in live_positions.items() if q < 0}
 
-    recent_trades = state.last_traded_at if hasattr(state, "last_traded_at") else {}
     filtered: list[str] = []
 
     for symbol in symbols:
@@ -5381,10 +5385,10 @@ def _process_symbols(
             )
             skipped_duplicates.inc()
             continue
-        last_ts = recent_trades.get(symbol)
-        if last_ts and (now - last_ts).total_seconds() < 60:
+        cd_ts = state.trade_cooldowns.get(symbol)
+        if cd_ts and (now - cd_ts).total_seconds() < TRADE_COOLDOWN_MIN * 60:
             logger.info(
-                f"SKIP_COOLDOWN | {symbol} traded at {last_ts.isoformat()}, skipping"
+                f"SKIP_COOLDOWN | {symbol} traded at {cd_ts}, skipping"
             )
             skipped_cooldown.inc()
             continue
@@ -5404,7 +5408,6 @@ def _process_symbols(
                 return
             processed.append(symbol)
             _safe_trade(ctx, state, symbol, current_cash, model, regime_ok)
-            state.last_traded_at[symbol] = datetime.datetime.now(datetime.timezone.utc)
         except Exception as exc:
             logger.error(f"Error processing {symbol}: {exc}", exc_info=True)
 
@@ -5467,8 +5470,6 @@ def run_all_trades_worker(state: BotState, model) -> None:
         )
 
         current_cash, regime_ok, symbols = _prepare_run(ctx, state)
-        if not hasattr(state, "last_traded_at"):
-            state.last_traded_at = {}
 
         if check_halt_flag():
             logger.info("TRADING_HALTED_VIA_FLAG")
@@ -5819,7 +5820,7 @@ def main() -> None:
         threading.Thread(
             target=lambda: asyncio.run(
                 start_trade_updates_stream(
-                    API_KEY, API_SECRET, trading_client, paper=True
+                    API_KEY, API_SECRET, trading_client, state, paper=True
                 )
             ),
             daemon=True,

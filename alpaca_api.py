@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import logging
 import os
 import time
@@ -201,7 +202,7 @@ def fetch_bars(
     return bars_df[["timestamp", "symbol", "open", "high", "low", "close", "volume"]]
 
 
-async def handle_trade_update(event) -> None:
+async def handle_trade_update(event, state=None) -> None:
     """Process order status updates from the Alpaca stream."""
     try:
         order = getattr(event, "order", {})
@@ -227,6 +228,11 @@ async def handle_trade_update(event) -> None:
             info["status"] = status
             if status not in {"PENDING_NEW", "NEW"}:
                 pending_orders.pop(str(order_id), None)
+        if state and status == "fill":
+            state.trade_cooldowns[symbol] = dt.datetime.now(dt.timezone.utc)
+            side = getattr(order, "side", getattr(event, "side", ""))
+            if side:
+                state.last_trade_direction[symbol] = str(side).lower()
     except Exception as exc:  # pragma: no cover - runtime safety
         logger.exception("Error processing trade update: %s", exc)
 
@@ -265,10 +271,10 @@ async def check_stuck_orders(api) -> None:
                 pending_orders.pop(oid, None)
 
 
-async def start_trade_updates_stream(api_key: str, secret_key: str, api, *, paper: bool = True) -> None:
+async def start_trade_updates_stream(api_key: str, secret_key: str, api, state=None, *, paper: bool = True) -> None:
     """Start Alpaca trade updates stream and stuck order monitor."""
     stream = TradingStream(api_key, secret_key, paper=paper)
-    stream.subscribe_trade_updates(handle_trade_update)
+    stream.subscribe_trade_updates(lambda ev: handle_trade_update(ev, state))
     logger.info("\u2705 Subscribed to Alpaca trade updates stream.")
     asyncio.create_task(check_stuck_orders(api))
     await stream.run()
