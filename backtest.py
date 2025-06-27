@@ -8,6 +8,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta
+import cProfile
 
 import pandas as pd
 import yfinance as yf
@@ -178,4 +179,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    cProfile.run('main()', 'profile.out')

@@ -39,6 +39,7 @@ def load_module(name: str) -> Any:
 
 def _fetch_api(url: str, retries: int = 3, delay: float = 1.0) -> dict:
     """Fetch JSON from an API with simple retry logic."""
+    # TODO: check loop for numpy replacement
     for attempt in range(1, retries + 1):
         try:
             resp = requests.get(url, timeout=5)
@@ -145,6 +146,7 @@ def _apply_macd(data: pd.DataFrame) -> pd.DataFrame:
     if macd_df is None or macd_df.empty:
         logger.warning("MACD indicator calculation failed, returning None")
         raise ValueError("MACD calculation failed")
+    # TODO: check loop for numpy replacement
     for col in ("macd", "signal", "histogram"):
         series = macd_df.get(col)
         if series is None:
