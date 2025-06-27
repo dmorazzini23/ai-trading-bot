@@ -159,7 +159,6 @@ import portalocker
 import requests
 import schedule
 import yfinance as yf
-
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
@@ -177,12 +176,8 @@ except Exception:  # pragma: no cover - older alpaca-trade-api
 
 
 from alpaca.trading.models import Order
-from alpaca.trading.requests import (
-    GetOrdersRequest,
-    LimitOrderRequest,
-    MarketOrderRequest,
-)
-
+from alpaca.trading.requests import (GetOrdersRequest, LimitOrderRequest,
+                                     MarketOrderRequest)
 # Legacy import removed; using alpaca-py trading stream instead
 from alpaca.trading.stream import TradingStream
 from bs4 import BeautifulSoup
@@ -383,14 +378,8 @@ def reconcile_positions(ctx: "BotContext") -> None:
 import warnings
 
 from ratelimit import limits, sleep_and_retry
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-    wait_random,
-)
+from tenacity import (RetryError, retry, retry_if_exception_type,
+                      stop_after_attempt, wait_exponential, wait_random)
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 RUN_HEALTH = RUN_HEALTHCHECK == "1"
@@ -3532,8 +3521,29 @@ def _safe_trade(
     balance: float,
     model: RandomForestClassifier,
     regime_ok: bool,
+    side: OrderSide | None = None,
 ) -> bool:
     try:
+        # Real-time position check to prevent buy/sell flip-flops
+        if side is not None:
+            try:
+                live_positions = {
+                    p.symbol: int(p.qty) for p in ctx.api.get_all_positions()
+                }
+                if side == OrderSide.BUY and symbol in live_positions:
+                    logger.info(
+                        f"REALTIME_SKIP | {symbol} already held. Skipping BUY."
+                    )
+                    return False
+                elif side == OrderSide.SELL and symbol not in live_positions:
+                    logger.info(
+                        f"REALTIME_SKIP | {symbol} not held. Skipping SELL."
+                    )
+                    return False
+            except Exception as e:
+                logger.warning(
+                    f"REALTIME_CHECK_FAIL | Could not check live positions for {symbol}: {e}"
+                )
         return trade_logic(ctx, state, symbol, balance, model, regime_ok)
     except RetryError as e:
         logger.warning(
