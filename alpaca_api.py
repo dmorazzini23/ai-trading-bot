@@ -274,7 +274,10 @@ async def check_stuck_orders(api) -> None:
 async def start_trade_updates_stream(api_key: str, secret_key: str, api, state=None, *, paper: bool = True) -> None:
     """Start Alpaca trade updates stream and stuck order monitor."""
     stream = TradingStream(api_key, secret_key, paper=paper)
-    stream.subscribe_trade_updates(lambda ev: handle_trade_update(ev, state))
+    async def handle_async_trade_update(ev):
+        handle_trade_update(ev, state)
+
+    await stream.subscribe_trade_updates(handle_async_trade_update)
     logger.info("\u2705 Subscribed to Alpaca trade updates stream.")
     asyncio.create_task(check_stuck_orders(api))
     await stream.run()
