@@ -122,8 +122,14 @@ def test_load_weights_default_zero(tmp_path):
 
 def test_update_weights_failure(monkeypatch, tmp_path):
     p = tmp_path / "w.csv"
-    monkeypatch.setattr(meta_learning.np, "savetxt", lambda *a, **k: (_ for _ in ()).throw(OSError("bad")))
-    ok = meta_learning.update_weights(str(p), np.array([1.0]), {}, str(tmp_path / "h.json"))
+    monkeypatch.setattr(
+        meta_learning.np,
+        "savetxt",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("bad")),
+    )
+    ok = meta_learning.update_weights(
+        str(p), np.array([1.0]), {}, str(tmp_path / "h.json")
+    )
     assert not ok
 
 
@@ -140,3 +146,10 @@ def test_update_signal_weights_norm_zero(caplog):
     res = meta_learning.update_signal_weights(w, perf)
     assert res == w
     assert "Normalization factor zero" in caplog.text
+
+
+def test_portfolio_rl_trigger():
+    learner = meta_learning.PortfolioReinforcementLearner()
+    state = np.random.rand(10)
+    weights = learner.rebalance_portfolio(state)
+    assert np.isclose(weights.sum(), 1, atol=0.1)

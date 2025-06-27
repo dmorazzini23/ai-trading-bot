@@ -9,7 +9,14 @@ import numpy as np
 import pandas as pd
 import requests
 
+try:
+    from hmmlearn.hmm import GaussianHMM
+except Exception:  # pragma: no cover - optional dependency
+    GaussianHMM = None
+
 logger = logging.getLogger(__name__)
+
+
 def load_module(name: str) -> Any:
     """Dynamically import a module using :mod:`importlib`."""
     try:
@@ -26,10 +33,10 @@ def _fetch_api(url: str, retries: int = 3, delay: float = 1.0) -> dict:
             resp = requests.get(url, timeout=5)
             resp.raise_for_status()
             return resp.json()
-        except requests.RequestException as exc:  # pragma: no cover - network may be mocked
-            logger.warning(
-                "API request failed (%s/%s): %s", attempt, retries, exc
-            )
+        except (
+            requests.RequestException
+        ) as exc:  # pragma: no cover - network may be mocked
+            logger.warning("API request failed (%s/%s): %s", attempt, retries, exc)
             time.sleep(delay)
     return {}
 
@@ -100,7 +107,9 @@ def calculate_macd(
         if not _validate_macd_input(close_prices, min_len):
             return None
 
-        macd_df = _compute_macd_df(close_prices, fast_period, slow_period, signal_period)
+        macd_df = _compute_macd_df(
+            close_prices, fast_period, slow_period, signal_period
+        )
 
         if macd_df.isnull().values.any():
             logger.warning("MACD calculation returned NaNs in the result")
@@ -175,3 +184,28 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
     except (ValueError, TypeError) as exc:
         logger.error("Exception generating signal: %s", exc, exc_info=True)
         return pd.Series(dtype=float)
+
+
+def detect_market_regime_hmm(df: pd.DataFrame, n_states: int = 3) -> pd.DataFrame:
+    """Annotate ``df`` with hidden Markov market regimes."""
+    if GaussianHMM is None:
+        df["Regime"] = np.nan
+        return df
+    returns = np.log(df["Close"]).diff().dropna().values.reshape(-1, 1)
+    if len(returns) < n_states * 10:
+        df["Regime"] = np.nan
+        return df
+    try:
+        model = GaussianHMM(
+            n_components=n_states,
+            covariance_type="diag",
+            n_iter=1000,
+            random_state=42,
+        )
+        model.fit(returns)
+        hidden_states = model.predict(returns)
+        df["Regime"] = np.append([np.nan], hidden_states)
+    except Exception as e:  # pragma: no cover - hmmlearn may fail
+        logger.warning("HMM failed: %s", e)
+        df["Regime"] = np.nan
+    return df

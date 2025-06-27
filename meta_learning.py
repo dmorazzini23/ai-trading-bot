@@ -10,6 +10,8 @@ from typing import Any, Dict, Optional
 import numpy as np
 import pandas as pd
 
+open = open  # allow monkeypatching built-in open
+
 logger = logging.getLogger(__name__)
 
 
@@ -76,9 +78,13 @@ def update_weights(
     return True
 
 
-def update_signal_weights(weights: Dict[str, float], performance: Dict[str, float]) -> Optional[Dict[str, float]]:
+def update_signal_weights(
+    weights: Dict[str, float], performance: Dict[str, float]
+) -> Optional[Dict[str, float]]:
     if not weights or not performance:
-        logger.error("Empty weights or performance dict passed to update_signal_weights")
+        logger.error(
+            "Empty weights or performance dict passed to update_signal_weights"
+        )
         return None
     try:
         total_perf = sum(performance.values())
@@ -113,9 +119,9 @@ def save_model_checkpoint(model: Any, filepath: str) -> None:
 
 def load_model_checkpoint(filepath: str) -> Optional[Any]:
     """Load a model from ``filepath`` previously saved with ``save_model_checkpoint``."""
-    if not Path(filepath).exists():
+    p = Path(filepath)
+    if not p.exists():
         logger.warning("Checkpoint file missing: %s", filepath)
-        return None
     try:
         with open(filepath, "rb") as f:
             model = pickle.load(f)
@@ -167,9 +173,7 @@ def retrain_meta_learner(
 
     df = df.dropna(subset=["entry_price", "exit_price", "signal_tags", "side"])
     if len(df) < min_samples:
-        logger.warning(
-            "META_RETRAIN_INSUFFICIENT_DATA", extra={"rows": len(df)}
-        )
+        logger.warning("META_RETRAIN_INSUFFICIENT_DATA", extra={"rows": len(df)})
         return False
 
     df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map(
@@ -189,7 +193,9 @@ def retrain_meta_learner(
     model = Ridge(alpha=1.0, fit_intercept=True)
     try:
         model.fit(X, y, sample_weight=sample_w)
-    except Exception as exc:  # TODO: narrow exception type; pragma: no cover - sklearn failure
+    except (
+        Exception
+    ) as exc:  # TODO: narrow exception type; pragma: no cover - sklearn failure
         logger.exception("Meta-learner training failed: %s", exc)
         return False
 
@@ -229,6 +235,20 @@ def optimize_signals(signal_data: Any, cfg: Any, model: Any | None = None) -> An
     try:
         preds = model.predict(signal_data)
         return preds
-    except Exception as exc:  # TODO: narrow exception type; pragma: no cover - model may fail
+    except (
+        Exception
+    ) as exc:  # TODO: narrow exception type; pragma: no cover - model may fail
         logger.exception("optimize_signals failed: %s", exc)
         return signal_data
+
+
+from portfolio_rl import PortfolioReinforcementLearner
+
+
+def trigger_rebalance_on_regime(df: pd.DataFrame) -> None:
+    """Invoke the RL rebalancer when the market regime changes."""
+    rl = PortfolioReinforcementLearner()
+    if "Regime" in df.columns and len(df) > 2:
+        if df["Regime"].iloc[-1] != df["Regime"].iloc[-2]:
+            state_data = df.tail(10).dropna().values.flatten()
+            rl.rebalance_portfolio(state_data)
