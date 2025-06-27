@@ -5,9 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 
+import pandas as pd
+import yfinance as yf
 from dotenv import load_dotenv
 
 from backtester import optimize_hyperparams as _optimize_hyperparams
@@ -22,6 +25,45 @@ from backtester.core import load_price_data as _load_price_data
 
 load_dotenv(dotenv_path=".env", override=True)
 logger = logging.getLogger(__name__)
+
+
+def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
+    """Load data for ``symbol`` using local CSV or yfinance."""
+    path = os.path.join("data", f"{symbol}.csv")
+    logger.info("Starting backtest for %s", symbol)
+    df = pd.DataFrame()
+    if os.path.exists(path):
+        try:
+            df = pd.read_csv(path, index_col=0, parse_dates=True)
+            logger.info("Loaded data from %s", path)
+        except Exception as exc:  # pragma: no cover - filesystem errors
+            logger.error("Failed to load %s: %s", path, exc)
+            return pd.DataFrame()
+    else:
+        try:
+            df = yf.download(
+                symbol,
+                start="2023-01-01",
+                end="2024-12-31",
+                interval="1d",
+                progress=False,
+            )
+            if df.empty:
+                logger.error("No data downloaded for %s", symbol)
+                return pd.DataFrame()
+            os.makedirs("data", exist_ok=True)
+            df.to_csv(path)
+            logger.info("Downloaded data for %s and saved to %s", symbol, path)
+        except Exception as exc:  # pragma: no cover - network errors
+            logger.error("Error downloading %s: %s", symbol, exc)
+            return pd.DataFrame()
+
+    df = df.loc[str(start) : str(end)]
+    required = {"Open", "High", "Low", "Close", "Volume"}
+    if not required.issubset(df.columns):
+        logger.error("Skipping %s, missing required columns...", symbol)
+        return pd.DataFrame()
+    return df
 
 
 def run_backtest_wrapper(symbols, start, end, params):
@@ -39,6 +81,7 @@ def run_backtest_wrapper(symbols, start, end, params):
 def optimize_hyperparams_wrapper(ctx, symbols, backtest_data, param_grid, metric="sharpe_ratio"):
     """Thin wrapper for compatibility with old scripts."""
     import os
+
     import backtester
     import backtester.core as core
     import backtester.grid_runner as grid_runner
@@ -65,7 +108,6 @@ def optimize_hyperparams_wrapper(ctx, symbols, backtest_data, param_grid, metric
 
 run_backtest = run_backtest_wrapper
 optimize_hyperparams = optimize_hyperparams_wrapper
-load_price_data = _load_price_data
 
 
 def main() -> None:

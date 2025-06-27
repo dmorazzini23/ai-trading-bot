@@ -8,9 +8,9 @@ Example:
 from __future__ import annotations
 
 import logging
+import os
 from itertools import product
 from multiprocessing import Pool, cpu_count
-import os
 from typing import Any, Iterable
 
 from .core import BacktestResult, run_backtest
