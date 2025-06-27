@@ -27,8 +27,8 @@ class PortfolioReinforcementLearner:
         if len(state) != 10:
             state = np.pad(state, (0, 10 - len(state)), "constant")
         state_tensor = torch.tensor(state, dtype=torch.float32)
-        weights = self.actor(state_tensor)
-        norm = weights.sum().item()
-        if norm == 0:
-            norm = 1
-        return (weights / norm).detach().numpy()
+        weights = self.actor(state_tensor).detach().numpy()
+        total = weights.sum()
+        if total == 0:
+            total = 1.0
+        return weights / total

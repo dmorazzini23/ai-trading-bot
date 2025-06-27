@@ -176,9 +176,8 @@ def retrain_meta_learner(
         logger.warning("META_RETRAIN_INSUFFICIENT_DATA", extra={"rows": len(df)})
         return False
 
-    df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map(
-        {"buy": 1, "sell": -1}
-    )
+    direction = np.where(df["side"] == "buy", 1, -1)
+    df["pnl"] = (df["exit_price"] - df["entry_price"]) * direction
     df["outcome"] = (df["pnl"] > 0).astype(int)
 
     tags = sorted({t for row in df["signal_tags"] for t in str(row).split("+")})

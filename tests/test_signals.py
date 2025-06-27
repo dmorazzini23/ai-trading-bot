@@ -2,6 +2,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+np.random.seed(0)
+
 from signals import GaussianHMM, detect_market_regime_hmm
 
 

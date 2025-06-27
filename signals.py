@@ -9,6 +9,17 @@ import numpy as np
 import pandas as pd
 import requests
 
+
+def rolling_mean(arr: np.ndarray, window: int) -> np.ndarray:
+    """Simple rolling mean using cumulative sum for speed."""
+    if window <= 0:
+        raise ValueError("window must be positive")
+    arr = np.asarray(arr, dtype=float)
+    if arr.size < window:
+        return np.array([], dtype=float)
+    cumsum = np.cumsum(np.insert(arr, 0, 0.0))
+    return (cumsum[window:] - cumsum[:-window]) / float(window)
+
 try:
     from hmmlearn.hmm import GaussianHMM
 except Exception:  # pragma: no cover - optional dependency
