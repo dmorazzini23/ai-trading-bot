@@ -2902,7 +2902,13 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                 else:
                     raise
 
+            start_ts = time.monotonic()
             while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
+                if time.monotonic() - start_ts > 30:
+                    logger.warning(
+                        f"Order stuck in PENDING_NEW: {req.symbol}, retrying or monitoring required."
+                    )
+                    break
                 time.sleep(0.5)
                 order = api.get_order_by_id(order.id)
             logger.info(
@@ -3727,6 +3733,8 @@ def _enter_long(
         with targets_lock:
             ctx.stop_targets[symbol] = stop
             ctx.take_profit_targets[symbol] = take
+        state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
+        state.last_trade_direction[symbol] = "buy"
     return True
 
 
@@ -3797,6 +3805,8 @@ def _enter_short(
         with targets_lock:
             ctx.stop_targets[symbol] = stop
             ctx.take_profit_targets[symbol] = take
+        state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
+        state.last_trade_direction[symbol] = "sell"
     return True
 
 
@@ -5363,6 +5373,11 @@ def _process_symbols(
     regime_ok: bool,
 ) -> list[str]:
     processed: list[str] = []
+
+    if not hasattr(state, "trade_cooldowns"):
+        state.trade_cooldowns = {}
+    if not hasattr(state, "last_trade_direction"):
+        state.last_trade_direction = {}
 
     now = datetime.datetime.now(datetime.timezone.utc)
     try:

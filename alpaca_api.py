@@ -277,7 +277,7 @@ async def start_trade_updates_stream(api_key: str, secret_key: str, api, state=N
     async def handle_async_trade_update(ev):
         handle_trade_update(ev, state)
 
-    await stream.subscribe_trade_updates(handle_async_trade_update)
+    stream.subscribe_trade_updates(handle_async_trade_update)
     logger.info("\u2705 Subscribed to Alpaca trade updates stream.")
     asyncio.create_task(check_stuck_orders(api))
     await stream.run()
