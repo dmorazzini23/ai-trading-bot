@@ -3830,6 +3830,9 @@ def _manage_existing_position(
             f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price:.4f}"
         )
         send_exit_order(ctx, symbol, exit_qty, price, reason)
+        if reason == "stop_loss":
+            state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
+            state.last_trade_direction[symbol] = "sell"
         ctx.trade_logger.log_exit(state, symbol, price)
         try:
             pos_after = ctx.api.get_open_position(symbol)
@@ -5400,11 +5403,9 @@ def _process_symbols(
             )
             skipped_duplicates.inc()
             continue
-        cd_ts = state.trade_cooldowns.get(symbol)
-        if cd_ts and (now - cd_ts).total_seconds() < TRADE_COOLDOWN_MIN * 60:
-            logger.info(
-                f"SKIP_COOLDOWN | {symbol} traded at {cd_ts}, skipping"
-            )
+        ts = state.trade_cooldowns.get(symbol)
+        if ts and (now - ts).total_seconds() < 60:
+            logger.info(f"SKIP_COOLDOWN | {symbol} traded at {ts}")
             skipped_cooldown.inc()
             continue
         filtered.append(symbol)
@@ -5454,6 +5455,10 @@ def run_all_trades_worker(state: BotState, model) -> None:
     import uuid
 
     loop_id = str(uuid.uuid4())
+    if not hasattr(state, "trade_cooldowns"):
+        state.trade_cooldowns = {}
+    if not hasattr(state, "last_trade_direction"):
+        state.last_trade_direction = {}
     if state.running:
         logger.warning("RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
