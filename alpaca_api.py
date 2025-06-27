@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
 from collections import defaultdict
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 import pandas as pd
 import requests
+from alpaca.trading.stream import TradingStream
 from tenacity import (retry, retry_if_exception_type, stop_after_attempt,
                       wait_exponential)
 
@@ -26,6 +29,9 @@ SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
 
 _warn_counts = defaultdict(int)
+
+# Track pending orders awaiting fill or rejection
+pending_orders: dict[str, dict[str, Any]] = {}
 
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
 
@@ -120,6 +126,13 @@ def submit_order(api, req, log: logging.Logger | None = None):
             order = api.submit_order(order_data=req)
             if hasattr(order, "status_code") and getattr(order, "status_code") == 429:
                 raise requests.exceptions.HTTPError("API rate limit exceeded (429)")
+            if getattr(order, "id", None):
+                pending_orders[str(order.id)] = {
+                    "symbol": getattr(req, "symbol", ""),
+                    "req": req,
+                    "timestamp": time.monotonic(),
+                    "status": "PENDING_NEW",
+                }
             return order
         except requests.exceptions.HTTPError as e:
             if "429" in str(e) or "rate limit" in str(e).lower():
@@ -186,3 +199,77 @@ def fetch_bars(
         return pd.DataFrame()
 
     return bars_df[["timestamp", "symbol", "open", "high", "low", "close", "volume"]]
+
+
+async def handle_trade_update(event) -> None:
+    """Process order status updates from the Alpaca stream."""
+    try:
+        order = getattr(event, "order", {})
+        order_id = getattr(order, "id", getattr(event, "order_id", ""))
+        symbol = getattr(order, "symbol", "")
+        status = getattr(event, "event", getattr(order, "status", ""))
+        filled_qty = getattr(order, "filled_qty", None)
+        fill_price = getattr(order, "filled_avg_price", None)
+        extra = (
+            f" [filled_qty={filled_qty} @ price={fill_price}]"
+            if filled_qty and fill_price
+            else ""
+        )
+        logger.info(
+            "Order update: %s (ID: %s) -> %s%s",
+            symbol,
+            order_id,
+            status,
+            extra,
+        )
+        info = pending_orders.get(str(order_id))
+        if info:
+            info["status"] = status
+            if status not in {"PENDING_NEW", "NEW"}:
+                pending_orders.pop(str(order_id), None)
+    except Exception as exc:  # pragma: no cover - runtime safety
+        logger.exception("Error processing trade update: %s", exc)
+
+
+async def check_stuck_orders(api) -> None:
+    """Cancel and resubmit orders stuck in PENDING_NEW state."""
+    while True:
+        await asyncio.sleep(10)
+        now = time.monotonic()
+        for oid, info in list(pending_orders.items()):
+            if now - info.get("timestamp", now) > 30 and info.get("status") == "PENDING_NEW":
+                symbol = info.get("symbol", "")
+                logger.warning(
+                    "\N{WARNING SIGN} Order %s for %s stuck >30s. Cancelling and resubmitting.",
+                    oid,
+                    symbol,
+                )
+                try:
+                    api.cancel_order_by_id(oid)
+                except Exception as exc:  # pragma: no cover - network
+                    logger.warning("Failed to cancel stuck order %s: %s", oid, exc)
+                req = info.get("req")
+                if req is not None:
+                    try:
+                        new_order = api.submit_order(order_data=req)
+                        if getattr(new_order, "id", None):
+                            pending_orders[str(new_order.id)] = {
+                                "symbol": symbol,
+                                "req": req,
+                                "timestamp": time.monotonic(),
+                                "status": "PENDING_NEW",
+                            }
+                            logger.info("Resubmitted order %s as %s", oid, new_order.id)
+                    except Exception as exc:  # pragma: no cover - network
+                        logger.exception("Error resubmitting order %s: %s", oid, exc)
+                pending_orders.pop(oid, None)
+
+
+async def start_trade_updates_stream(api_key: str, secret_key: str, api, *, paper: bool = True) -> None:
+    """Start Alpaca trade updates stream and stuck order monitor."""
+    stream = TradingStream(api_key, secret_key, paper=paper)
+    stream.subscribe_trade_updates(handle_trade_update)
+    logger.info("\u2705 Subscribed to Alpaca trade updates stream.")
+    asyncio.create_task(check_stuck_orders(api))
+    await stream.run()
+
