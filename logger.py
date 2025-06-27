@@ -2,12 +2,15 @@
 
 import logging
 import os
+import queue
 import sys
-from logging.handlers import RotatingFileHandler
+from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
 from typing import Dict
 
 _configured = False
 _loggers: Dict[str, logging.Logger] = {}
+_log_queue: queue.Queue | None = None
+_listener: QueueListener | None = None
 
 
 def get_rotating_handler(
@@ -37,18 +40,22 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     logger = logging.getLogger()
     logger.setLevel(level)
 
-    formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s - %(message)s')
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
 
-    handlers = []
+    handlers: list[logging.Handler] = []
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setFormatter(formatter)
     handlers.append(stream_handler)
 
+    global _log_queue, _listener
     if log_file:
         try:
             file_handler = get_rotating_handler(log_file, max_bytes=10_485_760)
             file_handler.setFormatter(formatter)
-            handlers.append(file_handler)
+            _log_queue = queue.Queue(-1)
+            _listener = QueueListener(_log_queue, file_handler)
+            _listener.start()
+            handlers.append(QueueHandler(_log_queue))
         except OSError as exc:
             logging.getLogger(__name__).error(
                 "Failed to configure log file %s: %s", log_file, exc

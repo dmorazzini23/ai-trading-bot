@@ -159,7 +159,6 @@ import portalocker
 import requests
 import schedule
 import yfinance as yf
-
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
@@ -177,12 +176,8 @@ except Exception:  # pragma: no cover - older alpaca-trade-api
 
 
 from alpaca.trading.models import Order
-from alpaca.trading.requests import (
-    GetOrdersRequest,
-    LimitOrderRequest,
-    MarketOrderRequest,
-)
-
+from alpaca.trading.requests import (GetOrdersRequest, LimitOrderRequest,
+                                     MarketOrderRequest)
 # Legacy import removed; using alpaca-py trading stream instead
 from alpaca.trading.stream import TradingStream
 from bs4 import BeautifulSoup
@@ -383,14 +378,8 @@ def reconcile_positions(ctx: "BotContext") -> None:
 import warnings
 
 from ratelimit import limits, sleep_and_retry
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-    wait_random,
-)
+from tenacity import (RetryError, retry, retry_if_exception_type,
+                      stop_after_attempt, wait_exponential, wait_random)
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 RUN_HEALTH = RUN_HEALTHCHECK == "1"
@@ -4273,9 +4262,8 @@ def run_meta_learning_weight_optimizer(
             logger.warning("METALEARN_NO_VALID_ROWS")
             return
 
-        df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map(
-            {"buy": 1, "sell": -1}
-        )
+        direction = np.where(df["side"] == "buy", 1, -1)
+        df["pnl"] = (df["exit_price"] - df["entry_price"]) * direction
         df["confidence"] = df.get("confidence", 0.5)
         df["reward"] = df["pnl"] * df["confidence"]
         df["outcome"] = (df["pnl"] > 0).astype(int)
@@ -4338,9 +4326,8 @@ def run_bayesian_meta_learning_optimizer(
             logger.warning("METALEARN_NO_VALID_ROWS")
             return
 
-        df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map(
-            {"buy": 1, "sell": -1}
-        )
+        direction = np.where(df["side"] == "buy", 1, -1)
+        df["pnl"] = (df["exit_price"] - df["entry_price"]) * direction
         df["outcome"] = (df["pnl"] > 0).astype(int)
 
         tags = sorted(set(tag for row in df["signal_tags"] for tag in row.split("+")))
@@ -4395,9 +4382,7 @@ def load_global_signal_performance(
     direction = np.where(df.side == "buy", 1, -1)
     df["pnl"] = (df.exit_price - df.entry_price) * direction
     df_tags = df.assign(tag=df.signal_tags.str.split("+")).explode("tag")
-    win_rates = (
-        df_tags.groupby("tag")["pnl"].apply(lambda pnl: np.mean(pnl > 0)).to_dict()
-    )
+    win_rates = (df_tags["pnl"] > 0).groupby(df_tags["tag"]).mean().to_dict()
     win_rates = {
         tag: round(wr, 3)
         for tag, wr in win_rates.items()
@@ -4906,9 +4891,8 @@ def daily_summary() -> None:
             logger.info("DAILY_SUMMARY_NO_TRADES")
             return
         df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["entry_price", "exit_price"])
-        df["pnl"] = (df.exit_price - df.entry_price) * df["side"].map(
-            {"buy": 1, "sell": -1}
-        )
+        direction = np.where(df["side"] == "buy", 1, -1)
+        df["pnl"] = (df.exit_price - df.entry_price) * direction
         total_trades = len(df)
         win_rate = (df.pnl > 0).mean() if total_trades else 0
         total_pnl = df.pnl.sum()

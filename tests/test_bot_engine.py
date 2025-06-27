@@ -6,6 +6,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+np.random.seed(0)
+
 # Build a lightweight bot_engine module exposing only prepare_indicators
 if 'bot_engine' not in sys.modules:
     src_path = Path(__file__).resolve().parents[1] / 'bot_engine.py'

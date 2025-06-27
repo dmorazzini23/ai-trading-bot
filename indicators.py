@@ -1,7 +1,9 @@
 """Technical indicator helpers used across the bot."""
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
+from numba import jit
 
 
 def ichimoku_fallback(high: pd.Series, low: pd.Series, close: pd.Series) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -26,4 +28,27 @@ def ichimoku_fallback(high: pd.Series, low: pd.Series, close: pd.Series) -> tupl
 
     signal = pd.DataFrame(df)
     return df, signal
+
+
+@jit(nopython=True)
+def rsi_numba(prices: np.ndarray, period: int = 14) -> np.ndarray:
+    """Compute RSI using a fast numba implementation."""
+    deltas = np.diff(prices)
+    seed = deltas[:period]
+    up = seed[seed > 0].sum() / period
+    down = -seed[seed < 0].sum() / period
+    rs = up / down if down != 0 else 0.0
+    rsi = np.zeros_like(prices)
+    rsi[:period] = 100.0 - 100.0 / (1.0 + rs)
+    up_avg = up
+    down_avg = down
+    for i in range(period, len(prices)):
+        delta = deltas[i - 1]
+        up_val = delta if delta > 0 else 0.0
+        down_val = -delta if delta < 0 else 0.0
+        up_avg = (up_avg * (period - 1) + up_val) / period
+        down_avg = (down_avg * (period - 1) + down_val) / period
+        rs = up_avg / down_avg if down_avg != 0 else 0.0
+        rsi[i] = 100.0 - 100.0 / (1.0 + rs)
+    return rsi
 
