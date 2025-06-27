@@ -194,3 +194,30 @@ def load_model(path: str) -> Any:
         Deserialized model object.
     """
     return joblib.load(str(Path(path)))
+
+
+import optuna
+import xgboost as xgb
+
+
+def train_xgboost_with_optuna(
+    X_train: Any, y_train: Any, X_val: Any, y_val: Any
+) -> xgb.XGBClassifier:
+    """Hyperparameter search for an XGBoost model using Optuna."""
+
+    def objective(trial: optuna.trial.Trial) -> float:
+        params = {
+            "max_depth": trial.suggest_int("max_depth", 3, 10),
+            "eta": trial.suggest_float("eta", 0.01, 0.3),
+            "objective": "binary:logistic",
+        }
+        dtrain = xgb.DMatrix(X_train, label=y_train)
+        cv = xgb.cv(params, dtrain, num_boost_round=100, nfold=3, metrics="logloss")
+        return cv["test-logloss-mean"].iloc[-1]
+
+    study = optuna.create_study(direction="minimize")
+    study.optimize(objective, n_trials=50)
+    best_params = study.best_params
+    model = xgb.XGBClassifier(**best_params)
+    model.fit(X_train, y_train)
+    return model

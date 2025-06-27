@@ -159,6 +159,7 @@ import portalocker
 import requests
 import schedule
 import yfinance as yf
+
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
@@ -176,8 +177,12 @@ except Exception:  # pragma: no cover - older alpaca-trade-api
 
 
 from alpaca.trading.models import Order
-from alpaca.trading.requests import (GetOrdersRequest, LimitOrderRequest,
-                                     MarketOrderRequest)
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    LimitOrderRequest,
+    MarketOrderRequest,
+)
+
 # Legacy import removed; using alpaca-py trading stream instead
 from alpaca.trading.stream import TradingStream
 from bs4 import BeautifulSoup
@@ -378,8 +383,14 @@ def reconcile_positions(ctx: "BotContext") -> None:
 import warnings
 
 from ratelimit import limits, sleep_and_retry
-from tenacity import (RetryError, retry, retry_if_exception_type,
-                      stop_after_attempt, wait_exponential, wait_random)
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random,
+)
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 RUN_HEALTH = RUN_HEALTHCHECK == "1"
@@ -3539,14 +3550,10 @@ def _safe_trade(
                     p.symbol: int(p.qty) for p in ctx.api.get_all_positions()
                 }
                 if side == OrderSide.BUY and symbol in live_positions:
-                    logger.info(
-                        f"REALTIME_SKIP | {symbol} already held. Skipping BUY."
-                    )
+                    logger.info(f"REALTIME_SKIP | {symbol} already held. Skipping BUY.")
                     return False
                 elif side == OrderSide.SELL and symbol not in live_positions:
-                    logger.info(
-                        f"REALTIME_SKIP | {symbol} not held. Skipping SELL."
-                    )
+                    logger.info(f"REALTIME_SKIP | {symbol} not held. Skipping SELL.")
                     return False
             except Exception as e:
                 logger.warning(
@@ -3948,8 +3955,7 @@ def trade_logic(
     if cd_ts and (now - cd_ts).total_seconds() < TRADE_COOLDOWN_MIN * 60:
         prev = state.last_trade_direction.get(symbol)
         if prev and (
-            (prev == "buy" and signal == "sell")
-            or (prev == "sell" and signal == "buy")
+            (prev == "buy" and signal == "sell") or (prev == "sell" and signal == "buy")
         ):
             logger.info("SKIP_REVERSED_SIGNAL", extra={"symbol": symbol})
             return True
@@ -4195,9 +4201,8 @@ def update_signal_weights() -> None:
         df = pd.read_csv(TRADE_LOG_FILE).dropna(
             subset=["entry_price", "exit_price", "signal_tags"]
         )
-        df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].apply(
-            lambda s: 1 if s == "buy" else -1
-        )
+        direction = np.where(df["side"] == "buy", 1, -1)
+        df["pnl"] = (df["exit_price"] - df["entry_price"]) * direction
         df["confidence"] = df.get("confidence", 0.5)
         df["reward"] = df["pnl"] * df["confidence"]
         optimize_signals(df, config)
@@ -4207,14 +4212,12 @@ def update_signal_weights() -> None:
         )
         df_recent = df[recent_mask]
 
-        stats_all: Dict[str, List[float]] = {}
-        stats_recent: Dict[str, List[float]] = {}
-        for _, row in df.iterrows():
-            for tag in row["signal_tags"].split("+"):
-                stats_all.setdefault(tag, []).append(row["reward"])
-        for _, row in df_recent.iterrows():
-            for tag in row["signal_tags"].split("+"):
-                stats_recent.setdefault(tag, []).append(row["reward"])
+        df_tags = df.assign(tag=df["signal_tags"].str.split("+")).explode("tag")
+        df_recent_tags = df_recent.assign(
+            tag=df_recent["signal_tags"].str.split("+")
+        ).explode("tag")
+        stats_all = df_tags.groupby("tag")["reward"].agg(list).to_dict()
+        stats_recent = df_recent_tags.groupby("tag")["reward"].agg(list).to_dict()
 
         new_weights = {}
         for tag, pnls in stats_all.items():
@@ -4389,17 +4392,16 @@ def load_global_signal_performance(
     )
     df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
     df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
-    df["pnl"] = (df.exit_price - df.entry_price) * df.side.apply(
-        lambda s: 1 if s == "buy" else -1
+    direction = np.where(df.side == "buy", 1, -1)
+    df["pnl"] = (df.exit_price - df.entry_price) * direction
+    df_tags = df.assign(tag=df.signal_tags.str.split("+")).explode("tag")
+    win_rates = (
+        df_tags.groupby("tag")["pnl"].apply(lambda pnl: np.mean(pnl > 0)).to_dict()
     )
-    results: Dict[str, List[float]] = {}
-    for _, row in df.iterrows():
-        for tag in row.signal_tags.split("+"):
-            results.setdefault(tag, []).append(row.pnl)
     win_rates = {
-        tag: round(np.mean([1 if p > 0 else 0 for p in pnls]), 3)
-        for tag, pnls in results.items()
-        if len(pnls) >= min_trades
+        tag: round(wr, 3)
+        for tag, wr in win_rates.items()
+        if len(df_tags[df_tags["tag"] == tag]) >= min_trades
     }
     filtered = {tag: wr for tag, wr in win_rates.items() if wr >= threshold}
     logger.info(

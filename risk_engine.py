@@ -3,6 +3,7 @@ import random
 from typing import Dict
 
 import numpy as np
+import pandas as pd
 
 from strategies import TradeSignal
 
@@ -88,7 +89,9 @@ class RiskEngine:
             logger.error("check_max_drawdown failed: %s", exc)
             return False
 
-    def position_size(self, signal: TradeSignal, cash: float, price: float, api=None) -> int:
+    def position_size(
+        self, signal: TradeSignal, cash: float, price: float, api=None
+    ) -> int:
         if self.hard_stop:
             logger.error("HARD_STOP_ACTIVE")
             return 0
@@ -100,7 +103,9 @@ class RiskEngine:
             return 0
 
         if cash <= 0 or price <= 0:
-            logger.error("Invalid cash %.2f or price %.2f for position sizing", cash, price)
+            logger.error(
+                "Invalid cash %.2f or price %.2f for position sizing", cash, price
+            )
             return 0
 
         if not self.can_trade(signal):
@@ -129,7 +134,9 @@ class RiskEngine:
             logger.info("ADJUST_WEIGHT_ASSET", extra={"orig": weight, "new": asset_rem})
             weight = asset_rem
         if weight > strat_cap:
-            logger.info("ADJUST_WEIGHT_STRATEGY", extra={"orig": weight, "new": strat_cap})
+            logger.info(
+                "ADJUST_WEIGHT_STRATEGY", extra={"orig": weight, "new": strat_cap}
+            )
             weight = strat_cap
         return weight
 
@@ -151,7 +158,9 @@ def calculate_position_size(*args, **kwargs) -> int:
     engine = RiskEngine()
     if len(args) == 2 and not kwargs:
         cash, price = args
-        dummy = TradeSignal(symbol="DUMMY", side="buy", confidence=1.0, strategy="default")
+        dummy = TradeSignal(
+            symbol="DUMMY", side="buy", confidence=1.0, strategy="default"
+        )
         return engine.position_size(dummy, cash, price)
     if len(args) >= 3:
         signal, cash, price = args[:3]
@@ -177,3 +186,25 @@ def register_trade(size: int) -> dict | None:
         return None
     CURRENT_TRADES += 1
     return {"size": size}
+
+
+import pandas_ta as ta
+
+
+def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float) -> None:
+    """Exit position if price falls below an ATR-based trailing stop."""
+    try:
+        atr = df.ta.atr()
+        trailing_stop = entry_price - 2 * atr
+        price = df["Close"].iloc[-1]
+        if price < trailing_stop.iloc[-1]:
+            print(f"Hit stop: price {price} vs {trailing_stop.iloc[-1]}")
+            sell()  # noqa: F821 - example placeholder
+            schedule_reentry_check("SYMBOL", lookahead_days=2)
+    except Exception as e:  # pragma: no cover - defensive
+        print(f"ATR stop error: {e}")
+
+
+def schedule_reentry_check(symbol: str, lookahead_days: int) -> None:
+    """Log a re-entry check after a stop out."""
+    print(f"Scheduling reentry for {symbol} in {lookahead_days} days.")
