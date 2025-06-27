@@ -188,10 +188,9 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
         return pd.Series(dtype=float)
 
     try:
-        signal = pd.Series(0, index=df.index)
-        signal[df[column] > 0] = 1
-        signal[df[column] < 0] = -1
-        return signal.fillna(0)
+        values = df[column].to_numpy()
+        signal = np.sign(values)
+        return pd.Series(signal, index=df.index).fillna(0).astype(int)
     except (ValueError, TypeError) as exc:
         logger.error("Exception generating signal: %s", exc, exc_info=True)
         return pd.Series(dtype=float)
