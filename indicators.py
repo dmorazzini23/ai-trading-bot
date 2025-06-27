@@ -42,6 +42,7 @@ def rsi_numba(prices: np.ndarray, period: int = 14) -> np.ndarray:
     rsi[:period] = 100.0 - 100.0 / (1.0 + rs)
     up_avg = up
     down_avg = down
+    # TODO: check loop for numpy replacement
     for i in range(period, len(prices)):
         delta = deltas[i - 1]
         up_val = delta if delta > 0 else 0.0

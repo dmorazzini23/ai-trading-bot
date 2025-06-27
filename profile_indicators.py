@@ -10,6 +10,12 @@ def profile(func, *args, **kwargs):
     start = time.perf_counter()
     try:
         result = func(*args, **kwargs)
+    except TypeError:
+        try:
+            result = func(args[0]['Close'])
+        except Exception as e:
+            print(f"{func.__name__} failed with fallback: {e}")
+            return None, -1
     except Exception as e:
         print(f"{func.__name__} failed: {e}")
         return None, -1
@@ -40,4 +46,3 @@ def run_profiles():
 
 if __name__ == "__main__":
     run_profiles()
-
