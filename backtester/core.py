@@ -14,6 +14,7 @@ from alpaca.common.exceptions import APIError
 from tenacity import RetryError
 
 from data_fetcher import DataFetchError, get_historical_data
+from utils import validate_ohlcv
 
 from .config import CACHE_DIR, DEFAULT_SLIPPAGE, TRADING_DAYS_PER_YEAR
 
@@ -50,7 +51,10 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
     cache_fname = os.path.join(CACHE_DIR, f"cache_{symbol}_{start}_{end}.csv")
     if os.path.exists(cache_fname):
         try:
-            return pd.read_csv(cache_fname, index_col=0, parse_dates=True)
+            df_cached = pd.read_csv(cache_fname, index_col=0, parse_dates=True)
+            if validate_ohlcv(df_cached):
+                return df_cached
+            logger.error("Cached data for %s missing required columns", symbol)
         except (OSError, pd.errors.ParserError, ValueError):
             try:
                 os.remove(cache_fname)
@@ -83,6 +87,9 @@ def load_price_data(symbol: str, start: str, end: str) -> pd.DataFrame:
     except OSError:
         pass
     time.sleep(1)
+    if not validate_ohlcv(df_final):
+        logger.error("Fetched data for %s missing required columns", symbol)
+        return pd.DataFrame()
     return df_final
 
 
@@ -97,18 +104,20 @@ def run_backtest(
     required_cols = {"Open", "High", "Low", "Close", "Volume"}
     for sym in symbols:
         df_sym = load_price_data(sym, start, end)
-        missing = required_cols - set(df_sym.columns)
-        if missing:
-            logger.warning("Missing required columns for %s: %s", sym, missing)
+        if not validate_ohlcv(df_sym):
+            logger.error("Skipping %s due to missing columns", sym)
             continue
         if not df_sym.empty:
             df_sym["ret"] = df_sym["Close"].pct_change(fill_method=None).fillna(0)
+            df_sym["sma_short"] = df_sym["Close"].rolling(20).mean()
+            df_sym["sma_long"] = df_sym["Close"].rolling(50).mean()
         data[sym] = df_sym
 
     cash = 100000.0
     positions = {s: 0 for s in symbols}
     entry_price = {s: 0.0 for s in symbols}
     peak_price = {s: 0.0 for s in symbols}
+    last_stop = {s: pd.Timestamp.min for s in symbols}
     portfolio: list[float] = []
 
     dates = pd.date_range(start, end, freq="B")
@@ -118,24 +127,46 @@ def run_backtest(
                 continue
             price = df.loc[d, "Open"]
             ret = df.loc[d, "ret"]
+            sma_s = df.loc[d, "sma_short"]
+            sma_l = df.loc[d, "sma_long"]
             if positions[sym] == 0:
-                if (not np.isnan(ret)) and ret > params["BUY_THRESHOLD"] and cash > 0:
+                buy_cond = (
+                    (not np.isnan(ret))
+                    and ret > params["BUY_THRESHOLD"]
+                    and cash > 0
+                    and d > last_stop[sym]
+                )
+                if pd.notna(sma_s) and pd.notna(sma_l):
+                    buy_cond = buy_cond and sma_s > sma_l
+                if buy_cond:
                     qty = int((cash * params["SCALING_FACTOR"]) / price)
                     if qty > 0:
-                        cost = qty * price * (1 + params.get("LIMIT_ORDER_SLIPPAGE", DEFAULT_SLIPPAGE))
+                        cost = qty * price * (
+                            1 + params.get("LIMIT_ORDER_SLIPPAGE", DEFAULT_SLIPPAGE)
+                        )
                         cash -= cost
                         positions[sym] += qty
                         entry_price[sym] = price
                         peak_price[sym] = price
+                        last_stop[sym] = pd.Timestamp.min
             else:
                 peak_price[sym] = max(peak_price[sym], price)
                 drawdown = (price - peak_price[sym]) / peak_price[sym]
                 gain = (price - entry_price[sym]) / entry_price[sym]
-                if gain >= params["TAKE_PROFIT_FACTOR"] or abs(drawdown) >= params["TRAILING_FACTOR"]:
-                    cash += positions[sym] * price * (1 - params.get("LIMIT_ORDER_SLIPPAGE", DEFAULT_SLIPPAGE))
+                sell_signal = pd.notna(sma_s) and pd.notna(sma_l) and sma_s < sma_l
+                stop_hit = abs(drawdown) >= params["TRAILING_FACTOR"]
+                take_profit = gain >= params["TAKE_PROFIT_FACTOR"]
+                if sell_signal or take_profit or stop_hit:
+                    cash += positions[sym] * price * (
+                        1 - params.get("LIMIT_ORDER_SLIPPAGE", DEFAULT_SLIPPAGE)
+                    )
                     positions[sym] = 0
                     entry_price[sym] = 0
                     peak_price[sym] = 0
+                    if stop_hit:
+                        last_stop[sym] = d
+                    else:
+                        last_stop[sym] = pd.Timestamp.min
         total_value = cash
         for sym, df in data.items():
             if d in df.index:

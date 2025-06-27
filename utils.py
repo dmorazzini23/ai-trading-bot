@@ -388,6 +388,22 @@ def get_ohlcv_columns(df):
     return cols
 
 
+REQUIRED_OHLCV_COLS = ["Open", "High", "Low", "Close", "Volume"]
+
+
+def validate_ohlcv(df: pd.DataFrame) -> bool:
+    """Return True if ``df`` contains the required OHLCV columns."""
+
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        logger.error("validate_ohlcv received invalid DataFrame")
+        return False
+    missing = [c for c in REQUIRED_OHLCV_COLS if c not in df.columns]
+    if missing:
+        logger.error("Missing OHLCV columns: %s", missing)
+        return False
+    return True
+
+
 from typing import Dict, List
 
 try:

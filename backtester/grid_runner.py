@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from itertools import product
 from multiprocessing import Pool, cpu_count
+import os
 from typing import Any, Iterable
 
 from .core import BacktestResult, run_backtest
@@ -34,8 +35,11 @@ def run_grid_search(
     """Run a grid search over ``param_list`` in parallel."""
     tasks = [(p, symbols, start, end) for p in param_list]
     workers = min(len(tasks), cpu_count() or 1)
-    with Pool(processes=workers) as pool:
-        results = pool.map(_run, tasks)
+    if os.getenv("BACKTEST_SERIAL") == "1" or workers == 1:
+        results = [_run(t) for t in tasks]
+    else:
+        with Pool(processes=workers) as pool:
+            results = pool.map(_run, tasks)
 
     sort_key = {
         "sharpe_ratio": lambda pr: pr[1].sharpe_ratio,

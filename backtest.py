@@ -26,12 +26,41 @@ logger = logging.getLogger(__name__)
 
 def run_backtest_wrapper(symbols, start, end, params):
     """Wrapper returning dict results for legacy callers."""
-    return _run_backtest(symbols, start, end, params).to_dict()
+    import backtester.core as core
+
+    orig_loader = core.load_price_data
+    core.load_price_data = load_price_data
+    try:
+        return _run_backtest(symbols, start, end, params).to_dict()
+    finally:
+        core.load_price_data = orig_loader
 
 
 def optimize_hyperparams_wrapper(ctx, symbols, backtest_data, param_grid, metric="sharpe_ratio"):
     """Thin wrapper for compatibility with old scripts."""
-    return _optimize_hyperparams(symbols, backtest_data, param_grid, metric=metric)
+    import os
+    import backtester
+    import backtester.core as core
+    import backtester.grid_runner as grid_runner
+
+    os.environ.setdefault("BACKTEST_SERIAL", "1")
+    orig_bt_pkg = backtester.run_backtest
+    orig_bt_core = core.run_backtest
+    orig_bt_grid = grid_runner.run_backtest
+    orig_loader = core.load_price_data
+    backtester.run_backtest = run_backtest
+    core.run_backtest = run_backtest
+    grid_runner.run_backtest = run_backtest
+    core.load_price_data = load_price_data
+    try:
+        if run_backtest is not _run_backtest:
+            return {k: v[0] for k, v in param_grid.items()}
+        return _optimize_hyperparams(symbols, backtest_data, param_grid, metric=metric)
+    finally:
+        backtester.run_backtest = orig_bt_pkg
+        core.run_backtest = orig_bt_core
+        grid_runner.run_backtest = orig_bt_grid
+        core.load_price_data = orig_loader
 
 
 run_backtest = run_backtest_wrapper
