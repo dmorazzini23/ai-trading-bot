@@ -5349,30 +5349,38 @@ def _process_symbols(
 ) -> list[str]:
     processed: list[str] = []
 
+    now = datetime.datetime.now(datetime.timezone.utc)
     try:
-        live_positions = {p.symbol: int(p.qty) for p in ctx.api.get_all_positions()}
+        pos_list = ctx.api.get_all_positions()
+        live_positions = {p.symbol: int(p.qty) for p in pos_list}
     except Exception as exc:  # pragma: no cover - network issues
         logger.warning(f"LIVE_POSITION_FETCH_FAIL: {exc}")
         live_positions = {}
 
-    now = datetime.datetime.now(datetime.timezone.utc)
+    state.position_cache = live_positions
+    state.long_positions = {s for s, q in live_positions.items() if q > 0}
+    state.short_positions = {s for s, q in live_positions.items() if q < 0}
+
+    recent_trades = state.last_traded_at if hasattr(state, "last_traded_at") else {}
     filtered: list[str] = []
+
     for symbol in symbols:
-        qty = live_positions.get(symbol, 0)
-        if qty != 0:
+        if symbol in live_positions:
             logger.info(
-                f"SKIPPING_DUPLICATE_POSITION | {symbol} already held, skipping trade."
+                f"SKIP_HELD_POSITION | {symbol} already held: {live_positions[symbol]} shares"
             )
             skipped_duplicates.inc()
             continue
-        cd_ts = state.trade_cooldowns.get(symbol)
-        if cd_ts and (now - cd_ts).total_seconds() < 60:
-            logger.info(f"SKIPPING_COOLDOWN | {symbol} traded too recently.")
+        last_ts = recent_trades.get(symbol)
+        if last_ts and (now - last_ts).total_seconds() < 60:
+            logger.info(
+                f"SKIP_COOLDOWN | {symbol} traded at {last_ts.isoformat()}, skipping"
+            )
             skipped_cooldown.inc()
             continue
         filtered.append(symbol)
 
-    symbols = filtered
+    symbols = filtered  # replace with filtered list
 
     def process_symbol(symbol: str) -> None:
         try:
@@ -5386,6 +5394,7 @@ def _process_symbols(
                 return
             processed.append(symbol)
             _safe_trade(ctx, state, symbol, current_cash, model, regime_ok)
+            state.last_traded_at[symbol] = datetime.datetime.now(datetime.timezone.utc)
         except Exception as exc:
             logger.error(f"Error processing {symbol}: {exc}", exc_info=True)
 
@@ -5447,16 +5456,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
             },
         )
 
-        try:
-            pos_list = ctx.api.get_all_positions()
-            state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
-        except Exception as e:
-            logger.warning(f"POSITION_FETCH_FAILED: {e}")
-            state.position_cache = {}
-        state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
-        state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
-
         current_cash, regime_ok, symbols = _prepare_run(ctx, state)
+        if not hasattr(state, "last_traded_at"):
+            state.last_traded_at = {}
 
         if check_halt_flag():
             logger.info("TRADING_HALTED_VIA_FLAG")
