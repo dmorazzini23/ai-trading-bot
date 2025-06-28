@@ -5,7 +5,6 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
-from bot_engine import main
 
 # Ensure project root is importable and stub heavy optional deps
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -85,9 +84,21 @@ mods = [
     "ratelimit",
     "capital_scaling",
     "strategy_allocator",
+    "torch",
 ]
 for m in mods:
     sys.modules.setdefault(m, types.ModuleType(m))
+
+if "torch" in sys.modules:
+    sys.modules["torch"].manual_seed = lambda *a, **k: None
+    sys.modules["torch"].Tensor = object
+    torch_nn = types.ModuleType("torch.nn")
+    torch_nn.Module = object
+    torch_nn.Sequential = lambda *a, **k: None
+    torch_nn.Linear = lambda *a, **k: None
+    torch_nn.ReLU = lambda *a, **k: None
+    torch_nn.Softmax = lambda *a, **k: None
+    sys.modules["torch.nn"] = torch_nn
 
 sys.modules["dotenv"].load_dotenv = lambda *a, **k: None
 req_mod = types.ModuleType("requests")
@@ -282,6 +293,9 @@ class _CapScaler:
 
 
 sys.modules["capital_scaling"].CapitalScalingEngine = _CapScaler
+
+from bot_engine import main
+from bot_engine import pre_trade_health_check
 
 
 def test_bot_main_normal(monkeypatch):
