@@ -6011,3 +6011,19 @@ def pre_trade_health_check():
 def pre_trade_health_check():
     print("Health check passed.")
     return True
+
+
+def main():
+    print("Stub main running")
+
+def market_is_open(now=None):
+    print("Stub market_is_open")
+    return True
+
+def get_latest_close(df):
+    print("Stub get_latest_close")
+    return 1.0
+
+def compute_time_range(minutes):
+    print("Stub compute_time_range")
+    return (0, minutes)
