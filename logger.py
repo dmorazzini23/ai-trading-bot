@@ -34,11 +34,11 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     if _configured:
         return logging.getLogger()
 
-    level_name = os.getenv("LOG_LEVEL", "DEBUG" if debug else "INFO").upper()
-    level = logging.DEBUG if level_name == "DEBUG" else logging.INFO
+    level_name = "DEBUG" if debug else "INFO"
+    level = logging.DEBUG if debug else logging.INFO
 
     logger = logging.getLogger()
-    logger.setLevel(level)
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
 
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
 
