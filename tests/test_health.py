@@ -240,8 +240,8 @@ class DummyCtx:
 def test_health_check_empty_dataframe(monkeypatch):
     monkeypatch.setenv("HEALTH_MIN_ROWS", "30")
     ctx = DummyCtx(pd.DataFrame())
-    summary = pre_trade_health_check(ctx, ["AAA"])
-    assert "AAA" in summary["failures"]
+    with pytest.raises(RuntimeError, match="Pre-trade health check failed"):
+        pre_trade_health_check(ctx, ["AAA"])
 
 
 def test_health_check_succeeds(monkeypatch):

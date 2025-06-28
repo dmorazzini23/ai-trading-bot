@@ -1,5 +1,6 @@
 import pickle
 import types
+import torch.nn as nn
 
 import numpy as np
 import pandas as pd
@@ -151,18 +152,10 @@ def test_update_signal_weights_norm_zero(caplog):
 
 
 def test_portfolio_rl_trigger(monkeypatch):
-    try:
-        learner = meta_learning.PortfolioReinforcementLearner()
-    except AttributeError as exc:
-        if "SymBool" in str(exc) or "Linear" in str(exc):
-            monkeypatch.setattr(
-                meta_learning.torch.nn,
-                "Linear",
-                lambda *a, **k: types.SimpleNamespace(forward=lambda x: x),
-            )
-            learner = meta_learning.PortfolioReinforcementLearner()
-        else:
-            raise
+    monkeypatch.setattr(
+        nn, "Linear", lambda *a, **k: types.SimpleNamespace(forward=lambda x: x)
+    )
+    learner = meta_learning.PortfolioReinforcementLearner()
     state = np.random.rand(10)
     weights = learner.rebalance_portfolio(state)
     assert np.isclose(weights.sum(), 1, atol=0.1)
