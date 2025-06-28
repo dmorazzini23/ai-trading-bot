@@ -39,3 +39,6 @@ optuna==3.6.1
 torch==2.7.1
 gunicorn>=20.1.0
 
+
+xgboost>=1.7.6
+alpaca-trade-api>=3.0.0
