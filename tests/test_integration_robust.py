@@ -115,6 +115,7 @@ sys.modules["urllib3"] = types.ModuleType("urllib3")
 sys.modules["urllib3"].exceptions = types.SimpleNamespace(HTTPError=Exception)
 sys.modules["alpaca_trade_api"].REST = object
 sys.modules["alpaca_trade_api"].APIError = Exception
+sys.modules["alpaca_trade_api.rest"].APIError = Exception
 sys.modules["alpaca.common.exceptions"].APIError = Exception
 
 
@@ -135,10 +136,28 @@ class _Req:
 sys.modules["alpaca.trading.requests"].LimitOrderRequest = _Req
 sys.modules["alpaca.trading.requests"].MarketOrderRequest = _Req
 sys.modules["alpaca.trading.requests"].GetOrdersRequest = _Req
-sys.modules["alpaca.trading.enums"].OrderSide = types.SimpleNamespace(BUY="buy", SELL="sell")
-sys.modules["alpaca.trading.enums"].TimeInForce = types.SimpleNamespace(DAY="day")
-sys.modules["alpaca.trading.enums"].QueryOrderStatus = object
-sys.modules["alpaca.trading.enums"].OrderStatus = object
+from enum import Enum
+
+class _Enum(str, Enum):
+    pass
+
+class _OrderSide(_Enum):
+    BUY = "buy"
+    SELL = "sell"
+
+class _TimeInForce(_Enum):
+    DAY = "day"
+
+class _QueryOrderStatus(_Enum):
+    pass
+
+class _OrderStatus(_Enum):
+    pass
+
+sys.modules["alpaca.trading.enums"].OrderSide = _OrderSide
+sys.modules["alpaca.trading.enums"].TimeInForce = _TimeInForce
+sys.modules["alpaca.trading.enums"].QueryOrderStatus = _QueryOrderStatus
+sys.modules["alpaca.trading.enums"].OrderStatus = _OrderStatus
 sys.modules["alpaca.trading.models"].Order = object
 sys.modules["alpaca.trading.stream"] = types.ModuleType("alpaca.trading.stream")
 

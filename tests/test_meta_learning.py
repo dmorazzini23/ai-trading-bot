@@ -152,7 +152,12 @@ def test_update_signal_weights_norm_zero(caplog):
 
 
 def test_portfolio_rl_trigger(monkeypatch):
+    import torch
     class FakeLinear(nn.Module):
+        def __init__(self, *a, **k):
+            super().__init__()
+            self.weight = nn.Parameter(torch.tensor([0.0]))
+
         def forward(self, x):
             return x
 
