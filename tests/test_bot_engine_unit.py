@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import joblib
 
 # Build lightweight module exposing unit-testable functions from bot_engine
 SRC_PATH = Path(__file__).resolve().parents[1] / "bot_engine.py"
@@ -117,6 +118,7 @@ def test_run_trading_cycle_integration(monkeypatch):
 def test_load_model_single(tmp_path):
     path = tmp_path / "m.pkl"
     joblib.dump({"a": 1}, path)
+    assert joblib.load(path) == {"a": 1}
     model = MOD.load_model(str(path))
     assert isinstance(model, dict)
 
