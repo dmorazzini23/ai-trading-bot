@@ -8,6 +8,8 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 import requests
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 
 def rolling_mean(arr: np.ndarray, window: int) -> np.ndarray:
@@ -146,16 +148,14 @@ def _apply_macd(data: pd.DataFrame) -> pd.DataFrame:
     if macd_df is None or macd_df.empty:
         logger.warning("MACD indicator calculation failed, returning None")
         raise ValueError("MACD calculation failed")
-    # TODO: check loop for numpy replacement
-    for col in ("macd", "signal", "histogram"):
-        series = macd_df.get(col)
-        if series is None:
-            raise ValueError(f"MACD output missing column '{col}'")
-        data[col] = series.astype(float)
+    missing = [c for c in ("macd", "signal", "histogram") if c not in macd_df]
+    if missing:
+        raise ValueError(f"MACD output missing column(s) {missing}")
+    data[["macd", "signal", "histogram"]] = macd_df[["macd", "signal", "histogram"]].astype(float)
     return data
 
 
-def prepare_indicators(data: pd.DataFrame) -> pd.DataFrame:
+def prepare_indicators(data: pd.DataFrame, ticker: str | None = None) -> pd.DataFrame:
     """Prepare indicator columns for a trading strategy.
 
     Parameters
@@ -175,9 +175,24 @@ def prepare_indicators(data: pd.DataFrame) -> pd.DataFrame:
     """
 
     _validate_input_df(data)
-    data = _apply_macd(data)
+    cache_path = Path(f"cache_{ticker}.parquet") if ticker else None
+    if cache_path and cache_path.exists():
+        return pd.read_parquet(cache_path)
+
+    data = _apply_macd(data.copy())
+    if cache_path:
+        try:
+            data.to_parquet(cache_path)
+        except OSError:
+            pass
+
     # Additional indicators can be added here using similar defensive checks
     return data
+
+
+def prepare_indicators_parallel(symbols, data):
+    with ThreadPoolExecutor() as executor:
+        list(executor.map(lambda ticker: prepare_indicators(data[ticker], ticker), symbols))
 
 
 def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
