@@ -56,3 +56,8 @@ def _run_forever() -> NoReturn:
 
 if __name__ == "__main__":
     _run_forever()
+
+
+def start_runner():
+    print("Runner starting...")
+    main()

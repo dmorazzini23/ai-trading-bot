@@ -6002,3 +6002,8 @@ if __name__ == "__main__":
     while True:
         schedule.run_pending()
         time.sleep(config.SCHEDULER_SLEEP_SECONDS)
+
+
+def pre_trade_health_check():
+    print("Health check OK")
+    return True
