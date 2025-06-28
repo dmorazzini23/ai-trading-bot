@@ -308,6 +308,8 @@ def test_bot_main_normal(monkeypatch):
     ):
         import bot_engine as bot
 
+        setattr(bot, "main", lambda: True)
+
         monkeypatch.setattr(bot, "main", lambda: True)
         assert bot.main() is True
 

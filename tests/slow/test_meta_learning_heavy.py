@@ -79,6 +79,7 @@ def test_retrain_meta_load_history(monkeypatch):
     monkeypatch.setattr(pd, "read_csv", lambda p: df)
     monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda *a, **k: None)
     monkeypatch.setattr(meta_learning, "open", lambda *a, **k: io.BytesIO())
+    monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda p: {"mock": "model"})
 
     monkeypatch.setattr(
         sklearn.linear_model,
