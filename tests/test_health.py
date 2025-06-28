@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from bot_engine import pre_trade_health_check
 
 # Minimal stubs so importing bot_engine succeeds without optional deps
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -217,8 +218,6 @@ sys.modules["torch.nn"] = torch_nn
 torch_optim = types.ModuleType("torch.optim")
 torch_optim.Adam = lambda *a, **k: None
 sys.modules["torch.optim"] = torch_optim
-
-from bot_engine import pre_trade_health_check
 
 
 class DummyFetcher:

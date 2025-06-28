@@ -5632,6 +5632,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
 
 
 def main() -> None:
+    print("Main trading bot starting...")
     config.reload_env()
 
     def _handle_term(signum, frame):
