@@ -1,7 +1,6 @@
-import os
-import sys
-
+import sys, os
 sys.path.insert(0, os.getcwd())
+print("PYTHONPATH forced to:", sys.path)
 from pathlib import Path
 
 import pytest
