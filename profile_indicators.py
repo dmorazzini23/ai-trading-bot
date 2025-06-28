@@ -28,8 +28,7 @@ def run_profiles():
 
     modules = [signals, indicators]
     for module in modules:
-        funcs = inspect.getmembers(module, inspect.isfunction)
-        for name, func in funcs:
+        for name, func in inspect.getmembers(module, inspect.isfunction):
             sig = inspect.signature(func)
             required_positional = [
                 p for p in sig.parameters.values()
@@ -38,8 +37,11 @@ def run_profiles():
                     inspect.Parameter.POSITIONAL_OR_KEYWORD
                 )
             ]
-            if len(required_positional) > 1:
-                print(f"Skipping {module.__name__}.{name} — requires multiple args: {[p.name for p in required_positional]}")
+            if len(required_positional) != 1:
+                print(f"Skipping {module.__name__}.{name} — requires {len(required_positional)} positional args: {[p.name for p in required_positional]}")
+                continue
+            if hasattr(func, "py_func") or name == "jit":
+                print(f"Skipping decorator or jit-wrapped function {module.__name__}.{name}")
                 continue
             _, elapsed = profile(func, df)
             timings.append((module.__name__ + "." + name, elapsed))
