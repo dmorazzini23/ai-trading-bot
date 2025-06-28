@@ -4,30 +4,23 @@ Utilities for adaptive capital allocation and risk-based position sizing.
 """
 
 
+class _CapScaler:
+    def __init__(self, params):
+        self.multiplier = params.get("x", 1)
+
+    def scale_position(self, value):
+        return value * self.multiplier
+
+
 class CapitalScalingEngine:
-    """Main scaling logic for position sizing and capital allocation.
+    def __init__(self, params):
+        self.scaler = _CapScaler(params)
 
-    Implement and evolve your advanced scaling algorithms here.
-    """
-
-    def __init__(self, config=None):
-        self.config = config
-
-    def scale_position(self, raw_size, risk_params=None):
-        """Placeholder for adaptive scaling logic.
-
-        Args:
-            raw_size (float): Initial suggested position size.
-            risk_params (dict, optional): Additional risk context.
-
-        Returns:
-            float: Final scaled position size.
-        """
-        # TODO: Implement Kelly, drawdown-aware, volatility-adaptive, etc.
-        return raw_size  # For now, return as-is.
+    def scale_position(self, value):
+        return self.scaler.scale_position(value)
 
     def update(self, ctx, equity_init):
-        # TODO: Implement capital scaling logic here.
+        # Placeholder for future scaling logic
         pass
 
 
