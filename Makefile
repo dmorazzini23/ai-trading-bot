@@ -1,13 +1,19 @@
 benchmark:
-	pytest tests/test_benchmarks.py --benchmark-only -n auto
+	pytest tests/test_benchmarks.py --benchmark-only --benchmark-save=latest
 
 profile:
-	pytest --profile-svg --maxfail=1 --disable-warnings
+	python profile_indicators.py
 
 test-all-backtests:
-	pytest -n auto tests/test_equity_curve.py
-	pytest -n auto tests/test_slippage.py
-	pytest -n auto tests/test_hyperparams.py
-	pytest -n auto tests/test_regime_filters.py
-	pytest -n auto tests/test_parallel_speed.py
-	pytest -n auto tests/test_grid_sanity.py
+	pytest tests/test_equity_curve.py
+	pytest tests/test_slippage.py
+	pytest tests/test_hyperparams.py
+	pytest tests/test_regime_filters.py
+	pytest tests/test_parallel_speed.py
+	pytest tests/test_grid_sanity.py
+
+coverage:
+	pytest --cov=. --cov-report=html
+
+compare-benchmarks:
+	pytest-benchmark compare latest
