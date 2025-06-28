@@ -1,7 +1,22 @@
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
+import types
+
+try:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+except Exception:  # pragma: no cover - optional dependency
+    torch = types.ModuleType("torch")
+    torch.Tensor = object
+    torch.tensor = lambda *a, **k: np.array([])
+    nn = types.ModuleType("torch.nn")
+    nn.Module = object
+    nn.Sequential = lambda *a, **k: None
+    nn.Linear = lambda *a, **k: None
+    nn.ReLU = lambda *a, **k: None
+    nn.Softmax = lambda *a, **k: None
+    optim = types.ModuleType("torch.optim")
+    optim.Adam = lambda *a, **k: None
 
 
 class Actor(nn.Module):
