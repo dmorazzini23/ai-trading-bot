@@ -105,6 +105,8 @@ class _Flask:
         pass
 
 sys.modules["flask"].Flask = _Flask
+sys.modules["flask"].jsonify = lambda *a, **k: None
+sys.modules["flask"].Response = object
 exc_mod = types.ModuleType("requests.exceptions")
 exc_mod.HTTPError = Exception
 exc_mod.RequestException = Exception
@@ -218,7 +220,8 @@ torch_optim = types.ModuleType("torch.optim")
 torch_optim.Adam = lambda *a, **k: None
 sys.modules["torch.optim"] = torch_optim
 
-from bot_engine import main, pre_trade_health_check
+from main import main
+from bot_engine import pre_trade_health_check
 
 
 class DummyFetcher:

@@ -2,6 +2,7 @@
 
 import importlib
 import logging
+import os
 import time
 from typing import Any, Optional
 
@@ -169,6 +170,8 @@ def prepare_indicators(data: pd.DataFrame, ticker: str | None = None) -> pd.Data
 
     _validate_input_df(data)
     cache_path = Path(f"cache_{ticker}.parquet") if ticker else None
+    if os.getenv("DISABLE_PARQUET"):
+        cache_path = None
     if cache_path and cache_path.exists():
         return pd.read_parquet(cache_path)
 
@@ -184,6 +187,10 @@ def prepare_indicators(data: pd.DataFrame, ticker: str | None = None) -> pd.Data
 
 
 def prepare_indicators_parallel(symbols, data):
+    if os.getenv("DISABLE_PARQUET"):
+        for _ in symbols:
+            pass
+        return
     with ThreadPoolExecutor() as executor:
         list(executor.map(lambda ticker: prepare_indicators(data[ticker], ticker), symbols))
 
