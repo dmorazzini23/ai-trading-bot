@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
+from bot_engine import main
 
 # Ensure project root is importable and stub heavy optional deps
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
