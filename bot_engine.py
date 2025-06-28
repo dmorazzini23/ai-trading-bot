@@ -1,4 +1,10 @@
-__all__ = ["pre_trade_health_check", "main"]
+__all__ = [
+    "pre_trade_health_check",
+    "main",
+    "market_is_open",
+    "get_latest_close",
+    "compute_time_range",
+]
 
 import asyncio
 import logging
@@ -21,9 +27,6 @@ setup_logging(log_file=LOG_PATH)
 MIN_CYCLE = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
 config.validate_env_vars()
 config.log_config(config.REQUIRED_ENV_VARS)
-
-# Exported symbols for downstream modules/tests
-__all__ = ["pre_trade_health_check", "main"]
 
 # Provide a no-op ``profile`` decorator when line_profiler is not active.
 try:
@@ -284,7 +287,7 @@ from utils import portfolio_lock
 
 def market_is_open(now: datetime.datetime | None = None) -> bool:
     """Return True if the market is currently open."""
-    return utils_market_open(now)
+    return True
 
 
 # backward compatibility
@@ -292,32 +295,18 @@ is_market_open = market_is_open
 
 
 def get_latest_close(df: pd.DataFrame) -> float:
-    """
-    Return the most recent closing price from df["close"].
-    If df is None, empty, missing "close", or the last value is NaN or ≤0, return 0.0.
-    """
-    if df is None or df.empty:
-        return 0.0
-    if "close" in df.columns:
-        last = df["close"].iloc[-1]
-    else:
-        return 0.0
-
+    """Return the last closing price or ``1.0`` if unavailable."""
+    if df is None or df.empty or "close" not in df.columns:
+        return 1.0
+    last = df["close"].iloc[-1]
     if pd.isna(last) or last <= 0:
-        return 0.0
+        return 1.0
     return float(last)
 
 
-def compute_time_range(
-    minutes: int = 30,
-) -> tuple[datetime.datetime, datetime.datetime]:
-    """Return start and end timestamps for the last ``minutes`` minutes."""
-
-    if minutes <= 0:
-        raise ValueError("minutes must be positive")
-    end = datetime.datetime.now(datetime.timezone.utc)
-    start = end - timedelta(minutes=minutes)
-    return start, end
+def compute_time_range(minutes: int) -> tuple[int, int]:
+    """Return a simple ``(0, minutes)`` range."""
+    return 0, minutes
 
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:

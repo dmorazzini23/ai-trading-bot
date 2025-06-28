@@ -152,9 +152,11 @@ def test_update_signal_weights_norm_zero(caplog):
 
 
 def test_portfolio_rl_trigger(monkeypatch):
-    monkeypatch.setattr(
-        nn, "Linear", lambda *a, **k: types.SimpleNamespace(forward=lambda x: x)
-    )
+    class DummyModule(nn.Module):
+        def forward(self, x):
+            return x
+
+    monkeypatch.setattr(nn, "Linear", lambda *a, **k: DummyModule())
     learner = meta_learning.PortfolioReinforcementLearner()
     state = np.random.rand(10)
     weights = learner.rebalance_portfolio(state)
