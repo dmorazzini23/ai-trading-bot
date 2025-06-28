@@ -8,6 +8,9 @@ import pandas as pd
 def test_ichimoku_indicator_returns_dataframe(monkeypatch):
     import bot_engine as bot
 
+    if not hasattr(bot.ta, "ichimoku"):
+        setattr(bot.ta, "ichimoku", lambda *a, **k: (pd.DataFrame(), {}))
+
     # Patch pandas_ta.ichimoku to return a tuple (DataFrame, params)
     ich_df = pd.DataFrame({"ITS_9": [1.0], "IKS_26": [1.0]})
     monkeypatch.setattr(bot.ta, "ichimoku", lambda *a, **k: (ich_df, {"foo": 1}))
@@ -22,6 +25,8 @@ def test_ichimoku_indicator_returns_dataframe(monkeypatch):
 
 def test_compute_ichimoku_returns_df_pair(monkeypatch):
     import bot_engine as bot
+    if not hasattr(bot.ta, "ichimoku"):
+        setattr(bot.ta, "ichimoku", lambda *a, **k: (pd.DataFrame(), {}))
     ich_df = pd.DataFrame({"ITS_9": [1.0]})
     signal_df = pd.DataFrame({"ITSs_9": [1.0]})
     monkeypatch.setattr(bot.ta, "ichimoku", lambda *a, **k: (ich_df, signal_df))
