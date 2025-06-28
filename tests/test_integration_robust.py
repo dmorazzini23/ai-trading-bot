@@ -313,8 +313,7 @@ class _CapScaler:
 
 sys.modules["capital_scaling"].CapitalScalingEngine = _CapScaler
 
-from bot_engine import main
-from bot_engine import pre_trade_health_check
+from bot_engine import main, pre_trade_health_check
 
 
 def test_bot_main_normal(monkeypatch):
