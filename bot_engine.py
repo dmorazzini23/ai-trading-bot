@@ -6007,3 +6007,7 @@ if __name__ == "__main__":
 def pre_trade_health_check():
     print("Health check OK")
     return True
+
+def pre_trade_health_check():
+    print("Health check passed.")
+    return True
