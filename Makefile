@@ -1,17 +1,13 @@
 benchmark:
-	pytest tests/test_benchmarks.py --benchmark-only
+	pytest tests/test_benchmarks.py --benchmark-only -n auto
 
 profile:
-	python profile_indicators.py
+	pytest --profile-svg --maxfail=1 --disable-warnings
 
-backtest:
-	python backtest.py
-
-gridsearch:
-	python backtester/grid_runner.py
-
-test-backtester:
-	pytest tests/test_backtest_smoke.py
-	pytest tests/test_integration.py
-	pytest tests/test_risk_engine_module.py
-	python -m backtester.plot
+test-all-backtests:
+	pytest -n auto tests/test_equity_curve.py
+	pytest -n auto tests/test_slippage.py
+	pytest -n auto tests/test_hyperparams.py
+	pytest -n auto tests/test_regime_filters.py
+	pytest -n auto tests/test_parallel_speed.py
+	pytest -n auto tests/test_grid_sanity.py
