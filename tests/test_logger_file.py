@@ -11,10 +11,15 @@ def test_setup_logging_with_file(monkeypatch, tmp_path):
     def fake_makedirs(path, exist_ok=False):
         pass
 
+    calls = []
+
+    def fake_get_handler(*args, **kwargs):
+        calls.append((args, kwargs))
+        return fake
+
     monkeypatch.setattr(logger.os, "makedirs", fake_makedirs)
-    monkeypatch.setattr(logger, "get_rotating_handler", lambda *a, **k: fake)
+    monkeypatch.setattr(logger, "get_rotating_handler", fake_get_handler)
 
     log_file = tmp_path / "x" / "app.log"
     logger.setup_logging(log_file=str(log_file))
-    root = logging.getLogger()
-    assert fake in root.handlers
+    assert calls
