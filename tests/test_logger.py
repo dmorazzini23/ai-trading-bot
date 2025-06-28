@@ -34,7 +34,7 @@ def test_setup_logging_idempotent(monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "get_rotating_handler", fake_get_rotating)
     lg = mod.setup_logging(debug=True, log_file=str(tmp_path / "f.log"))
     assert lg.level == logging.DEBUG
-    assert created
+    assert created, f"No rotating handler paths created. Captured: {created}"
     created.clear()
     lg2 = mod.setup_logging(debug=False)
     assert lg2 is lg
