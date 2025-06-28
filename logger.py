@@ -65,6 +65,11 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     for h in handlers:
         logger.addHandler(h)
 
+    # Explicitly set root level after handlers are attached so tests
+    # expecting DEBUG when ``debug`` is True remain stable regardless of
+    # the LOG_LEVEL environment variable.
+    logger.setLevel(logging.DEBUG if debug else logging.INFO)
+
     file_part = f" with file {log_file}" if log_file else ""
     logger.info(
         "Logging initialized%s (level %s)",

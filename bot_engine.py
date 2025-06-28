@@ -20,6 +20,9 @@ MIN_CYCLE = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
 config.validate_env_vars()
 config.log_config(config.REQUIRED_ENV_VARS)
 
+# Exported symbols for downstream modules/tests
+__all__ = ["pre_trade_health_check", "main"]
+
 # Provide a no-op ``profile`` decorator when line_profiler is not active.
 try:
     profile  # type: ignore[name-defined]
@@ -5998,81 +6001,6 @@ if __name__ == "__main__":
     while True:
         schedule.run_pending()
         time.sleep(config.SCHEDULER_SLEEP_SECONDS)
-
-
-def pre_trade_health_check(
-    ctx: BotContext, symbols: Sequence[str], min_rows: int = 30
-) -> dict:
-    """Validate API connectivity and data sanity prior to trading.
-
-    Parameters
-    ----------
-    ctx : BotContext
-        Global bot context with API clients.
-    symbols : Sequence[str]
-        Symbols to validate.
-    min_rows : int, optional
-        Minimum required row count per symbol, by default ``30``.
-
-    Returns
-    -------
-    dict
-        Summary dictionary of issues encountered.
-    """
-    min_rows = int(os.getenv("HEALTH_MIN_ROWS", min_rows))
-    summary = {
-        "checked": 0,
-        "failures": [],
-        "insufficient_rows": [],
-        "missing_columns": [],
-        "timezone_issues": [],
-    }
-    try:
-        ctx.api.get_account()
-    except Exception as exc:
-        logger.critical("PRE_TRADE_HEALTH_API_ERROR", extra={"error": str(exc)})
-        raise RuntimeError("API connectivity failed") from exc
-
-    for sym in symbols:
-        summary["checked"] += 1
-        attempts = 0
-        df = None
-        rows = 0
-        while attempts < 3:
-            try:
-                df = ctx.data_fetcher.get_daily_df(ctx, sym)
-            except Exception as exc:
-                log_warning("HEALTH_FETCH_ERROR", exc=exc, extra={"symbol": sym})
-                summary["failures"].append(sym)
-                df = None
-                break
-
-            if df is None or df.empty:
-                logger.critical("HEALTH_NO_DATA", extra={"symbol": sym})
-                summary["failures"].append(sym)
-                break
-
-            rows = len(df)
-            if rows < min_rows:
-                summary["insufficient_rows"].append(sym)
-                attempts += 1
-                if attempts < 3:
-                    time.sleep(60)
-                continue
-            break
-
-        if df is None or df.empty or rows < min_rows:
-            continue
-
-        required = ["open", "high", "low", "close", "volume"]
-        missing = [c for c in required if c not in df.columns or df[c].isnull().all()]
-        if missing:
-            summary["missing_columns"].append(sym)
-
-        if getattr(df.index, "tz", None) is None:
-            summary["timezone_issues"].append(sym)
-
-    return summary
 
 
 def main():
