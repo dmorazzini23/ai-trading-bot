@@ -30,13 +30,11 @@ except Exception:  # pragma: no cover - optional dependency
 logger = logging.getLogger(__name__)
 
 
-def load_module(name: str) -> Any:
-    """Dynamically import a module using :mod:`importlib`."""
-    try:
-        return importlib.import_module(name)
-    except ImportError as exc:  # pragma: no cover - dynamic import may fail
-        logger.warning("Failed to import %s: %s", name, exc)
+def load_module(name):
+    if not isinstance(name, str):
+        print(f"Skipping load_module on non-string: {type(name)}")
         return None
+    return importlib.import_module(name)
 
 
 def _fetch_api(url: str, retries: int = 3, delay: float = 1.0) -> dict:
@@ -61,15 +59,10 @@ def generate() -> int:
     return 0
 
 
-def _validate_macd_input(close_prices: pd.Series, min_len: int) -> bool:
-    if close_prices is None or len(close_prices) < min_len:
-        logger.warning(
-            "Insufficient data for MACD calculation: length=%s",
-            len(close_prices) if close_prices is not None else "None",
-        )
-        return False
+def _validate_macd_input(close_prices, min_len):
     if close_prices.isna().any() or np.isinf(close_prices).any():
-        logger.warning("MACD input data contains NaN or Inf")
+        return False
+    if len(close_prices) < min_len:
         return False
     return True
 
