@@ -26,13 +26,16 @@ for module in modules:
                 inspect.Parameter.POSITIONAL_OR_KEYWORD
             )
         ]
-        # filter: must have exactly 1 positional argument
+        # must have exactly 1 required positional argument
         if len(required_positional) != 1:
-            print(f"Skipping {module.__name__}.{name} — requires {len(required_positional)} positional args: {[p.name for p in required_positional]}")
+            print(f"Skipping {module.__name__}.{name}: requires {len(required_positional)} positional args.")
             continue
-        # avoid jit or decorator proxies
+        # skip if explicitly takes str, not intended for DataFrames
+        if required_positional[0].annotation == str:
+            print(f"Skipping {module.__name__}.{name}: expects str arg.")
+            continue
         if hasattr(func, "py_func") or name == "jit":
-            print(f"Skipping decorator or jit-wrapped function {module.__name__}.{name}")
+            print(f"Skipping decorator or jit function {module.__name__}.{name}")
             continue
         params.append(pytest.param(func, id=f"{module.__name__}.{name}"))
 
