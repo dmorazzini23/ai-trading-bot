@@ -5996,7 +5996,6 @@ def health_check(df: pd.DataFrame, resolution: str) -> bool:
 
 
 if __name__ == "__main__":
-    from bot import main
     main()
     import time
     import schedule
@@ -6004,18 +6003,3 @@ if __name__ == "__main__":
         schedule.run_pending()
         time.sleep(config.SCHEDULER_SLEEP_SECONDS)
 
-
-def main():
-    print("Stub main running")
-
-def market_is_open(now=None):
-    print("Stub market_is_open")
-    return True
-
-def get_latest_close(df):
-    print("Stub get_latest_close")
-    return 1.0
-
-def compute_time_range(minutes):
-    print("Stub compute_time_range")
-    return (0, minutes)

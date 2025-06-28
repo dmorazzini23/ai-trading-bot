@@ -41,12 +41,13 @@ if _real is not None:
     globals().update(_real.__dict__)
     sys.modules[__name__] = _real
     __all__ = getattr(_real, "__all__", [])
-else:
-
-    base = ModuleType("sklearn.base")
+    base = sys.modules.get("sklearn.base", ModuleType("sklearn.base"))
 
     class BaseEstimator:
         """Minimal stand-in for :class:`sklearn.base.BaseEstimator`."""
+
+        def __init__(self, *a, **k):
+            pass
 
         def get_params(self, deep: bool = True):
             return {}
@@ -63,35 +64,51 @@ else:
         def transform(self, X):
             return X
 
-    base.BaseEstimator = BaseEstimator
-    base.TransformerMixin = TransformerMixin
-    base.clone = lambda est: est
+    if not hasattr(base, "BaseEstimator"):
+        base.BaseEstimator = BaseEstimator
+    if not hasattr(base, "TransformerMixin"):
+        base.TransformerMixin = TransformerMixin
+    base.clone = getattr(base, "clone", lambda est: est)
 
-    linear_model = ModuleType("sklearn.linear_model")
+    linear_model = sys.modules.get("sklearn.linear_model", ModuleType("sklearn.linear_model"))
 
-    class Ridge: ...
+    class Ridge:
+        def __init__(self, *a, **k):
+            pass
 
-    class BayesianRidge: ...
+    class BayesianRidge:
+        def __init__(self, *a, **k):
+            pass
 
-    linear_model.Ridge = Ridge
-    linear_model.BayesianRidge = BayesianRidge
-    ensemble = ModuleType("sklearn.ensemble")
+    if not hasattr(linear_model, "Ridge"):
+        linear_model.Ridge = Ridge
+    if not hasattr(linear_model, "BayesianRidge"):
+        linear_model.BayesianRidge = BayesianRidge
 
-    class RandomForestClassifier: ...
+    ensemble = sys.modules.get("sklearn.ensemble", ModuleType("sklearn.ensemble"))
 
-    ensemble.RandomForestClassifier = RandomForestClassifier
-    decomposition = ModuleType("sklearn.decomposition")
-    
-    class PCA: ...
-    
-    decomposition.PCA = PCA
+    class RandomForestClassifier:
+        def __init__(self, *a, **k):
+            pass
 
-    model_selection = ModuleType("sklearn.model_selection")
-    pipeline = ModuleType("sklearn.pipeline")
-    preprocessing = ModuleType("sklearn.preprocessing")
+    if not hasattr(ensemble, "RandomForestClassifier"):
+        ensemble.RandomForestClassifier = RandomForestClassifier
+
+    decomposition = sys.modules.get("sklearn.decomposition", ModuleType("sklearn.decomposition"))
+
+    class PCA:
+        def __init__(self, *a, **k):
+            pass
+
+    if not hasattr(decomposition, "PCA"):
+        decomposition.PCA = PCA
+
+    model_selection = sys.modules.get("sklearn.model_selection", ModuleType("sklearn.model_selection"))
+    pipeline = sys.modules.get("sklearn.pipeline", ModuleType("sklearn.pipeline"))
+    preprocessing = sys.modules.get("sklearn.preprocessing", ModuleType("sklearn.preprocessing"))
 
     for mod in [base, linear_model, ensemble, decomposition, model_selection, pipeline, preprocessing]:
-        sys.modules[mod.__name__] = mod
+        sys.modules.setdefault(mod.__name__, mod)
 
     __all__ = [
         "base",
