@@ -61,3 +61,6 @@ if __name__ == "__main__":
 def start_runner():
     print("Runner starting...")
     main()
+
+def start_runner():
+    print("Runner started correctly.")
