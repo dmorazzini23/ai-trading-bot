@@ -152,11 +152,11 @@ def test_update_signal_weights_norm_zero(caplog):
 
 
 def test_portfolio_rl_trigger(monkeypatch):
-    class DummyModule(nn.Module):
+    class FakeLinear(nn.Module):
         def forward(self, x):
             return x
 
-    monkeypatch.setattr(nn, "Linear", lambda *a, **k: DummyModule())
+    monkeypatch.setattr(nn, "Linear", lambda *a, **k: FakeLinear())
     learner = meta_learning.PortfolioReinforcementLearner()
     state = np.random.rand(10)
     weights = learner.rebalance_portfolio(state)
