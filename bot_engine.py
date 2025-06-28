@@ -5991,14 +5991,10 @@ def health_check(df: pd.DataFrame, resolution: str) -> bool:
 
 
 if __name__ == "__main__":
-    # One-time startup: loads model, runs initial health check & schedules all jobs
+    from bot import main
     main()
-
-    # Then run only pending scheduled jobs in a tight loop
     import time
-
     import schedule
-
     while True:
         schedule.run_pending()
         time.sleep(config.SCHEDULER_SLEEP_SECONDS)
