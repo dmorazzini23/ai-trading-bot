@@ -1,7 +1,4 @@
-__all__ = [
-    "pre_trade_health_check",
-    "main",
-]
+__all__ = ["main", "pre_trade_health_check"]
 
 import asyncio
 import logging
