@@ -132,12 +132,11 @@ import pandas as pd
 import pandas_market_calendars as mcal
 import pandas_ta as ta
 
-if not hasattr(ta, "ichimoku"):
-
-    def _ichimoku_placeholder(*a, **k):
-        return pd.DataFrame(), pd.DataFrame()
-
-    ta.ichimoku = _ichimoku_placeholder
+ta.ichimoku = (
+    ta.ichimoku
+    if hasattr(ta, "ichimoku")
+    else lambda *a, **k: (pd.DataFrame(), {})
+)
 
 NY = mcal.get_calendar("NYSE")
 MARKET_SCHEDULE = NY.schedule(start_date="2020-01-01", end_date="2030-12-31")
