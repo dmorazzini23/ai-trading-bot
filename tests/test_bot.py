@@ -64,6 +64,8 @@ class _Flask:
         pass
 
 sys.modules["flask"].Flask = _Flask
+sys.modules["flask"].jsonify = lambda *a, **k: None
+sys.modules["flask"].Response = object
 sys.modules["requests"].get = lambda *a, **k: None
 exc_mod = types.ModuleType("requests.exceptions")
 exc_mod.HTTPError = Exception
@@ -188,7 +190,7 @@ if "pandas_ta" in sys.modules:
     sys.modules["pandas_ta"].obv = lambda *a, **k: pd.Series([0])
     sys.modules["pandas_ta"].vwap = lambda *a, **k: pd.Series([0])
 
-bot = pytest.importorskip("bot")
+import bot_engine as bot
 
 
 def test_screen_candidates_empty(monkeypatch):

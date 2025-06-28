@@ -4,13 +4,16 @@ import signals
 
 def test_parallel_vs_serial_prep_speed():
     symbols = ["AAPL", "MSFT", "GOOG", "AMZN", "TSLA"]
-    data = pd.DataFrame({
-        "open": [1, 2, 3, 4, 5],
-        "high": [2, 3, 4, 5, 6],
-        "low": [0, 1, 2, 3, 4],
-        "close": [1, 2, 3, 4, 5],
-        "volume": [100, 200, 300, 400, 500],
-    })
+    n = 60
+    data = pd.DataFrame(
+        {
+            "open": range(1, n + 1),
+            "high": range(2, n + 2),
+            "low": range(n),
+            "close": range(1, n + 1),
+            "volume": [100] * n,
+        }
+    )
 
     start_serial = time.perf_counter()
     for _ in symbols:

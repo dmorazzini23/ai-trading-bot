@@ -92,7 +92,7 @@ def load_symbol_data(symbol: str, start: datetime | None = None, end: datetime |
             df = pd.DataFrame()
 
     # Determine fetch range
-    end_dt = end or datetime.utcnow()
+    end_dt = end or datetime.now(datetime.UTC)
     start_dt = start or end_dt - timedelta(days=365 * 2)
 
     try:
