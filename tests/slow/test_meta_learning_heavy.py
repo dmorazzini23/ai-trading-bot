@@ -19,7 +19,9 @@ def test_retrain_meta_learner_success(monkeypatch):
     monkeypatch.setattr(meta_learning.Path, "exists", lambda self: True)
     monkeypatch.setattr(pd, "read_csv", lambda p: df)
     monkeypatch.setattr(meta_learning, "save_model_checkpoint", lambda m, p: None)
-    monkeypatch.setattr(meta_learning, "load_model_checkpoint", lambda p: [])
+    monkeypatch.setattr(
+        meta_learning, "load_model_checkpoint", lambda p: {"mock": "model"}
+    )
     monkeypatch.setattr(meta_learning, "open", lambda *a, **k: io.BytesIO())
 
     class DummyModel:

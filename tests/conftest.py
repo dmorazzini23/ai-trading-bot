@@ -1,10 +1,22 @@
 import os
 import sys
+
+sys.path.insert(0, os.getcwd())
 from pathlib import Path
 
 import pytest
-import urllib3
-from dotenv import load_dotenv
+try:
+    import urllib3
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    urllib3 = types.ModuleType("urllib3")
+    urllib3.__file__ = "stub"
+    sys.modules["urllib3"] = urllib3
+try:
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - optional dependency
+    def load_dotenv(*a, **k):
+        pass
 
 
 def pytest_configure() -> None:
