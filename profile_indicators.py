@@ -5,17 +5,10 @@ import inspect
 import signals
 import indicators
 
-
 def profile(func, *args, **kwargs):
     start = time.perf_counter()
     try:
         result = func(*args, **kwargs)
-    except TypeError:
-        try:
-            result = func(args[0]['Close'])
-        except Exception as e:
-            print(f"{func.__name__} failed with fallback: {e}")
-            return None, -1
     except Exception as e:
         print(f"{func.__name__} failed: {e}")
         return None, -1
@@ -23,26 +16,35 @@ def profile(func, *args, **kwargs):
     print(f"{func.__name__} took {elapsed:.6f} sec")
     return result, elapsed
 
-
 def run_profiles():
     timings = []
     df = pd.DataFrame({
-        'Open': np.random.random(500_000) * 100,
-        'High': np.random.random(500_000) * 100,
-        'Low': np.random.random(500_000) * 100,
-        'Close': np.random.random(500_000) * 100,
-        'Volume': np.random.randint(1000, 10000, size=500_000)
+        'open': np.random.random(500_000) * 100,
+        'high': np.random.random(500_000) * 100,
+        'low': np.random.random(500_000) * 100,
+        'close': np.random.random(500_000) * 100,
+        'volume': np.random.randint(1000, 10000, size=500_000)
     })
 
     modules = [signals, indicators]
     for module in modules:
         funcs = inspect.getmembers(module, inspect.isfunction)
         for name, func in funcs:
+            sig = inspect.signature(func)
+            required_positional = [
+                p for p in sig.parameters.values()
+                if p.default == inspect.Parameter.empty and p.kind in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD
+                )
+            ]
+            if len(required_positional) > 1:
+                print(f"Skipping {module.__name__}.{name} — requires multiple args: {[p.name for p in required_positional]}")
+                continue
             _, elapsed = profile(func, df)
             timings.append((module.__name__ + "." + name, elapsed))
 
     pd.DataFrame(timings, columns=["Function", "Time(sec)"]).to_csv("indicator_timings.csv", index=False)
-
 
 if __name__ == "__main__":
     run_profiles()
