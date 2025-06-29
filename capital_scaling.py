@@ -13,8 +13,10 @@ class _CapScaler:
 
 
 class CapitalScalingEngine:
-    def __init__(self, params):
-        self.scaler = _CapScaler(params)
+    def __init__(self, params=None):
+        # AI-AGENT-REF: allow optional params with sensible default
+        self.params = params or {}
+        self.scaler = _CapScaler(self.params)
 
     def scale_position(self, value):
         return self.scaler.scale_position(value)
