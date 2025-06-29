@@ -1,4 +1,5 @@
 -r requirements.txt
+pyarrow>=12.0.0
 pytest
 pytest-cov
 flake8
