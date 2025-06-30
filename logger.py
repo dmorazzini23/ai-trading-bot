@@ -108,6 +108,12 @@ def get_logger(name: str) -> logging.Logger:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["setup_logging", "get_logger", "logger"]
+def init_logger(log_file: str) -> logging.Logger:
+    """Wrapper used by utilities to initialize logging."""
+    # AI-AGENT-REF: provide simple alias for setup_logging
+    return setup_logging(log_file=log_file)
+
+
+__all__ = ["setup_logging", "get_logger", "init_logger", "logger"]
 
 

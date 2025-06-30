@@ -143,6 +143,14 @@ PYRAMID_LEVELS = {
 FORCE_TRADES: bool = False
 """If True, bypasses all pre-trade halts for testing."""
 
+
+def set_runtime_config(volume_thr: float, ml_thr: float, pyramid_levels: dict) -> None:
+    """Override key strategy parameters at runtime."""
+    global VOLUME_SPIKE_THRESHOLD, ML_CONFIDENCE_THRESHOLD, PYRAMID_LEVELS
+    VOLUME_SPIKE_THRESHOLD = volume_thr
+    ML_CONFIDENCE_THRESHOLD = ml_thr
+    PYRAMID_LEVELS = pyramid_levels
+
 # centralize SGDRegressor hyperparameters
 SGD_PARAMS = MappingProxyType(
     {
@@ -198,4 +206,5 @@ __all__ = [
     "ML_CONFIDENCE_THRESHOLD",
     "PYRAMID_LEVELS",
     "FORCE_TRADES",
+    "set_runtime_config",
 ]
