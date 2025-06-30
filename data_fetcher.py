@@ -38,14 +38,20 @@ logger = logging.getLogger(__name__)
 _rate_limit_lock = threading.Lock()
 try:
     import requests
+    from requests.sessions import Session
+    from requests.exceptions import HTTPError, RequestException
     import urllib3
 except Exception as e:  # pragma: no cover - allow missing in test env
     logger.warning("Optional dependencies missing: %s", e)
     import types
 
     requests = types.SimpleNamespace(
+        Session=lambda: types.SimpleNamespace(get=lambda *a, **k: None),
         get=lambda *a, **k: None,
-        exceptions=types.SimpleNamespace(RequestException=Exception),
+        exceptions=types.SimpleNamespace(
+            RequestException=Exception,
+            HTTPError=Exception,
+        ),
     )
     urllib3 = types.SimpleNamespace(exceptions=types.SimpleNamespace(HTTPError=Exception))
 from utils import ensure_utc, is_market_open, safe_to_datetime
@@ -750,7 +756,7 @@ class FinnhubFetcher:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 1),
-        retry=retry_if_exception_type((requests.exceptions.RequestException, urllib3.exceptions.HTTPError)),
+        retry=retry_if_exception_type((RequestException, urllib3.exceptions.HTTPError)),
     )
     def fetch(self, symbols: str | Sequence[str], period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
         """Fetch OHLCV data for ``symbols`` over the given period."""
