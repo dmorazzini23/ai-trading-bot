@@ -158,7 +158,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 import portalocker
 import requests
-from requests.sessions import Session
+from requests import Session, HTTPError
 import schedule
 import yfinance as yf
 # Alpaca v3 SDK imports
@@ -184,7 +184,6 @@ from alpaca.trading.requests import (GetOrdersRequest, LimitOrderRequest,
 from alpaca.trading.stream import TradingStream
 from bs4 import BeautifulSoup
 from flask import Flask
-from requests.exceptions import HTTPError
 
 from alpaca_api import alpaca_get, start_trade_updates_stream
 from rebalancer import maybe_rebalance

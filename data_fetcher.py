@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 _rate_limit_lock = threading.Lock()
 try:
     import requests
-    from requests.sessions import Session
-    from requests.exceptions import HTTPError, RequestException
+    from requests import Session, HTTPError
+    from requests.exceptions import RequestException
     import urllib3
 except Exception as e:  # pragma: no cover - allow missing in test env
     logger.warning("Optional dependencies missing: %s", e)
