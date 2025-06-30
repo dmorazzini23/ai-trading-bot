@@ -689,6 +689,37 @@ if not os.path.exists(SLIPPAGE_LOG_FILE):
 _SECTOR_CACHE: Dict[str, str] = {}
 
 
+def _log_health_diagnostics(ctx: "BotContext", reason: str) -> None:
+    """Log detailed diagnostics used for halt decisions."""
+    try:
+        cash = float(ctx.api.get_account().cash)
+        positions = len(ctx.api.get_all_positions())
+    except Exception:
+        cash = -1.0
+        positions = -1
+    try:
+        df = ctx.data_fetcher.get_minute_df(
+            ctx, REGIME_SYMBOLS[0], lookback_minutes=config.MIN_HEALTH_ROWS
+        )
+        rows = len(df)
+        last_time = df.index[-1].isoformat() if not df.empty else "n/a"
+    except Exception:
+        rows = 0
+        last_time = "n/a"
+    vol = _VOL_STATS.get("last")
+    sentiment = getattr(ctx, "last_sentiment", 0.0)
+    logger.debug(
+        "Health diagnostics: rows=%s, last_time=%s, vol=%s, sent=%s, cash=%s, positions=%s, reason=%s",
+        rows,
+        last_time,
+        vol,
+        sentiment,
+        cash,
+        positions,
+        reason,
+    )
+
+
 # ─── TYPED EXCEPTION ─────────────────────────────────────────────────────────
 class DataFetchErrorLegacy(Exception):
     pass
@@ -2579,6 +2610,10 @@ def check_pdt_rule(ctx: BotContext) -> bool:
 
 
 def check_halt_flag() -> bool:
+    if config.FORCE_TRADES:
+        logger.warning(
+            "FORCE_TRADES override active: ignoring halt flag.")
+        return False
     if not os.path.exists(HALT_FLAG_PATH):
         return False
     mtime = os.path.getmtime(HALT_FLAG_PATH)
@@ -3426,6 +3461,10 @@ def signal_and_confirm(
 def pre_trade_checks(
     ctx: BotContext, state: BotState, symbol: str, balance: float, regime_ok: bool
 ) -> bool:
+    if config.FORCE_TRADES:
+        logger.warning(
+            "FORCE_TRADES override active: ignoring all pre-trade halts.")
+        return True
     # Streak kill-switch check
     if (
         state.streak_halt_until
@@ -3435,24 +3474,31 @@ def pre_trade_checks(
             "SKIP_STREAK_HALT",
             extra={"symbol": symbol, "until": state.streak_halt_until},
         )
+        _log_health_diagnostics(ctx, "streak")
         return False
     if getattr(state, "pdt_blocked", False):
         logger.info("SKIP_PDT_RULE", extra={"symbol": symbol})
+        _log_health_diagnostics(ctx, "pdt")
         return False
     if check_halt_flag():
         logger.info("SKIP_HALT_FLAG", extra={"symbol": symbol})
+        _log_health_diagnostics(ctx, "halt_flag")
         return False
     if check_daily_loss(ctx, state):
         logger.info("SKIP_DAILY_LOSS", extra={"symbol": symbol})
+        _log_health_diagnostics(ctx, "daily_loss")
         return False
     if check_weekly_loss(ctx, state):
         logger.info("SKIP_WEEKLY_LOSS", extra={"symbol": symbol})
+        _log_health_diagnostics(ctx, "weekly_loss")
         return False
     if too_many_positions(ctx):
         logger.info("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol})
+        _log_health_diagnostics(ctx, "positions")
         return False
     if too_correlated(ctx, symbol):
         logger.info("SKIP_HIGH_CORRELATION", extra={"symbol": symbol})
+        _log_health_diagnostics(ctx, "correlation")
         return False
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
 
@@ -5465,6 +5511,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
         current_cash, regime_ok, symbols = _prepare_run(ctx, state)
 
         if check_halt_flag():
+            _log_health_diagnostics(ctx, "halt_flag_loop")
             logger.info("TRADING_HALTED_VIA_FLAG")
             return
 
