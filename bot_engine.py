@@ -2297,7 +2297,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     resp = requests.get(url, timeout=10)
     try:
         resp.raise_for_status()
-    except requests.exceptions.HTTPError:
+    except HTTPError:
         if resp.status_code == 429:
             logger.warning(
                 f"fetch_sentiment({ticker}) rate-limited → returning neutral 0.0"
