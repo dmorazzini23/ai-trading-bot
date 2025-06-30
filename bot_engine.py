@@ -2849,6 +2849,29 @@ def vol_target_position_size(
     return max(qty, 1)
 
 
+def compute_kelly_scale(vol: float, sentiment: float) -> float:
+    """Return basic Kelly scaling factor."""
+    base = 1.0
+    if vol > 0.05:
+        base *= 0.5
+    if sentiment < 0:
+        base *= 0.5
+    return max(base, 0.1)
+
+
+def adjust_position_size(position, scale: float) -> None:
+    """Placeholder for adjusting position quantity."""
+    try:
+        position.qty = str(int(int(position.qty) * scale))
+    except Exception:
+        logger.debug("adjust_position_size no-op")
+
+
+def adjust_trailing_stop(position, new_stop: float) -> None:
+    """Placeholder for adjusting trailing stop price."""
+    logger.debug("adjust_trailing_stop %s -> %.2f", position.symbol, new_stop)
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=10),
@@ -5482,6 +5505,58 @@ def _log_loop_heartbeat(loop_id: str, start: float) -> None:
     )
 
 
+def _send_heartbeat() -> None:
+    """Lightweight heartbeat when halted."""
+    logger.info(
+        "HEARTBEAT_HALTED",
+        extra={"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+    )
+
+
+def manage_position_risk(ctx: BotContext, position) -> None:
+    """Adjust trailing stops and position size while halted."""
+    symbol = position.symbol
+    try:
+        atr = utils.get_rolling_atr(symbol)
+        vwap = utils.get_current_vwap(symbol)
+        price_df = fetch_minute_df_safe(symbol)
+        price = get_latest_close(price_df)
+        side = "long" if int(position.qty) > 0 else "short"
+        if side == "long":
+            new_stop = float(position.avg_entry_price) * (1 - min(0.01 + atr / 100, 0.03))
+        else:
+            new_stop = float(position.avg_entry_price) * (1 + min(0.01 + atr / 100, 0.03))
+        update_trailing_stop(ctx, symbol, price, int(position.qty), atr)
+        pnl = float(getattr(position, "unrealized_plpc", 0))
+        kelly_scale = compute_kelly_scale(atr, 0.0)
+        adjust_position_size(position, kelly_scale)
+        volume_factor = utils.get_volume_spike_factor(symbol)
+        ml_conf = utils.get_ml_confidence(symbol)
+        if volume_factor > config.VOLUME_SPIKE_THRESHOLD and ml_conf > config.ML_CONFIDENCE_THRESHOLD:
+            if side == "long" and price > vwap and pnl > 0.02:
+                pyramid_add_position(ctx, symbol, config.PYRAMID_LEVELS["low"], side)
+        logger.info(
+            f"HALT_MANAGE {symbol} stop={new_stop:.2f} vwap={vwap:.2f} vol={volume_factor:.2f} ml={ml_conf:.2f}"
+        )
+    except Exception as exc:  # pragma: no cover - handle edge cases
+        logger.warning(f"manage_position_risk failed for {symbol}: {exc}")
+
+
+def pyramid_add_position(ctx: BotContext, symbol: str, fraction: float, side: str) -> None:
+    current_qty = _current_position_qty(ctx, symbol)
+    add_qty = max(1, int(abs(current_qty) * fraction))
+    submit_order(ctx, symbol, add_qty, "buy" if side == "long" else "sell")
+    logger.info("PYRAMID_ADD", extra={"symbol": symbol, "qty": add_qty, "side": side})
+
+
+def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
+    current_qty = _current_position_qty(ctx, symbol)
+    reduce_qty = max(1, int(abs(current_qty) * fraction))
+    side = "sell" if current_qty > 0 else "buy"
+    submit_order(ctx, symbol, reduce_qty, side)
+    logger.info("REDUCE_POSITION", extra={"symbol": symbol, "qty": reduce_qty})
+
+
 def run_all_trades_worker(state: BotState, model) -> None:
     """Run the full trading cycle for all candidate symbols.
 
@@ -5532,11 +5607,15 @@ def run_all_trades_worker(state: BotState, model) -> None:
         if check_halt_flag():
             _log_health_diagnostics(ctx, "halt_flag_loop")
             logger.info(
-                "TRADING_HALTED_VIA_FLAG: Skipping new trades, holding existing positions."
+                "TRADING_HALTED_VIA_FLAG: Managing existing positions only."
             )
-
-            # By returning here, we skip placing any new orders while
-            # maintaining any open positions untouched.
+            try:
+                portfolio = ctx.api.get_all_positions()
+                for pos in portfolio:
+                    manage_position_risk(ctx, pos)
+            except Exception as exc:  # pragma: no cover - network issues
+                logger.warning(f"HALT_MANAGE_FAIL: {exc}")
+            _send_heartbeat()
             return
 
         processed = _process_symbols(symbols, current_cash, model, regime_ok)

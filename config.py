@@ -133,6 +133,13 @@ TRADE_LOG_FILE = env_settings.TRADE_LOG_FILE
 SCHEDULER_SLEEP_SECONDS = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
 MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "30"))
 MIN_HEALTH_ROWS_DAILY = int(os.getenv("MIN_HEALTH_ROWS_DAILY", "5"))
+VOLUME_SPIKE_THRESHOLD = float(os.getenv("VOLUME_SPIKE_THRESHOLD", 1.5))
+ML_CONFIDENCE_THRESHOLD = float(os.getenv("ML_CONFIDENCE_THRESHOLD", 0.55))
+PYRAMID_LEVELS = {
+    "high": float(os.getenv("PYRAMID_HIGH", 0.4)),
+    "medium": float(os.getenv("PYRAMID_MEDIUM", 0.25)),
+    "low": float(os.getenv("PYRAMID_LOW", 0.15)),
+}
 FORCE_TRADES: bool = False
 """If True, bypasses all pre-trade halts for testing."""
 
@@ -187,5 +194,8 @@ __all__ = [
     "WEBHOOK_PORT",
     "MIN_HEALTH_ROWS",
     "MIN_HEALTH_ROWS_DAILY",
+    "VOLUME_SPIKE_THRESHOLD",
+    "ML_CONFIDENCE_THRESHOLD",
+    "PYRAMID_LEVELS",
     "FORCE_TRADES",
 ]

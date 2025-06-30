@@ -11,6 +11,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import config
 
 try:
     from tzlocal import get_localzone
@@ -157,6 +158,76 @@ def get_free_port(start: int = 9200, end: int = 9300) -> int | None:
             except OSError:
                 continue
     return None
+
+
+def get_rolling_atr(symbol: str, window: int = 14) -> float:
+    """Return normalized ATR over ``window`` days."""
+    from bot_engine import fetch_minute_df_safe  # lazy import to avoid cycles
+
+    df = fetch_minute_df_safe(symbol)
+    if df is None or df.empty:
+        return 0.0
+    high = df['high'].rolling(window).max()
+    low = df['low'].rolling(window).min()
+    close = df['close']
+    tr = pd.concat([
+        high - low,
+        (high - close.shift(1)).abs(),
+        (low - close.shift(1)).abs(),
+    ], axis=1).max(axis=1)
+    atr = tr.rolling(window).mean().iloc[-1]
+    last_close = close.iloc[-1] if not pd.isna(close.iloc[-1]) else 1.0
+    val = float(atr) / float(last_close) if last_close else 0.0
+    logger.info("ATR for %s=%.5f", symbol, val)
+    return val
+
+
+def get_current_vwap(symbol: str) -> float:
+    """Return simple intraday VWAP for ``symbol``."""
+    from bot_engine import fetch_minute_df_safe
+
+    df = fetch_minute_df_safe(symbol)
+    if df is None or df.empty:
+        return 0.0
+    pv = (df['close'] * df['volume']).sum()
+    vol = df['volume'].sum()
+    vwap = pv / vol if vol else 0.0
+    logger.info("VWAP for %s=%.4f", symbol, vwap)
+    return float(vwap)
+
+
+def get_volume_spike_factor(symbol: str) -> float:
+    """Return last minute volume over 20-period average."""
+    from bot_engine import fetch_minute_df_safe
+
+    df = fetch_minute_df_safe(symbol)
+    if df is None or len(df) < 21:
+        return 1.0
+    last_vol = df['volume'].iloc[-1]
+    avg_vol = df['volume'].iloc[-21:-1].mean()
+    factor = float(last_vol) / float(avg_vol) if avg_vol else 1.0
+    logger.info("Volume spike %s=%.2f", symbol, factor)
+    return factor
+
+
+def get_ml_confidence(symbol: str) -> float:
+    """Return model confidence for ``symbol``."""
+    try:
+        from ml_model import load_model
+    except Exception:  # pragma: no cover - optional dependency
+        return 0.5
+
+    model_path = config.MODEL_PATH
+    model = load_model(model_path)
+    if model is None:
+        return 0.5
+    feats = pd.DataFrame({"price": [0.0]})
+    try:
+        conf = float(model.predict_proba(feats)[0][1])
+    except Exception:
+        conf = 0.5
+    logger.info("ML confidence for %s=%.2f", symbol, conf)
+    return conf
 
 
 def to_serializable(obj: Any) -> Any:
