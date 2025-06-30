@@ -244,10 +244,27 @@ async def check_stuck_orders(api) -> None:
         await asyncio.sleep(10)
         now = time.monotonic()
         for oid, info in list(pending_orders.items()):
-            if now - info.get("timestamp", now) > 30 and info.get("status") == "PENDING_NEW":
+            if now - info.get("timestamp", now) > 60 and info.get("status") == "PENDING_NEW":
                 symbol = info.get("symbol", "")
+                req = info.get("req")
+                qty = float(getattr(req, "qty", 0)) if req is not None else 0.0
+                filled_qty = 0.0
+                try:
+                    od = api.get_order_by_id(oid)
+                    filled_qty = float(getattr(od, "filled_qty", 0))
+                except Exception as exc:  # pragma: no cover - network
+                    logger.warning("Failed to fetch order %s status: %s", oid, exc)
+                if filled_qty >= qty and qty > 0:
+                    logger.info(
+                        "Order %s already filled with %s/%s, skipping resubmit.",
+                        oid,
+                        filled_qty,
+                        qty,
+                    )
+                    pending_orders.pop(oid, None)
+                    continue
                 logger.warning(
-                    "\N{WARNING SIGN} Order %s for %s stuck >30s. Cancelling and resubmitting.",
+                    "\N{WARNING SIGN} Order %s for %s stuck >60s. Cancelling and resubmitting.",
                     oid,
                     symbol,
                 )
@@ -255,7 +272,6 @@ async def check_stuck_orders(api) -> None:
                     api.cancel_order_by_id(oid)
                 except Exception as exc:  # pragma: no cover - network
                     logger.warning("Failed to cancel stuck order %s: %s", oid, exc)
-                req = info.get("req")
                 if req is not None:
                     try:
                         new_order = api.submit_order(order_data=req)
@@ -276,7 +292,7 @@ async def start_trade_updates_stream(api_key: str, secret_key: str, api, state=N
     """Start Alpaca trade updates stream and stuck order monitor."""
     stream = TradingStream(api_key, secret_key, paper=paper)
     async def handle_async_trade_update(ev):
-        handle_trade_update(ev, state)
+        asyncio.create_task(handle_trade_update(ev, state))  # AI-AGENT-REF: schedule coroutine
 
     stream.subscribe_trade_updates(handle_async_trade_update)
     logger.info("\u2705 Subscribed to Alpaca trade updates stream.")
