@@ -133,7 +133,7 @@ TRADE_LOG_FILE = env_settings.TRADE_LOG_FILE
 SCHEDULER_SLEEP_SECONDS = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
 MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "30"))
 MIN_HEALTH_ROWS_DAILY = int(os.getenv("MIN_HEALTH_ROWS_DAILY", "5"))
-FORCE_TRADES: bool = True
+FORCE_TRADES: bool = False
 """If True, bypasses all pre-trade halts for testing."""
 
 # centralize SGDRegressor hyperparameters
