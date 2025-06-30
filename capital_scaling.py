@@ -9,6 +9,7 @@ class _CapScaler:
         self.multiplier = params.get("x", 1)
 
     def scale_position(self, value):
+        """Scale a numeric position by the configured multiplier."""
         return value * self.multiplier
 
 
