@@ -1,4 +1,10 @@
-"""Lightweight Alpaca REST helpers with retry and validation."""
+"""Lightweight Alpaca REST helpers with retry and validation.
+
+Orders submitted via :func:`submit_order` are recorded in ``pending_orders``.
+The :func:`check_stuck_orders` task periodically scans this registry and will
+cancel and resubmit any order that remains in ``PENDING_NEW`` for over
+60 seconds to guard against missed status updates.
+"""
 
 from __future__ import annotations
 
