@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 import requests
+from requests.exceptions import HTTPError
 from alpaca.trading.stream import TradingStream
 from tenacity import (retry, retry_if_exception_type, stop_after_attempt,
                       wait_exponential)
@@ -126,7 +127,7 @@ def submit_order(api, req, log: logging.Logger | None = None):
         try:
             order = api.submit_order(order_data=req)
             if hasattr(order, "status_code") and getattr(order, "status_code") == 429:
-                raise requests.exceptions.HTTPError("API rate limit exceeded (429)")
+                raise HTTPError("API rate limit exceeded (429)")  # AI-AGENT-REF: use explicit HTTPError import
             if getattr(order, "id", None):
                 pending_orders[str(order.id)] = {
                     "symbol": getattr(req, "symbol", ""),
@@ -135,7 +136,7 @@ def submit_order(api, req, log: logging.Logger | None = None):
                     "status": "PENDING_NEW",
                 }
             return order
-        except requests.exceptions.HTTPError as e:
+        except HTTPError as e:
             if "429" in str(e) or "rate limit" in str(e).lower():
                 wait = attempt * 2
                 _warn_limited(
