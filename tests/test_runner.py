@@ -4,7 +4,7 @@ import types
 
 import pytest
 import requests
-from conftest import load_runner
+from tests.conftest import load_runner
 
 
 def test_handle_signal_sets_shutdown(monkeypatch):

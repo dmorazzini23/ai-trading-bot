@@ -4,6 +4,7 @@ print("PYTHONPATH forced to:", sys.path)
 from pathlib import Path
 
 import pytest
+import types
 try:
     import urllib3
 except Exception:  # pragma: no cover - optional dependency
@@ -11,6 +12,14 @@ except Exception:  # pragma: no cover - optional dependency
     urllib3 = types.ModuleType("urllib3")
     urllib3.__file__ = "stub"
     sys.modules["urllib3"] = urllib3
+if "requests" not in sys.modules:
+    req_mod = types.ModuleType("requests")
+    exc_mod = types.ModuleType("requests.exceptions")
+    exc_mod.RequestException = Exception
+    req_mod.get = lambda *a, **k: None
+    req_mod.exceptions = exc_mod
+    sys.modules["requests"] = req_mod
+    sys.modules["requests.exceptions"] = exc_mod
 try:
     from dotenv import load_dotenv
 except Exception:  # pragma: no cover - optional dependency
@@ -75,5 +84,20 @@ def load_runner(monkeypatch):
     bot_mod = types.ModuleType("bot")
     bot_mod.main = lambda: None
     monkeypatch.setitem(sys.modules, "bot", bot_mod)
+    req_mod = types.ModuleType("requests")
+    req_mod.get = lambda *a, **k: None
+    exc_mod = types.ModuleType("requests.exceptions")
+    exc_mod.RequestException = Exception
+    req_mod.exceptions = exc_mod
+    monkeypatch.setitem(sys.modules, "requests.exceptions", exc_mod)
+    monkeypatch.setitem(sys.modules, "requests", req_mod)
+    alpaca_mod = types.ModuleType("alpaca")
+    trading_mod = types.ModuleType("alpaca.trading")
+    trading_mod.__path__ = []
+    stream_mod = types.ModuleType("alpaca.trading.stream")
+    stream_mod.TradingStream = object
+    monkeypatch.setitem(sys.modules, "alpaca", alpaca_mod)
+    monkeypatch.setitem(sys.modules, "alpaca.trading", trading_mod)
+    monkeypatch.setitem(sys.modules, "alpaca.trading.stream", stream_mod)
     import runner as r
     return importlib.reload(r)

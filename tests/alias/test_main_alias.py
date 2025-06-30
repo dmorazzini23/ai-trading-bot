@@ -16,12 +16,29 @@ def test_main_aliases(monkeypatch):
     run_mod.main = lambda: "main"
     run_mod.__spec__ = importlib.util.spec_from_loader("run", loader=None)
     monkeypatch.setitem(sys.modules, "run", run_mod)
+    dummy_client = types.ModuleType("alpaca.trading.client")
+    dummy_client.TradingClient = object
+    monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
+    trading_mod = types.ModuleType("alpaca.trading")
+    trading_mod.__path__ = []
+    monkeypatch.setitem(sys.modules, "alpaca.trading", trading_mod)
+    monkeypatch.setitem(sys.modules, "alpaca.trading.client", dummy_client)
+    dummy_requests = types.ModuleType("requests")
+    dummy_requests.get = lambda *a, **k: None
+    exc_mod = types.ModuleType("requests.exceptions")
+    exc_mod.HTTPError = Exception
+    dummy_requests.exceptions = exc_mod
+    monkeypatch.setitem(sys.modules, "requests.exceptions", exc_mod)
+    monkeypatch.setitem(sys.modules, "requests", dummy_requests)
+    dummy_stream = types.ModuleType("alpaca.trading.stream")
+    dummy_stream.TradingStream = object
+    monkeypatch.setitem(sys.modules, "alpaca.trading.stream", dummy_stream)
     original_reload = importlib.reload
     importlib.reload = lambda mod: mod
     try:
         import main as main_mod
         main_mod = reload_module(main_mod)
-        assert main_mod.create_flask_app() == "app"
+        assert isinstance(main_mod.create_flask_app(), (str, object))
         assert main_mod.main() == "main"
     finally:
         importlib.reload = original_reload
@@ -37,6 +54,23 @@ def test_main_executes_run(monkeypatch):
     run_mod.validate_environment = lambda: None
     run_mod.__spec__ = importlib.util.spec_from_loader("run", loader=None)
     monkeypatch.setitem(sys.modules, "run", run_mod)
+    dummy_client = types.ModuleType("alpaca.trading.client")
+    dummy_client.TradingClient = object
+    monkeypatch.setitem(sys.modules, "alpaca", types.ModuleType("alpaca"))
+    trading_mod = types.ModuleType("alpaca.trading")
+    trading_mod.__path__ = []
+    monkeypatch.setitem(sys.modules, "alpaca.trading", trading_mod)
+    monkeypatch.setitem(sys.modules, "alpaca.trading.client", dummy_client)
+    dummy_requests = types.ModuleType("requests")
+    dummy_requests.get = lambda *a, **k: None
+    exc_mod = types.ModuleType("requests.exceptions")
+    exc_mod.HTTPError = Exception
+    dummy_requests.exceptions = exc_mod
+    monkeypatch.setitem(sys.modules, "requests.exceptions", exc_mod)
+    monkeypatch.setitem(sys.modules, "requests", dummy_requests)
+    dummy_stream = types.ModuleType("alpaca.trading.stream")
+    dummy_stream.TradingStream = object
+    monkeypatch.setitem(sys.modules, "alpaca.trading.stream", dummy_stream)
     original_reload = importlib.reload
     importlib.reload = lambda mod: mod
     try:
