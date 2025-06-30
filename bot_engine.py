@@ -3444,6 +3444,24 @@ def exit_all_positions(ctx: BotContext) -> None:
             logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
 
 
+def _liquidate_all_positions(ctx: BotContext) -> None:
+    """Helper to liquidate every open position."""
+    # AI-AGENT-REF: existing exit_all_positions wrapper for emergency liquidation
+    exit_all_positions(ctx)
+
+
+def liquidate_positions_if_needed(ctx: BotContext) -> None:
+    """Liquidate all positions when certain risk conditions trigger."""
+    if check_halt_flag():
+        # Modified: DO NOT liquidate positions on halt flag.
+        logger.info(
+            "TRADING_HALTED_VIA_FLAG is active: NOT liquidating positions, holding open positions."
+        )
+        return
+
+    # normal liquidation logic would go here (placeholder)
+
+
 # ─── L. SIGNAL & TRADE LOGIC ───────────────────────────────────────────────────
 def signal_and_confirm(
     ctx: BotContext, state: BotState, symbol: str, df: pd.DataFrame, model
@@ -5510,9 +5528,15 @@ def run_all_trades_worker(state: BotState, model) -> None:
 
         current_cash, regime_ok, symbols = _prepare_run(ctx, state)
 
+        # AI-AGENT-REF: honor global halt flag before processing symbols
         if check_halt_flag():
             _log_health_diagnostics(ctx, "halt_flag_loop")
-            logger.info("TRADING_HALTED_VIA_FLAG")
+            logger.info(
+                "TRADING_HALTED_VIA_FLAG: Skipping new trades, holding existing positions."
+            )
+
+            # By returning here, we skip placing any new orders while
+            # maintaining any open positions untouched.
             return
 
         processed = _process_symbols(symbols, current_cash, model, regime_ok)
