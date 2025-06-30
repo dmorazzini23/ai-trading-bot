@@ -4,7 +4,12 @@ import logging
 import os
 import queue
 import sys
-from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
+from logging.handlers import (
+    QueueHandler,
+    QueueListener,
+    RotatingFileHandler,
+    TimedRotatingFileHandler,
+)
 from typing import Dict
 
 _configured = False
@@ -38,13 +43,14 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     level = logging.DEBUG if debug else logging.INFO
 
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG if debug else logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
 
     handlers: list[logging.Handler] = []
     stream_handler = logging.StreamHandler(sys.stdout)
     stream_handler.setFormatter(formatter)
+    stream_handler.setLevel(logging.DEBUG if debug else logging.INFO)
     handlers.append(stream_handler)
 
     global _log_queue, _listener
@@ -52,8 +58,17 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         try:
             file_handler = get_rotating_handler(log_file, max_bytes=10_485_760)
             file_handler.setFormatter(formatter)
+            file_handler.setLevel(logging.INFO)
+
+            debug_path = os.path.join(os.path.dirname(log_file), "debug.log")
+            debug_handler = TimedRotatingFileHandler(
+                debug_path, when="midnight", backupCount=7
+            )
+            debug_handler.setFormatter(formatter)
+            debug_handler.setLevel(logging.DEBUG)
+
             _log_queue = queue.Queue(-1)
-            _listener = QueueListener(_log_queue, file_handler)
+            _listener = QueueListener(_log_queue, file_handler, debug_handler)
             _listener.start()
             handlers.append(QueueHandler(_log_queue))
         except OSError as exc:
@@ -65,10 +80,8 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     for h in handlers:
         logger.addHandler(h)
 
-    # Explicitly set root level after handlers are attached so tests
-    # expecting DEBUG when ``debug`` is True remain stable regardless of
-    # the LOG_LEVEL environment variable.
-    logger.setLevel(logging.DEBUG if debug else logging.INFO)
+    # Explicitly enforce root DEBUG level so debug handler captures all messages
+    logger.setLevel(logging.DEBUG)
 
     file_part = f" with file {log_file}" if log_file else ""
     logger.info(

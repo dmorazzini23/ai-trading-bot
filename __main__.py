@@ -10,10 +10,16 @@ except Exception:  # pragma: no cover - optional dependency
     REST = object  # type: ignore
 
 from run import main as entrypoint
+import config
+from logger import get_logger
 
 
 def main() -> None:  # pragma: no cover - thin wrapper for entrypoint
     """Invoke :func:`run.main` when module is executed as a package."""
+    if config.FORCE_TRADES:
+        get_logger(__name__).warning(
+            "\ud83d\ude80 FORCE_TRADES is ENABLED. This run will ignore normal health halts!"
+        )
     entrypoint()
 
 

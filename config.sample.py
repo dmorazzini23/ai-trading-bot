@@ -27,6 +27,7 @@ BUY_THRESHOLD = float(os.environ.get("BUY_THRESHOLD", "0.5"))
 DISABLE_DAILY_RETRAIN = os.environ.get("DISABLE_DAILY_RETRAIN", "0")
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", "9000"))
+FORCE_TRADES = False  # If True, bypasses all pre-trade halts for testing.
 
 
 def validate_alpaca_credentials() -> None:

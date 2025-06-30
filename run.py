@@ -92,6 +92,10 @@ def main() -> None:
     # ✅ Fix: get configured logger object from setup_logging
     logger = setup_logging(log_file=args.log_file)
     logger.info("Starting AI Trading Bot unified runner")
+    if config.FORCE_TRADES:
+        logger.warning(
+            "\ud83d\ude80 FORCE_TRADES is ENABLED. This run will ignore normal health halts!"
+        )
 
     load_dotenv(dotenv_path=".env", override=True)
     validate_environment()
