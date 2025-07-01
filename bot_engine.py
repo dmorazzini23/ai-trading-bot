@@ -3758,6 +3758,13 @@ def _enter_long(
     strat: str,
 ) -> bool:
     current_price = get_latest_close(feat_df)
+    if current_price <= 0:
+        logger.warning(
+            "Aborting trade for %s, invalid price: %.2f",
+            symbol,
+            current_price,
+        )
+        return True
     target_weight = ctx.portfolio_weights.get(symbol, 0.0)
     raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
     if raw_qty is None or not np.isfinite(raw_qty) or raw_qty <= 0:
@@ -3818,6 +3825,13 @@ def _enter_short(
     strat: str,
 ) -> bool:
     current_price = get_latest_close(feat_df)
+    if current_price <= 0:
+        logger.warning(
+            "Aborting trade for %s, invalid price: %.2f",
+            symbol,
+            current_price,
+        )
+        return True
     atr = feat_df["atr"].iloc[-1]
     qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
     try:

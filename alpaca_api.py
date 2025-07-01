@@ -34,6 +34,7 @@ if "ALPACA_SECRET_KEY" in os.environ:
     os.environ.setdefault("APCA_API_SECRET_KEY", os.environ["ALPACA_SECRET_KEY"])
 
 SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
+DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
 
 
 _warn_counts = defaultdict(int)
@@ -113,6 +114,17 @@ def get_account() -> Optional[Dict[str, Any]]:
 def submit_order(api, req, log: logging.Logger | None = None):
     """Submit an order with retry and optional shadow mode."""
     log = log or logger
+    if DRY_RUN:
+        log.info(
+            "DRY RUN: would submit order for %s of size %s", 
+            getattr(req, "symbol", ""), 
+            getattr(req, "qty", 0),
+        )
+        return {
+            "status": "dry_run",
+            "symbol": getattr(req, "symbol", ""),
+            "qty": getattr(req, "qty", 0),
+        }
     if SHADOW_MODE:
         log.info(
             "SHADOW_MODE: Would place order: %s %s %s %s %s",

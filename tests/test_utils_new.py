@@ -80,3 +80,21 @@ def test_safe_to_datetime_various_formats():
     assert iso.isna().all()
     assert len(utils.safe_to_datetime([])) == 0
     assert utils.safe_to_datetime([float("nan"), None]).isna().all()
+
+
+def test_get_current_price_fallback(monkeypatch):
+    api_mod = types.SimpleNamespace(alpaca_get=lambda url: {"ap": 0})
+    fetch_mod = types.SimpleNamespace(get_daily_df=lambda s, start, end: pd.DataFrame({"close": [2.0]}))
+    monkeypatch.setitem(sys.modules, "alpaca_api", api_mod)
+    monkeypatch.setitem(sys.modules, "data_fetcher", fetch_mod)
+    price = utils.get_current_price("AAPL")
+    assert price == 2.0
+
+
+def test_get_current_price_final_fallback(monkeypatch):
+    api_mod = types.SimpleNamespace(alpaca_get=lambda url: {"ap": 0})
+    fetch_mod = types.SimpleNamespace(get_daily_df=lambda s, start, end: pd.DataFrame())
+    monkeypatch.setitem(sys.modules, "alpaca_api", api_mod)
+    monkeypatch.setitem(sys.modules, "data_fetcher", fetch_mod)
+    price = utils.get_current_price("AAPL")
+    assert price == 0.01

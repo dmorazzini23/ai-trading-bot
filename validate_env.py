@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     SLIPPAGE_THRESHOLD: float = 0.003
     REBALANCE_INTERVAL_MIN: int = 1440
     SHADOW_MODE: bool = False
+    DRY_RUN: bool = False
     DISABLE_DAILY_RETRAIN: bool = False
     TRADE_LOG_FILE: str = "trades.csv"
     FORCE_TRADES: bool = False

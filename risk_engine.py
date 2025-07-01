@@ -103,7 +103,7 @@ class RiskEngine:
             return 0
 
         if cash <= 0 or price <= 0:
-            logger.error(
+            logger.warning(
                 "Invalid cash %.2f or price %.2f for position sizing", cash, price
             )
             return 0
@@ -194,6 +194,9 @@ import pandas_ta as ta
 def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float) -> None:
     """Exit position if price falls below an ATR-based trailing stop."""
     try:
+        if entry_price <= 0:
+            logger.warning("apply_trailing_atr_stop invalid entry price: %.2f", entry_price)
+            return
         atr = df.ta.atr()
         trailing_stop = entry_price - 2 * atr
         price = df["Close"].iloc[-1]

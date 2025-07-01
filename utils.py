@@ -95,6 +95,35 @@ def get_latest_close(df: pd.DataFrame) -> float:
     return float(last)
 
 
+def get_current_price(symbol: str) -> float:
+    """Return latest quote price with fallbacks."""
+    price = 0.0
+    try:
+        from alpaca_api import alpaca_get
+
+        data = alpaca_get(f"/v2/stocks/{symbol}/quotes/latest")
+        price = float(data.get("ap", 0) or 0)
+    except Exception as exc:  # pragma: no cover - network/API errors
+        logger.warning("get_current_price primary fetch failed for %s: %s", symbol, exc)
+
+    if price <= 0:
+        logger.warning("get_current_price invalid price %.2f for %s; falling back to last close", price, symbol)
+        try:
+            from data_fetcher import get_daily_df
+
+            end = dt.date.today()
+            start = end - dt.timedelta(days=5)
+            df = get_daily_df(symbol, start, end)
+            price = get_latest_close(df) if df is not None else 0.0
+        except Exception as exc:  # pragma: no cover - fallback errors
+            logger.warning("get_current_price fallback failed for %s: %s", symbol, exc)
+
+    if price <= 0:
+        logger.warning("get_current_price ultimate fallback using 0.01 for %s", symbol)
+        price = 0.01
+    return price
+
+
 def is_market_open(now: dt.datetime | None = None) -> bool:
     """Return True if current time is within NYSE trading hours."""
     try:

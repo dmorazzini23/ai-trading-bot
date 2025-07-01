@@ -29,6 +29,14 @@ def test_submit_order_shadow(monkeypatch):
     assert api.calls == 0
 
 
+def test_submit_order_dry_run(monkeypatch):
+    api = DummyAPI()
+    monkeypatch.setattr(alpaca_api, "DRY_RUN", True)
+    result = alpaca_api.submit_order(api, make_req())
+    assert result["status"] == "dry_run"
+    assert api.calls == 0
+
+
 def test_submit_order_rate_limit(monkeypatch):
     api = DummyAPI()
     monkeypatch.setattr(alpaca_api, "SHADOW_MODE", False)
