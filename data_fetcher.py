@@ -260,11 +260,6 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
     df = pd.DataFrame(bars)
     if df.empty:
         logger.critical("NO_DATA_RETURNED_%s", symbol)
-        try:
-            with open(HALT_FLAG_PATH, "w", encoding="utf-8") as f:
-                f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
-        except Exception as e:
-            logger.error("Failed to write halt flag: %s", e)
         return None
 
     if isinstance(df.columns, pd.MultiIndex):
@@ -386,11 +381,6 @@ def get_daily_df(
 
         if df.empty:
             logger.critical("NO_DATA_RETURNED_%s", symbol)
-            try:
-                with open(HALT_FLAG_PATH, "w", encoding="utf-8") as f:
-                    f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
-            except Exception as e:
-                logger.error("Failed to write halt flag: %s", e)
             return None
 
         if isinstance(df.index, pd.MultiIndex):
@@ -572,11 +562,6 @@ def get_minute_df(
 
         if bars is None or not getattr(bars, "df", pd.DataFrame()).size:
             logger.critical("NO_DATA_RETURNED_%s", symbol)
-            try:
-                with open(HALT_FLAG_PATH, "w", encoding="utf-8") as f:
-                    f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
-            except Exception as e:
-                logger.error("Failed to write halt flag: %s", e)
             return None
 
         bars = bars.df
@@ -622,11 +607,6 @@ def get_minute_df(
         df = df[["open", "high", "low", "close", "volume"]]
         if df.empty:
             logger.critical("NO_DATA_RETURNED_%s", symbol)
-            try:
-                with open(HALT_FLAG_PATH, "w", encoding="utf-8") as f:
-                    f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
-            except Exception as e:
-                logger.error("Failed to write halt flag: %s", e)
             return None
         try:
             idx = safe_to_datetime(df.index, context=f"{symbol} minute")
@@ -680,11 +660,6 @@ def get_minute_df(
             df = bars.df[["open", "high", "low", "close", "volume"]].copy()
             if df.empty:
                 logger.critical("NO_DATA_RETURNED_%s", symbol)
-                try:
-                    with open(HALT_FLAG_PATH, "w", encoding="utf-8") as f:
-                        f.write(f"NO_DATA {symbol} {datetime.now(timezone.utc).isoformat()}")
-                except Exception as e:
-                    logger.error("Failed to write halt flag: %s", e)
                 return None
             try:
                 idx = safe_to_datetime(df.index, context=f"{symbol} fallback")

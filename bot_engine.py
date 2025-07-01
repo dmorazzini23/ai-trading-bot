@@ -2609,24 +2609,48 @@ def check_pdt_rule(ctx: BotContext) -> bool:
     return False
 
 
-def check_halt_flag() -> bool:
-    if config.FORCE_TRADES:
-        logger.warning(
-            "FORCE_TRADES override active: ignoring halt flag.")
-        return False
-    if not os.path.exists(HALT_FLAG_PATH):
-        return False
-    mtime = os.path.getmtime(HALT_FLAG_PATH)
-    age = dt_.now(timezone.utc) - dt_.fromtimestamp(mtime, timezone.utc)
+def set_halt_flag(reason: str) -> None:
+    """Persist a halt flag with the provided reason."""
     try:
-        with open(HALT_FLAG_PATH, "r") as f:
-            content = f.read().strip()
-    except Exception:
-        content = ""
-    max_age = (
-        timedelta(hours=24) if content.startswith("DISASTER") else timedelta(hours=1)
-    )
-    return age < max_age
+        with open(HALT_FLAG_PATH, "w") as f:
+            f.write(f"{reason} " + dt_.now(timezone.utc).isoformat())
+        logger.info(f"TRADING_HALTED set due to {reason}")
+    except Exception as exc:  # pragma: no cover - disk issues
+        logger.error(f"Failed to write halt flag: {exc}")
+
+
+def check_halt_flag(ctx: BotContext | None = None) -> bool:
+    if config.FORCE_TRADES:
+        logger.warning("FORCE_TRADES override active: ignoring halt flag.")
+        return False
+
+    reason = None
+    if os.path.exists(HALT_FLAG_PATH):
+        try:
+            with open(HALT_FLAG_PATH, "r") as f:
+                content = f.read().strip()
+        except Exception:
+            content = ""
+        if content.startswith("MANUAL"):
+            reason = "manual override"
+        elif content.startswith("DISASTER"):
+            reason = "disaster flag"
+    if ctx:
+        dd = _current_drawdown()
+        if dd >= DISASTER_DD_LIMIT:
+            reason = f"portfolio drawdown {dd:.2%} >= {DISASTER_DD_LIMIT:.2%}"
+        else:
+            try:
+                acct = ctx.api.get_account()
+                if float(getattr(acct, "maintenance_margin", 0)) > float(acct.equity):
+                    reason = "margin breach"
+            except Exception:
+                pass
+
+    if reason:
+        logger.info(f"TRADING_HALTED set due to {reason}")
+        return True
+    return False
 
 
 def too_many_positions(ctx: BotContext) -> bool:
@@ -3475,7 +3499,7 @@ def _liquidate_all_positions(ctx: BotContext) -> None:
 
 def liquidate_positions_if_needed(ctx: BotContext) -> None:
     """Liquidate all positions when certain risk conditions trigger."""
-    if check_halt_flag():
+    if check_halt_flag(ctx):
         # Modified: DO NOT liquidate positions on halt flag.
         logger.info(
             "TRADING_HALTED_VIA_FLAG is active: NOT liquidating positions, holding open positions."
@@ -3521,7 +3545,7 @@ def pre_trade_checks(
         logger.info("SKIP_PDT_RULE", extra={"symbol": symbol})
         _log_health_diagnostics(ctx, "pdt")
         return False
-    if check_halt_flag():
+    if check_halt_flag(ctx):
         logger.info("SKIP_HALT_FLAG", extra={"symbol": symbol})
         _log_health_diagnostics(ctx, "halt_flag")
         return False
@@ -5152,11 +5176,7 @@ def check_disaster_halt() -> None:
     try:
         dd = _current_drawdown()
         if dd >= DISASTER_DD_LIMIT:
-            with open(HALT_FLAG_PATH, "w") as f:
-                f.write(
-                    "DISASTER "
-                    + datetime.datetime.now(datetime.timezone.utc).isoformat()
-                )
+            set_halt_flag(f"DISASTER_DRAW_DOWN_{dd:.2%}")
             logger.error("DISASTER_HALT_TRIGGERED", extra={"drawdown": dd})
     except Exception as e:
         logger.exception(f"check_disaster_halt failed: {e}")
@@ -5618,7 +5638,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
         current_cash, regime_ok, symbols = _prepare_run(ctx, state)
 
         # AI-AGENT-REF: honor global halt flag before processing symbols
-        if check_halt_flag():
+        if check_halt_flag(ctx):
             _log_health_diagnostics(ctx, "halt_flag_loop")
             logger.info(
                 "TRADING_HALTED_VIA_FLAG: Managing existing positions only."
@@ -5629,26 +5649,50 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     manage_position_risk(ctx, pos)
             except Exception as exc:  # pragma: no cover - network issues
                 logger.warning(f"HALT_MANAGE_FAIL: {exc}")
+            logger.info("HALT_SKIP_NEW_TRADES")
             _send_heartbeat()
+            # log summary even when halted
+            try:
+                acct = ctx.api.get_account()
+                cash = float(acct.cash)
+                equity = float(acct.equity)
+                positions = ctx.api.get_all_positions()
+                exposure = (
+                    sum(abs(float(p.market_value)) for p in positions) / equity * 100
+                    if equity > 0
+                    else 0.0
+                )
+                logger.info(
+                    f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
+                )
+            except Exception as exc:  # pragma: no cover - network issues
+                logger.warning(f"SUMMARY_FAIL: {exc}")
             return
 
         processed = _process_symbols(symbols, current_cash, model, regime_ok)
 
         if not processed:
             logger.critical("DATA_SOURCE_EMPTY", extra={"symbols": symbols})
-            try:
-                with open(HALT_FLAG_PATH, "w") as f:
-                    f.write(
-                        "DATA_OUTAGE "
-                        + datetime.datetime.now(datetime.timezone.utc).isoformat()
-                    )
-            except Exception as e:
-                logger.error(f"Failed to set halt flag: {e}")
             time.sleep(60)
             return
 
         run_multi_strategy(ctx)
         logger.info("RUN_ALL_TRADES_COMPLETE")
+        try:
+            acct = ctx.api.get_account()
+            cash = float(acct.cash)
+            equity = float(acct.equity)
+            positions = ctx.api.get_all_positions()
+            exposure = (
+                sum(abs(float(p.market_value)) for p in positions) / equity * 100
+                if equity > 0
+                else 0.0
+            )
+            logger.info(
+                f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
+            )
+        except Exception as exc:  # pragma: no cover - network issues
+            logger.warning(f"SUMMARY_FAIL: {exc}")
         try:
             acct = ctx.api.get_account()
             pnl = float(acct.equity) - float(acct.last_equity)
