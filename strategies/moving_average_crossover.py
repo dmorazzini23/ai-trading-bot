@@ -31,8 +31,12 @@ class MovingAverageCrossoverStrategy(Strategy):
                     self.long,
                 )
                 continue
-            short_ma = df["close"].rolling(self.short).mean().iloc[-1]
-            long_ma = df["close"].rolling(self.long).mean().iloc[-1]
+            close_series = df["close"].dropna()
+            if len(close_series) < self.long:
+                logger.warning("%s: no valid close prices", sym)
+                continue
+            short_ma = close_series.rolling(self.short).mean().iloc[-1]
+            long_ma = close_series.rolling(self.long).mean().iloc[-1]
             if pd.isna(short_ma) or pd.isna(long_ma):
                 continue
             if short_ma > long_ma:

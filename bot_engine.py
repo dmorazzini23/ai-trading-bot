@@ -3485,7 +3485,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
 
 def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> None:
     if qty is None or not np.isfinite(qty) or qty <= 0:
-        logger.error(f"Invalid order size for {symbol}: {qty}")
+        logger.warning(f"Skipping {symbol}: computed qty <= 0")
         return
     raw = fetch_minute_df_safe(symbol)
     exit_price = get_latest_close(raw) if raw is not None else 1.0
@@ -3718,15 +3718,15 @@ def _fetch_feature_data(
 
     df = compute_macd(df)
     assert_row_integrity(initial_len, len(df), "compute_macd", symbol)
-    logger.debug(f"Post MACD tail for {symbol}:\n{df.tail(5)}")
+    logger.debug(f"[{symbol}] Post MACD: last closes:\n{df[['close']].tail(5)}")
 
     df = compute_atr(df)
     assert_row_integrity(initial_len, len(df), "compute_atr", symbol)
-    logger.debug(f"Post ATR tail for {symbol}:\n{df.tail(5)}")
+    logger.debug(f"[{symbol}] Post ATR: last closes:\n{df[['close']].tail(5)}")
 
     df = compute_vwap(df)
     assert_row_integrity(initial_len, len(df), "compute_vwap", symbol)
-    logger.debug(f"Post VWAP tail for {symbol}:\n{df.tail(5)}")
+    logger.debug(f"[{symbol}] Post VWAP: last closes:\n{df[['close']].tail(5)}")
 
     df = compute_macds(df)
     logger.debug(f"{symbol} dataframe columns after indicators: {df.columns.tolist()}")
@@ -3825,8 +3825,8 @@ def _enter_long(
     target_weight = ctx.portfolio_weights.get(symbol, 0.0)
     raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
     if raw_qty is None or not np.isfinite(raw_qty) or raw_qty <= 0:
-        logger.error(
-            f"Invalid order size for {symbol}: {raw_qty}. Signal: {final_score}, Price: {current_price}"
+        logger.warning(
+            f"Skipping {symbol}: computed qty <= 0"
         )
         return True
     logger.info(
@@ -3901,8 +3901,8 @@ def _enter_short(
         logger.exception("bot.py unexpected", exc_info=exc)
         raise
     if qty is None or not np.isfinite(qty) or qty <= 0:
-        logger.error(
-            f"Invalid order size for {symbol}: {qty}. Signal: {final_score}, Price: {current_price}"
+        logger.warning(
+            f"Skipping {symbol}: computed qty <= 0"
         )
         return True
     logger.info(
@@ -4081,6 +4081,9 @@ def trade_logic(
         )
     except ValueError as exc:
         logger.error("%s", exc)
+        return True
+    if pd.isna(final_score) or pd.isna(conf):
+        logger.warning(f"Skipping {symbol}: model returned NaN prediction")
         return True
 
     current_qty = _current_position_qty(ctx, symbol)
@@ -5479,16 +5482,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
             continue
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty is None or not np.isfinite(qty) or qty <= 0:
-            bars = fetch_minute_df_safe(sig.symbol)
-            desc = bars.describe() if not bars.empty else "EMPTY"
-            logger.error(
-                "Invalid order size for %s: %s. Signal: %s, Price: %s, Data: %s",
-                sig.symbol,
-                qty,
-                sig.weight,
-                price,
-                desc,
-            )
+            logger.warning(f"Skipping {sig.symbol}: computed qty <= 0")
             continue
         ctx.execution_engine.execute_order(
             sig.symbol, qty, sig.side, asset_class=sig.asset_class
@@ -5621,11 +5615,17 @@ def manage_position_risk(ctx: BotContext, position) -> None:
         vwap = utils.get_current_vwap(symbol)
         price_df = fetch_minute_df_safe(symbol)
         logger.debug(f"Latest rows for {symbol}:\n{price_df.tail(3)}")
-        if "close" in price_df.columns and not price_df["close"].dropna().empty:
-            price = price_df["close"].dropna().iloc[-1]
-            logger.debug(f"Final extracted price for {symbol}: {price}")
+        if "close" in price_df.columns:
+            price_series = price_df["close"].dropna()
+            if not price_series.empty:
+                price = price_series.iloc[-1]
+                logger.debug(f"Final extracted price for {symbol}: {price}")
+            else:
+                logger.critical(
+                    f"No valid close prices found for {symbol}, skipping.")
+                price = 0.0
         else:
-            logger.critical(f"No valid close price found for {symbol}, setting to 0.0")
+            logger.critical(f"Close column missing for {symbol}, skipping.")
             price = 0.0
         if price <= 0 or pd.isna(price):
             logger.critical(f"Invalid price computed for {symbol}: {price}")

@@ -34,15 +34,19 @@ class MeanReversionStrategy(Strategy):
                 # Skip signal generation when we don't have enough history
                 continue
 
-            ma = df["close"].rolling(self.lookback).mean().iloc[-1]
-            sd = df["close"].rolling(self.lookback).std().iloc[-1]
+            close_series = df["close"].dropna()
+            if len(close_series) < self.lookback:
+                logger.warning("%s: no valid close prices", sym)
+                continue
+            ma = close_series.rolling(self.lookback).mean().iloc[-1]
+            sd = close_series.rolling(self.lookback).std().iloc[-1]
             # Validate rolling mean/std results before computing the z-score
             if pd.isna(ma) or pd.isna(sd) or sd == 0:
                 logger.warning("%s: invalid rolling statistics", sym)
                 # Avoid division by zero or propagating NaNs
                 continue
 
-            last_close = df["close"].iloc[-1]
+            last_close = close_series.iloc[-1]
             # Guard against NaN closing prices before computing z-score
             if pd.isna(last_close):
                 logger.warning("%s: last close is NaN", sym)
