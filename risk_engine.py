@@ -92,6 +92,13 @@ class RiskEngine:
     def position_size(
         self, signal: TradeSignal, cash: float, price: float, api=None
     ) -> int:
+        logger.debug(
+            "Pricing inputs for %s | cash: %.2f, price: %.2f, signal: %s",
+            getattr(signal, "symbol", "N/A"),
+            cash,
+            price,
+            signal,
+        )
         if self.hard_stop:
             logger.error("HARD_STOP_ACTIVE")
             return 0
@@ -199,7 +206,12 @@ def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float) -> None:
             return
         atr = df.ta.atr()
         trailing_stop = entry_price - 2 * atr
-        price = df["Close"].iloc[-1]
+        price = df["Close"].iloc[-1] if not df.empty else 0.0
+        logger.debug("Latest 5 rows for ATR stop:\n%s", df.tail(5))
+        logger.debug("Computed price for ATR stop: %s", price)
+        if price <= 0 or pd.isna(price):
+            logger.critical("Invalid price computed for ATR stop: %s", price)
+            return
         if price < trailing_stop.iloc[-1]:
             print(f"Hit stop: price {price} vs {trailing_stop.iloc[-1]}")
             sell()  # noqa: F821 - example placeholder

@@ -36,11 +36,15 @@ def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def ensure_columns(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+def ensure_columns(df: pd.DataFrame, columns: list[str], symbol: str | None = None) -> pd.DataFrame:
+    """Ensure required indicator columns exist, filling with 0.0 if missing."""
     for col in columns:
         if col not in df.columns:
             df[col] = 0.0
-            logger.warning(f"Column {col} was missing, filled with 0.0.")
+            if symbol:
+                logger.warning(f"Column {col} was missing for {symbol}, filled with 0.0.")
+            else:
+                logger.warning(f"Column {col} was missing, filled with 0.0.")
     return df
 
 
@@ -48,11 +52,11 @@ def build_features_pipeline(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     try:
         logger.debug(f"Starting feature pipeline for {symbol}. Initial shape: {df.shape}")
         df = compute_macd(df)
-        df = compute_macds(df)
         df = compute_atr(df)
         df = compute_vwap(df)
-        required_cols = ['macd', 'macds', 'atr', 'vwap']
-        df = ensure_columns(df, required_cols)
+        df = compute_macds(df)
+        required_cols = ['macd', 'atr', 'vwap', 'macds']
+        df = ensure_columns(df, required_cols, symbol)
         logger.debug(f"Feature pipeline complete for {symbol}. Last rows:\n{df.tail(3)}")
     except Exception as e:
         logger.exception(f"Feature pipeline failed for {symbol}: {e}")
