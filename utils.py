@@ -83,16 +83,20 @@ model_lock = _CallableLock()
 
 
 def get_latest_close(df: pd.DataFrame) -> float:
-    """Return last closing price or 1.0 if unavailable."""
+    """Return last closing price or ``0.0`` if unavailable."""
     if df is None or df.empty:
-        return 1.0
-    if "close" in df.columns:
-        last = df["close"].iloc[-1]
+        return 0.0
+    if "close" not in df.columns:
+        return 0.0
+    last_valid_close = df["close"].dropna()
+    if not last_valid_close.empty:
+        price = last_valid_close.iloc[-1]
     else:
-        return 1.0
-    if pd.isna(last) or last == 0:
-        return 1.0
-    return float(last)
+        logger.critical("All NaNs in close column for get_latest_close")
+        price = 0.0
+    if pd.isna(price) or price <= 0:
+        return 0.0
+    return float(price)
 
 
 def get_current_price(symbol: str) -> float:
@@ -205,7 +209,12 @@ def get_rolling_atr(symbol: str, window: int = 14) -> float:
         (low - close.shift(1)).abs(),
     ], axis=1).max(axis=1)
     atr = tr.rolling(window).mean().iloc[-1]
-    last_close = close.iloc[-1] if not pd.isna(close.iloc[-1]) else 1.0
+    last_valid_close = close.dropna()
+    if not last_valid_close.empty:
+        last_close = last_valid_close.iloc[-1]
+    else:
+        logger.critical("All NaNs in close column for get_rolling_atr")
+        last_close = 0.0
     val = float(atr) / float(last_close) if last_close else 0.0
     logger.info("ATR for %s=%.5f", symbol, val)
     return val

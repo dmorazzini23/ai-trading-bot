@@ -269,7 +269,13 @@ class ExecutionEngine:
             return 0.0, 0.0, 0.0
         vol = float(df["volume"].iloc[-1])
         avg1m = float(df["volume"].tail(5).mean())
-        momentum = float(df["close"].iloc[-1] - df["close"].iloc[-5])
+        last_valid_close = df["close"].dropna()
+        if last_valid_close.empty:
+            self.logger.critical(f"All NaNs in close column for {symbol}")
+            return 0.0, 0.0, 0.0
+        last_close = last_valid_close.iloc[-1]
+        prev_idx = -5 if len(last_valid_close) >= 5 else 0
+        momentum = float(last_close - last_valid_close.iloc[prev_idx])
         return vol, avg1m, momentum
 
     def _prepare_order(self, symbol: str, side: str, qty: int) -> Tuple[object, Optional[float]]:
