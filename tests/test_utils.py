@@ -83,11 +83,11 @@ def test_safe_to_datetime_various(caplog):
 
 
 def test_get_latest_close_cases():
-    assert utils.get_latest_close(None) == 1.0
+    assert utils.get_latest_close(None) == 0.0
     df = pd.DataFrame()
-    assert utils.get_latest_close(df) == 1.0
+    assert utils.get_latest_close(df) == 0.0
     df = pd.DataFrame({"close": [0, np.nan]})
-    assert utils.get_latest_close(df) == 1.0
+    assert utils.get_latest_close(df) == 0.0
     df = pd.DataFrame({"close": [1.0, 2.0]})
     assert utils.get_latest_close(df) == 2.0
 
@@ -172,7 +172,7 @@ def test_callable_lock_methods():
 
 def test_get_latest_close_no_column():
     df = pd.DataFrame({"open": [1]})
-    assert utils.get_latest_close(df) == 1.0
+    assert utils.get_latest_close(df) == 0.0
 
 
 def test_is_market_open_holiday(monkeypatch):

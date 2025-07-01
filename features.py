@@ -52,9 +52,21 @@ def build_features_pipeline(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     try:
         logger.debug(f"Starting feature pipeline for {symbol}. Initial shape: {df.shape}")
         df = compute_macd(df)
+        logger.debug(
+            f"After MACD {symbol}, tail close:\n{df[['close']].tail(5)}"
+        )
         df = compute_atr(df)
+        logger.debug(
+            f"After ATR {symbol}, tail close:\n{df[['close']].tail(5)}"
+        )
         df = compute_vwap(df)
+        logger.debug(
+            f"After VWAP {symbol}, tail close:\n{df[['close']].tail(5)}"
+        )
         df = compute_macds(df)
+        logger.debug(
+            f"After MACDS {symbol}, tail close:\n{df[['close']].tail(5)}"
+        )
         required_cols = ['macd', 'atr', 'vwap', 'macds']
         df = ensure_columns(df, required_cols, symbol)
         logger.debug(f"Feature pipeline complete for {symbol}. Last rows:\n{df.tail(3)}")

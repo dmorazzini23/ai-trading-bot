@@ -19,7 +19,7 @@ def test_get_latest_close_normal():
 def test_get_latest_close_missing():
     """Default value is used when close column is missing."""
     df = pd.DataFrame({"open": [1.0]})
-    assert utils.get_latest_close(df) == 1.0
+    assert utils.get_latest_close(df) == 0.0
 
 
 def test_is_market_open_with_calendar(monkeypatch):

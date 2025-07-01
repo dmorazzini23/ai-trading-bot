@@ -245,9 +245,9 @@ def test_mean_reversion_nan_and_short(monkeypatch):
 
 def test_utils_edge_cases(tmp_path):
     """Cover utility helper edge cases."""
-    assert utils.get_latest_close(pd.DataFrame()) == 1.0
+    assert utils.get_latest_close(pd.DataFrame()) == 0.0
     df = pd.DataFrame({"close":[np.nan]})
-    assert utils.get_latest_close(df) == 1.0
+    assert utils.get_latest_close(df) == 0.0
     mod = types.ModuleType("pandas_market_calendars")
     setattr(mod, "get_calendar", None)
     sys.modules["pandas_market_calendars"] = mod

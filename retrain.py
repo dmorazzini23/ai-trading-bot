@@ -464,6 +464,9 @@ def build_feature_label_df(
             for col in list(raw.columns):
                 if col.lower() in ["high", "low", "close", "volume"]:
                     raw = raw.rename(columns={col: col.lower()})
+            logger.debug(
+                f"After rename {sym}, tail close:\n{raw[['close']].tail(5)}"
+            )
             if (
                 "close" not in raw.columns
                 or "high" not in raw.columns
@@ -482,6 +485,9 @@ def build_feature_label_df(
             closes = raw["close"].values
 
             feat = prepare_indicators(raw, freq="intraday")
+            logger.debug(
+                f"After indicators {sym}, tail close:\n{feat[['close']].tail(5)}"
+            )
             if feat.empty:
                 logger.info(
                     "[build_feature_label_df] – %s indicators empty after dropna",
@@ -491,8 +497,14 @@ def build_feature_label_df(
 
             sent = fetch_sentiment(sym)
             feat["sentiment"] = sent
+            logger.debug(
+                f"After sentiment {sym}, tail close:\n{feat[['close']].tail(5)}"
+            )
 
             regime_info = detect_regime(raw)
+            logger.debug(
+                f"After regime {sym}, tail close:\n{raw[['close']].tail(5)}"
+            )
             if isinstance(regime_info, pd.Series):
                 regimes = regime_info.reset_index(drop=True)
             else:

@@ -206,7 +206,12 @@ def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float) -> None:
             return
         atr = df.ta.atr()
         trailing_stop = entry_price - 2 * atr
-        price = df["Close"].iloc[-1] if not df.empty else 0.0
+        last_valid_close = df["Close"].dropna()
+        if not last_valid_close.empty:
+            price = last_valid_close.iloc[-1]
+        else:
+            logger.critical("All NaNs in close column for ATR stop")
+            price = 0.0
         logger.debug("Latest 5 rows for ATR stop:\n%s", df.tail(5))
         logger.debug("Computed price for ATR stop: %s", price)
         if price <= 0 or pd.isna(price):

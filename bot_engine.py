@@ -289,13 +289,18 @@ is_market_open = market_is_open
 
 
 def get_latest_close(df: pd.DataFrame) -> float:
-    """Return the last closing price or ``1.0`` if unavailable."""
+    """Return the last closing price or ``0.0`` if unavailable."""
     if df is None or df.empty or "close" not in df.columns:
-        return 1.0
-    last = df["close"].iloc[-1]
-    if pd.isna(last) or last <= 0:
-        return 1.0
-    return float(last)
+        return 0.0
+    last_valid_close = df["close"].dropna()
+    if not last_valid_close.empty:
+        price = last_valid_close.iloc[-1]
+    else:
+        logger.critical("All NaNs in close column for get_latest_close")
+        price = 0.0
+    if pd.isna(price) or price <= 0:
+        return 0.0
+    return float(price)
 
 
 def compute_time_range(minutes: int) -> tuple[int, int]:
@@ -5416,17 +5421,35 @@ def start_healthcheck() -> None:
 
 
 def start_metrics_server(default_port: int = 9200) -> None:
-    """Start Prometheus metrics server on a free port."""
-    port = utils.get_free_port(default_port, default_port + 50)
-    if port is None:
-        logger.warning("No free port available for metrics server")
-        return
-    if port != default_port:
-        logger.warning("Metrics port %d in use; using %d", default_port, port)
+    """Start Prometheus metrics server handling port conflicts."""
     try:
-        start_http_server(port)
-    except Exception as exc:
-        logger.warning("Failed to start metrics server on %d: %s", port, exc)
+        start_http_server(default_port)
+        logger.debug("Metrics server started on %d", default_port)
+        return
+    except OSError as exc:
+        if "Address already in use" in str(exc):
+            try:
+                import requests
+
+                resp = requests.get(f"http://localhost:{default_port}")
+                if resp.ok:
+                    logger.info("Metrics port %d already serving; reusing", default_port)
+                    return
+            except Exception:
+                pass
+            port = utils.get_free_port(default_port + 1, default_port + 50)
+            if port is None:
+                logger.warning("No free port available for metrics server")
+                return
+            logger.warning("Metrics port %d busy; using %d", default_port, port)
+            try:
+                start_http_server(port)
+            except Exception as exc2:
+                logger.warning("Failed to start metrics server on %d: %s", port, exc2)
+        else:
+            logger.warning("Failed to start metrics server on %d: %s", default_port, exc)
+    except Exception as exc:  # pragma: no cover - unexpected error
+        logger.warning("Failed to start metrics server on %d: %s", default_port, exc)
 
 
 def run_multi_strategy(ctx: BotContext) -> None:

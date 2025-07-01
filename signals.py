@@ -146,6 +146,9 @@ def _apply_macd(data: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"MACD output missing column(s) {missing}")
     data[["macd", "signal", "histogram"]] = macd_df[["macd", "signal", "histogram"]].astype(float)
+    logger.debug(
+        f"After MACD {data.columns[0] if not data.empty else ''}, tail close:\n{data[['close']].tail(5)}"
+    )
     return data
 
 
@@ -176,6 +179,9 @@ def prepare_indicators(data: pd.DataFrame, ticker: str | None = None) -> pd.Data
         return pd.read_parquet(cache_path)
 
     data = _apply_macd(data.copy())
+    logger.debug(
+        f"After prepare_macd {ticker or ''}, tail close:\n{data[['close']].tail(5)}"
+    )
     if cache_path:
         try:
             data.to_parquet(cache_path)
