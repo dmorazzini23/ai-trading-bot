@@ -6,11 +6,11 @@ Utilities for adaptive capital allocation and risk-based position sizing.
 
 class _CapScaler:
     def __init__(self, params):
-        self.multiplier = params.get("x", 1)
+        self.params = params or {}
 
     def scale_position(self, value):
-        """Scale a numeric position by the configured multiplier."""
-        return value * self.multiplier
+        """Scale a numeric position using params['x']."""  # AI-AGENT-REF: unify scaling logic
+        return value * self.params.get("x", 1)
 
 
 class CapitalScalingEngine:

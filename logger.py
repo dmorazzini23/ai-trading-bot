@@ -34,61 +34,27 @@ def get_rotating_handler(
 
 
 def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.Logger:
-    """Configure the root logger once and return it."""
+    """Configure the root logger in an idempotent way."""
     global _configured
-    if _configured:
-        return logging.getLogger()
-
-    level_name = "DEBUG" if debug else "INFO"
-    level = logging.DEBUG if debug else logging.INFO
-
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
 
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
 
-    handlers: list[logging.Handler] = []
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(formatter)
-    stream_handler.setLevel(logging.DEBUG if debug else logging.INFO)
-    handlers.append(stream_handler)
+    # Attach console handler once
+    if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(formatter)
+        stream_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+        logger.addHandler(stream_handler)
 
-    global _log_queue, _listener
     if log_file:
-        try:
-            file_handler = get_rotating_handler(log_file, max_bytes=10_485_760)
-            file_handler.setFormatter(formatter)
-            file_handler.setLevel(logging.INFO)
+        # Always add rotating handler when log_file is provided
+        rotating_handler = get_rotating_handler(log_file)
+        rotating_handler.setFormatter(formatter)
+        rotating_handler.setLevel(logging.INFO)
+        logger.addHandler(rotating_handler)
 
-            debug_path = os.path.join(os.path.dirname(log_file), "debug.log")
-            debug_handler = TimedRotatingFileHandler(
-                debug_path, when="midnight", backupCount=7
-            )
-            debug_handler.setFormatter(formatter)
-            debug_handler.setLevel(logging.DEBUG)
-
-            _log_queue = queue.Queue(-1)
-            _listener = QueueListener(_log_queue, file_handler, debug_handler)
-            _listener.start()
-            handlers.append(QueueHandler(_log_queue))
-        except OSError as exc:
-            logging.getLogger(__name__).error(
-                "Failed to configure log file %s: %s", log_file, exc
-            )
-
-    logger.handlers.clear()
-    for h in handlers:
-        logger.addHandler(h)
-
-    # Explicitly enforce root DEBUG level so debug handler captures all messages
-    logger.setLevel(logging.DEBUG)
-
-    file_part = f" with file {log_file}" if log_file else ""
-    logger.info(
-        "Logging initialized%s (level %s)",
-        file_part,
-        logging.getLevelName(level),
-    )
     _configured = True
     return logger
 
