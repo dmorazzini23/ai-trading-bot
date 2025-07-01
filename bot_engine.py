@@ -49,6 +49,13 @@ sys.excepthook = handle_exception
 import datetime
 import warnings
 
+warnings.filterwarnings(
+    "ignore",
+    message=".*invalid escape sequence.*",
+    category=SyntaxWarning,
+    module="pandas_ta.*",
+)
+
 import pandas as pd
 
 import utils
@@ -399,7 +406,13 @@ warnings.filterwarnings(
 # ─── FINBERT SENTIMENT MODEL IMPORTS & FALLBACK ─────────────────────────────────
 try:
     import torch
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=".*_register_pytree_node.*",
+            module="transformers.*",
+        )
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
     _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
     _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
@@ -5942,11 +5955,14 @@ def main() -> None:
                 )
                 market_open = False
 
+        sleep_minutes = 60
         if not market_open:
-            logger.info("Market is closed. Sleeping for 60 minutes before rechecking.")
-            time.sleep(60 * 60)
+            logger.info("Market is closed. Sleeping for %d minutes.", sleep_minutes)
+            time.sleep(sleep_minutes * 60)
             # Return control to outer loop instead of exiting
             return
+
+        logger.info("Market is open. Starting trade cycle.")
 
         # Start Prometheus metrics server on an available port
         start_metrics_server(9200)

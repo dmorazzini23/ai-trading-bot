@@ -1,9 +1,17 @@
 import logging
 import random
+import warnings
 from typing import Dict
 
 import numpy as np
 import pandas as pd
+
+warnings.filterwarnings(
+    "ignore",
+    message=".*invalid escape sequence.*",
+    category=SyntaxWarning,
+    module="pandas_ta.*",
+)
 
 from strategies import TradeSignal
 

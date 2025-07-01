@@ -5,6 +5,13 @@ import os
 import random
 import warnings
 
+warnings.filterwarnings(
+    "ignore",
+    message=".*invalid escape sequence.*",
+    category=SyntaxWarning,
+    module="pandas_ta.*",
+)
+
 import joblib
 import numpy as np
 import pandas as pd
