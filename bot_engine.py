@@ -159,7 +159,8 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 import portalocker
 import requests
-from requests import Session, HTTPError
+from requests import Session
+from requests.exceptions import HTTPError
 import schedule
 import yfinance as yf
 # Alpaca v3 SDK imports
