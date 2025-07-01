@@ -7,6 +7,11 @@ import sys
 import time
 import traceback
 import types
+import warnings
+
+# AI-AGENT-REF: suppress noisy external library warnings
+warnings.filterwarnings("ignore", category=SyntaxWarning, message="invalid escape sequence")
+warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 
 # Avoid failing under older Python versions during tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
@@ -289,7 +294,12 @@ from utils import portfolio_lock
 
 def market_is_open(now: datetime.datetime | None = None) -> bool:
     """Return True if the market is currently open."""
-    return True
+    if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
+        logger.info(
+            "FORCE_MARKET_OPEN is enabled; overriding market hours checks."
+        )
+        return True
+    return utils_market_open(now)
 
 
 # backward compatibility

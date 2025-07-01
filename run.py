@@ -6,6 +6,11 @@ import subprocess
 import sys
 import threading
 from typing import Any
+import warnings
+
+# AI-AGENT-REF: suppress noisy external library warnings
+warnings.filterwarnings("ignore", category=SyntaxWarning, message="invalid escape sequence")
+warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 
 from alpaca_trade_api.rest import APIError  # noqa: F401
 from dotenv import load_dotenv

@@ -130,6 +130,11 @@ def get_current_price(symbol: str) -> float:
 
 def is_market_open(now: dt.datetime | None = None) -> bool:
     """Return True if current time is within NYSE trading hours."""
+    if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
+        logger.info(
+            "FORCE_MARKET_OPEN is enabled; overriding market hours checks."
+        )
+        return True
     try:
         import pandas_market_calendars as mcal
 

@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import logging
+import warnings
+
+# AI-AGENT-REF: suppress noisy external library warnings
+warnings.filterwarnings("ignore", category=SyntaxWarning, message="invalid escape sequence")
+warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 
 try:
     from alpaca_trade_api.rest import REST
