@@ -1,6 +1,5 @@
-import sys, os
-sys.path.insert(0, os.getcwd())
-print("PYTHONPATH forced to:", sys.path)
+import sys
+import os
 from pathlib import Path
 
 import pytest
@@ -12,11 +11,14 @@ except Exception:  # pragma: no cover - optional dependency
     urllib3 = types.ModuleType("urllib3")
     urllib3.__file__ = "stub"
     sys.modules["urllib3"] = urllib3
-if "requests" not in sys.modules:
+try:
+    import requests  # ensure real package available
+except Exception:  # pragma: no cover - allow missing in test env
     req_mod = types.ModuleType("requests")
     exc_mod = types.ModuleType("requests.exceptions")
     exc_mod.RequestException = Exception
     req_mod.get = lambda *a, **k: None
+    req_mod.Session = lambda *a, **k: None
     req_mod.exceptions = exc_mod
     sys.modules["requests"] = req_mod
     sys.modules["requests.exceptions"] = exc_mod
@@ -45,15 +47,7 @@ def pytest_configure() -> None:
     os.environ.setdefault("FLASK_PORT", "9000")
     os.environ.setdefault("TESTING", "1")
 
-    # Diagnostic debug prints
-    print(f"PYTHONPATH: {sys.path}")
-    print(f"urllib3.__file__: {urllib3.__file__}")
-    print(f"Has urllib3.util? {hasattr(urllib3, 'util')}")
-    try:
-        from urllib3.util import Retry
-        print(f"urllib3.util.Retry imported successfully: {Retry}")
-    except Exception as e:
-        print(f"Failed to import urllib3.util.Retry: {e}")
+
 
 @pytest.fixture(autouse=True, scope="session")
 def cleanup_test_env_vars():
