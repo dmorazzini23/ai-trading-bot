@@ -303,6 +303,14 @@ def compute_time_range(minutes: int) -> tuple[int, int]:
     return 0, minutes
 
 
+# AI-AGENT-REF: utility to detect row drops during feature engineering
+def assert_row_integrity(before_len: int, after_len: int, func_name: str, symbol: str) -> None:
+    if after_len < before_len:
+        logger.warning(
+            f"Row count dropped in {func_name} for {symbol}: {before_len} -> {after_len}"
+        )
+
+
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     """Fetches minute-level data, returning an empty DataFrame on error."""
     try:
@@ -3699,9 +3707,22 @@ def _fetch_feature_data(
         return None, None, False
 
     df = raw_df.copy()
+    # AI-AGENT-REF: log initial dataframe and monitor row drops
+    logger.debug(f"Initial tail data for {symbol}:\n{df.tail(5)}")
+    initial_len = len(df)
+
     df = compute_macd(df)
+    assert_row_integrity(initial_len, len(df), "compute_macd", symbol)
+    logger.debug(f"Post MACD tail for {symbol}:\n{df.tail(5)}")
+
     df = compute_atr(df)
+    assert_row_integrity(initial_len, len(df), "compute_atr", symbol)
+    logger.debug(f"Post ATR tail for {symbol}:\n{df.tail(5)}")
+
     df = compute_vwap(df)
+    assert_row_integrity(initial_len, len(df), "compute_vwap", symbol)
+    logger.debug(f"Post VWAP tail for {symbol}:\n{df.tail(5)}")
+
     df = compute_macds(df)
     logger.debug(f"{symbol} dataframe columns after indicators: {df.columns.tolist()}")
     df = ensure_columns(df, ['macd', 'atr', 'vwap', 'macds'], symbol)
@@ -5428,6 +5449,11 @@ def run_multi_strategy(ctx: BotContext) -> None:
         except APIError as e:
             logger.warning(f"[run_all_trades] quote failed for {sig.symbol}: {e}")
             continue
+        if price <= 0.0 or pd.isna(price):
+            logger.critical(
+                f"Critical: computed non-positive price for {sig.symbol}: {price}. Skipping order."
+            )
+            continue
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty is None or not np.isfinite(qty) or qty <= 0:
             bars = fetch_minute_df_safe(sig.symbol)
@@ -5571,9 +5597,13 @@ def manage_position_risk(ctx: BotContext, position) -> None:
         atr = utils.get_rolling_atr(symbol)
         vwap = utils.get_current_vwap(symbol)
         price_df = fetch_minute_df_safe(symbol)
-        price = price_df['close'].iloc[-1] if not price_df.empty else 0.0
         logger.debug(f"Latest rows for {symbol}:\n{price_df.tail(3)}")
-        logger.debug(f"Computed price for {symbol}: {price}")
+        if "close" in price_df.columns and not price_df["close"].dropna().empty:
+            price = price_df["close"].dropna().iloc[-1]
+            logger.debug(f"Final extracted price for {symbol}: {price}")
+        else:
+            logger.critical(f"No valid close price found for {symbol}, setting to 0.0")
+            price = 0.0
         if price <= 0 or pd.isna(price):
             logger.critical(f"Invalid price computed for {symbol}: {price}")
             return
