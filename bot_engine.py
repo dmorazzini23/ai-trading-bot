@@ -52,6 +52,7 @@ import warnings
 import pandas as pd
 
 import utils
+from features import compute_macd, compute_atr, compute_vwap, compute_macds, ensure_columns
 
 try:
     from sklearn.exceptions import InconsistentVersionWarning
@@ -3697,8 +3698,16 @@ def _fetch_feature_data(
         logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
         return None, None, False
 
+    df = raw_df.copy()
+    df = compute_macd(df)
+    df = compute_atr(df)
+    df = compute_vwap(df)
+    df = compute_macds(df)
+    logger.debug(f"{symbol} dataframe columns after indicators: {df.columns.tolist()}")
+    df = ensure_columns(df, ['macd', 'atr', 'vwap', 'macds'])
+
     try:
-        feat_df = prepare_indicators(raw_df.copy())
+        feat_df = prepare_indicators(df)
         if feat_df is None:
             return raw_df, None, True
     except ValueError as exc:
@@ -4026,9 +4035,16 @@ def trade_logic(
     if feat_df is None:
         return skip_flag if skip_flag is not None else False
 
+    for col in ['macd', 'atr', 'vwap', 'macds']:
+        if col not in feat_df.columns:
+            feat_df[col] = 0.0
+
     feature_names = _model_feature_names(model)
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
+        logger.debug(
+            f"Feature snapshot for {symbol}: macd={feat_df['macd'].iloc[-1]}, atr={feat_df['atr'].iloc[-1]}, vwap={feat_df['vwap'].iloc[-1]}, macds={feat_df['macds'].iloc[-1]}"
+        )
         logger.info("SKIP_MISSING_FEATURES | symbol=%s  missing=%s", symbol, missing)
         return True
 
@@ -5554,7 +5570,12 @@ def manage_position_risk(ctx: BotContext, position) -> None:
         atr = utils.get_rolling_atr(symbol)
         vwap = utils.get_current_vwap(symbol)
         price_df = fetch_minute_df_safe(symbol)
-        price = get_latest_close(price_df)
+        price = price_df['close'].iloc[-1] if not price_df.empty else 0.0
+        logger.debug(f"Latest rows for {symbol}:\n{price_df.tail(3)}")
+        logger.debug(f"Computed price for {symbol}: {price}")
+        if price <= 0 or pd.isna(price):
+            logger.critical(f"Invalid price computed for {symbol}: {price}")
+            return
         side = "long" if int(position.qty) > 0 else "short"
         if side == "long":
             new_stop = float(position.avg_entry_price) * (1 - min(0.01 + atr / 100, 0.03))
