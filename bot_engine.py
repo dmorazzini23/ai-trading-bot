@@ -3704,7 +3704,7 @@ def _fetch_feature_data(
     df = compute_vwap(df)
     df = compute_macds(df)
     logger.debug(f"{symbol} dataframe columns after indicators: {df.columns.tolist()}")
-    df = ensure_columns(df, ['macd', 'atr', 'vwap', 'macds'])
+    df = ensure_columns(df, ['macd', 'atr', 'vwap', 'macds'], symbol)
 
     try:
         feat_df = prepare_indicators(df)
@@ -3791,12 +3791,10 @@ def _enter_long(
     strat: str,
 ) -> bool:
     current_price = get_latest_close(feat_df)
-    if current_price <= 0:
-        logger.warning(
-            "Aborting trade for %s, invalid price: %.2f",
-            symbol,
-            current_price,
-        )
+    logger.debug(f"Latest 5 rows for {symbol}:\n{feat_df.tail(5)}")
+    logger.debug(f"Computed price for {symbol}: {current_price}")
+    if current_price <= 0 or pd.isna(current_price):
+        logger.critical(f"Invalid price computed for {symbol}: {current_price}")
         return True
     target_weight = ctx.portfolio_weights.get(symbol, 0.0)
     raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
@@ -3858,12 +3856,10 @@ def _enter_short(
     strat: str,
 ) -> bool:
     current_price = get_latest_close(feat_df)
-    if current_price <= 0:
-        logger.warning(
-            "Aborting trade for %s, invalid price: %.2f",
-            symbol,
-            current_price,
-        )
+    logger.debug(f"Latest 5 rows for {symbol}:\n{feat_df.tail(5)}")
+    logger.debug(f"Computed price for {symbol}: {current_price}")
+    if current_price <= 0 or pd.isna(current_price):
+        logger.critical(f"Invalid price computed for {symbol}: {current_price}")
         return True
     atr = feat_df["atr"].iloc[-1]
     qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
@@ -3938,6 +3934,11 @@ def _manage_existing_position(
     current_qty: int,
 ) -> bool:
     price = get_latest_close(feat_df)
+    logger.debug(f"Latest 5 rows for {symbol}:\n{feat_df.tail(5)}")
+    logger.debug(f"Computed price for {symbol}: {price}")
+    if price <= 0 or pd.isna(price):
+        logger.critical(f"Invalid price computed for {symbol}: {price}")
+        return False
     if not recent_rebal:
         should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
     else:
