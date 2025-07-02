@@ -11,13 +11,14 @@ import time
 from typing import NoReturn
 
 import requests
+from utils import get_phase_logger
 
 try:  # prefer 'bot' module for backward compat
     from bot import main  # type: ignore
 except Exception:
     from bot_engine import main
 
-logger = logging.getLogger(__name__)
+logger = get_phase_logger(__name__, "RUNNER")
 
 _shutdown = False
 

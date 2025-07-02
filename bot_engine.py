@@ -5597,13 +5597,14 @@ def run_multi_strategy(ctx: BotContext) -> None:
                         if minute_close > 0
                         else utils.get_latest_close(data)
                     )
-                logger.warning(
-                    "Retry %s: price %.2f <= 0 for %s, refetching data",
-                    retries + 1,
-                    price,
-                    sig.symbol,
-                )
-                retries += 1
+                if price <= 0:
+                    logger.warning(
+                        "Retry %s: price %.2f <= 0 for %s, refetching data",
+                        retries + 1,
+                        price,
+                        sig.symbol,
+                    )
+                    retries += 1
             else:
                 break
         if price <= 0:
