@@ -93,11 +93,14 @@ class StrategyAllocator:
                     strat,
                     weight,
                 )
+                final_cands = {s.symbol: s.weight for s in results if s.strategy == strat}
                 logger.info(
                     "Final candidate signals for %s: %s",
                     strat,
-                    {s.symbol: s.weight for s in results if s.strategy == strat},
+                    final_cands,
                 )
+                if not final_cands:
+                    logger.warning("No final candidates for %s", strat)
 
             return results
         except Exception as exc:  # pragma: no cover - unexpected error

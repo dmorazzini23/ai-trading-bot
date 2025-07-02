@@ -13,6 +13,12 @@ from logging.handlers import (
 )
 from typing import Dict
 
+
+class UTCFormatter(logging.Formatter):
+    """Formatter with UTC timestamps and structured phase tags."""
+
+    converter = time.gmtime
+
 _configured = False
 _loggers: Dict[str, logging.Logger] = {}
 _log_queue: queue.Queue | None = None
@@ -40,10 +46,9 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
 
-    formatter = logging.Formatter(
-        "%(asctime)s %(levelname)s [%(bot_phase)s] %(name)s - %(message)s"
+    formatter = UTCFormatter(
+        "%(asctime)sZ %(levelname)s [%(bot_phase)s] %(name)s - %(message)s"
     )
-    formatter.converter = time.gmtime
 
     class _PhaseFilter(logging.Filter):
         def filter(self, record: logging.LogRecord) -> bool:

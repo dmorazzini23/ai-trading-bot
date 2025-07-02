@@ -179,6 +179,7 @@ class ExecutionEngine:
         self.slippage_total = slippage_total
         self.slippage_count = slippage_count
         self.orders_total = orders_total
+        self._slippage_checks: dict[str, int] = {}
 
     # --- helper methods -------------------------------------------------
 
@@ -211,8 +212,15 @@ class ExecutionEngine:
         return True
 
     def _available_qty(self, api: TradingClient, symbol: str) -> float:
-        """Return current position quantity for ``symbol``."""
+        """Return current position quantity for ``symbol`` with retries."""
         try:
+            if hasattr(api, "get_all_positions"):
+                for _ in range(3):
+                    positions = api.get_all_positions()
+                    for pos in positions:
+                        if getattr(pos, "symbol", "") == symbol:
+                            return float(getattr(pos, "qty", 0))
+                    time.sleep(1)
             if hasattr(api, "get_open_position"):
                 pos = api.get_open_position(symbol)
                 return float(getattr(pos, "qty", 0))
@@ -345,8 +353,22 @@ class ExecutionEngine:
 
         return order_request, expected
 
-    def _log_slippage(self, symbol: str, expected: Optional[float], actual: float) -> None:
+    def _log_slippage(
+        self,
+        symbol: str,
+        expected: Optional[float],
+        actual: float,
+        *,
+        order_id: str | None = None,
+    ) -> None:
+        """Log slippage after at least three checks."""
+        key = order_id or symbol
+        count = self._slippage_checks.get(key, 0) + 1
+        self._slippage_checks[key] = count
         slip = ((actual - expected) * 100) if expected else 0.0
+        if count < 3:
+            self.logger.debug("waiting on fill for %s", symbol)
+            return
         try:
             # File I/O may fail; handle gracefully
             with open(self.slippage_path, "a", newline="", encoding="utf-8") as f:
@@ -471,7 +493,7 @@ class ExecutionEngine:
                 "ORDER_PENDING", extra={"symbol": symbol, "order_id": order_id, "wait_s": latency}
             )
             return 0
-        self._log_slippage(symbol, expected_price, fill_price)
+        self._log_slippage(symbol, expected_price, fill_price, order_id=order_id)
         latency *= 1000.0
         filled_qty = 0
         if status == "filled":

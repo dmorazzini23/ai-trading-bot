@@ -4628,6 +4628,7 @@ def load_global_signal_performance(
     )
     df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
     df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
+    df["signal_tags"] = df["signal_tags"].astype(str)
     direction = np.where(df.side == "buy", 1, -1)
     df["pnl"] = (df.exit_price - df.entry_price) * direction
     df_tags = df.assign(tag=df.signal_tags.str.split("+")).explode("tag")
