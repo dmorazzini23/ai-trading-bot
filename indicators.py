@@ -97,6 +97,48 @@ def mean_reversion_zscore(series: pd.Series, window: int = 20) -> pd.Series:
     return (series - rolling_mean) / rolling_std
 
 
+# AI-AGENT-REF: additional indicator utilities
+def calculate_macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[pd.Series, pd.Series]:
+    """Return MACD and signal line series."""
+    ema_fast = close.ewm(span=fast, adjust=False).mean()
+    ema_slow = close.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    return macd_line, signal_line
+
+
+def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs(),
+    ], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
+
+def calculate_vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
+    typical_price = (high + low + close) / 3
+    cum_pv = (typical_price * volume).cumsum()
+    cum_vol = volume.cumsum()
+    return cum_pv / cum_vol
+
+
+def get_rsi_signal(series: pd.Series, period: int = 14) -> pd.Series:
+    vals = rsi(tuple(series.astype(float)), period)
+    return (vals - 50) / 50
+
+
+def get_atr_trailing_stop(close: pd.Series, high: pd.Series, low: pd.Series, period: int = 14, multiplier: float = 1.5) -> pd.Series:
+    atr_series = calculate_atr(high, low, close, period)
+    return close - multiplier * atr_series
+
+
+def get_vwap_bias(close: pd.Series, high: pd.Series, low: pd.Series, volume: pd.Series) -> pd.Series:
+    vwap_series = calculate_vwap(high, low, close, volume)
+    bias = close / vwap_series - 1
+    return bias
+
+
 __all__ = [
     "ichimoku_fallback",
     "rsi_numba",
@@ -106,5 +148,11 @@ __all__ = [
     "rsi",
     "atr",
     "mean_reversion_zscore",
+    "calculate_macd",
+    "calculate_atr",
+    "calculate_vwap",
+    "get_rsi_signal",
+    "get_atr_trailing_stop",
+    "get_vwap_bias",
 ]
 

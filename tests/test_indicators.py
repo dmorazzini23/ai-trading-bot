@@ -36,3 +36,13 @@ def test_compute_ichimoku_returns_df_pair(monkeypatch):
     assert "ITS_9" in df1.columns
     assert "ITSs_9" in df2.columns
 
+
+def test_vwap_calculation():
+    from indicators import calculate_vwap
+    high = pd.Series([10, 11, 12])
+    low = pd.Series([5, 6, 7])
+    close = pd.Series([7, 8, 9])
+    volume = pd.Series([1000, 1100, 1200])
+    vwap = calculate_vwap(high, low, close, volume)
+    assert vwap.iloc[-1] > 0
+
