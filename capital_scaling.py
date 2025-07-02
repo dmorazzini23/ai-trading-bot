@@ -3,6 +3,8 @@
 Utilities for adaptive capital allocation and risk-based position sizing.
 """
 
+import numpy as np
+
 
 class _CapScaler:
     def scale_position(self, size):
@@ -43,6 +45,12 @@ def dynamic_fractional_kelly(base_fraction: float, drawdown: float, volatility_s
     return base_fraction * adjustment
 
 
+def kelly_fraction(win_rate: float, win_loss_ratio: float) -> float:
+    """Return raw Kelly fraction based on win statistics."""
+    edge = win_rate - (1 - win_rate) / win_loss_ratio
+    return max(edge / win_loss_ratio, 0)
+
+
 def pyramiding_add(position: float, profit_atr: float, base_size: float) -> float:
     """Increase ``position`` when profit exceeds 1 ATR up to 2x base size."""
     if position > 0 and profit_atr > 1.0:
@@ -57,6 +65,30 @@ def decay_position(position: float, atr: float, atr_mean: float) -> float:
         return position * 0.9
     return position
 
+# AI-AGENT-REF: new capital scaling helpers for risk regimes
+
+def fractional_kelly(kelly: float, regime: str = "neutral") -> float:
+    """Return Kelly fraction adjusted for market ``regime``."""
+    if regime == "risk_on":
+        return min(1.0, kelly * 1.2)
+    if regime == "risk_off":
+        return max(0.0, kelly * 0.5)
+    return kelly
+
+
+def volatility_parity(weights: np.ndarray, volatilities: np.ndarray) -> np.ndarray:
+    """Scale ``weights`` using inverse volatility."""
+    inv_vol = 1 / (volatilities + 1e-9)
+    scaled = weights * inv_vol
+    return scaled / np.sum(scaled) * np.sum(weights)
+
+
+def cvar_scaling(returns: np.ndarray, alpha: float = 0.05) -> float:
+    """Return scaling factor based on CVaR at ``alpha`` level."""
+    sorted_returns = np.sort(returns)
+    var = sorted_returns[int(len(sorted_returns) * alpha)]
+    cvar = np.mean(sorted_returns[sorted_returns <= var])
+    return abs(cvar) if cvar < 0 else 1.0
 
 __all__ = [
     "CapitalScalingEngine",
@@ -64,4 +96,8 @@ __all__ = [
     "dynamic_fractional_kelly",
     "pyramiding_add",
     "decay_position",
+    "fractional_kelly",
+    "kelly_fraction",
+    "volatility_parity",
+    "cvar_scaling",
 ]
