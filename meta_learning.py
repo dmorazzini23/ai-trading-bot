@@ -3,6 +3,11 @@
 import json
 import logging
 import pickle
+import joblib
+import datetime
+# AI-AGENT-REF: safe utc
+old_generate = datetime.datetime.utcnow
+new_generate = datetime.datetime.now(datetime.UTC)
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
