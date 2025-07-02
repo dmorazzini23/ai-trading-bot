@@ -3,8 +3,9 @@ import math
 from typing import Dict, List
 
 from strategies import TradeSignal
+from utils import get_phase_logger
 
-logger = logging.getLogger(__name__)
+logger = get_phase_logger(__name__, "REBALANCE")
 logger.debug("=== STRATEGY_ALLOCATOR LOADED === %s", __file__)
 
 

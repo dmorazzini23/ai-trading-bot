@@ -1,6 +1,7 @@
 """Logging helpers for the AI trading bot."""
 
 import logging
+import time
 import os
 import queue
 import sys
@@ -39,13 +40,23 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
 
-    formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s - %(message)s")
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s [%(bot_phase)s] %(name)s - %(message)s"
+    )
+    formatter.converter = time.gmtime
+
+    class _PhaseFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            if not hasattr(record, "bot_phase"):
+                record.bot_phase = "GENERAL"
+            return True
 
     # Attach console handler once
     if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
         stream_handler = logging.StreamHandler(sys.stdout)
         stream_handler.setFormatter(formatter)
         stream_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+        stream_handler.addFilter(_PhaseFilter())
         logger.addHandler(stream_handler)
 
     if log_file:
@@ -53,6 +64,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         rotating_handler = get_rotating_handler(log_file)
         rotating_handler.setFormatter(formatter)
         rotating_handler.setLevel(logging.INFO)
+        rotating_handler.addFilter(_PhaseFilter())
         logger.addHandler(rotating_handler)
 
     _configured = True

@@ -6,8 +6,9 @@ from typing import List
 import pandas as pd
 
 from strategies.base import Strategy, TradeSignal, asset_class_for
+from utils import get_phase_logger
 
-logger = logging.getLogger(__name__)
+logger = get_phase_logger(__name__, "STRATEGY")
 
 
 class MeanReversionStrategy(Strategy):
@@ -78,4 +79,7 @@ class MeanReversionStrategy(Strategy):
                 )
         if not signals:
             logger.info("No signals generated for mean_reversion. Scores: %s", scores)
+        if not scores:
+            logger.warning("mean_reversion received no candidate data")
+            return []
         return signals

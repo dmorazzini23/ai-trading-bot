@@ -79,6 +79,7 @@ except Exception:  # TODO: narrow exception type
 
 from audit import log_trade
 from slippage import monitor_slippage
+from utils import get_phase_logger
 
 SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
@@ -152,8 +153,8 @@ class ExecutionEngine:
         self.ctx = ctx
         # Trading client from the new Alpaca SDK
         self.api: TradingClient = ctx.api
-        # Use module-level logger so configuration is centralized
-        self.logger = logging.getLogger(__name__)
+        # Use phase logger for execution context
+        self.logger = get_phase_logger(__name__, "ORDER_EXEC")
         self.slippage_path = os.path.join(os.path.dirname(__file__), "logs", "slippage.csv")
         if not os.path.exists(self.slippage_path):
             # Protect file creation in case the logs directory is unwritable
@@ -210,12 +211,21 @@ class ExecutionEngine:
         return True
 
     def _available_qty(self, api: TradingClient, symbol: str) -> float:
+        """Return current position quantity for ``symbol``."""
         try:
-            pos = api.get_position(symbol)
-            return float(getattr(pos, "qty", 0))
-        except Exception as exc:  # TODO: narrow exception type
+            if hasattr(api, "get_open_position"):
+                pos = api.get_open_position(symbol)
+                return float(getattr(pos, "qty", 0))
+            if hasattr(api, "get_position"):
+                pos = api.get_position(symbol)
+                return float(getattr(pos, "qty", 0))
+            acct = api.get_account()
+            for p in getattr(acct, "positions", []):
+                if getattr(p, "symbol", "") == symbol:
+                    return float(getattr(p, "qty", 0))
+        except Exception as exc:  # pragma: no cover - network or API errors
             self.logger.error("No position for %s: %s", symbol, exc)
-            return 0.0
+        return 0.0
 
     def _can_sell(self, api: TradingClient, symbol: str, qty: int) -> bool:
         avail = self._available_qty(api, symbol)
@@ -442,13 +452,27 @@ class ExecutionEngine:
     ) -> int:
         status = getattr(order, "status", "")
         order_id = getattr(order, "id", "")
+        if status in ("new", "pending_new"):
+            time.sleep(3)
+            try:
+                refreshed = self.api.get_order_by_id(order_id)
+                status = getattr(refreshed, "status", status)
+                order = refreshed
+            except Exception as exc:  # pragma: no cover - network issues
+                self.logger.debug("Order refresh failed for %s: %s", order_id, exc)
         if not self._check_order_active(symbol, order, status, order_id):
             return 0
         fill_price = float(
             getattr(order, "filled_avg_price", expected_price or 0) or 0
         )
-        latency = (time.monotonic() - start_time) * 1000.0
+        latency = (time.monotonic() - start_time)
+        if status in ("new", "pending_new"):
+            self.logger.info(
+                "ORDER_PENDING", extra={"symbol": symbol, "order_id": order_id, "wait_s": latency}
+            )
+            return 0
         self._log_slippage(symbol, expected_price, fill_price)
+        latency *= 1000.0
         filled_qty = 0
         if status == "filled":
             self.logger.info(

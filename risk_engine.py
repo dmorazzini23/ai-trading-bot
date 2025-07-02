@@ -1,4 +1,5 @@
 import logging
+import os
 import random
 import warnings
 from typing import Dict
@@ -14,8 +15,9 @@ warnings.filterwarnings(
 )
 
 from strategies import TradeSignal
+from utils import get_phase_logger
 
-logger = logging.getLogger(__name__)
+logger = get_phase_logger(__name__, "RISK_CHECK")
 
 random.seed(42)
 np.random.seed(42)
@@ -50,24 +52,28 @@ class RiskEngine:
         asset_exp = self.exposure.get(signal.asset_class, 0.0)
         asset_cap = self.asset_limits.get(signal.asset_class, self.global_limit)
         if asset_exp + signal.weight > asset_cap:
-            logger.info(
-                "Trade blocked: %s exposure %.2f exceeds cap %.2f",
+            logger.warning(
+                "Exposure cap exceeded for %s: %.2f vs %.2f",
                 signal.asset_class,
                 asset_exp + signal.weight,
                 asset_cap,
             )
-            return False
+            if os.getenv("FORCE_CONTINUE_ON_CAP", "false").lower() != "true":
+                return False
+            logger.warning("FORCE_CONTINUE_ON_CAP enabled; continuing trade")
 
         strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
-        allowed = signal.weight <= strat_cap
-        if not allowed:
-            logger.info(
-                "Trade blocked: strategy %s weight %.2f exceeds cap %.2f",
+        if signal.weight > strat_cap:
+            logger.warning(
+                "Strategy %s weight %.2f exceeds cap %.2f",
                 signal.strategy,
                 signal.weight,
                 strat_cap,
             )
-        return allowed
+            if os.getenv("FORCE_CONTINUE_ON_CAP", "false").lower() != "true":
+                return False
+            logger.warning("FORCE_CONTINUE_ON_CAP enabled; continuing trade")
+        return True
 
     def register_fill(self, signal: TradeSignal) -> None:
         if not isinstance(signal, TradeSignal):
@@ -76,11 +82,13 @@ class RiskEngine:
 
         prev = self.exposure.get(signal.asset_class, 0.0)
         self.exposure[signal.asset_class] = prev + signal.weight
-        logger.debug(
-            "Registered fill for %s: exposure %.2f -> %.2f",
-            signal.asset_class,
-            prev,
-            self.exposure[signal.asset_class],
+        logger.info(
+            "EXPOSURE_UPDATED",
+            extra={
+                "asset": signal.asset_class,
+                "prev": prev,
+                "new": self.exposure[signal.asset_class],
+            },
         )
 
     def check_max_drawdown(self, api) -> bool:

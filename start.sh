@@ -36,5 +36,5 @@ export WEB_CONCURRENCY=${WEB_CONCURRENCY:-1}
 echo "🔍 Validating environment variables..."
 python validate_env.py
 
-echo "🤖 Launching bot engine loop..."
-exec python -u bot_engine.py
+echo "🤖 Launching Gunicorn server..."
+exec gunicorn -b 0.0.0.0:9000 run:app

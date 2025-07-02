@@ -26,6 +26,21 @@ logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
+
+class PhaseLoggerAdapter(logging.LoggerAdapter):
+    """Logger adapter that injects bot_phase context."""
+
+    def process(self, msg, kwargs):
+        extra = kwargs.setdefault("extra", {})
+        extra.setdefault("bot_phase", self.extra.get("bot_phase", "GENERAL"))
+        return msg, kwargs
+
+
+def get_phase_logger(name: str, phase: str) -> logging.Logger:
+    """Return logger with ``bot_phase`` context."""
+    base = logging.getLogger(name)
+    return PhaseLoggerAdapter(base, {"bot_phase": phase})
+
 MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "30"))
 MIN_HEALTH_ROWS_D = int(os.getenv("MIN_HEALTH_ROWS_DAILY", "5"))
 HEALTH_MIN_ROWS = int(os.getenv("HEALTH_MIN_ROWS", "100"))
