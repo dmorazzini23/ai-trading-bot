@@ -5,6 +5,10 @@ try:
     import torch
     import torch.nn as nn
     import torch.optim as optim
+    try:
+        torch.SymInt
+    except AttributeError as exc:
+        raise ImportError('Your PyTorch version is too old. Please install torch>=2.0') from exc
 except Exception:  # pragma: no cover - optional dependency
     torch = types.ModuleType("torch")
     torch.Tensor = object

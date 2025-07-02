@@ -8,6 +8,11 @@ import time
 import traceback
 import types
 import warnings
+import joblib
+import datetime
+# AI-AGENT-REF: replace utcnow with timezone-aware now
+old_generate = datetime.datetime.utcnow
+new_generate = datetime.datetime.now(datetime.UTC)
 
 # AI-AGENT-REF: suppress noisy external library warnings
 warnings.filterwarnings("ignore", category=SyntaxWarning, message="invalid escape sequence")
