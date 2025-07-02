@@ -41,7 +41,20 @@ class RiskEngine:
         self.exposure: Dict[str, float] = {}
         self.hard_stop = False
 
-    def can_trade(self, signal: TradeSignal) -> bool:
+    def _dynamic_cap(self, asset_class: str, volatility: float | None = None, cash_ratio: float | None = None) -> float:
+        """Return exposure cap for ``asset_class`` adjusted by volatility and cash."""
+        cap = self.asset_limits.get(asset_class, self.global_limit)
+        if os.getenv("DYNAMIC_EXPOSURE_CAP", "0") != "1":
+            return cap
+        base = float(os.getenv("BASE_CAP", 1.0))
+        adj = float(os.getenv("VOLATILITY_ADJUST", 0.2))
+        vol = volatility if volatility is not None else 1.0
+        dyn = base * (1 + vol * adj)
+        if cash_ratio is not None:
+            dyn *= max(0.2, min(1.0, cash_ratio))
+        return min(cap, dyn)
+
+    def can_trade(self, signal: TradeSignal, *, pending: float = 0.0, volatility: float | None = None, cash_ratio: float | None = None) -> bool:
         if self.hard_stop:
             logger.error("TRADING_HALTED_RISK_LIMIT")
             return False
@@ -49,8 +62,8 @@ class RiskEngine:
             logger.error("can_trade called with invalid signal type")
             return False
 
-        asset_exp = self.exposure.get(signal.asset_class, 0.0)
-        asset_cap = self.asset_limits.get(signal.asset_class, self.global_limit)
+        asset_exp = self.exposure.get(signal.asset_class, 0.0) + max(pending, 0.0)
+        asset_cap = self._dynamic_cap(signal.asset_class, volatility, cash_ratio)
         if asset_exp + signal.weight > asset_cap:
             logger.warning(
                 "Exposure cap exceeded for %s: %.2f vs %.2f",
@@ -149,7 +162,7 @@ class RiskEngine:
 
     def _apply_weight_limits(self, signal: TradeSignal) -> float:
         """Return signal weight after applying asset and strategy caps."""
-        asset_cap = self.asset_limits.get(signal.asset_class, self.global_limit)
+        asset_cap = self._dynamic_cap(signal.asset_class)
         asset_rem = max(asset_cap - self.exposure.get(signal.asset_class, 0.0), 0.0)
         strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
         weight = signal.weight

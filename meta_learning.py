@@ -20,6 +20,26 @@ open = open  # allow monkeypatching built-in open
 logger = logging.getLogger(__name__)
 
 
+def normalize_score(score: float, cap: float = 1.2) -> float:
+    """Clip ``score`` to ``cap`` preserving sign."""
+    try:
+        score = float(score)
+    except Exception:
+        return 0.0
+    return max(-cap, min(cap, score))
+
+
+def adjust_confidence(confidence: float, volatility: float, threshold: float = 1.0) -> float:
+    """Scale confidence by inverse volatility to reduce spam at high levels."""
+    try:
+        conf = float(confidence)
+        vol = float(volatility)
+    except Exception:
+        return 0.0
+    factor = 1.0 if vol <= threshold else 1.0 / max(vol, 1e-3)
+    return max(0.0, min(1.0, conf * factor))
+
+
 def load_weights(path: str, default: np.ndarray | None = None) -> np.ndarray:
     """Load signal weights array from ``path`` or return ``default``."""
     p = Path(path)
@@ -230,7 +250,7 @@ def retrain_meta_learner(
     return True
 
 
-def optimize_signals(signal_data: Any, cfg: Any, model: Any | None = None) -> Any:
+def optimize_signals(signal_data: Any, cfg: Any, model: Any | None = None, *, volatility: float = 1.0) -> Any:
     """Optimize trading signals using ``model`` if provided."""
     if model is None:
         model = load_model_checkpoint(cfg.MODEL_PATH)
@@ -238,6 +258,9 @@ def optimize_signals(signal_data: Any, cfg: Any, model: Any | None = None) -> An
         return signal_data
     try:
         preds = model.predict(signal_data)
+        preds = np.clip(preds, -1.2, 1.2)
+        factor = 1.0 if volatility <= 1.0 else 1.0 / max(volatility, 1e-3)
+        preds = preds * factor
         return preds
     except (
         Exception

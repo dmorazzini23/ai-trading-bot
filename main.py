@@ -16,6 +16,22 @@ run_bot = _run.run_bot
 validate_environment = _run.validate_environment
 main = _run.main
 
+import pandas as pd
+from logger import get_logger
+
+
+def summarize_trades(path: str = os.getenv("TRADE_LOG_FILE", "trades.csv")) -> None:
+    """Log summary of attempted vs skipped trades from ``path``."""
+    log = get_logger(__name__)
+    try:
+        df = pd.read_csv(path)
+    except Exception as exc:  # pragma: no cover - I/O errors
+        log.warning("SUMMARY_READ_FAIL %s", exc)
+        return
+    attempted = len(df)
+    skipped = df[df.get("status") == "skipped"].groupby("reason").size().to_dict() if "status" in df.columns else {}
+    log.info("TRADE_RUN_SUMMARY", extra={"attempted": attempted, "skipped": skipped})
+
 
 def start_trade_updates_loop() -> None:
     """Convenience wrapper to run trade update streaming."""
@@ -29,3 +45,4 @@ def start_trade_updates_loop() -> None:
 
 if __name__ == "__main__":
     _run.main()
+    summarize_trades()
