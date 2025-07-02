@@ -138,6 +138,49 @@ def get_vwap_bias(close: pd.Series, high: pd.Series, low: pd.Series, volume: pd.
     bias = close / vwap_series - 1
     return bias
 
+# AI-AGENT-REF: additional indicator utilities for complex strategies
+def vwap(prices: np.ndarray, volumes: np.ndarray) -> float:
+    """Return the volume weighted average price for ``prices``."""
+    return np.sum(prices * volumes) / np.sum(volumes)
+
+
+def donchian_channel(highs: np.ndarray, lows: np.ndarray, period: int = 20) -> dict[str, float]:
+    """Return Donchian channel bounds using ``period`` lookback."""
+    upper = np.max(highs[-period:])
+    lower = np.min(lows[-period:])
+    return {"upper": upper, "lower": lower}
+
+
+def obv(closes: np.ndarray, volumes: np.ndarray) -> np.ndarray:
+    """Return On-Balance Volume (OBV) series."""
+    obv_vals = [0]
+    for i in range(1, len(closes)):
+        if closes[i] > closes[i - 1]:
+            obv_vals.append(obv_vals[-1] + volumes[i])
+        elif closes[i] < closes[i - 1]:
+            obv_vals.append(obv_vals[-1] - volumes[i])
+        else:
+            obv_vals.append(obv_vals[-1])
+    return np.array(obv_vals)
+
+
+def stochastic_rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:
+    """Return simplified stochastic RSI as an array aligned with ``prices``."""
+    deltas = np.diff(prices)
+    ups = np.where(deltas > 0, deltas, 0)
+    downs = -np.where(deltas < 0, deltas, 0)
+    rs = np.sum(ups[-period:]) / (np.sum(downs[-period:]) + 1e-9)
+    rsi_val = 100 - (100 / (1 + rs))
+    return np.array([rsi_val] * len(prices))
+
+
+def hurst_exponent(ts: np.ndarray) -> float:
+    """Estimate the Hurst exponent for ``ts``."""
+    lags = range(2, 100)
+    tau = [np.std(np.subtract(ts[lag:], ts[:-lag])) for lag in lags]
+    poly = np.polyfit(np.log(lags), np.log(tau), 1)
+    return 2.0 * poly[0]
+
 
 __all__ = [
     "ichimoku_fallback",
@@ -154,5 +197,10 @@ __all__ = [
     "get_rsi_signal",
     "get_atr_trailing_stop",
     "get_vwap_bias",
+    "vwap",
+    "donchian_channel",
+    "obv",
+    "stochastic_rsi",
+    "hurst_exponent",
 ]
 
