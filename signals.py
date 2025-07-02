@@ -13,8 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import datetime
 
-from indicators import rsi_numba
-from features import compute_atr
+from indicators import rsi, atr, mean_reversion_zscore
 
 def get_utcnow():
     return datetime.datetime.now(datetime.UTC)
@@ -268,10 +267,11 @@ def compute_signal_matrix(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     macd_df = calculate_macd(df["close"])
-    rsi = pd.Series(rsi_numba(df["close"].fillna(method="ffill").to_numpy()), index=df.index)
+    rsi_series = rsi(tuple(df["close"].fillna(method="ffill").astype(float)), 14)
     sma_diff = df["close"] - df["close"].rolling(20).mean()
-    atr_df = compute_atr(df.copy())
-    atr_move = df["close"].diff() / atr_df["atr"].replace(0, np.nan)
+    atr_series = atr(df["high"], df["low"], df["close"], 14)
+    atr_move = df["close"].diff() / atr_series.replace(0, np.nan)
+    mean_rev = mean_reversion_zscore(df["close"], 20)
 
     def _z(series: pd.Series) -> pd.Series:
         return (series - series.rolling(20).mean()) / series.rolling(20).std(ddof=0)
@@ -279,9 +279,10 @@ def compute_signal_matrix(df: pd.DataFrame) -> pd.DataFrame:
     matrix = pd.DataFrame(index=df.index)
     if macd_df is not None and not macd_df.empty:
         matrix["macd"] = _z(macd_df["macd"])
-    matrix["rsi"] = _z(rsi)
+    matrix["rsi"] = _z(rsi_series)
     matrix["sma_diff"] = _z(sma_diff)
     matrix["atr_move"] = _z(atr_move)
+    matrix["mean_rev_z"] = mean_rev
     return matrix.dropna(how="all")
 
 

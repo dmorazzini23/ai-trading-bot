@@ -1,29 +1,26 @@
 import pandas as pd
 import numpy as np
 import logging
+from indicators import ema, atr
 
 logger = logging.getLogger(__name__)
 
 
 def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
-    df['ema12'] = df['close'].ewm(span=12, adjust=False).mean()
-    df['ema26'] = df['close'].ewm(span=26, adjust=False).mean()
+    close = tuple(df['close'].astype(float))
+    df['ema12'] = ema(close, 12)
+    df['ema26'] = ema(close, 26)
     df['macd'] = df['ema12'] - df['ema26']
     return df
 
 
 def compute_macds(df: pd.DataFrame) -> pd.DataFrame:
-    df['macds'] = df['macd'].ewm(span=9, adjust=False).mean()
+    df['macds'] = ema(tuple(df['macd'].astype(float)), 9)
     return df
 
 
 def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = ranges.max(axis=1)
-    df['atr'] = true_range.rolling(window=period).mean()
+    df['atr'] = atr(df['high'], df['low'], df['close'], period)
     return df
 
 
