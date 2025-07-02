@@ -1,34 +1,20 @@
-import numpy as np
 import pandas as pd
 
+class Backtester:
+    def __init__(self, initial_capital=100000):
+        self.initial_capital = initial_capital
+        self.equity = initial_capital
+        self.equity_curve = []
 
-def load_data(file: str) -> pd.DataFrame:
-    """Load a CSV with OHLCV data, filling missing columns."""
-    df = pd.read_csv(file)
-    for col in ["Open", "High", "Low", "Close", "Volume"]:
-        if col not in df.columns:
-            print(f"Warning: {file} missing {col}, filling with last value or ffill.")
-            df[col] = np.nan
-    df.fillna(method="ffill", inplace=True)
-    df.dropna(inplace=True)
-    return df
-
-
-def execute_backtest():
-    """Placeholder backtest executor returning empty metrics."""
-    # AI-AGENT-REF: simplified backtest stub for grid tuning
-    return {}
-
-
-def run_backtest(
-    volume_spike_threshold: float,
-    ml_confidence_threshold: float,
-    pyramid_levels: dict,
-) -> dict:
-    """Run backtest with overridable parameters."""
-    from config import set_runtime_config
-
-    set_runtime_config(volume_spike_threshold, ml_confidence_threshold, pyramid_levels)
-    results = execute_backtest()
-    return results
-
+    def run(self, df, signals, stop_levels, scaler):
+        position = 0
+        for i in range(1, len(df)):
+            if signals[i] != 0 and position == 0:
+                vol = df['close'].rolling(10).std().iloc[i]
+                draw = 1 - (self.equity / self.initial_capital)
+                position = scaler.scale_position(self.equity, vol, draw) * signals[i]
+            elif position != 0 and df['close'].iloc[i] < stop_levels.iloc[i]:
+                self.equity += position * (df['close'].iloc[i] - df['close'].iloc[i-1])
+                position = 0
+            self.equity_curve.append(self.equity)
+        return self.equity_curve
