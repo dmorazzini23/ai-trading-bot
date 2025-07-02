@@ -5,19 +5,15 @@ Utilities for adaptive capital allocation and risk-based position sizing.
 
 
 class _CapScaler:
-    def __init__(self, params):
-        self.params = params or {}
-
-    def scale_position(self, value):
-        """Scale a numeric position using params['x']."""  # AI-AGENT-REF: unify scaling logic
-        return value * self.params.get("x", 1)
+    def scale_position(self, size):
+        return size
 
 
 class CapitalScalingEngine:
     def __init__(self, params=None):
-        # AI-AGENT-REF: allow optional params with sensible default
+        # AI-AGENT-REF: accept params but scaler no longer uses them
         self.params = params or {}
-        self.scaler = _CapScaler(self.params)
+        self.scaler = _CapScaler()
 
     def scale_position(self, value):
         return self.scaler.scale_position(value)
