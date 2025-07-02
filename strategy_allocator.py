@@ -1,5 +1,6 @@
 import logging
 import math
+import os
 from typing import Dict, List
 
 from strategies import TradeSignal
@@ -14,6 +15,11 @@ class StrategyAllocator:
 
     def __init__(self) -> None:
         self.weights: Dict[str, float] = {}
+        self.last_direction: Dict[str, str] = {}
+        self.last_confidence: Dict[str, float] = {}
+        self.hold_protect: Dict[str, int] = {}
+        self.hold_cycles = int(os.getenv("HOLD_PROTECT_CYCLES", 3))
+        self.delta_threshold = float(os.getenv("DELTA_THRESHOLD", 0.3))
 
     def update_reward(self, strategy: str, reward: float) -> None:
         try:
@@ -39,11 +45,21 @@ class StrategyAllocator:
         except Exception as exc:  # pragma: no cover - unexpected error
             logger.exception("update_reward failed: %s", exc)
 
-    def allocate(self, signals: Dict[str, List[TradeSignal]]) -> List[TradeSignal]:
+    def allocate(self, signals: Dict[str, List[TradeSignal]], *, volatility: float | None = None) -> List[TradeSignal]:
         try:
             if not isinstance(signals, dict) or not signals:
                 logger.warning("allocate called with empty or invalid signals input")
                 return []
+
+            vol = volatility if volatility is not None else float(os.getenv("RECENT_VOLATILITY", 1))
+
+            for sym in list(self.hold_protect):
+                if vol < float(os.getenv("VOL_THRESHOLD", 1.2)):
+                    self.hold_protect[sym] = max(0, self.hold_protect[sym] - 2)
+                self.hold_protect[sym] -= 1
+                if self.hold_protect[sym] <= 0:
+                    logger.info("COOLDOWN_EXPIRED", extra={"symbol": sym})
+                    self.hold_protect.pop(sym, None)
 
             results: List[TradeSignal] = []
             for strat, sigs in signals.items():
@@ -84,8 +100,21 @@ class StrategyAllocator:
                             "Signal weight invalid for %s; using default 1.0", s.symbol
                         )
                         s.weight = 1.0
+                    last_dir = self.last_direction.get(s.symbol)
+                    last_conf = self.last_confidence.get(s.symbol, 0.0)
+                    if last_dir and last_dir != s.side:
+                        if self.hold_protect.get(s.symbol, 0) > 0:
+                            logger.info("SKIP_HOLD_PROTECTION", extra={"symbol": s.symbol})
+                            continue
+                        if s.confidence < last_conf + self.delta_threshold:
+                            logger.info("SKIP_DELTA_THRESHOLD", extra={"symbol": s.symbol})
+                            continue
                     s.weight *= weight
                     results.append(s)
+                    self.last_direction[s.symbol] = s.side
+                    self.last_confidence[s.symbol] = s.confidence
+                    if s.side == "buy":
+                        self.hold_protect[s.symbol] = self.hold_cycles
 
                 logger.debug(
                     "Allocated %d signals for %s with weight %.3f",

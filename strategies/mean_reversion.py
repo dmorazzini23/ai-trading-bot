@@ -1,6 +1,7 @@
 """Mean reversion trading strategy implementation."""
 
 import logging
+import os
 from typing import List
 
 import pandas as pd
@@ -16,9 +17,10 @@ class MeanReversionStrategy(Strategy):
 
     name = "mean_reversion"
 
-    def __init__(self, lookback: int = 20, z: float = 2.0) -> None:
+    def __init__(self, lookback: int = 20, z: float | None = None) -> None:
         self.lookback = lookback
-        self.z = z
+        thresh = float(os.getenv("MEAN_REVERT_THRESHOLD", 0.75))
+        self.z = thresh if z is None else z
 
     def generate(self, ctx) -> List[TradeSignal]:
         signals: List[TradeSignal] = []
