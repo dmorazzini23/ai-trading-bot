@@ -28,4 +28,40 @@ class CapitalScalingEngine:
         pass
 
 
-__all__ = ["CapitalScalingEngine"]
+def volatility_parity_position(base_risk: float, atr_value: float) -> float:
+    """Return position size using volatility parity."""
+    return base_risk / atr_value if atr_value else 0.0
+
+
+def dynamic_fractional_kelly(base_fraction: float, drawdown: float, volatility_spike: bool) -> float:
+    """Adjust Kelly fraction based on drawdown and volatility."""
+    adjustment = 1.0
+    if drawdown > 0.10:
+        adjustment *= 0.5
+    if volatility_spike:
+        adjustment *= 0.7
+    return base_fraction * adjustment
+
+
+def pyramiding_add(position: float, profit_atr: float, base_size: float) -> float:
+    """Increase ``position`` when profit exceeds 1 ATR up to 2x base size."""
+    if position > 0 and profit_atr > 1.0:
+        target = 2 * base_size
+        return min(position + 0.25 * base_size, target)
+    return position
+
+
+def decay_position(position: float, atr: float, atr_mean: float) -> float:
+    """Reduce position when ATR spikes 50%% above its mean."""
+    if atr_mean and atr > 1.5 * atr_mean:
+        return position * 0.9
+    return position
+
+
+__all__ = [
+    "CapitalScalingEngine",
+    "volatility_parity_position",
+    "dynamic_fractional_kelly",
+    "pyramiding_add",
+    "decay_position",
+]

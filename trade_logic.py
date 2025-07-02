@@ -1,6 +1,7 @@
 # AI-AGENT-REF: basic trade utilities
 
 import random
+import metrics_logger
 
 def compute_order_price(symbol_data):
     raw_price = extract_price(symbol_data)
@@ -19,3 +20,12 @@ def simulate_execution(price: float, qty: int) -> tuple[int, float]:
     fill_ratio = random.uniform(0.9, 1.0)
     filled_qty = max(1, int(qty * fill_ratio))
     return filled_qty, fill_price
+
+
+def pyramiding_logic(current_position: float, profit_in_atr: float, base_size: float) -> float:
+    """Return new position size applying pyramiding rules."""
+    if profit_in_atr > 1.0 and current_position < 2 * base_size:
+        new_pos = current_position + 0.25 * base_size
+        metrics_logger.log_pyramid_add("generic", new_pos)
+        return new_pos
+    return current_position

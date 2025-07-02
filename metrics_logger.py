@@ -67,3 +67,23 @@ def log_metrics(
             writer.writerow(record)
     except (OSError, csv.Error) as exc:  # pragma: no cover - best effort logging
         logger.warning("Failed to update metrics file %s: %s", filename, exc)
+
+
+def log_volatility(value: float) -> None:
+    """Log volatility reading."""
+    logger.info("VOLATILITY_READING", extra={"value": float(value)})
+
+
+def log_atr_stop(symbol: str, stop: float) -> None:
+    """Log ATR stop level."""
+    logger.info("ATR_STOP", extra={"symbol": symbol, "stop": float(stop)})
+
+
+def log_pyramid_add(symbol: str, position: float) -> None:
+    """Log a pyramiding position add."""
+    logger.info("PYRAMID_ADD", extra={"symbol": symbol, "position": position})
+
+
+def log_regime_toggle(symbol: str, regime: str) -> None:
+    """Log regime changes."""
+    logger.info("REGIME_TOGGLE", extra={"symbol": symbol, "regime": regime})

@@ -69,6 +69,8 @@ def optimize_hyperparams(
     logger.warning("No results returned from grid search")
     return {}
 
+# AI-AGENT-REF: additional grid tests for indicator triggers and scaling
+
 
 __all__ = ["run_grid_search", "optimize_hyperparams"]
 

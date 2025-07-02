@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import numpy as np
+import metrics_logger
 import pandas as pd
 
 open = open  # allow monkeypatching built-in open
@@ -38,6 +39,17 @@ def adjust_confidence(confidence: float, volatility: float, threshold: float = 1
         return 0.0
     factor = 1.0 if vol <= threshold else 1.0 / max(vol, 1e-3)
     return max(0.0, min(1.0, conf * factor))
+
+
+def volatility_regime_filter(atr: float, sma100: float) -> str:
+    """Return volatility regime string based on ATR and SMA."""
+    if sma100 == 0:
+        return "unknown"
+    ratio = atr / sma100
+    regime = "high_vol" if ratio > 0.05 else "low_vol"
+    metrics_logger.log_volatility(ratio)
+    metrics_logger.log_regime_toggle("generic", regime)
+    return regime
 
 
 def load_weights(path: str, default: np.ndarray | None = None) -> np.ndarray:

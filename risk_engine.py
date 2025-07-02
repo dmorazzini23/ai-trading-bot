@@ -6,6 +6,7 @@ from typing import Dict
 
 import numpy as np
 import pandas as pd
+import metrics_logger
 
 warnings.filterwarnings(
     "ignore",
@@ -275,3 +276,37 @@ def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float) -> None:
 def schedule_reentry_check(symbol: str, lookahead_days: int) -> None:
     """Log a re-entry check after a stop out."""
     print(f"Scheduling reentry for {symbol} in {lookahead_days} days.")
+
+
+# AI-AGENT-REF: new risk helpers
+def calculate_atr_stop(entry_price: float, atr: float, multiplier: float = 1.5, direction: str = "long") -> float:
+    """Return ATR-based stop price."""
+    stop = entry_price - multiplier * atr if direction == "long" else entry_price + multiplier * atr
+    metrics_logger.log_atr_stop(symbol="generic", stop=stop)
+    return stop
+
+
+def calculate_bollinger_stop(price: float, upper_band: float, lower_band: float, direction: str = "long") -> float:
+    """Return stop price using Bollinger band width."""
+    mid = (upper_band + lower_band) / 2
+    if direction == "long":
+        stop = min(price, mid)
+    else:
+        stop = max(price, mid)
+    metrics_logger.log_atr_stop(symbol="bb", stop=stop)
+    return stop
+
+
+def dynamic_stop_price(entry_price: float, atr: float | None = None, upper_band: float | None = None, lower_band: float | None = None, percent: float | None = None, direction: str = "long") -> float:
+    """Return the tightest stop price based on ATR, Bollinger width or percent."""
+    stops: list[float] = []
+    if atr is not None:
+        stops.append(calculate_atr_stop(entry_price, atr, direction=direction))
+    if upper_band is not None and lower_band is not None:
+        stops.append(calculate_bollinger_stop(entry_price, upper_band, lower_band, direction=direction))
+    if percent is not None:
+        pct_stop = entry_price * (1 - percent) if direction == "long" else entry_price * (1 + percent)
+        stops.append(pct_stop)
+    if not stops:
+        return entry_price
+    return max(stops) if direction == "long" else min(stops)
