@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from functools import lru_cache
 from numba import jit
 
 
@@ -52,4 +53,58 @@ def rsi_numba(prices: np.ndarray, period: int = 14) -> np.ndarray:
         rs = up_avg / down_avg if down_avg != 0 else 0.0
         rsi[i] = 100.0 - 100.0 / (1.0 + rs)
     return rsi
+
+
+# AI-AGENT-REF: new vectorized indicator helpers with caching
+
+@lru_cache(maxsize=128)
+def ema(series: tuple[float, ...], period: int) -> pd.Series:
+    s = pd.Series(series)
+    return s.ewm(span=period, adjust=False).mean()
+
+
+@lru_cache(maxsize=128)
+def sma(series: tuple[float, ...], period: int) -> pd.Series:
+    s = pd.Series(series)
+    return s.rolling(window=period).mean()
+
+
+def bollinger_bands(series: pd.Series, window: int = 20, num_std: int = 2) -> pd.DataFrame:
+    ma = series.rolling(window=window).mean()
+    std = series.rolling(window=window).std(ddof=0)
+    upper = ma + num_std * std
+    lower = ma - num_std * std
+    return pd.DataFrame({"bb_upper": upper, "bb_lower": lower, "bb_mid": ma})
+
+
+@lru_cache(maxsize=128)
+def rsi(series: tuple[float, ...], period: int = 14) -> pd.Series:
+    arr = np.asarray(series, dtype=float)
+    return pd.Series(rsi_numba(arr, period))
+
+
+def atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+    hl = high - low
+    hc = (high - close.shift()).abs()
+    lc = (low - close.shift()).abs()
+    tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
+
+def mean_reversion_zscore(series: pd.Series, window: int = 20) -> pd.Series:
+    rolling_mean = series.rolling(window).mean()
+    rolling_std = series.rolling(window).std(ddof=0)
+    return (series - rolling_mean) / rolling_std
+
+
+__all__ = [
+    "ichimoku_fallback",
+    "rsi_numba",
+    "ema",
+    "sma",
+    "bollinger_bands",
+    "rsi",
+    "atr",
+    "mean_reversion_zscore",
+]
 

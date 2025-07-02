@@ -19,11 +19,11 @@ def profile(func, *args, **kwargs):
 def run_profiles():
     timings = []
     df = pd.DataFrame({
-        'open': np.random.random(500_000) * 100,
-        'high': np.random.random(500_000) * 100,
-        'low': np.random.random(500_000) * 100,
-        'close': np.random.random(500_000) * 100,
-        'volume': np.random.randint(1000, 10000, size=500_000)
+        'open': np.random.random(100_000) * 100,
+        'high': np.random.random(100_000) * 100,
+        'low': np.random.random(100_000) * 100,
+        'close': np.random.random(100_000) * 100,
+        'volume': np.random.randint(1000, 10000, size=100_000)
     })
 
     modules = [signals, indicators]

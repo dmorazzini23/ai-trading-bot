@@ -8,6 +8,7 @@ import pandas as pd
 
 from strategies.base import Strategy, TradeSignal, asset_class_for
 from utils import get_phase_logger
+from indicators import mean_reversion_zscore
 
 logger = get_phase_logger(__name__, "STRATEGY")
 
@@ -42,22 +43,13 @@ class MeanReversionStrategy(Strategy):
             if len(close_series) < self.lookback:
                 logger.warning("%s: no valid close prices", sym)
                 continue
-            ma = close_series.rolling(self.lookback).mean().iloc[-1]
-            sd = close_series.rolling(self.lookback).std().iloc[-1]
-            # Validate rolling mean/std results before computing the z-score
-            if pd.isna(ma) or pd.isna(sd) or sd == 0:
-                logger.warning("%s: invalid rolling statistics", sym)
-                # Avoid division by zero or propagating NaNs
+            zscores = mean_reversion_zscore(close_series, self.lookback)
+            if zscores.empty:
                 continue
-
-            last_close = close_series.iloc[-1]
-            # Guard against NaN closing prices before computing z-score
-            if pd.isna(last_close):
-                logger.warning("%s: last close is NaN", sym)
+            z = zscores.iloc[-1]
+            if pd.isna(z):
+                logger.warning("%s: invalid z-score", sym)
                 continue
-
-            # Calculate the z-score of the latest close price
-            z = (last_close - ma) / sd
             scores[sym] = float(z)
             if z > self.z:
                 signals.append(
