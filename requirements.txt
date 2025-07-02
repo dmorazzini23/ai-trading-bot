@@ -43,3 +43,6 @@ gunicorn>=20.1.0
 
 xgboost>=1.7.6
 alpaca-trade-api>=3.0.0
+
+torch>=2.0
+joblib>=1.3

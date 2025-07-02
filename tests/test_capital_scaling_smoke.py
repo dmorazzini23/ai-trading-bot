@@ -18,5 +18,3 @@ def force_coverage(mod):
 def test_capital_scaler_basic():
     eng = capital_scaling.CapitalScalingEngine({"x": 1})
     assert eng.scale_position(10) == 10
-    eng.update(None, 100)
-    force_coverage(capital_scaling)

@@ -11,6 +11,10 @@ import pandas as pd
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import datetime
+
+def get_utcnow():
+    return datetime.datetime.now(datetime.UTC)
 
 
 def rolling_mean(arr: np.ndarray, window: int) -> np.ndarray:
