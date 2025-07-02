@@ -13,6 +13,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import datetime
 
+from indicators import rsi_numba
+from features import compute_atr
+
 def get_utcnow():
     return datetime.datetime.now(datetime.UTC)
 
@@ -253,3 +256,54 @@ def detect_market_regime_hmm(df: pd.DataFrame, n_states: int = 3) -> pd.DataFram
         logger.warning("HMM failed: %s", e)
         df["Regime"] = np.nan
     return df
+
+
+def compute_signal_matrix(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a matrix of z-scored indicator signals."""
+
+    if df is None or df.empty:
+        return pd.DataFrame()
+    required = {"close", "high", "low"}
+    if not required.issubset(df.columns):
+        return pd.DataFrame()
+
+    macd_df = calculate_macd(df["close"])
+    rsi = pd.Series(rsi_numba(df["close"].fillna(method="ffill").to_numpy()), index=df.index)
+    sma_diff = df["close"] - df["close"].rolling(20).mean()
+    atr_df = compute_atr(df.copy())
+    atr_move = df["close"].diff() / atr_df["atr"].replace(0, np.nan)
+
+    def _z(series: pd.Series) -> pd.Series:
+        return (series - series.rolling(20).mean()) / series.rolling(20).std(ddof=0)
+
+    matrix = pd.DataFrame(index=df.index)
+    if macd_df is not None and not macd_df.empty:
+        matrix["macd"] = _z(macd_df["macd"])
+    matrix["rsi"] = _z(rsi)
+    matrix["sma_diff"] = _z(sma_diff)
+    matrix["atr_move"] = _z(atr_move)
+    return matrix.dropna(how="all")
+
+
+def ensemble_vote_signals(signal_matrix: pd.DataFrame) -> pd.Series:
+    """Return voting-based entry signals from ``signal_matrix``."""
+
+    if signal_matrix is None or signal_matrix.empty:
+        return pd.Series(dtype=int)
+    pos = (signal_matrix > 0.5).sum(axis=1)
+    neg = (signal_matrix < -0.5).sum(axis=1)
+    votes = np.where(pos >= 2, 1, np.where(neg >= 2, -1, 0))
+    return pd.Series(votes, index=signal_matrix.index)
+
+
+def classify_regime(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Classify each row as 'trend' or 'mean_revert' based on volatility."""
+
+    if df is None or df.empty or "close" not in df:
+        return pd.Series(dtype=object)
+    returns = df["close"].pct_change()
+    vol = returns.rolling(window).std()
+    med = vol.rolling(window).median()
+    dev = vol.rolling(window).std()
+    regime = np.where(vol > med + dev, "trend", "mean_revert")
+    return pd.Series(regime, index=df.index)

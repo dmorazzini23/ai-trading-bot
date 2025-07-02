@@ -17,7 +17,7 @@ validate_environment = _run.validate_environment
 main = _run.main
 
 import pandas as pd
-from logger import get_logger
+from logger import get_logger, log_performance_metrics
 
 
 def summarize_trades(path: str = os.getenv("TRADE_LOG_FILE", "trades.csv")) -> None:
@@ -29,8 +29,17 @@ def summarize_trades(path: str = os.getenv("TRADE_LOG_FILE", "trades.csv")) -> N
         log.warning("SUMMARY_READ_FAIL %s", exc)
         return
     attempted = len(df)
-    skipped = df[df.get("status") == "skipped"].groupby("reason").size().to_dict() if "status" in df.columns else {}
+    skipped = (
+        df[df.get("status") == "skipped"].groupby("reason").size().to_dict()
+        if "status" in df.columns
+        else {}
+    )
     log.info("TRADE_RUN_SUMMARY", extra={"attempted": attempted, "skipped": skipped})
+
+    exposure = abs(df.get("qty", 0) * df.get("price", 0)).sum() if not df.empty else 0
+    equity_curve = df.get("equity", []).tolist() if "equity" in df.columns else df.get("price", []).cumsum().tolist()
+    regime = df.get("regime").iloc[-1] if "regime" in df.columns and not df.empty else "unknown"
+    log_performance_metrics(exposure_pct=exposure, equity_curve=equity_curve, regime=regime)
 
 
 def start_trade_updates_loop() -> None:
