@@ -58,9 +58,9 @@ class RiskEngine:
                 asset_exp + signal.weight,
                 asset_cap,
             )
-            if os.getenv("FORCE_CONTINUE_ON_CAP", "false").lower() != "true":
+            if os.getenv("FORCE_CONTINUE_ON_EXPOSURE", "false").lower() != "true":
                 return False
-            logger.warning("FORCE_CONTINUE_ON_CAP enabled; continuing trade")
+            logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")
 
         strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
         if signal.weight > strat_cap:
@@ -70,9 +70,9 @@ class RiskEngine:
                 signal.weight,
                 strat_cap,
             )
-            if os.getenv("FORCE_CONTINUE_ON_CAP", "false").lower() != "true":
+            if os.getenv("FORCE_CONTINUE_ON_EXPOSURE", "false").lower() != "true":
                 return False
-            logger.warning("FORCE_CONTINUE_ON_CAP enabled; continuing trade")
+            logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")
         return True
 
     def register_fill(self, signal: TradeSignal) -> None:
