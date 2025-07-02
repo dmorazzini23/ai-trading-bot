@@ -10,12 +10,15 @@ import types
 import warnings
 import joblib
 import datetime
+
 # AI-AGENT-REF: replace utcnow with timezone-aware now
 old_generate = datetime.datetime.utcnow
 new_generate = datetime.datetime.now(datetime.UTC)
 
 # AI-AGENT-REF: suppress noisy external library warnings
-warnings.filterwarnings("ignore", category=SyntaxWarning, message="invalid escape sequence")
+warnings.filterwarnings(
+    "ignore", category=SyntaxWarning, message="invalid escape sequence"
+)
 warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 
 # Avoid failing under older Python versions during tests
@@ -69,7 +72,13 @@ warnings.filterwarnings(
 import pandas as pd
 
 import utils
-from features import compute_macd, compute_atr, compute_vwap, compute_macds, ensure_columns
+from features import (
+    compute_macd,
+    compute_atr,
+    compute_vwap,
+    compute_macds,
+    ensure_columns,
+)
 
 try:
     from sklearn.exceptions import InconsistentVersionWarning
@@ -151,9 +160,7 @@ import pandas_market_calendars as mcal
 import pandas_ta as ta
 
 ta.ichimoku = (
-    ta.ichimoku
-    if hasattr(ta, "ichimoku")
-    else lambda *a, **k: (pd.DataFrame(), {})
+    ta.ichimoku if hasattr(ta, "ichimoku") else lambda *a, **k: (pd.DataFrame(), {})
 )
 
 NY = mcal.get_calendar("NYSE")
@@ -180,6 +187,7 @@ from requests import Session
 from requests.exceptions import HTTPError
 import schedule
 import yfinance as yf
+
 # Alpaca v3 SDK imports
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
@@ -197,8 +205,12 @@ except Exception:  # pragma: no cover - older alpaca-trade-api
 
 
 from alpaca.trading.models import Order
-from alpaca.trading.requests import (GetOrdersRequest, LimitOrderRequest,
-                                     MarketOrderRequest)
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    LimitOrderRequest,
+    MarketOrderRequest,
+)
+
 # Legacy import removed; using alpaca-py trading stream instead
 from alpaca.trading.stream import TradingStream
 from bs4 import BeautifulSoup
@@ -300,9 +312,7 @@ from utils import portfolio_lock
 def market_is_open(now: datetime.datetime | None = None) -> bool:
     """Return True if the market is currently open."""
     if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
-        logger.info(
-            "FORCE_MARKET_OPEN is enabled; overriding market hours checks."
-        )
+        logger.info("FORCE_MARKET_OPEN is enabled; overriding market hours checks.")
         return True
     return utils_market_open(now)
 
@@ -313,6 +323,7 @@ is_market_open = market_is_open
 
 # AI-AGENT-REF: snapshot live positions for debugging
 PORTFOLIO_FILE = "portfolio_snapshot.json"
+
 
 def save_portfolio_snapshot(portfolio: Dict[str, int]) -> None:
     data = {
@@ -372,7 +383,9 @@ def safe_price(price: float) -> float:
 
 
 # AI-AGENT-REF: utility to detect row drops during feature engineering
-def assert_row_integrity(before_len: int, after_len: int, func_name: str, symbol: str) -> None:
+def assert_row_integrity(
+    before_len: int, after_len: int, func_name: str, symbol: str
+) -> None:
     if after_len < before_len:
         logger.warning(
             f"Row count dropped in {func_name} for {symbol}: {before_len} -> {after_len}"
@@ -442,8 +455,14 @@ def reconcile_positions(ctx: "BotContext") -> None:
 import warnings
 
 from ratelimit import limits, sleep_and_retry
-from tenacity import (RetryError, retry, retry_if_exception_type,
-                      stop_after_attempt, wait_exponential, wait_random)
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random,
+)
 
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 RUN_HEALTH = RUN_HEALTHCHECK == "1"
@@ -461,6 +480,7 @@ warnings.filterwarnings(
 # ─── FINBERT SENTIMENT MODEL IMPORTS & FALLBACK ─────────────────────────────────
 try:
     import torch
+
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
@@ -754,9 +774,9 @@ TRADE_COOLDOWN_MIN = int(config.get_env("TRADE_COOLDOWN_MIN", "5"))  # minutes
 _VOL_STATS = {"mean": None, "std": None, "last_update": None, "last": None}
 
 # Slippage logs (in-memory for quick access)
-_slippage_log: List[Tuple[str, float, float, datetime]] = (
-    []
-)  # (symbol, expected, actual, timestamp)
+_slippage_log: List[
+    Tuple[str, float, float, datetime]
+] = []  # (symbol, expected, actual, timestamp)
 # Ensure persistent slippage log file exists
 if not os.path.exists(SLIPPAGE_LOG_FILE):
     try:
@@ -1579,7 +1599,9 @@ class TradeLogger:
                     cls = (
                         "day_trade"
                         if days == 0
-                        else "swing_trade" if days < 5 else "long_trade"
+                        else "swing_trade"
+                        if days < 5
+                        else "long_trade"
                     )
                     row[3], row[4], row[8] = (
                         datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1791,7 +1813,9 @@ class SignalManager:
             s = (
                 -1
                 if val > self.mean_rev_zscore_threshold
-                else 1 if val < -self.mean_rev_zscore_threshold else -1
+                else 1
+                if val < -self.mean_rev_zscore_threshold
+                else -1
             )
             w = min(abs(val) / 3, 1.0)
             return s, w, "mean_reversion"
@@ -1837,7 +1861,9 @@ class SignalManager:
             s = (
                 1
                 if df["close"].iloc[-1] > df["open"].iloc[-1]
-                else -1 if df["close"].iloc[-1] < df["open"].iloc[-1] else -1
+                else -1
+                if df["close"].iloc[-1] < df["open"].iloc[-1]
+                else -1
             )
             w = min(score / avg, 1.0)
             return s, w, "vsa"
@@ -3611,8 +3637,7 @@ def pre_trade_checks(
     ctx: BotContext, state: BotState, symbol: str, balance: float, regime_ok: bool
 ) -> bool:
     if config.FORCE_TRADES:
-        logger.warning(
-            "FORCE_TRADES override active: ignoring all pre-trade halts.")
+        logger.warning("FORCE_TRADES override active: ignoring all pre-trade halts.")
         return True
     # Streak kill-switch check
     if (
@@ -3800,7 +3825,7 @@ def _fetch_feature_data(
 
     df = compute_macds(df)
     logger.debug(f"{symbol} dataframe columns after indicators: {df.columns.tolist()}")
-    df = ensure_columns(df, ['macd', 'atr', 'vwap', 'macds'], symbol)
+    df = ensure_columns(df, ["macd", "atr", "vwap", "macds"], symbol)
 
     try:
         feat_df = prepare_indicators(df)
@@ -3895,9 +3920,7 @@ def _enter_long(
     target_weight = ctx.portfolio_weights.get(symbol, 0.0)
     raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
     if raw_qty is None or not np.isfinite(raw_qty) or raw_qty <= 0:
-        logger.warning(
-            f"Skipping {symbol}: computed qty <= 0"
-        )
+        logger.warning(f"Skipping {symbol}: computed qty <= 0")
         return True
     logger.info(
         f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={raw_qty}"
@@ -3971,9 +3994,7 @@ def _enter_short(
         logger.exception("bot.py unexpected", exc_info=exc)
         raise
     if qty is None or not np.isfinite(qty) or qty <= 0:
-        logger.warning(
-            f"Skipping {symbol}: computed qty <= 0"
-        )
+        logger.warning(f"Skipping {symbol}: computed qty <= 0")
         return True
     logger.info(
         f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={qty}"
@@ -4132,7 +4153,7 @@ def trade_logic(
     if feat_df is None:
         return skip_flag if skip_flag is not None else False
 
-    for col in ['macd', 'atr', 'vwap', 'macds']:
+    for col in ["macd", "atr", "vwap", "macds"]:
         if col not in feat_df.columns:
             feat_df[col] = 0.0
 
@@ -5506,7 +5527,9 @@ def start_metrics_server(default_port: int = 9200) -> None:
 
                 resp = requests.get(f"http://localhost:{default_port}")
                 if resp.ok:
-                    logger.info("Metrics port %d already serving; reusing", default_port)
+                    logger.info(
+                        "Metrics port %d already serving; reusing", default_port
+                    )
                     return
             except Exception:
                 pass
@@ -5520,7 +5543,9 @@ def start_metrics_server(default_port: int = 9200) -> None:
             except Exception as exc2:
                 logger.warning("Failed to start metrics server on %d: %s", port, exc2)
         else:
-            logger.warning("Failed to start metrics server on %d: %s", default_port, exc)
+            logger.warning(
+                "Failed to start metrics server on %d: %s", default_port, exc
+            )
     except Exception as exc:  # pragma: no cover - unexpected error
         logger.warning("Failed to start metrics server on %d: %s", default_port, exc)
 
@@ -5538,21 +5563,59 @@ def run_multi_strategy(ctx: BotContext) -> None:
     acct = ctx.api.get_account()
     cash = float(getattr(acct, "cash", 0))
     for sig in final:
-        try:
-            req = StockLatestQuoteRequest(symbol_or_symbols=[sig.symbol])
-            quote: Quote = ctx.data_client.get_stock_latest_quote(req)
-            price = float(getattr(quote, "ask_price", 0) or 0)
-        except APIError as e:
-            logger.warning(f"[run_all_trades] quote failed for {sig.symbol}: {e}")
-            continue
-        if price <= 0.0 or pd.isna(price):
+        retries = 0
+        price = 0.0
+        data = None
+        while price <= 0 and retries < 3:
+            try:
+                req = StockLatestQuoteRequest(symbol_or_symbols=[sig.symbol])
+                quote: Quote = ctx.data_client.get_stock_latest_quote(req)
+                price = float(getattr(quote, "ask_price", 0) or 0)
+            except APIError as e:
+                logger.warning(
+                    "[run_all_trades] quote failed for %s: %s", sig.symbol, e
+                )
+                price = 0.0
+            if price <= 0:
+                time.sleep(2)
+                data = fetch_minute_df_safe(sig.symbol)
+                if data is not None and not data.empty:
+                    row = data.iloc[-1]
+                    logger.debug(
+                        "Fetched minute data for %s: %s",
+                        sig.symbol,
+                        row.to_dict(),
+                    )
+                    minute_close = float(row.get("close", 0))
+                    logger.info(
+                        "Using last_close=%.4f vs minute_close=%.4f",
+                        utils.get_latest_close(data),
+                        minute_close,
+                    )
+                    price = (
+                        minute_close
+                        if minute_close > 0
+                        else utils.get_latest_close(data)
+                    )
+                logger.warning(
+                    "Retry %s: price %.2f <= 0 for %s, refetching data",
+                    retries + 1,
+                    price,
+                    sig.symbol,
+                )
+                retries += 1
+            else:
+                break
+        if price <= 0:
             logger.critical(
-                f"Critical: computed non-positive price for {sig.symbol}: {price}. Skipping order."
+                "Failed after retries: non-positive price for %s. Data context: %r",
+                sig.symbol,
+                data.tail(3).to_dict() if isinstance(data, pd.DataFrame) else data,
             )
             continue
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty is None or not np.isfinite(qty) or qty <= 0:
-            logger.warning(f"Skipping {sig.symbol}: computed qty <= 0")
+            logger.warning("Skipping %s: computed qty <= 0", sig.symbol)
             continue
         ctx.execution_engine.execute_order(
             sig.symbol, qty, sig.side, asset_class=sig.asset_class
@@ -5691,8 +5754,7 @@ def manage_position_risk(ctx: BotContext, position) -> None:
                 price = price_series.iloc[-1]
                 logger.debug(f"Final extracted price for {symbol}: {price}")
             else:
-                logger.critical(
-                    f"No valid close prices found for {symbol}, skipping.")
+                logger.critical(f"No valid close prices found for {symbol}, skipping.")
                 price = 0.0
         else:
             logger.critical(f"Close column missing for {symbol}, skipping.")
@@ -5702,16 +5764,23 @@ def manage_position_risk(ctx: BotContext, position) -> None:
             return
         side = "long" if int(position.qty) > 0 else "short"
         if side == "long":
-            new_stop = float(position.avg_entry_price) * (1 - min(0.01 + atr / 100, 0.03))
+            new_stop = float(position.avg_entry_price) * (
+                1 - min(0.01 + atr / 100, 0.03)
+            )
         else:
-            new_stop = float(position.avg_entry_price) * (1 + min(0.01 + atr / 100, 0.03))
+            new_stop = float(position.avg_entry_price) * (
+                1 + min(0.01 + atr / 100, 0.03)
+            )
         update_trailing_stop(ctx, symbol, price, int(position.qty), atr)
         pnl = float(getattr(position, "unrealized_plpc", 0))
         kelly_scale = compute_kelly_scale(atr, 0.0)
         adjust_position_size(position, kelly_scale)
         volume_factor = utils.get_volume_spike_factor(symbol)
         ml_conf = utils.get_ml_confidence(symbol)
-        if volume_factor > config.VOLUME_SPIKE_THRESHOLD and ml_conf > config.ML_CONFIDENCE_THRESHOLD:
+        if (
+            volume_factor > config.VOLUME_SPIKE_THRESHOLD
+            and ml_conf > config.ML_CONFIDENCE_THRESHOLD
+        ):
             if side == "long" and price > vwap and pnl > 0.02:
                 pyramid_add_position(ctx, symbol, config.PYRAMID_LEVELS["low"], side)
         logger.info(
@@ -5721,7 +5790,9 @@ def manage_position_risk(ctx: BotContext, position) -> None:
         logger.warning(f"manage_position_risk failed for {symbol}: {exc}")
 
 
-def pyramid_add_position(ctx: BotContext, symbol: str, fraction: float, side: str) -> None:
+def pyramid_add_position(
+    ctx: BotContext, symbol: str, fraction: float, side: str
+) -> None:
     current_qty = _current_position_qty(ctx, symbol)
     add_qty = max(1, int(abs(current_qty) * fraction))
     submit_order(ctx, symbol, add_qty, "buy" if side == "long" else "sell")
@@ -5785,9 +5856,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
         # AI-AGENT-REF: honor global halt flag before processing symbols
         if check_halt_flag(ctx):
             _log_health_diagnostics(ctx, "halt_flag_loop")
-            logger.info(
-                "TRADING_HALTED_VIA_FLAG: Managing existing positions only."
-            )
+            logger.info("TRADING_HALTED_VIA_FLAG: Managing existing positions only.")
             try:
                 portfolio = ctx.api.get_all_positions()
                 for pos in portfolio:
@@ -5809,6 +5878,24 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 )
                 logger.info(
                     f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
+                )
+                logger.info(
+                    "Positions detail: %s",
+                    [
+                        {
+                            "symbol": p.symbol,
+                            "qty": int(p.qty),
+                            "avg_price": float(p.avg_entry_price),
+                            "market_value": float(p.market_value),
+                        }
+                        for p in positions
+                    ],
+                )
+                logger.info(
+                    "Weights vs positions: weights=%s positions=%s cash=%.2f",
+                    ctx.portfolio_weights,
+                    {p.symbol: int(p.qty) for p in positions},
+                    cash,
                 )
             except Exception as exc:  # pragma: no cover - network issues
                 logger.warning(f"SUMMARY_FAIL: {exc}")
@@ -5835,6 +5922,24 @@ def run_all_trades_worker(state: BotState, model) -> None:
             )
             logger.info(
                 f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
+            )
+            logger.info(
+                "Positions detail: %s",
+                [
+                    {
+                        "symbol": p.symbol,
+                        "qty": int(p.qty),
+                        "avg_price": float(p.avg_entry_price),
+                        "market_value": float(p.market_value),
+                    }
+                    for p in positions
+                ],
+            )
+            logger.info(
+                "Weights vs positions: weights=%s positions=%s cash=%.2f",
+                ctx.portfolio_weights,
+                {p.symbol: int(p.qty) for p in positions},
+                cash,
             )
         except Exception as exc:  # pragma: no cover - network issues
             logger.warning(f"SUMMARY_FAIL: {exc}")
@@ -6338,7 +6443,7 @@ if __name__ == "__main__":
     main()
     import time
     import schedule
+
     while True:
         schedule.run_pending()
         time.sleep(config.SCHEDULER_SLEEP_SECONDS)
-
