@@ -189,6 +189,24 @@ class RiskEngine:
         return {"volatility": vol}
 
 
+def dynamic_position_size(capital: float, volatility: float, drawdown: float) -> float:
+    """Return position size using volatility and drawdown aware Kelly fraction.
+
+    The base Kelly fraction of ``0.5 / volatility`` is throttled by current
+    drawdown. When drawdown exceeds 10% the fraction is scaled down by 50%.
+    """
+
+    if capital <= 0:
+        return 0.0
+
+    vol = max(volatility, 1e-6)
+    kelly_fraction = 0.5 / vol
+    if drawdown > 0.1:
+        kelly_fraction *= 0.5
+    kelly_fraction = min(max(kelly_fraction, 0.0), 1.0)
+    return capital * kelly_fraction
+
+
 def calculate_position_size(*args, **kwargs) -> int:
     """Convenience wrapper supporting simple and advanced usage."""
     engine = RiskEngine()

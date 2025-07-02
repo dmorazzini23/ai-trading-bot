@@ -5,6 +5,12 @@ import time
 import os
 import queue
 import sys
+import csv
+from datetime import date
+
+import pandas as pd
+import numpy as np
+import metrics_logger
 from logging.handlers import (
     QueueHandler,
     QueueListener,
@@ -97,6 +103,56 @@ def init_logger(log_file: str) -> logging.Logger:
     return setup_logging(log_file=log_file)
 
 
-__all__ = ["setup_logging", "get_logger", "init_logger", "logger"]
+def log_performance_metrics(
+    exposure_pct: float,
+    equity_curve: list[float],
+    regime: str,
+    filename: str = "logs/performance.csv",
+    *,
+    as_of: date | None = None,
+) -> None:
+    """Log daily performance metrics to ``filename``."""
+
+    if not equity_curve:
+        return
+    as_of = as_of or date.today()
+    returns = pd.Series(equity_curve).pct_change().dropna()
+    roll = returns.tail(20)
+    if roll.empty:
+        sharpe = sortino = realized_vol = 0.0
+    else:
+        sharpe = roll.mean() / (roll.std(ddof=0) or 1e-9) * np.sqrt(252 / 20)
+        downside = roll[roll < 0]
+        sortino = roll.mean() / (downside.std(ddof=0) or 1e-9) * np.sqrt(252 / 20)
+        realized_vol = roll.std(ddof=0) * np.sqrt(252 / 20)
+    max_dd = metrics_logger.compute_max_drawdown(equity_curve)
+    rec = {
+        "date": str(as_of),
+        "exposure_pct": exposure_pct,
+        "sharpe20": sharpe,
+        "sortino20": sortino,
+        "realized_vol": realized_vol,
+        "max_drawdown": max_dd,
+        "regime": regime,
+    }
+    try:
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        new = not os.path.exists(filename)
+        with open(filename, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=rec.keys())
+            if new:
+                writer.writeheader()
+            writer.writerow(rec)
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.warning("Failed to log performance metrics: %s", exc)
+
+
+__all__ = [
+    "setup_logging",
+    "get_logger",
+    "init_logger",
+    "logger",
+    "log_performance_metrics",
+]
 
 
