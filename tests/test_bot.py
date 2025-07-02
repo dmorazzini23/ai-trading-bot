@@ -93,6 +93,11 @@ class _FakeREST:
 sys.modules["alpaca_trade_api.rest"].REST = _FakeREST
 sys.modules["alpaca_trade_api.rest"].APIError = Exception
 class _DummyTradingClient:
+    def __init__(self, api_key, secret_key, paper=True):
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.paper = paper
+
     def get_account(self):
         return {"status": "ACTIVE"}
 
