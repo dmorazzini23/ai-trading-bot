@@ -205,7 +205,7 @@ from bs4 import BeautifulSoup
 from flask import Flask
 
 from alpaca_api import alpaca_get, start_trade_updates_stream
-from rebalancer import maybe_rebalance
+from rebalancer import maybe_rebalance as original_rebalance
 
 # for paper trading
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
@@ -311,6 +311,40 @@ def market_is_open(now: datetime.datetime | None = None) -> bool:
 is_market_open = market_is_open
 
 
+# AI-AGENT-REF: snapshot live positions for debugging
+PORTFOLIO_FILE = "portfolio_snapshot.json"
+
+def save_portfolio_snapshot(portfolio: Dict[str, int]) -> None:
+    data = {
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "positions": portfolio,
+    }
+    with open(PORTFOLIO_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def load_portfolio_snapshot() -> Dict[str, int]:
+    if not os.path.exists(PORTFOLIO_FILE):
+        return {}
+    with open(PORTFOLIO_FILE, "r") as f:
+        data = json.load(f)
+    return data.get("positions", {})
+
+
+def compute_current_positions(ctx: "BotContext") -> Dict[str, int]:
+    try:
+        return {p.symbol: int(p.qty) for p in ctx.api.get_all_positions()}
+    except Exception:
+        logger.warning("compute_current_positions failed", exc_info=True)
+        return {}
+
+
+def maybe_rebalance(ctx):
+    portfolio = compute_current_positions(ctx)
+    save_portfolio_snapshot(portfolio)
+    return original_rebalance(ctx)
+
+
 def get_latest_close(df: pd.DataFrame) -> float:
     """Return the last closing price or ``0.0`` if unavailable."""
     if df is None or df.empty or "close" not in df.columns:
@@ -329,6 +363,12 @@ def get_latest_close(df: pd.DataFrame) -> float:
 def compute_time_range(minutes: int) -> tuple[int, int]:
     """Return a simple ``(0, minutes)`` range."""
     return 0, minutes
+
+
+def safe_price(price: float) -> float:
+    """Defensively clamp ``price`` to a minimal positive value."""
+    # AI-AGENT-REF: prevent invalid zero/negative prices
+    return max(price, 1e-3)
 
 
 # AI-AGENT-REF: utility to detect row drops during feature engineering
@@ -2121,6 +2161,7 @@ try:
 except Exception:
     equity_init = 0.0
 ctx.capital_scaler.update(ctx, equity_init)
+ctx.last_positions = load_portfolio_snapshot()
 
 # Warm up regime history cache so initial regime checks pass
 try:

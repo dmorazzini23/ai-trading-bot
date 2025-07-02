@@ -16,6 +16,13 @@ import datetime
 def get_utcnow():
     return datetime.datetime.now(datetime.UTC)
 
+# AI-AGENT-REF: safe close retrieval for pipelines
+def robust_signal_price(df: pd.DataFrame) -> float:
+    try:
+        return df['close'].iloc[-1]
+    except Exception:
+        return 1e-3
+
 
 def rolling_mean(arr: np.ndarray, window: int) -> np.ndarray:
     """Simple rolling mean using cumulative sum for speed."""

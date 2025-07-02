@@ -14,7 +14,10 @@ warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 
 from alpaca_trade_api.rest import APIError  # noqa: F401
 from dotenv import load_dotenv
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
+
+import bot_engine
+import runner
 
 import config
 from alerting import send_slack_alert
@@ -34,6 +37,30 @@ def create_flask_app() -> Flask:
     def healthz():
         from flask import Response
         return Response("OK", status=200)
+
+    @app.route('/api/override_cooldown', methods=['POST'])
+    def override_cooldown():
+        payload = request.get_json() or {}
+        symbols = payload.get("symbols", [])
+        reset = payload.get("reset", True)
+        cleared = []
+        for sym in symbols:
+            if reset:
+                bot_engine.state.trade_cooldowns.pop(sym, None)
+                cleared.append(sym)
+        return jsonify({"status": "success", "details": f"Cooldowns cleared for {cleared}"})
+
+    @app.route('/api/force_trade', methods=['POST'])
+    def force_trade():
+        payload = request.get_json() or {}
+        mode = payload.get("mode", "balanced")
+        symbols = payload.get("symbols")
+        try:
+            runner.run_all_trades(bot_engine.ctx, mode_override=mode, symbols_override=symbols)
+            summary = "triggered"
+        except Exception as exc:  # pragma: no cover - safety
+            summary = str(exc)
+        return jsonify({"status": "success", "summary": summary})
 
     return app
 
