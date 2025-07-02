@@ -6406,11 +6406,12 @@ def initialize_bot(api=None, data_loader=None):
     return ctx, state
 
 
-def generate_signals(df: pd.DataFrame) -> pd.Series:
-    """Generate basic momentum signals from a price column."""
-    if df is None or "price" not in df.columns:
-        raise KeyError("price")
-    return np.sign(df["price"].diff().fillna(0))
+def generate_signals(df):
+    # AI-AGENT-REF: momentum-based signal using rolling z-score
+    window = 10
+    momentum = (df['price'] - df['price'].shift(window)) / df['price'].rolling(window).std()
+    signal = np.where(momentum > 1, 1, np.where(momentum < -1, -1, 0))
+    return signal
 
 
 def execute_trades(ctx, signals: pd.Series) -> list[tuple[str, str]]:
@@ -6439,6 +6440,17 @@ def run_trading_cycle(ctx, df: pd.DataFrame) -> list[tuple[str, str]]:
 def health_check(df: pd.DataFrame, resolution: str) -> bool:
     """Delegate to :func:`utils.health_check` for convenience."""
     return utils.health_check(df, resolution)
+
+
+def compute_atr_stop(df, atr_window=14, multiplier=2):
+    # AI-AGENT-REF: helper for ATR-based trailing stop
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    atr = tr.rolling(atr_window).mean()
+    stop_level = df['close'] - (atr * multiplier)
+    return stop_level
 
 
 if __name__ == "__main__":
