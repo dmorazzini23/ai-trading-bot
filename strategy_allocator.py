@@ -46,12 +46,26 @@ class StrategyAllocator:
 
             results: List[TradeSignal] = []
             for strat, sigs in signals.items():
+                candidates_dict = {s.symbol: getattr(s, "confidence", 0) for s in sigs}
+                logger.info(
+                    "Strategy %s evaluating candidates: %s",
+                    strat,
+                    candidates_dict,
+                )
                 if not isinstance(sigs, list) or not sigs:
-                    logger.warning("No signals provided for strategy %s", strat)
+                    logger.warning(
+                        "No signals for strategy %s. Candidates: %s",
+                        strat,
+                        candidates_dict,
+                    )
                     continue
 
                 weight = self.weights.get(strat, 1.0)
-                if not isinstance(weight, (int, float)) or math.isnan(weight) or weight <= 0:
+                if (
+                    not isinstance(weight, (int, float))
+                    or math.isnan(weight)
+                    or weight <= 0
+                ):
                     logger.warning(
                         "Invalid weight %r for strategy %s; defaulting to 1.0",
                         weight,
@@ -65,7 +79,9 @@ class StrategyAllocator:
                         logger.warning("Invalid TradeSignal %r in %s", s, strat)
                         continue
                     if not isinstance(s.weight, (int, float)) or math.isnan(s.weight):
-                        logger.warning("Signal weight invalid for %s; using default 1.0", s.symbol)
+                        logger.warning(
+                            "Signal weight invalid for %s; using default 1.0", s.symbol
+                        )
                         s.weight = 1.0
                     s.weight *= weight
                     results.append(s)
@@ -75,6 +91,11 @@ class StrategyAllocator:
                     len(results) - before_count,
                     strat,
                     weight,
+                )
+                logger.info(
+                    "Final candidate signals for %s: %s",
+                    strat,
+                    {s.symbol: s.weight for s in results if s.strategy == strat},
                 )
 
             return results

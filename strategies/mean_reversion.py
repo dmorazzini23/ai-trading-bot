@@ -21,6 +21,7 @@ class MeanReversionStrategy(Strategy):
 
     def generate(self, ctx) -> List[TradeSignal]:
         signals: List[TradeSignal] = []
+        scores = {}
         tickers = getattr(ctx, "tickers", [])
         for sym in tickers:
             df = ctx.data_fetcher.get_daily_df(ctx, sym)
@@ -54,6 +55,7 @@ class MeanReversionStrategy(Strategy):
 
             # Calculate the z-score of the latest close price
             z = (last_close - ma) / sd
+            scores[sym] = float(z)
             if z > self.z:
                 signals.append(
                     TradeSignal(
@@ -74,4 +76,6 @@ class MeanReversionStrategy(Strategy):
                         asset_class=asset_class_for(sym),
                     )
                 )
+        if not signals:
+            logger.info("No signals generated for mean_reversion. Scores: %s", scores)
         return signals
