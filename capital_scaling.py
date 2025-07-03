@@ -45,6 +45,13 @@ def dynamic_fractional_kelly(base_fraction: float, drawdown: float, volatility_s
     return base_fraction * adjustment
 
 
+# AI-AGENT-REF: throttle Kelly sizing as drawdowns deepen
+def drawdown_adjusted_kelly(account_value: float, equity_peak: float, raw_kelly: float) -> float:
+    drawdown_pct = 1 - (account_value / equity_peak)
+    throttle = max(0.2, 1 - drawdown_pct * 2)
+    return raw_kelly * throttle
+
+
 def kelly_fraction(win_rate: float, win_loss_ratio: float) -> float:
     """Return raw Kelly fraction based on win statistics."""
     edge = win_rate - (1 - win_rate) / win_loss_ratio
@@ -94,6 +101,7 @@ __all__ = [
     "CapitalScalingEngine",
     "volatility_parity_position",
     "dynamic_fractional_kelly",
+    "drawdown_adjusted_kelly",
     "pyramiding_add",
     "decay_position",
     "fractional_kelly",
