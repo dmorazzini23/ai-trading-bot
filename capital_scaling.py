@@ -32,8 +32,10 @@ class CapitalScalingEngine:
 
 
 def volatility_parity_position(base_risk: float, atr_value: float) -> float:
-    """Return position size using volatility parity."""
-    return base_risk / atr_value if atr_value else 0.0
+    """Position size based on volatility parity."""
+    if atr_value == 0:
+        return 0
+    return base_risk / atr_value
 
 
 def dynamic_fractional_kelly(base_fraction: float, drawdown: float, volatility_spike: bool) -> float:
@@ -46,10 +48,14 @@ def dynamic_fractional_kelly(base_fraction: float, drawdown: float, volatility_s
     return base_fraction * adjustment
 
 
-# AI-AGENT-REF: simpler drawdown throttling with clamp
+# AI-AGENT-REF: adjust Kelly fraction by current drawdown
 def drawdown_adjusted_kelly(account_value: float, equity_peak: float, raw_kelly: float) -> float:
-    dd_factor = account_value / equity_peak if equity_peak else 1.0
-    return max(0.0, min(1.0, raw_kelly * dd_factor))
+    """Scale down kelly fraction during drawdowns."""
+    if equity_peak == 0:
+        return raw_kelly
+    drawdown_ratio = account_value / equity_peak
+    adjusted_kelly = raw_kelly * drawdown_ratio
+    return max(0, adjusted_kelly)
 
 
 def kelly_fraction(win_rate: float, win_loss_ratio: float) -> float:
@@ -97,16 +103,6 @@ def cvar_scaling(returns: np.ndarray, alpha: float = 0.05) -> float:
     cvar = np.mean(sorted_returns[sorted_returns <= var])
     return abs(cvar) if cvar < 0 else 1.0
 
-# === Wrappers for expected test signatures ===
-def volatility_parity_position_alt(asset_vol, portfolio_vol):
-    return volatility_parity_position(portfolio_vol, asset_vol)
-
-
-def drawdown_adjusted_kelly_alt(current_drawdown, kelly_fraction, taper_threshold=0.2):
-    equity_peak = 1.0
-    account_value = 1.0 - current_drawdown
-    raw_kelly = kelly_fraction
-    return drawdown_adjusted_kelly(account_value, equity_peak, raw_kelly)
 
 __all__ = [
     "CapitalScalingEngine",
