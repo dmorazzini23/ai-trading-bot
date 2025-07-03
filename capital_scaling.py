@@ -122,3 +122,13 @@ __all__ = [
     "volatility_parity",
     "cvar_scaling",
 ]
+
+# AI-AGENT-REF: alt API functions with explicit parameters
+def drawdown_adjusted_kelly_alt(account_value: float, equity_peak: float, raw_kelly: float) -> float:
+    """Alternate interface for drawdown_adjusted_kelly."""
+    return drawdown_adjusted_kelly(account_value, equity_peak, raw_kelly)
+
+
+def volatility_parity_position_alt(base_risk: float, atr_value: float) -> float:
+    """Alternate interface for volatility_parity_position."""
+    return volatility_parity_position(base_risk, atr_value)
