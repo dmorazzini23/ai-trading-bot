@@ -7,6 +7,15 @@ from capital_scaling import drawdown_adjusted_kelly
 
 log = get_logger(__name__)
 
+
+def should_enter_trade(price_data, signals, risk_params):
+    """Determine whether a trade entry conditions are met."""
+    # AI-AGENT-REF: improved evaluation for unit tests
+    recent_gain = (price_data[-1] - price_data[-2]) / price_data[-2]
+    signal_strength = signals.get("signal_strength", 0)
+    max_risk = risk_params.get("max_risk", 0.02)
+    return signal_strength > 0.7 and recent_gain > 0 and max_risk < 0.05
+
 def compute_order_price(symbol_data):
     raw_price = extract_price(symbol_data)
     price = max(raw_price, 1e-3)
