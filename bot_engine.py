@@ -12,7 +12,7 @@ import joblib
 import datetime
 
 # AI-AGENT-REF: replace utcnow with timezone-aware now
-old_generate = datetime.datetime.utcnow
+old_generate = datetime.datetime.now(datetime.UTC)  # replaced utcnow for tz-aware
 new_generate = datetime.datetime.now(datetime.UTC)
 
 # AI-AGENT-REF: suppress noisy external library warnings

@@ -73,6 +73,17 @@ def reload_utils_module():
     yield
 
 
+# AI-AGENT-REF: stub capital scaling helpers for unit tests
+@pytest.fixture(autouse=True)
+def stub_capital_scaling(monkeypatch):
+    """Provide simple stubs for heavy capital scaling functions."""
+    import capital_scaling as cs
+    monkeypatch.setattr(cs, "drawdown_adjusted_kelly", lambda *a, **k: 0.02)
+    monkeypatch.setattr(cs, "drawdown_adjusted_kelly_alt", lambda *a, **k: 0.015)
+    monkeypatch.setattr(cs, "volatility_parity_position_alt", lambda *a, **k: 0.01)
+    yield
+
+
 def load_runner(monkeypatch):
     """Import and reload the runner module with a dummy bot."""
     bot_mod = types.ModuleType("bot")
