@@ -77,11 +77,19 @@ except Exception:  # TODO: narrow exception type
         raise RuntimeError("Alpaca API unavailable")
 
 
-from audit import log_trade
+from audit import log_trade as audit_log_trade
 from slippage import monitor_slippage
 from utils import get_phase_logger
 
 SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
+
+
+def log_trade(symbol, quantity, price, order_id, filled_qty, timestamp):
+    """Log basic trade execution details."""  # AI-AGENT-REF: simplified trade log
+    logging.info(
+        f"[TRADE_LOG] {symbol} | qty={quantity} price={price} order_id={order_id} "
+        f"filled_qty={filled_qty} time={timestamp}"
+    )
 
 
 def log_order(order, status=None, extra=None):
@@ -506,13 +514,21 @@ class ExecutionEngine:
                     "price": fill_price,
                 },
             )
-            log_trade(
+            audit_log_trade(
                 symbol,
                 side,
                 slice_qty,
                 fill_price,
                 status,
                 "SHADOW" if SHADOW_MODE else "LIVE",
+            )
+            log_trade(
+                symbol,
+                slice_qty,
+                fill_price,
+                order_id,
+                slice_qty,
+                datetime.now(timezone.utc).isoformat(),
             )
             filled_qty = slice_qty
         elif status == "partially_filled":

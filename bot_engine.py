@@ -5639,10 +5639,13 @@ def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[st
 
     full_watchlist = load_tickers(TICKERS_FILE)
     symbols = screen_candidates()
+    logger.info("Number of screened candidates: %s", len(symbols))  # AI-AGENT-REF: log candidate count
     if not symbols:
-        logger.warning("No tickers passed screening—using fallback watchlist.")
+        logger.warning(
+            "No candidates found after filtering, using top 5 tickers fallback."
+        )
         state.fallback_watchlist_events += 1
-        symbols = full_watchlist
+        symbols = full_watchlist[:5]
     logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
     ctx.tickers = symbols
     try:
