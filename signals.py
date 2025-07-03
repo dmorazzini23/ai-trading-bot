@@ -308,3 +308,22 @@ def classify_regime(df: pd.DataFrame, window: int = 20) -> pd.Series:
     dev = vol.rolling(window).std()
     regime = np.where(vol > med + dev, "trend", "mean_revert")
     return pd.Series(regime, index=df.index)
+
+
+# AI-AGENT-REF: ensemble decision using multiple indicator columns
+def generate_ensemble_signal(df: pd.DataFrame) -> int:
+    signals = []
+    if df.get("EMA_5", pd.Series()).iloc[-1] > df.get("EMA_20", pd.Series()).iloc[-1]:
+        signals.append(1)
+    if df.get("SMA_50", pd.Series()).iloc[-1] > df.get("SMA_200", pd.Series()).iloc[-1]:
+        signals.append(1)
+    if df.get("close", pd.Series()).iloc[-1] > df.get("UB", pd.Series()).iloc[-1]:
+        signals.append(-1)
+    if df.get("close", pd.Series()).iloc[-1] < df.get("LB", pd.Series()).iloc[-1]:
+        signals.append(1)
+    avg_signal = np.mean(signals) if signals else 0
+    if avg_signal > 0.5:
+        return 1
+    if avg_signal < -0.5:
+        return -1
+    return 0

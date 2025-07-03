@@ -96,6 +96,47 @@ def mean_reversion_zscore(series: pd.Series, window: int = 20) -> pd.Series:
     rolling_std = series.rolling(window).std(ddof=0)
     return (series - rolling_mean) / rolling_std
 
+# AI-AGENT-REF: helper to compute multiple EMAs across common horizons
+def compute_ema(df: pd.DataFrame, periods: list[int] | None = None) -> pd.DataFrame:
+    periods = periods or [5, 20, 50, 200]
+    for p in periods:
+        df[f"EMA_{p}"] = df["close"].ewm(span=p, adjust=False).mean()
+    return df
+
+
+# AI-AGENT-REF: helper to compute multiple SMAs across common horizons
+def compute_sma(df: pd.DataFrame, periods: list[int] | None = None) -> pd.DataFrame:
+    periods = periods or [5, 20, 50, 200]
+    for p in periods:
+        df[f"SMA_{p}"] = df["close"].rolling(window=p).mean()
+    return df
+
+
+# AI-AGENT-REF: compute standard Bollinger Bands and width
+def compute_bollinger(df: pd.DataFrame, window: int = 20, num_std: int = 2) -> pd.DataFrame:
+    df["MB"] = df["close"].rolling(window=window).mean()
+    df["STD"] = df["close"].rolling(window=window).std()
+    df["UB"] = df["MB"] + (num_std * df["STD"])
+    df["LB"] = df["MB"] - (num_std * df["STD"])
+    df["BollingerWidth"] = df["UB"] - df["LB"]
+    return df
+
+
+# AI-AGENT-REF: compute ATR values for several lookback periods
+def compute_atr(df: pd.DataFrame, periods: list[int] | None = None) -> pd.DataFrame:
+    periods = periods or [14, 50]
+    for p in periods:
+        tr = np.maximum(
+            df["high"] - df["low"],
+            np.maximum(
+                (df["high"] - df["close"].shift()).abs(),
+                (df["low"] - df["close"].shift()).abs(),
+            ),
+        )
+        df[f"TR_{p}"] = tr
+        df[f"ATR_{p}"] = tr.rolling(window=p).mean()
+    return df
+
 
 # AI-AGENT-REF: additional indicator utilities
 def calculate_macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[pd.Series, pd.Series]:
@@ -188,6 +229,10 @@ __all__ = [
     "ema",
     "sma",
     "bollinger_bands",
+    "compute_ema",
+    "compute_sma",
+    "compute_bollinger",
+    "compute_atr",
     "rsi",
     "atr",
     "mean_reversion_zscore",

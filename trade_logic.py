@@ -2,6 +2,10 @@
 
 import random
 import metrics_logger
+from logger import get_logger
+from capital_scaling import drawdown_adjusted_kelly
+
+log = get_logger(__name__)
 
 def compute_order_price(symbol_data):
     raw_price = extract_price(symbol_data)
@@ -29,3 +33,15 @@ def pyramiding_logic(current_position: float, profit_in_atr: float, base_size: f
         metrics_logger.log_pyramid_add("generic", new_pos)
         return new_pos
     return current_position
+
+
+# AI-AGENT-REF: execute trade with drawdown-aware Kelly sizing
+def execute_trade(signal: int, position_size: float, price: float, equity_peak: float, account_value: float, raw_kelly: float) -> None:
+    adj_kelly = drawdown_adjusted_kelly(account_value, equity_peak, raw_kelly)
+    final_size = position_size * adj_kelly
+    if signal == 1:
+        log.info("BUY %s at %s", final_size, price)
+    elif signal == -1:
+        log.info("SELL %s at %s", final_size, price)
+    else:
+        log.info("HOLD")
