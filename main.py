@@ -2,6 +2,7 @@
 import asyncio
 import importlib
 import os
+import logging
 
 from alpaca.trading.client import TradingClient
 
@@ -40,6 +41,17 @@ def summarize_trades(path: str = os.getenv("TRADE_LOG_FILE", "trades.csv")) -> N
     equity_curve = df.get("equity", []).tolist() if "equity" in df.columns else df.get("price", []).cumsum().tolist()
     regime = df.get("regime").iloc[-1] if "regime" in df.columns and not df.empty else "unknown"
     log_performance_metrics(exposure_pct=exposure, equity_curve=equity_curve, regime=regime)
+
+
+def screen_candidates_with_logging(candidates: list[str], tickers: list[str]) -> list[str]:
+    """Return final candidate list with fallback logging."""  # AI-AGENT-REF: candidate logging
+    logging.info("Number of screened candidates: %s", len(candidates))
+    if not candidates:
+        logging.warning(
+            "No candidates found after filtering, using top 5 tickers fallback."
+        )
+        candidates = tickers[:5]
+    return candidates
 
 
 def start_trade_updates_loop() -> None:
