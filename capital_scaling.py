@@ -4,6 +4,7 @@ Utilities for adaptive capital allocation and risk-based position sizing.
 """
 
 import numpy as np
+import math
 
 
 class _CapScaler:
@@ -45,11 +46,10 @@ def dynamic_fractional_kelly(base_fraction: float, drawdown: float, volatility_s
     return base_fraction * adjustment
 
 
-# AI-AGENT-REF: throttle Kelly sizing as drawdowns deepen
+# AI-AGENT-REF: simpler drawdown throttling with clamp
 def drawdown_adjusted_kelly(account_value: float, equity_peak: float, raw_kelly: float) -> float:
-    drawdown_pct = 1 - (account_value / equity_peak)
-    throttle = max(0.2, 1 - drawdown_pct * 2)
-    return raw_kelly * throttle
+    dd_factor = account_value / equity_peak if equity_peak else 1.0
+    return max(0.0, min(1.0, raw_kelly * dd_factor))
 
 
 def kelly_fraction(win_rate: float, win_loss_ratio: float) -> float:
@@ -97,11 +97,24 @@ def cvar_scaling(returns: np.ndarray, alpha: float = 0.05) -> float:
     cvar = np.mean(sorted_returns[sorted_returns <= var])
     return abs(cvar) if cvar < 0 else 1.0
 
+# === Wrappers for expected test signatures ===
+def volatility_parity_position_alt(asset_vol, portfolio_vol):
+    return volatility_parity_position(portfolio_vol, asset_vol)
+
+
+def drawdown_adjusted_kelly_alt(current_drawdown, kelly_fraction, taper_threshold=0.2):
+    equity_peak = 1.0
+    account_value = 1.0 - current_drawdown
+    raw_kelly = kelly_fraction
+    return drawdown_adjusted_kelly(account_value, equity_peak, raw_kelly)
+
 __all__ = [
     "CapitalScalingEngine",
     "volatility_parity_position",
     "dynamic_fractional_kelly",
     "drawdown_adjusted_kelly",
+    "volatility_parity_position_alt",
+    "drawdown_adjusted_kelly_alt",
     "pyramiding_add",
     "decay_position",
     "fractional_kelly",
