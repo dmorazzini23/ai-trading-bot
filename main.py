@@ -2,7 +2,6 @@
 import asyncio
 import importlib
 import os
-import logging
 
 from alpaca.trading.client import TradingClient
 
@@ -19,6 +18,7 @@ main = _run.main
 
 import pandas as pd
 from logger import get_logger, log_performance_metrics
+from bot_engine import compute_current_positions, ctx as bot_ctx
 
 
 def summarize_trades(path: str = os.getenv("TRADE_LOG_FILE", "trades.csv")) -> None:
@@ -44,14 +44,22 @@ def summarize_trades(path: str = os.getenv("TRADE_LOG_FILE", "trades.csv")) -> N
 
 
 def screen_candidates_with_logging(candidates: list[str], tickers: list[str]) -> list[str]:
-    """Return final candidate list with fallback logging."""  # AI-AGENT-REF: candidate logging
-    logging.info("Number of screened candidates: %s", len(candidates))
+    """Return final candidate list with fallback and position filtering."""  # AI-AGENT-REF: candidate logging
+    log = get_logger(__name__)
+    log.info("Number of screened candidates: %s", len(candidates))
     if not candidates:
-        logging.warning(
+        log.warning(
             "No candidates found after filtering, using top 5 tickers fallback."
         )
         candidates = tickers[:5]
-    return candidates
+
+    positions = compute_current_positions(bot_ctx)
+    filtered = [c for c in candidates if c not in positions]
+    if not filtered:
+        log.info("All candidates already held, skipping new buys.")
+        return []
+
+    return filtered
 
 
 def start_trade_updates_loop() -> None:

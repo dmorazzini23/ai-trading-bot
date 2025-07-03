@@ -85,9 +85,10 @@ SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
 
 def log_trade(symbol, quantity, price, order_id, filled_qty, timestamp):
-    """Log basic trade execution details."""  # AI-AGENT-REF: simplified trade log
+    """Log basic trade execution details."""  # AI-AGENT-REF: logging fix
+    import logging
     logging.info(
-        f"[TRADE_LOG] {symbol} | qty={quantity} price={price} order_id={order_id} "
+        f"[TRADE_LOG] {symbol} qty={quantity} price={price} order_id={order_id} "
         f"filled_qty={filled_qty} time={timestamp}"
     )
 
