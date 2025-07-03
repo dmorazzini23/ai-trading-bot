@@ -188,6 +188,25 @@ def test_is_market_open_holiday(monkeypatch):
     assert not utils.is_market_open(now)
 
 
+def test_is_market_open_july3_2025(monkeypatch):
+    """July 3, 2025 should be normal hours."""
+    mod = types.ModuleType("pandas_market_calendars")
+
+    class Cal:
+        def schedule(self, start_date=None, end_date=None):
+            return pd.DataFrame(
+                {
+                    "market_open": [pd.Timestamp("2025-07-03 09:30", tz="US/Eastern")],
+                    "market_close": [pd.Timestamp("2025-07-03 13:00", tz="US/Eastern")],
+                }
+            )
+
+    mod.get_calendar = lambda name: Cal()
+    monkeypatch.setitem(sys.modules, "pandas_market_calendars", mod)
+    now = datetime(2025, 7, 3, 11, 55, tzinfo=utils.EASTERN_TZ)
+    assert utils.is_market_open(now)
+
+
 def test_ensure_utc_type_error():
     with pytest.raises(AssertionError):
         utils.ensure_utc(1)
