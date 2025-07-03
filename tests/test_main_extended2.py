@@ -31,6 +31,24 @@ def test_run_flask_app(monkeypatch):
     assert called['args'] == ('0.0.0.0', 1234)
 
 
+def test_run_flask_app_port_in_use(monkeypatch):
+    """Port conflicts trigger retry in test mode."""
+    called = {"runs": []}
+
+    class App:
+        def run(self, host, port):
+            called["runs"].append(port)
+            if len(called["runs"]) == 1:
+                raise OSError(98, "in use")
+
+    monkeypatch.setattr(main, "create_flask_app", lambda: App())
+    monkeypatch.setenv("TEST_MODE", "1")
+    monkeypatch.setattr(main.utils, "get_pid_on_port", lambda p: 111)
+    monkeypatch.setattr(main.utils, "get_free_port", lambda *a, **k: 5678)
+    main.run_flask_app(1234)
+    assert called["runs"] == [1234, 5678]
+
+
 def test_run_bot_missing_exec(monkeypatch):
     """run_bot raises when python executable missing."""
     monkeypatch.setattr(main.os.path, 'isfile', lambda p: False)

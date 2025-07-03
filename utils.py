@@ -169,9 +169,21 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
                 "No market schedule for %s in is_market_open; returning False.",
                 check_time.date(),
             )
+            logger.info("Detected Market Hours today: CLOSED")
             return False  # holiday or weekend
         market_open = sched.iloc[0]["market_open"].tz_convert(EASTERN_TZ).time()
         market_close = sched.iloc[0]["market_close"].tz_convert(EASTERN_TZ).time()
+        if check_time.month == 7 and check_time.day == 3:
+            july4 = date(check_time.year, 7, 4)
+            if july4.weekday() >= 5:
+                market_close = time(13, 0)
+            else:
+                market_close = MARKET_CLOSE_TIME
+        logger.info(
+            "Detected Market Hours today: OPEN from %s to %s",
+            market_open.strftime("%H:%M"),
+            market_close.strftime("%H:%M"),
+        )
         current = check_time.time()
         return market_open <= current <= market_close
     except Exception as exc:
@@ -181,8 +193,14 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
             now or dt.datetime.now(tz=EASTERN_TZ)
         ).astimezone(EASTERN_TZ)
         if now_et.weekday() >= 5:
+            logger.info("Detected Market Hours today: CLOSED")
             return False
         current = now_et.time()
+        logger.info(
+            "Detected Market Hours today: OPEN from %s to %s",
+            MARKET_OPEN_TIME.strftime("%H:%M"),
+            MARKET_CLOSE_TIME.strftime("%H:%M"),
+        )
         return MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME
 
 
@@ -210,6 +228,37 @@ def get_free_port(start: int = 9200, end: int = 9300) -> int | None:
                 return port
             except OSError:
                 continue
+    return None
+
+
+def _pid_from_inode(inode: str) -> int | None:
+    """Return PID for a socket inode on Linux."""
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        fd_dir = f"/proc/{pid}/fd"
+        if not os.path.isdir(fd_dir):
+            continue
+        for fd in os.listdir(fd_dir):
+            try:
+                if os.readlink(os.path.join(fd_dir, fd)) == f"socket:[{inode}]":
+                    return int(pid)
+            except OSError:
+                continue
+    return None
+
+
+def get_pid_on_port(port: int) -> int | None:
+    """Best-effort detection of PID bound to ``port``."""
+    try:
+        with open("/proc/net/tcp") as f:
+            next(f)
+            for line in f:
+                parts = line.split()
+                local = parts[1]
+                inode = parts[9]
+                if int(local.split(":")[1], 16) == port:
+                    return _pid_from_inode(inode)
+    except Exception:
+        return None
     return None
 
 

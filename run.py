@@ -1,5 +1,6 @@
 #!/usr/bin/env python3.12
 import argparse
+import errno
 import os
 import signal
 import subprocess
@@ -15,6 +16,8 @@ warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 from alpaca_trade_api.rest import APIError  # noqa: F401
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
+
+import utils
 
 import bot_engine
 import runner
@@ -68,7 +71,21 @@ def create_flask_app() -> Flask:
 def run_flask_app(port: int) -> None:
     """Start the Flask application on ``port``."""
     app = create_flask_app()
-    app.run(host="0.0.0.0", port=port)
+    try:
+        app.run(host="0.0.0.0", port=port)
+    except OSError as exc:  # AI-AGENT-REF: handle port reuse
+        if exc.errno == errno.EADDRINUSE:
+            pid = utils.get_pid_on_port(port)
+            hint = f" by PID {pid}" if pid else ""
+            app.logger.error("port already in use on %s%s", port, hint)
+            if os.getenv("TEST_MODE"):
+                new_port = utils.get_free_port() or port
+                app.logger.info("Retrying Flask server on port %s", new_port)
+                app.run(host="0.0.0.0", port=new_port)
+            else:
+                raise
+        else:
+            raise
 
 
 def run_bot(venv_path: str, bot_script: str) -> int:
