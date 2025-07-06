@@ -27,6 +27,11 @@ except ImportError:  # pragma: no cover - sklearn optional
 
 
 import joblib
+from joblib import parallel_backend
+
+# AI-AGENT-REF: restrict joblib parallelism
+with parallel_backend("loky", n_jobs=1):
+    pass
 import pandas as pd
 
 try:

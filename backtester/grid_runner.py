@@ -38,7 +38,7 @@ def run_grid_search(
     if os.getenv("BACKTEST_SERIAL") == "1" or workers == 1:
         results = [_run(t) for t in tasks]
     else:
-        with Pool(processes=workers) as pool:
+        with Pool(processes=1) as pool:  # AI-AGENT-REF: single worker for consistency
             results = pool.map(_run, tasks)
 
     sort_key = {

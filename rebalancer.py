@@ -39,7 +39,8 @@ def start_rebalancer(ctx) -> threading.Thread:
                 maybe_rebalance(ctx)
             except Exception as exc:  # pragma: no cover - background errors
                 logger.error("Rebalancer loop error: %s", exc)
-            time.sleep(60)
+            # AI-AGENT-REF: reduce loop churn
+            time.sleep(300)
 
     t = threading.Thread(target=loop, daemon=True)
     t.start()

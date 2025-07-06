@@ -210,7 +210,7 @@ def prepare_indicators_parallel(symbols, data):
         for _ in symbols:
             pass
         return
-    with ThreadPoolExecutor() as executor:
+    with ThreadPoolExecutor(max_workers=1) as executor:  # AI-AGENT-REF: single worker to reduce CPU
         list(executor.map(lambda ticker: prepare_indicators(data[ticker], ticker), symbols))
 
 

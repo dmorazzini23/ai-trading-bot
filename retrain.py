@@ -765,7 +765,7 @@ def retrain_meta_learner(
             pos_ratio,
         )
 
-        base_params = dict(objective="binary", n_jobs=-1, random_state=SEED)
+        base_params = dict(objective="binary", n_jobs=1, random_state=SEED)  # AI-AGENT-REF: reduce thread usage
         search_space = {
             "n_estimators": [100, 200, 300, 500],
             "max_depth": [-1, 4, 6, 8],
