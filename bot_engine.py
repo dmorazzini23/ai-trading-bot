@@ -757,9 +757,9 @@ slippage_lock = Lock()
 meta_lock = Lock()
 
 breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
-executor = ThreadPoolExecutor(max_workers=4)
+executor = ThreadPoolExecutor(max_workers=1)  # AI-AGENT-REF: limit workers for single CPU
 # Separate executor for ML predictions and trade execution
-prediction_executor = ThreadPoolExecutor(max_workers=2)
+prediction_executor = ThreadPoolExecutor(max_workers=1)
 
 # EVENT cooldown
 _LAST_EVENT_TS = {}
@@ -3088,7 +3088,7 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                         f"Order stuck in PENDING_NEW: {req.symbol}, retrying or monitoring required."
                     )
                     break
-                time.sleep(0.5)
+                time.sleep(5)  # AI-AGENT-REF: avoid busy polling
                 order = api.get_order_by_id(order.id)
             logger.info(
                 f"Order status for {req.symbol}: {getattr(order, 'status', '')}"
