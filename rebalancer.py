@@ -7,10 +7,11 @@ from datetime import datetime, timedelta, timezone
 
 import config
 from alerts import send_slack_alert
+from bot_engine import compute_portfolio_weights
 
 logger = logging.getLogger(__name__)
 
-REBALANCE_INTERVAL_MIN = int(config.get_env("REBALANCE_INTERVAL_MIN", "1440"))
+REBALANCE_INTERVAL_MIN = int(config.get_env("REBALANCE_INTERVAL_MIN", "10"))
 
 _last_rebalance = datetime.now(timezone.utc)
 
@@ -27,8 +28,14 @@ def maybe_rebalance(ctx) -> None:
     global _last_rebalance
     now = datetime.now(timezone.utc)
     if (now - _last_rebalance) >= timedelta(minutes=REBALANCE_INTERVAL_MIN):
-        rebalance_portfolio(ctx)
-        _last_rebalance = now
+        portfolio = getattr(ctx, "portfolio_weights", {})
+        current = compute_portfolio_weights(list(portfolio.keys())) if portfolio else {}
+        drift = max(
+            abs(current.get(s, 0) - portfolio.get(s, 0)) for s in current
+        ) if current else 0.0
+        if drift > config.REBALANCE_DRIFT_THRESHOLD:
+            rebalance_portfolio(ctx)
+            _last_rebalance = now
 
 
 def start_rebalancer(ctx) -> threading.Thread:
@@ -40,7 +47,7 @@ def start_rebalancer(ctx) -> threading.Thread:
             except Exception as exc:  # pragma: no cover - background errors
                 logger.error("Rebalancer loop error: %s", exc)
             # AI-AGENT-REF: reduce loop churn
-            time.sleep(300)
+            time.sleep(600)
 
     t = threading.Thread(target=loop, daemon=True)
     t.start()
