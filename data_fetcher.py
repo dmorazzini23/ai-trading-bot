@@ -259,18 +259,18 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
         raise DataFetchError(f"Historical fetch failed for {symbol}: {e}") from e
 
     df = pd.DataFrame(bars)
-        if df.empty:
-            for attempt in range(3):
-                pytime.sleep(0.5 * (attempt + 1))
-                bars = _fetch(_DEFAULT_FEED)
-                df = pd.DataFrame(bars)
-                if not df.empty:
-                    break
-            if df.empty or len(df) < MIN_EXPECTED_ROWS:
-                logger.warning(
-                    f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
-                )
-                return []
+    if df.empty:
+        for attempt in range(3):
+            pytime.sleep(0.5 * (attempt + 1))
+            bars = _fetch(_DEFAULT_FEED)
+            df = pd.DataFrame(bars)
+            if not df.empty:
+                break
+        if df.empty or len(df) < MIN_EXPECTED_ROWS:
+            logger.warning(
+                f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
+            )
+            return []
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(-1)
