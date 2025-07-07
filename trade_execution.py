@@ -207,6 +207,7 @@ class ExecutionEngine:
         self._slippage_checks: dict[str, int] = {}
         # AI-AGENT-REF: track fill fragmentation and volatility regime
         self.fill_history: deque[int] = deque(maxlen=config.PARTIAL_FILL_LOOKBACK)
+        self.partial_flags: deque[bool] = deque(maxlen=config.PARTIAL_FILL_LOOKBACK)
         self.adaptive_multiplier = 1.0
         self.vol_history: deque[float] = deque(maxlen=50)
         self.baseline_vol: float | None = None
@@ -440,17 +441,19 @@ class ExecutionEngine:
 
     def _record_fill_steps(self, steps: int) -> None:
         self.fill_history.append(steps)
-        if steps > config.PARTIAL_FILL_FRAGMENT_THRESHOLD:
+        partial = steps > 1
+        self.partial_flags.append(partial)
+        if partial and steps > config.PARTIAL_FILL_FRAGMENT_THRESHOLD:
             self.logger.warning(
                 "PARTIAL_FILL_FRAGMENTED", extra={"steps": steps}
             )
-        if len(self.fill_history) >= self.fill_history.maxlen:
-            frag_count = sum(1 for s in self.fill_history if s > 1)
+        if len(self.partial_flags) >= self.partial_flags.maxlen:
+            frag_count = sum(1 for f in self.partial_flags if f)
             if frag_count > config.PARTIAL_FILL_FRAGMENT_THRESHOLD:
                 self.logger.warning(
                     "HIGH_FRAGMENTATION", extra={"count": frag_count}
                 )
-                self.adaptive_multiplier = 0.8
+                self.adaptive_multiplier = 1.0 - config.PARTIAL_FILL_REDUCTION_RATIO
             else:
                 self.adaptive_multiplier = 1.0
 
@@ -462,9 +465,10 @@ class ExecutionEngine:
         if df_ticks is not None and not df_ticks.empty and "close" in df_ticks.columns:
             tick_range = float(df_ticks["close"].diff().abs().tail(5).max() or 0.0)
         if spread >= config.LIQUIDITY_SPREAD_THRESHOLD * 2 or tick_range >= config.LIQUIDITY_VOL_THRESHOLD * 2:
+            reason = "spread" if spread >= config.LIQUIDITY_SPREAD_THRESHOLD * 2 else "volatility"
             self.logger.info(
                 "LIQUIDITY_SKIP",
-                extra={"symbol": symbol, "spread": spread, "tick_range": tick_range},
+                extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason},
             )
             return 0, True
         if spread >= config.LIQUIDITY_SPREAD_THRESHOLD or tick_range >= config.LIQUIDITY_VOL_THRESHOLD:
@@ -605,11 +609,14 @@ class ExecutionEngine:
             )
             log_json_audit(
                 {
-                    "client_order_id": getattr(order, "client_order_id", order_id),
-                    "asset_id": getattr(order, "asset_id", ""),
-                    "fills": getattr(order, "legs", []),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "fees": getattr(order, "filled_fees", None),
+                    "symbol": symbol,
+                    "qty": slice_qty,
+                    "price": fill_price,
+                    "order_id": order_id,
+                    "client_order_id": getattr(order, "client_order_id", order_id),
+                    "status": status,
+                    "partial_fills": getattr(order, "legs", []),
                 }
             )
             log_trade(
@@ -629,6 +636,18 @@ class ExecutionEngine:
                     "order_id": order_id,
                     "filled_qty": getattr(order, "filled_qty", 0),
                 },
+            )
+            log_json_audit(
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "symbol": symbol,
+                    "qty": getattr(order, "filled_qty", 0),
+                    "price": fill_price,
+                    "order_id": order_id,
+                    "client_order_id": getattr(order, "client_order_id", order_id),
+                    "status": status,
+                    "partial_fills": getattr(order, "legs", []),
+                }
             )
             filled_qty = int(getattr(order, "filled_qty", 0) or 0)
         elif status in ("pending_new", "new"):
