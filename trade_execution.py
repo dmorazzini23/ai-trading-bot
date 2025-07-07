@@ -445,8 +445,14 @@ class ExecutionEngine:
                 "PARTIAL_FILL_FRAGMENTED", extra={"steps": steps}
             )
         if len(self.fill_history) >= self.fill_history.maxlen:
-            avg = sum(self.fill_history) / len(self.fill_history)
-            self.adaptive_multiplier = 0.8 if avg > config.PARTIAL_FILL_FRAGMENT_THRESHOLD else 1.0
+            frag_count = sum(1 for s in self.fill_history if s > 1)
+            if frag_count > config.PARTIAL_FILL_FRAGMENT_THRESHOLD:
+                self.logger.warning(
+                    "HIGH_FRAGMENTATION", extra={"count": frag_count}
+                )
+                self.adaptive_multiplier = 0.8
+            else:
+                self.adaptive_multiplier = 1.0
 
     def _assess_liquidity(self, symbol: str, qty: int) -> tuple[int, bool]:
         bid, ask = self._latest_quote(symbol)

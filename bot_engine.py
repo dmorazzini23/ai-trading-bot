@@ -307,6 +307,7 @@ from strategies import MeanReversionStrategy, MomentumStrategy, TradeSignal
 from strategy_allocator import StrategyAllocator
 from utils import is_market_open as utils_market_open
 from utils import portfolio_lock
+import portfolio
 
 
 def market_is_open(now: datetime.datetime | None = None) -> bool:
@@ -2347,6 +2348,7 @@ def pre_trade_health_check(
                         extra={
                             "symbol": sym,
                             "last_ts": last_ts.isoformat(),
+                            "now_ts": pd.Timestamp.now(tz="UTC").isoformat(),
                             "age_min": (pd.Timestamp.now(tz="UTC") - last_ts).total_seconds() / 60,
                         },
                     )
@@ -4244,22 +4246,13 @@ def trade_logic(
 
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
-    """Equal-weight portfolio using a dummy-price fallback for missing data."""
-    n = len(symbols)
-    if n == 0:
-        logger.warning("No tickers to weight—skipping.")
-        return {}
-
-    prices = [get_latest_close(ctx.data_fetcher.get_daily_df(ctx, s)) for s in symbols]
-    inv_prices = [1.0 / p if p > 0 else 1.0 for p in prices]
-    total_inv = sum(inv_prices)
-    weights = {s: inv / total_inv for s, inv in zip(symbols, inv_prices)}
-    logger.info("PORTFOLIO_WEIGHTS", extra={"weights": weights})
-    return weights
+    """Delegates to :mod:`portfolio` to avoid import cycles."""
+    # AI-AGENT-REF: wrapper for moved implementation
+    return portfolio.compute_portfolio_weights(ctx, symbols)
 
 
 def on_trade_exit_rebalance(ctx: BotContext) -> None:
-    current = compute_portfolio_weights(list(ctx.portfolio_weights.keys()))
+    current = portfolio.compute_portfolio_weights(ctx, list(ctx.portfolio_weights.keys()))
     old = ctx.portfolio_weights
     drift = max(abs(current[s] - old.get(s, 0)) for s in current) if current else 0
     if drift <= 0.1:
@@ -5662,7 +5655,7 @@ def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[st
     except Exception as exc:
         logger.warning(f"pre_trade_health_check failure: {exc}")
     with portfolio_lock:
-        ctx.portfolio_weights = compute_portfolio_weights(symbols)
+        ctx.portfolio_weights = portfolio.compute_portfolio_weights(ctx, symbols)
     acct = ctx.api.get_account()
     current_cash = float(acct.cash)
     regime_ok = check_market_regime(state)
