@@ -84,12 +84,26 @@ from utils import get_phase_logger
 SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
 
-def log_trade(symbol, quantity, price, order_id, filled_qty, timestamp):
-    """Log basic trade execution details."""  # AI-AGENT-REF: logging fix
-    import logging
-    logging.info(
-        f"[TRADE_LOG] {symbol} qty={quantity} price={price} order_id={order_id} "
-        f"filled_qty={filled_qty} time={timestamp}"
+def log_trade(
+    symbol: str,
+    qty: int,
+    side: str,
+    price: float,
+    timestamp: str,
+    order_id: str,
+) -> None:
+    """Log basic trade execution details."""
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "TRADE_EXECUTED",
+        extra={
+            "symbol": symbol,
+            "qty": qty,
+            "side": side,
+            "price": price,
+            "timestamp": timestamp,
+            "order_id": order_id,
+        },
     )
 
 
@@ -526,10 +540,10 @@ class ExecutionEngine:
             log_trade(
                 symbol,
                 slice_qty,
+                side,
                 fill_price,
-                order_id,
-                slice_qty,
                 datetime.now(timezone.utc).isoformat(),
+                order_id,
             )
             filled_qty = slice_qty
         elif status == "partially_filled":

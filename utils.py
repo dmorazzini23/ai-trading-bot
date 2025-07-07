@@ -6,7 +6,8 @@ import os
 import socket
 import threading
 import warnings
-from datetime import date, time, timezone
+import time
+from datetime import date, time as dtime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -57,9 +58,22 @@ def log_warning(
     else:
         logger.warning(msg, extra=extra)
 
+# Cache of last logged stale timestamp per symbol
+_STALE_CACHE: dict[str, tuple[pd.Timestamp, float]] = {}
 
-MARKET_OPEN_TIME = time(9, 30)
-MARKET_CLOSE_TIME = time(16, 0)
+
+def should_log_stale(symbol: str, last_ts: pd.Timestamp, *, ttl: int = 300) -> bool:
+    """Return True if stale data warning should be emitted."""
+    prev = _STALE_CACHE.get(symbol)
+    now = time.time()
+    if prev and prev[0] == last_ts and now - prev[1] < ttl:
+        return False
+    _STALE_CACHE[symbol] = (last_ts, now)
+    return True
+
+
+MARKET_OPEN_TIME = dtime(9, 30)
+MARKET_CLOSE_TIME = dtime(16, 0)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
 # Lock protecting portfolio state across threads

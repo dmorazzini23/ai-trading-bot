@@ -69,21 +69,27 @@ def create_flask_app() -> Flask:
 
 
 def run_flask_app(port: int) -> None:
-    """Start the Flask application on ``port``."""
+    """Start the Flask application on an available ``port``."""
     app = create_flask_app()
+
+    candidate = port
+    if utils.get_pid_on_port(port):
+        alt = utils.get_free_port(start=port + 1, end=port + 10)
+        if alt is None:
+            app.logger.error("No free port available starting at %s", port)
+            return
+        app.logger.warning("Port %s busy, switching to %s", port, alt)
+        candidate = alt
+    else:
+        app.logger.info("Starting Flask on port %s", candidate)
+
     try:
-        app.run(host="0.0.0.0", port=port)
-    except OSError as exc:  # AI-AGENT-REF: handle port reuse
+        app.run(host="0.0.0.0", port=candidate)
+    except OSError as exc:  # AI-AGENT-REF: handle runtime reuse
         if exc.errno == errno.EADDRINUSE:
-            pid = utils.get_pid_on_port(port)
+            pid = utils.get_pid_on_port(candidate)
             hint = f" by PID {pid}" if pid else ""
-            app.logger.error("port already in use on %s%s", port, hint)
-            if os.getenv("TEST_MODE"):
-                new_port = utils.get_free_port() or port
-                app.logger.info("Retrying Flask server on port %s", new_port)
-                app.run(host="0.0.0.0", port=new_port)
-            else:
-                raise
+            app.logger.error("Port already in use on %s%s", candidate, hint)
         else:
             raise
 
@@ -163,7 +169,6 @@ def main() -> None:
 
         flask_thread = Thread(target=run_flask_app, args=(args.flask_port,), daemon=True)
         flask_thread.start()
-        logger.info(f"Flask server started on port {args.flask_port}")
 
         bot_exit_code = run_bot(args.venv_path, args.bot_script)
         logger.info(f"Bot process exited with code {bot_exit_code}")
