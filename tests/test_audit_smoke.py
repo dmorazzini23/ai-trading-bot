@@ -16,7 +16,7 @@ def force_coverage(mod):
 def test_log_trade(tmp_path, monkeypatch):
     path = tmp_path / "trades.csv"
     monkeypatch.setattr(audit, "TRADE_LOG_FILE", str(path))
-    audit.log_trade("AAPL", "buy", 1, 100.0, "filled", "TEST")
+    audit.log_trade("AAPL", 1, "buy", 100.0, "filled", "TEST")
     rows = list(csv.DictReader(open(path)))
     assert rows and rows[0]["symbol"] == "AAPL"
     force_coverage(audit)

@@ -88,9 +88,9 @@ def log_trade(
     symbol: str,
     qty: int,
     side: str,
-    price: float,
+    fill_price: float,
     timestamp: str,
-    order_id: str,
+    extra_info: Any | None = None,
 ) -> None:
     """Log basic trade execution details."""
     logger = logging.getLogger(__name__)
@@ -100,9 +100,9 @@ def log_trade(
             "symbol": symbol,
             "qty": qty,
             "side": side,
-            "price": price,
+            "price": fill_price,
             "timestamp": timestamp,
-            "order_id": order_id,
+            "extra": extra_info,
         },
     )
 
@@ -531,11 +531,11 @@ class ExecutionEngine:
             )
             audit_log_trade(
                 symbol,
-                side,
                 slice_qty,
+                side,
                 fill_price,
-                status,
-                "SHADOW" if SHADOW_MODE else "LIVE",
+                datetime.now(timezone.utc).isoformat(),
+                {"status": status, "mode": "SHADOW" if SHADOW_MODE else "LIVE"},
             )
             log_trade(
                 symbol,

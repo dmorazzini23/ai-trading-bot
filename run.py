@@ -16,6 +16,7 @@ warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 from alpaca_trade_api.rest import APIError  # noqa: F401
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
+import socket
 
 import utils
 
@@ -25,6 +26,11 @@ import runner
 import config
 from alerting import send_slack_alert
 from logger import setup_logging
+
+
+def is_port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
 
 
 def create_flask_app() -> Flask:
@@ -73,6 +79,9 @@ def run_flask_app(port: int) -> None:
     app = create_flask_app()
 
     candidate = port
+    if port == 9000 and is_port_in_use(9000):
+        app.logger.critical("Port 9000 already in use. Exiting to prevent collision.")
+        sys.exit(1)
     if utils.get_pid_on_port(port):
         alt = utils.get_free_port(start=port + 1, end=port + 10)
         if alt is None:
