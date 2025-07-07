@@ -77,9 +77,11 @@ except Exception:  # TODO: narrow exception type
         raise RuntimeError("Alpaca API unavailable")
 
 
-from audit import log_trade as audit_log_trade
+from audit import log_trade as audit_log_trade, log_json_audit
 from slippage import monitor_slippage
 from utils import get_phase_logger
+import config
+from collections import deque
 
 SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
@@ -203,6 +205,12 @@ class ExecutionEngine:
         self.slippage_count = slippage_count
         self.orders_total = orders_total
         self._slippage_checks: dict[str, int] = {}
+        # AI-AGENT-REF: track fill fragmentation and volatility regime
+        self.fill_history: deque[int] = deque(maxlen=config.PARTIAL_FILL_LOOKBACK)
+        self.adaptive_multiplier = 1.0
+        self.vol_history: deque[float] = deque(maxlen=50)
+        self.baseline_vol: float | None = None
+        self.high_vol_regime = False
 
     # --- helper methods -------------------------------------------------
 
@@ -323,6 +331,8 @@ class ExecutionEngine:
         if qty <= 0:
             raise ValueError("qty must be positive")
 
+        self._update_volatility(symbol)
+
         bid, ask = self._latest_quote(symbol)
         spread = (ask - bid) if ask and bid else 0.0
         mid = (ask + bid) / 2 if ask and bid else None
@@ -333,6 +343,9 @@ class ExecutionEngine:
         max_adv = adv * adv_pct if adv else qty
         max_slice = int(vol * 0.1) if vol > 0 else qty
         slice_qty = max(1, min(qty, int(min(max_slice, max_adv))))
+        slice_qty = int(slice_qty * self.adaptive_multiplier)
+        if self.high_vol_regime:
+            slice_qty = max(1, int(slice_qty * 0.5))
 
         expected = None
         order_request: object
@@ -422,6 +435,53 @@ class ExecutionEngine:
             },
         )
         monitor_slippage(expected, actual, symbol)
+
+    # --- adaptive helpers -------------------------------------------------
+
+    def _record_fill_steps(self, steps: int) -> None:
+        self.fill_history.append(steps)
+        if steps > config.PARTIAL_FILL_FRAGMENT_THRESHOLD:
+            self.logger.warning(
+                "PARTIAL_FILL_FRAGMENTED", extra={"steps": steps}
+            )
+        if len(self.fill_history) >= self.fill_history.maxlen:
+            avg = sum(self.fill_history) / len(self.fill_history)
+            self.adaptive_multiplier = 0.8 if avg > config.PARTIAL_FILL_FRAGMENT_THRESHOLD else 1.0
+
+    def _assess_liquidity(self, symbol: str, qty: int) -> tuple[int, bool]:
+        bid, ask = self._latest_quote(symbol)
+        spread = ask - bid if ask and bid else 0.0
+        df_ticks = self.ctx.data_fetcher.get_minute_df(self.ctx, symbol)
+        tick_range = 0.0
+        if df_ticks is not None and not df_ticks.empty and "close" in df_ticks.columns:
+            tick_range = float(df_ticks["close"].diff().abs().tail(5).max() or 0.0)
+        if spread >= config.LIQUIDITY_SPREAD_THRESHOLD * 2 or tick_range >= config.LIQUIDITY_VOL_THRESHOLD * 2:
+            self.logger.info(
+                "LIQUIDITY_SKIP",
+                extra={"symbol": symbol, "spread": spread, "tick_range": tick_range},
+            )
+            return 0, True
+        if spread >= config.LIQUIDITY_SPREAD_THRESHOLD or tick_range >= config.LIQUIDITY_VOL_THRESHOLD:
+            self.logger.info(
+                "LIQUIDITY_REDUCE",
+                extra={"symbol": symbol, "spread": spread, "tick_range": tick_range},
+            )
+            return max(1, int(qty * 0.5)), False
+        return qty, False
+
+    def _update_volatility(self, symbol: str) -> None:
+        df = self.ctx.data_fetcher.get_minute_df(self.ctx, symbol)
+        if df is None or df.empty or "close" not in df.columns:
+            return
+        returns = df["close"].pct_change().dropna()
+        if returns.empty:
+            return
+        std = float(returns.tail(20).std())
+        self.vol_history.append(std)
+        if self.baseline_vol is None and len(self.vol_history) >= 20:
+            self.baseline_vol = sum(self.vol_history) / len(self.vol_history)
+        if self.baseline_vol:
+            self.high_vol_regime = std > config.VOL_REGIME_MULTIPLIER * self.baseline_vol
 
     def _check_order_active(self, symbol: str, order: Order, status: str, order_id: str) -> bool:
         """Return ``True`` if order status indicates the order is active."""
@@ -537,6 +597,15 @@ class ExecutionEngine:
                 datetime.now(timezone.utc).isoformat(),
                 {"status": status, "mode": "SHADOW" if SHADOW_MODE else "LIVE"},
             )
+            log_json_audit(
+                {
+                    "client_order_id": getattr(order, "client_order_id", order_id),
+                    "asset_id": getattr(order, "asset_id", ""),
+                    "fills": getattr(order, "legs", []),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "fees": getattr(order, "filled_fees", None),
+                }
+            )
             log_trade(
                 symbol,
                 slice_qty,
@@ -587,7 +656,11 @@ class ExecutionEngine:
                     symbol,
                 )
                 remaining = int(round(avail))
+        steps = 0
         while remaining > 0:
+            remaining, skip = self._assess_liquidity(symbol, remaining)
+            if skip or remaining <= 0:
+                break
             if side.lower() == "sell":
                 avail = self._available_qty(api, symbol)
                 if avail < remaining:
@@ -631,8 +704,10 @@ class ExecutionEngine:
                 break
             last_order = order
             remaining -= filled
+            steps += 1
             if remaining > 0:
                 time.sleep(random.uniform(0.05, 0.15))
+        self._record_fill_steps(max(1, steps))
         return last_order
 
 

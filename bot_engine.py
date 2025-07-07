@@ -2342,7 +2342,14 @@ def pre_trade_health_check(
             last_ts = df.index[-1]
             if last_ts < pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=2):
                 if utils.should_log_stale(sym, last_ts):
-                    log_warning("HEALTH_STALE_DATA", extra={"symbol": sym})
+                    log_warning(
+                        "HEALTH_STALE_DATA",
+                        extra={
+                            "symbol": sym,
+                            "last_ts": last_ts.isoformat(),
+                            "age_min": (pd.Timestamp.now(tz="UTC") - last_ts).total_seconds() / 60,
+                        },
+                    )
                 summary.setdefault("stale_data", []).append(sym)
 
     failures = (
@@ -5910,7 +5917,19 @@ def run_all_trades_worker(state: BotState, model) -> None:
         processed = _process_symbols(symbols, current_cash, model, regime_ok)
 
         if not processed:
-            logger.critical("DATA_SOURCE_EMPTY", extra={"symbols": symbols})
+            last_ts = None
+            for sym in symbols:
+                ts = ctx.data_fetcher._minute_timestamps.get(sym)
+                if last_ts is None or (ts and ts > last_ts):
+                    last_ts = ts
+            logger.critical(
+                "DATA_SOURCE_EMPTY",
+                extra={
+                    "symbols": symbols,
+                    "endpoint": "minute",
+                    "last_success": last_ts.isoformat() if last_ts else "unknown",
+                },
+            )
             time.sleep(60)
             return
 

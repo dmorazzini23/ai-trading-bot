@@ -143,6 +143,15 @@ PYRAMID_LEVELS = {
 FORCE_TRADES: bool = False
 """If True, bypasses all pre-trade halts for testing."""
 
+# AI-AGENT-REF: new adaptive execution and rebalance settings
+PARTIAL_FILL_FRAGMENT_THRESHOLD = int(os.getenv("PARTIAL_FILL_FRAGMENT_THRESHOLD", "5"))
+PARTIAL_FILL_LOOKBACK = int(os.getenv("PARTIAL_FILL_LOOKBACK", "10"))
+LIQUIDITY_SPREAD_THRESHOLD = float(os.getenv("LIQUIDITY_SPREAD_THRESHOLD", "0.05"))
+LIQUIDITY_VOL_THRESHOLD = float(os.getenv("LIQUIDITY_VOL_THRESHOLD", "0.02"))
+VOL_REGIME_MULTIPLIER = float(os.getenv("VOL_REGIME_MULTIPLIER", "2.0"))
+REBALANCE_DRIFT_THRESHOLD = float(os.getenv("REBALANCE_DRIFT_THRESHOLD", "0.1"))
+TRADE_AUDIT_DIR = os.getenv("TRADE_AUDIT_DIR", "logs/trade_audits")
+
 
 def set_runtime_config(volume_thr: float, ml_thr: float, pyramid_levels: dict) -> None:
     """Override key strategy parameters at runtime."""
@@ -206,5 +215,12 @@ __all__ = [
     "ML_CONFIDENCE_THRESHOLD",
     "PYRAMID_LEVELS",
     "FORCE_TRADES",
+    "PARTIAL_FILL_FRAGMENT_THRESHOLD",
+    "PARTIAL_FILL_LOOKBACK",
+    "LIQUIDITY_SPREAD_THRESHOLD",
+    "LIQUIDITY_VOL_THRESHOLD",
+    "VOL_REGIME_MULTIPLIER",
+    "REBALANCE_DRIFT_THRESHOLD",
+    "TRADE_AUDIT_DIR",
     "set_runtime_config",
 ]
