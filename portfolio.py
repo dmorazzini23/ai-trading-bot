@@ -21,3 +21,9 @@ def compute_portfolio_weights(ctx, symbols: List[str]) -> Dict[str, float]:
     logger.info("PORTFOLIO_WEIGHTS", extra={"weights": weights})
     return weights
 
+
+def is_high_volatility(current_stddev: float, baseline_stddev: float) -> bool:
+    """Return ``True`` when ``current_stddev`` exceeds twice the baseline."""
+    # AI-AGENT-REF: placeholder for future regime logic
+    return current_stddev > 2 * baseline_stddev
+

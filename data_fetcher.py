@@ -270,7 +270,7 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
             logger.warning(
                 f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
             )
-            return []
+            return pd.DataFrame()
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(-1)
@@ -393,7 +393,7 @@ def get_daily_df(
             logger.warning(
                 f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
             )
-            return []
+            return pd.DataFrame()
 
         if isinstance(df.index, pd.MultiIndex):
             df.index = df.index.get_level_values(0)
@@ -577,9 +577,11 @@ def get_minute_df(
             logger.warning(
                 f"Data incomplete for {symbol}, got {len(latest_prices)} rows. Skipping this cycle."
             )
-            return []
+            return pd.DataFrame()
 
         bars = bars.df
+        if isinstance(bars, list):
+            bars = pd.DataFrame(bars)
         logger.debug("%s raw minute timestamps: %s", symbol, list(bars.index[:5]))
         if bars.empty:
             logger.error(f"Data fetch failed for {symbol} on {end_dt.date()} during trading hours! Skipping symbol.")
@@ -624,7 +626,7 @@ def get_minute_df(
             logger.warning(
                 f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
             )
-            return []
+            return pd.DataFrame()
         try:
             idx = safe_to_datetime(df.index, context=f"{symbol} minute")
         except ValueError as e:
@@ -675,11 +677,13 @@ def get_minute_df(
                 logger.exception("Daily fallback fetch failed for %s: %s", symbol, fetch_err)
                 raise
             df = bars.df[["open", "high", "low", "close", "volume"]].copy()
+            if isinstance(df, list):
+                df = pd.DataFrame(df, columns=["open", "high", "low", "close", "volume"])
             if df.empty or len(df) < MIN_EXPECTED_ROWS:
                 logger.warning(
                     f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
                 )
-                return []
+                return pd.DataFrame()
             try:
                 idx = safe_to_datetime(df.index, context=f"{symbol} fallback")
             except ValueError as e:

@@ -403,6 +403,8 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             start_date=yesterday.isoformat(),
             end_date=today.isoformat(),
         )
+        if isinstance(df, list):
+            df = pd.DataFrame(df)
         if df is None or df.empty:
             return pd.DataFrame()
         if isinstance(df.index, pd.MultiIndex):
@@ -697,6 +699,7 @@ class BotState:
     short_positions: set[str] = field(default_factory=set)
     # Timestamp of last run to prevent duplicate cycles
     last_run_at: Optional[datetime.datetime] = None
+    last_loop_duration: float = 0.0
     # Record of last exit/entry time per symbol for cooldowns
     trade_cooldowns: Dict[str, datetime.datetime] = field(default_factory=dict)
     # Track direction of last filled trade per symbol
@@ -2347,9 +2350,9 @@ def pre_trade_health_check(
                         "HEALTH_STALE_DATA",
                         extra={
                             "symbol": sym,
-                            "last_ts": last_ts.isoformat(),
-                            "now_ts": pd.Timestamp.now(tz="UTC").isoformat(),
-                            "age_min": (pd.Timestamp.now(tz="UTC") - last_ts).total_seconds() / 60,
+                            "last_row_time": last_ts.isoformat(),
+                            "current_utc": pd.Timestamp.now(tz="UTC").isoformat(),
+                            "diff_seconds": (pd.Timestamp.now(tz="UTC") - last_ts).total_seconds(),
                         },
                     )
                 summary.setdefault("stale_data", []).append(sym)
@@ -5667,8 +5670,9 @@ def _process_symbols(
     current_cash: float,
     model,
     regime_ok: bool,
-) -> list[str]:
+) -> tuple[list[str], dict[str, int]]:
     processed: list[str] = []
+    row_counts: dict[str, int] = {}
 
     if not hasattr(state, "trade_cooldowns"):
         state.trade_cooldowns = {}
@@ -5712,6 +5716,7 @@ def _process_symbols(
                 logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
                 return
             price_df = fetch_minute_df_safe(symbol)
+            row_counts[symbol] = len(price_df) if isinstance(price_df, pd.DataFrame) else 0
             if price_df.empty or "close" not in price_df.columns:
                 logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
                 return
@@ -5723,7 +5728,7 @@ def _process_symbols(
     futures = [prediction_executor.submit(process_symbol, s) for s in symbols]
     for f in futures:
         f.result()
-    return processed
+    return processed, row_counts
 
 
 def _log_loop_heartbeat(loop_id: str, start: float) -> None:
@@ -5828,7 +5833,10 @@ def run_all_trades_worker(state: BotState, model) -> None:
     if not hasattr(state, "last_trade_direction"):
         state.last_trade_direction = {}
     if state.running:
-        logger.warning("RUN_ALL_TRADES_SKIPPED_OVERLAP")
+        logger.warning(
+            "RUN_ALL_TRADES_SKIPPED_OVERLAP",
+            extra={"last_duration": getattr(state, "last_loop_duration", 0.0)},
+        )
         return
     now = datetime.datetime.now(datetime.timezone.utc)
     for sym, ts in list(state.trade_cooldowns.items()):
@@ -5907,7 +5915,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 logger.warning(f"SUMMARY_FAIL: {exc}")
             return
 
-        processed = _process_symbols(symbols, current_cash, model, regime_ok)
+        processed, row_counts = _process_symbols(symbols, current_cash, model, regime_ok)
 
         if not processed:
             last_ts = None
@@ -5921,6 +5929,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     "symbols": symbols,
                     "endpoint": "minute",
                     "last_success": last_ts.isoformat() if last_ts else "unknown",
+                    "row_counts": row_counts,
                 },
             )
             time.sleep(60)
@@ -5979,6 +5988,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
     finally:
         # Always reset running flag
         state.running = False
+        state.last_loop_duration = time.monotonic() - loop_start
         _log_loop_heartbeat(loop_id, loop_start)
 
 
