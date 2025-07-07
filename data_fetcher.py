@@ -259,8 +259,15 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
 
     df = pd.DataFrame(bars)
     if df.empty:
-        logger.critical("NO_DATA_RETURNED_%s", symbol)
-        return None
+        for attempt in range(3):
+            pytime.sleep(0.5 * (attempt + 1))
+            bars = _fetch(_DEFAULT_FEED)
+            df = pd.DataFrame(bars)
+            if not df.empty:
+                break
+        if df.empty:
+            logger.critical("NO_DATA_RETURNED_%s", symbol)
+            return None
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(-1)

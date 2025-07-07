@@ -2341,7 +2341,8 @@ def pre_trade_health_check(
         if not orig_range:
             last_ts = df.index[-1]
             if last_ts < pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=2):
-                log_warning("HEALTH_STALE_DATA", extra={"symbol": sym})
+                if utils.should_log_stale(sym, last_ts):
+                    log_warning("HEALTH_STALE_DATA", extra={"symbol": sym})
                 summary.setdefault("stale_data", []).append(sym)
 
     failures = (
