@@ -57,6 +57,7 @@ except Exception as e:  # pragma: no cover - allow missing in test env
 from utils import ensure_utc, is_market_open, safe_to_datetime
 
 MINUTES_REQUIRED = 31
+MIN_EXPECTED_ROWS = 5
 HISTORICAL_START = "2025-06-01"
 HISTORICAL_END = "2025-06-06"
 import logging
@@ -258,16 +259,18 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
         raise DataFetchError(f"Historical fetch failed for {symbol}: {e}") from e
 
     df = pd.DataFrame(bars)
-    if df.empty:
-        for attempt in range(3):
-            pytime.sleep(0.5 * (attempt + 1))
-            bars = _fetch(_DEFAULT_FEED)
-            df = pd.DataFrame(bars)
-            if not df.empty:
-                break
         if df.empty:
-            logger.critical("NO_DATA_RETURNED_%s", symbol)
-            return None
+            for attempt in range(3):
+                pytime.sleep(0.5 * (attempt + 1))
+                bars = _fetch(_DEFAULT_FEED)
+                df = pd.DataFrame(bars)
+                if not df.empty:
+                    break
+            if df.empty or len(df) < MIN_EXPECTED_ROWS:
+                logger.warning(
+                    f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
+                )
+                return []
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(-1)
@@ -386,9 +389,11 @@ def get_daily_df(
 
         df.columns = df.columns.str.lower()
 
-        if df.empty:
-            logger.critical("NO_DATA_RETURNED_%s", symbol)
-            return None
+        if df.empty or len(df) < MIN_EXPECTED_ROWS:
+            logger.warning(
+                f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
+            )
+            return []
 
         if isinstance(df.index, pd.MultiIndex):
             df.index = df.index.get_level_values(0)
@@ -567,9 +572,12 @@ def get_minute_df(
                 logger.error(f"API error for {symbol}: {e}")
                 return None
 
-        if bars is None or not getattr(bars, "df", pd.DataFrame()).size:
-            logger.critical("NO_DATA_RETURNED_%s", symbol)
-            return None
+        latest_prices = getattr(bars, "df", pd.DataFrame()) if bars is not None else pd.DataFrame()
+        if latest_prices is None or len(latest_prices) < MIN_EXPECTED_ROWS:
+            logger.warning(
+                f"Data incomplete for {symbol}, got {len(latest_prices)} rows. Skipping this cycle."
+            )
+            return []
 
         bars = bars.df
         logger.debug("%s raw minute timestamps: %s", symbol, list(bars.index[:5]))
@@ -612,9 +620,11 @@ def get_minute_df(
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
         df = df[["open", "high", "low", "close", "volume"]]
-        if df.empty:
-            logger.critical("NO_DATA_RETURNED_%s", symbol)
-            return None
+        if df.empty or len(df) < MIN_EXPECTED_ROWS:
+            logger.warning(
+                f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
+            )
+            return []
         try:
             idx = safe_to_datetime(df.index, context=f"{symbol} minute")
         except ValueError as e:
@@ -665,9 +675,11 @@ def get_minute_df(
                 logger.exception("Daily fallback fetch failed for %s: %s", symbol, fetch_err)
                 raise
             df = bars.df[["open", "high", "low", "close", "volume"]].copy()
-            if df.empty:
-                logger.critical("NO_DATA_RETURNED_%s", symbol)
-                return None
+            if df.empty or len(df) < MIN_EXPECTED_ROWS:
+                logger.warning(
+                    f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
+                )
+                return []
             try:
                 idx = safe_to_datetime(df.index, context=f"{symbol} fallback")
             except ValueError as e:
