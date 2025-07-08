@@ -30,6 +30,7 @@ _LAST_MARKET_HOURS_LOG = 0.0
 _LAST_MARKET_STATE = ""
 _LAST_HEALTH_ROW_LOG = 0.0
 _LAST_HEALTH_ROWS_COUNT = -1
+_LAST_HEALTH_STATUS: bool | None = None
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -183,17 +184,21 @@ def _log_market_hours(message: str) -> None:
         _LAST_MARKET_HOURS_LOG = now
 
 
-def log_health_row_check(rows: int) -> None:
-    """Log HEALTH_ROW_CHECK_PASSED only on change or every 30s."""
-    global _LAST_HEALTH_ROW_LOG, _LAST_HEALTH_ROWS_COUNT
+def log_health_row_check(rows: int, passed: bool) -> None:
+    """Log HEALTH_ROWS status changes or once every 30 seconds."""
+    global _LAST_HEALTH_ROW_LOG, _LAST_HEALTH_ROWS_COUNT, _LAST_HEALTH_STATUS
     now = time.time()
-    if rows != _LAST_HEALTH_ROWS_COUNT or now - _LAST_HEALTH_ROW_LOG >= 30:
-        if config.VERBOSE_LOGGING:
-            logger.info("HEALTH_ROW_CHECK_PASSED: received %d rows", rows)
-        else:
-            logger.debug("HEALTH_ROW_CHECK_PASSED: received %d rows", rows)
+    if (
+        rows != _LAST_HEALTH_ROWS_COUNT
+        or passed != _LAST_HEALTH_STATUS
+        or now - _LAST_HEALTH_ROW_LOG >= 30
+    ):
+        level = logger.info if config.VERBOSE_LOGGING else logger.debug
+        status = "PASSED" if passed else "FAILED"
+        level("HEALTH_ROWS_%s: received %d rows", status, rows)
         _LAST_HEALTH_ROW_LOG = now
         _LAST_HEALTH_ROWS_COUNT = rows
+        _LAST_HEALTH_STATUS = passed
 
 
 def is_market_open(now: dt.datetime | None = None) -> bool:
@@ -461,9 +466,10 @@ def health_check(df: pd.DataFrame | None, resolution: str) -> bool:
         logger.debug("Preview:\n%s", df.head(3))
         if rows == 0:
             logger.critical("HEALTH_FAILURE: empty dataset loaded")
+        log_health_row_check(rows, False)
         return False
 
-    log_health_row_check(rows)
+    log_health_row_check(rows, True)
     return True
 
 

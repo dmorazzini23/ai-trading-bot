@@ -86,8 +86,14 @@ def mask_secret(value: str, show_last: int = 4) -> str:
     return "*" * max(0, len(value) - show_last) + value[-show_last:]
 
 
+_CONFIG_LOGGED = False
+
+
 def log_config(keys: list[str] | None = None) -> None:
     """Log key configuration values with secrets masked."""
+    global _CONFIG_LOGGED
+    if _CONFIG_LOGGED:
+        return
     if keys is None:
         keys = REQUIRED_ENV_VARS
     cfg = {}
@@ -97,6 +103,7 @@ def log_config(keys: list[str] | None = None) -> None:
             val = mask_secret(val)
         cfg[k] = val
     logger.info("Configuration: %s", cfg)
+    _CONFIG_LOGGED = True
 
 
 def _require_env_vars(*keys: str) -> None:
