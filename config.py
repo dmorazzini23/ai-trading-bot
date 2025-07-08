@@ -18,7 +18,12 @@ load_dotenv(ENV_PATH)
 # configuration module can be imported without all production variables set.
 TESTING = os.getenv("PYTEST_CURRENT_TEST") is not None or os.getenv("TESTING")
 
-required_env_vars = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL", "WEBHOOK_SECRET"]
+required_env_vars = [
+    "ALPACA_API_KEY",
+    "ALPACA_SECRET_KEY",
+    "ALPACA_BASE_URL",
+    "WEBHOOK_SECRET",
+]
 if not TESTING:
     required_env_vars.append("FLASK_PORT")
 
@@ -28,7 +33,13 @@ if missing_vars:
         f"Missing required environment variables: {', '.join(missing_vars)}"
     )
 
-REQUIRED_ENV_VARS = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL", "WEBHOOK_SECRET"]
+REQUIRED_ENV_VARS = [
+    "ALPACA_API_KEY",
+    "ALPACA_SECRET_KEY",
+    "ALPACA_BASE_URL",
+    "WEBHOOK_SECRET",
+]
+
 
 def get_env(
     key: str,
@@ -105,6 +116,7 @@ def validate_environment() -> None:
             "Missing required environment variables: " + ", ".join(missing)
         )
 
+
 ALPACA_API_KEY = env_settings.ALPACA_API_KEY
 ALPACA_SECRET_KEY = env_settings.ALPACA_SECRET_KEY
 ALPACA_BASE_URL = env_settings.ALPACA_BASE_URL
@@ -131,6 +143,7 @@ SHADOW_MODE = env_settings.SHADOW_MODE
 DISABLE_DAILY_RETRAIN = env_settings.DISABLE_DAILY_RETRAIN
 TRADE_LOG_FILE = env_settings.TRADE_LOG_FILE
 VERBOSE = os.getenv("VERBOSE", "1").lower() not in ("0", "false")
+VERBOSE_LOGGING = os.getenv("VERBOSE_LOGGING", "1").lower() not in ("0", "false")
 SCHEDULER_SLEEP_SECONDS = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
 MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "30"))
 MIN_HEALTH_ROWS_DAILY = int(os.getenv("MIN_HEALTH_ROWS_DAILY", "5"))
@@ -162,6 +175,7 @@ def set_runtime_config(volume_thr: float, ml_thr: float, pyramid_levels: dict) -
     VOLUME_SPIKE_THRESHOLD = volume_thr
     ML_CONFIDENCE_THRESHOLD = ml_thr
     PYRAMID_LEVELS = pyramid_levels
+
 
 # centralize SGDRegressor hyperparameters
 SGD_PARAMS = MappingProxyType(

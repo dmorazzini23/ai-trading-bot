@@ -761,7 +761,9 @@ slippage_lock = Lock()
 meta_lock = Lock()
 
 breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
-executor = ThreadPoolExecutor(max_workers=1)  # AI-AGENT-REF: limit workers for single CPU
+executor = ThreadPoolExecutor(
+    max_workers=1
+)  # AI-AGENT-REF: limit workers for single CPU
 # Separate executor for ML predictions and trade execution
 prediction_executor = ThreadPoolExecutor(max_workers=1)
 
@@ -778,9 +780,9 @@ TRADE_COOLDOWN_MIN = int(config.get_env("TRADE_COOLDOWN_MIN", "5"))  # minutes
 _VOL_STATS = {"mean": None, "std": None, "last_update": None, "last": None}
 
 # Slippage logs (in-memory for quick access)
-_slippage_log: List[
-    Tuple[str, float, float, datetime]
-] = []  # (symbol, expected, actual, timestamp)
+_slippage_log: List[Tuple[str, float, float, datetime]] = (
+    []
+)  # (symbol, expected, actual, timestamp)
 # Ensure persistent slippage log file exists
 if not os.path.exists(SLIPPAGE_LOG_FILE):
     try:
@@ -1603,9 +1605,7 @@ class TradeLogger:
                     cls = (
                         "day_trade"
                         if days == 0
-                        else "swing_trade"
-                        if days < 5
-                        else "long_trade"
+                        else "swing_trade" if days < 5 else "long_trade"
                     )
                     row[3], row[4], row[8] = (
                         datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1817,9 +1817,7 @@ class SignalManager:
             s = (
                 -1
                 if val > self.mean_rev_zscore_threshold
-                else 1
-                if val < -self.mean_rev_zscore_threshold
-                else -1
+                else 1 if val < -self.mean_rev_zscore_threshold else -1
             )
             w = min(abs(val) / 3, 1.0)
             return s, w, "mean_reversion"
@@ -1865,9 +1863,7 @@ class SignalManager:
             s = (
                 1
                 if df["close"].iloc[-1] > df["open"].iloc[-1]
-                else -1
-                if df["close"].iloc[-1] < df["open"].iloc[-1]
-                else -1
+                else -1 if df["close"].iloc[-1] < df["open"].iloc[-1] else -1
             )
             w = min(score / avg, 1.0)
             return s, w, "vsa"
@@ -2286,7 +2282,7 @@ def pre_trade_health_check(
                 break
 
             rows = len(df)
-            if config.VERBOSE:
+            if config.VERBOSE_LOGGING:
                 logger.info("HEALTH_ROWS", extra={"symbol": sym, "rows": rows})
             if rows < min_rows:
                 logger.warning(
@@ -2308,8 +2304,13 @@ def pre_trade_health_check(
                     time.sleep(60)
                 continue
             else:
-                if config.VERBOSE:
+                if config.VERBOSE_LOGGING:
                     logger.info(
+                        "HEALTH_ROW_CHECK_PASSED: received %d rows",
+                        rows,
+                    )
+                else:
+                    logger.debug(
                         "HEALTH_ROW_CHECK_PASSED: received %d rows",
                         rows,
                     )
@@ -2354,7 +2355,9 @@ def pre_trade_health_check(
                             "symbol": sym,
                             "last_row_time": last_ts.isoformat(),
                             "current_utc": pd.Timestamp.now(tz="UTC").isoformat(),
-                            "diff_seconds": (pd.Timestamp.now(tz="UTC") - last_ts).total_seconds(),
+                            "diff_seconds": (
+                                pd.Timestamp.now(tz="UTC") - last_ts
+                            ).total_seconds(),
                         },
                     )
                 summary.setdefault("stale_data", []).append(sym)
@@ -4257,7 +4260,9 @@ def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
 
 
 def on_trade_exit_rebalance(ctx: BotContext) -> None:
-    current = portfolio.compute_portfolio_weights(ctx, list(ctx.portfolio_weights.keys()))
+    current = portfolio.compute_portfolio_weights(
+        ctx, list(ctx.portfolio_weights.keys())
+    )
     old = ctx.portfolio_weights
     drift = max(abs(current[s] - old.get(s, 0)) for s in current) if current else 0
     if drift <= 0.1:
@@ -5645,7 +5650,9 @@ def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[st
 
     full_watchlist = load_tickers(TICKERS_FILE)
     symbols = screen_candidates()
-    logger.info("Number of screened candidates: %s", len(symbols))  # AI-AGENT-REF: log candidate count
+    logger.info(
+        "Number of screened candidates: %s", len(symbols)
+    )  # AI-AGENT-REF: log candidate count
     if not symbols:
         logger.warning(
             "No candidates found after filtering, using top 5 tickers fallback."
@@ -5718,7 +5725,9 @@ def _process_symbols(
                 logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
                 return
             price_df = fetch_minute_df_safe(symbol)
-            row_counts[symbol] = len(price_df) if isinstance(price_df, pd.DataFrame) else 0
+            row_counts[symbol] = (
+                len(price_df) if isinstance(price_df, pd.DataFrame) else 0
+            )
             if price_df.empty or "close" not in price_df.columns:
                 logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
                 return
@@ -5864,7 +5873,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
             logger.info(
                 "RUN_ALL_TRADES_START",
                 extra={
-                    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    "timestamp": datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).isoformat()
                 },
             )
 
@@ -5918,7 +5929,20 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 logger.warning(f"SUMMARY_FAIL: {exc}")
             return
 
-        processed, row_counts = _process_symbols(symbols, current_cash, model, regime_ok)
+        retries = 3
+        processed, row_counts = [], {}
+        for attempt in range(retries):
+            processed, row_counts = _process_symbols(
+                symbols, current_cash, model, regime_ok
+            )
+            if processed:
+                if attempt:
+                    logger.info(
+                        "DATA_SOURCE_RETRY_SUCCESS",
+                        extra={"attempt": attempt + 1, "symbols": symbols},
+                    )
+                break
+            time.sleep(2)
 
         if not processed:
             last_ts = None
@@ -5935,8 +5959,17 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     "row_counts": row_counts,
                 },
             )
+            logger.info(
+                "DATA_SOURCE_RETRY_FAILED",
+                extra={"attempts": retries, "symbols": symbols},
+            )
             time.sleep(60)
             return
+        else:
+            logger.info(
+                "DATA_SOURCE_RETRY_FINAL",
+                extra={"success": True, "attempts": attempt + 1},
+            )
 
         run_multi_strategy(ctx)
         logger.info("RUN_ALL_TRADES_COMPLETE")
@@ -6438,7 +6471,9 @@ def initialize_bot(api=None, data_loader=None):
 def generate_signals(df):
     # AI-AGENT-REF: momentum-based signal using rolling z-score
     window = 10
-    momentum = (df['price'] - df['price'].shift(window)) / df['price'].rolling(window).std()
+    momentum = (df["price"] - df["price"].shift(window)) / df["price"].rolling(
+        window
+    ).std()
     signal = np.where(momentum > 1, 1, np.where(momentum < -1, -1, 0))
     return signal
 
@@ -6473,12 +6508,12 @@ def health_check(df: pd.DataFrame, resolution: str) -> bool:
 
 def compute_atr_stop(df, atr_window=14, multiplier=2):
     # AI-AGENT-REF: helper for ATR-based trailing stop
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
+    high_low = df["high"] - df["low"]
+    high_close = np.abs(df["high"] - df["close"].shift())
+    low_close = np.abs(df["low"] - df["close"].shift())
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     atr = tr.rolling(atr_window).mean()
-    stop_level = df['close'] - (atr * multiplier)
+    stop_level = df["close"] - (atr * multiplier)
     return stop_level
 
 
