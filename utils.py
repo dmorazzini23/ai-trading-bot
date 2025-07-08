@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 
 # AI-AGENT-REF: throttle noisy logs
 _LAST_MARKET_HOURS_LOG = 0.0
+_LAST_MARKET_STATE = ""
 _LAST_HEALTH_ROW_LOG = 0.0
+_LAST_HEALTH_ROWS_COUNT = -1
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -168,27 +170,30 @@ def get_current_price(symbol: str) -> float:
 
 
 def _log_market_hours(message: str) -> None:
-    """Emit market hours message with throttling."""
-    global _LAST_MARKET_HOURS_LOG
+    """Emit market hours message only on state change or hourly."""
+    global _LAST_MARKET_HOURS_LOG, _LAST_MARKET_STATE
     now = time.time()
-    if now - _LAST_MARKET_HOURS_LOG >= 30:
+    state = "OPEN" if "OPEN" in message else "CLOSED"
+    if state != _LAST_MARKET_STATE or now - _LAST_MARKET_HOURS_LOG >= 3600:
         if config.VERBOSE_LOGGING:
             logger.info(message)
         else:
             logger.debug(message)
+        _LAST_MARKET_STATE = state
         _LAST_MARKET_HOURS_LOG = now
 
 
 def log_health_row_check(rows: int) -> None:
-    """Log HEALTH_ROW_CHECK_PASSED with throttling."""
-    global _LAST_HEALTH_ROW_LOG
+    """Log HEALTH_ROW_CHECK_PASSED only on change or every 30s."""
+    global _LAST_HEALTH_ROW_LOG, _LAST_HEALTH_ROWS_COUNT
     now = time.time()
-    if now - _LAST_HEALTH_ROW_LOG >= 5:
+    if rows != _LAST_HEALTH_ROWS_COUNT or now - _LAST_HEALTH_ROW_LOG >= 30:
         if config.VERBOSE_LOGGING:
             logger.info("HEALTH_ROW_CHECK_PASSED: received %d rows", rows)
         else:
             logger.debug("HEALTH_ROW_CHECK_PASSED: received %d rows", rows)
         _LAST_HEALTH_ROW_LOG = now
+        _LAST_HEALTH_ROWS_COUNT = rows
 
 
 def is_market_open(now: dt.datetime | None = None) -> bool:
