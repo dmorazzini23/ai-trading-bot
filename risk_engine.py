@@ -41,21 +41,51 @@ class RiskEngine:
         self.strategy_limits: Dict[str, float] = {}
         self.exposure: Dict[str, float] = {}
         self.hard_stop = False
+        # AI-AGENT-REF: track returns/drawdown for adaptive exposure cap
+        self._returns: list[float] = []
+        self._drawdowns: list[float] = []
 
     def _dynamic_cap(self, asset_class: str, volatility: float | None = None, cash_ratio: float | None = None) -> float:
-        """Return exposure cap for ``asset_class`` adjusted by volatility and cash."""
-        cap = self.asset_limits.get(asset_class, self.global_limit)
-        if os.getenv("DYNAMIC_EXPOSURE_CAP", "0") != "1":
-            return cap
-        base = float(os.getenv("BASE_CAP", 1.0))
-        adj = float(os.getenv("VOLATILITY_ADJUST", 0.2))
-        vol = volatility if volatility is not None else 1.0
-        dyn = base * (1 + vol * adj)
-        if cash_ratio is not None:
-            dyn *= max(0.2, min(1.0, cash_ratio))
-        return min(cap, dyn)
+        """Return exposure cap for ``asset_class`` using adaptive rules."""
+        base_cap = self.asset_limits.get(asset_class, self.global_limit)
+        cap = self._adaptive_global_cap()
+        return min(base_cap, cap)
 
-    def can_trade(self, signal: TradeSignal, *, pending: float = 0.0, volatility: float | None = None, cash_ratio: float | None = None) -> bool:
+    # AI-AGENT-REF: adaptive exposure cap based on returns & drawdown
+    def _adaptive_global_cap(self) -> float:
+        cap = 1.0
+        if len(self._returns) >= 30:
+            vol = float(np.std(self._returns[-30:]))
+            if vol < 0.015:
+                cap = 1.5
+        if len(self._drawdowns) >= 7:
+            dd = float(max(self._drawdowns[-7:]))
+            if dd < 0.03:
+                cap = 2.0
+        return cap
+
+    def update_portfolio_metrics(
+        self, returns: list[float] | None = None, drawdown: float | None = None
+    ) -> None:
+        if returns:
+            self._returns.extend(list(returns))
+        if drawdown is not None:
+            self._drawdowns.append(float(drawdown))
+
+    def can_trade(
+        self,
+        signal: TradeSignal,
+        *,
+        pending: float = 0.0,
+        volatility: float | None = None,
+        cash_ratio: float | None = None,
+        returns: list[float] | None = None,
+        drawdowns: list[float] | None = None,
+    ) -> bool:
+        if returns:
+            self._returns.extend(list(returns))
+        if drawdowns:
+            self._drawdowns.extend(list(drawdowns))
         if self.hard_stop:
             logger.error("TRADING_HALTED_RISK_LIMIT")
             return False
