@@ -110,11 +110,6 @@ logger.info("Bot starting up")
 python bot_engine.py
 ```
 
-To start the optional webhook server locally:
-
-```bash
-python server.py
-```
 
 ---
 
