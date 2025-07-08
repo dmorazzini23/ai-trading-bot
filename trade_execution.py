@@ -212,6 +212,7 @@ class ExecutionEngine:
         self.vol_history: deque[float] = deque(maxlen=50)
         self.baseline_vol: float | None = None
         self.high_vol_regime = False
+        self._partial_buffer: dict[str, dict] = {}
 
     # --- helper methods -------------------------------------------------
 
@@ -501,6 +502,53 @@ class ExecutionEngine:
         if self.baseline_vol:
             self.high_vol_regime = std > config.VOL_REGIME_MULTIPLIER * self.baseline_vol
 
+    def _check_exposure_cap(self, asset_class: str, qty: int, price: float, symbol: str) -> bool:
+        """Return True if submitting qty would exceed exposure cap."""
+        eng = getattr(self.ctx, "risk_engine", None)
+        if eng is None:
+            return False
+        try:
+            acct = self.api.get_account()
+            equity = float(getattr(acct, "equity", 0) or 0)
+        except Exception:
+            return False
+        if equity <= 0 or price <= 0:
+            return False
+        weight = qty * price / equity
+        current = eng.exposure.get(asset_class, 0.0)
+        cap = eng._dynamic_cap(asset_class)
+        projected = current + weight
+        if projected > cap:
+            self.logger.info(
+                "Skipping submit for %s: projected exposure=%.2f > cap=%.2f",
+                symbol,
+                projected,
+                cap,
+            )
+            return True
+        return False
+
+    def _flush_partial_buffers(self, force_id: str | None = None) -> None:
+        now = time.monotonic()
+        ids = list(self._partial_buffer.keys()) if force_id is None else [force_id]
+        for oid in ids:
+            buf = self._partial_buffer.get(oid)
+            if not buf:
+                continue
+            if force_id is not None or now - buf["ts"] >= 2:
+                avg = buf["total_price"] / buf["qty"] if buf["qty"] else 0.0
+                self.logger.info(
+                    "ORDER_FILL_CONSOLIDATED",
+                    extra={
+                        "symbol": buf["symbol"],
+                        "order_id": oid,
+                        "total": buf["qty"],
+                        "fragments": buf["count"],
+                        "avg_price": round(avg, 2),
+                    },
+                )
+                del self._partial_buffer[oid]
+
     def _check_order_active(self, symbol: str, order: Order, status: str, order_id: str) -> bool:
         """Return ``True`` if order status indicates the order is active."""
         if status == "rejected":
@@ -573,6 +621,7 @@ class ExecutionEngine:
         slice_qty: int,
         start_time: float,
     ) -> int:
+        self._flush_partial_buffers()
         status = getattr(order, "status", "")
         order_id = getattr(order, "id", "")
         if status in ("new", "pending_new"):
@@ -636,28 +685,32 @@ class ExecutionEngine:
                 order_id,
             )
             filled_qty = slice_qty
+            if order_id in self._partial_buffer:
+                buf = self._partial_buffer[order_id]
+                add_qty = max(0, slice_qty - buf["qty"])
+                buf["qty"] += add_qty
+                buf["count"] += 1 if add_qty else 0
+                buf["total_price"] += add_qty * fill_price
+                self._flush_partial_buffers(order_id)
         elif status == "partially_filled":
-            self.logger.info(
-                "ORDER_PARTIAL",
-                extra={
+            part_qty = int(getattr(order, "filled_qty", 0) or 0)
+            self._partial_buffer.setdefault(
+                order_id,
+                {
+                    "qty": 0,
+                    "count": 0,
+                    "total_price": 0.0,
                     "symbol": symbol,
-                    "order_id": order_id,
-                    "filled_qty": getattr(order, "filled_qty", 0),
+                    "ts": time.monotonic(),
                 },
             )
-            log_json_audit(
-                {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "symbol": symbol,
-                    "qty": getattr(order, "filled_qty", 0),
-                    "price": fill_price,
-                    "order_id": order_id,
-                    "client_order_id": getattr(order, "client_order_id", order_id),
-                    "status": status,
-                    "partial_fills": getattr(order, "legs", []),
-                }
-            )
-            filled_qty = int(getattr(order, "filled_qty", 0) or 0)
+            buf = self._partial_buffer[order_id]
+            buf["qty"] += part_qty
+            buf["count"] += 1
+            buf["total_price"] += part_qty * fill_price
+            buf["ts"] = time.monotonic()
+            self._flush_partial_buffers()
+            filled_qty = part_qty
         elif status in ("pending_new", "new"):
             self.logger.info("Order status for %s: %s", symbol, status)
         elif status in ("rejected", "failed"):
@@ -727,6 +780,8 @@ class ExecutionEngine:
                 api, symbol, slice_qty
             ):
                 break
+            if expected_price and self._check_exposure_cap(asset_class, slice_qty, expected_price, symbol):
+                break
             start = time.monotonic()
             order = self._submit_with_retry(
                 api, order_req, symbol, side, slice_qty
@@ -744,6 +799,10 @@ class ExecutionEngine:
             if remaining > 0:
                 time.sleep(random.uniform(0.05, 0.15))
         self._record_fill_steps(max(1, steps))
+        if last_order:
+            oid = getattr(last_order, "id", None)
+            if oid:
+                self._flush_partial_buffers(oid)
         return last_order
 
 

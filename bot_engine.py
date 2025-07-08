@@ -2306,7 +2306,7 @@ def pre_trade_health_check(
             else:
                 from utils import log_health_row_check
 
-                log_health_row_check(rows)
+                log_health_row_check(rows, True)
             break
 
         if df is None or df.empty or rows < min_rows:
