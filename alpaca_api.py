@@ -22,8 +22,12 @@ import requests
 from requests import Session
 from requests.exceptions import HTTPError
 from alpaca.trading.stream import TradingStream
-from tenacity import (retry, retry_if_exception_type, stop_after_attempt,
-                      wait_exponential)
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from alerts import send_slack_alert
 
@@ -42,6 +46,9 @@ _warn_counts = defaultdict(int)
 
 # Track pending orders awaiting fill or rejection
 pending_orders: dict[str, dict[str, Any]] = {}
+
+# AI-AGENT-REF: accumulate partial fills for periodic summary
+partial_fills: dict[str, dict[str, float]] = {}
 
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
 
@@ -83,7 +90,9 @@ def alpaca_get(
 
     url = f"{ALPACA_BASE_URL}{endpoint}"
     try:
-        response = requests.get(url, headers=_build_headers(), params=params, timeout=10)
+        response = requests.get(
+            url, headers=_build_headers(), params=params, timeout=10
+        )
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as exc:
@@ -117,8 +126,8 @@ def submit_order(api, req, log: logging.Logger | None = None):
     log = log or logger
     if DRY_RUN:
         log.info(
-            "DRY RUN: would submit order for %s of size %s", 
-            getattr(req, "symbol", ""), 
+            "DRY RUN: would submit order for %s of size %s",
+            getattr(req, "symbol", ""),
             getattr(req, "qty", 0),
         )
         return {
@@ -146,7 +155,9 @@ def submit_order(api, req, log: logging.Logger | None = None):
         try:
             order = api.submit_order(order_data=req)
             if hasattr(order, "status_code") and getattr(order, "status_code") == 429:
-                raise HTTPError("API rate limit exceeded (429)")  # AI-AGENT-REF: use explicit HTTPError import
+                raise HTTPError(
+                    "API rate limit exceeded (429)"
+                )  # AI-AGENT-REF: use explicit HTTPError import
             if getattr(order, "id", None):
                 pending_orders[str(order.id)] = {
                     "symbol": getattr(req, "symbol", ""),
@@ -243,6 +254,14 @@ async def handle_trade_update(event, state=None) -> None:
             status,
             extra,
         )
+        if status in {"partial_fill", "partial", "partially_filled"}:
+            partial_fills[str(order_id)] = {
+                "symbol": symbol,
+                "qty": float(filled_qty or 0),
+                "price": float(fill_price or 0),
+            }
+        elif status in {"fill", "canceled", "rejected"}:
+            partial_fills.pop(str(order_id), None)
         info = pending_orders.get(str(order_id))
         if info:
             info["status"] = status
@@ -257,13 +276,32 @@ async def handle_trade_update(event, state=None) -> None:
         logger.exception("Error processing trade update: %s", exc)
 
 
+async def _partial_fill_summary_loop() -> None:
+    """Periodically log consolidated partial fill summaries."""
+    while True:
+        await asyncio.sleep(3)
+        if partial_fills:
+            summary = {
+                oid: {
+                    "symbol": info["symbol"],
+                    "qty": info["qty"],
+                    "price": info["price"],
+                }
+                for oid, info in partial_fills.items()
+            }
+            logger.info("PARTIAL_FILL_SUMMARY", extra={"orders": summary})
+
+
 async def check_stuck_orders(api) -> None:
     """Cancel and resubmit orders stuck in PENDING_NEW state."""
     while True:
         await asyncio.sleep(10)
         now = time.monotonic()
         for oid, info in list(pending_orders.items()):
-            if now - info.get("timestamp", now) > 60 and info.get("status") == "PENDING_NEW":
+            if (
+                now - info.get("timestamp", now) > 60
+                and info.get("status") == "PENDING_NEW"
+            ):
                 symbol = info.get("symbol", "")
                 req = info.get("req")
                 qty = float(getattr(req, "qty", 0)) if req is not None else 0.0
@@ -307,15 +345,20 @@ async def check_stuck_orders(api) -> None:
                 pending_orders.pop(oid, None)
 
 
-async def start_trade_updates_stream(api_key: str, secret_key: str, api, state=None, *, paper: bool = True) -> None:
+async def start_trade_updates_stream(
+    api_key: str, secret_key: str, api, state=None, *, paper: bool = True
+) -> None:
     """Start Alpaca trade updates stream and stuck order monitor."""
     stream = TradingStream(api_key, secret_key, paper=paper)
+
     async def handle_async_trade_update(ev):
-        asyncio.create_task(handle_trade_update(ev, state))  # AI-AGENT-REF: schedule coroutine
+        asyncio.create_task(
+            handle_trade_update(ev, state)
+        )  # AI-AGENT-REF: schedule coroutine
 
     stream.subscribe_trade_updates(handle_async_trade_update)
     logger.info("\u2705 Subscribed to Alpaca trade updates stream.")
     asyncio.create_task(check_stuck_orders(api))
+    asyncio.create_task(_partial_fill_summary_loop())
     # Avoid nested asyncio.run inside TradingStream.run()
     await stream._run_forever()
-

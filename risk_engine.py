@@ -53,23 +53,28 @@ class RiskEngine:
     ) -> float:
         """Return exposure cap for ``asset_class`` using adaptive rules."""
         base_cap = self.asset_limits.get(asset_class, self.global_limit)
-        cap = self._adaptive_global_cap()
-        return min(base_cap, cap)
+        port_cap = self._adaptive_global_cap()
+        vol = self._current_volatility()
+        logger.info(
+            "Adaptive exposure caps: portfolio=%.1f, equity=%.1f (volatility=%.1f%%)",
+            port_cap,
+            base_cap,
+            vol * 100,
+        )
+        return min(base_cap, port_cap)
 
     # AI-AGENT-REF: adaptive exposure cap based on 10-day volatility
+    def _current_volatility(self) -> float:
+        return float(np.std(self._returns[-10:])) if self._returns else 0.0
+
     def _adaptive_global_cap(self) -> float:
-        vol = float(np.std(self._returns[-10:])) if self._returns else 0.0
+        vol = self._current_volatility()
         if vol < 0.015:
             cap = 2.5
         elif vol < 0.03:
             cap = 2.0
         else:
             cap = 1.0
-        logger.info(
-            "Adaptive exposure cap set to %.1f based on volatility=%.1f%%",
-            cap,
-            vol * 100,
-        )
         return cap
 
     def update_portfolio_metrics(
@@ -105,8 +110,8 @@ class RiskEngine:
         asset_cap = self._dynamic_cap(signal.asset_class, volatility, cash_ratio)
         if asset_exp + signal.weight > asset_cap:
             logger.warning(
-                "Exposure cap exceeded for %s: %.2f vs %.2f",
-                signal.asset_class,
+                "Exposure cap breach: symbol=%s exposure=%.2f vs cap=%.2f",
+                signal.symbol,
                 asset_exp + signal.weight,
                 asset_cap,
             )

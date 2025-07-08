@@ -2304,16 +2304,9 @@ def pre_trade_health_check(
                     time.sleep(60)
                 continue
             else:
-                if config.VERBOSE_LOGGING:
-                    logger.info(
-                        "HEALTH_ROW_CHECK_PASSED: received %d rows",
-                        rows,
-                    )
-                else:
-                    logger.debug(
-                        "HEALTH_ROW_CHECK_PASSED: received %d rows",
-                        rows,
-                    )
+                from utils import log_health_row_check
+
+                log_health_row_check(rows)
             break
 
         if df is None or df.empty or rows < min_rows:
@@ -6003,6 +5996,18 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 ctx.portfolio_weights,
                 {p.symbol: int(p.qty) for p in positions},
                 cash,
+            )
+            try:
+                adaptive_cap = ctx.risk_engine._adaptive_global_cap()
+            except Exception:
+                adaptive_cap = 0.0
+            logger.info(
+                "CYCLE SUMMARY: cash=$%.0f equity=$%.0f exposure=%.0f%% positions=%d adaptive_cap=%.1f",
+                cash,
+                equity,
+                exposure,
+                len(positions),
+                adaptive_cap,
             )
         except Exception as exc:  # pragma: no cover - network issues
             logger.warning(f"SUMMARY_FAIL: {exc}")
