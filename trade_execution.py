@@ -535,7 +535,7 @@ class ExecutionEngine:
             buf = self._partial_buffer.get(oid)
             if not buf:
                 continue
-            if force_id is not None or now - buf["ts"] >= 2:
+            if force_id is not None or now - buf["ts"] >= 1:
                 avg = buf["total_price"] / buf["qty"] if buf["qty"] else 0.0
                 self.logger.info(
                     "ORDER_FILL_CONSOLIDATED",

@@ -44,7 +44,8 @@ class RiskEngine:
         # AI-AGENT-REF: track returns/drawdown for adaptive exposure cap
         self._returns: list[float] = []
         self._drawdowns: list[float] = []
-        self._last_caps: tuple[float, float] | None = None
+        self._last_portfolio_cap: float | None = None
+        self._last_equity_cap: float | None = None
 
     def _dynamic_cap(
         self,
@@ -56,15 +57,20 @@ class RiskEngine:
         base_cap = self.asset_limits.get(asset_class, self.global_limit)
         port_cap = self._adaptive_global_cap()
         vol = self._current_volatility()
-        new_caps = (port_cap, base_cap)
-        if new_caps != self._last_caps:
+        if (
+            self._last_portfolio_cap is None
+            or abs(self._last_portfolio_cap - port_cap) > 0.01
+            or self._last_equity_cap is None
+            or abs(self._last_equity_cap - base_cap) > 0.01
+        ):
             logger.info(
                 "Adaptive exposure caps: portfolio=%.1f, equity=%.1f (volatility=%.1f%%)",
                 port_cap,
                 base_cap,
                 vol * 100,
             )
-            self._last_caps = new_caps
+            self._last_portfolio_cap = port_cap
+            self._last_equity_cap = base_cap
         return min(base_cap, port_cap)
 
     # AI-AGENT-REF: adaptive exposure cap based on 10-day volatility
