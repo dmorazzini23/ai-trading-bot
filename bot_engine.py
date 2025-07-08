@@ -4208,7 +4208,7 @@ def trade_logic(
         ):
             logger.info("SKIP_REVERSED_SIGNAL", extra={"symbol": symbol})
             return True
-        logger.info("SKIP_COOLDOWN", extra={"symbol": symbol})
+        logger.debug("SKIP_COOLDOWN", extra={"symbol": symbol})
         return True
 
     if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
@@ -5694,6 +5694,7 @@ def _process_symbols(
     state.short_positions = {s for s, q in live_positions.items() if q < 0}
 
     filtered: list[str] = []
+    cd_skipped: list[str] = []
 
     for symbol in symbols:
         if symbol in live_positions:
@@ -5704,12 +5705,15 @@ def _process_symbols(
             continue
         ts = state.trade_cooldowns.get(symbol)
         if ts and (now - ts).total_seconds() < 60:
-            logger.info(f"SKIP_COOLDOWN | {symbol} traded at {ts}")
+            cd_skipped.append(symbol)
             skipped_cooldown.inc()
             continue
         filtered.append(symbol)
 
     symbols = filtered  # replace with filtered list
+
+    if cd_skipped:
+        logger.info("SKIP_COOLDOWN | %s", ", ".join(cd_skipped))
 
     def process_symbol(symbol: str) -> None:
         try:

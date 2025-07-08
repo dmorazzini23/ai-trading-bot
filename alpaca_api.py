@@ -259,6 +259,7 @@ async def handle_trade_update(event, state=None) -> None:
                 "symbol": symbol,
                 "qty": float(filled_qty or 0),
                 "price": float(fill_price or 0),
+                "ts": time.monotonic(),
             }
         elif status in {"fill", "canceled", "rejected"}:
             partial_fills.pop(str(order_id), None)
@@ -279,17 +280,21 @@ async def handle_trade_update(event, state=None) -> None:
 async def _partial_fill_summary_loop() -> None:
     """Periodically log consolidated partial fill summaries."""
     while True:
-        await asyncio.sleep(3)
-        if partial_fills:
-            summary = {
-                oid: {
-                    "symbol": info["symbol"],
-                    "qty": info["qty"],
-                    "price": info["price"],
-                }
-                for oid, info in partial_fills.items()
-            }
-            logger.info("PARTIAL_FILL_SUMMARY", extra={"orders": summary})
+        await asyncio.sleep(2)
+        now = time.monotonic()
+        stale = {
+            oid: info
+            for oid, info in list(partial_fills.items())
+            if now - info.get("ts", 0) >= 2
+        }
+        for oid, info in stale.items():
+            logger.info(
+                "ORDER_PROGRESS: %s partial_fill total=%s @ avg=%.2f",
+                info["symbol"],
+                int(info["qty"]),
+                info["price"],
+            )
+            partial_fills.pop(oid, None)
 
 
 async def check_stuck_orders(api) -> None:
