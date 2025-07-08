@@ -457,7 +457,9 @@ class ExecutionEngine:
             else:
                 self.adaptive_multiplier = 1.0
 
-    def _assess_liquidity(self, symbol: str, qty: int) -> tuple[int, bool]:
+    def _assess_liquidity(
+        self, symbol: str, qty: int, *, attempted: bool = False
+    ) -> tuple[int, bool]:
         bid, ask = self._latest_quote(symbol)
         spread = ask - bid if ask and bid else 0.0
         df_ticks = self.ctx.data_fetcher.get_minute_df(self.ctx, symbol)
@@ -466,11 +468,17 @@ class ExecutionEngine:
             tick_range = float(df_ticks["close"].diff().abs().tail(5).max() or 0.0)
         if spread >= config.LIQUIDITY_SPREAD_THRESHOLD * 2 or tick_range >= config.LIQUIDITY_VOL_THRESHOLD * 2:
             reason = "spread" if spread >= config.LIQUIDITY_SPREAD_THRESHOLD * 2 else "volatility"
+            if attempted:
+                self.logger.info(
+                    "LIQUIDITY_SKIP",
+                    extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason},
+                )
+                return 0, True
             self.logger.info(
-                "LIQUIDITY_SKIP",
+                "LIQUIDITY_RETRY",
                 extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason},
             )
-            return 0, True
+            return max(1, int(qty * 0.5)), False
         if spread >= config.LIQUIDITY_SPREAD_THRESHOLD or tick_range >= config.LIQUIDITY_VOL_THRESHOLD:
             self.logger.info(
                 "LIQUIDITY_REDUCE",
@@ -682,10 +690,13 @@ class ExecutionEngine:
                 )
                 remaining = int(round(avail))
         steps = 0
+        tried_partial = False
         while remaining > 0:
-            remaining, skip = self._assess_liquidity(symbol, remaining)
+            remaining, skip = self._assess_liquidity(symbol, remaining, attempted=tried_partial)
             if skip or remaining <= 0:
                 break
+            if not tried_partial and remaining < qty:
+                tried_partial = True
             if side.lower() == "sell":
                 avail = self._available_qty(api, symbol)
                 if avail < remaining:

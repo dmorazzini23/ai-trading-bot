@@ -2286,7 +2286,8 @@ def pre_trade_health_check(
                 break
 
             rows = len(df)
-            logger.info("HEALTH_ROWS", extra={"symbol": sym, "rows": rows})
+            if config.VERBOSE:
+                logger.info("HEALTH_ROWS", extra={"symbol": sym, "rows": rows})
             if rows < min_rows:
                 logger.warning(
                     "HEALTH_INSUFFICIENT_ROWS: only %d rows (min expected %d)",
@@ -2307,10 +2308,11 @@ def pre_trade_health_check(
                     time.sleep(60)
                 continue
             else:
-                logger.info(
-                    "HEALTH_ROW_CHECK_PASSED: received %d rows",
-                    rows,
-                )
+                if config.VERBOSE:
+                    logger.info(
+                        "HEALTH_ROW_CHECK_PASSED: received %d rows",
+                        rows,
+                    )
             break
 
         if df is None or df.empty or rows < min_rows:
@@ -5858,12 +5860,13 @@ def run_all_trades_worker(state: BotState, model) -> None:
     state.last_run_at = now
     loop_start = time.monotonic()
     try:
-        logger.info(
-            "RUN_ALL_TRADES_START",
-            extra={
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
-            },
-        )
+        if config.VERBOSE:
+            logger.info(
+                "RUN_ALL_TRADES_START",
+                extra={
+                    "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
+                },
+            )
 
         current_cash, regime_ok, symbols = _prepare_run(ctx, state)
 
