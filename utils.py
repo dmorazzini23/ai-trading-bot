@@ -25,6 +25,10 @@ except ImportError:  # pragma: no cover - optional dependency
 
 logger = logging.getLogger(__name__)
 
+# AI-AGENT-REF: throttle noisy logs
+_LAST_MARKET_HOURS_LOG = 0.0
+_LAST_HEALTH_ROW_LOG = 0.0
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
@@ -163,6 +167,30 @@ def get_current_price(symbol: str) -> float:
     return price
 
 
+def _log_market_hours(message: str) -> None:
+    """Emit market hours message with throttling."""
+    global _LAST_MARKET_HOURS_LOG
+    now = time.time()
+    if now - _LAST_MARKET_HOURS_LOG >= 30:
+        if config.VERBOSE_LOGGING:
+            logger.info(message)
+        else:
+            logger.debug(message)
+        _LAST_MARKET_HOURS_LOG = now
+
+
+def log_health_row_check(rows: int) -> None:
+    """Log HEALTH_ROW_CHECK_PASSED with throttling."""
+    global _LAST_HEALTH_ROW_LOG
+    now = time.time()
+    if now - _LAST_HEALTH_ROW_LOG >= 5:
+        if config.VERBOSE_LOGGING:
+            logger.info("HEALTH_ROW_CHECK_PASSED: received %d rows", rows)
+        else:
+            logger.debug("HEALTH_ROW_CHECK_PASSED: received %d rows", rows)
+        _LAST_HEALTH_ROW_LOG = now
+
+
 def is_market_open(now: dt.datetime | None = None) -> bool:
     """Return True if current time is within NYSE trading hours."""
     if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
@@ -185,10 +213,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
                 "No market schedule for %s in is_market_open; returning False.",
                 check_time.date(),
             )
-            if config.VERBOSE_LOGGING:
-                logger.info("Detected Market Hours today: CLOSED")
-            else:
-                logger.debug("Detected Market Hours today: CLOSED")
+            _log_market_hours("Detected Market Hours today: CLOSED")
             return False  # holiday or weekend
         market_open = sched.iloc[0]["market_open"].tz_convert(EASTERN_TZ).time()
         market_close = sched.iloc[0]["market_close"].tz_convert(EASTERN_TZ).time()
@@ -198,18 +223,10 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
                 market_close = time(13, 0)
             else:
                 market_close = MARKET_CLOSE_TIME
-        if config.VERBOSE_LOGGING:
-            logger.info(
-                "Detected Market Hours today: OPEN from %s to %s",
-                market_open.strftime("%H:%M"),
-                market_close.strftime("%H:%M"),
-            )
-        else:
-            logger.debug(
-                "Detected Market Hours today: OPEN from %s to %s",
-                market_open.strftime("%H:%M"),
-                market_close.strftime("%H:%M"),
-            )
+        _log_market_hours(
+            "Detected Market Hours today: OPEN from %s to %s"
+            % (market_open.strftime("%H:%M"), market_close.strftime("%H:%M"))
+        )
         current = check_time.time()
         return market_open <= current <= market_close
     except Exception as exc:
@@ -217,24 +234,16 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         # Fallback to simple weekday/time check when calendar unavailable
         now_et = (now or dt.datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
         if now_et.weekday() >= 5:
-            if config.VERBOSE_LOGGING:
-                logger.info("Detected Market Hours today: CLOSED")
-            else:
-                logger.debug("Detected Market Hours today: CLOSED")
+            _log_market_hours("Detected Market Hours today: CLOSED")
             return False
         current = now_et.time()
-        if config.VERBOSE_LOGGING:
-            logger.info(
-                "Detected Market Hours today: OPEN from %s to %s",
+        _log_market_hours(
+            "Detected Market Hours today: OPEN from %s to %s"
+            % (
                 MARKET_OPEN_TIME.strftime("%H:%M"),
                 MARKET_CLOSE_TIME.strftime("%H:%M"),
             )
-        else:
-            logger.debug(
-                "Detected Market Hours today: OPEN from %s to %s",
-                MARKET_OPEN_TIME.strftime("%H:%M"),
-                MARKET_CLOSE_TIME.strftime("%H:%M"),
-            )
+        )
         return MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME
 
 
@@ -449,10 +458,7 @@ def health_check(df: pd.DataFrame | None, resolution: str) -> bool:
             logger.critical("HEALTH_FAILURE: empty dataset loaded")
         return False
 
-    if config.VERBOSE_LOGGING:
-        logger.info("HEALTH_ROW_CHECK_PASSED: received %d rows", rows)
-    else:
-        logger.debug("HEALTH_ROW_CHECK_PASSED: received %d rows", rows)
+    log_health_row_check(rows)
     return True
 
 
