@@ -42,6 +42,7 @@ def get_phase_logger(name: str, phase: str) -> logging.Logger:
     base = logging.getLogger(name)
     return PhaseLoggerAdapter(base, {"bot_phase": phase})
 
+
 MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "30"))
 MIN_HEALTH_ROWS_D = int(os.getenv("MIN_HEALTH_ROWS_DAILY", "5"))
 HEALTH_MIN_ROWS = int(os.getenv("HEALTH_MIN_ROWS", "100"))
@@ -57,6 +58,7 @@ def log_warning(
         logger.warning("%s: %s", msg, exc, extra=extra, exc_info=True)
     else:
         logger.warning(msg, extra=extra)
+
 
 # Cache of last logged stale timestamp per symbol
 _STALE_CACHE: dict[str, tuple[pd.Timestamp, float]] = {}
@@ -140,7 +142,11 @@ def get_current_price(symbol: str) -> float:
         logger.warning("get_current_price primary fetch failed for %s: %s", symbol, exc)
 
     if price <= 0:
-        logger.warning("get_current_price invalid price %.2f for %s; falling back to last close", price, symbol)
+        logger.warning(
+            "get_current_price invalid price %.2f for %s; falling back to last close",
+            price,
+            symbol,
+        )
         try:
             from data_fetcher import get_daily_df
 
@@ -160,16 +166,12 @@ def get_current_price(symbol: str) -> float:
 def is_market_open(now: dt.datetime | None = None) -> bool:
     """Return True if current time is within NYSE trading hours."""
     if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
-        logger.info(
-            "FORCE_MARKET_OPEN is enabled; overriding market hours checks."
-        )
+        logger.info("FORCE_MARKET_OPEN is enabled; overriding market hours checks.")
         return True
     try:
         import pandas_market_calendars as mcal
 
-        check_time = (
-            now or dt.datetime.now(tz=EASTERN_TZ)
-        ).astimezone(EASTERN_TZ)
+        check_time = (now or dt.datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
         cal = getattr(mcal, "get_calendar", None)
         if cal is None:
             raise AttributeError
@@ -183,8 +185,10 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
                 "No market schedule for %s in is_market_open; returning False.",
                 check_time.date(),
             )
-            if config.VERBOSE:
+            if config.VERBOSE_LOGGING:
                 logger.info("Detected Market Hours today: CLOSED")
+            else:
+                logger.debug("Detected Market Hours today: CLOSED")
             return False  # holiday or weekend
         market_open = sched.iloc[0]["market_open"].tz_convert(EASTERN_TZ).time()
         market_close = sched.iloc[0]["market_close"].tz_convert(EASTERN_TZ).time()
@@ -194,8 +198,14 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
                 market_close = time(13, 0)
             else:
                 market_close = MARKET_CLOSE_TIME
-        if config.VERBOSE:
+        if config.VERBOSE_LOGGING:
             logger.info(
+                "Detected Market Hours today: OPEN from %s to %s",
+                market_open.strftime("%H:%M"),
+                market_close.strftime("%H:%M"),
+            )
+        else:
+            logger.debug(
                 "Detected Market Hours today: OPEN from %s to %s",
                 market_open.strftime("%H:%M"),
                 market_close.strftime("%H:%M"),
@@ -205,16 +215,22 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
     except Exception as exc:
         logger.debug("market calendar unavailable: %s", exc)
         # Fallback to simple weekday/time check when calendar unavailable
-        now_et = (
-            now or dt.datetime.now(tz=EASTERN_TZ)
-        ).astimezone(EASTERN_TZ)
+        now_et = (now or dt.datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
         if now_et.weekday() >= 5:
-            if config.VERBOSE:
+            if config.VERBOSE_LOGGING:
                 logger.info("Detected Market Hours today: CLOSED")
+            else:
+                logger.debug("Detected Market Hours today: CLOSED")
             return False
         current = now_et.time()
-        if config.VERBOSE:
+        if config.VERBOSE_LOGGING:
             logger.info(
+                "Detected Market Hours today: OPEN from %s to %s",
+                MARKET_OPEN_TIME.strftime("%H:%M"),
+                MARKET_CLOSE_TIME.strftime("%H:%M"),
+            )
+        else:
+            logger.debug(
                 "Detected Market Hours today: OPEN from %s to %s",
                 MARKET_OPEN_TIME.strftime("%H:%M"),
                 MARKET_CLOSE_TIME.strftime("%H:%M"),
@@ -287,14 +303,17 @@ def get_rolling_atr(symbol: str, window: int = 14) -> float:
     df = fetch_minute_df_safe(symbol)
     if df is None or df.empty:
         return 0.0
-    high = df['high'].rolling(window).max()
-    low = df['low'].rolling(window).min()
-    close = df['close']
-    tr = pd.concat([
-        high - low,
-        (high - close.shift(1)).abs(),
-        (low - close.shift(1)).abs(),
-    ], axis=1).max(axis=1)
+    high = df["high"].rolling(window).max()
+    low = df["low"].rolling(window).min()
+    close = df["close"]
+    tr = pd.concat(
+        [
+            high - low,
+            (high - close.shift(1)).abs(),
+            (low - close.shift(1)).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     atr = tr.rolling(window).mean().iloc[-1]
     last_valid_close = close.dropna()
     if not last_valid_close.empty:
@@ -314,8 +333,8 @@ def get_current_vwap(symbol: str) -> float:
     df = fetch_minute_df_safe(symbol)
     if df is None or df.empty:
         return 0.0
-    pv = (df['close'] * df['volume']).sum()
-    vol = df['volume'].sum()
+    pv = (df["close"] * df["volume"]).sum()
+    vol = df["volume"].sum()
     vwap = pv / vol if vol else 0.0
     logger.info("VWAP for %s=%.4f", symbol, vwap)
     return float(vwap)
@@ -328,8 +347,8 @@ def get_volume_spike_factor(symbol: str) -> float:
     df = fetch_minute_df_safe(symbol)
     if df is None or len(df) < 21:
         return 1.0
-    last_vol = df['volume'].iloc[-1]
-    avg_vol = df['volume'].iloc[-21:-1].mean()
+    last_vol = df["volume"].iloc[-1]
+    avg_vol = df["volume"].iloc[-21:-1].mean()
     factor = float(last_vol) / float(avg_vol) if avg_vol else 1.0
     logger.info("Volume spike %s=%.2f", symbol, factor)
     return factor
@@ -430,8 +449,10 @@ def health_check(df: pd.DataFrame | None, resolution: str) -> bool:
             logger.critical("HEALTH_FAILURE: empty dataset loaded")
         return False
 
-    if config.VERBOSE:
+    if config.VERBOSE_LOGGING:
         logger.info("HEALTH_ROW_CHECK_PASSED: received %d rows", rows)
+    else:
+        logger.debug("HEALTH_ROW_CHECK_PASSED: received %d rows", rows)
     return True
 
 
@@ -639,7 +660,5 @@ def pre_trade_health_check(symbols: List[str], api: REST) -> Dict[str, bool]:
         ok = check_symbol(sym, api)
         symbol_health[sym] = ok
         if not ok:
-            logging.warning(
-                f"Health check skipped for {sym}: insufficient data"
-            )
+            logging.warning(f"Health check skipped for {sym}: insufficient data")
     return symbol_health

@@ -45,23 +45,31 @@ class RiskEngine:
         self._returns: list[float] = []
         self._drawdowns: list[float] = []
 
-    def _dynamic_cap(self, asset_class: str, volatility: float | None = None, cash_ratio: float | None = None) -> float:
+    def _dynamic_cap(
+        self,
+        asset_class: str,
+        volatility: float | None = None,
+        cash_ratio: float | None = None,
+    ) -> float:
         """Return exposure cap for ``asset_class`` using adaptive rules."""
         base_cap = self.asset_limits.get(asset_class, self.global_limit)
         cap = self._adaptive_global_cap()
         return min(base_cap, cap)
 
-    # AI-AGENT-REF: adaptive exposure cap based on returns & drawdown
+    # AI-AGENT-REF: adaptive exposure cap based on 10-day volatility
     def _adaptive_global_cap(self) -> float:
-        cap = 1.0
-        if len(self._returns) >= 30:
-            vol = float(np.std(self._returns[-30:]))
-            if vol < 0.015:
-                cap = 1.5
-        if len(self._drawdowns) >= 7:
-            dd = float(max(self._drawdowns[-7:]))
-            if dd < 0.03:
-                cap = 2.0
+        vol = float(np.std(self._returns[-10:])) if self._returns else 0.0
+        if vol < 0.015:
+            cap = 2.5
+        elif vol < 0.03:
+            cap = 2.0
+        else:
+            cap = 1.0
+        logger.info(
+            "Adaptive exposure cap set to %.1f based on volatility=%.1f%%",
+            cap,
+            vol * 100,
+        )
         return cap
 
     def update_portfolio_metrics(
@@ -280,7 +288,9 @@ def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float) -> None:
     """Exit position if price falls below an ATR-based trailing stop."""
     try:
         if entry_price <= 0:
-            logger.warning("apply_trailing_atr_stop invalid entry price: %.2f", entry_price)
+            logger.warning(
+                "apply_trailing_atr_stop invalid entry price: %.2f", entry_price
+            )
             return
         atr = df.ta.atr()
         trailing_stop = entry_price - 2 * atr
@@ -309,14 +319,22 @@ def schedule_reentry_check(symbol: str, lookahead_days: int) -> None:
 
 
 # AI-AGENT-REF: new risk helpers
-def calculate_atr_stop(entry_price: float, atr: float, multiplier: float = 1.5, direction: str = "long") -> float:
+def calculate_atr_stop(
+    entry_price: float, atr: float, multiplier: float = 1.5, direction: str = "long"
+) -> float:
     """Return ATR-based stop price."""
-    stop = entry_price - multiplier * atr if direction == "long" else entry_price + multiplier * atr
+    stop = (
+        entry_price - multiplier * atr
+        if direction == "long"
+        else entry_price + multiplier * atr
+    )
     metrics_logger.log_atr_stop(symbol="generic", stop=stop)
     return stop
 
 
-def calculate_bollinger_stop(price: float, upper_band: float, lower_band: float, direction: str = "long") -> float:
+def calculate_bollinger_stop(
+    price: float, upper_band: float, lower_band: float, direction: str = "long"
+) -> float:
     """Return stop price using Bollinger band width."""
     mid = (upper_band + lower_band) / 2
     if direction == "long":
@@ -327,15 +345,30 @@ def calculate_bollinger_stop(price: float, upper_band: float, lower_band: float,
     return stop
 
 
-def dynamic_stop_price(entry_price: float, atr: float | None = None, upper_band: float | None = None, lower_band: float | None = None, percent: float | None = None, direction: str = "long") -> float:
+def dynamic_stop_price(
+    entry_price: float,
+    atr: float | None = None,
+    upper_band: float | None = None,
+    lower_band: float | None = None,
+    percent: float | None = None,
+    direction: str = "long",
+) -> float:
     """Return the tightest stop price based on ATR, Bollinger width or percent."""
     stops: list[float] = []
     if atr is not None:
         stops.append(calculate_atr_stop(entry_price, atr, direction=direction))
     if upper_band is not None and lower_band is not None:
-        stops.append(calculate_bollinger_stop(entry_price, upper_band, lower_band, direction=direction))
+        stops.append(
+            calculate_bollinger_stop(
+                entry_price, upper_band, lower_band, direction=direction
+            )
+        )
     if percent is not None:
-        pct_stop = entry_price * (1 - percent) if direction == "long" else entry_price * (1 + percent)
+        pct_stop = (
+            entry_price * (1 - percent)
+            if direction == "long"
+            else entry_price * (1 + percent)
+        )
         stops.append(pct_stop)
     if not stops:
         return entry_price
