@@ -80,6 +80,7 @@ def stub_capital_scaling(monkeypatch):
     import capital_scaling as cs
     monkeypatch.setattr(cs, "drawdown_adjusted_kelly", lambda *a, **k: 0.02)
     monkeypatch.setattr(cs, "drawdown_adjusted_kelly_alt", lambda *a, **k: 0.015)
+    monkeypatch.setattr(cs, "volatility_parity_position", lambda *a, **k: 0.01)
     monkeypatch.setattr(cs, "volatility_parity_position_alt", lambda *a, **k: 0.01)
     yield
 
