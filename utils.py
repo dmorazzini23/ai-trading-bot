@@ -32,6 +32,18 @@ _LAST_HEALTH_ROW_LOG = 0.0
 _LAST_HEALTH_ROWS_COUNT = -1
 _LAST_HEALTH_STATUS: bool | None = None
 
+# AI-AGENT-REF: throttle HEALTH_ROWS logs
+_last_health_log = 0.0
+
+def throttle_health_logs(min_interval: int = 10) -> bool:
+    """Return True if a health log should be emitted."""
+    global _last_health_log
+    now = time.time()
+    if now - _last_health_log > min_interval:
+        _last_health_log = now
+        return True
+    return False
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
@@ -199,6 +211,15 @@ def log_health_row_check(rows: int, passed: bool) -> None:
         _LAST_HEALTH_ROW_LOG = now
         _LAST_HEALTH_ROWS_COUNT = rows
         _LAST_HEALTH_STATUS = passed
+
+
+def health_rows_passed(rows) -> bool:
+    """Log HEALTH_ROWS_PASSED with throttling."""
+    if throttle_health_logs():
+        logger.info(f"HEALTH_ROWS_PASSED: received {len(rows)} rows")
+    else:
+        logger.debug(f"HEALTH_ROWS_THROTTLED: {len(rows)} rows")
+    return True
 
 
 def is_market_open(now: dt.datetime | None = None) -> bool:
