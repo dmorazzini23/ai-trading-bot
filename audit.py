@@ -11,14 +11,30 @@ import config
 TRADE_LOG_FILE = settings.TRADE_LOG_FILE
 
 logger = logging.getLogger(__name__)
-_fields = ["id", "timestamp", "symbol", "side", "qty", "price", "mode", "result"]
+_fields = [
+    "id",
+    "timestamp",
+    "symbol",
+    "side",
+    "qty",
+    "price",
+    "exposure",
+    "mode",
+    "result",
+]
 
 
-def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None):
+def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposure=None):
     """Persist a trade event to ``TRADE_LOG_FILE`` and log a summary."""
-    # AI-AGENT-REF: new signature for flexible logging
+    # AI-AGENT-REF: record exposure and intent
     logger.info(
-        f"Trade Log | {symbol=} {qty=} {side=} {fill_price=} {timestamp=} {extra_info=}"
+        "Trade Log | symbol=%s, qty=%s, side=%s, fill_price=%.2f, exposure=%s, timestamp=%s",
+        symbol,
+        qty,
+        side,
+        fill_price,
+        f"{exposure:.4f}" if exposure is not None else "n/a",
+        timestamp,
     )
 
     os.makedirs(os.path.dirname(TRADE_LOG_FILE) or ".", exist_ok=True)
@@ -36,6 +52,7 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None):
                     "side": side,
                     "qty": qty,
                     "price": fill_price,
+                    "exposure": exposure if exposure is not None else "",
                     "mode": (extra_info or ""),
                     "result": "",
                 }

@@ -33,7 +33,7 @@ _listener: QueueListener | None = None
 
 def get_rotating_handler(
     path: str,
-    max_bytes: int = 10_000_000,
+    max_bytes: int = 5_000_000,
     backup_count: int = 5,
 ) -> logging.Handler:
     """Return a size-rotating file handler. Falls back to stderr on failure."""
