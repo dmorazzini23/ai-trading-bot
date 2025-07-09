@@ -144,7 +144,7 @@ np.random.seed(SEED)
 
 # AI-AGENT-REF: throttle SKIP_COOLDOWN logs
 _LAST_SKIP_CD_TIME = 0.0
-_LAST_SKIP_SYMBOLS: set[str] = set()
+_LAST_SKIP_SYMBOLS: frozenset[str] = frozenset()
 try:
     import torch
 
@@ -311,8 +311,8 @@ logger = logging.getLogger(__name__)
 def log_skip_cooldown(symbols: Sequence[str]) -> None:
     """Log SKIP_COOLDOWN once per unique set within 15 seconds."""
     global _LAST_SKIP_CD_TIME, _LAST_SKIP_SYMBOLS
-    now = time.time()
-    sym_set = set(symbols)
+    now = time.monotonic()
+    sym_set = frozenset(symbols)
     if sym_set != _LAST_SKIP_SYMBOLS or now - _LAST_SKIP_CD_TIME >= 15:
         logger.info("SKIP_COOLDOWN | %s", ", ".join(sorted(sym_set)))
         _LAST_SKIP_CD_TIME = now

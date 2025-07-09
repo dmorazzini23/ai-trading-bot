@@ -20,6 +20,9 @@ class StrategyAllocator:
         self.hold_protect: Dict[str, int] = {}
         self.hold_cycles = int(os.getenv("HOLD_PROTECT_CYCLES", 3))
         self.delta_threshold = float(os.getenv("DELTA_THRESHOLD", 0.3))
+        # AI-AGENT-REF: track cooldown log state for throttling
+        self._last_cooldown_log: Dict[str, float] = {}
+        self._last_signal_hash: int | None = None
 
     def update_reward(self, strategy: str, reward: float) -> None:
         try:
@@ -53,12 +56,28 @@ class StrategyAllocator:
 
             vol = volatility if volatility is not None else float(os.getenv("RECENT_VOLATILITY", 1))
 
+            current_hash = hash(
+                tuple(
+                    sorted(
+                        (sig.symbol, round(getattr(sig, "confidence", 0), 4))
+                        for sig_list in signals.values()
+                        for sig in sig_list
+                    )
+                )
+            )
+
             for sym in list(self.hold_protect):
                 if vol < float(os.getenv("VOL_THRESHOLD", 1.2)):
                     self.hold_protect[sym] = max(0, self.hold_protect[sym] - 2)
                 self.hold_protect[sym] -= 1
                 if self.hold_protect[sym] <= 0:
-                    logger.info("COOLDOWN_EXPIRED", extra={"symbol": sym})
+                    last_ts = self._last_cooldown_log.get(sym, 0.0)
+                    if (
+                        current_hash != self._last_signal_hash
+                        or time.monotonic() - last_ts >= 15
+                    ):
+                        logger.info("COOLDOWN_EXPIRED", extra={"symbol": sym})
+                        self._last_cooldown_log[sym] = time.monotonic()
                     self.hold_protect.pop(sym, None)
 
             results: List[TradeSignal] = []
@@ -131,6 +150,7 @@ class StrategyAllocator:
                 if not final_cands:
                     logger.warning("No final candidates for %s", strat)
 
+            self._last_signal_hash = current_hash
             return results
         except Exception as exc:  # pragma: no cover - unexpected error
             logger.exception("allocate failed: %s", exc)
