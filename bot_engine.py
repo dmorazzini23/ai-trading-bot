@@ -141,6 +141,10 @@ import numpy as np
 SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
+
+# AI-AGENT-REF: throttle SKIP_COOLDOWN logs
+_LAST_SKIP_CD_TIME = 0.0
+_LAST_SKIP_SYMBOLS: set[str] = set()
 try:
     import torch
 
@@ -302,6 +306,17 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
 from data_fetcher import DataFetchError, finnhub_client, get_minute_df
 
 logger = logging.getLogger(__name__)
+
+# AI-AGENT-REF: helper for throttled SKIP_COOLDOWN logging
+def log_skip_cooldown(symbols: Sequence[str]) -> None:
+    """Log SKIP_COOLDOWN once per unique set within 15 seconds."""
+    global _LAST_SKIP_CD_TIME, _LAST_SKIP_SYMBOLS
+    now = time.time()
+    sym_set = set(symbols)
+    if sym_set != _LAST_SKIP_SYMBOLS or now - _LAST_SKIP_CD_TIME >= 15:
+        logger.info("SKIP_COOLDOWN | %s", ", ".join(sorted(sym_set)))
+        _LAST_SKIP_CD_TIME = now
+        _LAST_SKIP_SYMBOLS = sym_set
 from risk_engine import RiskEngine
 from strategies import MeanReversionStrategy, MomentumStrategy, TradeSignal
 from strategy_allocator import StrategyAllocator
@@ -5713,7 +5728,7 @@ def _process_symbols(
     symbols = filtered  # replace with filtered list
 
     if cd_skipped:
-        logger.info("SKIP_COOLDOWN | %s", ", ".join(cd_skipped))
+        log_skip_cooldown(cd_skipped)
 
     def process_symbol(symbol: str) -> None:
         try:
