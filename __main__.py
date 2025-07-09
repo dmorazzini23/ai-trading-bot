@@ -30,7 +30,7 @@ _last_skip_set: set[str] = set()
 def check_health_rows(rows: int) -> None:
     """Log HEALTH_ROWS at most every 10 seconds."""
     global _LAST_HEALTH_LOG_TIME
-    now = time.time()
+    now = time.monotonic()
     if now - _LAST_HEALTH_LOG_TIME > 10:
         get_logger(__name__).info("HEALTH_ROWS", extra={"rows": rows})
         _LAST_HEALTH_LOG_TIME = now
@@ -46,7 +46,7 @@ def flush_skip_cooldown_log() -> None:
     global _skip_cooldown_symbols, _LAST_SKIP_LOG_TIME, _last_skip_set
     if not _skip_cooldown_symbols:
         return
-    now = time.time()
+    now = time.monotonic()
     if (
         _skip_cooldown_symbols != _last_skip_set
         or now - _LAST_SKIP_LOG_TIME >= 15

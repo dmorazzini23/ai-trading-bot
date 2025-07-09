@@ -49,6 +49,8 @@ pending_orders: dict[str, dict[str, Any]] = {}
 
 # AI-AGENT-REF: accumulate partial fills for periodic summary
 partial_fills: dict[str, dict[str, float]] = {}
+# AI-AGENT-REF: track first partial fill per order
+partial_fill_tracker: set[str] = set()
 
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
 
@@ -247,22 +249,39 @@ async def handle_trade_update(event, state=None) -> None:
             if filled_qty and fill_price
             else ""
         )
-        logger.info(
-            "Order update: %s (ID: %s) -> %s%s",
-            symbol,
-            order_id,
-            status,
-            extra,
-        )
         if status in {"partial_fill", "partial", "partially_filled"}:
+            if str(order_id) not in partial_fill_tracker:
+                logger.debug(
+                    "ORDER_PARTIAL_FILL | %s qty=%s price=%s",
+                    symbol,
+                    filled_qty,
+                    fill_price,
+                )
+                partial_fill_tracker.add(str(order_id))
             partial_fills[str(order_id)] = {
                 "symbol": symbol,
                 "qty": float(filled_qty or 0),
                 "price": float(fill_price or 0),
                 "ts": time.monotonic(),
             }
-        elif status in {"fill", "canceled", "rejected"}:
-            partial_fills.pop(str(order_id), None)
+        else:
+            logger.info(
+                "Order update: %s (ID: %s) -> %s%s",
+                symbol,
+                order_id,
+                status,
+                extra,
+            )
+            if status == "fill":
+                logger.info(
+                    "ORDER_FILLED | %s qty=%s price=%s",
+                    symbol,
+                    filled_qty,
+                    fill_price,
+                )
+                partial_fill_tracker.discard(str(order_id))
+            if status in {"fill", "canceled", "rejected"}:
+                partial_fills.pop(str(order_id), None)
         info = pending_orders.get(str(order_id))
         if info:
             info["status"] = status

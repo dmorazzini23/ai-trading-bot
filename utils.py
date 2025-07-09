@@ -38,7 +38,7 @@ _last_health_log = 0.0
 def throttle_health_logs(min_interval: int = 10) -> bool:
     """Return True if a health log should be emitted."""
     global _last_health_log
-    now = time.time()
+    now = time.monotonic()
     if now - _last_health_log > min_interval:
         _last_health_log = now
         return True
@@ -199,13 +199,14 @@ def _log_market_hours(message: str) -> None:
 def log_health_row_check(rows: int, passed: bool) -> None:
     """Log HEALTH_ROWS status changes or once every 10 seconds."""
     global _LAST_HEALTH_ROW_LOG, _LAST_HEALTH_ROWS_COUNT, _LAST_HEALTH_STATUS
-    now = time.time()
+    now = time.monotonic()
     if (
-        rows != _LAST_HEALTH_ROWS_COUNT
+        not passed
+        or rows != _LAST_HEALTH_ROWS_COUNT
         or passed != _LAST_HEALTH_STATUS
         or now - _LAST_HEALTH_ROW_LOG >= 10
     ):
-        level = logger.info if config.VERBOSE_LOGGING else logger.debug
+        level = logger.info if config.VERBOSE_LOGGING or not passed else logger.debug
         status = "PASSED" if passed else "FAILED"
         level("HEALTH_ROWS_%s: received %d rows", status, rows)
         _LAST_HEALTH_ROW_LOG = now
