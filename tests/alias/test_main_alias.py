@@ -4,7 +4,7 @@ import runpy
 import sys
 import types
 
-from conftest import reload_module
+from tests.conftest import reload_module
 
 
 def test_main_aliases(monkeypatch):
