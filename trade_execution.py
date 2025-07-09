@@ -242,8 +242,16 @@ class ExecutionEngine:
         self.baseline_vol: float | None = None
         self.high_vol_regime = False
         self._partial_buffer: dict[str, dict] = {}
+        # AI-AGENT-REF: track orders within a cycle to avoid duplicates
+        self._cycle_orders: set[str] = set()
+        self._cycle_symbols: set[str] = set()
 
     # --- helper methods -------------------------------------------------
+
+    def start_cycle(self) -> None:
+        """Reset duplicate order tracking for a new run cycle."""
+        self._cycle_orders.clear()
+        self._cycle_symbols.clear()
 
     def _select_api(self, asset_class: str):
         api = self.api
@@ -277,12 +285,12 @@ class ExecutionEngine:
         """Return current position quantity for ``symbol`` with retries."""
         try:
             if hasattr(api, "get_all_positions"):
-                for _ in range(3):
+                for attempt in range(3):
                     positions = api.get_all_positions()
                     for pos in positions:
                         if getattr(pos, "symbol", "") == symbol:
                             return float(getattr(pos, "qty", 0))
-                    time.sleep(1)
+                    time.sleep(1 + random.uniform(0.1, 0.3) * (attempt + 1))
             if hasattr(api, "get_open_position"):
                 pos = api.get_open_position(symbol)
                 return float(getattr(pos, "qty", 0))
@@ -503,11 +511,17 @@ class ExecutionEngine:
                     "LIQUIDITY_SKIP",
                     extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason},
                 )
+                time.sleep(random.uniform(0.1, 0.3))
+                self.logger.info(
+                    "LIQUIDITY_SKIP_FINAL",
+                    extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason},
+                )
                 return 0, True
             self.logger.info(
                 "LIQUIDITY_RETRY",
                 extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason},
             )
+            time.sleep(random.uniform(0.1, 0.3))
             return max(1, int(qty * 0.5)), False
         if spread >= config.LIQUIDITY_SPREAD_THRESHOLD or tick_range >= config.LIQUIDITY_VOL_THRESHOLD:
             self.logger.info(
@@ -549,10 +563,13 @@ class ExecutionEngine:
         projected = current + weight
         if projected > cap:
             self.logger.info(
-                "Skipping submit for %s: projected exposure=%.2f > cap=%.2f",
-                symbol,
-                projected,
-                cap,
+                "EXPOSURE_CAP_BREACH", 
+                extra={
+                    "symbol": symbol,
+                    "qty": qty,
+                    "projected": projected,
+                    "cap": cap,
+                },
             )
             return True
         return False
@@ -627,7 +644,7 @@ class ExecutionEngine:
                     self.logger.error("Order failed for %s: %s", symbol, order)
                 return order
             except (APIError, TimeoutError) as e:
-                sleep = 1 * (attempt + 1)
+                sleep = (attempt + 1) + random.uniform(0.1, 0.3)
                 time.sleep(sleep)
                 if attempt == 2:
                     self.logger.warning(
@@ -815,6 +832,15 @@ class ExecutionEngine:
                 break
             if expected_price and self._check_exposure_cap(asset_class, slice_qty, expected_price, symbol):
                 break
+            order_key = getattr(order_req, "client_order_id", f"{symbol}-{side}")
+            if order_key in self._cycle_orders or symbol in self._cycle_symbols:
+                self.logger.info(
+                    "DUPLICATE_ORDER_SKIP",
+                    extra={"symbol": symbol, "client_order_id": order_key},
+                )
+                break
+            self._cycle_orders.add(order_key)
+            self._cycle_symbols.add(symbol)
             start = time.monotonic()
             order = self._submit_with_retry(
                 api, order_req, symbol, side, slice_qty

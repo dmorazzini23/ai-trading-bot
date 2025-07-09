@@ -120,8 +120,10 @@ class RiskEngine:
         asset_cap = self._dynamic_cap(signal.asset_class, volatility, cash_ratio)
         if asset_exp + signal.weight > asset_cap:
             logger.warning(
-                "Exposure cap breach: symbol=%s exposure=%.2f vs cap=%.2f",
+                "Exposure cap breach: symbol=%s qty=%s alloc=%.3f exposure=%.2f vs cap=%.2f",
                 signal.symbol,
+                getattr(signal, "qty", "n/a"),
+                signal.weight,
                 asset_exp + signal.weight,
                 asset_cap,
             )
@@ -199,6 +201,21 @@ class RiskEngine:
             return 0
 
         if not self.can_trade(signal):
+            asset_exp = self.exposure.get(signal.asset_class, 0.0)
+            asset_cap = self._dynamic_cap(signal.asset_class)
+            projected = asset_exp + signal.weight
+            if projected > asset_cap:
+                qty_intended = int(round(cash * min(signal.weight, 1.0) / price))
+                logger.warning(
+                    "EXPOSURE_CAP_SKIP",
+                    extra={
+                        "symbol": signal.symbol,
+                        "qty": qty_intended,
+                        "allocation": signal.weight,
+                        "exposure": projected,
+                        "cap": asset_cap,
+                    },
+                )
             return 0
 
         weight = self._apply_weight_limits(signal)

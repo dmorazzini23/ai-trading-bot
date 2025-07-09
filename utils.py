@@ -216,8 +216,13 @@ def log_health_row_check(rows: int, passed: bool) -> None:
 
 def health_rows_passed(rows) -> bool:
     """Log HEALTH_ROWS_PASSED with throttling."""
+    global _LAST_HEALTH_ROWS_COUNT
     if throttle_health_logs():
-        logger.info(f"HEALTH_ROWS_PASSED: received {len(rows)} rows")
+        if rows != _LAST_HEALTH_ROWS_COUNT:
+            logger.info(f"HEALTH_ROWS_PASSED: received {len(rows)} rows")
+            _LAST_HEALTH_ROWS_COUNT = rows
+        else:
+            logger.debug(f"HEALTH_ROWS_THROTTLED: {len(rows)} rows")
     else:
         logger.debug(f"HEALTH_ROWS_THROTTLED: {len(rows)} rows")
     return True
