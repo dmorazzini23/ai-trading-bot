@@ -1,5 +1,5 @@
 import pytest
-from capital_scaling import volatility_parity_position_alt as volatility_parity_position
+from capital_scaling import volatility_parity_position
 
 
 def test_volatility_parity_position_basic():
