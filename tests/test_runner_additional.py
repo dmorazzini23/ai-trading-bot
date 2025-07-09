@@ -1,5 +1,5 @@
 import bot_engine  # replace old bot import
-from test_bot import _DummyTradingClient
+from tests.test_bot import _DummyTradingClient
 
 
 def test_runner_starts():

@@ -128,3 +128,10 @@ def drawdown_adjusted_kelly_alt(account_value: float, equity_peak: float, raw_ke
 def volatility_parity_position_alt(base_risk: float, atr_value: float) -> float:
     """Alternate interface for volatility_parity_position."""
     return volatility_parity_position(base_risk, atr_value)
+
+# Alias for tests
+try:
+    drawdown_adjusted_kelly_alt = drawdown_adjusted_kelly
+except NameError:
+    pass
+

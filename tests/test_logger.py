@@ -2,7 +2,7 @@ import importlib
 import logging
 
 import pytest
-from conftest import reload_module
+from tests.conftest import reload_module
 
 import logger
 
