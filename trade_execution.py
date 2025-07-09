@@ -558,25 +558,29 @@ class ExecutionEngine:
         return False
 
     def _flush_partial_buffers(self, force_id: str | None = None) -> None:
+        """Emit consolidated fill logs when ``force_id`` is provided."""
         now = time.monotonic()
         ids = list(self._partial_buffer.keys()) if force_id is None else [force_id]
         for oid in ids:
             buf = self._partial_buffer.get(oid)
             if not buf:
                 continue
-            if force_id is not None or now - buf["ts"] >= 1:
-                avg = buf["total_price"] / buf["qty"] if buf["qty"] else 0.0
-                self.logger.info(
-                    "ORDER_FILL_CONSOLIDATED",
-                    extra={
-                        "symbol": buf["symbol"],
-                        "order_id": oid,
-                        "total": buf["qty"],
-                        "fragments": buf["count"],
-                        "avg_price": round(avg, 2),
-                    },
-                )
-                del self._partial_buffer[oid]
+            if force_id is None:
+                if now - buf["ts"] > 60:
+                    del self._partial_buffer[oid]
+                continue
+            avg = buf["total_price"] / buf["qty"] if buf["qty"] else 0.0
+            self.logger.info(
+                "ORDER_FILL_CONSOLIDATED",
+                extra={
+                    "symbol": buf["symbol"],
+                    "order_id": oid,
+                    "total": buf["qty"],
+                    "fragments": buf["count"],
+                    "avg_price": round(avg, 2),
+                },
+            )
+            del self._partial_buffer[oid]
 
     def _check_order_active(self, symbol: str, order: Order, status: str, order_id: str) -> bool:
         """Return ``True`` if order status indicates the order is active."""

@@ -197,13 +197,13 @@ def _log_market_hours(message: str) -> None:
 
 
 def log_health_row_check(rows: int, passed: bool) -> None:
-    """Log HEALTH_ROWS status changes or once every 30 seconds."""
+    """Log HEALTH_ROWS status changes or once every 10 seconds."""
     global _LAST_HEALTH_ROW_LOG, _LAST_HEALTH_ROWS_COUNT, _LAST_HEALTH_STATUS
     now = time.time()
     if (
         rows != _LAST_HEALTH_ROWS_COUNT
         or passed != _LAST_HEALTH_STATUS
-        or now - _LAST_HEALTH_ROW_LOG >= 30
+        or now - _LAST_HEALTH_ROW_LOG >= 10
     ):
         level = logger.info if config.VERBOSE_LOGGING else logger.debug
         status = "PASSED" if passed else "FAILED"
