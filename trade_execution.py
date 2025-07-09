@@ -85,6 +85,9 @@ from collections import deque
 
 SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
+# AI-AGENT-REF: aggregate partial fills across orders
+_partial_fills: dict[str, dict] = {}
+
 
 def log_trade(
     symbol: str,
@@ -169,6 +172,32 @@ def calculate_adv(df: pd.DataFrame, symbol: str, window: int = 30) -> Optional[f
         logging.warning("Invalid volume data for %s during ADV calc", symbol)
         return None
     return float(vol.mean())
+
+
+def handle_partial_fill(order_id: str, symbol: str, qty: int, price: float) -> None:
+    """Accumulate partial fill data for later aggregation."""
+    if order_id not in _partial_fills:
+        _partial_fills[order_id] = {"symbol": symbol, "qty": 0, "price_sum": 0.0, "fills": 0}
+    data = _partial_fills[order_id]
+    data["qty"] += qty
+    data["price_sum"] += price * qty
+    data["fills"] += 1
+    logging.getLogger(__name__).debug(
+        "Partial fill accumulating: %s total_qty=%s", symbol, data["qty"]
+    )
+
+
+def handle_full_fill(order_id: str) -> None:
+    """Log aggregated metrics for a fully filled order."""
+    data = _partial_fills.pop(order_id, None)
+    if data:
+        avg_price = data["price_sum"] / data["qty"]
+        logging.getLogger(__name__).info(
+            "ORDER_FILLED_AGGREGATED | %s qty=%s avg_price=%.2f",
+            data["symbol"],
+            data["qty"],
+            avg_price,
+        )
 
 
 class ExecutionEngine:

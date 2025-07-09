@@ -22,7 +22,7 @@ from logger import get_logger
 
 # AI-AGENT-REF: throttle HEALTH_ROWS and SKIP_COOLDOWN logs
 _LAST_HEALTH_LOG_TIME = 0.0
-_LAST_SKIPPED_SYMBOLS: set[str] = set()
+_skip_cooldown_symbols: set[str] = set()
 
 
 def check_health_rows(rows: int) -> None:
@@ -34,13 +34,20 @@ def check_health_rows(rows: int) -> None:
         _LAST_HEALTH_LOG_TIME = now
 
 
-def log_skip_cooldown(symbols: list[str]) -> None:
-    """Log SKIP_COOLDOWN only when ``symbols`` changes."""
-    global _LAST_SKIPPED_SYMBOLS
-    current = set(symbols)
-    if current != _LAST_SKIPPED_SYMBOLS:
-        get_logger(__name__).info("SKIP_COOLDOWN | %s", ", ".join(symbols))
-        _LAST_SKIPPED_SYMBOLS = current
+def skip_cooldown(symbols: list[str]) -> None:
+    """Batch SKIP_COOLDOWN symbols until flushed."""
+    global _skip_cooldown_symbols
+    _skip_cooldown_symbols.update(symbols)
+
+
+def flush_skip_cooldown_log() -> None:
+    global _skip_cooldown_symbols
+    if _skip_cooldown_symbols:
+        get_logger(__name__).info(
+            "SKIP_COOLDOWN_BATCHED | %s",
+            ", ".join(sorted(_skip_cooldown_symbols)),
+        )
+        _skip_cooldown_symbols.clear()
 
 
 def main() -> None:  # pragma: no cover - thin wrapper for entrypoint
