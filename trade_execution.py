@@ -290,6 +290,7 @@ class ExecutionEngine:
             if hasattr(api, "get_all_positions"):
                 for attempt in range(3):
                     positions = api.get_all_positions()
+                    self.logger.info("Raw Alpaca positions: %s", positions)
                     for pos in positions:
                         if getattr(pos, "symbol", "") == symbol:
                             return float(getattr(pos, "qty", 0))

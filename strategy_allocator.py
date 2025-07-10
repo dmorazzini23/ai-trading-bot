@@ -122,13 +122,17 @@ class StrategyAllocator:
                             "Signal weight invalid for %s; using default 1.0", s.symbol
                         )
                         s.weight = 1.0
-                    if s.symbol in recent_buys and time.time() - recent_buys[s.symbol] < 60:
+                    if (
+                        s.side == "sell"
+                        and s.symbol in recent_buys
+                        and time.time() - recent_buys[s.symbol] < 120
+                    ):
                         logger.info("SKIP_REBALANCE_RECENT_BUY for %s", s.symbol)
                         continue
                     last_dir = self.last_direction.get(s.symbol)
                     last_conf = self.last_confidence.get(s.symbol, 0.0)
                     if last_dir and last_dir != s.side:
-                        if self.hold_protect.get(s.symbol, 0) > 0:
+                        if s.side == "sell" and self.hold_protect.get(s.symbol, 0) > 0:
                             logger.info("SKIP_HOLD_PROTECTION", extra={"symbol": s.symbol})
                             continue
                         if s.confidence < last_conf + self.delta_threshold:
