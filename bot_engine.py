@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 
 # Avoid failing under older Python versions during tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
-    print("Warning: Running under unsupported Python version", file=sys.stderr)
+    logger.warning("Running under unsupported Python version")
 
 import config
 from alerting import send_slack_alert
@@ -6169,7 +6169,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
 
 
 def main() -> None:
-    print("Main trading bot starting...")
+    logger.info("Main trading bot starting...")
     config.reload_env()
 
     def _handle_term(signum, frame):

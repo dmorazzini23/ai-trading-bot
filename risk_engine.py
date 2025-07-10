@@ -374,16 +374,16 @@ def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float) -> None:
             logger.critical("Invalid price computed for ATR stop: %s", price)
             return
         if price < trailing_stop.iloc[-1]:
-            print(f"Hit stop: price {price} vs {trailing_stop.iloc[-1]}")
+            logger.info('ATR stop hit: price=%s vs stop=%s', price, trailing_stop.iloc[-1])
             sell()  # noqa: F821 - example placeholder
             schedule_reentry_check("SYMBOL", lookahead_days=2)
     except Exception as e:  # pragma: no cover - defensive
-        print(f"ATR stop error: {e}")
+        logger.error("ATR stop error: %s", e)
 
 
 def schedule_reentry_check(symbol: str, lookahead_days: int) -> None:
     """Log a re-entry check after a stop out."""
-    print(f"Scheduling reentry for {symbol} in {lookahead_days} days.")
+    logger.info("Scheduling reentry for %s in %s days", symbol, lookahead_days)
 
 
 # AI-AGENT-REF: new risk helpers

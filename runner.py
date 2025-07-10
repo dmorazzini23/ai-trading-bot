@@ -73,12 +73,9 @@ if __name__ == "__main__":
     _run_forever()
 
 
-def start_runner():
-    print("Runner starting...")
-    main()
-
-def start_runner():
-    print("Runner started correctly.")
+def start_runner() -> None:
+    logger.info("Runner starting")
+    _run_forever()
 
 
 # AI-AGENT-REF: experimental trading loop utilities
