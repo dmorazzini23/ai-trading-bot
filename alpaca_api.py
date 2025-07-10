@@ -124,6 +124,9 @@ def get_account() -> Optional[Dict[str, Any]]:
 
 
 def submit_order(api, req, log: logging.Logger | None = None):
+    if req["symbol"] in [order["symbol"] for order in pending_orders.values()]:
+        print(f"Skipping duplicate order for {req['symbol']} still pending")
+        return None
     """Submit an order with retry and optional shadow mode."""
     log = log or logger
     if DRY_RUN:

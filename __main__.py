@@ -37,6 +37,11 @@ def check_health_rows(rows: int) -> None:
 
 
 def skip_cooldown(symbols: list[str]) -> None:
+    # Enforce immediate cooldown protection to avoid double buying
+    for sym in symbols:
+        if sym in positions:
+            continue  # Already holding, skip re-buy
+        cooldown_tracker[sym] = time.time()
     """Batch SKIP_COOLDOWN symbols until flushed."""
     global _skip_cooldown_symbols
     _skip_cooldown_symbols.update(symbols)
