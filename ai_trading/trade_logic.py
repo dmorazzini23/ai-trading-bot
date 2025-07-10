@@ -1,6 +1,8 @@
 # AI-AGENT-REF: basic trade utilities
 
 import random
+from typing import Any, Sequence
+
 import metrics_logger
 from logger import get_logger
 from ai_trading.capital_scaling import (
@@ -17,6 +19,23 @@ def should_enter_trade(price_data, signals, risk_params):
     signal_strength = signals.get("signal_strength", 0)
     max_risk = risk_params.get("max_risk", 0.02)
     return signal_strength > 0.7 and recent_gain > 0 and max_risk < 0.05
+
+
+def extract_price(data: Any) -> float:
+    """Return the last price from various data structures."""
+    # AI-AGENT-REF: handle DataFrame, mapping or sequence inputs
+    try:
+        if hasattr(data, "iloc"):
+            val = data["close"].iloc[-1]
+        elif isinstance(data, dict):
+            val = data.get("close") or data.get("price")
+        elif isinstance(data, Sequence):
+            val = data[-1]
+        else:
+            val = float(data)
+    except Exception:
+        val = 0.0
+    return float(val or 0.0)
 
 def compute_order_price(symbol_data):
     raw_price = extract_price(symbol_data)

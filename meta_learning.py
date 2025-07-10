@@ -3,12 +3,7 @@
 import json
 import logging
 import pickle
-import joblib
-import datetime
 import random
-# AI-AGENT-REF: safe utc
-old_generate = datetime.datetime.now(datetime.UTC)  # replaced utcnow for tz-aware
-new_generate = datetime.datetime.now(datetime.UTC)
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
