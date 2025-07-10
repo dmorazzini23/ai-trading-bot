@@ -295,7 +295,7 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
 
 
 try:
-    from capital_scaling import CapitalScalingEngine
+    from ai_trading.capital_scaling import CapitalScalingEngine
 except Exception:  # pragma: no cover - allow tests with stubbed module
 
     class CapitalScalingEngine:

@@ -42,7 +42,7 @@ mods = [
     "pybreaker",
     "ratelimit",
     "trade_execution",
-    "capital_scaling",
+    "ai_trading.capital_scaling",
     "strategy_allocator",
     "torch",
 ]
@@ -55,7 +55,7 @@ if "sklearn" in sys.modules:
     sys.modules["sklearn"].linear_model = sys.modules["sklearn.linear_model"]
     sys.modules["sklearn"].decomposition = sys.modules["sklearn.decomposition"]
 
-if "capital_scaling" in sys.modules:
+if "ai_trading.capital_scaling" in sys.modules:
     class _CapScaler:
         def __init__(self, *a, **k):
             pass
@@ -63,7 +63,7 @@ if "capital_scaling" in sys.modules:
         def update(self, *a, **k):
             pass
 
-    sys.modules["capital_scaling"].CapitalScalingEngine = _CapScaler
+    sys.modules["ai_trading.capital_scaling"].CapitalScalingEngine = _CapScaler
 
 sys.modules.setdefault("yfinance", types.ModuleType("yfinance"))
 if "pandas_market_calendars" in sys.modules:

@@ -81,7 +81,7 @@ def test_atr_stop_adjusts():
 
 
 def test_pyramiding_adds():
-    from trade_logic import pyramiding_logic
+    from ai_trading.trade_logic import pyramiding_logic
     new_pos = pyramiding_logic(1, profit_in_atr=1.2, base_size=1)
     assert new_pos > 1
 

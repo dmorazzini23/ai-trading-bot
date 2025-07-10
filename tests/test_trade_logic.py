@@ -1,5 +1,5 @@
-from trade_logic import should_enter_trade
-from capital_scaling import drawdown_adjusted_kelly
+from ai_trading.trade_logic import should_enter_trade
+from ai_trading.capital_scaling import drawdown_adjusted_kelly
 
 
 def test_should_enter_trade_basic():

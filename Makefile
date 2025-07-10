@@ -1,5 +1,5 @@
 test-all: clean
-	pytest --maxfail=3 --disable-warnings -n auto -v
+	PYTHONPATH=. pytest --maxfail=3 --disable-warnings -n auto -v
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +

@@ -17,7 +17,7 @@ def test_imports():
 
 
 def test_import_capital_scaling():
-    from capital_scaling import drawdown_adjusted_kelly, volatility_parity_position
+    from ai_trading.capital_scaling import drawdown_adjusted_kelly, volatility_parity_position
     assert callable(drawdown_adjusted_kelly)
     assert callable(volatility_parity_position)
 

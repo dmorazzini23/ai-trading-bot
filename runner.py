@@ -19,7 +19,7 @@ from indicators import (
     stochastic_rsi,
     hurst_exponent,
 )
-from capital_scaling import (
+from ai_trading.capital_scaling import (
     fractional_kelly,
     volatility_parity,
     cvar_scaling,

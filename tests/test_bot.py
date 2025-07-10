@@ -41,7 +41,7 @@ mods = [
     "joblib",
     "pybreaker",
     "trade_execution",
-    "capital_scaling",
+    "ai_trading.capital_scaling",
     "strategy_allocator",
 ]
 for name in mods:
@@ -182,7 +182,7 @@ class _CapScaler:
     def update(self, *a, **k):
         pass
 
-sys.modules["capital_scaling"].CapitalScalingEngine = _CapScaler
+sys.modules["ai_trading.capital_scaling"].CapitalScalingEngine = _CapScaler
 if "pandas_market_calendars" in sys.modules:
     sys.modules["pandas_market_calendars"].get_calendar = (
         lambda *a, **k: types.SimpleNamespace(

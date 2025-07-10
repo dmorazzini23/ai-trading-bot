@@ -82,7 +82,7 @@ mods = [
     "pybreaker",
     "yfinance",
     "ratelimit",
-    "capital_scaling",
+    "ai_trading.capital_scaling",
     "strategy_allocator",
     "torch",
 ]
@@ -300,7 +300,7 @@ class _Alloc:
 
 
 sys.modules["strategy_allocator"].StrategyAllocator = _Alloc
-sys.modules["capital_scaling"] = types.ModuleType("capital_scaling")
+sys.modules["ai_trading.capital_scaling"] = types.ModuleType("ai_trading.capital_scaling")
 
 
 class _CapScaler:
@@ -311,7 +311,7 @@ class _CapScaler:
         pass
 
 
-sys.modules["capital_scaling"].CapitalScalingEngine = _CapScaler
+sys.modules["ai_trading.capital_scaling"].CapitalScalingEngine = _CapScaler
 
 from main import main
 from bot_engine import pre_trade_health_check
