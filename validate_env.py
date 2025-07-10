@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     DOLLAR_RISK_LIMIT: float = 0.02
     FINNHUB_RPM: int = 60
     MINUTE_CACHE_TTL: int = 60
+    EQUITY_EXPOSURE_CAP: float = 2.5
+    PORTFOLIO_EXPOSURE_CAP: float = 2.5
 
     model_config = SettingsConfigDict(
         env_file=".env",

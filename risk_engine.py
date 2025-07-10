@@ -36,7 +36,7 @@ class RiskEngine:
     """Cross-strategy risk manager."""
 
     def __init__(self) -> None:
-        self.global_limit = 1.0
+        self.global_limit = float(os.getenv("EQUITY_EXPOSURE_CAP", "2.5"))
         self.asset_limits: Dict[str, float] = {}
         self.strategy_limits: Dict[str, float] = {}
         self.exposure: Dict[str, float] = {}
@@ -79,12 +79,13 @@ class RiskEngine:
 
     def _adaptive_global_cap(self) -> float:
         vol = self._current_volatility()
+        max_cap = float(os.getenv("PORTFOLIO_EXPOSURE_CAP", "2.5"))
         if vol < 0.015:
-            cap = 2.5
+            cap = max_cap
         elif vol < 0.03:
-            cap = 2.0
+            cap = max(2.0, max_cap - 0.5)
         else:
-            cap = 1.0
+            cap = max(2.0, max_cap - 1.0)
         return cap
 
     def update_portfolio_metrics(
@@ -94,6 +95,24 @@ class RiskEngine:
             self._returns.extend(list(returns))
         if drawdown is not None:
             self._drawdowns.append(float(drawdown))
+
+    def refresh_positions(self, api) -> None:
+        """Synchronize exposure with live positions."""
+        try:
+            positions = api.get_all_positions()
+            logger.info("Raw Alpaca positions: %s", positions)
+            acct = api.get_account()
+            equity = float(getattr(acct, "equity", 0) or 0)
+            exposure: Dict[str, float] = {}
+            for p in positions:
+                asset = getattr(p, "asset_class", "equity")
+                qty = float(getattr(p, "qty", 0) or 0)
+                price = float(getattr(p, "avg_entry_price", 0) or 0)
+                weight = abs(qty * price / equity) if equity > 0 else 0.0
+                exposure[asset] = exposure.get(asset, 0.0) + weight
+            self.exposure = exposure
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.warning("refresh_positions failed: %s", exc)
 
     def can_trade(
         self,
@@ -152,7 +171,8 @@ class RiskEngine:
             return
 
         prev = self.exposure.get(signal.asset_class, 0.0)
-        self.exposure[signal.asset_class] = prev + signal.weight
+        delta = signal.weight if signal.side.lower() == "buy" else -signal.weight
+        self.exposure[signal.asset_class] = prev + delta
         logger.info(
             "EXPOSURE_UPDATED",
             extra={

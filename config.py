@@ -149,6 +149,8 @@ REBALANCE_INTERVAL_MIN = env_settings.REBALANCE_INTERVAL_MIN
 SHADOW_MODE = env_settings.SHADOW_MODE
 DISABLE_DAILY_RETRAIN = env_settings.DISABLE_DAILY_RETRAIN
 TRADE_LOG_FILE = env_settings.TRADE_LOG_FILE
+EQUITY_EXPOSURE_CAP = float(os.getenv("EQUITY_EXPOSURE_CAP", "2.5"))
+PORTFOLIO_EXPOSURE_CAP = float(os.getenv("PORTFOLIO_EXPOSURE_CAP", "2.5"))
 VERBOSE = os.getenv("VERBOSE", "1").lower() not in ("0", "false")
 VERBOSE_LOGGING = os.getenv("VERBOSE_LOGGING", "1").lower() not in ("0", "false")
 SCHEDULER_SLEEP_SECONDS = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
@@ -248,5 +250,7 @@ __all__ = [
     "REBALANCE_DRIFT_THRESHOLD",
     "PORTFOLIO_DRIFT_THRESHOLD",
     "TRADE_AUDIT_DIR",
+    "EQUITY_EXPOSURE_CAP",
+    "PORTFOLIO_EXPOSURE_CAP",
     "set_runtime_config",
 ]

@@ -360,7 +360,9 @@ def load_portfolio_snapshot() -> Dict[str, int]:
 
 def compute_current_positions(ctx: "BotContext") -> Dict[str, int]:
     try:
-        return {p.symbol: int(p.qty) for p in ctx.api.get_all_positions()}
+        positions = ctx.api.get_all_positions()
+        logger.info("Raw Alpaca positions: %s", positions)
+        return {p.symbol: int(p.qty) for p in positions}
     except Exception:
         logger.warning("compute_current_positions failed", exc_info=True)
         return {}
@@ -5699,6 +5701,7 @@ def _process_symbols(
     now = datetime.datetime.now(datetime.timezone.utc)
     try:
         pos_list = ctx.api.get_all_positions()
+        logger.info("Raw Alpaca positions: %s", pos_list)
         live_positions = {p.symbol: int(p.qty) for p in pos_list}
     except Exception as exc:  # pragma: no cover - network issues
         logger.warning(f"LIVE_POSITION_FETCH_FAIL: {exc}")
@@ -5878,6 +5881,10 @@ def run_all_trades_worker(state: BotState, model) -> None:
     if state.pdt_blocked:
         return
     state.running = True
+    try:
+        ctx.risk_engine.refresh_positions(ctx.api)
+    except Exception as exc:  # pragma: no cover - safety
+        logger.warning("refresh_positions failed: %s", exc)
     state.last_run_at = now
     loop_start = time.monotonic()
     try:
@@ -5911,6 +5918,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 cash = float(acct.cash)
                 equity = float(acct.equity)
                 positions = ctx.api.get_all_positions()
+                logger.info("Raw Alpaca positions: %s", positions)
                 exposure = (
                     sum(abs(float(p.market_value)) for p in positions) / equity * 100
                     if equity > 0
@@ -5990,6 +5998,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             cash = float(acct.cash)
             equity = float(acct.equity)
             positions = ctx.api.get_all_positions()
+            logger.info("Raw Alpaca positions: %s", positions)
             exposure = (
                 sum(abs(float(p.market_value)) for p in positions) / equity * 100
                 if equity > 0
