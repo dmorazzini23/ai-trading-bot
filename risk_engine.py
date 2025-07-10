@@ -314,9 +314,11 @@ def register_trade(size: int) -> dict | None:
 
 
 def check_exposure_caps(portfolio, exposure, cap):
-    for sym in positions:
-        if exposure[sym] > cap:
-            print(f"Exposure cap triggered, blocking new orders for {sym}")
+    for sym, pos in portfolio.positions.items():
+        if pos.quantity > 0 and exposure[sym] > cap:
+            logger.warning(
+                "Exposure cap triggered, blocking new orders for %s", sym
+            )
             return False
     # Original exposure logic continues here...
 
