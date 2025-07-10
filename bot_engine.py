@@ -23,7 +23,9 @@ warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 
 # Avoid failing under older Python versions during tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
-    logger.warning("Running under unsupported Python version")
+    logging.getLogger(__name__).warning(
+        "Running under unsupported Python version"
+    )
 
 import config
 from alerting import send_slack_alert
