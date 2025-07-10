@@ -117,7 +117,9 @@ class RiskEngine:
             return False
 
         asset_exp = self.exposure.get(signal.asset_class, 0.0) + max(pending, 0.0)
-        asset_cap = self._dynamic_cap(signal.asset_class, volatility, cash_ratio)
+        asset_cap = 1.1 * self._dynamic_cap(
+            signal.asset_class, volatility, cash_ratio
+        )  # slight relaxation to reduce unnecessary skips
         if asset_exp + signal.weight > asset_cap:
             logger.warning(
                 "Exposure cap breach: symbol=%s qty=%s alloc=%.3f exposure=%.2f vs cap=%.2f",
@@ -202,7 +204,9 @@ class RiskEngine:
 
         if not self.can_trade(signal):
             asset_exp = self.exposure.get(signal.asset_class, 0.0)
-            asset_cap = self._dynamic_cap(signal.asset_class)
+            asset_cap = 1.1 * self._dynamic_cap(
+                signal.asset_class
+            )  # slight relaxation to reduce unnecessary skips
             projected = asset_exp + signal.weight
             if projected > asset_cap:
                 qty_intended = int(round(cash * min(signal.weight, 1.0) / price))
@@ -233,7 +237,9 @@ class RiskEngine:
 
     def _apply_weight_limits(self, signal: TradeSignal) -> float:
         """Return signal weight after applying asset and strategy caps."""
-        asset_cap = self._dynamic_cap(signal.asset_class)
+        asset_cap = 1.1 * self._dynamic_cap(
+            signal.asset_class
+        )  # slight relaxation to reduce unnecessary skips
         asset_rem = max(asset_cap - self.exposure.get(signal.asset_class, 0.0), 0.0)
         strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
         weight = signal.weight
