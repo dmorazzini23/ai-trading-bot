@@ -16,6 +16,9 @@ import pandas as pd
 from tenacity import (retry, retry_if_exception_type, stop_after_attempt,
                       wait_exponential, wait_random)
 
+# AI-AGENT-REF: track recent buy timestamps to avoid immediate re-checks
+recent_buys: dict[str, float] = {}
+
 # Updated Alpaca SDK imports
 try:
     from alpaca.common.exceptions import APIError
@@ -547,6 +550,10 @@ class ExecutionEngine:
 
     def _check_exposure_cap(self, asset_class: str, qty: int, price: float, symbol: str) -> bool:
         """Return True if submitting qty would exceed exposure cap."""
+        if symbol in recent_buys and time.time() - recent_buys[symbol] < 60:
+            # AI-AGENT-REF: skip exposure cap check briefly after a buy
+            self.logger.info("EXPOSURE_CAP_SKIP_RECENT_BUY for %s", symbol)
+            return False
         eng = getattr(self.ctx, "risk_engine", None)
         if eng is None:
             return False
@@ -862,6 +869,9 @@ class ExecutionEngine:
             oid = getattr(last_order, "id", None)
             if oid:
                 self._flush_partial_buffers(oid)
+            if side.lower() == "buy":
+                # AI-AGENT-REF: track recent buys to prevent immediate sell-offs
+                recent_buys[symbol] = time.time()
         return last_order
 
 

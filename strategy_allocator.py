@@ -4,6 +4,8 @@ import os
 import time  # AI-AGENT-REF: needed for monotonic timestamps
 from typing import Dict, List
 
+from trade_execution import recent_buys
+
 from strategies import TradeSignal
 from utils import get_phase_logger
 
@@ -120,6 +122,9 @@ class StrategyAllocator:
                             "Signal weight invalid for %s; using default 1.0", s.symbol
                         )
                         s.weight = 1.0
+                    if s.symbol in recent_buys and time.time() - recent_buys[s.symbol] < 60:
+                        logger.info("SKIP_REBALANCE_RECENT_BUY for %s", s.symbol)
+                        continue
                     last_dir = self.last_direction.get(s.symbol)
                     last_conf = self.last_confidence.get(s.symbol, 0.0)
                     if last_dir and last_dir != s.side:
