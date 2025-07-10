@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 import time
 import pandas as pd
 import numpy as np
@@ -10,10 +12,10 @@ def profile(func, *args, **kwargs):
     try:
         result = func(*args, **kwargs)
     except Exception as e:
-        print(f"{func.__name__} failed: {e}")
+        logger.error(f"%s failed: %s", func.__name__, e)
         return None, -1
     elapsed = time.perf_counter() - start
-    print(f"{func.__name__} took {elapsed:.6f} sec")
+    logger.info(f"%s took %.6f sec", func.__name__, elapsed)
     return result, elapsed
 
 def run_profiles():
@@ -38,10 +40,10 @@ def run_profiles():
                 )
             ]
             if len(required_positional) != 1:
-                print(f"Skipping {module.__name__}.{name} — requires {len(required_positional)} positional args: {[p.name for p in required_positional]}")
+                logger.info("Skipping %s.%s - requires %s positional args", module.__name__, name, len(required_positional))
                 continue
             if hasattr(func, "py_func") or name == "jit":
-                print(f"Skipping decorator or jit-wrapped function {module.__name__}.{name}")
+                logger.info("Skipping decorator or jit-wrapped function %s.%s", module.__name__, name)
                 continue
             _, elapsed = profile(func, df)
             timings.append((module.__name__ + "." + name, elapsed))

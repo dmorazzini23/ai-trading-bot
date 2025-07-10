@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 def load_module(name):
     if not isinstance(name, str):
-        print(f"Skipping load_module on non-string: {type(name)}")
+        logger.warning("Skipping load_module on non-string: %s", type(name))
         return None
     return importlib.import_module(name)
 
@@ -197,7 +197,7 @@ def prepare_indicators(data: pd.DataFrame, ticker: str | None = None) -> pd.Data
     )
     if cache_path:
         try:
-            data.to_parquet(cache_path)
+            data.to_parquet(cache_path, engine="pyarrow")
         except OSError:
             pass
 
@@ -205,14 +205,14 @@ def prepare_indicators(data: pd.DataFrame, ticker: str | None = None) -> pd.Data
     return data
 
 
-def prepare_indicators_parallel(symbols, data):
+def prepare_indicators_parallel(symbols, data, max_workers=None):
     if os.getenv("DISABLE_PARQUET"):
         for _ in symbols:
             pass
         return
-    with ThreadPoolExecutor(max_workers=1) as executor:  # AI-AGENT-REF: single worker to reduce CPU
-        list(executor.map(lambda ticker: prepare_indicators(data[ticker], ticker), symbols))
-
+    workers = max_workers or min(4, len(symbols))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        list(executor.map(lambda t: prepare_indicators(data[t], t), symbols))
 
 def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
     if df is None or df.empty:
