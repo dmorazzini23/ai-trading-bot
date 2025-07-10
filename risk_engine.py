@@ -281,11 +281,15 @@ class RiskEngine:
             logger.warning("Empty or invalid returns series—skipping risk computation")
             return {"volatility": 0.0}
 
-        try:
-            vol = float(np.std(returns))
-        except (ValueError, TypeError) as exc:
-            logger.error("Failed computing volatility: %s", exc)
+        if np.isnan(returns).any() or np.isinf(returns).any():
+            logger.error("Failed computing volatility: invalid values present")
             vol = 0.0
+        else:
+            try:
+                vol = float(np.std(returns))
+            except (ValueError, TypeError) as exc:
+                logger.error("Failed computing volatility: %s", exc)
+                vol = 0.0
         return {"volatility": vol}
 
 

@@ -65,6 +65,15 @@ def test_compute_volatility_error(monkeypatch):
     assert res['volatility'] == 0.0
 
 
+def test_compute_volatility_nan(caplog):
+    eng = risk_engine.RiskEngine()
+    caplog.set_level("ERROR")
+    arr = np.array([1.0, np.nan])
+    res = eng.compute_volatility(arr)
+    assert res["volatility"] == 0.0
+    assert "invalid values" in caplog.text
+
+
 def test_calculate_position_size_invalid_args():
     """Invalid argument patterns raise TypeError."""
     with pytest.raises(TypeError):
