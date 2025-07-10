@@ -5,11 +5,11 @@ a simple `generate` method that returns buy or sell signals from a price series.
 
 ## Using drawdown_adjusted_kelly
 
-The `capital_scaling` module provides a `drawdown_adjusted_kelly` helper which scales
+The `ai_trading.capital_scaling` module provides a `drawdown_adjusted_kelly` helper which scales
 your raw Kelly fraction based on current account drawdown:
 
 ```python
-from capital_scaling import drawdown_adjusted_kelly
+from ai_trading.capital_scaling import drawdown_adjusted_kelly
 
 kelly_frac = 0.6
 account_value = 9000

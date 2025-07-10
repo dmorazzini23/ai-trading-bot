@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-sys.modules.pop("capital_scaling", None)
-capital_scaling = importlib.import_module("capital_scaling")
+sys.modules.pop("ai_trading.capital_scaling", None)
+capital_scaling = importlib.import_module("ai_trading.capital_scaling")
 
 
 def force_coverage(mod):

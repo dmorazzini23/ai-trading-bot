@@ -38,7 +38,7 @@ def pytest_configure() -> None:
     if env_file.exists():
         load_dotenv(env_file)
     # Ensure project root is on the import path so modules like
-    # ``capital_scaling`` resolve when tests are run from the ``tests``
+    # ``ai_trading.capital_scaling`` resolve when tests are run from the ``tests``
     # directory by CI tools or developers.
     root_dir = Path(__file__).resolve().parent.parent
     if str(root_dir) not in sys.path:
@@ -78,7 +78,7 @@ def reload_utils_module():
 @pytest.fixture(autouse=True)
 def stub_capital_scaling(monkeypatch):
     """Provide simple stubs for heavy capital scaling functions."""
-    import capital_scaling as cs
+    import ai_trading.capital_scaling as cs
     monkeypatch.setattr(cs, "drawdown_adjusted_kelly", lambda *a, **k: 0.02)
     monkeypatch.setattr(cs, "drawdown_adjusted_kelly_alt", lambda *a, **k: 0.015)
     monkeypatch.setattr(cs, "volatility_parity_position", lambda *a, **k: 0.01)
