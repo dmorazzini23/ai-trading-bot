@@ -124,8 +124,8 @@ def get_account() -> Optional[Dict[str, Any]]:
 
 
 def submit_order(api, req, log: logging.Logger | None = None):
-    if req["symbol"] in [order["symbol"] for order in pending_orders.values()]:
-        print(f"Skipping duplicate order for {req['symbol']} still pending")
+    if req.symbol in [order["symbol"] for order in pending_orders.values()]:
+        logger.info("Skipping duplicate order for %s still pending", req.symbol)
         return None
     """Submit an order with retry and optional shadow mode."""
     log = log or logger
@@ -157,6 +157,7 @@ def submit_order(api, req, log: logging.Logger | None = None):
 
     max_retries = 5
     for attempt in range(1, max_retries + 1):
+        order_id: str | None = None
         try:
             order = api.submit_order(order_data=req)
             if hasattr(order, "status_code") and getattr(order, "status_code") == 429:
@@ -164,12 +165,15 @@ def submit_order(api, req, log: logging.Logger | None = None):
                     "API rate limit exceeded (429)"
                 )  # AI-AGENT-REF: use explicit HTTPError import
             if getattr(order, "id", None):
-                pending_orders[str(order.id)] = {
+                order_id = str(order.id)
+                pending_orders[order_id] = {
                     "symbol": getattr(req, "symbol", ""),
                     "req": req,
                     "timestamp": time.monotonic(),
                     "status": "PENDING_NEW",
                 }
+            if order_id:
+                pending_orders.pop(order_id, None)
             return order
         except HTTPError as e:
             if "429" in str(e) or "rate limit" in str(e).lower():
@@ -202,6 +206,9 @@ def submit_order(api, req, log: logging.Logger | None = None):
                 )
                 raise
             time.sleep(attempt * 2)
+        finally:
+            if order_id:
+                pending_orders.pop(order_id, None)
 
 
 @retry(
