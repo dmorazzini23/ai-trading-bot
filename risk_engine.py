@@ -313,6 +313,14 @@ def register_trade(size: int) -> dict | None:
     return {"size": size}
 
 
+def check_exposure_caps(portfolio, exposure, cap):
+    for sym in positions:
+        if exposure[sym] > cap:
+            print(f"Exposure cap triggered, blocking new orders for {sym}")
+            return False
+    # Original exposure logic continues here...
+
+
 import pandas_ta as ta
 
 
