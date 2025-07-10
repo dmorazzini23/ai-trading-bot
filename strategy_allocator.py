@@ -1,6 +1,7 @@
 import logging
 import math
 import os
+import time  # AI-AGENT-REF: needed for monotonic timestamps
 from typing import Dict, List
 
 from strategies import TradeSignal
