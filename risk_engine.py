@@ -22,6 +22,9 @@ logger = get_phase_logger(__name__, "RISK_CHECK")
 
 random.seed(42)
 np.random.seed(42)
+# AI-AGENT-REF: compatibility with pandas_ta expecting numpy.NaN constant
+if not hasattr(np, "NaN"):
+    np.NaN = np.nan
 
 
 MAX_DRAWDOWN = 0.05
