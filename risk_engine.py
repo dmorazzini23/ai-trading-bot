@@ -195,7 +195,7 @@ class RiskEngine:
                 self.hard_stop = True
                 return False
             return True
-        except Exception as exc:  # TODO: narrow exception type
+        except (RuntimeError, AttributeError, ValueError) as exc:
             logger.error("check_max_drawdown failed: %s", exc)
             return False
 

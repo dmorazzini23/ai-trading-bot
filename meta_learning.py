@@ -156,7 +156,7 @@ def update_signal_weights(
         for key in updated_weights:
             updated_weights[key] /= norm_factor
         return updated_weights
-    except Exception as exc:  # TODO: narrow exception type
+    except (ZeroDivisionError, TypeError) as exc:
         logger.exception("Exception in update_signal_weights: %s", exc)
         return weights
 
@@ -246,9 +246,7 @@ def retrain_meta_learner(
     model = Ridge(alpha=1.0, fit_intercept=True)
     try:
         model.fit(X, y, sample_weight=sample_w)
-    except (
-        Exception
-    ) as exc:  # TODO: narrow exception type; pragma: no cover - sklearn failure
+    except (ValueError, RuntimeError) as exc:  # pragma: no cover - sklearn failure
         logger.exception("Meta-learner training failed: %s", exc)
         return False
 
@@ -291,9 +289,7 @@ def optimize_signals(signal_data: Any, cfg: Any, model: Any | None = None, *, vo
         factor = 1.0 if volatility <= 1.0 else 1.0 / max(volatility, 1e-3)
         preds = preds * factor
         return preds
-    except (
-        Exception
-    ) as exc:  # TODO: narrow exception type; pragma: no cover - model may fail
+    except (ValueError, RuntimeError) as exc:  # pragma: no cover - model may fail
         logger.exception("optimize_signals failed: %s", exc)
         return signal_data
 

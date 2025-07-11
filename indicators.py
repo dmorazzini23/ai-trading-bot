@@ -35,23 +35,24 @@ def ichimoku_fallback(high: pd.Series, low: pd.Series, close: pd.Series) -> tupl
 def rsi_numba(prices: np.ndarray, period: int = 14) -> np.ndarray:
     """Compute RSI using a fast numba implementation."""
     deltas = np.diff(prices)
-    seed = deltas[:period]
-    up = seed[seed > 0].sum() / period
-    down = -seed[seed < 0].sum() / period
-    rs = up / down if down != 0 else 0.0
+    gains = np.where(deltas > 0, deltas, 0.0)
+    losses = np.where(deltas < 0, -deltas, 0.0)
     rsi = np.zeros_like(prices)
+    if prices.size <= period:
+        return rsi
+
+    avg_gain = gains[:period].mean()
+    avg_loss = losses[:period].mean()
+    rs = avg_gain / avg_loss if avg_loss != 0 else 0.0
     rsi[:period] = 100.0 - 100.0 / (1.0 + rs)
-    up_avg = up
-    down_avg = down
-    # TODO: check loop for numpy replacement
+
+    # AI-AGENT-REF: loop retained for sequential smoothing; numba handles speed
     for i in range(period, len(prices)):
-        delta = deltas[i - 1]
-        up_val = delta if delta > 0 else 0.0
-        down_val = -delta if delta < 0 else 0.0
-        up_avg = (up_avg * (period - 1) + up_val) / period
-        down_avg = (down_avg * (period - 1) + down_val) / period
-        rs = up_avg / down_avg if down_avg != 0 else 0.0
+        avg_gain = (avg_gain * (period - 1) + gains[i - 1]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i - 1]) / period
+        rs = avg_gain / avg_loss if avg_loss != 0 else 0.0
         rsi[i] = 100.0 - 100.0 / (1.0 + rs)
+
     return rsi
 
 

@@ -28,7 +28,7 @@ try:
     from alpaca.trading.enums import OrderSide, TimeInForce
     from alpaca.trading.models import Order
     from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
-except Exception:  # TODO: narrow exception type
+except ImportError:
     TradingClient = object
 
     class MarketOrderRequest(dict):
@@ -74,7 +74,7 @@ except Exception:  # TODO: narrow exception type
 
 try:
     from alpaca_api import submit_order
-except Exception:  # TODO: narrow exception type
+except ImportError:
 
     def submit_order(*args, **kwargs):
         raise RuntimeError("Alpaca API unavailable")
@@ -116,18 +116,23 @@ def log_trade(
 
 
 def log_order(order, status=None, extra=None):
-    """Log the result of an order execution.
-
-    Parameters
-    ----------
-    order : object
-        The order or trade object to log.
-    status : Optional[str]
-        Execution status. Unused in the stub.
-    extra : Optional[dict]
-        Additional logging context.
-    """
-    # TODO: Extend with persistent logging, audit trails, etc.
+    """Log the result of an order execution and persist to file."""
+    path = os.path.join(os.path.dirname(__file__), "logs", "orders.csv")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        with open(path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(
+                [
+                    datetime.now(timezone.utc).isoformat(),
+                    getattr(order, "symbol", ""),
+                    getattr(order, "qty", ""),
+                    status or getattr(order, "status", ""),
+                    extra or {},
+                ]
+            )
+    except OSError as exc:
+        logging.getLogger(__name__).error("Failed to persist order log: %s", exc)
 
 
 def place_order(symbol: str, qty: int, side: str):
@@ -271,7 +276,7 @@ class ExecutionEngine:
             return True
         try:
             acct = api.get_account()
-        except Exception as exc:  # TODO: narrow exception type
+        except (APIError, RuntimeError, AttributeError) as exc:
             self.logger.error("Error fetching account information: %s", exc)
             return False
         need = qty * price
@@ -661,7 +666,7 @@ class ExecutionEngine:
                         e,
                     )
                     return None
-            except Exception as exc:  # TODO: narrow exception type
+            except (RuntimeError, ValueError) as exc:
                 self.logger.exception(
                     "Unexpected error placing order for %s: %s",
                     symbol,
