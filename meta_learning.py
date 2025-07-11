@@ -95,7 +95,10 @@ def update_weights(
     history_file: str = "metrics.json",
     n_history: int = 5,
 ) -> bool:
-    """Update signal weights if changed and persist metric history."""
+    """Update signal weights and append metric history."""
+    if new_weights.size == 0:
+        logger.error("update_weights called with empty weight array")
+        return False
     p = Path(weight_path)
     prev = None
     try:

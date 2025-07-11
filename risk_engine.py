@@ -2,7 +2,7 @@ import logging
 import os
 import random
 import warnings
-from typing import Dict
+from typing import Any, Dict
 
 import numpy as np
 import pandas as pd
@@ -359,8 +359,15 @@ def check_exposure_caps(portfolio, exposure, cap):
 import pandas_ta as ta
 
 
-def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float) -> None:
-    """Exit position if price falls below an ATR-based trailing stop."""
+def apply_trailing_atr_stop(
+    df: pd.DataFrame,
+    entry_price: float,
+    *,
+    ctx: Any | None = None,
+    symbol: str = "SYMBOL",
+    qty: int | None = None,
+) -> None:
+    """Exit ``qty`` at market if the trailing stop is triggered."""
     try:
         if entry_price <= 0:
             logger.warning(
@@ -381,9 +388,19 @@ def apply_trailing_atr_stop(df: pd.DataFrame, entry_price: float) -> None:
             logger.critical("Invalid price computed for ATR stop: %s", price)
             return
         if price < trailing_stop.iloc[-1]:
-            logger.info('ATR stop hit: price=%s vs stop=%s', price, trailing_stop.iloc[-1])
-            sell()  # noqa: F821 - example placeholder
-            schedule_reentry_check("SYMBOL", lookahead_days=2)
+            logger.info(
+                "ATR stop hit: price=%s vs stop=%s", price, trailing_stop.iloc[-1]
+            )
+            if ctx is not None and qty:
+                try:
+                    from bot_engine import send_exit_order
+
+                    send_exit_order(ctx, symbol, abs(int(qty)), price, "atr_stop")
+                except Exception as exc:  # pragma: no cover - best effort
+                    logger.error("ATR stop exit failed: %s", exc)
+            else:
+                logger.warning("ATR stop triggered but no context/qty provided")
+            schedule_reentry_check(symbol, lookahead_days=2)
     except Exception as e:  # pragma: no cover - defensive
         logger.error("ATR stop error: %s", e)
 
