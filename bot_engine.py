@@ -6148,11 +6148,17 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                     if qty_to_buy < 1:
                         continue
                     try:
-                        submit_order(ctx, sym, qty_to_buy, "buy")
-                        logger.info(f"INITIAL_REBALANCE: Bought {qty_to_buy} {sym}")
-                        ctx.rebalance_buys[sym] = datetime.datetime.now(
-                            datetime.timezone.utc
-                        )
+                        order = submit_order(ctx, sym, qty_to_buy, "buy")
+                        # AI-AGENT-REF: confirm order result before logging success
+                        if order:
+                            logger.info(f"INITIAL_REBALANCE: Bought {qty_to_buy} {sym}")
+                            ctx.rebalance_buys[sym] = datetime.datetime.now(
+                                datetime.timezone.utc
+                            )
+                        else:
+                            logger.error(
+                                f"INITIAL_REBALANCE: Buy failed for {sym}: order not placed"
+                            )
                     except Exception as e:
                         logger.error(
                             f"INITIAL_REBALANCE: Buy failed for {sym}: {repr(e)}"
