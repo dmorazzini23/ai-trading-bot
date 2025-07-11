@@ -206,9 +206,8 @@ def prepare_indicators(data: pd.DataFrame, ticker: str | None = None) -> pd.Data
 
 
 def prepare_indicators_parallel(symbols, data, max_workers=None):
+    """Run :func:`prepare_indicators` over ``symbols`` concurrently."""
     if os.getenv("DISABLE_PARQUET"):
-        for _ in symbols:
-            pass
         return
     workers = max_workers or min(4, len(symbols))
     with ThreadPoolExecutor(max_workers=workers) as executor:

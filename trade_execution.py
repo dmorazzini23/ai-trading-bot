@@ -802,7 +802,8 @@ class ExecutionEngine:
                 remaining = int(round(avail))
         steps = 0
         tried_partial = False
-        while remaining > 0:
+        max_steps = 20
+        while remaining > 0 and steps < max_steps:
             remaining, skip = self._assess_liquidity(symbol, remaining, attempted=tried_partial)
             if skip or remaining <= 0:
                 break
@@ -865,6 +866,11 @@ class ExecutionEngine:
             steps += 1
             if remaining > 0:
                 time.sleep(random.uniform(0.05, 0.15))
+        if steps >= max_steps and remaining > 0:
+            self.logger.error(
+                "ORDER_MAX_STEPS_EXCEEDED",
+                extra={"symbol": symbol, "remaining": remaining},
+            )
         self._record_fill_steps(max(1, steps))
         if last_order:
             oid = getattr(last_order, "id", None)

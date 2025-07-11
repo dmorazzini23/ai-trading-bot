@@ -109,8 +109,6 @@ __all__ = [
     "volatility_parity_position",
     "dynamic_fractional_kelly",
     "drawdown_adjusted_kelly",
-    "volatility_parity_position_alt",
-    "drawdown_adjusted_kelly_alt",
     "pyramiding_add",
     "decay_position",
     "fractional_kelly",
@@ -129,14 +127,7 @@ def volatility_parity_position_alt(base_risk: float, atr_value: float) -> float:
     """Alternate interface for volatility_parity_position."""
     return volatility_parity_position(base_risk, atr_value)
 
-# AI-AGENT-REF: ensure aliases exist for both API names
-if 'drawdown_adjusted_kelly_alt' in globals() and 'drawdown_adjusted_kelly' not in globals():
-    drawdown_adjusted_kelly = drawdown_adjusted_kelly_alt
-elif 'drawdown_adjusted_kelly' in globals() and 'drawdown_adjusted_kelly_alt' not in globals():
-    drawdown_adjusted_kelly_alt = drawdown_adjusted_kelly
-
-if 'volatility_parity_position_alt' in globals() and 'volatility_parity_position' not in globals():
-    volatility_parity_position = volatility_parity_position_alt
-elif 'volatility_parity_position' in globals() and 'volatility_parity_position_alt' not in globals():
-    volatility_parity_position_alt = volatility_parity_position
+# Simple aliases for backward compatibility
+drawdown_adjusted_kelly_alias = drawdown_adjusted_kelly
+volatility_parity_position_alias = volatility_parity_position
 
