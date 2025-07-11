@@ -90,7 +90,7 @@ _CONFIG_LOGGED = False
 
 
 def log_config(keys: list[str] | None = None) -> None:
-    """Log key configuration values with secrets masked."""
+    """Log selected configuration values with secrets hidden."""
     global _CONFIG_LOGGED
     if _CONFIG_LOGGED:
         return
@@ -100,7 +100,8 @@ def log_config(keys: list[str] | None = None) -> None:
     for k in keys:
         val = os.getenv(k, "")
         if "KEY" in k or "SECRET" in k:
-            val = mask_secret(val)
+            # AI-AGENT-REF: avoid logging secret values entirely
+            val = "<hidden>"
         cfg[k] = val
     logger.info("Configuration: %s", cfg)
     _CONFIG_LOGGED = True
