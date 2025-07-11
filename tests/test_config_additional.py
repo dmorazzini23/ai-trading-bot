@@ -43,5 +43,5 @@ def test_log_config_masks_secrets(monkeypatch, caplog):
     caplog.set_level("INFO")
     config._CONFIG_LOGGED = False
     config.log_config(["ALPACA_API_KEY"])
-    assert "****1234" in caplog.text
+    assert "<hidden>" in caplog.text
     assert "secret1234" not in caplog.text
