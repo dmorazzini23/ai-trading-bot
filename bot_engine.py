@@ -790,7 +790,8 @@ prediction_executor = ThreadPoolExecutor(max_workers=1)
 # EVENT cooldown
 _LAST_EVENT_TS = {}
 EVENT_COOLDOWN = 15.0  # seconds
-REBALANCE_HOLD_SECONDS = 600  # skip selling shortly after rebalance buys
+# AI-AGENT-REF: hold time now configurable; default to 0 for pure signal holding
+REBALANCE_HOLD_SECONDS = int(os.getenv("REBALANCE_HOLD_SECONDS", "0"))
 RUN_INTERVAL_SECONDS = 60  # don't run trading loop more often than this
 TRADE_COOLDOWN_MIN = int(config.get_env("TRADE_COOLDOWN_MIN", "5"))  # minutes
 
@@ -3723,18 +3724,9 @@ def should_exit(
     except Exception:
         current_qty = 0
 
-    rebalance_time = ctx.rebalance_buys.get(symbol)
-    recent_rebalance = False
-    if rebalance_time:
-        if datetime.datetime.now(datetime.timezone.utc) - rebalance_time < timedelta(
-            seconds=REBALANCE_HOLD_SECONDS
-        ):
-            recent_rebalance = True
-        else:
-            ctx.rebalance_buys.pop(symbol, None)
-
-    if recent_rebalance:
-        return False, 0, ""
+    # AI-AGENT-REF: remove time-based rebalance hold logic
+    if symbol in ctx.rebalance_buys:
+        ctx.rebalance_buys.pop(symbol, None)
 
     stop = ctx.stop_targets.get(symbol)
     if stop is not None:
@@ -3906,14 +3898,8 @@ def _exit_positions_if_needed(
     final_score: float,
     conf: float,
     current_qty: int,
-    recent_rebal: bool,
 ) -> bool:
-    if (
-        not recent_rebal
-        and final_score < 0
-        and current_qty > 0
-        and abs(conf) >= CONF_THRESHOLD
-    ):
+    if final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
         if _should_hold_position(feat_df):
             logger.info("HOLD_SIGNAL_ACTIVE", extra={"symbol": symbol})
         else:
@@ -3928,12 +3914,7 @@ def _exit_positions_if_needed(
                 ctx.take_profit_targets.pop(symbol, None)
             return True
 
-    if (
-        not recent_rebal
-        and final_score > 0
-        and current_qty < 0
-        and abs(conf) >= CONF_THRESHOLD
-    ):
+    if final_score > 0 and current_qty < 0 and abs(conf) >= CONF_THRESHOLD:
         price = get_latest_close(feat_df)
         logger.info(
             f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
@@ -4092,7 +4073,6 @@ def _manage_existing_position(
     symbol: str,
     feat_df: pd.DataFrame,
     conf: float,
-    recent_rebal: bool,
     atr: float,
     current_qty: int,
 ) -> bool:
@@ -4102,10 +4082,8 @@ def _manage_existing_position(
     if price <= 0 or pd.isna(price):
         logger.critical(f"Invalid price computed for {symbol}: {price}")
         return False
-    if not recent_rebal:
-        should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
-    else:
-        should_exit_flag, exit_qty, reason = False, 0, ""
+    # AI-AGENT-REF: always rely on indicator-driven exits
+    should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
     if should_exit_flag and exit_qty > 0:
         logger.info(
             f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price:.4f}"
@@ -4167,14 +4145,9 @@ def _current_position_qty(ctx: BotContext, symbol: str) -> int:
 
 
 def _recent_rebalance_flag(ctx: BotContext, symbol: str) -> bool:
-    reb_time = ctx.rebalance_buys.get(symbol)
-    if not reb_time:
-        return False
-    if datetime.datetime.now(datetime.timezone.utc) - reb_time < timedelta(
-        seconds=REBALANCE_HOLD_SECONDS
-    ):
-        return True
-    ctx.rebalance_buys.pop(symbol, None)
+    """Return ``False`` and clear any rebalance timestamp."""
+    if symbol in ctx.rebalance_buys:
+        ctx.rebalance_buys.pop(symbol, None)
     return False
 
 
@@ -4224,14 +4197,13 @@ def trade_logic(
         return True
 
     current_qty = _current_position_qty(ctx, symbol)
-    recent_rebal = _recent_rebalance_flag(ctx, symbol)
 
     now = datetime.datetime.now(datetime.timezone.utc)
 
     signal = "buy" if final_score > 0 else "sell" if final_score < 0 else "hold"
 
     if _exit_positions_if_needed(
-        ctx, state, symbol, feat_df, final_score, conf, current_qty, recent_rebal
+        ctx, state, symbol, feat_df, final_score, conf, current_qty
     ):
         return True
 
@@ -4270,7 +4242,7 @@ def trade_logic(
     if current_qty != 0:
         atr = feat_df["atr"].iloc[-1]
         return _manage_existing_position(
-            ctx, state, symbol, feat_df, conf, recent_rebal, atr, current_qty
+            ctx, state, symbol, feat_df, conf, atr, current_qty
         )
 
     # Else hold / no action

@@ -153,6 +153,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # AI-AGENT-REF: ensure signal-driven holding by disabling rebalance hold
+    os.environ.setdefault("REBALANCE_HOLD_SECONDS", "0")
+
     # ✅ Fix: get configured logger object from setup_logging
     logger = setup_logging(log_file=args.log_file)
     logger.info("Starting AI Trading Bot unified runner")
