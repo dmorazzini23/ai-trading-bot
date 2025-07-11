@@ -17,6 +17,19 @@ class CapitalScalingEngine:
         # AI-AGENT-REF: accept params but scaler no longer uses them
         self.params = params or {}
         self.scaler = _CapScaler()
+        # AI-AGENT-REF: base level for compression factor calculations
+        self._base = float(self.params.get("COMPRESSION_BASE", 100000))
+
+    def compression_factor(self, balance: float) -> float:
+        """Return risk compression factor based on ``balance``."""
+        try:
+            if balance <= 0 or self._base <= 0:
+                return 1.0
+            ratio = balance / self._base
+            factor = 1.0 / (1.0 + math.log1p(max(ratio - 1.0, 0.0)))
+            return max(0.1, min(factor, 1.0))
+        except Exception:
+            return 1.0
 
     def scale_position(self, portfolio_value, volatility, drawdown):
         # AI-AGENT-REF: dynamic position sizing with volatility and drawdown
