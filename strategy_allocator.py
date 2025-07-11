@@ -70,9 +70,11 @@ class StrategyAllocator:
             )
 
             for sym in list(self.hold_protect):
+                # AI-AGENT-REF: ensure cooldown decrements only once per cycle
                 if vol < float(os.getenv("VOL_THRESHOLD", 1.2)):
                     self.hold_protect[sym] = max(0, self.hold_protect[sym] - 2)
-                self.hold_protect[sym] -= 1
+                else:
+                    self.hold_protect[sym] = max(0, self.hold_protect[sym] - 1)
                 if self.hold_protect[sym] <= 0:
                     last_ts = self._last_cooldown_log.get(sym, 0.0)
                     if (
