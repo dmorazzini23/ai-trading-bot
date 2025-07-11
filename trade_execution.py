@@ -795,7 +795,7 @@ class ExecutionEngine:
         if side.lower() == "sell":
             avail = self._available_qty(api, symbol)
             if avail <= 0:
-                self.logger.error("No position to sell for %s", symbol)
+                self.logger.info("No position to sell for %s, skipping.", symbol)
                 return None
             if remaining > avail:
                 self.logger.warning(
@@ -884,6 +884,8 @@ class ExecutionEngine:
             if side.lower() == "buy":
                 # AI-AGENT-REF: track recent buys to prevent immediate sell-offs
                 recent_buys[symbol] = time.time()
+            else:
+                self.logger.info("EXITING %s via order %s", symbol, oid)
         return last_order
 
 

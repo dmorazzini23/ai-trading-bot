@@ -11,6 +11,7 @@ import time
 from typing import NoReturn
 
 import requests
+from trade_execution import recent_buys
 import numpy as np
 from indicators import (
     vwap,
@@ -66,6 +67,9 @@ def _run_forever() -> NoReturn:
             raise
 
         if not _shutdown:
+            if any(time.time() - ts < 2 for ts in recent_buys.values()):
+                logger.info("Post-buy sync wait")
+                time.sleep(2)
             time.sleep(5)
 
 

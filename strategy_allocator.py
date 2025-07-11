@@ -85,6 +85,13 @@ class StrategyAllocator:
                         self._last_cooldown_log[sym] = time.monotonic()
                     self.hold_protect.pop(sym, None)
 
+            # AI-AGENT-REF: map of symbols with buy signals to avoid premature sells
+            positive_symbols = {
+                s.symbol
+                for lst in signals.values()
+                for s in lst
+                if getattr(s, "side", "") == "buy"
+            }
             results: List[TradeSignal] = []
             for strat, sigs in signals.items():
                 candidates_dict = {s.symbol: getattr(s, "confidence", 0) for s in sigs}
@@ -133,6 +140,11 @@ class StrategyAllocator:
                         logger.info(
                             "RECENT_BUY_SELL", extra={"symbol": s.symbol}
                         )
+                    if s.side == "sell" and s.symbol in positive_symbols:
+                        logger.info(
+                            "HOLDING %s: indicator signals still positive", s.symbol
+                        )
+                        continue
                     last_dir = self.last_direction.get(s.symbol)
                     last_conf = self.last_confidence.get(s.symbol, 0.0)
                     if last_dir and last_dir != s.side:
@@ -144,6 +156,11 @@ class StrategyAllocator:
                             continue
                     s.weight *= weight
                     results.append(s)
+                    if s.side == "sell":
+                        logger.info(
+                            "EXITING %s: indicator signals turned negative",
+                            s.symbol,
+                        )
                     self.last_direction[s.symbol] = s.side
                     self.last_confidence[s.symbol] = s.confidence
                     if s.side == "buy":
