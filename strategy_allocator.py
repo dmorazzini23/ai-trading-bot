@@ -129,14 +129,16 @@ class StrategyAllocator:
                         and s.symbol in recent_buys
                         and time.time() - recent_buys[s.symbol] < 120
                     ):
-                        logger.info("SKIP_REBALANCE_RECENT_BUY for %s", s.symbol)
-                        continue
+                        # AI-AGENT-REF: allow sells despite recent buy; log only
+                        logger.info(
+                            "RECENT_BUY_SELL", extra={"symbol": s.symbol}
+                        )
                     last_dir = self.last_direction.get(s.symbol)
                     last_conf = self.last_confidence.get(s.symbol, 0.0)
                     if last_dir and last_dir != s.side:
                         if s.side == "sell" and self.hold_protect.get(s.symbol, 0) > 0:
-                            logger.info("SKIP_HOLD_PROTECTION", extra={"symbol": s.symbol})
-                            continue
+                            # AI-AGENT-REF: remove hold protection block; log only
+                            logger.info("HOLD_PROTECT_ACTIVE", extra={"symbol": s.symbol})
                         if s.confidence < last_conf + self.delta_threshold:
                             logger.info("SKIP_DELTA_THRESHOLD", extra={"symbol": s.symbol})
                             continue
