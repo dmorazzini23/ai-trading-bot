@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import pickle
 import time
 from datetime import datetime
 from pathlib import Path
@@ -78,7 +79,7 @@ class MLModel:
                 extra={"duration": round(dur, 2), "mse": mse},
             )
             return mse
-        except Exception as exc:  # TODO: narrow exception type
+        except (ValueError, RuntimeError) as exc:
             self.logger.exception("MODEL_TRAIN_FAILED: %s", exc)
             raise
 
@@ -86,7 +87,7 @@ class MLModel:
         self._validate_inputs(X)
         try:
             preds = self.pipeline.predict(X)
-        except Exception as exc:  # TODO: narrow exception type
+        except (ValueError, RuntimeError, AttributeError) as exc:
             self.logger.exception("MODEL_PREDICT_FAILED: %s", exc)
             raise
         self.logger.info("MODEL_PREDICT", extra={"rows": len(X)})
@@ -100,7 +101,7 @@ class MLModel:
         try:
             joblib.dump(self.pipeline, str(path))
             self.logger.info("MODEL_SAVED", extra={"path": str(path)})
-        except Exception as exc:  # TODO: narrow exception type
+        except (OSError, ValueError) as exc:
             self.logger.exception("MODEL_SAVE_FAILED: %s", exc)
             raise
         return str(path)
@@ -121,7 +122,7 @@ class MLModel:
                     "version": getattr(pipeline, "version", "n/a"),
                 },
             )
-        except Exception as exc:  # TODO: narrow exception type
+        except (OSError, ValueError, pickle.UnpicklingError) as exc:
             logger.exception("MODEL_LOAD_FAILED: %s", exc)
             raise
         return cls(pipeline)
