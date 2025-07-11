@@ -21,7 +21,7 @@ class StrategyAllocator:
         self.last_direction: Dict[str, str] = {}
         self.last_confidence: Dict[str, float] = {}
         self.hold_protect: Dict[str, int] = {}
-        self.hold_cycles = int(os.getenv("HOLD_PROTECT_CYCLES", 3))
+        self.hold_cycles = int(os.getenv("HOLD_PROTECT_CYCLES", 5))
         self.delta_threshold = float(os.getenv("DELTA_THRESHOLD", 0.3))
         # AI-AGENT-REF: track cooldown log state for throttling
         self._last_cooldown_log: Dict[str, float] = {}

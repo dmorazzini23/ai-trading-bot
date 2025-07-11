@@ -164,6 +164,7 @@ from functools import lru_cache
 import pandas as pd
 import pandas_market_calendars as mcal
 import pandas_ta as ta
+from indicators import rsi
 
 ta.ichimoku = (
     ta.ichimoku if hasattr(ta, "ichimoku") else lambda *a, **k: (pd.DataFrame(), {})
@@ -3885,6 +3886,18 @@ def _model_feature_names(model) -> list[str]:
     ]
 
 
+def _should_hold_position(df: pd.DataFrame) -> bool:
+    """Return True if trend indicators favor staying in the trade."""
+    try:
+        close = df["close"].astype(float)
+        ema_fast = close.ewm(span=20, adjust=False).mean().iloc[-1]
+        ema_slow = close.ewm(span=50, adjust=False).mean().iloc[-1]
+        rsi_val = rsi(tuple(close), 14).iloc[-1]
+        return close.iloc[-1] > ema_fast > ema_slow and rsi_val >= 55
+    except Exception:
+        return False
+
+
 def _exit_positions_if_needed(
     ctx: BotContext,
     state: BotState,
@@ -3901,16 +3914,19 @@ def _exit_positions_if_needed(
         and current_qty > 0
         and abs(conf) >= CONF_THRESHOLD
     ):
-        price = get_latest_close(feat_df)
-        logger.info(
-            f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
-        )
-        send_exit_order(ctx, symbol, current_qty, price, "reversal")
-        ctx.trade_logger.log_exit(state, symbol, price)
-        with targets_lock:
-            ctx.stop_targets.pop(symbol, None)
-            ctx.take_profit_targets.pop(symbol, None)
-        return True
+        if _should_hold_position(feat_df):
+            logger.info("HOLD_SIGNAL_ACTIVE", extra={"symbol": symbol})
+        else:
+            price = get_latest_close(feat_df)
+            logger.info(
+                f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
+            )
+            send_exit_order(ctx, symbol, current_qty, price, "reversal")
+            ctx.trade_logger.log_exit(state, symbol, price)
+            with targets_lock:
+                ctx.stop_targets.pop(symbol, None)
+                ctx.take_profit_targets.pop(symbol, None)
+            return True
 
     if (
         not recent_rebal
