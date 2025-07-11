@@ -117,6 +117,16 @@ class RiskEngine:
         except Exception as exc:  # pragma: no cover - best effort
             logger.warning("refresh_positions failed: %s", exc)
 
+    def position_exists(self, api, symbol: str) -> bool:
+        """Return True if ``symbol`` exists in current Alpaca positions."""
+        try:
+            for p in api.get_all_positions():
+                if getattr(p, "symbol", "") == symbol:
+                    return True
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.warning("position_exists failed for %s: %s", symbol, exc)
+        return False
+
     def can_trade(
         self,
         signal: TradeSignal,
@@ -393,6 +403,9 @@ def apply_trailing_atr_stop(
             )
             if ctx is not None and qty:
                 try:
+                    if hasattr(ctx, "risk_engine") and not ctx.risk_engine.position_exists(ctx.api, symbol):
+                        logger.info("No position to sell for %s, skipping.", symbol)
+                        return
                     from bot_engine import send_exit_order
 
                     send_exit_order(ctx, symbol, abs(int(qty)), price, "atr_stop")
