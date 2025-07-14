@@ -7,7 +7,7 @@ import types
 import warnings
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
-from typing import Optional, Sequence
+from typing import Any, Optional, Sequence
 
 # Do not hard fail when running under older Python versions in tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
@@ -34,6 +34,24 @@ else:
         secret_key=ALPACA_SECRET_KEY,
     )
 logger = logging.getLogger(__name__)
+
+
+def _mask_headers(headers: dict[str, Any]) -> dict[str, Any]:
+    masked = {}
+    for k, v in headers.items():
+        if isinstance(v, str) and any(x in k.lower() for x in ("key", "token", "secret")):
+            masked[k] = config.mask_secret(v)
+        else:
+            masked[k] = v
+    return masked
+
+
+def _log_http_request(method: str, url: str, params: dict[str, Any], headers: dict[str, Any]) -> None:
+    logger.debug("HTTP %s %s params=%s headers=%s", method, url, params, _mask_headers(headers))
+
+
+def _log_http_response(resp: requests.Response) -> None:
+    logger.debug("HTTP_RESPONSE status=%s body=%s", resp.status_code, resp.text[:300])
 
 _rate_limit_lock = threading.Lock()
 try:
@@ -88,6 +106,50 @@ config.reload_env()
 
 # In-memory minute bar cache to avoid unnecessary API calls
 _MINUTE_CACHE: dict[str, tuple[pd.DataFrame, pd.Timestamp]] = {}
+
+
+def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, feed: str = _DEFAULT_FEED) -> pd.DataFrame:
+    """Fetch raw bars from Alpaca with detailed logging."""
+    url = f"https://data.alpaca.markets/v2/stocks/{symbol}/bars"
+    params = {
+        "start": ensure_utc(start).isoformat(),
+        "end": ensure_utc(end).isoformat(),
+        "timeframe": timeframe,
+        "feed": feed,
+    }
+    headers = {
+        "APCA-API-KEY-ID": ALPACA_API_KEY,
+        "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY,
+    }
+    _log_http_request("GET", url, params, headers)
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
+    except requests.exceptions.RequestException as exc:
+        logger.exception("HTTP request error for %s", symbol, exc_info=exc)
+        raise DataFetchException(symbol, "alpaca", url, str(exc)) from exc
+
+    _log_http_response(resp)
+    if resp.status_code != 200:
+        raise DataFetchException(
+            symbol, "alpaca", url, f"status {resp.status_code}: {resp.text[:300]}"
+        )
+    data = resp.json()
+    bars = data.get("bars") or []
+    if not bars:
+        return pd.DataFrame()
+    df = pd.DataFrame(bars)
+    rename_map = {
+        "t": "timestamp",
+        "o": "open",
+        "h": "high",
+        "l": "low",
+        "c": "close",
+        "v": "volume",
+    }
+    df = df.rename(columns=rename_map)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df.set_index("timestamp", inplace=True)
+    return df[["open", "high", "low", "close", "volume"]]
 
 
 # Helper to coerce dates into datetimes
@@ -179,6 +241,25 @@ _DEFAULT_FEED = ALPACA_DATA_FEED or "iex"
 
 class DataFetchError(Exception):
     """Raised when a data request fails after all retries."""
+
+
+class DataFetchException(Exception):
+    """Raised when an HTTP fetch returns an error status."""
+
+    def __init__(self, symbol: str, provider: str, endpoint: str, message: str) -> None:
+        super().__init__(message)
+        self.symbol = symbol
+        self.provider = provider
+        self.endpoint = endpoint
+        self.message = message
+
+
+class DataSourceDownException(Exception):
+    """Raised when all data sources fail for a symbol."""
+
+    def __init__(self, symbol: str) -> None:
+        super().__init__(f"All data sources failed for {symbol}")
+        self.symbol = symbol
 
 
 
@@ -327,61 +408,21 @@ def get_daily_df(
                 f"{name} must be date, datetime, pandas.Timestamp or str"
             )
 
-    df = pd.DataFrame()
-    for attempt in range(3):
+    start_dt = ensure_datetime(start)
+    end_dt = ensure_datetime(end)
+    try:
+        df = _fetch_bars(symbol, start_dt, end_dt, "1Day", _DEFAULT_FEED)
+    except DataFetchException as primary_err:
+        logger.error(
+            "Primary daily fetch failed for %s: %s", symbol, primary_err.message
+        )
         try:
-            start_dt = ensure_datetime(start)
-            end_dt = ensure_datetime(end)
-        except (ValueError, TypeError) as dt_err:
-            logger.error("get_daily_df datetime error: %s", dt_err, exc_info=True)
-            raise
-
-        try:
-            df = get_historical_data(
-                symbol,
-                start_dt,
-                end_dt,
-                "1Day",
+            df = fh_fetcher.fetch(symbol, period="6mo", interval="1d")
+        except Exception as fh_err:
+            logger.critical(
+                "Secondary provider failed for %s: %s", symbol, fh_err
             )
-            break
-        except (APIError, RetryError) as e:
-            logger.debug(
-                f"get_daily_df attempt {attempt+1} failed for {symbol}: {e}"
-            )
-            pytime.sleep(1)
-    else:
-        try:
-            start_dt = ensure_datetime(start)
-            end_dt = ensure_datetime(end)
-        except (ValueError, TypeError) as dt_err:
-            logger.error("get_daily_df datetime error: %s", dt_err, exc_info=True)
-            raise
-
-        try:
-            req = StockBarsRequest(
-                symbol_or_symbols=[symbol],
-                start=ensure_utc(start_dt),
-                end=ensure_utc(end_dt),
-                timeframe=TimeFrame.Day,
-                feed=_DEFAULT_FEED,
-            )
-            try:
-                df = _DATA_CLIENT.get_stock_bars(req).df
-            except APIError as e:
-                if "subscription does not permit" in str(e).lower() and _DEFAULT_FEED != "iex":
-                    logger.warning(
-                        "Daily fetch subscription error for %s with feed %s: %s",
-                        symbol,
-                        _DEFAULT_FEED,
-                        e,
-                    )
-                    req.feed = "iex"
-                    df = _DATA_CLIENT.get_stock_bars(req).df
-                else:
-                    raise
-        except (APIError, RetryError):
-            logger.info("SKIP_NO_PRICE_DATA | %s", symbol)
-            return None
+            raise DataSourceDownException(symbol) from fh_err
     try:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(-1)
@@ -531,7 +572,6 @@ def get_minute_df(
     start_dt = ensure_utc(start_date) - timedelta(minutes=1)
     end_dt = ensure_utc(end_date)
 
-    # Serve cached data if still fresh (within 1 minute of last bar)
     cached = _MINUTE_CACHE.get(symbol)
     if cached is not None:
         df_cached, ts = cached
@@ -540,182 +580,34 @@ def get_minute_df(
             return df_cached.copy()
 
     try:
-        bars = None
-        try:
-            req = StockBarsRequest(
-                symbol_or_symbols=[symbol],
-                timeframe=TimeFrame.Minute,
-                start=start_dt,
-                end=end_dt,
-                feed=_DEFAULT_FEED,
-            )
-            try:
-                bars = client.get_stock_bars(req)
-            except Exception as err:
-                logger.exception("Minute data fetch failed for %s: %s", symbol, err)
-                raise
-        except APIError as e:
-            if "subscription does not permit" in str(e).lower() and _DEFAULT_FEED != "iex":
-                logger.error(
-                    "API subscription error for %s with feed %s: %s",
-                    symbol,
-                    _DEFAULT_FEED,
-                    e,
-                )
-                req.feed = "iex"
-                try:
-                    bars = client.get_stock_bars(req)
-                except Exception as iex_err:
-                    logger.exception("IEX fallback failed for %s: %s", symbol, iex_err)
-                    return None
-            else:
-                logger.error(f"API error for {symbol}: {e}")
-                return None
-
-        latest_prices = getattr(bars, "df", pd.DataFrame()) if bars is not None else pd.DataFrame()
-        if latest_prices is None or len(latest_prices) < MIN_EXPECTED_ROWS:
-            logger.warning(
-                f"Data incomplete for {symbol}, got {len(latest_prices)} rows. Skipping this cycle."
-            )
-            return pd.DataFrame()
-
-        bars = bars.df
-        if isinstance(bars, list):
-            bars = pd.DataFrame(bars)
-        logger.debug("%s raw minute timestamps: %s", symbol, list(bars.index[:5]))
-        if bars.empty:
-            logger.error(f"Data fetch failed for {symbol} on {end_dt.date()} during trading hours! Skipping symbol.")
-            # Optionally, alert or set error counter here
-            return None
-        # drop MultiIndex if present, otherwise drop the stray "symbol" column
-        if isinstance(bars.columns, pd.MultiIndex):
-            bars = bars.xs(symbol, level=0, axis=1)
-        else:
-            bars = bars.drop(columns=["symbol"], errors="ignore")
-        df = bars.copy()
-
-        logger.debug(f"{symbol}: raw bar columns: {df.columns.tolist()}")
-
-        rename_map = {}
-        patterns = {
-            "open": ["open", "o", "open_price"],
-            "high": ["high", "h", "high_price"],
-            "low": ["low", "l", "low_price"],
-            "close": ["close", "c", "close_price"],
-            "volume": ["volume", "v"],
-        }
-        for std, pats in patterns.items():
-            for pat in pats:
-                for col in df.columns:
-                    if col.lower().startswith(pat):
-                        rename_map[col] = std
-                        break
-                if std in rename_map:
-                    break
-
-        df.rename(columns=rename_map, inplace=True)
-        logger.debug(f"{symbol}: renamed bar columns: {df.columns.tolist()}")
-
-        required = {"open", "high", "low", "close", "volume"}
-        if not required.issubset(df.columns):
-            logger.warning("Missing OHLCV columns for %s; returning empty", symbol)
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-
-        df = df[["open", "high", "low", "close", "volume"]]
-        if df.empty or len(df) < MIN_EXPECTED_ROWS:
-            logger.warning(
-                f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
-            )
-            return pd.DataFrame()
-        try:
-            idx = safe_to_datetime(df.index, context=f"{symbol} minute")
-        except ValueError as e:
-            logger.debug("Raw minute data for %s: %s", symbol, df.head().to_dict())
-            logger.warning("Invalid minute index for %s; skipping. %s", symbol, e)
-            return None
-        df.index = idx
-
-        _MINUTE_CACHE[symbol] = (df, pd.Timestamp.now(tz="UTC"))
-        logger.info(
-            "MINUTE_FETCHED",
-            extra={"symbol": symbol, "rows": len(df), "cols": df.shape[1]},
+        df = _fetch_bars(symbol, start_dt, end_dt, "1Min", _DEFAULT_FEED)
+    except DataFetchException as primary_err:
+        logger.error(
+            "Primary fetch failed for %s via Alpaca: %s", symbol, primary_err.message
         )
-        return df
-    except (APIError, KeyError):
         try:
-            start_dt = ensure_datetime(start_date)
-            end_dt = ensure_datetime(end_date)
-        except (ValueError, TypeError) as dt_err:
-            logger.error(
-                "get_minute_df fallback datetime error: %s", dt_err, exc_info=True
+            df = fh_fetcher.fetch(symbol, period="1d", interval="1")
+        except Exception as fh_err:
+            logger.critical(
+                "Secondary provider failed for %s: %s", symbol, fh_err
             )
-            return None
-
-        try:
-            req = StockBarsRequest(
-                symbol_or_symbols=[symbol],
-                timeframe=TimeFrame.Day,
-                start=ensure_utc(start_dt),
-                end=ensure_utc(end_dt) + timedelta(days=1),
-                feed=_DEFAULT_FEED,
-            )
-            try:
-                bars = client.get_stock_bars(req)
-            except APIError as e:
-                if "subscription does not permit" in str(e).lower() and _DEFAULT_FEED != "iex":
-                    logger.warning(
-                        "Minute fallback daily subscription error for %s with feed %s: %s",
-                        symbol,
-                        _DEFAULT_FEED,
-                        e,
-                    )
-                    req.feed = "iex"
-                    bars = client.get_stock_bars(req)
-                else:
-                    raise
-            except Exception as fetch_err:
-                logger.exception("Daily fallback fetch failed for %s: %s", symbol, fetch_err)
-                raise
-            df = bars.df[["open", "high", "low", "close", "volume"]].copy()
-            if isinstance(df, list):
-                df = pd.DataFrame(df, columns=["open", "high", "low", "close", "volume"])
-            if df.empty or len(df) < MIN_EXPECTED_ROWS:
-                logger.warning(
-                    f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
-                )
-                return pd.DataFrame()
-            try:
-                idx = safe_to_datetime(df.index, context=f"{symbol} fallback")
-            except ValueError as e:
-                logger.debug("Raw fallback data for %s: %s", symbol, df.head().to_dict())
-                logger.warning(
-                    "Invalid fallback index for %s; skipping | %s",
-                    symbol,
-                    e,
-                )
-                return None
-            logger.debug("%s fallback raw timestamps: %s", symbol, list(df.index[:5]))
-            logger.debug("%s fallback parsed timestamps: %s", symbol, list(idx[:5]))
-            df.index = idx
-            logger.info(
-                "Falling back to daily bars for %s (%s rows)",
-                symbol,
-                len(df),
-            )
-            _MINUTE_CACHE[symbol] = (df, pd.Timestamp.now(tz="UTC"))
-            logger.info(
-                "MINUTE_FETCHED",
-                extra={"symbol": symbol, "rows": len(df), "cols": df.shape[1]},
-            )
-            return df
-        except Exception as daily_err:
-            logger.debug(f"{symbol}: daily fallback fetch failed: {daily_err}")
-            return None
-    except Exception as e:
-        snippet = df.head().to_dict() if "df" in locals() and isinstance(df, pd.DataFrame) else "N/A"
-        logger.error("get_minute_df processing error for %s: %s", symbol, e, exc_info=True)
-        logger.debug("get_minute_df raw response for %s: %s", symbol, snippet)
-        return None
+            raise DataSourceDownException(symbol) from fh_err
+    if df is None or df.empty:
+        logger.critical(
+            "EMPTY_DATA", extra={"symbol": symbol, "start": start_dt.isoformat(), "end": end_dt.isoformat()}
+        )
+        return pd.DataFrame()
+    if len(df) < MIN_EXPECTED_ROWS:
+        logger.critical(
+            "INCOMPLETE_DATA", extra={"symbol": symbol, "rows": len(df)}
+        )
+        return pd.DataFrame()
+    _MINUTE_CACHE[symbol] = (df, pd.Timestamp.now(tz="UTC"))
+    logger.info(
+        "MINUTE_FETCHED",
+        extra={"symbol": symbol, "rows": len(df), "cols": df.shape[1]},
+    )
+    return df
 
 
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
@@ -793,3 +685,6 @@ class FinnhubFetcher:
         if len(frames) == 1:
             return frames[0]
         return pd.concat(frames, axis=0, keys=syms, names=["symbol"]).reset_index(level=0)
+
+
+fh_fetcher = FinnhubFetcher()
