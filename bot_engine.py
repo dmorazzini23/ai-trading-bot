@@ -724,6 +724,7 @@ class BotState:
     trade_cooldowns: Dict[str, datetime.datetime] = field(default_factory=dict)
     # Track direction of last filled trade per symbol
     last_trade_direction: Dict[str, str] = field(default_factory=dict)
+    skipped_cycles: int = 0
 
 
 state = BotState()
@@ -5979,6 +5980,26 @@ def run_all_trades_worker(state: BotState, model) -> None:
             logger.info(
                 "DATA_SOURCE_RETRY_FINAL",
                 extra={"success": True, "attempts": attempt + 1},
+            )
+
+        skipped = [s for s in symbols if s not in processed]
+        if skipped:
+            logger.info(
+                "CYCLE_SKIPPED_SUMMARY",
+                extra={"count": len(skipped), "symbols": skipped},
+            )
+            if len(skipped) == len(symbols):
+                state.skipped_cycles += 1
+            else:
+                state.skipped_cycles = 0
+        else:
+            state.skipped_cycles = 0
+        if state.skipped_cycles >= 2:
+            logger.critical(
+                "ALL_SYMBOLS_SKIPPED_TWO_CYCLES",
+                extra={
+                    "hint": "Check data provider API keys and entitlements; test data fetch manually from the server; review data fetcher logs",
+                },
             )
 
         run_multi_strategy(ctx)

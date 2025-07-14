@@ -657,6 +657,17 @@ class ExecutionEngine:
                     self.logger.error("Order failed for %s: %s", symbol, order)
                 return order
             except (APIError, TimeoutError) as e:
+                self.logger.error(
+                    "ORDER_SUBMIT_ERROR %s | params=%s | %s",
+                    symbol,
+                    {
+                        "symbol": getattr(order_req, "symbol", ""),
+                        "qty": getattr(order_req, "qty", 0),
+                        "side": getattr(order_req, "side", ""),
+                        "type": order_req.__class__.__name__,
+                    },
+                    e,
+                )
                 sleep = (attempt + 1) + random.uniform(0.1, 0.3)
                 time.sleep(sleep)
                 if attempt == 2:
@@ -782,6 +793,11 @@ class ExecutionEngine:
             self.logger.error(
                 "ORDER_STATUS",
                 extra={"symbol": symbol, "order_id": order_id, "status": status},
+            )
+
+        if status not in ("filled", "accepted", "new", "pending_new", "partially_filled"):
+            self.logger.warning(
+                "UNEXPECTED_ORDER_STATUS", extra={"symbol": symbol, "status": status}
             )
         if self.orders_total is not None:
             self.orders_total.inc()
