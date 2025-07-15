@@ -9,6 +9,8 @@ from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional, Sequence
 
+import requests  # AI-AGENT-REF: ensure requests import for function annotations
+
 # Do not hard fail when running under older Python versions in tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     print("Warning: Running under unsupported Python version", file=sys.stderr)
