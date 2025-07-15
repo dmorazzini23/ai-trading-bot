@@ -628,7 +628,6 @@ class FinnhubFetcher:
 
     def _throttle(self) -> None:
         while True:
-            pytime.sleep(0)  # AI-AGENT-REF: yield CPU while waiting for rate limit
             now_ts = pytime.time()
             with _rate_limit_lock:
                 while self._timestamps and now_ts - self._timestamps[0] > 60:
