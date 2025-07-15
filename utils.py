@@ -13,6 +13,10 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import config
+try:
+    import psutil
+except Exception:  # pragma: no cover - optional dependency
+    psutil = None
 
 try:
     from tzlocal import get_localzone
@@ -60,6 +64,15 @@ def get_phase_logger(name: str, phase: str) -> logging.Logger:
     """Return logger with ``bot_phase`` context."""
     base = logging.getLogger(name)
     return PhaseLoggerAdapter(base, {"bot_phase": phase})
+
+
+def log_cpu_usage(lg: logging.Logger, note: str | None = None) -> None:
+    """Log current process CPU usage if :mod:`psutil` is available."""
+    if psutil is None:
+        return
+    pct = psutil.cpu_percent(interval=None)
+    suffix = f"_{note}" if note else ""
+    lg.debug("CPU_USAGE%s: %.2f%%", suffix, pct)
 
 
 MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "30"))

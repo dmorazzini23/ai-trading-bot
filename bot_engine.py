@@ -968,7 +968,6 @@ class FinnhubFetcherLegacy:
 
     def _throttle(self):
         while True:
-            pytime.sleep(0)  # AI-AGENT-REF: yield CPU between rate-limit checks
             now_ts = pytime.time()
             # drop timestamps older than 60 seconds
             while self._timestamps and now_ts - self._timestamps[0] > 60:

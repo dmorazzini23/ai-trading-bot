@@ -26,7 +26,7 @@ from ai_trading.capital_scaling import (
     cvar_scaling,
     kelly_fraction,
 )
-from utils import get_phase_logger
+from utils import get_phase_logger, log_cpu_usage
 
 try:  # prefer 'bot' module for backward compat
     from bot import main  # type: ignore
@@ -67,6 +67,7 @@ def _run_forever() -> NoReturn:
             raise
 
         if not _shutdown:
+            log_cpu_usage(logger)
             if any(time.time() - ts < 2 for ts in recent_buys.values()):
                 logger.info("Post-buy sync wait")
                 time.sleep(2)

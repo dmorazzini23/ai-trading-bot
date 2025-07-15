@@ -699,7 +699,7 @@ class ExecutionEngine:
         status = getattr(order, "status", "")
         order_id = getattr(order, "id", "")
         if status in ("new", "pending_new"):
-            time.sleep(3)
+            time.sleep(1)
             try:
                 refreshed = self.api.get_order_by_id(order_id)
                 status = getattr(refreshed, "status", status)

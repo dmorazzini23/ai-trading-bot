@@ -5,6 +5,7 @@ import logging
 import os
 import time
 from typing import Any, Optional
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -100,6 +101,17 @@ def _compute_macd_df(
     )
 
 
+@lru_cache(maxsize=128)
+def _cached_macd(
+    prices_tuple: tuple,
+    fast_period: int,
+    slow_period: int,
+    signal_period: int,
+) -> pd.DataFrame:
+    series = pd.Series(prices_tuple)
+    return _compute_macd_df(series, fast_period, slow_period, signal_period)
+
+
 def calculate_macd(
     close_prices: pd.Series,
     fast_period: int = 12,
@@ -131,9 +143,8 @@ def calculate_macd(
         if not _validate_macd_input(close_prices, min_len):
             return None
 
-        macd_df = _compute_macd_df(
-            close_prices, fast_period, slow_period, signal_period
-        )
+        tup = tuple(map(float, close_prices.dropna().tolist()))
+        macd_df = _cached_macd(tup, fast_period, slow_period, signal_period)
 
         if macd_df.isnull().values.any():
             logger.warning("MACD calculation returned NaNs in the result")

@@ -397,5 +397,17 @@ async def start_trade_updates_stream(
     logger.info("\u2705 Subscribed to Alpaca trade updates stream.")
     asyncio.create_task(check_stuck_orders(api))
     asyncio.create_task(_partial_fill_summary_loop())
-    # Avoid nested asyncio.run inside TradingStream.run()
-    await stream._run_forever()
+
+    backoff = 1
+    while True:
+        try:
+            await stream._run_forever()
+            backoff = 1
+        except Exception as exc:  # AI-AGENT-REF: reconnect with backoff
+            logger.error("Trade update stream error: %s", exc)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+            stream = TradingStream(api_key, secret_key, paper=paper)
+            stream.subscribe_trade_updates(handle_async_trade_update)
+        else:
+            break

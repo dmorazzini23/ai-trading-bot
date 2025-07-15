@@ -36,6 +36,8 @@ transformers==4.35.2
 # Address dateutil utcfromtimestamp deprecation
 python-dateutil==2.9.0.post0
 optuna==3.6.1
+# Monitor CPU load
+psutil>=5.9.8
 # For Python 3.12 wheels use the CPU index when installing PyTorch locally
 torch==2.1.2
 
