@@ -15,6 +15,10 @@ import datetime
 
 from indicators import rsi, atr, mean_reversion_zscore
 
+# Cache the last computed signal matrix to avoid recomputation
+_LAST_SIGNAL_BAR: pd.Timestamp | None = None
+_LAST_SIGNAL_MATRIX: pd.DataFrame | None = None
+
 def get_utcnow():
     return datetime.datetime.now(datetime.UTC)
 
@@ -260,6 +264,11 @@ def compute_signal_matrix(df: pd.DataFrame) -> pd.DataFrame:
 
     if df is None or df.empty:
         return pd.DataFrame()
+    global _LAST_SIGNAL_BAR, _LAST_SIGNAL_MATRIX
+    last_bar = df.index[-1] if not df.empty else None
+    if last_bar is not None and last_bar == _LAST_SIGNAL_BAR:
+        # AI-AGENT-REF: reuse previously computed indicators for same bar
+        return _LAST_SIGNAL_MATRIX.copy() if _LAST_SIGNAL_MATRIX is not None else pd.DataFrame()
     required = {"close", "high", "low"}
     if not required.issubset(df.columns):
         return pd.DataFrame()
@@ -281,7 +290,10 @@ def compute_signal_matrix(df: pd.DataFrame) -> pd.DataFrame:
     matrix["sma_diff"] = _z(sma_diff)
     matrix["atr_move"] = _z(atr_move)
     matrix["mean_rev_z"] = mean_rev
-    return matrix.dropna(how="all")
+    matrix = matrix.dropna(how="all")
+    _LAST_SIGNAL_BAR = last_bar
+    _LAST_SIGNAL_MATRIX = matrix.copy()
+    return matrix
 
 
 def ensemble_vote_signals(signal_matrix: pd.DataFrame) -> pd.Series:

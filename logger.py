@@ -7,6 +7,7 @@ import queue
 import sys
 import csv
 from datetime import date
+import atexit
 
 import pandas as pd
 import numpy as np
@@ -48,8 +49,11 @@ def get_rotating_handler(
 
 def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.Logger:
     """Configure the root logger in an idempotent way."""
-    global _configured
+    global _configured, _log_queue, _listener
     logger = logging.getLogger()
+    if _configured:
+        return logger
+
     logger.setLevel(logging.DEBUG)
 
     formatter = UTCFormatter(
@@ -62,21 +66,39 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
                 record.bot_phase = "GENERAL"
             return True
 
-    # Attach console handler once
-    if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
-        stream_handler = logging.StreamHandler(sys.stdout)
-        stream_handler.setFormatter(formatter)
-        stream_handler.setLevel(logging.DEBUG if debug else logging.INFO)
-        stream_handler.addFilter(_PhaseFilter())
-        logger.addHandler(stream_handler)
+    handlers: list[logging.Handler] = []
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+    stream_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+    stream_handler.addFilter(_PhaseFilter())
+    handlers.append(stream_handler)
 
     if log_file:
-        # Always add rotating handler when log_file is provided
         rotating_handler = get_rotating_handler(log_file)
         rotating_handler.setFormatter(formatter)
         rotating_handler.setLevel(logging.INFO)
         rotating_handler.addFilter(_PhaseFilter())
-        logger.addHandler(rotating_handler)
+        handlers.append(rotating_handler)
+
+    _log_queue = queue.Queue(-1)
+    queue_handler = QueueHandler(_log_queue)
+    queue_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+    queue_handler.addFilter(_PhaseFilter())
+    queue_handler.setFormatter(formatter)
+    logger.handlers = [queue_handler]
+    # AI-AGENT-REF: use background queue listener to reduce I/O blocking
+    _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
+    _listener.start()
+
+    def _stop_listener() -> None:
+        if _listener:
+            try:
+                _listener.stop()
+            except Exception:
+                pass
+
+    atexit.register(_stop_listener)
 
     _configured = True
     return logger
