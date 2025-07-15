@@ -37,6 +37,9 @@ else:
     )
 logger = logging.getLogger(__name__)
 
+# Default market data feed for Alpaca requests
+_DEFAULT_FEED = "alpaca"
+
 
 def _mask_headers(headers: dict[str, Any]) -> dict[str, Any]:
     masked = {}
@@ -238,7 +241,6 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
 
 # Alpaca historical data client
 _DATA_CLIENT = client
-_DEFAULT_FEED = ALPACA_DATA_FEED or "iex"
 
 
 class DataFetchError(Exception):
