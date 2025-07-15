@@ -28,6 +28,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+from ratelimit import limits, sleep_and_retry
 
 from alerts import send_slack_alert
 
@@ -78,6 +79,8 @@ def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
             logger.warning("Further '%s' warnings suppressed", key)
 
 
+@sleep_and_retry
+@limits(calls=190, period=60)
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=1, max=16),
