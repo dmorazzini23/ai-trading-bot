@@ -594,6 +594,7 @@ def get_minute_df(
 
     alpaca_exc = finnhub_exc = yexc = None
     try:
+        logger.debug("DATA_SOURCE_FALLBACK: trying %s", "Alpaca")
         logger.debug("FETCH_ALPACA_MINUTE_BARS: start", extra={"symbol": symbol})
         df = _fetch_bars(symbol, start_dt, end_dt, "1Min", _DEFAULT_FEED)
         logger.debug(
@@ -601,10 +602,12 @@ def get_minute_df(
         )
     except DataFetchException as primary_err:
         alpaca_exc = primary_err
+        logger.error("DATA_SOURCE_FALLBACK_FAILED: %s", "Alpaca", exc_info=True)
         logger.debug(
             "FETCH_ALPACA_MINUTE_BARS: error %s", primary_err, exc_info=True
         )
         try:
+            logger.debug("DATA_SOURCE_FALLBACK: trying %s", "Finnhub")
             logger.debug(
                 "FETCH_FINNHUB_MINUTE_BARS: start", extra={"symbol": symbol}
             )
@@ -614,12 +617,14 @@ def get_minute_df(
             )
         except FinnhubAPIException as fh_err:
             finnhub_exc = fh_err
+            logger.error("DATA_SOURCE_FALLBACK_FAILED: %s", "Finnhub", exc_info=True)
             logger.debug(
                 "FETCH_FINNHUB_MINUTE_BARS: error %s", fh_err, exc_info=True
             )
             if getattr(fh_err, "status_code", None) == 403:
                 logger.warning("Finnhub 403 for %s; using yfinance fallback", symbol)
                 try:
+                    logger.debug("DATA_SOURCE_FALLBACK: trying %s", "yfinance")
                     logger.debug(
                         "FETCH_YFINANCE_MINUTE_BARS: start", extra={"symbol": symbol}
                     )
@@ -629,19 +634,13 @@ def get_minute_df(
                     )
                 except Exception as y_err:
                     yexc = y_err
+                    logger.error("DATA_SOURCE_FALLBACK_FAILED: %s", "yfinance", exc_info=True)
                     logger.debug(
                         "FETCH_YFINANCE_MINUTE_BARS: error %s", y_err, exc_info=True
                     )
-                    logger.error(
-                        "DATA_SOURCE_RETRY_FINAL: all sources failed",
-                        extra={
-                            "symbol": symbol,
-                            "errors": [
-                                str(alpaca_exc),
-                                str(finnhub_exc),
-                                str(yexc),
-                            ],
-                        },
+                    logger.warning(
+                        "DATA_SOURCE_RETRY_FINAL: all sources failed (tried Alpaca, Finnhub, yfinance)",
+                        exc_info=True,
                     )
                     raise DataSourceDownException(symbol) from y_err
             else:
@@ -651,10 +650,12 @@ def get_minute_df(
                 raise DataSourceDownException(symbol) from fh_err
         except Exception as fh_err:
             finnhub_exc = fh_err
+            logger.error("DATA_SOURCE_FALLBACK_FAILED: %s", "Finnhub", exc_info=True)
             logger.debug(
                 "FETCH_FINNHUB_MINUTE_BARS: error %s", fh_err, exc_info=True
             )
             try:
+                logger.debug("DATA_SOURCE_FALLBACK: trying %s", "yfinance")
                 logger.debug(
                     "FETCH_YFINANCE_MINUTE_BARS: start", extra={"symbol": symbol}
                 )
@@ -664,15 +665,13 @@ def get_minute_df(
                 )
             except Exception as y_err:
                 yexc = y_err
+                logger.error("DATA_SOURCE_FALLBACK_FAILED: %s", "yfinance", exc_info=True)
                 logger.debug(
                     "FETCH_YFINANCE_MINUTE_BARS: error %s", y_err, exc_info=True
                 )
-                logger.error(
-                    "DATA_SOURCE_RETRY_FINAL: all sources failed",
-                    extra={
-                        "symbol": symbol,
-                        "errors": [str(alpaca_exc), str(finnhub_exc), str(yexc)],
-                    },
+                logger.warning(
+                    "DATA_SOURCE_RETRY_FINAL: all sources failed (tried Alpaca, Finnhub, yfinance)",
+                    exc_info=True,
                 )
                 raise DataSourceDownException(symbol) from y_err
     if df is None or df.empty:

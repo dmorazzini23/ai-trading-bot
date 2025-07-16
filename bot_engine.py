@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 import traceback
 import types
 import warnings
@@ -2126,6 +2127,9 @@ class BotContext:
     portfolio_weights: dict[str, float] = field(default_factory=dict)
     tickers: List[str] = field(default_factory=list)
     rebalance_buys: dict[str, datetime] = field(default_factory=dict)
+    # AI-AGENT-REF: track client_order_id base for INITIAL_REBALANCE orders
+    rebalance_ids: dict[str, str] = field(default_factory=dict)
+    rebalance_attempts: dict[str, int] = field(default_factory=dict)
     risk_engine: RiskEngine | None = None
     allocator: StrategyAllocator | None = None
     strategies: List[Any] = field(default_factory=list)
@@ -6166,6 +6170,12 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                     if qty_to_buy < 1:
                         continue
                     try:
+                        # AI-AGENT-REF: preserve consistent client_order_id across retries
+                        cid = ctx.rebalance_ids.get(sym)
+                        if not cid:
+                            cid = f"{sym}-{uuid.uuid4().hex[:8]}"
+                            ctx.rebalance_ids[sym] = cid
+                            ctx.rebalance_attempts[sym] = 0
                         order = submit_order(ctx, sym, qty_to_buy, "buy")
                         # AI-AGENT-REF: confirm order result before logging success
                         if order:

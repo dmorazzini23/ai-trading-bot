@@ -650,14 +650,27 @@ class ExecutionEngine:
                 "type": order_req.__class__.__name__,
             },
         )
-        # AI-AGENT-REF: ensure unique client_order_id for each retry
+        # AI-AGENT-REF: preserve base client_order_id for INITIAL_REBALANCE
         base_cid = getattr(order_req, "client_order_id", f"{symbol}-{side}")
-        if isinstance(order_req, dict):
-            order_req.setdefault("client_order_id", base_cid)
+        rebalance_ids = getattr(self.ctx, "rebalance_ids", {})
+        rebalance_attempts = getattr(self.ctx, "rebalance_attempts", {})
+        use_rebalance_id = symbol in rebalance_ids
+        if use_rebalance_id:
+            base_cid = rebalance_ids[symbol]
         else:
-            setattr(order_req, "client_order_id", base_cid)
+            if isinstance(order_req, dict):
+                order_req.setdefault("client_order_id", base_cid)
+            else:
+                setattr(order_req, "client_order_id", base_cid)
         for attempt in range(3):
-            if attempt:
+            if use_rebalance_id:
+                attempt_num = rebalance_attempts.get(symbol, 0)
+                cid = base_cid if attempt_num == 0 else f"{base_cid}_r{attempt_num}"
+                if isinstance(order_req, dict):
+                    order_req["client_order_id"] = cid
+                else:
+                    setattr(order_req, "client_order_id", cid)
+            elif attempt:
                 new_cid = f"{base_cid}-{uuid4().hex[:8]}"
                 if isinstance(order_req, dict):
                     order_req["client_order_id"] = new_cid
@@ -683,6 +696,8 @@ class ExecutionEngine:
                 )
                 sleep = (attempt + 1) + random.uniform(0.1, 0.3)
                 time.sleep(sleep)
+                if use_rebalance_id:
+                    rebalance_attempts[symbol] = rebalance_attempts.get(symbol, 0) + 1
                 if attempt == 2:
                     self.logger.warning(
                         "submit_order failed for %s after retries: %s",
