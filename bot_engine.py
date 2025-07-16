@@ -33,7 +33,8 @@ from logger import setup_logging
 
 LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
 setup_logging(log_file=LOG_PATH)
-MIN_CYCLE = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
+# Mirror config to maintain historical constant name
+MIN_CYCLE = config.SCHEDULER_SLEEP_SECONDS
 config.validate_env_vars()
 config.log_config(config.REQUIRED_ENV_VARS)
 
@@ -57,6 +58,14 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     logging.critical(
         "Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback)
     )
+    # AI-AGENT-REF: flush and close log handlers to preserve logs on crash
+    for h in logging.getLogger().handlers:
+        try:
+            h.flush()
+            h.close()
+        except Exception:
+            pass
+    logging.shutdown()
 
 
 sys.excepthook = handle_exception
@@ -226,8 +235,8 @@ from flask import Flask
 from alpaca_api import alpaca_get, start_trade_updates_stream
 from rebalancer import maybe_rebalance as original_rebalance
 
-# for paper trading
-ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+# Use base URL from configuration
+ALPACA_BASE_URL = config.ALPACA_BASE_URL
 import pickle
 
 import joblib
@@ -2132,7 +2141,7 @@ allocator = StrategyAllocator()
 strategies = [MomentumStrategy(), MeanReversionStrategy()]
 API_KEY = ALPACA_API_KEY
 API_SECRET = ALPACA_SECRET_KEY
-BASE_URL = ALPACA_BASE_URL
+BASE_URL = config.ALPACA_BASE_URL
 paper = ALPACA_PAPER
 
 if not (API_KEY and API_SECRET) and not config.SHADOW_MODE:
@@ -6568,10 +6577,18 @@ def compute_atr_stop(df, atr_window=14, multiplier=2):
 
 
 if __name__ == "__main__":
-    main()
-    import time
+    try:
+        main()
+    except Exception as exc:
+        logger.exception("Fatal error in main: %s", exc)
+        raise
+
     import schedule
+    import time
 
     while True:
-        schedule.run_pending()
+        try:
+            schedule.run_pending()
+        except Exception as exc:
+            logger.exception("Scheduler loop error: %s", exc)
         time.sleep(config.SCHEDULER_SLEEP_SECONDS)
