@@ -594,7 +594,7 @@ def get_minute_df(
 
     alpaca_exc = finnhub_exc = yexc = None
     try:
-        logger.debug("DATA_SOURCE_FALLBACK: trying %s", "Alpaca")
+        logger.info("DATA_SOURCE_FALLBACK: trying %s", "Alpaca")
         logger.debug("FETCH_ALPACA_MINUTE_BARS: start", extra={"symbol": symbol})
         df = _fetch_bars(symbol, start_dt, end_dt, "1Min", _DEFAULT_FEED)
         logger.debug(
@@ -605,7 +605,7 @@ def get_minute_df(
         logger.debug(f"Alpaca fetch failed: {primary_err}")
         logger.debug("Falling back to Finnhub")
         try:
-            logger.debug("DATA_SOURCE_FALLBACK: trying %s", "Finnhub")
+            logger.info("DATA_SOURCE_FALLBACK: trying %s", "Finnhub")
             logger.debug(
                 "FETCH_FINNHUB_MINUTE_BARS: start", extra={"symbol": symbol}
             )
@@ -620,7 +620,7 @@ def get_minute_df(
             if getattr(fh_err, "status_code", None) == 403:
                 logger.warning("Finnhub 403 for %s; using yfinance fallback", symbol)
                 try:
-                    logger.debug("DATA_SOURCE_FALLBACK: trying %s", "yfinance")
+                    logger.info("DATA_SOURCE_FALLBACK: trying %s", "yfinance")
                     logger.debug(
                         "FETCH_YFINANCE_MINUTE_BARS: start", extra={"symbol": symbol}
                     )
@@ -631,7 +631,12 @@ def get_minute_df(
                 except Exception as y_err:
                     yexc = y_err
                     logger.debug(f"yfinance fetch failed: {y_err}")
-                    logger.error("DATA_SOURCE_RETRY_FINAL: all fetchers failed")
+                    logger.error(
+                        "DATA_SOURCE_RETRY_FINAL: alpaca failed=%s; finnhub failed=%s; yfinance failed=%s",
+                        alpaca_exc,
+                        fh_err,
+                        y_err,
+                    )
                     raise DataSourceDownException(symbol) from y_err
             else:
                 logger.critical(
@@ -643,7 +648,7 @@ def get_minute_df(
             logger.debug(f"Finnhub fetch failed: {fh_err}")
             logger.debug("Falling back to yfinance")
             try:
-                logger.debug("DATA_SOURCE_FALLBACK: trying %s", "yfinance")
+                logger.info("DATA_SOURCE_FALLBACK: trying %s", "yfinance")
                 logger.debug(
                     "FETCH_YFINANCE_MINUTE_BARS: start", extra={"symbol": symbol}
                 )
@@ -654,7 +659,12 @@ def get_minute_df(
             except Exception as y_err:
                 yexc = y_err
                 logger.debug(f"yfinance fetch failed: {y_err}")
-                logger.error("DATA_SOURCE_RETRY_FINAL: all fetchers failed")
+                logger.error(
+                    "DATA_SOURCE_RETRY_FINAL: alpaca failed=%s; finnhub failed=%s; yfinance failed=%s",
+                    alpaca_exc,
+                    finnhub_exc,
+                    y_err,
+                )
                 raise DataSourceDownException(symbol) from y_err
     if df is None or df.empty:
         logger.critical(
