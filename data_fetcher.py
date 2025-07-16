@@ -592,28 +592,89 @@ def get_minute_df(
             logger.debug("minute cache hit for %s", symbol)
             return df_cached.copy()
 
+    alpaca_exc = finnhub_exc = yexc = None
     try:
+        logger.debug("FETCH_ALPACA_MINUTE_BARS: start", extra={"symbol": symbol})
         df = _fetch_bars(symbol, start_dt, end_dt, "1Min", _DEFAULT_FEED)
+        logger.debug(
+            "FETCH_ALPACA_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
+        )
     except DataFetchException as primary_err:
-        logger.error(
-            "Primary fetch failed for %s via Alpaca: %s", symbol, primary_err.message
+        alpaca_exc = primary_err
+        logger.debug(
+            "FETCH_ALPACA_MINUTE_BARS: error %s", primary_err, exc_info=True
         )
         try:
+            logger.debug(
+                "FETCH_FINNHUB_MINUTE_BARS: start", extra={"symbol": symbol}
+            )
             df = fh_fetcher.fetch(symbol, period="1d", interval="1")
+            logger.debug(
+                "FETCH_FINNHUB_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
+            )
         except FinnhubAPIException as fh_err:
+            finnhub_exc = fh_err
+            logger.debug(
+                "FETCH_FINNHUB_MINUTE_BARS: error %s", fh_err, exc_info=True
+            )
             if getattr(fh_err, "status_code", None) == 403:
                 logger.warning("Finnhub 403 for %s; using yfinance fallback", symbol)
-                df = fetch_minute_yfinance(symbol)
+                try:
+                    logger.debug(
+                        "FETCH_YFINANCE_MINUTE_BARS: start", extra={"symbol": symbol}
+                    )
+                    df = fetch_minute_yfinance(symbol)
+                    logger.debug(
+                        "FETCH_YFINANCE_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
+                    )
+                except Exception as y_err:
+                    yexc = y_err
+                    logger.debug(
+                        "FETCH_YFINANCE_MINUTE_BARS: error %s", y_err, exc_info=True
+                    )
+                    logger.error(
+                        "DATA_SOURCE_RETRY_FINAL: all sources failed",
+                        extra={
+                            "symbol": symbol,
+                            "errors": [
+                                str(alpaca_exc),
+                                str(finnhub_exc),
+                                str(yexc),
+                            ],
+                        },
+                    )
+                    raise DataSourceDownException(symbol) from y_err
             else:
                 logger.critical(
                     "Secondary provider failed for %s: %s", symbol, fh_err
                 )
                 raise DataSourceDownException(symbol) from fh_err
         except Exception as fh_err:
-            logger.critical(
-                "Secondary provider failed for %s: %s", symbol, fh_err
+            finnhub_exc = fh_err
+            logger.debug(
+                "FETCH_FINNHUB_MINUTE_BARS: error %s", fh_err, exc_info=True
             )
-            raise DataSourceDownException(symbol) from fh_err
+            try:
+                logger.debug(
+                    "FETCH_YFINANCE_MINUTE_BARS: start", extra={"symbol": symbol}
+                )
+                df = fetch_minute_yfinance(symbol)
+                logger.debug(
+                    "FETCH_YFINANCE_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
+                )
+            except Exception as y_err:
+                yexc = y_err
+                logger.debug(
+                    "FETCH_YFINANCE_MINUTE_BARS: error %s", y_err, exc_info=True
+                )
+                logger.error(
+                    "DATA_SOURCE_RETRY_FINAL: all sources failed",
+                    extra={
+                        "symbol": symbol,
+                        "errors": [str(alpaca_exc), str(finnhub_exc), str(yexc)],
+                    },
+                )
+                raise DataSourceDownException(symbol) from y_err
     if df is None or df.empty:
         logger.critical(
             "EMPTY_DATA", extra={"symbol": symbol, "start": start_dt.isoformat(), "end": end_dt.isoformat()}
