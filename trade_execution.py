@@ -664,8 +664,7 @@ class ExecutionEngine:
                 setattr(order_req, "client_order_id", base_cid)
         for attempt in range(3):
             if use_rebalance_id:
-                attempt_num = rebalance_attempts.get(symbol, 0)
-                cid = base_cid if attempt_num == 0 else f"{base_cid}_r{attempt_num}"
+                cid = base_cid if attempt == 0 and not rebalance_attempts.get(symbol) else f"{base_cid}_{uuid4().hex[:8]}"
                 if isinstance(order_req, dict):
                     order_req["client_order_id"] = cid
                 else:
@@ -760,7 +759,7 @@ class ExecutionEngine:
             )
             audit_log_trade(
                 symbol,
-                slice_qty,
+                int(getattr(order, "filled_qty", slice_qty)),
                 side,
                 fill_price,
                 datetime.now(timezone.utc).isoformat(),
@@ -770,7 +769,7 @@ class ExecutionEngine:
                 {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "symbol": symbol,
-                    "qty": slice_qty,
+                    "qty": int(getattr(order, "filled_qty", slice_qty)),
                     "price": fill_price,
                     "order_id": order_id,
                     "client_order_id": getattr(order, "client_order_id", order_id),
@@ -778,15 +777,16 @@ class ExecutionEngine:
                     "partial_fills": getattr(order, "legs", []),
                 }
             )
+            actual_qty = int(getattr(order, "filled_qty", slice_qty))
             log_trade(
                 symbol,
-                slice_qty,
+                actual_qty,
                 side,
                 fill_price,
                 datetime.now(timezone.utc).isoformat(),
                 order_id,
             )
-            filled_qty = slice_qty
+            filled_qty = actual_qty
             if order_id in self._partial_buffer:
                 buf = self._partial_buffer[order_id]
                 add_qty = max(0, slice_qty - buf["qty"])

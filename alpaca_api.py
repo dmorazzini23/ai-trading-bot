@@ -300,9 +300,27 @@ async def handle_trade_update(event, state=None) -> None:
             info["status"] = status
             if status not in {"PENDING_NEW", "NEW"}:
                 pending_orders.pop(str(order_id), None)
-        if state and status == "fill":
-            state.trade_cooldowns[symbol] = dt.datetime.now(dt.timezone.utc)
+        if state and status in {"fill", "partial_fill", "partial", "partially_filled"}:
+            qty = int(filled_qty or 0)
             side = getattr(order, "side", getattr(event, "side", ""))
+            if qty and side:
+                current = state.position_cache.get(symbol, 0)
+                if str(side).lower() == "buy":
+                    current += qty
+                else:
+                    current -= qty
+                state.position_cache[symbol] = current
+                if current > 0:
+                    state.long_positions.add(symbol)
+                    state.short_positions.discard(symbol)
+                elif current < 0:
+                    state.short_positions.add(symbol)
+                    state.long_positions.discard(symbol)
+                else:
+                    state.long_positions.discard(symbol)
+                    state.short_positions.discard(symbol)
+            if status == "fill":
+                state.trade_cooldowns[symbol] = dt.datetime.now(dt.timezone.utc)
             if side:
                 state.last_trade_direction[symbol] = str(side).lower()
     except Exception as exc:  # pragma: no cover - runtime safety
