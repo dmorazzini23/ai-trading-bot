@@ -10,6 +10,7 @@ import time
 import warnings
 from datetime import datetime, timezone
 from typing import Any, Optional, Tuple
+from uuid import uuid4
 
 import numpy as np
 import pandas as pd
@@ -649,7 +650,19 @@ class ExecutionEngine:
                 "type": order_req.__class__.__name__,
             },
         )
+        # AI-AGENT-REF: ensure unique client_order_id for each retry
+        base_cid = getattr(order_req, "client_order_id", f"{symbol}-{side}")
+        if isinstance(order_req, dict):
+            order_req.setdefault("client_order_id", base_cid)
+        else:
+            setattr(order_req, "client_order_id", base_cid)
         for attempt in range(3):
+            if attempt:
+                new_cid = f"{base_cid}-{uuid4().hex[:8]}"
+                if isinstance(order_req, dict):
+                    order_req["client_order_id"] = new_cid
+                else:
+                    setattr(order_req, "client_order_id", new_cid)
             try:
                 order = submit_order(api, order_req, self.logger)
                 self.logger.info("Order submit response for %s: %s", symbol, order)
