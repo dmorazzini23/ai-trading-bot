@@ -38,7 +38,7 @@ else:
 logger = logging.getLogger(__name__)
 
 # Default market data feed for Alpaca requests
-_DEFAULT_FEED = "alpaca"
+_DEFAULT_FEED = "iex"
 
 
 def _mask_headers(headers: dict[str, Any]) -> dict[str, Any]:
@@ -89,8 +89,10 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 
 try:
     import finnhub
+    from finnhub import FinnhubAPIException
 except Exception:  # pragma: no cover - optional dependency
     finnhub = types.SimpleNamespace(Client=lambda *a, **k: None)
+    FinnhubAPIException = Exception
 import pandas as pd
 
 try:
@@ -129,6 +131,10 @@ def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, fee
     _log_http_request("GET", url, params, headers)
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=10)
+        if resp.status_code == 400 and "invalid feed" in resp.text.lower() and feed != "sip":
+            logger.warning("Alpaca invalid feed %s for %s; retrying with SIP", feed, symbol)
+            params["feed"] = "sip"
+            resp = requests.get(url, params=params, headers=headers, timeout=10)
     except requests.exceptions.RequestException as exc:
         logger.exception("HTTP request error for %s", symbol, exc_info=exc)
         raise DataFetchException(symbol, "alpaca", url, str(exc)) from exc
@@ -136,7 +142,10 @@ def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, fee
     _log_http_response(resp)
     if resp.status_code != 200:
         raise DataFetchException(
-            symbol, "alpaca", url, f"status {resp.status_code}: {resp.text[:300]}"
+            symbol,
+            "alpaca",
+            url,
+            f"status {resp.status_code}: {resp.text[:300]}",
         )
     data = resp.json()
     bars = data.get("bars") or []
@@ -591,6 +600,15 @@ def get_minute_df(
         )
         try:
             df = fh_fetcher.fetch(symbol, period="1d", interval="1")
+        except FinnhubAPIException as fh_err:
+            if getattr(fh_err, "status_code", None) == 403:
+                logger.warning("Finnhub 403 for %s; using yfinance fallback", symbol)
+                df = fetch_minute_yfinance(symbol)
+            else:
+                logger.critical(
+                    "Secondary provider failed for %s: %s", symbol, fh_err
+                )
+                raise DataSourceDownException(symbol) from fh_err
         except Exception as fh_err:
             logger.critical(
                 "Secondary provider failed for %s: %s", symbol, fh_err
@@ -692,3 +710,15 @@ class FinnhubFetcher:
 
 
 fh_fetcher = FinnhubFetcher()
+
+
+def fetch_minute_yfinance(symbol: str) -> pd.DataFrame:
+    """Fetch one day of minute bars using yfinance."""
+    import yfinance as yf
+
+    df = yf.Ticker(symbol).history(period="1d", interval="1m")
+    df.index = pd.DatetimeIndex(df.index).tz_localize("UTC")
+    df = df.rename_axis("timestamp").reset_index()
+    df = df.set_index("timestamp")[["Open", "High", "Low", "Close", "Volume"]]
+    df.columns = [c.lower() for c in df.columns]
+    return df
