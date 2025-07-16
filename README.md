@@ -77,7 +77,10 @@ Additional key variables include:
 * `BOT_LOG_FILE`: path for rotating logs
 * `SCHEDULER_SLEEP_SECONDS`: delay between scheduler cycles (30–60s recommended)
 
-> **Note:** `.env` contains only dummy secrets for testing. Never commit real credentials. Use external secrets management in production.
+
+## Data Sources
+
+Market data is requested from Alpaca first, then Finnhub as a paid secondary source. If both providers fail (e.g. Alpaca subscription errors and Finnhub responds with 403), the bot falls back to `yfinance` for free minute-level data.
 
 ---
 

@@ -75,6 +75,12 @@ class _DummyFinnhub:
 
 
 sys.modules["finnhub"].Client = _DummyFinnhub
+class _DummyFinnhubException(Exception):
+    def __init__(self, status_code=0):
+        super().__init__("finnhub error")
+        self.status_code = status_code
+
+sys.modules["finnhub"].FinnhubAPIException = _DummyFinnhubException
 
 import data_fetcher
 
@@ -120,3 +126,62 @@ def test_subscription_error_logged(monkeypatch, caplog):
     monkeypatch.setattr(data_fetcher.logger, "critical", lambda msg, *a, **k: messages.append(msg))
     data_fetcher.get_minute_df("AAPL", start, end)
     assert messages == []
+
+
+def test_default_feed_constant():
+    assert data_fetcher._DEFAULT_FEED == "iex"
+
+
+def test_fetch_bars_retry_invalid_feed(monkeypatch):
+    calls = []
+
+    class Resp:
+        def __init__(self, status, text, data=None):
+            self.status_code = status
+            self.text = text
+            self._data = data or {}
+
+        def json(self):
+            return self._data
+
+    def fake_get(url, params=None, headers=None, timeout=10):
+        calls.append(params["feed"])
+        if len(calls) == 1:
+            return Resp(400, "invalid feed")
+        return Resp(200, "", {"bars": [{"t": "2023-01-01T00:00:00Z", "o": 1, "h": 1, "l": 1, "c": 1, "v": 1}]})
+
+    monkeypatch.setattr(data_fetcher.requests, "get", fake_get)
+
+    start = pd.Timestamp("2023-01-01", tz="UTC")
+    end = start + pd.Timedelta(minutes=1)
+    df = data_fetcher._fetch_bars("AAPL", start, end, "1Min", "iex")
+    assert calls == ["iex", "sip"]
+    assert not df.empty
+
+
+def test_finnhub_403_yfinance(monkeypatch):
+    def raise_fetch(*a, **k):
+        raise data_fetcher.DataFetchException("AAPL", "alpaca", "", "err")
+
+    def raise_finnhub(*a, **k):
+        raise data_fetcher.FinnhubAPIException(status_code=403)
+
+    called = []
+
+    def fake_yf(symbol):
+        called.append(symbol)
+        return pd.DataFrame(
+            {"open": [1], "high": [1], "low": [1], "close": [1], "volume": [1]},
+            index=[pd.Timestamp("2023-01-01", tz="UTC")],
+        )
+
+    monkeypatch.setattr(data_fetcher, "_fetch_bars", raise_fetch)
+    monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", raise_finnhub)
+    monkeypatch.setattr(data_fetcher, "fetch_minute_yfinance", fake_yf)
+    monkeypatch.setattr(data_fetcher, "is_market_open", lambda: True)
+
+    start = pd.Timestamp("2023-01-01", tz="UTC")
+    end = start + pd.Timedelta(minutes=1)
+    df = data_fetcher.get_minute_df("AAPL", start, end)
+    assert called == ["AAPL"]
+    assert not df.empty
