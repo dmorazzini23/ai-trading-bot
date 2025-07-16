@@ -75,7 +75,7 @@ Additional key variables include:
 * `BOT_MODE`: e.g. `balanced`, `production`
 * `SLACK_WEBHOOK`: optional for critical alerts
 * `BOT_LOG_FILE`: path for rotating logs
-* `SCHEDULER_SLEEP_SECONDS`: minimum loop delay (default 30)
+* `SCHEDULER_SLEEP_SECONDS`: delay between scheduler cycles (30–60s recommended)
 
 > **Note:** `.env` contains only dummy secrets for testing. Never commit real credentials. Use external secrets management in production.
 
