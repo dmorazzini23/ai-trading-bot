@@ -15,7 +15,8 @@ import pandas as pd
 import config
 try:
     import psutil
-except Exception:  # pragma: no cover - optional dependency
+except Exception as e:  # pragma: no cover - optional dependency
+    logging.getLogger(__name__).error("psutil import failed", exc_info=e)
     psutil = None
 
 try:
@@ -350,7 +351,8 @@ def get_pid_on_port(port: int) -> int | None:
                 inode = parts[9]
                 if int(local.split(":")[1], 16) == port:
                     return _pid_from_inode(inode)
-    except Exception:
+    except Exception as e:
+        logging.getLogger(__name__).error("get_pid_on_port failed", exc_info=e)
         return None
     return None
 
@@ -417,7 +419,8 @@ def get_ml_confidence(symbol: str) -> float:
     """Return model confidence for ``symbol``."""
     try:
         from ml_model import load_model
-    except Exception:  # pragma: no cover - optional dependency
+    except Exception as e:  # pragma: no cover - optional dependency
+        logger.error("load_model failed", exc_info=e)
         return 0.5
 
     model_path = config.MODEL_PATH
@@ -427,7 +430,8 @@ def get_ml_confidence(symbol: str) -> float:
     feats = pd.DataFrame({"price": [0.0]})
     try:
         conf = float(model.predict_proba(feats)[0][1])
-    except Exception:
+    except Exception as e:
+        logger.error("predict_proba failed", exc_info=e)
         conf = 0.5
     logger.info("ML confidence for %s=%.2f", symbol, conf)
     return conf
@@ -683,7 +687,8 @@ from typing import Dict, List
 
 try:
     from alpaca_trade_api.rest import REST
-except Exception:  # pragma: no cover - optional dependency
+except Exception as e:  # pragma: no cover - optional dependency
+    logging.getLogger(__name__).error("alpaca_trade_api import failed", exc_info=e)
     REST = object  # type: ignore
 
 

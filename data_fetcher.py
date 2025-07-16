@@ -594,6 +594,7 @@ def get_minute_df(
 
     alpaca_exc = finnhub_exc = yexc = None
     try:
+        logger.debug("Trying data source: Alpaca")
         logger.info("DATA_SOURCE_FALLBACK: trying %s", "Alpaca")
         logger.debug("FETCH_ALPACA_MINUTE_BARS: start", extra={"symbol": symbol})
         df = _fetch_bars(symbol, start_dt, end_dt, "1Min", _DEFAULT_FEED)
@@ -615,11 +616,12 @@ def get_minute_df(
             )
         except FinnhubAPIException as fh_err:
             finnhub_exc = fh_err
-            logger.debug(f"Finnhub fetch failed: {fh_err}")
+            logger.error("[DataFetcher] Finnhub failed: %s", fh_err)
             logger.debug("Falling back to yfinance")
             if getattr(fh_err, "status_code", None) == 403:
                 logger.warning("Finnhub 403 for %s; using yfinance fallback", symbol)
                 try:
+                    logger.debug("Trying data source: yfinance")
                     logger.info("DATA_SOURCE_FALLBACK: trying %s", "yfinance")
                     logger.debug(
                         "FETCH_YFINANCE_MINUTE_BARS: start", extra={"symbol": symbol}
@@ -628,16 +630,17 @@ def get_minute_df(
                     logger.debug(
                         "FETCH_YFINANCE_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
                     )
-                except Exception as y_err:
-                    yexc = y_err
-                    logger.debug(f"yfinance fetch failed: {y_err}")
+                except Exception as exc:
+                    yexc = exc
+                    logger.error("[DataFetcher] yfinance failed: %s", exc)
                     logger.error(
-                        "DATA_SOURCE_RETRY_FINAL: alpaca failed=%s; finnhub failed=%s; yfinance failed=%s",
+                        "DATA_SOURCE_RETRY_FINAL: alpaca failed=%s; finnhub failed=%s; yfinance failed=%s | last=%s",
                         alpaca_exc,
                         fh_err,
-                        y_err,
+                        exc,
+                        "yfinance",
                     )
-                    raise DataSourceDownException(symbol) from y_err
+                    raise DataSourceDownException(symbol) from exc
             else:
                 logger.critical(
                     "Secondary provider failed for %s: %s", symbol, fh_err
@@ -645,9 +648,10 @@ def get_minute_df(
                 raise DataSourceDownException(symbol) from fh_err
         except Exception as fh_err:
             finnhub_exc = fh_err
-            logger.debug(f"Finnhub fetch failed: {fh_err}")
+            logger.error("[DataFetcher] Finnhub failed: %s", fh_err)
             logger.debug("Falling back to yfinance")
             try:
+                logger.debug("Trying data source: yfinance")
                 logger.info("DATA_SOURCE_FALLBACK: trying %s", "yfinance")
                 logger.debug(
                     "FETCH_YFINANCE_MINUTE_BARS: start", extra={"symbol": symbol}
@@ -656,16 +660,17 @@ def get_minute_df(
                 logger.debug(
                     "FETCH_YFINANCE_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
                 )
-            except Exception as y_err:
-                yexc = y_err
-                logger.debug(f"yfinance fetch failed: {y_err}")
+            except Exception as exc:
+                yexc = exc
+                logger.error("[DataFetcher] yfinance failed: %s", exc)
                 logger.error(
-                    "DATA_SOURCE_RETRY_FINAL: alpaca failed=%s; finnhub failed=%s; yfinance failed=%s",
+                    "DATA_SOURCE_RETRY_FINAL: alpaca failed=%s; finnhub failed=%s; yfinance failed=%s | last=%s",
                     alpaca_exc,
                     finnhub_exc,
-                    y_err,
+                    exc,
+                    "yfinance",
                 )
-                raise DataSourceDownException(symbol) from y_err
+                raise DataSourceDownException(symbol) from exc
     if df is None or df.empty:
         logger.critical(
             "EMPTY_DATA", extra={"symbol": symbol, "start": start_dt.isoformat(), "end": end_dt.isoformat()}
