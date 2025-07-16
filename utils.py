@@ -13,11 +13,14 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import config
+
+logger = logging.getLogger(__name__)
+
 try:
     import psutil
-except Exception as e:  # pragma: no cover - optional dependency
-    logging.getLogger(__name__).error("psutil import failed", exc_info=e)
+except ImportError:
     psutil = None
+    logger.warning("psutil import failed — memory stats disabled")
 
 try:
     from tzlocal import get_localzone
@@ -27,8 +30,6 @@ except ImportError:  # pragma: no cover - optional dependency
     def get_localzone() -> ZoneInfo:
         return ZoneInfo("UTC")
 
-
-logger = logging.getLogger(__name__)
 
 # AI-AGENT-REF: throttle noisy logs
 _LAST_MARKET_HOURS_LOG = 0.0

@@ -630,22 +630,22 @@ def get_minute_df(
                     logger.debug(
                         "FETCH_YFINANCE_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
                     )
-            except Exception as exc:
-                yexc = exc
-                logger.error("[DataFetcher] yfinance failed: %s", exc)
-                logger.error(
-                    "DATA_SOURCE_RETRY_FINAL: alpaca failed=%s; finnhub failed=%s; yfinance failed=%s | last=%s",
-                    alpaca_exc,
-                    fh_err,
-                    exc,
-                    "yfinance",
-                )
-                logger.debug("yfinance fetch error: %s", exc)
-                raise DataSourceDownException(symbol) from exc
-            else:
-                logger.critical(
-                    "Secondary provider failed for %s: %s", symbol, fh_err
-                )
+                except Exception as exc:
+                    yexc = exc
+                    logger.error("[DataFetcher] yfinance failed: %s", exc)
+                    logger.error(
+                        "DATA_SOURCE_RETRY_FINAL: alpaca failed=%s; finnhub failed=%s; yfinance failed=%s | last=%s",
+                        alpaca_exc,
+                        fh_err,
+                        exc,
+                        "yfinance",
+                    )
+                    logger.debug("yfinance fetch error: %s", exc)
+                    raise DataSourceDownException(symbol) from exc
+                else:
+                    logger.critical(
+                        "Secondary provider failed for %s: %s", symbol, fh_err
+                    )
                 raise DataSourceDownException(symbol) from fh_err
         except Exception as fh_err:
             finnhub_exc = fh_err
