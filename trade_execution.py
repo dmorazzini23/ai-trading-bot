@@ -10,6 +10,7 @@ import time
 import warnings
 from datetime import datetime, timezone
 from typing import Any, Optional, Tuple
+from enum import Enum
 from uuid import uuid4
 
 import numpy as np
@@ -86,6 +87,13 @@ from slippage import monitor_slippage
 from utils import get_phase_logger
 import config
 from collections import deque
+
+
+class OrderClass(str, Enum):
+    """Execution order classification."""
+
+    NORMAL = "normal"
+    INITIAL_REBALANCE = "initial_rebalance"
 
 SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
@@ -435,6 +443,12 @@ class ExecutionEngine:
                 time_in_force=TimeInForce.DAY,
             )
             expected = ask if side == "buy" else bid
+
+        # AI-AGENT-REF: tag order requests by execution phase
+        rebalance_ids = getattr(self.ctx, "rebalance_ids", {})
+        is_rebalance = symbol in rebalance_ids and not getattr(self.ctx, "_rebalance_done", False)
+        order_class = OrderClass.INITIAL_REBALANCE if is_rebalance else OrderClass.NORMAL
+        setattr(order_request, "order_class", order_class)
 
         return order_request, expected
 
@@ -891,14 +905,18 @@ class ExecutionEngine:
             if expected_price and self._check_exposure_cap(asset_class, slice_qty, expected_price, symbol):
                 break
             order_key = getattr(order_req, "client_order_id", f"{symbol}-{side}")
-            if order_key in self._cycle_orders or symbol in self._cycle_symbols:
+            order_cls = getattr(order_req, "order_class", OrderClass.NORMAL)
+            if order_cls is not OrderClass.INITIAL_REBALANCE and (
+                order_key in self._cycle_orders or symbol in self._cycle_symbols
+            ):
                 self.logger.info(
                     "DUPLICATE_ORDER_SKIP",
                     extra={"symbol": symbol, "client_order_id": order_key},
                 )
                 break
-            self._cycle_orders.add(order_key)
-            self._cycle_symbols.add(symbol)
+            if order_cls is not OrderClass.INITIAL_REBALANCE:
+                self._cycle_orders.add(order_key)
+                self._cycle_symbols.add(symbol)
             start = time.monotonic()
             order = self._submit_with_retry(
                 api, order_req, symbol, side, slice_qty
