@@ -603,7 +603,7 @@ def get_minute_df(
         )
     except DataFetchException as primary_err:
         alpaca_exc = primary_err
-        logger.debug(f"Alpaca fetch failed: {primary_err}")
+        logger.debug("Alpaca fetch error: %s", primary_err)
         logger.debug("Falling back to Finnhub")
         try:
             logger.info("DATA_SOURCE_FALLBACK: trying %s", "Finnhub")
@@ -630,17 +630,18 @@ def get_minute_df(
                     logger.debug(
                         "FETCH_YFINANCE_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
                     )
-                except Exception as exc:
-                    yexc = exc
-                    logger.error("[DataFetcher] yfinance failed: %s", exc)
-                    logger.error(
-                        "DATA_SOURCE_RETRY_FINAL: alpaca failed=%s; finnhub failed=%s; yfinance failed=%s | last=%s",
-                        alpaca_exc,
-                        fh_err,
-                        exc,
-                        "yfinance",
-                    )
-                    raise DataSourceDownException(symbol) from exc
+            except Exception as exc:
+                yexc = exc
+                logger.error("[DataFetcher] yfinance failed: %s", exc)
+                logger.error(
+                    "DATA_SOURCE_RETRY_FINAL: alpaca failed=%s; finnhub failed=%s; yfinance failed=%s | last=%s",
+                    alpaca_exc,
+                    fh_err,
+                    exc,
+                    "yfinance",
+                )
+                logger.debug("yfinance fetch error: %s", exc)
+                raise DataSourceDownException(symbol) from exc
             else:
                 logger.critical(
                     "Secondary provider failed for %s: %s", symbol, fh_err
@@ -670,6 +671,7 @@ def get_minute_df(
                     exc,
                     "yfinance",
                 )
+                logger.debug("yfinance fetch error: %s", exc)
                 raise DataSourceDownException(symbol) from exc
     if df is None or df.empty:
         logger.critical(

@@ -698,8 +698,15 @@ class ExecutionEngine:
                 order_req.setdefault("client_order_id", base_cid)
             else:
                 setattr(order_req, "client_order_id", base_cid)
+        backoff = 1
         for attempt in range(3):
-            if use_rebalance_id:
+            if order_class is OrderClass.INITIAL_REBALANCE:
+                cid = f"{base_cid}-{uuid4().hex[:8]}"
+                if isinstance(order_req, dict):
+                    order_req["client_order_id"] = cid
+                else:
+                    setattr(order_req, "client_order_id", cid)
+            elif use_rebalance_id:
                 cid = base_cid if attempt == 0 and not rebalance_attempts.get(symbol) else f"{base_cid}_{uuid4().hex[:8]}"
                 if isinstance(order_req, dict):
                     order_req["client_order_id"] = cid
@@ -729,8 +736,8 @@ class ExecutionEngine:
                     },
                     e,
                 )
-                sleep = (attempt + 1) + random.uniform(0.1, 0.3)
-                time.sleep(sleep)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 30)
                 if use_rebalance_id:
                     rebalance_attempts[symbol] = rebalance_attempts.get(symbol, 0) + 1
                 if attempt == 2:
@@ -748,6 +755,21 @@ class ExecutionEngine:
                 )
                 return None
         return None
+
+    def _wait_for_fill(self, order_id: str) -> None:
+        """Block until the order ``order_id`` is filled or canceled."""
+        backoff = 1
+        while True:
+            try:
+                od = self.api.get_order_by_id(order_id)
+                status = getattr(od, "status", "")
+                if status in {"filled", "canceled", "rejected"}:
+                    return
+                backoff = 1
+            except Exception as exc:  # pragma: no cover - network
+                self.logger.debug("ORDER_POLL_FAIL %s: %s", order_id, exc)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 30)
 
     def _handle_order_result(
         self,
@@ -769,6 +791,8 @@ class ExecutionEngine:
                 order = refreshed
             except Exception as exc:  # pragma: no cover - network issues
                 self.logger.debug("Order refresh failed for %s: %s", order_id, exc)
+            if status not in {"filled", "canceled", "rejected"}:
+                self._wait_for_fill(order_id)
         if not self._check_order_active(symbol, order, status, order_id):
             return 0
         fill_price = float(
@@ -863,6 +887,8 @@ class ExecutionEngine:
             self.logger.warning(
                 "UNEXPECTED_ORDER_STATUS", extra={"symbol": symbol, "status": status}
             )
+        if status not in {"filled", "canceled", "rejected"}:
+            self._wait_for_fill(order_id)
         if self.orders_total is not None:
             self.orders_total.inc()
         return filled_qty
@@ -872,6 +898,13 @@ class ExecutionEngine:
         remaining = int(round(qty))
         last_order = None
         api = self._select_api(asset_class)
+        existing = self._available_qty(api, symbol)
+        if side.lower() == "buy" and existing > 0:
+            self.logger.info("SKIP_HELD_POSITION | already long, skipping buy")
+            return None
+        if side.lower() == "sell" and existing == 0:
+            self.logger.info("SKIP_NO_POSITION | no shares to sell, skipping")
+            return None
         if side.lower() == "sell":
             avail = self._available_qty(api, symbol)
             if avail <= 0:

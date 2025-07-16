@@ -6197,6 +6197,15 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                             f"INITIAL_REBALANCE: Sell failed for {sym}: {repr(e)}"
                         )
 
+    ctx.initial_rebalance_done = True
+    try:
+        pos_list = ctx.api.get_all_positions()
+        state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
+        state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
+        state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
+    except Exception:
+        pass
+
 
 def main() -> None:
     logger.info("Main trading bot starting...")
@@ -6399,10 +6408,17 @@ def main() -> None:
         )
 
         # Start listening for trade updates in a background thread
+        ctx.stream_event = asyncio.Event()
+        ctx.stream_event.set()
         threading.Thread(
             target=lambda: asyncio.run(
                 start_trade_updates_stream(
-                    API_KEY, API_SECRET, trading_client, state, paper=True
+                    API_KEY,
+                    API_SECRET,
+                    trading_client,
+                    state,
+                    paper=True,
+                    running=ctx.stream_event,
                 )
             ),
             daemon=True,
