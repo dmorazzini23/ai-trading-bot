@@ -401,7 +401,13 @@ async def check_stuck_orders(api) -> None:
 
 
 async def start_trade_updates_stream(
-    api_key: str, secret_key: str, api, state=None, *, paper: bool = True
+    api_key: str,
+    secret_key: str,
+    api,
+    state=None,
+    *,
+    paper: bool = True,
+    running: asyncio.Event | None = None,
 ) -> None:
     """Start Alpaca trade updates stream and stuck order monitor."""
     stream = TradingStream(api_key, secret_key, paper=paper)
@@ -416,8 +422,11 @@ async def start_trade_updates_stream(
     asyncio.create_task(check_stuck_orders(api))
     asyncio.create_task(_partial_fill_summary_loop())
 
+    if running is None:
+        running = asyncio.Event()
+        running.set()
     backoff = 1
-    while True:
+    while running.is_set():
         try:
             await stream._run_forever()
             backoff = 1
@@ -429,3 +438,7 @@ async def start_trade_updates_stream(
             stream.subscribe_trade_updates(handle_async_trade_update)
         else:
             break
+    try:
+        await stream.stop_ws()
+    except Exception:
+        pass

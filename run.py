@@ -6,6 +6,8 @@ import signal
 import subprocess
 import sys
 import threading
+import time
+import atexit
 from typing import Any
 import warnings
 
@@ -49,26 +51,31 @@ def create_flask_app() -> Flask:
 
     @app.route('/api/override_cooldown', methods=['POST'])
     def override_cooldown():
-        payload = request.get_json() or {}
-        symbols = payload.get("symbols", [])
-        reset = payload.get("reset", True)
-        cleared = []
-        for sym in symbols:
-            if reset:
-                bot_engine.state.trade_cooldowns.pop(sym, None)
-                cleared.append(sym)
-        return jsonify({"status": "success", "details": f"Cooldowns cleared for {cleared}"})
+        try:
+            payload = request.get_json() or {}
+            symbols = payload.get("symbols", [])
+            reset = payload.get("reset", True)
+            cleared = []
+            for sym in symbols:
+                if reset:
+                    bot_engine.state.trade_cooldowns.pop(sym, None)
+                    cleared.append(sym)
+            return jsonify({"status": "success", "details": f"Cooldowns cleared for {cleared}"})
+        except Exception as e:  # AI-AGENT-REF: log failures
+            app.logger.exception("override_cooldown failed")
+            return jsonify(error=str(e)), 500
 
     @app.route('/api/force_trade', methods=['POST'])
     def force_trade():
-        payload = request.get_json() or {}
-        mode = payload.get("mode", "balanced")
-        symbols = payload.get("symbols")
         try:
+            payload = request.get_json() or {}
+            mode = payload.get("mode", "balanced")
+            symbols = payload.get("symbols")
             runner.run_all_trades(bot_engine.ctx, mode_override=mode, symbols_override=symbols)
             summary = "triggered"
-        except Exception as exc:  # pragma: no cover - safety
-            summary = str(exc)
+        except Exception as e:  # pragma: no cover - safety
+            app.logger.exception("force_trade failed")
+            return jsonify(error=str(e)), 500
         return jsonify({"status": "success", "summary": summary})
 
     return app
@@ -151,6 +158,11 @@ def main() -> None:
         default=os.path.join(os.getcwd(), "logs", "trading_bot.log"),
         help="Path to the log file",
     )
+    parser.add_argument(
+        "--single-process",
+        action="store_true",
+        help="Run bot and API in-process rather than spawning a subprocess",
+    )
     args = parser.parse_args()
 
     # AI-AGENT-REF: ensure signal-driven holding by disabling rebalance hold
@@ -175,18 +187,38 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
+    atexit.register(shutdown_event.set)
 
-    if args.serve_api and not args.bot_only:
+    if args.single_process:
         from threading import Thread
 
-        flask_thread = Thread(target=run_flask_app, args=(args.flask_port,), daemon=True)
-        flask_thread.start()
+        def bot_loop() -> None:
+            runner.start_runner()
 
-        bot_exit_code = run_bot(args.venv_path, args.bot_script)
-        logger.info(f"Bot process exited with code {bot_exit_code}")
+        threads = []
+        if args.serve_api:
+            threads.append(Thread(target=run_flask_app, args=(args.flask_port,), daemon=True))
+        threads.append(Thread(target=bot_loop, daemon=True))
+        for t in threads:
+            t.start()
+        while not shutdown_event.is_set():
+            time.sleep(0.5)
+        runner._shutdown = True
+        if getattr(bot_engine.ctx, "stream_event", None):
+            bot_engine.ctx.stream_event.clear()
+        bot_exit_code = 0
     else:
-        bot_exit_code = run_bot(args.venv_path, args.bot_script)
-        logger.info(f"Bot process exited with code {bot_exit_code}")
+        if args.serve_api and not args.bot_only:
+            from threading import Thread
+
+            flask_thread = Thread(target=run_flask_app, args=(args.flask_port,), daemon=True)
+            flask_thread.start()
+
+            bot_exit_code = run_bot(args.venv_path, args.bot_script)
+            logger.info(f"Bot process exited with code {bot_exit_code}")
+        else:
+            bot_exit_code = run_bot(args.venv_path, args.bot_script)
+            logger.info(f"Bot process exited with code {bot_exit_code}")
 
     logger.info("AI Trading Bot runner shutting down")
     sys.exit(bot_exit_code)
