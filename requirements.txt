@@ -39,7 +39,7 @@ optuna==3.6.1
 # Monitor CPU load
 psutil>=5.9.8
 # For Python 3.12 wheels use the CPU index when installing PyTorch locally
-torch==2.1.2
+torch>=2.2.2,<2.8.0   # 2.2.x+cpu wheels exist for Python 3.12
 
 
 xgboost>=1.7.6
