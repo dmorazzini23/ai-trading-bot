@@ -1,7 +1,6 @@
 # Ensure PyYAML can build under Python 3.12
 Cython>=0.29.36         # needed to build PyYAML on Python 3.12
 PyYAML==6.0.1             # ensure a wheel install
-
 tenacity==8.2.2
 ratelimit==2.2.1
 numpy>=1.24.0
@@ -43,11 +42,8 @@ torch==2.2.2+cpu
 torch>=2.2.2,<2.8.0   # 2.2.x+cpu wheels exist for Python 3.12
 
 
+# For Python 3.12 use the CPU wheel index:
+# https://download.pytorch.org/whl/cpu
+torch==2.2.2+cpu  # CPU-only wheel for Python 3.12
 xgboost>=1.7.6
 alpaca-trade-api>=3.0.0
-
-torch>=2.0
-joblib>=1.3
-torch==2.5.1
-joblib>=1.3
-psutil
