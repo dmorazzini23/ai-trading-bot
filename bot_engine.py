@@ -5703,17 +5703,7 @@ def _process_symbols(
         state.last_trade_direction = {}
 
     now = datetime.datetime.now(datetime.timezone.utc)
-    try:
-        pos_list = ctx.api.get_all_positions()
-        logger.info("Raw Alpaca positions: %s", pos_list)
-        live_positions = {p.symbol: int(p.qty) for p in pos_list}
-    except Exception as exc:  # pragma: no cover - network issues
-        logger.warning(f"LIVE_POSITION_FETCH_FAIL: {exc}")
-        live_positions = {}
-
-    state.position_cache = live_positions
-    state.long_positions = {s for s, q in live_positions.items() if q > 0}
-    state.short_positions = {s for s, q in live_positions.items() if q < 0}
+    live_positions = state.position_cache
 
     filtered: list[str] = []
     cd_skipped: list[str] = []
@@ -5885,10 +5875,6 @@ def run_all_trades_worker(state: BotState, model) -> None:
     if state.pdt_blocked:
         return
     state.running = True
-    try:
-        ctx.risk_engine.refresh_positions(ctx.api)
-    except Exception as exc:  # pragma: no cover - safety
-        logger.warning("refresh_positions failed: %s", exc)
     state.last_run_at = now
     loop_start = time.monotonic()
     try:
@@ -6016,6 +6002,14 @@ def run_all_trades_worker(state: BotState, model) -> None:
             )
 
         run_multi_strategy(ctx)
+        try:
+            ctx.risk_engine.refresh_positions(ctx.api)
+            pos_list = ctx.api.get_all_positions()
+            state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
+            state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
+            state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
+        except Exception as exc:  # pragma: no cover - safety
+            logger.warning("refresh_positions failed: %s", exc)
         logger.info("RUN_ALL_TRADES_COMPLETE")
         try:
             acct = ctx.api.get_account()
