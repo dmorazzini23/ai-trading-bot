@@ -101,6 +101,14 @@ SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 _partial_fills: dict[str, dict] = {}
 
 
+def generate_client_order_id(
+    symbol: str, side: str, order_class: OrderClass
+) -> str:
+    """Return a deterministic client order id for retries."""
+    seed = f"{symbol}-{side}-{order_class.name}-{time.time_ns()}"
+    return f"{symbol}-{hash(seed) & 0xFFFF_FFFF:x}"
+
+
 def log_trade(
     symbol: str,
     qty: int,
@@ -279,6 +287,15 @@ class ExecutionEngine:
         elif asset_class == "commodity" and hasattr(self.ctx, "commodity_api"):
             api = self.ctx.commodity_api
         return api
+
+    def _is_duplicate_order(self, order) -> bool:
+        """Return True if ``order`` is a duplicate within this cycle."""
+        order_cls = getattr(order, "order_class", OrderClass.NORMAL)
+        if order_cls == OrderClass.INITIAL_REBALANCE:
+            return False
+        cid = getattr(order, "client_order_id", "")
+        symbol = getattr(order, "symbol", "")
+        return cid in self._cycle_orders or symbol in self._cycle_symbols
 
     def _has_buy_power(self, api: TradingClient, qty: int, price: Optional[float]) -> bool:
         if price is None:
@@ -665,7 +682,12 @@ class ExecutionEngine:
             },
         )
         # AI-AGENT-REF: preserve base client_order_id for INITIAL_REBALANCE
-        base_cid = getattr(order_req, "client_order_id", f"{symbol}-{side}")
+        order_class = getattr(order_req, "order_class", OrderClass.NORMAL)
+        base_cid = getattr(
+            order_req,
+            "client_order_id",
+            generate_client_order_id(symbol, side, order_class),
+        )
         rebalance_ids = getattr(self.ctx, "rebalance_ids", {})
         rebalance_attempts = getattr(self.ctx, "rebalance_attempts", {})
         use_rebalance_id = symbol in rebalance_ids
@@ -906,9 +928,7 @@ class ExecutionEngine:
                 break
             order_key = getattr(order_req, "client_order_id", f"{symbol}-{side}")
             order_cls = getattr(order_req, "order_class", OrderClass.NORMAL)
-            if order_cls is not OrderClass.INITIAL_REBALANCE and (
-                order_key in self._cycle_orders or symbol in self._cycle_symbols
-            ):
+            if self._is_duplicate_order(order_req):
                 self.logger.info(
                     "DUPLICATE_ORDER_SKIP",
                     extra={"symbol": symbol, "client_order_id": order_key},
