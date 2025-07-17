@@ -47,4 +47,3 @@ filelock>=3.13.1
 # https://download.pytorch.org/whl/cpu
 torch==2.2.2+cpu  # CPU-only wheel for Python 3.12
 xgboost>=1.7.6
-alpaca-trade-api>=3.0.0

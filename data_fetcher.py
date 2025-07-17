@@ -150,7 +150,9 @@ def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, fee
     data = resp.json()
     bars = data.get("bars") or []
     if not bars:
-        raise DataFetchException(symbol, "alpaca", url, "DATA_SOURCE_EMPTY")
+        # no new bars yet (e.g. today's bar before market close)
+        # fallback: use yesterday's last bar or skip this symbol
+        return get_last_available_bar(symbol)
     df = pd.DataFrame(bars)
     rename_map = {
         "t": "timestamp",
@@ -273,6 +275,19 @@ class DataSourceDownException(Exception):
     def __init__(self, symbol: str) -> None:
         super().__init__(f"All data sources failed for {symbol}")
         self.symbol = symbol
+
+
+def get_last_available_bar(symbol: str) -> pd.DataFrame:
+    """Return the most recent daily bar for ``symbol`` or empty DataFrame."""
+    end = datetime.now(timezone.utc).date()
+    start = end - timedelta(days=2)
+    try:
+        df = get_daily_df(symbol, start, end)
+        if df is not None and not df.empty:
+            return df.tail(1)
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.warning("get_last_available_bar failed for %s: %s", symbol, exc)
+    return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
 
 

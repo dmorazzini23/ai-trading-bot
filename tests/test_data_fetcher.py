@@ -203,3 +203,30 @@ def test_empty_bars_handled(monkeypatch):
 
     df = data_fetcher.get_minute_df("AAPL", start, end)
     assert df.empty
+
+
+def test_fetch_bars_empty_uses_last_bar(monkeypatch):
+    class Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"bars": []}
+
+    last = pd.DataFrame(
+        {"open": [1], "high": [1], "low": [1], "close": [1], "volume": [1]},
+        index=[pd.Timestamp("2023-01-01", tz="UTC")],
+    )
+
+    monkeypatch.setattr(data_fetcher.requests, "get", lambda *a, **k: Resp())
+    monkeypatch.setattr(data_fetcher, "get_last_available_bar", lambda s: last)
+
+    df = data_fetcher._fetch_bars(
+        "AAPL",
+        pd.Timestamp("2023-01-02", tz="UTC"),
+        pd.Timestamp("2023-01-02", tz="UTC"),
+        "1Day",
+        "iex",
+    )
+
+    assert not df.empty and df.equals(last)
