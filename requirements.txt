@@ -37,6 +37,8 @@ python-dateutil==2.9.0.post0
 optuna==3.6.1
 # Monitor CPU load
 psutil>=5.9.8
+# lightweight cross-process locks
+filelock>=3.13.1
 # For Python 3.12 use the CPU wheel index:
 # https://download.pytorch.org/whl/cpu
 torch==2.2.2+cpu  # CPU-only wheel for Python 3.12

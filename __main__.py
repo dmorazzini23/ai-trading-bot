@@ -6,6 +6,7 @@ import logging
 import warnings
 import os
 import time
+from filelock import FileLock, Timeout
 
 # AI-AGENT-REF: suppress noisy external library warnings
 warnings.filterwarnings("ignore", category=SyntaxWarning, message="invalid escape sequence")
@@ -72,7 +73,13 @@ def main() -> None:  # pragma: no cover - thin wrapper for entrypoint
         get_logger(__name__).warning(
             "\ud83d\ude80 FORCE_TRADES is ENABLED. This run will ignore normal health halts!"
         )
-    entrypoint()
+    lock = FileLock("/tmp/ai_trading_bot.lock", timeout=0)
+    try:
+        with lock:
+            entrypoint()
+    except Timeout:
+        get_logger(__name__).info("RUN_ALL_TRADES_SKIPPED_OVERLAP")
+        return
 
 
 if __name__ == "__main__":
