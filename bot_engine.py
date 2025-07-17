@@ -5759,6 +5759,7 @@ def _process_symbols(
                 )
                 skipped_duplicates.inc()
                 continue
+            # qty < 0 → real short, queue close
             if qty < 0:
                 logger.info(
                     "SHORT_CLOSE_QUEUED | symbol=%s  qty=%d",
