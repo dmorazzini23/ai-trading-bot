@@ -22,6 +22,8 @@ import requests
 from requests import Session
 from requests.exceptions import HTTPError
 from alpaca.trading.stream import TradingStream
+from alpaca.common.exceptions import APIError
+import uuid
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -161,6 +163,8 @@ def submit_order(api, req, log: logging.Logger | None = None):
     max_retries = 5
     for attempt in range(1, max_retries + 1):
         order_id: str | None = None
+        symbol = getattr(req, "symbol", "")
+        req.client_order_id = f"{symbol}-{uuid.uuid4().hex}"
         try:
             order = api.submit_order(order_data=req)
             if hasattr(order, "status_code") and getattr(order, "status_code") == 429:
@@ -178,6 +182,22 @@ def submit_order(api, req, log: logging.Logger | None = None):
             if order_id:
                 pending_orders.pop(order_id, None)
             return order
+        except APIError as e:
+            if getattr(e, "error", {}).get("code") == 40010001:
+                req.client_order_id = f"{symbol}-{uuid.uuid4().hex}"
+                order = api.submit_order(order_data=req)
+                if getattr(order, "id", None):
+                    order_id = str(order.id)
+                    pending_orders[order_id] = {
+                        "symbol": symbol,
+                        "req": req,
+                        "timestamp": time.monotonic(),
+                        "status": "PENDING_NEW",
+                    }
+                if order_id:
+                    pending_orders.pop(order_id, None)
+                return order
+            raise
         except HTTPError as e:
             if "429" in str(e) or "rate limit" in str(e).lower():
                 wait = attempt * 2

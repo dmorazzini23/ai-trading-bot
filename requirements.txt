@@ -42,6 +42,7 @@ torch==2.2.2+cpu
 torch>=2.2.2,<2.8.0   # 2.2.x+cpu wheels exist for Python 3.12
 
 
+filelock>=3.13.1
 # For Python 3.12 use the CPU wheel index:
 # https://download.pytorch.org/whl/cpu
 torch==2.2.2+cpu  # CPU-only wheel for Python 3.12
