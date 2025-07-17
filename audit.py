@@ -8,7 +8,7 @@ from validate_env import settings
 import json
 import config
 
-TRADE_LOG_FILE = settings.TRADE_LOG_FILE
+TRADE_LOG_FILE = config.TRADE_LOG_FILE
 
 logger = logging.getLogger(__name__)
 _fields = [

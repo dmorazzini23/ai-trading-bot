@@ -2,6 +2,8 @@
 import argparse
 import errno
 import os
+import csv
+import logging
 import signal
 import subprocess
 import sys
@@ -29,6 +31,35 @@ import config
 from alerting import send_slack_alert
 from logger import setup_logging
 
+
+def ensure_trade_log_file() -> None:
+    """Create the trade log file with header and write permissions."""
+    path = config.TRADE_LOG_FILE
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        if not os.path.exists(path):
+            with open(path, "w", newline="") as f:
+                csv.writer(f).writerow(
+                    [
+                        "symbol",
+                        "entry_time",
+                        "entry_price",
+                        "exit_time",
+                        "exit_price",
+                        "qty",
+                        "side",
+                        "strategy",
+                        "classification",
+                        "signal_tags",
+                        "confidence",
+                        "reward",
+                    ]
+                )
+            os.chmod(path, 0o664)
+    except PermissionError as exc:  # pragma: no cover - env dependent
+        logging.getLogger(__name__).error(
+            "ERROR [audit] permission denied writing %s: %s", path, exc
+        )
 
 def is_port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -178,6 +209,7 @@ def main() -> None:
 
     load_dotenv(dotenv_path=".env", override=True)
     validate_environment()
+    ensure_trade_log_file()
 
     shutdown_event = threading.Event()
 
