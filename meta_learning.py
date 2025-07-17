@@ -187,7 +187,7 @@ def load_model_checkpoint(filepath: str) -> Optional[Any]:
 
 
 def retrain_meta_learner(
-    trade_log_path: str = "trades.csv",
+    trade_log_path: str = config.TRADE_LOG_FILE,
     model_path: str = "meta_model.pkl",
     history_path: str = "meta_retrain_history.pkl",
     min_samples: int = 20,

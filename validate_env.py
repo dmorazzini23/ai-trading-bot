@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     SHADOW_MODE: bool = False
     DRY_RUN: bool = False
     DISABLE_DAILY_RETRAIN: bool = False
-    TRADE_LOG_FILE: str = "trades.csv"
+    TRADE_LOG_FILE: str = "data/trades.csv"
     FORCE_TRADES: bool = False
     DISASTER_DD_LIMIT: float = 0.2
     MODEL_RF_PATH: str = "model_rf.pkl"
