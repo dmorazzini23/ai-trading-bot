@@ -276,14 +276,14 @@ class ExecutionEngine:
         self._partial_buffer: dict[str, dict] = {}
         # AI-AGENT-REF: track orders within a cycle to avoid duplicates
         self._cycle_orders: set[str] = set()
-        self._cycle_symbols: set[str] = set()
+        self._seen_orders: set[str] = set()
 
     # --- helper methods -------------------------------------------------
 
     def start_cycle(self) -> None:
         """Reset duplicate order tracking for a new run cycle."""
         self._cycle_orders.clear()
-        self._cycle_symbols.clear()
+        self._seen_orders.clear()
 
     def _select_api(self, asset_class: str):
         api = self.api
@@ -301,8 +301,9 @@ class ExecutionEngine:
         if order_cls == OrderClass.INITIAL_REBALANCE:
             return False
         cid = getattr(order, "client_order_id", "")
-        symbol = getattr(order, "symbol", "")
-        return cid in self._cycle_orders or symbol in self._cycle_symbols
+        oid = getattr(order, "id", "")
+        key = oid or cid
+        return key in self._seen_orders
 
     def _has_buy_power(self, api: TradingClient, qty: int, price: Optional[float]) -> bool:
         if price is None:
@@ -981,13 +982,13 @@ class ExecutionEngine:
                 break
             if order_cls is not OrderClass.INITIAL_REBALANCE:
                 self._cycle_orders.add(order_key)
-                self._cycle_symbols.add(symbol)
             start = time.monotonic()
             order = self._submit_with_retry(
                 api, order_req, symbol, side, slice_qty
             )
             if order is None:
                 break
+            self._seen_orders.add(getattr(order, "id", "") or order_key)
             filled = self._handle_order_result(
                 symbol, side, order, expected_price, slice_qty, start
             )

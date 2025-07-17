@@ -41,6 +41,11 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
     exists = os.path.exists(TRADE_LOG_FILE)
     try:
         with open(TRADE_LOG_FILE, "a", newline="") as f:
+            if not exists:
+                try:
+                    os.chmod(TRADE_LOG_FILE, 0o664)
+                except OSError:
+                    pass
             writer = csv.DictWriter(f, fieldnames=_fields)
             if not exists:
                 writer.writeheader()
@@ -57,7 +62,9 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
                     "result": "",
                 }
             )
-    except Exception as exc:  # pragma: no cover - I/O errors
+    except PermissionError as exc:  # pragma: no cover - permission errors
+        logger.error("ERROR [audit] permission denied writing %s: %s", TRADE_LOG_FILE, exc)
+    except Exception as exc:  # pragma: no cover - other I/O errors
         logger.error("Failed to record trade: %s", exc)
 
 
