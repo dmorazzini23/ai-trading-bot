@@ -27,7 +27,7 @@ try:
     from alpaca.data.models import Quote
     from alpaca.data.requests import StockLatestQuoteRequest
     from alpaca.trading.client import TradingClient
-    from alpaca.trading.enums import OrderSide, TimeInForce
+    from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass as AlpacaOrderClass
     from alpaca.trading.models import Order
     from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 except ImportError:
@@ -72,6 +72,13 @@ except ImportError:
     class StockLatestQuoteRequest:
         def __init__(self, symbol_or_symbols):
             self.symbols = symbol_or_symbols
+
+    class AlpacaOrderClass(str, Enum):
+        SIMPLE = "simple"
+        MLEG = "mleg"
+        BRACKET = "bracket"
+        OCO = "oco"
+        OTO = "oto"
 
 
 try:
@@ -465,7 +472,12 @@ class ExecutionEngine:
         rebalance_ids = getattr(self.ctx, "rebalance_ids", {})
         is_rebalance = symbol in rebalance_ids and not getattr(self.ctx, "_rebalance_done", False)
         order_class = OrderClass.INITIAL_REBALANCE if is_rebalance else OrderClass.NORMAL
-        setattr(order_request, "order_class", order_class)
+        VALID_ORDER_CLASSES = {"simple", "mleg", "bracket", "oco", "oto"}
+        # AI-AGENT-REF: convert custom order_class to Alpaca order class string
+        oc_value = order_class.value if hasattr(order_class, "value") else str(order_class)
+        if oc_value not in VALID_ORDER_CLASSES:
+            oc_value = AlpacaOrderClass.SIMPLE.value
+        order_request.order_class = oc_value
 
         return order_request, expected
 
