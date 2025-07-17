@@ -149,7 +149,8 @@ SLIPPAGE_THRESHOLD = env_settings.SLIPPAGE_THRESHOLD
 REBALANCE_INTERVAL_MIN = env_settings.REBALANCE_INTERVAL_MIN
 SHADOW_MODE = env_settings.SHADOW_MODE
 DISABLE_DAILY_RETRAIN = env_settings.DISABLE_DAILY_RETRAIN
-TRADE_LOG_FILE = env_settings.TRADE_LOG_FILE
+# AI-AGENT-REF: unify trade log path under data/
+TRADE_LOG_FILE = str((ROOT_DIR / env_settings.TRADE_LOG_FILE).resolve())
 EQUITY_EXPOSURE_CAP = float(os.getenv("EQUITY_EXPOSURE_CAP", "2.5"))
 PORTFOLIO_EXPOSURE_CAP = float(os.getenv("PORTFOLIO_EXPOSURE_CAP", "2.5"))
 VERBOSE = os.getenv("VERBOSE", "1").lower() not in ("0", "false")

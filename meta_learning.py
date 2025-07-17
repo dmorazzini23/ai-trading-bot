@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import config  # AI-AGENT-REF: access centralized log paths
+
 import numpy as np
 import metrics_logger
 import pandas as pd

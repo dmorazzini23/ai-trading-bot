@@ -988,10 +988,13 @@ class ExecutionEngine:
             )
             if order is None:
                 break
-            self._seen_orders.add(getattr(order, "id", "") or order_key)
             filled = self._handle_order_result(
                 symbol, side, order, expected_price, slice_qty, start
             )
+            if filled > 0:
+                self._seen_orders.add(
+                    getattr(order, "id", "") or order_key
+                )
             if filled <= 0:
                 break
             last_order = order
