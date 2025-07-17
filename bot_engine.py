@@ -618,7 +618,8 @@ def get_git_hash() -> str:
 
 
 TICKERS_FILE = abspath("tickers.csv")
-TRADE_LOG_FILE = abspath("data/trades.csv")
+# AI-AGENT-REF: use centralized trade log path
+TRADE_LOG_FILE = config.TRADE_LOG_FILE
 SIGNAL_WEIGHTS_FILE = abspath("signal_weights.csv")
 EQUITY_FILE = abspath("last_equity.txt")
 PEAK_EQUITY_FILE = abspath("peak_equity.txt")
@@ -1561,22 +1562,27 @@ class TradeLogger:
     def __init__(self, path: str = TRADE_LOG_FILE) -> None:
         self.path = path
         if not os.path.exists(path):
-            with portalocker.Lock(path, "w", timeout=5) as f:
-                csv.writer(f).writerow(
-                    [
-                        "symbol",
-                        "entry_time",
-                        "entry_price",
-                        "exit_time",
-                        "exit_price",
-                        "qty",
-                        "side",
-                        "strategy",
-                        "classification",
-                        "signal_tags",
-                        "confidence",
-                        "reward",
-                    ]
+            try:
+                with portalocker.Lock(path, "w", timeout=5) as f:
+                    csv.writer(f).writerow(
+                        [
+                            "symbol",
+                            "entry_time",
+                            "entry_price",
+                            "exit_time",
+                            "exit_price",
+                            "qty",
+                            "side",
+                            "strategy",
+                            "classification",
+                            "signal_tags",
+                            "confidence",
+                            "reward",
+                        ]
+                    )
+            except PermissionError as exc:  # AI-AGENT-REF: handle file perms
+                logger.error(
+                    "ERROR [audit] permission denied writing %s: %s", path, exc
                 )
         if not os.path.exists(REWARD_LOG_FILE):
             try:
@@ -1606,63 +1612,78 @@ class TradeLogger:
         confidence: float = 0.0,
     ) -> None:
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        with portalocker.Lock(self.path, "a", timeout=5) as f:
-            csv.writer(f).writerow(
-                [
-                    symbol,
-                    now_iso,
-                    price,
-                    "",
-                    "",
-                    qty,
-                    side,
-                    strategy,
-                    "",
-                    signal_tags,
-                    confidence,
-                    "",
-                ]
+        try:
+            with portalocker.Lock(self.path, "a", timeout=5) as f:
+                csv.writer(f).writerow(
+                    [
+                        symbol,
+                        now_iso,
+                        price,
+                        "",
+                        "",
+                        qty,
+                        side,
+                        strategy,
+                        "",
+                        signal_tags,
+                        confidence,
+                        "",
+                    ]
+                )
+        except PermissionError as exc:  # AI-AGENT-REF: handle file perms
+            logger.error(
+                "ERROR [audit] permission denied writing %s: %s", self.path, exc
             )
 
     def log_exit(self, state: BotState, symbol: str, exit_price: float) -> None:
-        with portalocker.Lock(self.path, "r+", timeout=5) as f:
-            rows = list(csv.reader(f))
-            header, data = rows[0], rows[1:]
-            pnl = 0.0
-            conf = 0.0
-            for row in data:
-                if row[0] == symbol and row[3] == "":
-                    entry_t = datetime.fromisoformat(row[1])
-                    days = (datetime.datetime.now(datetime.timezone.utc) - entry_t).days
-                    cls = (
-                        "day_trade"
-                        if days == 0
-                        else "swing_trade" if days < 5 else "long_trade"
-                    )
-                    row[3], row[4], row[8] = (
-                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                        exit_price,
-                        cls,
-                    )
-                    # Compute PnL
-                    entry_price = float(row[2])
-                    pnl = (exit_price - entry_price) * (1 if row[6] == "buy" else -1)
-                    if len(row) >= 11:
-                        try:
-                            conf = float(row[10])
-                        except Exception:
-                            conf = 0.0
-                    if len(row) >= 12:
-                        row[11] = pnl * conf
-                    else:
-                        row.append(conf)
-                        row.append(pnl * conf)
-                    break
-            f.seek(0)
-            f.truncate()
-            w = csv.writer(f)
-            w.writerow(header)
-            w.writerows(data)
+        try:
+            with portalocker.Lock(self.path, "r+", timeout=5) as f:
+                rows = list(csv.reader(f))
+                header, data = rows[0], rows[1:]
+                pnl = 0.0
+                conf = 0.0
+                for row in data:
+                    if row[0] == symbol and row[3] == "":
+                        entry_t = datetime.fromisoformat(row[1])
+                        days = (
+                            datetime.datetime.now(datetime.timezone.utc) - entry_t
+                        ).days
+                        cls = (
+                            "day_trade"
+                            if days == 0
+                            else "swing_trade" if days < 5 else "long_trade"
+                        )
+                        row[3], row[4], row[8] = (
+                            datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                            exit_price,
+                            cls,
+                        )
+                        # Compute PnL
+                        entry_price = float(row[2])
+                        pnl = (exit_price - entry_price) * (
+                            1 if row[6] == "buy" else -1
+                        )
+                        if len(row) >= 11:
+                            try:
+                                conf = float(row[10])
+                            except Exception:
+                                conf = 0.0
+                        if len(row) >= 12:
+                            row[11] = pnl * conf
+                        else:
+                            row.append(conf)
+                            row.append(pnl * conf)
+                        break
+                f.seek(0)
+                f.truncate()
+                w = csv.writer(f)
+                w.writerow(header)
+                w.writerows(data)
+        except PermissionError as exc:  # AI-AGENT-REF: handle file perms
+            logger.error(
+                "ERROR [audit] permission denied writing %s: %s", self.path, exc
+            )
+            return
 
         # log reward
         try:
