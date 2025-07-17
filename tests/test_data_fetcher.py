@@ -185,3 +185,21 @@ def test_finnhub_403_yfinance(monkeypatch):
     df = data_fetcher.get_minute_df("AAPL", start, end)
     assert called == ["AAPL"]
     assert not df.empty
+
+
+def test_empty_bars_handled(monkeypatch):
+    start = pd.Timestamp("2023-01-01", tz="UTC")
+    end = start + pd.Timedelta(minutes=1)
+
+    class Resp:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"bars": []}
+
+    monkeypatch.setattr(data_fetcher.requests, "get", lambda *a, **k: Resp())
+    monkeypatch.setattr(data_fetcher, "is_market_open", lambda: True)
+
+    df = data_fetcher.get_minute_df("AAPL", start, end)
+    assert df.empty

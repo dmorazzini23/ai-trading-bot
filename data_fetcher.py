@@ -150,7 +150,7 @@ def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, fee
     data = resp.json()
     bars = data.get("bars") or []
     if not bars:
-        return pd.DataFrame()
+        raise DataFetchException(symbol, "alpaca", url, "DATA_SOURCE_EMPTY")
     df = pd.DataFrame(bars)
     rename_map = {
         "t": "timestamp",
