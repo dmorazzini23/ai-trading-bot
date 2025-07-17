@@ -5,9 +5,8 @@ from typing import Any, Sequence
 
 import metrics_logger
 from logger import get_logger
-from ai_trading.capital_scaling import (
-    drawdown_adjusted_kelly_alt as drawdown_adjusted_kelly,
-)
+from ai_trading.capital_scaling import drawdown_adjusted_kelly_alt as drawdown_adjusted_kelly
+from ai_trading.capital_scaling import volatility_parity_position_alt as volatility_parity_position
 
 log = get_logger(__name__)
 

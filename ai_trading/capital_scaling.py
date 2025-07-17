@@ -45,9 +45,9 @@ class CapitalScalingEngine:
 
 
 def volatility_parity_position(base_risk: float, atr_value: float) -> float:
-    """Position size based on volatility parity."""
-    if atr_value == 0:
-        return 0
+    """Scale position based on volatility parity, with a non-zero minimum floor."""
+    if base_risk <= 0 or atr_value == 0:
+        return 0.01
     return base_risk / atr_value
 
 
@@ -128,16 +128,20 @@ __all__ = [
     "kelly_fraction",
     "volatility_parity",
     "cvar_scaling",
+    "drawdown_adjusted_kelly_alt",
+    "volatility_parity_position_alt",
 ]
 
 # AI-AGENT-REF: alt API functions with explicit parameters
 def drawdown_adjusted_kelly_alt(account_value: float, equity_peak: float, raw_kelly: float) -> float:
     """Alternate interface for drawdown_adjusted_kelly."""
+    from .capital_scaling import drawdown_adjusted_kelly
     return drawdown_adjusted_kelly(account_value, equity_peak, raw_kelly)
 
 
 def volatility_parity_position_alt(base_risk: float, atr_value: float) -> float:
     """Alternate interface for volatility_parity_position."""
+    from .capital_scaling import volatility_parity_position
     return volatility_parity_position(base_risk, atr_value)
 
 # Simple aliases for backward compatibility
