@@ -877,6 +877,11 @@ class DataFetchErrorLegacy(Exception):
     pass
 
 
+class OrderExecutionError(Exception):
+    """Raised when an Alpaca order fails after submission."""
+    pass
+
+
 # ─── B. CLIENTS & SINGLETONS ─────────────────────────────────────────────────
 
 
@@ -3185,6 +3190,7 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                 logger.error(
                     f"Order for {req.symbol} was {status}: {getattr(order, 'reject_reason', '')}"
                 )
+                raise OrderExecutionError(f"Buy failed for {req.symbol}: {status}")
             else:
                 logger.error(
                     f"Order for {req.symbol} status={status}: {getattr(order, 'reject_reason', '')}"
