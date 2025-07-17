@@ -316,7 +316,12 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
             pass
 
 
-from data_fetcher import DataFetchError, finnhub_client, get_minute_df
+from data_fetcher import (
+    DataFetchError,
+    DataFetchException,
+    finnhub_client,
+    get_minute_df,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -441,6 +446,10 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             df.index = df.index.get_level_values(1)
         df.index = pd.to_datetime(df.index)
         return df
+    except data_fetcher.DataFetchException:
+        # AI-AGENT-REF: handle empty data source gracefully
+        logger.warning("DATA_SOURCE_EMPTY | symbol=%s", symbol)
+        return pd.DataFrame()
     except Exception as exc:
         logger.exception("fetch_minute_df_safe failed for %s", symbol, exc_info=exc)
         return pd.DataFrame()
@@ -791,6 +800,7 @@ vol_lock = Lock()
 sentiment_lock = Lock()
 slippage_lock = Lock()
 meta_lock = Lock()
+run_lock = Lock()
 
 breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
 executor = ThreadPoolExecutor(
@@ -5742,11 +5752,26 @@ def _process_symbols(
 
     for symbol in symbols:
         if symbol in live_positions:
-            logger.info(
-                f"SKIP_HELD_POSITION | {symbol} already held: {live_positions[symbol]} shares"
-            )
-            skipped_duplicates.inc()
-            continue
+            qty = live_positions[symbol]
+            if qty > 0:
+                logger.info(
+                    f"SKIP_HELD_POSITION | {symbol} already held: {qty} shares"
+                )
+                skipped_duplicates.inc()
+                continue
+            if qty < 0:
+                logger.info(
+                    "SHORT_CLOSE_QUEUED | symbol=%s  qty=%d",
+                    symbol,
+                    abs(qty),
+                )
+                try:
+                    submit_order(ctx, symbol, abs(qty), "buy")
+                except Exception as exc:
+                    logger.warning(
+                        "SHORT_CLOSE_FAIL | %s %s", symbol, exc
+                    )
+                continue
         ts = state.trade_cooldowns.get(symbol)
         if ts and (now - ts).total_seconds() < 60:
             cd_skipped.append(symbol)
@@ -5880,6 +5905,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
     import uuid
 
     loop_id = str(uuid.uuid4())
+    if not run_lock.acquire(blocking=False):
+        logger.info("RUN_ALL_TRADES_SKIPPED_OVERLAP")
+        return
     if not hasattr(state, "trade_cooldowns"):
         state.trade_cooldowns = {}
     if not hasattr(state, "last_trade_direction"):
@@ -6109,6 +6137,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
         state.running = False
         state.last_loop_duration = time.monotonic() - loop_start
         _log_loop_heartbeat(loop_id, loop_start)
+        run_lock.release()
 
 
 def schedule_run_all_trades(model):
