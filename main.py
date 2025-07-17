@@ -21,7 +21,7 @@ from logger import get_logger, log_performance_metrics
 from bot_engine import compute_current_positions, ctx as bot_ctx
 
 
-def summarize_trades(path: str = os.getenv("TRADE_LOG_FILE", "trades.csv")) -> None:
+def summarize_trades(path: str = os.getenv("TRADE_LOG_FILE", "data/trades.csv")) -> None:
     """Log summary of attempted vs skipped trades from ``path``."""
     log = get_logger(__name__)
     try:

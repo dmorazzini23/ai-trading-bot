@@ -618,7 +618,7 @@ def get_git_hash() -> str:
 
 
 TICKERS_FILE = abspath("tickers.csv")
-TRADE_LOG_FILE = abspath("trades.csv")
+TRADE_LOG_FILE = abspath("data/trades.csv")
 SIGNAL_WEIGHTS_FILE = abspath("signal_weights.csv")
 EQUITY_FILE = abspath("last_equity.txt")
 PEAK_EQUITY_FILE = abspath("peak_equity.txt")
@@ -3200,11 +3200,21 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
 
 
 def send_exit_order(
-    ctx: BotContext, symbol: str, exit_qty: int, price: float, reason: str
+    ctx: BotContext,
+    symbol: str,
+    exit_qty: int,
+    price: float,
+    reason: str,
+    raw_positions: list | None = None,
 ) -> None:
     logger.info(
         f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price}"
     )
+    if raw_positions is not None and not any(
+        getattr(p, "symbol", "") == symbol for p in raw_positions
+    ):
+        logger.info("SKIP_NO_POSITION", extra={"symbol": symbol})
+        return
     try:
         pos = ctx.api.get_open_position(symbol)
         held_qty = int(pos.qty)
@@ -3640,10 +3650,11 @@ def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> Non
 
 
 def exit_all_positions(ctx: BotContext) -> None:
-    for pos in ctx.api.get_all_positions():
+    raw_positions = ctx.api.get_all_positions()
+    for pos in raw_positions:
         qty = abs(int(pos.qty))
         if qty:
-            send_exit_order(ctx, pos.symbol, qty, 0.0, "eod_exit")
+            send_exit_order(ctx, pos.symbol, qty, 0.0, "eod_exit", raw_positions=raw_positions)
             logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
 
 
