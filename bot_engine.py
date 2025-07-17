@@ -5752,27 +5752,29 @@ def _process_symbols(
 
     for symbol in symbols:
         if symbol in live_positions:
-            qty = live_positions[symbol]
-            if qty > 0:
+            pos = live_positions[symbol]
+            if pos > 0:
                 logger.info(
-                    f"SKIP_HELD_POSITION | {symbol} already held: {qty} shares"
+                    "SKIP_HELD_POSITION | already long, skipping close"
                 )
                 skipped_duplicates.inc()
                 continue
-            # qty < 0 → real short, queue close
-            if qty < 0:
+            elif pos < 0:
                 logger.info(
                     "SHORT_CLOSE_QUEUED | symbol=%s  qty=%d",
                     symbol,
-                    abs(qty),
+                    abs(pos),
                 )
                 try:
-                    submit_order(ctx, symbol, abs(qty), "buy")
+                    submit_order(ctx, symbol, abs(pos), "buy")
                 except Exception as exc:
                     logger.warning(
                         "SHORT_CLOSE_FAIL | %s %s", symbol, exc
                     )
                 continue
+            else:
+                # AI-AGENT-REF: flat position means no close action
+                pass
         ts = state.trade_cooldowns.get(symbol)
         if ts and (now - ts).total_seconds() < 60:
             cd_skipped.append(symbol)
