@@ -5903,6 +5903,7 @@ def _process_symbols(
             price_df = fetch_minute_df_safe(symbol)
             # AI-AGENT-REF: record raw row count before validation
             row_counts[symbol] = len(price_df)
+            logger.info(f"FETCHED_ROWS | {symbol} rows={len(price_df)}")
             if price_df.empty or "close" not in price_df.columns:
                 logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
                 return
@@ -6123,7 +6124,8 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 break
             time.sleep(2)
 
-        if not processed:
+        # AI-AGENT-REF: abort only if all symbols returned zero rows
+        if sum(row_counts.values()) == 0:
             last_ts = None
             for sym in symbols:
                 ts = ctx.data_fetcher._minute_timestamps.get(sym)
@@ -6179,7 +6181,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
             state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
         except Exception as exc:  # pragma: no cover - safety
             logger.warning("refresh_positions failed: %s", exc)
-        logger.info("RUN_ALL_TRADES_COMPLETE")
+        logger.info(
+            f"RUN_ALL_TRADES_COMPLETE | processed={len(row_counts)} symbols, total_rows={sum(row_counts.values())}"
+        )
         try:
             acct = ctx.api.get_account()
             cash = float(acct.cash)

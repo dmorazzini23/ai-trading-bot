@@ -12,7 +12,7 @@ import pandas as pd
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import datetime
+from datetime import datetime, timezone
 
 try:
     from hmmlearn.hmm import GaussianHMM
@@ -26,7 +26,7 @@ _LAST_SIGNAL_BAR: pd.Timestamp | None = None
 _LAST_SIGNAL_MATRIX: pd.DataFrame | None = None
 
 def get_utcnow():
-    return datetime.datetime.now(datetime.UTC)
+    return datetime.now(timezone.utc)
 
 # AI-AGENT-REF: safe close retrieval for pipelines
 def robust_signal_price(df: pd.DataFrame) -> float:
