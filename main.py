@@ -277,14 +277,17 @@ if __name__ == "__main__":
                     break
                 except DataSourceEmpty:
                     logging.getLogger(__name__).warning(
-                        "DATA_SOURCE_EMPTY, retry %d/3", attempt
+                        "No data on attempt %d/3; retrying", attempt
                     )
                     time.sleep(attempt * 2)
             else:
-                logging.getLogger(__name__).error(
-                    "DATA_SOURCE_EMPTY after 3 retries; skipping cycle"
+                logging.getLogger(__name__).info(
+                    "No data after 3 attempts; skipping this cycle"
                 )
     except Timeout:
         logging.getLogger(__name__).info("RUN_ALL_TRADES_SKIPPED_OVERLAP")
+
+    # Always exit cleanly so the scheduler loop continues:
+    sys.exit(0)
 
 
