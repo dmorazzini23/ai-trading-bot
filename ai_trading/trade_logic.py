@@ -65,7 +65,14 @@ def pyramiding_logic(current_position: float, profit_in_atr: float, base_size: f
 
 
 # AI-AGENT-REF: execute trade with drawdown-aware Kelly sizing
-def execute_trade(signal: int, position_size: float, price: float, equity_peak: float, account_value: float, raw_kelly: float) -> None:
+def execute_trade(
+    signal: int,
+    position_size: float,
+    price: float,
+    equity_peak: float,
+    account_value: float,
+    raw_kelly: float
+) -> None:
     adj_kelly = drawdown_adjusted_kelly(account_value, equity_peak, raw_kelly)
     final_size = position_size * adj_kelly
     if signal == 1:
