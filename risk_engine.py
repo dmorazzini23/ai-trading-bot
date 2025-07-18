@@ -103,7 +103,7 @@ class RiskEngine:
         """Synchronize exposure with live positions."""
         try:
             positions = api.get_all_positions()
-            logger.info("Raw Alpaca positions: %s", positions)
+            logger.debug("Raw Alpaca positions: %s", positions)
             acct = api.get_account()
             equity = float(getattr(acct, "equity", 0) or 0)
             exposure: Dict[str, float] = {}

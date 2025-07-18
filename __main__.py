@@ -34,7 +34,7 @@ def check_health_rows(rows: int) -> None:
     global _LAST_HEALTH_LOG_TIME
     now = time.monotonic()
     if now - _LAST_HEALTH_LOG_TIME > 10:
-        get_logger(__name__).info("HEALTH_ROWS", extra={"rows": rows})
+        get_logger(__name__).debug("HEALTH_ROWS", extra={"rows": rows})
         _LAST_HEALTH_LOG_TIME = now
 
 
@@ -77,18 +77,19 @@ def main() -> None:  # pragma: no cover - thin wrapper for entrypoint
     lock = FileLock("/tmp/ai_trading_bot.lock", timeout=0)
     try:
         with lock:
-            for attempt in range(3):
+            for attempt in range(1, 4):
                 try:
                     entrypoint()
                     break
                 except DataSourceEmpty:
                     get_logger(__name__).warning(
-                        "DATA_SOURCE_EMPTY – retrying (%d/3)…", attempt + 1
+                        "DATA_SOURCE_EMPTY, retrying %d/3…",
+                        attempt,
                     )
-                    time.sleep(5)
+                    time.sleep(attempt * 2)
             else:
                 get_logger(__name__).error(
-                    "DATA_SOURCE_EMPTY after 3 retries – aborting trade cycle"
+                    "DATA_SOURCE_EMPTY after 3 attempts; skipping trade cycle"
                 )
                 return
     except Timeout:
@@ -98,9 +99,10 @@ def main() -> None:  # pragma: no cover - thin wrapper for entrypoint
 
 if __name__ == "__main__":
     logging.basicConfig(
+        format="%(asctime)sZ %(levelname)s [%(bot_phase)s] %(name)s - %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
         level=logging.INFO,
-        format="%(asctime)s [%(bot_phase)s] %(name)s - %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%SZ",
     )
+    logging.Formatter.converter = lambda *args: time.gmtime()  # force UTC
     main()
 
