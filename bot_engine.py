@@ -24,9 +24,7 @@ warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 
 # Avoid failing under older Python versions during tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
-    logging.getLogger(__name__).warning(
-        "Running under unsupported Python version"
-    )
+    logging.getLogger(__name__).warning("Running under unsupported Python version")
 
 import config
 from alerting import send_slack_alert
@@ -172,6 +170,7 @@ from functools import lru_cache
 import importlib
 import types
 
+
 # AI-AGENT-REF: lazy load heavy modules when first accessed
 class _LazyModule(types.ModuleType):
     def __init__(self, name: str) -> None:
@@ -187,79 +186,111 @@ class _LazyModule(types.ModuleType):
         self._load()
         return getattr(self._module, item)
 
+
 pd = _LazyModule("pandas")
 mcal = _LazyModule("pandas_market_calendars")
 ta = _LazyModule("pandas_ta")
+
 
 def limits(*args, **kwargs):
     def decorator(func):
         def wrapped(*a, **k):
             from ratelimit import limits as _limits
+
             return _limits(*args, **kwargs)(func)(*a, **k)
+
         return wrapped
+
     return decorator
+
 
 def sleep_and_retry(func):
     def wrapped(*a, **k):
         from ratelimit import sleep_and_retry as _sr
+
         return _sr(func)(*a, **k)
+
     return wrapped
+
 
 def retry(*dargs, **dkwargs):
     def decorator(func):
         def wrapped(*a, **k):
             from tenacity import retry as _retry
+
             return _retry(*dargs, **dkwargs)(func)(*a, **k)
+
         return wrapped
+
     return decorator
+
 
 def stop_after_attempt(*args, **kwargs):
     from tenacity import stop_after_attempt as _saa
+
     return _saa(*args, **kwargs)
+
 
 def wait_exponential(*args, **kwargs):
     from tenacity import wait_exponential as _we
+
     return _we(*args, **kwargs)
+
 
 def wait_random(*args, **kwargs):
     from tenacity import wait_random as _wr
+
     return _wr(*args, **kwargs)
+
 
 def retry_if_exception_type(*args, **kwargs):
     from tenacity import retry_if_exception_type as _riet
+
     return _riet(*args, **kwargs)
+
 
 try:
     from tenacity import RetryError
 except Exception:
+
     class RetryError(Exception):
         pass
+
 
 ta.ichimoku = (
     ta.ichimoku if hasattr(ta, "ichimoku") else lambda *a, **k: (pd.DataFrame(), {})
 )
 
 _MARKET_SCHEDULE = None
+
+
 def get_market_schedule():
     global _MARKET_SCHEDULE
     if _MARKET_SCHEDULE is None:
         _MARKET_SCHEDULE = NY.schedule(start_date="2020-01-01", end_date="2030-12-31")
     return _MARKET_SCHEDULE
+
+
 _MARKET_CALENDAR = None
+
 
 def get_market_calendar():
     """Lazy-load the NYSE calendar itself (but not its full schedule)."""
     global _MARKET_CALENDAR
     if _MARKET_CALENDAR is None:
         import pandas_market_calendars as mcal
+
         _MARKET_CALENDAR = mcal.get_calendar("NYSE")
     return _MARKET_CALENDAR
+
 
 # back-compat for existing code references
 NY = get_market_calendar()
 
 
 _FULL_DATETIME_RANGE = None
+
+
 def get_full_datetime_range():
     global _FULL_DATETIME_RANGE
     if _FULL_DATETIME_RANGE is None:
@@ -407,6 +438,7 @@ from data_fetcher import (
 
 logger = logging.getLogger(__name__)
 
+
 # AI-AGENT-REF: helper for throttled SKIP_COOLDOWN logging
 def log_skip_cooldown(symbols: Sequence[str]) -> None:
     """Log SKIP_COOLDOWN once per unique set within 15 seconds."""
@@ -421,6 +453,7 @@ def log_skip_cooldown(symbols: Sequence[str]) -> None:
 
 def market_is_open(now: datetime | None = None) -> bool:
     from utils import is_market_open as utils_market_open
+
     """Return True if the market is currently open."""
     if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
         logger.info("FORCE_MARKET_OPEN is enabled; overriding market hours checks.")
@@ -949,6 +982,7 @@ class DataFetchErrorLegacy(Exception):
 
 class OrderExecutionError(Exception):
     """Raised when an Alpaca order fails after submission."""
+
     pass
 
 
@@ -1404,12 +1438,8 @@ class DataFetcher:
         current_day = start_date
 
         while current_day <= end_date:
-            day_start = datetime.combine(
-                current_day, dt_time.min, timezone.utc
-            )
-            day_end = datetime.combine(
-                current_day, dt_time.max, timezone.utc
-            )
+            day_start = datetime.combine(current_day, dt_time.min, timezone.utc)
+            day_end = datetime.combine(current_day, dt_time.max, timezone.utc)
             if isinstance(day_start, tuple):
                 day_start, _tmp = day_start
             if isinstance(day_end, tuple):
@@ -1730,9 +1760,7 @@ class TradeLogger:
                 for row in data:
                     if row[0] == symbol and row[3] == "":
                         entry_t = datetime.fromisoformat(row[1])
-                        days = (
-                            datetime.now(timezone.utc) - entry_t
-                        ).days
+                        days = (datetime.now(timezone.utc) - entry_t).days
                         cls = (
                             "day_trade"
                             if days == 0
@@ -1793,9 +1821,9 @@ class TradeLogger:
         else:
             state.loss_streak = 0
         if state.loss_streak >= 3:
-            state.streak_halt_until = datetime.now(timezone.utc).astimezone(PACIFIC) + timedelta(
-                minutes=60
-            )
+            state.streak_halt_until = datetime.now(timezone.utc).astimezone(
+                PACIFIC
+            ) + timedelta(minutes=60)
             logger.warning(
                 "STREAK_HALT_TRIGGERED",
                 extra={
@@ -1810,7 +1838,19 @@ def _parse_local_positions() -> Dict[str, int]:
     positions: Dict[str, int] = {}
     if not os.path.exists(TRADE_LOG_FILE):
         return positions
-    df = pd.read_csv(TRADE_LOG_FILE)
+    try:
+        # AI-AGENT-REF: tolerate malformed CSV lines
+        df = pd.read_csv(
+            TRADE_LOG_FILE,
+            on_bad_lines="warn",
+            dtype=str,
+        )
+    except pd.errors.ParserError as e:
+        logging.getLogger(__name__).warning(
+            "Failed to parse TRADE_LOG_FILE (malformed row): %s; returning empty set",
+            e,
+        )
+        return positions
     for _, row in df.iterrows():
         if str(row.get("exit_time", "")) != "":
             continue
@@ -1881,6 +1921,12 @@ def audit_positions(ctx: "BotContext") -> None:
 
 
 def validate_open_orders(ctx: "BotContext") -> None:
+    local = _parse_local_positions()
+    if not local:
+        logging.getLogger(__name__).info(
+            "No local positions parsed; skipping open-order audit"
+        )
+        return
     try:
         open_orders = ctx.api.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
     except Exception:
@@ -2250,26 +2296,34 @@ risk_engine = None
 allocator = None
 strategies = None
 
+
 def get_risk_engine():
     global risk_engine
     if risk_engine is None:
         from risk_engine import RiskEngine
+
         risk_engine = RiskEngine()
     return risk_engine
+
 
 def get_allocator():
     global allocator
     if allocator is None:
         from strategy_allocator import StrategyAllocator
+
         allocator = StrategyAllocator()
     return allocator
+
 
 def get_strategies():
     global strategies
     if strategies is None:
         from strategies import MomentumStrategy, MeanReversionStrategy
+
         strategies = [MomentumStrategy(), MeanReversionStrategy()]
     return strategies
+
+
 API_KEY = ALPACA_API_KEY
 API_SECRET = ALPACA_SECRET_KEY
 BASE_URL = config.ALPACA_BASE_URL
@@ -3450,9 +3504,7 @@ def vwap_pegged_submit(
                 logger.info(
                     "ORDER_SENT",
                     extra={
-                        "timestamp": datetime.now(
-                            timezone.utc
-                        ).isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                         "symbol": symbol,
                         "side": side,
                         "qty": slice_qty,
@@ -3510,9 +3562,7 @@ def vwap_pegged_submit(
                             with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
                                 csv.writer(sf).writerow(
                                     [
-                                        datetime.now(
-                                            timezone.utc
-                                        ).isoformat(),
+                                        datetime.now(timezone.utc).isoformat(),
                                         symbol,
                                         vwap_price,
                                         fill_price,
@@ -3782,7 +3832,9 @@ def exit_all_positions(ctx: BotContext) -> None:
     for pos in raw_positions:
         qty = abs(int(pos.qty))
         if qty:
-            send_exit_order(ctx, pos.symbol, qty, 0.0, "eod_exit", raw_positions=raw_positions)
+            send_exit_order(
+                ctx, pos.symbol, qty, 0.0, "eod_exit", raw_positions=raw_positions
+            )
             logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
 
 
@@ -4033,6 +4085,7 @@ def _model_feature_names(model) -> list[str]:
 
 def _should_hold_position(df: pd.DataFrame) -> bool:
     from indicators import rsi
+
     """Return True if trend indicators favor staying in the trade."""
     try:
         close = df["close"].astype(float)
@@ -4410,6 +4463,7 @@ def trade_logic(
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """Delegates to :mod:`portfolio` to avoid import cycles."""
     from portfolio import compute_portfolio_weights as _cpw
+
     # AI-AGENT-REF: wrapper for moved implementation
     return _cpw(ctx, symbols)
 
@@ -4417,6 +4471,7 @@ def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
 def on_trade_exit_rebalance(ctx: BotContext) -> None:
     from utils import portfolio_lock
     import portfolio
+
     current = portfolio.compute_portfolio_weights(
         ctx, list(ctx.portfolio_weights.keys())
     )
@@ -4543,6 +4598,7 @@ class EnsembleModel:
 
 def load_model(path: str = MODEL_PATH):
     import joblib
+
     rf_exists = os.path.exists(MODEL_RF_PATH)
     xgb_exists = os.path.exists(MODEL_XGB_PATH)
     lgb_exists = os.path.exists(MODEL_LGB_PATH)
@@ -4614,9 +4670,7 @@ def update_signal_weights() -> None:
         df["reward"] = df["pnl"] * df["confidence"]
         optimize_signals(df, config)
         recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
-        recent_mask = recent_cut >= (
-            datetime.now(timezone.utc) - timedelta(days=30)
-        )
+        recent_mask = recent_cut >= (datetime.now(timezone.utc) - timedelta(days=30))
         df_recent = df[recent_mask]
 
         df_tags = df.assign(tag=df["signal_tags"].str.split("+")).explode("tag")
@@ -4863,6 +4917,7 @@ def _add_basic_indicators(
 
 def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
     from signals import calculate_macd as signals_calculate_macd
+
     """Add MACD indicators using the defensive helper."""
     try:
         if "close" not in df.columns:
@@ -5086,6 +5141,7 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     from signals import calculate_macd as signals_calculate_macd
+
     feat = pd.DataFrame(index=df.index)
     feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
     feat["rsi"] = ta.rsi(df["close"], length=14)
@@ -5334,6 +5390,7 @@ def daily_summary() -> None:
 # ─── PCA-BASED PORTFOLIO ADJUSTMENT ─────────────────────────────────────────────
 def run_daily_pca_adjustment(ctx: BotContext) -> None:
     from utils import portfolio_lock
+
     """
     Once per day, run PCA on last 90-day returns of current universe.
     If top PC explains >40% variance and portfolio loads heavily,
@@ -5501,7 +5558,11 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
     2. If missing or older than today, call retrain_meta_learner(ctx, symbols) and update marker.
     3. Then load the (new) model from MODEL_PATH.
     """
-    today_str = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    today_str = (
+        datetime.now(timezone.utc)
+        .astimezone(ZoneInfo("America/New_York"))
+        .strftime("%Y-%m-%d")
+    )
     marker = RETRAIN_MARKER_FILE
 
     need_to_retrain = True
@@ -5610,12 +5671,10 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
 
         for f in os.listdir("models"):
             if f.endswith(".pkl"):
-                dt = datetime.strptime(
-                    f.split("_")[1].split(".")[0], "%Y%m%d"
-                ).replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) - dt > timedelta(
-                    days=30
-                ):
+                dt = datetime.strptime(f.split("_")[1].split(".")[0], "%Y%m%d").replace(
+                    tzinfo=timezone.utc
+                )
+                if datetime.now(timezone.utc) - dt > timedelta(days=30):
                     os.remove(os.path.join("models", f))
 
         batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
@@ -5800,6 +5859,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
 def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[str]]:
     from utils import portfolio_lock
     import portfolio
+
     """Prepare trading run by syncing positions and generating symbols."""
     cancel_all_open_orders(ctx)
     audit_positions(ctx)
@@ -5861,9 +5921,7 @@ def _process_symbols(
         if symbol in live_positions:
             pos = live_positions[symbol]
             if pos > 0:
-                logger.info(
-                    "SKIP_HELD_POSITION | already long, skipping close"
-                )
+                logger.info("SKIP_HELD_POSITION | already long, skipping close")
                 skipped_duplicates.inc()
                 continue
             elif pos < 0:
@@ -5875,9 +5933,7 @@ def _process_symbols(
                 try:
                     submit_order(ctx, symbol, abs(pos), "buy")
                 except Exception as exc:
-                    logger.warning(
-                        "SHORT_CLOSE_FAIL | %s %s", symbol, exc
-                    )
+                    logger.warning("SHORT_CLOSE_FAIL | %s %s", symbol, exc)
                 continue
             else:
                 # AI-AGENT-REF: flat position means no close action
@@ -6051,11 +6107,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
         if config.VERBOSE:
             logger.info(
                 "RUN_ALL_TRADES_START",
-                extra={
-                    "timestamp": datetime.now(
-                        timezone.utc
-                    ).isoformat()
-                },
+                extra={"timestamp": datetime.now(timezone.utc).isoformat()},
             )
 
         current_cash, regime_ok, symbols = _prepare_run(ctx, state)
@@ -6178,7 +6230,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
             pos_list = ctx.api.get_all_positions()
             state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
             state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
-            state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
+            state.short_positions = {
+                s for s, q in state.position_cache.items() if q < 0
+            }
         except Exception as exc:  # pragma: no cover - safety
             logger.warning("refresh_positions failed: %s", exc)
         logger.info(
@@ -6348,9 +6402,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                         # AI-AGENT-REF: confirm order result before logging success
                         if order:
                             logger.info(f"INITIAL_REBALANCE: Bought {qty_to_buy} {sym}")
-                            ctx.rebalance_buys[sym] = datetime.now(
-                                timezone.utc
-                            )
+                            ctx.rebalance_buys[sym] = datetime.now(timezone.utc)
                         else:
                             logger.error(
                                 f"INITIAL_REBALANCE: Buy failed for {sym}: order not placed"
@@ -6724,10 +6776,10 @@ def initialize_bot(api=None, data_loader=None):
 
 def generate_signals(df):
     """+1 if price rise, -1 if price fall, else 0."""
-    price = df["price"]                           # KeyError if missing
-    diff = price.diff().fillna(0)                 # NaN → 0 for the first row
+    price = df["price"]  # KeyError if missing
+    diff = price.diff().fillna(0)  # NaN → 0 for the first row
     signals = diff.apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
-    return signals                                # pandas Series → .items()
+    return signals  # pandas Series → .items()
 
 
 def execute_trades(ctx, signals: pd.Series) -> list[tuple[str, str]]:

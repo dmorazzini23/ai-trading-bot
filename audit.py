@@ -46,7 +46,11 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
                     os.chmod(TRADE_LOG_FILE, 0o664)
                 except OSError:
                     pass
-            writer = csv.DictWriter(f, fieldnames=_fields)
+            writer = csv.DictWriter(
+                f,
+                fieldnames=_fields,
+                quoting=csv.QUOTE_MINIMAL,
+            )
             if not exists:
                 writer.writeheader()
             writer.writerow(
@@ -63,7 +67,9 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
                 }
             )
     except PermissionError as exc:  # pragma: no cover - permission errors
-        logger.error("ERROR [audit] permission denied writing %s: %s", TRADE_LOG_FILE, exc)
+        logger.error(
+            "ERROR [audit] permission denied writing %s: %s", TRADE_LOG_FILE, exc
+        )
     except Exception as exc:  # pragma: no cover - other I/O errors
         logger.error("Failed to record trade: %s", exc)
 
@@ -79,4 +85,3 @@ def log_json_audit(details: dict) -> None:
             json.dump(details, f, indent=2, default=str)
     except Exception as exc:  # pragma: no cover - best effort
         logger.warning("Failed JSON audit log %s: %s", fname, exc)
-
