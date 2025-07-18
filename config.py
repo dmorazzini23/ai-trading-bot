@@ -103,7 +103,6 @@ def log_config(keys: list[str] | None = None) -> None:
             # AI-AGENT-REF: avoid logging secret values entirely
             val = "<hidden>"
         cfg[k] = val
-    logger.info("Configuration: %s", cfg)
     _CONFIG_LOGGED = True
 
 
