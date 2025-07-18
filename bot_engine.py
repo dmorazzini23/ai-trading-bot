@@ -9,8 +9,8 @@ import uuid
 import traceback
 import types
 import warnings
-from datetime import datetime, timedelta, timezone
-from datetime import date
+from datetime import datetime, timezone
+from datetime import date, timedelta
 
 # AI-AGENT-REF: replace utcnow with timezone-aware now
 old_generate = datetime.now(timezone.utc)  # replaced utcnow for tz-aware
@@ -5901,9 +5901,8 @@ def _process_symbols(
                 logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
                 return
             price_df = fetch_minute_df_safe(symbol)
-            row_counts[symbol] = (
-                len(price_df) if isinstance(price_df, pd.DataFrame) else 0
-            )
+            # AI-AGENT-REF: record raw row count before validation
+            row_counts[symbol] = len(price_df)
             if price_df.empty or "close" not in price_df.columns:
                 logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
                 return
