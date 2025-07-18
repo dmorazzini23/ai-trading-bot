@@ -9,11 +9,11 @@ import uuid
 import traceback
 import types
 import warnings
-import datetime
+from datetime import datetime, timedelta, timezone, date
 
 # AI-AGENT-REF: replace utcnow with timezone-aware now
-old_generate = datetime.datetime.now(datetime.UTC)  # replaced utcnow for tz-aware
-new_generate = datetime.datetime.now(datetime.UTC)
+old_generate = datetime.now(timezone.utc)  # replaced utcnow for tz-aware
+new_generate = datetime.now(timezone.utc)
 
 # AI-AGENT-REF: suppress noisy external library warnings
 warnings.filterwarnings(
@@ -70,7 +70,6 @@ def handle_exception(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = handle_exception
 
-import datetime
 import warnings
 
 warnings.filterwarnings(
@@ -138,7 +137,7 @@ from argparse import ArgumentParser
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, time as dt_time, timedelta, timezone
+from datetime import time as dt_time
 from datetime import datetime as dt_
 from threading import Lock, Semaphore, Thread
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -419,7 +418,7 @@ def log_skip_cooldown(symbols: Sequence[str]) -> None:
         _LAST_SKIP_SYMBOLS = sym_set
 
 
-def market_is_open(now: datetime.datetime | None = None) -> bool:
+def market_is_open(now: datetime | None = None) -> bool:
     from utils import is_market_open as utils_market_open
     """Return True if the market is currently open."""
     if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
@@ -438,7 +437,7 @@ PORTFOLIO_FILE = "portfolio_snapshot.json"
 
 def save_portfolio_snapshot(portfolio: Dict[str, int]) -> None:
     data = {
-        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "timestamp": datetime.now(datetime.timezone.utc).isoformat(),
         "positions": portfolio,
     }
     with open(PORTFOLIO_FILE, "w") as f:
@@ -790,9 +789,9 @@ class BotMode:
 @dataclass
 class BotState:
     loss_streak: int = 0
-    streak_halt_until: Optional[datetime.datetime] = None
-    day_start_equity: Optional[tuple[datetime.date, float]] = None
-    week_start_equity: Optional[tuple[datetime.date, float]] = None
+    streak_halt_until: Optional[datetime] = None
+    day_start_equity: Optional[tuple[date, float]] = None
+    week_start_equity: Optional[tuple[date, float]] = None
     last_drawdown: float = 0.0
     updates_halted: bool = False
     running: bool = False
@@ -808,10 +807,10 @@ class BotState:
     long_positions: set[str] = field(default_factory=set)
     short_positions: set[str] = field(default_factory=set)
     # Timestamp of last run to prevent duplicate cycles
-    last_run_at: Optional[datetime.datetime] = None
+    last_run_at: Optional[datetime] = None
     last_loop_duration: float = 0.0
     # Record of last exit/entry time per symbol for cooldowns
-    trade_cooldowns: Dict[str, datetime.datetime] = field(default_factory=dict)
+    trade_cooldowns: Dict[str, datetime] = field(default_factory=dict)
     # Track direction of last filled trade per symbol
     last_trade_direction: Dict[str, str] = field(default_factory=dict)
     skipped_cycles: int = 0
@@ -993,7 +992,7 @@ def asset_class_for(symbol: str) -> str:
 
 def compute_spy_vol_stats(ctx: "BotContext") -> None:
     """Compute daily ATR mean/std on SPY for the past 1 year."""
-    today = datetime.date.today()
+    today = date.today()
     with vol_lock:
         if _VOL_STATS["last_update"] == today:
             return
@@ -1125,7 +1124,7 @@ class FinnhubFetcherLegacy:
         return pd.concat(frames, axis=1, keys=syms, names=["Symbol", "Field"])
 
 
-_last_fh_prefetch_date: Optional[datetime.date] = None
+_last_fh_prefetch_date: Optional[date] = None
 
 
 @dataclass
@@ -1137,7 +1136,7 @@ class DataFetcher:
 
     def get_daily_df(self, ctx: "BotContext", symbol: str) -> Optional[pd.DataFrame]:
         symbol = symbol.upper()
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        now_utc = datetime.now(datetime.timezone.utc)
         end_ts = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         # fetch ~6 months of daily bars for health checks and indicators
         start_ts = end_ts - timedelta(days=150)
@@ -1273,7 +1272,7 @@ class DataFetcher:
         self, ctx: "BotContext", symbol: str, lookback_minutes: int = 30
     ) -> Optional[pd.DataFrame]:
         symbol = symbol.upper()
-        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        now_utc = datetime.now(datetime.timezone.utc)
         last_closed_minute = now_utc.replace(second=0, microsecond=0) - timedelta(
             minutes=1
         )
@@ -1392,8 +1391,8 @@ class DataFetcher:
         self,
         ctx: "BotContext",  # ← still needs ctx here, per retrain.py
         symbol: str,
-        start_date: datetime.date,
-        end_date: datetime.date,
+        start_date: date,
+        end_date: date,
     ) -> Optional[pd.DataFrame]:
         """
         Fetch all minute bars for `symbol` between start_date and end_date (inclusive),
@@ -1404,10 +1403,10 @@ class DataFetcher:
         current_day = start_date
 
         while current_day <= end_date:
-            day_start = datetime.datetime.combine(
+            day_start = datetime.combine(
                 current_day, dt_time.min, datetime.timezone.utc
             )
-            day_end = datetime.datetime.combine(
+            day_end = datetime.combine(
                 current_day, dt_time.max, datetime.timezone.utc
             )
             if isinstance(day_start, tuple):
@@ -1492,7 +1491,7 @@ class DataFetcher:
 # Helper to prefetch daily data in bulk with Alpaca, handling SIP subscription
 # issues and falling back to IEX delayed feed per symbol if needed.
 def prefetch_daily_data(
-    symbols: List[str], start_date: datetime.date, end_date: datetime.date
+    symbols: List[str], start_date: date, end_date: date
 ) -> Dict[str, pd.DataFrame]:
     alpaca_key = config.get_env("ALPACA_API_KEY")
     alpaca_secret = config.get_env("ALPACA_SECRET_KEY")
@@ -1696,7 +1695,7 @@ class TradeLogger:
         signal_tags: str = "",
         confidence: float = 0.0,
     ) -> None:
-        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        now_iso = datetime.now(datetime.timezone.utc).isoformat()
         try:
             with portalocker.Lock(self.path, "a", timeout=5) as f:
                 csv.writer(f).writerow(
@@ -1731,7 +1730,7 @@ class TradeLogger:
                     if row[0] == symbol and row[3] == "":
                         entry_t = datetime.fromisoformat(row[1])
                         days = (
-                            datetime.datetime.now(datetime.timezone.utc) - entry_t
+                            datetime.now(datetime.timezone.utc) - entry_t
                         ).days
                         cls = (
                             "day_trade"
@@ -1739,7 +1738,7 @@ class TradeLogger:
                             else "swing_trade" if days < 5 else "long_trade"
                         )
                         row[3], row[4], row[8] = (
-                            datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                            datetime.now(datetime.timezone.utc).isoformat(),
                             exit_price,
                             cls,
                         )
@@ -1775,7 +1774,7 @@ class TradeLogger:
             with open(REWARD_LOG_FILE, "a", newline="") as rf:
                 csv.writer(rf).writerow(
                     [
-                        datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        datetime.now(datetime.timezone.utc).isoformat(),
                         symbol,
                         pnl * conf,
                         pnl,
@@ -1793,7 +1792,7 @@ class TradeLogger:
         else:
             state.loss_streak = 0
         if state.loss_streak >= 3:
-            state.streak_halt_until = datetime.datetime.now(PACIFIC) + timedelta(
+            state.streak_halt_until = datetime.now(PACIFIC) + timedelta(
                 minutes=60
             )
             logger.warning(
@@ -1886,7 +1885,7 @@ def validate_open_orders(ctx: "BotContext") -> None:
     except Exception:
         return
 
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.now(datetime.timezone.utc)
     for od in open_orders:
         created = pd.to_datetime(getattr(od, "created_at", now))
         age = (now - created).total_seconds() / 60.0
@@ -2697,7 +2696,7 @@ def fetch_form4_filings(ticker: str) -> List[dict]:
             continue
         date_str = cols[3].get_text(strip=True)
         try:
-            fdate = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+            fdate = datetime.strptime(date_str, "%Y-%m-%d")
         except Exception:
             continue
         txn_type = cols[4].get_text(strip=True).lower()  # "purchase" or "sale"
@@ -2732,11 +2731,11 @@ def _can_fetch_events(symbol: str) -> bool:
 
 
 _calendar_cache: Dict[str, pd.DataFrame] = {}
-_calendar_last_fetch: Dict[str, datetime.date] = {}
+_calendar_last_fetch: Dict[str, date] = {}
 
 
 def get_calendar_safe(symbol: str) -> pd.DataFrame:
-    today_date = datetime.date.today()
+    today_date = date.today()
     if symbol in _calendar_cache and _calendar_last_fetch.get(symbol) == today_date:
         return _calendar_cache[symbol]
     try:
@@ -2788,7 +2787,7 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
 def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
     acct = safe_alpaca_get_account(ctx)
     equity = float(acct.equity)
-    today_date = datetime.date.today()
+    today_date = date.today()
     limit = params.get("DAILY_LOSS_LIMIT", 0.07)
 
     if state.day_start_equity is None or state.day_start_equity[0] != today_date:
@@ -2814,7 +2813,7 @@ def check_weekly_loss(ctx: BotContext, state: BotState) -> bool:
     """Weekly portfolio drawdown guard."""
     acct = safe_alpaca_get_account(ctx)
     equity = float(acct.equity)
-    today_date = datetime.date.today()
+    today_date = date.today()
     week_start = today_date - timedelta(days=today_date.weekday())
 
     if state.week_start_equity is None or state.week_start_equity[0] != week_start:
@@ -3032,7 +3031,7 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
     """Return True if current time is during regular Eastern trading hours."""
-    now_et = datetime.datetime.now(ZoneInfo("America/New_York"))
+    now_et = datetime.now(ZoneInfo("America/New_York"))
     start = dt_time(9, 30)
     end = dt_time(16, 0)
     if not (start <= now_et.time() <= end):
@@ -3043,7 +3042,7 @@ def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
         return False
     if (
         state.streak_halt_until
-        and datetime.datetime.now(PACIFIC) < state.streak_halt_until
+        and datetime.now(PACIFIC) < state.streak_halt_until
     ):
         logger.info("SKIP_STREAK_HALT", extra={"until": state.streak_halt_until})
         return False
@@ -3450,7 +3449,7 @@ def vwap_pegged_submit(
                 logger.info(
                     "ORDER_SENT",
                     extra={
-                        "timestamp": datetime.datetime.now(
+                        "timestamp": datetime.now(
                             datetime.timezone.utc
                         ).isoformat(),
                         "symbol": symbol,
@@ -3502,7 +3501,7 @@ def vwap_pegged_submit(
                             symbol,
                             vwap_price,
                             fill_price,
-                            datetime.datetime.now(datetime.timezone.utc),
+                            datetime.now(datetime.timezone.utc),
                         )
                     )
                     with slippage_lock:
@@ -3510,7 +3509,7 @@ def vwap_pegged_submit(
                             with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
                                 csv.writer(sf).writerow(
                                     [
-                                        datetime.datetime.now(
+                                        datetime.now(
                                             datetime.timezone.utc
                                         ).isoformat(),
                                         symbol,
@@ -3742,9 +3741,9 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     entry_price = get_latest_close(df_ind)
     ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "", confidence=0.5)
 
-    now_pac = datetime.datetime.now(PACIFIC)
-    mo = datetime.datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
-    mc = datetime.datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
+    now_pac = datetime.now(PACIFIC)
+    mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
+    mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
     if is_high_vol_regime():
         tp_factor = TAKE_PROFIT_FACTOR * 1.1
     else:
@@ -3827,7 +3826,7 @@ def pre_trade_checks(
     # Streak kill-switch check
     if (
         state.streak_halt_until
-        and datetime.datetime.now(PACIFIC) < state.streak_halt_until
+        and datetime.now(PACIFIC) < state.streak_halt_until
     ):
         logger.info(
             "SKIP_STREAK_HALT",
@@ -4123,9 +4122,9 @@ def _enter_long(
             signal_tags=strat,
             confidence=conf,
         )
-        now_pac = datetime.datetime.now(PACIFIC)
-        mo = datetime.datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
-        mc = datetime.datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
+        now_pac = datetime.now(PACIFIC)
+        mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
+        mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
         tp_factor = (
             TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
         )
@@ -4141,7 +4140,7 @@ def _enter_long(
         with targets_lock:
             ctx.stop_targets[symbol] = stop
             ctx.take_profit_targets[symbol] = take
-        state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
+        state.trade_cooldowns[symbol] = datetime.now(datetime.timezone.utc)
         state.last_trade_direction[symbol] = "buy"
     return True
 
@@ -4197,9 +4196,9 @@ def _enter_short(
             signal_tags=strat,
             confidence=conf,
         )
-        now_pac = datetime.datetime.now(PACIFIC)
-        mo = datetime.datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
-        mc = datetime.datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
+        now_pac = datetime.now(PACIFIC)
+        mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
+        mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
         tp_factor = (
             TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
         )
@@ -4216,7 +4215,7 @@ def _enter_short(
         with targets_lock:
             ctx.stop_targets[symbol] = stop
             ctx.take_profit_targets[symbol] = take
-        state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
+        state.trade_cooldowns[symbol] = datetime.now(datetime.timezone.utc)
         state.last_trade_direction[symbol] = "sell"
     return True
 
@@ -4244,7 +4243,7 @@ def _manage_existing_position(
         )
         send_exit_order(ctx, symbol, exit_qty, price, reason)
         if reason == "stop_loss":
-            state.trade_cooldowns[symbol] = datetime.datetime.now(datetime.timezone.utc)
+            state.trade_cooldowns[symbol] = datetime.now(datetime.timezone.utc)
             state.last_trade_direction[symbol] = "sell"
         ctx.trade_logger.log_exit(state, symbol, price)
         try:
@@ -4352,7 +4351,7 @@ def trade_logic(
 
     current_qty = _current_position_qty(ctx, symbol)
 
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.now(datetime.timezone.utc)
 
     signal = "buy" if final_score > 0 else "sell" if final_score < 0 else "hold"
 
@@ -4480,7 +4479,7 @@ def fetch_data(
     ctx: BotContext, symbols: List[str], period: str, interval: str
 ) -> Optional[pd.DataFrame]:
     frames: List[pd.DataFrame] = []
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.now(datetime.timezone.utc)
     if period.endswith("d"):
         delta = timedelta(days=int(period[:-1]))
     elif period.endswith("mo"):
@@ -4588,7 +4587,7 @@ def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
     online_error = float(np.mean((pred - y_new) ** 2))
     log_metrics(
         {
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "timestamp": datetime.now(datetime.timezone.utc).isoformat(),
             "type": "online_update",
             "symbol": symbol,
             "error": online_error,
@@ -4615,7 +4614,7 @@ def update_signal_weights() -> None:
         optimize_signals(df, config)
         recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
         recent_mask = recent_cut >= (
-            datetime.datetime.now(datetime.timezone.utc) - timedelta(days=30)
+            datetime.now(datetime.timezone.utc) - timedelta(days=30)
         )
         df_recent = df[recent_mask]
 
@@ -4706,7 +4705,7 @@ def run_meta_learning_weight_optimizer(
         logger.info("META_MODEL_TRAINED", extra={"samples": len(y)})
         log_metrics(
             {
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "timestamp": datetime.now(datetime.timezone.utc).isoformat(),
                 "type": "meta_model_train",
                 "samples": len(y),
                 "hyperparams": json.dumps({"alpha": alpha}),
@@ -4767,7 +4766,7 @@ def run_bayesian_meta_learning_optimizer(
         logger.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
         log_metrics(
             {
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "timestamp": datetime.now(datetime.timezone.utc).isoformat(),
                 "type": "meta_model_bayes_train",
                 "samples": len(y),
                 "seed": SEED,
@@ -5124,11 +5123,11 @@ if os.path.exists(REGIME_MODEL_PATH):
             n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
         )
 else:
-    today_date = datetime.date.today()
-    start_dt = datetime.datetime.combine(
+    today_date = date.today()
+    start_dt = datetime.combine(
         today_date - timedelta(days=365), dt_time.min, datetime.timezone.utc
     )
-    end_dt = datetime.datetime.combine(today_date, dt_time.max, datetime.timezone.utc)
+    end_dt = datetime.combine(today_date, dt_time.max, datetime.timezone.utc)
     if isinstance(start_dt, tuple):
         start_dt, _tmp = start_dt
     if isinstance(end_dt, tuple):
@@ -5501,7 +5500,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
     2. If missing or older than today, call retrain_meta_learner(ctx, symbols) and update marker.
     3. Then load the (new) model from MODEL_PATH.
     """
-    today_str = datetime.datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    today_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     marker = RETRAIN_MARKER_FILE
 
     need_to_retrain = True
@@ -5602,7 +5601,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
             except Exception as e:
                 logger.error(f"Daily retrain failed: {e}")
 
-        date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M")
+        date_str = datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M")
         os.makedirs("models", exist_ok=True)
         path = f"models/sgd_{date_str}.pkl"
         atomic_joblib_dump(model_pipeline, path)
@@ -5610,10 +5609,10 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
 
         for f in os.listdir("models"):
             if f.endswith(".pkl"):
-                dt = datetime.datetime.strptime(
+                dt = datetime.strptime(
                     f.split("_")[1].split(".")[0], "%Y%m%d"
                 ).replace(tzinfo=datetime.timezone.utc)
-                if datetime.datetime.now(datetime.timezone.utc) - dt > timedelta(
+                if datetime.now(datetime.timezone.utc) - dt > timedelta(
                     days=30
                 ):
                     os.remove(os.path.join("models", f))
@@ -5621,7 +5620,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
         log_metrics(
             {
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "timestamp": datetime.now(datetime.timezone.utc).isoformat(),
                 "type": "daily_retrain",
                 "batch_mse": batch_mse,
                 "hyperparams": json.dumps(utils.to_serializable(config.SGD_PARAMS)),
@@ -5851,7 +5850,7 @@ def _process_symbols(
     if not hasattr(state, "last_trade_direction"):
         state.last_trade_direction = {}
 
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.now(datetime.timezone.utc)
     live_positions = state.position_cache
 
     filtered: list[str] = []
@@ -5924,7 +5923,7 @@ def _log_loop_heartbeat(loop_id: str, start: float) -> None:
         "HEARTBEAT",
         extra={
             "loop_id": loop_id,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "timestamp": datetime.now(datetime.timezone.utc).isoformat(),
             "duration": duration,
         },
     )
@@ -5934,7 +5933,7 @@ def _send_heartbeat() -> None:
     """Lightweight heartbeat when halted."""
     logger.info(
         "HEARTBEAT_HALTED",
-        extra={"timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+        extra={"timestamp": datetime.now(datetime.timezone.utc).isoformat()},
     )
 
 
@@ -6028,7 +6027,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             extra={"last_duration": getattr(state, "last_loop_duration", 0.0)},
         )
         return
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.now(datetime.timezone.utc)
     for sym, ts in list(state.trade_cooldowns.items()):
         if (now - ts).total_seconds() > TRADE_COOLDOWN_MIN * 60:
             state.trade_cooldowns.pop(sym, None)
@@ -6052,7 +6051,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             logger.info(
                 "RUN_ALL_TRADES_START",
                 extra={
-                    "timestamp": datetime.datetime.now(
+                    "timestamp": datetime.now(
                         datetime.timezone.utc
                     ).isoformat()
                 },
@@ -6272,7 +6271,7 @@ def schedule_run_all_trades_with_delay(model):
 
 
 def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
-    now_pac = datetime.datetime.now(PACIFIC)
+    now_pac = datetime.now(PACIFIC)
     if not in_trading_hours(now_pac):
         logger.info("INITIAL_REBALANCE_MARKET_CLOSED")
         return
@@ -6291,7 +6290,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
         return
 
     # Determine current UTC time
-    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    now_utc = datetime.now(datetime.timezone.utc)
     # If it’s between 00:00 and 00:15 UTC, daily bars may not be published yet.
     if now_utc.hour == 0 and now_utc.minute < 15:
         logger.info("INITIAL_REBALANCE: Too early—daily bars not live yet.")
@@ -6345,7 +6344,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                         # AI-AGENT-REF: confirm order result before logging success
                         if order:
                             logger.info(f"INITIAL_REBALANCE: Bought {qty_to_buy} {sym}")
-                            ctx.rebalance_buys[sym] = datetime.datetime.now(
+                            ctx.rebalance_buys[sym] = datetime.now(
                                 datetime.timezone.utc
                             )
                         else:
