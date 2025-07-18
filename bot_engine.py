@@ -2445,7 +2445,7 @@ def pre_trade_health_check(
 
             rows = len(df)
             if config.VERBOSE_LOGGING:
-                logger.info("HEALTH_ROWS", extra={"symbol": sym, "rows": rows})
+                logger.debug("HEALTH_ROWS", extra={"symbol": sym, "rows": rows})
             if rows < min_rows:
                 logger.warning(
                     "HEALTH_INSUFFICIENT_ROWS: only %d rows (min expected %d)",

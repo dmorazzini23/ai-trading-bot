@@ -17,36 +17,35 @@ class Flask:
 flask_mod.Flask = Flask
 flask_mod.jsonify = lambda *a, **k: {}
 sys.modules["flask"] = flask_mod
-import run as main
+import main
 
 
 def test_run_flask_app(monkeypatch):
-    """Flask app is run with provided port."""
+    """Flask app runs on provided port."""
     called = {}
+
     class App:
         def run(self, host, port):
-            called['args'] = (host, port)
-    monkeypatch.setattr(main, 'create_flask_app', lambda: App())
+            called["args"] = (host, port)
+
+    monkeypatch.setattr(main, "create_flask_app", lambda: App())
     main.run_flask_app(1234)
-    assert called['args'] == ('0.0.0.0', 1234)
+    assert called["args"] == ("0.0.0.0", 1234)
 
 
 def test_run_flask_app_port_in_use(monkeypatch):
-    """Port conflicts trigger retry in test mode."""
-    called = {"runs": []}
+    """Port conflict triggers fallback port."""
+    called = []
 
     class App:
         def run(self, host, port):
-            called["runs"].append(port)
-            if len(called["runs"]) == 1:
-                raise OSError(98, "in use")
+            called.append(port)
 
     monkeypatch.setattr(main, "create_flask_app", lambda: App())
-    monkeypatch.setenv("TEST_MODE", "1")
     monkeypatch.setattr(main.utils, "get_pid_on_port", lambda p: 111)
     monkeypatch.setattr(main.utils, "get_free_port", lambda *a, **k: 5678)
     main.run_flask_app(1234)
-    assert called["runs"] == [1234, 5678]
+    assert called == [5678]
 
 
 def test_run_bot_missing_exec(monkeypatch):
@@ -81,7 +80,7 @@ def test_validate_environment_missing(monkeypatch):
 
 def test_main_bot_only(monkeypatch):
     """main runs bot and exits with its return code."""
-    monkeypatch.setattr(sys, 'argv', ['run.py', '--bot-only'])
+    monkeypatch.setattr(sys, 'argv', ['main.py', '--bot-only'])
     monkeypatch.setattr(main, 'run_bot', lambda v, s: 5)
     monkeypatch.setattr(main, 'run_flask_app', lambda port: None)
     monkeypatch.setattr(main, 'setup_logging', lambda *a, **k: logging.getLogger('t'))
