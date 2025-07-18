@@ -14,6 +14,11 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import datetime
 
+try:
+    from hmmlearn.hmm import GaussianHMM
+except ImportError:  # pragma: no cover - optional dependency
+    GaussianHMM = None
+
 from indicators import rsi, atr, mean_reversion_zscore
 
 # Cache the last computed signal matrix to avoid recomputation
@@ -243,10 +248,6 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
 
 def detect_market_regime_hmm(df: pd.DataFrame, n_states: int = 3) -> pd.DataFrame:
     """Annotate ``df`` with hidden Markov market regimes."""
-    try:
-        from hmmlearn.hmm import GaussianHMM
-    except ImportError:
-        GaussianHMM = None
     if GaussianHMM is None:
         df["Regime"] = np.nan
         return df

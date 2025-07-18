@@ -6706,13 +6706,11 @@ def initialize_bot(api=None, data_loader=None):
 
 
 def generate_signals(df):
-    # AI-AGENT-REF: momentum-based signal using rolling z-score
-    window = 10
-    momentum = (df["price"] - df["price"].shift(window)) / df["price"].rolling(
-        window
-    ).std()
-    signal = np.where(momentum > 1, 1, np.where(momentum < -1, -1, 0))
-    return signal
+    """+1 if price rise, -1 if price fall, else 0."""
+    price = df["price"]                           # KeyError if missing
+    diff = price.diff().fillna(0)                 # NaN → 0 for the first row
+    signals = diff.apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+    return signals                                # pandas Series → .items()
 
 
 def execute_trades(ctx, signals: pd.Series) -> list[tuple[str, str]]:
