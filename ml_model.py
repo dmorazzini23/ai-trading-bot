@@ -7,7 +7,7 @@ import io
 import logging
 import pickle
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -94,7 +94,7 @@ class MLModel:
 
     def save(self, path: str | None = None) -> str:
         import joblib
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         model_dir = Path(__file__).parent / "models"
         path = Path(path) if path else model_dir / f"model_{ts}.pkl"
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -702,7 +702,7 @@ def retrain_meta_learner(
             )
             return False
 
-    logger.info(f"Starting meta-learner retraining at {now:%Y-%m-%d %H:%M:%S}")
+    logger.info("Starting meta-learner retraining")
     raw_store = gather_minute_data(ctx, symbols, lookback_days=lookback_days)
     if not raw_store:
         logger.critical(

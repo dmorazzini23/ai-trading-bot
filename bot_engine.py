@@ -1793,7 +1793,7 @@ class TradeLogger:
         else:
             state.loss_streak = 0
         if state.loss_streak >= 3:
-            state.streak_halt_until = datetime.now(PACIFIC) + timedelta(
+            state.streak_halt_until = datetime.now(timezone.utc).astimezone(PACIFIC) + timedelta(
                 minutes=60
             )
             logger.warning(
@@ -3032,7 +3032,7 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
     """Return True if current time is during regular Eastern trading hours."""
-    now_et = datetime.now(ZoneInfo("America/New_York"))
+    now_et = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York"))
     start = dt_time(9, 30)
     end = dt_time(16, 0)
     if not (start <= now_et.time() <= end):
@@ -3043,7 +3043,7 @@ def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
         return False
     if (
         state.streak_halt_until
-        and datetime.now(PACIFIC) < state.streak_halt_until
+        and datetime.now(timezone.utc).astimezone(PACIFIC) < state.streak_halt_until
     ):
         logger.info("SKIP_STREAK_HALT", extra={"until": state.streak_halt_until})
         return False
@@ -3742,7 +3742,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     entry_price = get_latest_close(df_ind)
     ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "", confidence=0.5)
 
-    now_pac = datetime.now(PACIFIC)
+    now_pac = datetime.now(timezone.utc).astimezone(PACIFIC)
     mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
     mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
     if is_high_vol_regime():
@@ -3827,7 +3827,7 @@ def pre_trade_checks(
     # Streak kill-switch check
     if (
         state.streak_halt_until
-        and datetime.now(PACIFIC) < state.streak_halt_until
+        and datetime.now(timezone.utc).astimezone(PACIFIC) < state.streak_halt_until
     ):
         logger.info(
             "SKIP_STREAK_HALT",
@@ -4123,7 +4123,7 @@ def _enter_long(
             signal_tags=strat,
             confidence=conf,
         )
-        now_pac = datetime.now(PACIFIC)
+        now_pac = datetime.now(timezone.utc).astimezone(PACIFIC)
         mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
         mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
         tp_factor = (
@@ -4197,7 +4197,7 @@ def _enter_short(
             signal_tags=strat,
             confidence=conf,
         )
-        now_pac = datetime.now(PACIFIC)
+        now_pac = datetime.now(timezone.utc).astimezone(PACIFIC)
         mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
         mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
         tp_factor = (
@@ -5501,7 +5501,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
     2. If missing or older than today, call retrain_meta_learner(ctx, symbols) and update marker.
     3. Then load the (new) model from MODEL_PATH.
     """
-    today_str = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    today_str = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     marker = RETRAIN_MARKER_FILE
 
     need_to_retrain = True
@@ -5638,7 +5638,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
 
 def on_market_close() -> None:
     """Trigger daily retraining after the market closes."""
-    now_est = dt_.now(ZoneInfo("America/New_York"))
+    now_est = dt_.now(timezone.utc).astimezone(ZoneInfo("America/New_York"))
     if market_is_open(now_est):
         logger.info("RETRAIN_SKIP_MARKET_OPEN")
         return
@@ -6275,7 +6275,7 @@ def schedule_run_all_trades_with_delay(model):
 
 
 def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
-    now_pac = datetime.now(PACIFIC)
+    now_pac = datetime.now(timezone.utc).astimezone(PACIFIC)
     if not in_trading_hours(now_pac):
         logger.info("INITIAL_REBALANCE_MARKET_CLOSED")
         return
@@ -6461,7 +6461,8 @@ def main() -> None:
 
         # Retraining after market close (~16:05 US/Eastern)
         close_time = (
-            dt_.now(ZoneInfo("America/New_York"))
+            dt_.now(timezone.utc)
+            .astimezone(ZoneInfo("America/New_York"))
             .replace(hour=16, minute=5, second=0, microsecond=0)
             .astimezone(timezone.utc)
             .strftime("%H:%M")
