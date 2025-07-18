@@ -245,9 +245,21 @@ _MARKET_SCHEDULE = None
 def get_market_schedule():
     global _MARKET_SCHEDULE
     if _MARKET_SCHEDULE is None:
-        NY = mcal.get_calendar("NYSE")
         _MARKET_SCHEDULE = NY.schedule(start_date="2020-01-01", end_date="2030-12-31")
     return _MARKET_SCHEDULE
+_MARKET_CALENDAR = None
+
+def get_market_calendar():
+    """Lazy-load the NYSE calendar itself (but not its full schedule)."""
+    global _MARKET_CALENDAR
+    if _MARKET_CALENDAR is None:
+        import pandas_market_calendars as mcal
+        _MARKET_CALENDAR = mcal.get_calendar("NYSE")
+    return _MARKET_CALENDAR
+
+# back-compat for existing code references
+NY = get_market_calendar()
+
 
 _FULL_DATETIME_RANGE = None
 def get_full_datetime_range():
