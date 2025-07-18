@@ -138,10 +138,8 @@ from argparse import ArgumentParser
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import datetime, time as dt_time, timedelta, timezone
 from datetime import datetime as dt_
-from datetime import time as dt_time
-from datetime import timedelta, timezone
 from threading import Lock, Semaphore, Thread
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from zoneinfo import ZoneInfo
@@ -404,6 +402,7 @@ from data_fetcher import (
     DataFetchException,
     finnhub_client,
     get_minute_df,
+    _MINUTE_CACHE,
 )
 
 logger = logging.getLogger(__name__)
@@ -509,13 +508,15 @@ def assert_row_integrity(
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     """Fetches minute-level data, returning an empty DataFrame on error."""
     try:
-        today = datetime.date.today()
-        yesterday = today - timedelta(days=1)
-        df = get_minute_df(
-            symbol,
-            start_date=yesterday.isoformat(),
-            end_date=today.isoformat(),
-        )
+        if symbol in _MINUTE_CACHE:
+            df_cached, ts = _MINUTE_CACHE[symbol]
+            if ts >= datetime.now(timezone.utc) - timedelta(seconds=30):
+                return df_cached.copy()
+
+        now_utc = datetime.now(timezone.utc)
+        start_dt = now_utc - timedelta(days=1)
+        df = get_minute_df(symbol, start_dt, now_utc)
+        _MINUTE_CACHE.pop(symbol, None)
         if isinstance(df, list):
             df = pd.DataFrame(df)
         if df is None or df.empty:
@@ -790,8 +791,8 @@ class BotMode:
 class BotState:
     loss_streak: int = 0
     streak_halt_until: Optional[datetime.datetime] = None
-    day_start_equity: Optional[tuple[date, float]] = None
-    week_start_equity: Optional[tuple[date, float]] = None
+    day_start_equity: Optional[tuple[datetime.date, float]] = None
+    week_start_equity: Optional[tuple[datetime.date, float]] = None
     last_drawdown: float = 0.0
     updates_halted: bool = False
     running: bool = False
@@ -992,7 +993,7 @@ def asset_class_for(symbol: str) -> str:
 
 def compute_spy_vol_stats(ctx: "BotContext") -> None:
     """Compute daily ATR mean/std on SPY for the past 1 year."""
-    today = date.today()
+    today = datetime.date.today()
     with vol_lock:
         if _VOL_STATS["last_update"] == today:
             return
@@ -1124,7 +1125,7 @@ class FinnhubFetcherLegacy:
         return pd.concat(frames, axis=1, keys=syms, names=["Symbol", "Field"])
 
 
-_last_fh_prefetch_date: Optional[date] = None
+_last_fh_prefetch_date: Optional[datetime.date] = None
 
 
 @dataclass
@@ -1391,8 +1392,8 @@ class DataFetcher:
         self,
         ctx: "BotContext",  # ← still needs ctx here, per retrain.py
         symbol: str,
-        start_date: date,
-        end_date: date,
+        start_date: datetime.date,
+        end_date: datetime.date,
     ) -> Optional[pd.DataFrame]:
         """
         Fetch all minute bars for `symbol` between start_date and end_date (inclusive),
@@ -1491,7 +1492,7 @@ class DataFetcher:
 # Helper to prefetch daily data in bulk with Alpaca, handling SIP subscription
 # issues and falling back to IEX delayed feed per symbol if needed.
 def prefetch_daily_data(
-    symbols: List[str], start_date: date, end_date: date
+    symbols: List[str], start_date: datetime.date, end_date: datetime.date
 ) -> Dict[str, pd.DataFrame]:
     alpaca_key = config.get_env("ALPACA_API_KEY")
     alpaca_secret = config.get_env("ALPACA_SECRET_KEY")
@@ -2731,11 +2732,11 @@ def _can_fetch_events(symbol: str) -> bool:
 
 
 _calendar_cache: Dict[str, pd.DataFrame] = {}
-_calendar_last_fetch: Dict[str, date] = {}
+_calendar_last_fetch: Dict[str, datetime.date] = {}
 
 
 def get_calendar_safe(symbol: str) -> pd.DataFrame:
-    today_date = date.today()
+    today_date = datetime.date.today()
     if symbol in _calendar_cache and _calendar_last_fetch.get(symbol) == today_date:
         return _calendar_cache[symbol]
     try:
@@ -2787,7 +2788,7 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
 def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
     acct = safe_alpaca_get_account(ctx)
     equity = float(acct.equity)
-    today_date = date.today()
+    today_date = datetime.date.today()
     limit = params.get("DAILY_LOSS_LIMIT", 0.07)
 
     if state.day_start_equity is None or state.day_start_equity[0] != today_date:
@@ -2813,7 +2814,7 @@ def check_weekly_loss(ctx: BotContext, state: BotState) -> bool:
     """Weekly portfolio drawdown guard."""
     acct = safe_alpaca_get_account(ctx)
     equity = float(acct.equity)
-    today_date = date.today()
+    today_date = datetime.date.today()
     week_start = today_date - timedelta(days=today_date.weekday())
 
     if state.week_start_equity is None or state.week_start_equity[0] != week_start:
@@ -5123,7 +5124,7 @@ if os.path.exists(REGIME_MODEL_PATH):
             n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
         )
 else:
-    today_date = date.today()
+    today_date = datetime.date.today()
     start_dt = datetime.datetime.combine(
         today_date - timedelta(days=365), dt_time.min, datetime.timezone.utc
     )
