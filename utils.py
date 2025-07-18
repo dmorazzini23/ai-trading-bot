@@ -223,7 +223,7 @@ def log_health_row_check(rows: int, passed: bool) -> None:
 def health_rows_passed(rows) -> bool:
     """Log HEALTH_ROWS every 100 rows at INFO level."""
     if rows % 100 == 0:
-        logger.info("HEALTH_ROWS_PASSED: received %d rows", rows)
+        logger.debug("HEALTH_ROWS_PASSED: received %d rows", rows)
     else:
         logger.debug("HEALTH_ROWS: received %d rows", rows)
     return True

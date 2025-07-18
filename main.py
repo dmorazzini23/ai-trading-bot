@@ -1,77 +1,290 @@
-"""Alias to run module for backward compatibility."""
-import asyncio
-import importlib
+#!/usr/bin/env python3.12
+import argparse
+import errno
 import os
+import csv
+import logging
+import signal
+import subprocess
+import sys
+import threading
+import time
+import atexit
+from typing import Any
+import warnings
 
-from alpaca.trading.client import TradingClient
+# AI-AGENT-REF: suppress noisy external library warnings
+warnings.filterwarnings("ignore", category=SyntaxWarning, message="invalid escape sequence")
+warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 
-import alpaca_api
-import run as _run
+logging.basicConfig(
+    format="%(asctime)sZ %(levelname)s [%(name)s] %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+    level=logging.INFO,
+)
+logging.Formatter.converter = time.gmtime
 
-_run = importlib.reload(_run)
+from alpaca_trade_api.rest import APIError  # noqa: F401
+from dotenv import load_dotenv
+from flask import Flask, jsonify, request
+import socket
 
-create_flask_app = _run.create_flask_app
-run_flask_app = _run.run_flask_app
-run_bot = _run.run_bot
-validate_environment = _run.validate_environment
-main = _run.main
+import utils
 
-import pandas as pd
-from logger import get_logger, log_performance_metrics
-from bot_engine import compute_current_positions, ctx as bot_ctx
+import bot_engine
+import runner
+
+import config
+from alerting import send_slack_alert
+from logger import setup_logging
 
 
-def summarize_trades(path: str = os.getenv("TRADE_LOG_FILE", "data/trades.csv")) -> None:
-    """Log summary of attempted vs skipped trades from ``path``."""
-    log = get_logger(__name__)
+def ensure_trade_log_file() -> None:
+    """Create the trade log file with header and write permissions."""
+    path = config.TRADE_LOG_FILE
     try:
-        df = pd.read_csv(path)
-    except Exception as exc:  # pragma: no cover - I/O errors
-        log.warning("SUMMARY_READ_FAIL %s", exc)
-        return
-    attempted = len(df)
-    skipped = (
-        df[df.get("status") == "skipped"].groupby("reason").size().to_dict()
-        if "status" in df.columns
-        else {}
-    )
-    log.info("TRADE_RUN_SUMMARY", extra={"attempted": attempted, "skipped": skipped})
-
-    exposure = abs(df.get("qty", 0) * df.get("price", 0)).sum() if not df.empty else 0
-    equity_curve = df.get("equity", []).tolist() if "equity" in df.columns else df.get("price", []).cumsum().tolist()
-    regime = df.get("regime").iloc[-1] if "regime" in df.columns and not df.empty else "unknown"
-    log_performance_metrics(exposure_pct=exposure, equity_curve=equity_curve, regime=regime)
-
-
-def screen_candidates_with_logging(candidates: list[str], tickers: list[str]) -> list[str]:
-    """Return final candidate list with fallback and position filtering."""  # AI-AGENT-REF: candidate logging
-    log = get_logger(__name__)
-    log.info("Number of screened candidates: %s", len(candidates))
-    if not candidates:
-        log.warning(
-            "No candidates found after filtering, using top 5 tickers fallback."
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        if not os.path.exists(path):
+            with open(path, "w", newline="") as f:
+                csv.writer(f).writerow(
+                    [
+                        "symbol",
+                        "entry_time",
+                        "entry_price",
+                        "exit_time",
+                        "exit_price",
+                        "qty",
+                        "side",
+                        "strategy",
+                        "classification",
+                        "signal_tags",
+                        "confidence",
+                        "reward",
+                    ]
+                )
+            os.chmod(path, 0o664)
+    except PermissionError as exc:  # pragma: no cover - env dependent
+        logging.getLogger(__name__).error(
+            "ERROR [audit] permission denied writing %s: %s", path, exc
         )
-        candidates = tickers[:5]
 
-    positions = compute_current_positions(bot_ctx)
-    filtered = [c for c in candidates if c not in positions]
-    if not filtered:
-        log.info("All candidates already held, skipping new buys.")
-        return []
-
-    return filtered
+def is_port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
 
 
-def start_trade_updates_loop() -> None:
-    """Convenience wrapper to run trade update streaming."""
-    api_key = os.getenv("ALPACA_API_KEY", "")
-    secret = os.getenv("ALPACA_SECRET_KEY", "")
-    paper = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets").startswith("https://paper")
-    client = TradingClient(api_key, secret, paper=paper)
-    asyncio.run(
-        alpaca_api.start_trade_updates_stream(api_key, secret, client, paper=paper)
+def create_flask_app() -> Flask:
+    """Return a minimal Flask application with health endpoints."""
+    app = Flask(__name__)
+
+    @app.route("/health")
+    def health():
+        app.logger.info("Health check called")
+        return jsonify(status="ok")
+
+    @app.route("/healthz")
+    def healthz():
+        from flask import Response
+        return Response("OK", status=200)
+
+    @app.route('/api/override_cooldown', methods=['POST'])
+    def override_cooldown():
+        try:
+            payload = request.get_json() or {}
+            symbols = payload.get("symbols", [])
+            reset = payload.get("reset", True)
+            cleared = []
+            for sym in symbols:
+                if reset:
+                    bot_engine.state.trade_cooldowns.pop(sym, None)
+                    cleared.append(sym)
+            return jsonify({"status": "success", "details": f"Cooldowns cleared for {cleared}"})
+        except Exception as e:  # AI-AGENT-REF: log failures
+            app.logger.exception("override_cooldown failed")
+            return jsonify(error=str(e)), 500
+
+    @app.route('/api/force_trade', methods=['POST'])
+    def force_trade():
+        try:
+            payload = request.get_json() or {}
+            mode = payload.get("mode", "balanced")
+            symbols = payload.get("symbols")
+            runner.run_all_trades(bot_engine.ctx, mode_override=mode, symbols_override=symbols)
+            summary = "triggered"
+        except Exception as e:  # pragma: no cover - safety
+            app.logger.exception("force_trade failed")
+            return jsonify(error=str(e)), 500
+        return jsonify({"status": "success", "summary": summary})
+
+    return app
+
+
+def run_flask_app(port: int) -> None:
+    """Start the Flask application on an available ``port``."""
+    app = create_flask_app()
+
+    candidate = port
+    if port == 9000 and is_port_in_use(9000):
+        app.logger.critical("Port 9000 already in use. Exiting to prevent collision.")
+        sys.exit(1)
+    if utils.get_pid_on_port(port):
+        alt = utils.get_free_port(start=port + 1, end=port + 10)
+        if alt is None:
+            app.logger.error("No free port available starting at %s", port)
+            return
+        app.logger.warning("Port %s busy, switching to %s", port, alt)
+        candidate = alt
+    else:
+        app.logger.info("Starting Flask on port %s", candidate)
+
+    try:
+        app.run(host="0.0.0.0", port=candidate)
+    except OSError as exc:  # AI-AGENT-REF: handle runtime reuse
+        if exc.errno == errno.EADDRINUSE:
+            pid = utils.get_pid_on_port(candidate)
+            hint = f" by PID {pid}" if pid else ""
+            app.logger.error("Port already in use on %s%s", candidate, hint)
+        else:
+            raise
+
+
+def run_bot(venv_path: str, bot_script: str) -> int:
+    """Execute ``bot_script`` using the Python from ``venv_path``."""
+    python_executable = os.path.join(venv_path, "bin", "python3.12")
+    if not os.path.isfile(python_executable):
+        raise RuntimeError(f"Python executable not found at {python_executable}")
+
+    process = subprocess.Popen(
+        [python_executable, "-u", bot_script],
+        stdout=sys.stdout,
+        stderr=sys.stderr,
+        env=os.environ.copy(),
     )
+    return process.wait()
+
+
+def validate_environment() -> None:
+    """Ensure mandatory environment variables are present."""
+    if not config.WEBHOOK_SECRET:
+        raise RuntimeError("WEBHOOK_SECRET must be set")
+
+
+def main() -> None:
+    """Entry point for running the unified bot or API server."""
+    parser = argparse.ArgumentParser(description="Unified AI Trading Bot runner")
+    parser.add_argument(
+        "--serve-api", action="store_true", help="Run the Flask API server"
+    )
+    parser.add_argument(
+        "--bot-only", action="store_true", help="Run only the trading bot"
+    )
+    parser.add_argument(
+        "--flask-port", type=int, default=9000, help="Port for Flask server"
+    )
+    parser.add_argument(
+        "--venv-path",
+        default=os.path.join(os.getcwd(), "venv"),
+        help="Path to the Python virtual environment",
+    )
+    parser.add_argument(
+        "--bot-script",
+        default=os.path.join(os.getcwd(), "bot_engine.py"),
+        help="Path to the bot main script",
+    )
+    parser.add_argument(
+        "--log-file",
+        default=os.path.join(os.getcwd(), "logs", "trading_bot.log"),
+        help="Path to the log file",
+    )
+    parser.add_argument(
+        "--single-process",
+        action="store_true",
+        help="Run bot and API in-process rather than spawning a subprocess",
+    )
+    args = parser.parse_args()
+
+    # AI-AGENT-REF: ensure signal-driven holding by disabling rebalance hold
+    os.environ.setdefault("REBALANCE_HOLD_SECONDS", "0")
+
+    # ✅ Fix: get configured logger object from setup_logging
+    logger = setup_logging(log_file=args.log_file)
+    logger.info("Starting AI Trading Bot unified runner")
+    if config.FORCE_TRADES:
+        logger.warning(
+            "\ud83d\ude80 FORCE_TRADES is ENABLED. This run will ignore normal health halts!"
+        )
+
+    load_dotenv(dotenv_path=".env", override=True)
+    validate_environment()
+    ensure_trade_log_file()
+
+    shutdown_event = threading.Event()
+
+    def handle_signal(signum, frame):
+        logger.info("Received signal %s, shutting down", signum)
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+    atexit.register(shutdown_event.set)
+
+    if args.single_process:
+        from threading import Thread
+
+        def bot_loop() -> None:
+            runner.start_runner()
+
+        threads = []
+        if args.serve_api:
+            threads.append(Thread(target=run_flask_app, args=(args.flask_port,), daemon=True))
+        threads.append(Thread(target=bot_loop, daemon=True))
+        for t in threads:
+            t.start()
+        while not shutdown_event.is_set():
+            time.sleep(0.5)
+        runner._shutdown = True
+        if getattr(bot_engine.ctx, "stream_event", None):
+            bot_engine.ctx.stream_event.clear()
+        bot_exit_code = 0
+    else:
+        if args.serve_api and not args.bot_only:
+            from threading import Thread
+
+            flask_thread = Thread(target=run_flask_app, args=(args.flask_port,), daemon=True)
+            flask_thread.start()
+
+            bot_exit_code = run_bot(args.venv_path, args.bot_script)
+            logger.info("Bot process exited with code %s", bot_exit_code)
+        else:
+            bot_exit_code = run_bot(args.venv_path, args.bot_script)
+            logger.info("Bot process exited with code %s", bot_exit_code)
+
+    logger.info("AI Trading Bot runner shutting down")
+    sys.exit(bot_exit_code)
+
 
 if __name__ == "__main__":
-    _run.main()
-    summarize_trades()
+    from filelock import FileLock, Timeout
+    from data_fetcher import DataFetchError as DataSourceEmpty
+
+    os.environ.setdefault("BACKTEST_SERIAL", "1")
+    lock = FileLock("/tmp/ai_trading_bot.lock", timeout=0)
+    try:
+        with lock:
+            for attempt in range(1, 4):
+                try:
+                    main()
+                    break
+                except DataSourceEmpty:
+                    logging.getLogger(__name__).warning(
+                        "DATA_SOURCE_EMPTY, retry %d/3", attempt
+                    )
+                    time.sleep(attempt * 2)
+            else:
+                logging.getLogger(__name__).error(
+                    "DATA_SOURCE_EMPTY after 3 retries; skipping cycle"
+                )
+    except Timeout:
+        logging.getLogger(__name__).info("RUN_ALL_TRADES_SKIPPED_OVERLAP")
+
+

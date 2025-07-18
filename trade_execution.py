@@ -347,10 +347,11 @@ class ExecutionEngine:
         except APIError as exc:  # pragma: no cover - network or API errors
             if getattr(exc, "code", None) == 40410000:
                 self.logger.warning("No existing position for %s, skipping", symbol)
-            else:
-                self.logger.error("No position for %s: %s", symbol, exc)
+                return 0.0
+            raise
         except Exception as exc:  # pragma: no cover - network or API errors
             self.logger.error("No position for %s: %s", symbol, exc)
+            return 0.0
         return 0.0
 
     def _can_sell(self, api: TradingClient, symbol: str, qty: int) -> bool:
