@@ -9,8 +9,6 @@ import csv
 from datetime import date
 import atexit
 
-import pandas as pd
-import numpy as np
 import metrics_logger
 from logging.handlers import (
     QueueHandler,
@@ -134,6 +132,8 @@ def log_performance_metrics(
     as_of: date | None = None,
 ) -> None:
     """Log daily performance metrics to ``filename``."""
+    import pandas as pd
+    import numpy as np
 
     if not equity_curve:
         return
