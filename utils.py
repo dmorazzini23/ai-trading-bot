@@ -39,16 +39,6 @@ _LAST_HEALTH_ROWS_COUNT = -1
 _LAST_HEALTH_STATUS: bool | None = None
 
 # AI-AGENT-REF: throttle HEALTH_ROWS logs
-_last_health_log = 0.0
-
-def throttle_health_logs(min_interval: int = 10) -> bool:
-    """Return True if a health log should be emitted."""
-    global _last_health_log
-    now = time.monotonic()
-    if now - _last_health_log > min_interval:
-        _last_health_log = now
-        return True
-    return False
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 
@@ -59,6 +49,7 @@ class PhaseLoggerAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
         extra = kwargs.setdefault("extra", {})
         extra.setdefault("bot_phase", self.extra.get("bot_phase", "GENERAL"))
+        extra.setdefault("timestamp", dt.datetime.now(timezone.utc))
         return msg, kwargs
 
 
@@ -230,16 +221,11 @@ def log_health_row_check(rows: int, passed: bool) -> None:
 
 
 def health_rows_passed(rows) -> bool:
-    """Log HEALTH_ROWS_PASSED with throttling."""
-    global _LAST_HEALTH_ROWS_COUNT
-    if throttle_health_logs():
-        if rows != _LAST_HEALTH_ROWS_COUNT:
-            logger.info(f"HEALTH_ROWS_PASSED: received {len(rows)} rows")
-            _LAST_HEALTH_ROWS_COUNT = rows
-        else:
-            logger.debug(f"HEALTH_ROWS_THROTTLED: {len(rows)} rows")
+    """Log HEALTH_ROWS every 100 rows at INFO level."""
+    if rows % 100 == 0:
+        logger.info("HEALTH_ROWS_PASSED: received %d rows", rows)
     else:
-        logger.debug(f"HEALTH_ROWS_THROTTLED: {len(rows)} rows")
+        logger.debug("HEALTH_ROWS: received %d rows", rows)
     return True
 
 
@@ -251,7 +237,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
     try:
         import pandas_market_calendars as mcal
 
-        check_time = (now or dt.datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
+        check_time = (now or dt.datetime.now(timezone.utc)).astimezone(EASTERN_TZ)
         cal = getattr(mcal, "get_calendar", None)
         if cal is None:
             raise AttributeError
@@ -284,7 +270,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
     except Exception as exc:
         logger.debug("market calendar unavailable: %s", exc)
         # Fallback to simple weekday/time check when calendar unavailable
-        now_et = (now or dt.datetime.now(tz=EASTERN_TZ)).astimezone(EASTERN_TZ)
+        now_et = (now or dt.datetime.now(timezone.utc)).astimezone(EASTERN_TZ)
         if now_et.weekday() >= 5:
             _log_market_hours("Detected Market Hours today: CLOSED")
             return False
