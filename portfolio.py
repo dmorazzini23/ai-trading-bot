@@ -35,7 +35,7 @@ def log_portfolio_summary(ctx) -> None:
         cash = float(acct.cash)
         equity = float(acct.equity)
         positions = ctx.api.get_all_positions()
-        logger.info("Raw Alpaca positions: %s", positions)
+        logger.debug("Raw Alpaca positions: %s", positions)
         exposure = (
             sum(abs(float(p.market_value)) for p in positions) / equity * 100
             if equity > 0
