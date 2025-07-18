@@ -38,10 +38,11 @@ def test_validate_alpaca_credentials_missing(monkeypatch):
         config.validate_alpaca_credentials()
 
 
-def test_log_config_masks_secrets(monkeypatch, caplog):
+def test_log_config_does_not_log(monkeypatch, caplog):
     monkeypatch.setenv("ALPACA_API_KEY", "secret1234")
     caplog.set_level("INFO")
     config._CONFIG_LOGGED = False
     config.log_config(["ALPACA_API_KEY"])
-    assert "<hidden>" in caplog.text
+    assert caplog.text == ""
     assert "secret1234" not in caplog.text
+    assert config._CONFIG_LOGGED
