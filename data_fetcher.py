@@ -292,7 +292,13 @@ def get_last_available_bar(symbol: str) -> pd.DataFrame:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd.DataFrame:
+def get_historical_data(
+    symbol: str,
+    start_date,
+    end_date,
+    timeframe: str,
+    raise_on_empty: bool = False,
+) -> pd.DataFrame:
     """Fetch historical bars from Alpaca and ensure OHLCV float columns."""
 
     if start_date is None or end_date is None:
@@ -379,6 +385,9 @@ def get_historical_data(symbol: str, start_date, end_date, timeframe: str) -> pd
             logger.warning(
                 f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
             )
+            if raise_on_empty:
+                # AI-AGENT-REF: optionally propagate empty-data condition
+                raise DataFetchError("DATA_SOURCE_EMPTY")
             return pd.DataFrame()
 
     if isinstance(df.columns, pd.MultiIndex):
