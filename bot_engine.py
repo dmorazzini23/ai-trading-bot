@@ -9,7 +9,6 @@ import uuid
 import traceback
 import types
 import warnings
-import joblib
 import datetime
 
 # AI-AGENT-REF: replace utcnow with timezone-aware now
@@ -171,18 +170,91 @@ np.NaN = np.nan
 
 from functools import lru_cache
 
-import pandas as pd
-import pandas_market_calendars as mcal
-import pandas_ta as ta
-from indicators import rsi
+
+import importlib
+import types
+
+# AI-AGENT-REF: lazy load heavy modules when first accessed
+class _LazyModule(types.ModuleType):
+    def __init__(self, name: str) -> None:
+        super().__init__(name)
+        self._module = None
+        self.__name__ = name
+
+    def _load(self):
+        if self._module is None:
+            self._module = importlib.import_module(self.__name__)
+
+    def __getattr__(self, item):
+        self._load()
+        return getattr(self._module, item)
+
+pd = _LazyModule("pandas")
+mcal = _LazyModule("pandas_market_calendars")
+ta = _LazyModule("pandas_ta")
+
+def limits(*args, **kwargs):
+    def decorator(func):
+        def wrapped(*a, **k):
+            from ratelimit import limits as _limits
+            return _limits(*args, **kwargs)(func)(*a, **k)
+        return wrapped
+    return decorator
+
+def sleep_and_retry(func):
+    def wrapped(*a, **k):
+        from ratelimit import sleep_and_retry as _sr
+        return _sr(func)(*a, **k)
+    return wrapped
+
+def retry(*dargs, **dkwargs):
+    def decorator(func):
+        def wrapped(*a, **k):
+            from tenacity import retry as _retry
+            return _retry(*dargs, **dkwargs)(func)(*a, **k)
+        return wrapped
+    return decorator
+
+def stop_after_attempt(*args, **kwargs):
+    from tenacity import stop_after_attempt as _saa
+    return _saa(*args, **kwargs)
+
+def wait_exponential(*args, **kwargs):
+    from tenacity import wait_exponential as _we
+    return _we(*args, **kwargs)
+
+def wait_random(*args, **kwargs):
+    from tenacity import wait_random as _wr
+    return _wr(*args, **kwargs)
+
+def retry_if_exception_type(*args, **kwargs):
+    from tenacity import retry_if_exception_type as _riet
+    return _riet(*args, **kwargs)
+
+try:
+    from tenacity import RetryError
+except Exception:
+    class RetryError(Exception):
+        pass
 
 ta.ichimoku = (
     ta.ichimoku if hasattr(ta, "ichimoku") else lambda *a, **k: (pd.DataFrame(), {})
 )
 
-NY = mcal.get_calendar("NYSE")
-MARKET_SCHEDULE = NY.schedule(start_date="2020-01-01", end_date="2030-12-31")
-FULL_DATETIME_RANGE = pd.date_range(start="09:30", end="16:00", freq="1T")
+_MARKET_SCHEDULE = None
+def get_market_schedule():
+    global _MARKET_SCHEDULE
+    if _MARKET_SCHEDULE is None:
+        NY = mcal.get_calendar("NYSE")
+        _MARKET_SCHEDULE = NY.schedule(start_date="2020-01-01", end_date="2030-12-31")
+    return _MARKET_SCHEDULE
+
+_FULL_DATETIME_RANGE = None
+def get_full_datetime_range():
+    global _FULL_DATETIME_RANGE
+    if _FULL_DATETIME_RANGE is None:
+        _FULL_DATETIME_RANGE = pd.date_range(start="09:30", end="16:00", freq="1T")
+    return _FULL_DATETIME_RANGE
 
 
 @lru_cache(maxsize=None)
@@ -190,7 +262,7 @@ def is_holiday(ts: pd.Timestamp) -> bool:
     # Compare only dates, not full timestamps, to handle schedule timezones correctly
     dt = pd.Timestamp(ts).date()
     # Precompute set of valid trading dates (as dates) once
-    trading_dates = {d.date() for d in MARKET_SCHEDULE.index}
+    trading_dates = {d.date() for d in get_market_schedule().index}
     return dt not in trading_dates
 
 
@@ -240,7 +312,6 @@ from rebalancer import maybe_rebalance as original_rebalance
 ALPACA_BASE_URL = config.ALPACA_BASE_URL
 import pickle
 
-import joblib
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.models import Quote
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
@@ -335,15 +406,10 @@ def log_skip_cooldown(symbols: Sequence[str]) -> None:
         logger.info("SKIP_COOLDOWN | %s", ", ".join(sorted(sym_set)))
         _LAST_SKIP_CD_TIME = now
         _LAST_SKIP_SYMBOLS = sym_set
-from risk_engine import RiskEngine
-from strategies import MeanReversionStrategy, MomentumStrategy, TradeSignal
-from strategy_allocator import StrategyAllocator
-from utils import is_market_open as utils_market_open
-from utils import portfolio_lock
-import portfolio
 
 
 def market_is_open(now: datetime.datetime | None = None) -> bool:
+    from utils import is_market_open as utils_market_open
     """Return True if the market is currently open."""
     if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
         logger.info("FORCE_MARKET_OPEN is enabled; overriding market hours checks.")
@@ -496,16 +562,6 @@ def reconcile_positions(ctx: "BotContext") -> None:
 
 import warnings
 
-from ratelimit import limits, sleep_and_retry
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-    wait_random,
-)
-
 # ─── A. CONFIGURATION CONSTANTS ─────────────────────────────────────────────────
 RUN_HEALTH = RUN_HEALTHCHECK == "1"
 
@@ -581,6 +637,7 @@ def abspath(fname: str) -> str:
 
 def atomic_joblib_dump(obj, path: str) -> None:
     """Safely write joblib file using atomic replace."""
+    import joblib
     import tempfile
 
     dir_name = os.path.dirname(path)
@@ -2166,8 +2223,8 @@ class BotContext:
     # AI-AGENT-REF: track client_order_id base for INITIAL_REBALANCE orders
     rebalance_ids: dict[str, str] = field(default_factory=dict)
     rebalance_attempts: dict[str, int] = field(default_factory=dict)
-    risk_engine: RiskEngine | None = None
-    allocator: StrategyAllocator | None = None
+    risk_engine: "RiskEngine | None" = None
+    allocator: "StrategyAllocator | None" = None
     strategies: List[Any] = field(default_factory=list)
     execution_engine: ExecutionEngine | None = None
     logger: logging.Logger = logger
@@ -2176,9 +2233,30 @@ class BotContext:
 data_fetcher = DataFetcher()
 signal_manager = SignalManager()
 trade_logger = TradeLogger()
-risk_engine = RiskEngine()
-allocator = StrategyAllocator()
-strategies = [MomentumStrategy(), MeanReversionStrategy()]
+risk_engine = None
+allocator = None
+strategies = None
+
+def get_risk_engine():
+    global risk_engine
+    if risk_engine is None:
+        from risk_engine import RiskEngine
+        risk_engine = RiskEngine()
+    return risk_engine
+
+def get_allocator():
+    global allocator
+    if allocator is None:
+        from strategy_allocator import StrategyAllocator
+        allocator = StrategyAllocator()
+    return allocator
+
+def get_strategies():
+    global strategies
+    if strategies is None:
+        from strategies import MomentumStrategy, MeanReversionStrategy
+        strategies = [MomentumStrategy(), MeanReversionStrategy()]
+    return strategies
 API_KEY = ALPACA_API_KEY
 API_SECRET = ALPACA_SECRET_KEY
 BASE_URL = config.ALPACA_BASE_URL
@@ -2241,9 +2319,9 @@ ctx = BotContext(
     stop_targets={},
     portfolio_weights={},
     rebalance_buys={},
-    risk_engine=risk_engine,
-    allocator=allocator,
-    strategies=strategies,
+    risk_engine=get_risk_engine(),
+    allocator=get_allocator(),
+    strategies=get_strategies(),
 )
 exec_engine = ExecutionEngine(
     ctx,
@@ -2449,7 +2527,7 @@ def in_trading_hours(ts: pd.Timestamp) -> bool:
         )
         return False
     try:
-        return NY.open_at_time(MARKET_SCHEDULE, ts)
+        return NY.open_at_time(get_market_schedule(), ts)
     except ValueError as exc:
         logger.warning(f"Invalid schedule time {ts}: {exc}; assuming market closed")
         return False
@@ -3941,6 +4019,7 @@ def _model_feature_names(model) -> list[str]:
 
 
 def _should_hold_position(df: pd.DataFrame) -> bool:
+    from indicators import rsi
     """Return True if trend indicators favor staying in the trade."""
     try:
         close = df["close"].astype(float)
@@ -4317,11 +4396,14 @@ def trade_logic(
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """Delegates to :mod:`portfolio` to avoid import cycles."""
+    from portfolio import compute_portfolio_weights as _cpw
     # AI-AGENT-REF: wrapper for moved implementation
-    return portfolio.compute_portfolio_weights(ctx, symbols)
+    return _cpw(ctx, symbols)
 
 
 def on_trade_exit_rebalance(ctx: BotContext) -> None:
+    from utils import portfolio_lock
+    import portfolio
     current = portfolio.compute_portfolio_weights(
         ctx, list(ctx.portfolio_weights.keys())
     )
@@ -4447,6 +4529,7 @@ class EnsembleModel:
 
 
 def load_model(path: str = MODEL_PATH):
+    import joblib
     rf_exists = os.path.exists(MODEL_RF_PATH)
     xgb_exists = os.path.exists(MODEL_XGB_PATH)
     lgb_exists = os.path.exists(MODEL_LGB_PATH)
@@ -4766,6 +4849,7 @@ def _add_basic_indicators(
 
 
 def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
+    from signals import calculate_macd as signals_calculate_macd
     """Add MACD indicators using the defensive helper."""
     try:
         if "close" not in df.columns:
@@ -4988,6 +5072,7 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
+    from signals import calculate_macd as signals_calculate_macd
     feat = pd.DataFrame(index=df.index)
     feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
     feat["rsi"] = ta.rsi(df["close"], length=14)
@@ -5235,6 +5320,7 @@ def daily_summary() -> None:
 
 # ─── PCA-BASED PORTFOLIO ADJUSTMENT ─────────────────────────────────────────────
 def run_daily_pca_adjustment(ctx: BotContext) -> None:
+    from utils import portfolio_lock
     """
     Once per day, run PCA on last 90-day returns of current universe.
     If top PC explains >40% variance and portfolio loads heavily,
@@ -5699,6 +5785,8 @@ def run_multi_strategy(ctx: BotContext) -> None:
 
 
 def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[str]]:
+    from utils import portfolio_lock
+    import portfolio
     """Prepare trading run by syncing positions and generating symbols."""
     cancel_all_open_orders(ctx)
     audit_positions(ctx)
@@ -6315,7 +6403,7 @@ def main() -> None:
             market_open = False
         else:
             try:
-                market_open = NY.open_at_time(MARKET_SCHEDULE, now_utc)
+                market_open = NY.open_at_time(get_market_schedule(), now_utc)
             except ValueError as e:
                 logger.warning(
                     f"Invalid schedule time {now_utc}: {e}; assuming market closed"

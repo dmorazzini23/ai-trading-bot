@@ -41,10 +41,6 @@ def rolling_mean(arr: np.ndarray, window: int) -> np.ndarray:
     cumsum = np.cumsum(np.insert(arr, 0, 0.0))
     return (cumsum[window:] - cumsum[:-window]) / float(window)
 
-try:
-    from hmmlearn.hmm import GaussianHMM
-except Exception:  # pragma: no cover - optional dependency
-    GaussianHMM = None
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +243,10 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
 
 def detect_market_regime_hmm(df: pd.DataFrame, n_states: int = 3) -> pd.DataFrame:
     """Annotate ``df`` with hidden Markov market regimes."""
+    try:
+        from hmmlearn.hmm import GaussianHMM
+    except ImportError:
+        GaussianHMM = None
     if GaussianHMM is None:
         df["Regime"] = np.nan
         return df

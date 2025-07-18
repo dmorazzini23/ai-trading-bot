@@ -27,13 +27,11 @@ except ImportError:  # pragma: no cover - sklearn optional
         return 0.0
 
 
-import joblib
 from joblib import parallel_backend
 
 # AI-AGENT-REF: restrict joblib parallelism
 with parallel_backend("loky", n_jobs=1):
     pass
-import pandas as pd
 
 try:
     from sklearn.linear_model import LinearRegression
@@ -55,6 +53,7 @@ class MLModel:
         self.logger = logger
 
     def _validate_inputs(self, X: pd.DataFrame) -> None:
+        import pandas as pd
         if not isinstance(X, pd.DataFrame):
             raise TypeError("X must be a DataFrame")
         if X.empty:
@@ -94,6 +93,7 @@ class MLModel:
         return preds
 
     def save(self, path: str | None = None) -> str:
+        import joblib
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_dir = Path(__file__).parent / "models"
         path = Path(path) if path else model_dir / f"model_{ts}.pkl"
@@ -109,6 +109,7 @@ class MLModel:
     @classmethod
     def load(cls, path: str) -> "MLModel":
         """Deserialize a saved model from ``path`` and return an ``MLModel``."""
+        import joblib
         try:
             with open(path, "rb") as f:
                 data = f.read()
@@ -172,6 +173,7 @@ def predict_model(model: Any, X: Sequence[Any] | pd.DataFrame) -> list[float]:
 
 
 def save_model(model: Any, path: str) -> None:
+    import joblib
     """Persist ``model`` to ``path``.
 
     Parameters
@@ -187,6 +189,7 @@ def save_model(model: Any, path: str) -> None:
 
 
 def load_model(path: str) -> Any:
+    import joblib
     """Load a model previously saved with ``save_model``.
 
     Parameters
@@ -202,14 +205,14 @@ def load_model(path: str) -> Any:
     return joblib.load(str(Path(path)))
 
 
-import optuna
-import xgboost as xgb
 
 
 def train_xgboost_with_optuna(
     X_train: Any, y_train: Any, X_val: Any, y_val: Any
-) -> xgb.XGBClassifier:
+) -> Any:
     """Hyperparameter search for an XGBoost model using Optuna."""
+    import optuna
+    import xgboost as xgb
 
     def objective(trial: optuna.trial.Trial) -> float:
         params = {
