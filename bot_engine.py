@@ -456,7 +456,7 @@ def load_portfolio_snapshot() -> Dict[str, int]:
 def compute_current_positions(ctx: "BotContext") -> Dict[str, int]:
     try:
         positions = ctx.api.get_all_positions()
-        logger.info("Raw Alpaca positions: %s", positions)
+        logger.debug("Raw Alpaca positions: %s", positions)
         return {p.symbol: int(p.qty) for p in positions}
     except Exception:
         logger.warning("compute_current_positions failed", exc_info=True)
@@ -6078,7 +6078,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 cash = float(acct.cash)
                 equity = float(acct.equity)
                 positions = ctx.api.get_all_positions()
-                logger.info("Raw Alpaca positions: %s", positions)
+                logger.debug("Raw Alpaca positions: %s", positions)
                 exposure = (
                     sum(abs(float(p.market_value)) for p in positions) / equity * 100
                     if equity > 0
@@ -6189,7 +6189,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             cash = float(acct.cash)
             equity = float(acct.equity)
             positions = ctx.api.get_all_positions()
-            logger.info("Raw Alpaca positions: %s", positions)
+            logger.debug("Raw Alpaca positions: %s", positions)
             exposure = (
                 sum(abs(float(p.market_value)) for p in positions) / equity * 100
                 if equity > 0
