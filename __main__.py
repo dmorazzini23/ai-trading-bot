@@ -20,6 +20,7 @@ except Exception:  # pragma: no cover - optional dependency
 from run import main as entrypoint
 import config
 from logger import get_logger
+from data_fetcher import DataFetchError as DataSourceEmpty
 
 # AI-AGENT-REF: throttle HEALTH_ROWS and SKIP_COOLDOWN logs
 _LAST_HEALTH_LOG_TIME = 0.0
@@ -76,13 +77,30 @@ def main() -> None:  # pragma: no cover - thin wrapper for entrypoint
     lock = FileLock("/tmp/ai_trading_bot.lock", timeout=0)
     try:
         with lock:
-            entrypoint()
+            for attempt in range(3):
+                try:
+                    entrypoint()
+                    break
+                except DataSourceEmpty:
+                    get_logger(__name__).warning(
+                        "DATA_SOURCE_EMPTY – retrying (%d/3)…", attempt + 1
+                    )
+                    time.sleep(5)
+            else:
+                get_logger(__name__).error(
+                    "DATA_SOURCE_EMPTY after 3 retries – aborting trade cycle"
+                )
+                return
     except Timeout:
         get_logger(__name__).info("RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(bot_phase)s] %(name)s - %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%SZ",
+    )
     main()
 
