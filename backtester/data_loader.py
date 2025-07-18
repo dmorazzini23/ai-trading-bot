@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -92,7 +92,7 @@ def load_symbol_data(symbol: str, start: datetime | None = None, end: datetime |
             df = pd.DataFrame()
 
     # Determine fetch range
-    end_dt = end or datetime.now(datetime.UTC)
+    end_dt = end or datetime.now(timezone.utc)
     start_dt = start or end_dt - timedelta(days=365 * 2)
 
     try:
