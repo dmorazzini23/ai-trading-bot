@@ -7,6 +7,7 @@ import argparse
 import logging
 from pathlib import Path
 from typing import Iterable
+import concurrent.futures
 
 import pandas as pd
 
@@ -84,8 +85,10 @@ def main() -> None:  # pragma: no cover - CLI utility
     valid_count = 0
     invalid_count = 0
 
-    for csv_path in csv_files:
-        valid, reason = validate_csv(csv_path)
+    with concurrent.futures.ProcessPoolExecutor() as pool:
+        results = list(pool.map(validate_csv, csv_files))
+
+    for csv_path, (valid, reason) in zip(csv_files, results):
         if valid:
             valid_count += 1
         else:
