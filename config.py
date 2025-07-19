@@ -3,8 +3,14 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from pydantic_settings import BaseSettings
 
 from validate_env import settings as env_settings
+
+class Settings(BaseSettings):
+    """Runtime configuration via environment."""
+
+settings = Settings()
 
 logger = logging.getLogger(__name__)
 

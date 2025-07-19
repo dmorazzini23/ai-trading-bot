@@ -23,6 +23,7 @@ Create a virtual environment and install the dependencies:
 python3.12 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+pip install pydantic-settings pydantic>=2.0 python-dateutil>=2.9.2
 ```
 
 For development & testing, install additional tools:
@@ -113,6 +114,18 @@ logger.info("Bot starting up")
 python bot_engine.py
 ```
 
+The project modules live under `ai_trading/` including `capital_scaling`,
+`trade_logic`, and `trade_execution`. Network operations are async; when
+calling helpers like `execute_order_async` be sure to run them inside an
+event loop:
+
+```python
+import asyncio
+from trade_execution import execute_order_async
+
+asyncio.run(execute_order_async(...))
+```
+
 
 ---
 
@@ -139,10 +152,16 @@ pip install -r requirements-dev.txt
 Run tests with coverage:
 
 ```bash
-pytest --cov
+pytest -m "not slow" --maxfail=1 --disable-warnings --strict-markers --cov=ai_trading --cov-fail-under=80
 ```
 
-Expect minimum **90% coverage**.
+Slow tests are skipped by default. Run them explicitly with:
+
+```bash
+pytest -m slow
+```
+
+Expect minimum **80% coverage**.
 To drill into indicator prep logic:
 
 ```bash

@@ -43,18 +43,19 @@ def pytest_configure() -> None:
     root_dir = Path(__file__).resolve().parent.parent
     if str(root_dir) not in sys.path:
         sys.path.insert(0, str(root_dir))
-    os.environ.setdefault("ALPACA_API_KEY", "testkey")
-    os.environ.setdefault("ALPACA_SECRET_KEY", "testsecret")
-    os.environ.setdefault("FLASK_PORT", "9000")
-    os.environ.setdefault("TESTING", "1")
 
 
-
-@pytest.fixture(autouse=True, scope="session")
-def cleanup_test_env_vars():
-    """Clean up testing flag after session."""
+@pytest.fixture(autouse=True)
+def default_env(monkeypatch):
+    """Provide standard environment variables for tests."""
+    monkeypatch.setenv("ALPACA_API_KEY", "testkey")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "testsecret")
+    monkeypatch.setenv("FLASK_PORT", "9000")
+    monkeypatch.setenv("TESTING", "1")
     yield
-    os.environ.pop("TESTING", None)
+
+
+
 
 
 import importlib
