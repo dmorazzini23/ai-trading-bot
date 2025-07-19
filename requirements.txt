@@ -34,7 +34,7 @@ urllib3>=1.26,<2.0
 statsmodels==0.14.1
 transformers==4.35.2
 # Address dateutil utcfromtimestamp deprecation
-python-dateutil>=2.9.2
+python-dateutil>=2.9.0
 optuna==3.6.1
 # Monitor CPU load
 psutil>=5.9.8
@@ -42,6 +42,6 @@ psutil>=5.9.8
 filelock>=3.13.1
 # For Python 3.12 use the CPU wheel index:
 # https://download.pytorch.org/whl/cpu
-torch==2.2.2+cpu  # CPU-only wheel for Python 3.12
+# torch pinned for GPU builds; skip in lightweight test env
 xgboost>=1.7.6
 pytest-asyncio>=0.20.2

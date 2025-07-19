@@ -440,11 +440,16 @@ logger = logging.getLogger(__name__)
 
 
 # AI-AGENT-REF: helper for throttled SKIP_COOLDOWN logging
-def log_skip_cooldown(symbols: Sequence[str]) -> None:
+def log_skip_cooldown(
+    symbols: Sequence[str] | str, state: BotState | None = None
+) -> None:
     """Log SKIP_COOLDOWN once per unique set within 15 seconds."""
     global _LAST_SKIP_CD_TIME, _LAST_SKIP_SYMBOLS
     now = time.monotonic()
-    sym_set = frozenset(symbols)
+    if isinstance(symbols, str):
+        sym_set = frozenset([symbols])
+    else:
+        sym_set = frozenset(symbols)
     if sym_set != _LAST_SKIP_SYMBOLS or now - _LAST_SKIP_CD_TIME >= 15:
         logger.info("SKIP_COOLDOWN | %s", ", ".join(sorted(sym_set)))
         _LAST_SKIP_CD_TIME = now
@@ -3158,19 +3163,13 @@ def fractional_kelly_size(
     win_prob: float,
     payoff_ratio: float = 1.5,
 ) -> int:
-    # AI-AGENT-REF: adaptive kelly fraction based on peak equity drawdown
-    lock_path = PEAK_EQUITY_FILE
-    with portalocker.Lock(
-        lock_path,
-        "r+" if os.path.exists(lock_path) else "w+",
-        timeout=1,
-    ):
-        with open(lock_path, "r+" if os.path.exists(lock_path) else "w+") as f:
-            data = f.read().strip()
+    # AI-AGENT-REF: adaptive kelly fraction based on historical peak equity
+    if os.path.exists(PEAK_EQUITY_FILE):
+        with portalocker.Lock(PEAK_EQUITY_FILE) as lock:
+            data = lock.read()
             prev_peak = float(data) if data else balance
-            f.seek(0)
-            f.truncate()
-            f.write(str(max(prev_peak, balance)))
+    else:
+        prev_peak = balance
     drawdown = (prev_peak - balance) / prev_peak
     if drawdown > 0.10:
         frac = 0.3
@@ -3181,11 +3180,13 @@ def fractional_kelly_size(
     if is_high_vol_thr_spy():
         frac *= 0.5
 
-
     edge = win_prob - (1 - win_prob) / payoff_ratio
     kelly = max(edge / payoff_ratio, 0) * frac
     dollars_to_risk = kelly * balance
     if atr <= 0:
+        new_peak = max(balance, prev_peak)
+        with portalocker.Lock(PEAK_EQUITY_FILE) as lock:
+            lock.write(str(new_peak))
         return 1
 
     raw_pos = dollars_to_risk / atr
@@ -3193,7 +3194,13 @@ def fractional_kelly_size(
     risk_cap = (balance * DOLLAR_RISK_LIMIT) / atr if atr > 0 else raw_pos
     dollar_cap = ctx.max_position_dollars / price if price > 0 else raw_pos
     size = int(round(min(raw_pos, cap_pos, risk_cap, dollar_cap, MAX_POSITION_SIZE)))
-    return max(size, 1)
+    size = max(size, 1)
+
+    new_peak = max(balance, prev_peak)
+    with portalocker.Lock(PEAK_EQUITY_FILE) as lock:
+        lock.write(str(new_peak))
+
+    return size
 
 
 def vol_target_position_size(
@@ -5917,7 +5924,7 @@ def _process_symbols(
 
     for symbol in symbols:
         if dedupe and symbol in state.position_cache:
-            log_skip_cooldown([symbol])
+            log_skip_cooldown(symbol, state)
             skipped_duplicates.inc()
             continue
         if symbol in live_positions:
