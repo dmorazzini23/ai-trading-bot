@@ -7,7 +7,7 @@ import socket
 import threading
 import warnings
 import time
-from datetime import date, time as dtime, timezone
+from datetime import date, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -99,8 +99,8 @@ def should_log_stale(symbol: str, last_ts: pd.Timestamp, *, ttl: int = 300) -> b
     return True
 
 
-MARKET_OPEN_TIME = dtime(9, 30)
-MARKET_CLOSE_TIME = dtime(16, 0)
+MARKET_OPEN_TIME = dt.time(9, 30)
+MARKET_CLOSE_TIME = dt.time(16, 0)
 EASTERN_TZ = ZoneInfo("America/New_York")
 
 # Lock protecting portfolio state across threads
@@ -296,7 +296,7 @@ def ensure_utc(value: dt.datetime | date) -> dt.datetime:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
     if isinstance(value, date):
-        return dt.datetime.combine(value, time.min, tzinfo=timezone.utc)
+        return dt.datetime.combine(value, dt.time.min, tzinfo=timezone.utc)
     raise TypeError(f"Unsupported type for ensure_utc: {type(value)!r}")
 
 
