@@ -315,9 +315,9 @@ def dynamic_position_size(capital: float, volatility: float, drawdown: float) ->
 
     vol = max(volatility, 1e-6)
     kelly_fraction = 0.5 / vol
+    kelly_fraction = min(max(kelly_fraction, 0.0), 1.0)
     if drawdown > 0.1:
         kelly_fraction *= 0.5
-    kelly_fraction = min(max(kelly_fraction, 0.0), 1.0)
     return capital * kelly_fraction
 
 
