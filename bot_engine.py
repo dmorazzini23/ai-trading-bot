@@ -5957,6 +5957,8 @@ def _process_symbols(
             if price_df.empty or "close" not in price_df.columns:
                 logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
                 return
+            if symbol in state.position_cache:
+                return  # AI-AGENT-REF: skip symbol with open position
             processed.append(symbol)
             _safe_trade(ctx, state, symbol, current_cash, model, regime_ok)
         except Exception as exc:

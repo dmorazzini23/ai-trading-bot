@@ -122,6 +122,9 @@ def create_flask_app() -> Flask:
 def run_flask_app(port: int) -> None:
     """Start the Flask application on an available ``port``."""
     app = create_flask_app()
+    import logging
+    if not hasattr(app, "logger"):
+        app.logger = logging.getLogger(__name__)  # AI-AGENT-REF: ensure fallback logger
 
     candidate = port
     if port == 9000 and is_port_in_use(9000):
