@@ -92,7 +92,13 @@ try:
     from finnhub import FinnhubAPIException
 except Exception:  # pragma: no cover - optional dependency
     finnhub = types.SimpleNamespace(Client=lambda *a, **k: None)
-    FinnhubAPIException = Exception
+    class FinnhubAPIException(Exception):
+        """Fallback exception with status code attribute."""
+
+        def __init__(self, *args, status_code=None, **kwargs) -> None:  # AI-AGENT-REF: flex init
+            code = status_code if status_code is not None else (args[0] if args else None)
+            self.status_code = code
+            super().__init__(f"FinnhubAPIException: {code}")
 import pandas as pd
 
 try:
@@ -706,7 +712,6 @@ def get_minute_df(
         logger.critical(
             "INCOMPLETE_DATA", extra={"symbol": symbol, "rows": len(df)}
         )
-        return pd.DataFrame()
     _MINUTE_CACHE[symbol] = (df, pd.Timestamp.now(tz="UTC"))
     logger.info(
         "MINUTE_FETCHED",
