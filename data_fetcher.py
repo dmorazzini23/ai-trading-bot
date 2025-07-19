@@ -708,6 +708,11 @@ def get_minute_df(
             "EMPTY_DATA", extra={"symbol": symbol, "start": start_dt.isoformat(), "end": end_dt.isoformat()}
         )
         return pd.DataFrame()
+    required_cols = {"open", "high", "low", "close", "volume"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        logger.error("get_minute_df missing columns: %s", sorted(missing))  # AI-AGENT-REF: early validation
+        raise KeyError(f"missing columns: {sorted(missing)}")
     if len(df) < MIN_EXPECTED_ROWS:
         logger.critical(
             "INCOMPLETE_DATA", extra={"symbol": symbol, "rows": len(df)}
@@ -805,7 +810,11 @@ def fetch_minute_yfinance(symbol: str) -> pd.DataFrame:
     import yfinance as yf
 
     df = yf.Ticker(symbol).history(period="1d", interval="1m")
-    df.index = pd.DatetimeIndex(df.index).tz_localize("UTC")
+    idx = pd.DatetimeIndex(df.index)
+    if idx.tz is None:
+        df.index = idx.tz_localize("UTC")
+    else:
+        df.index = idx.tz_convert("UTC")  # AI-AGENT-REF: preserve existing tz
     df = df.rename_axis("timestamp").reset_index()
     df = df.set_index("timestamp")[["Open", "High", "Low", "Close", "Volume"]]
     df.columns = [c.lower() for c in df.columns]
