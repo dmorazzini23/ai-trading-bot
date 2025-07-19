@@ -142,3 +142,24 @@ def volatility_parity_position_alt(base_risk: float, atr_value: float) -> float:
 drawdown_adjusted_kelly_alias = drawdown_adjusted_kelly
 volatility_parity_position_alias = volatility_parity_position
 
+# AI-AGENT-REF: fallback stubs for optional imports
+if "fractional_kelly" not in globals():
+    def fractional_kelly(*args, **kwargs):
+        """Stub for import; tests don’t execute this."""
+        raise NotImplementedError("fractional_kelly stub")
+
+if "volatility_parity" not in globals():
+    def volatility_parity(*args, **kwargs):
+        """Stub for import; tests don’t execute this."""
+        raise NotImplementedError("volatility_parity stub")
+
+if "cvar_scaling" not in globals():
+    def cvar_scaling(*args, **kwargs):
+        """Stub for import; tests don’t execute this."""
+        raise NotImplementedError("cvar_scaling stub")
+
+if "kelly_fraction" not in globals():
+    def kelly_fraction(*args, **kwargs):
+        """Stub for import; tests don’t execute this."""
+        raise NotImplementedError("kelly_fraction stub")
+

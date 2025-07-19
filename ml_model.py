@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import joblib
 import hashlib
 import io
 import logging
