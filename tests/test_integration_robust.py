@@ -72,7 +72,6 @@ mods = [
     "alpaca.common.exceptions",
     "dotenv",
     "finnhub",
-    "joblib",
     "sklearn.ensemble",
     "sklearn.linear_model",
     "sklearn.decomposition",
@@ -284,7 +283,6 @@ sys.modules["prometheus_client"].Gauge = lambda *a, **k: None
 sys.modules["prometheus_client"].Histogram = lambda *a, **k: None
 sys.modules["pipeline"] = types.ModuleType("pipeline")
 sys.modules["metrics_logger"] = types.ModuleType("metrics_logger")
-sys.modules["joblib"] = types.ModuleType("joblib")
 sys.modules["pybreaker"] = types.ModuleType("pybreaker")
 sys.modules["pipeline"].model_pipeline = lambda *a, **k: None
 sys.modules["metrics_logger"].log_metrics = lambda *a, **k: None

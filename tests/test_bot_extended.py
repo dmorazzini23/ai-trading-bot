@@ -37,7 +37,6 @@ mods = [
     "metrics_logger",
     "prometheus_client",
     "finnhub",
-    "joblib",
     "pybreaker",
     "ratelimit",
     "trade_execution",
@@ -131,8 +130,6 @@ class _PCA:
         pass
 
 sys.modules["sklearn.decomposition"].PCA = _PCA
-sys.modules["joblib"] = types.ModuleType("joblib")
-
 sys.modules["alpaca_trade_api.rest"].REST = object
 sys.modules["alpaca_trade_api.rest"].APIError = Exception
 class _DummyTradingClient:

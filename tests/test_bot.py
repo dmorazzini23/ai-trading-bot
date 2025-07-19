@@ -38,7 +38,6 @@ mods = [
     "metrics_logger",
     "prometheus_client",
     "finnhub",
-    "joblib",
     "pybreaker",
     "trade_execution",
     "ai_trading.capital_scaling",
@@ -82,7 +81,6 @@ sys.modules["sklearn.ensemble"].RandomForestClassifier = object
 sys.modules["sklearn.linear_model"].Ridge = object
 sys.modules["sklearn.linear_model"].BayesianRidge = object
 sys.modules["sklearn.decomposition"].PCA = object
-sys.modules["joblib"] = types.ModuleType("joblib")
 
 
 class _FakeREST:

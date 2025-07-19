@@ -129,35 +129,36 @@ def get_account() -> Optional[Dict[str, Any]]:
 
 
 def submit_order(api, req, log: logging.Logger | None = None):
+    order_data = req  # AI-AGENT-REF: capture request payload
     if req.symbol in [order["symbol"] for order in pending_orders.values()]:
-        logger.info("Skipping duplicate order for %s still pending", req.symbol)
+        logger.info("Skipping duplicate order for %s still pending", getattr(order_data, "symbol", ""))
         return None
     """Submit an order with retry and optional shadow mode."""
     log = log or logger
     if DRY_RUN:
         log.info(
             "DRY RUN: would submit order for %s of size %s",
-            getattr(req, "symbol", ""),
-            getattr(req, "qty", 0),
+            getattr(order_data, "symbol", ""),
+            getattr(order_data, "qty", 0),
         )
         return {
             "status": "dry_run",
-            "symbol": getattr(req, "symbol", ""),
-            "qty": getattr(req, "qty", 0),
+            "symbol": getattr(order_data, "symbol", ""),
+            "qty": getattr(order_data, "qty", 0),
         }
     if SHADOW_MODE:
         log.info(
             "SHADOW_MODE: Would place order: %s %s %s %s %s",
-            getattr(req, "symbol", ""),
-            getattr(req, "qty", ""),
-            getattr(req, "side", ""),
+            getattr(order_data, "symbol", ""),
+            getattr(order_data, "qty", ""),
+            getattr(order_data, "side", ""),
             req.__class__.__name__,
-            getattr(req, "time_in_force", ""),
+            getattr(order_data, "time_in_force", ""),
         )
         return {
             "status": "shadow",
-            "symbol": getattr(req, "symbol", ""),
-            "qty": getattr(req, "qty", 0),
+            "symbol": getattr(order_data, "symbol", ""),
+            "qty": getattr(order_data, "qty", 0),
         }
 
     max_retries = 5
@@ -166,7 +167,14 @@ def submit_order(api, req, log: logging.Logger | None = None):
         symbol = getattr(req, "symbol", "")
         req.client_order_id = f"{symbol}-{uuid.uuid4().hex}"
         try:
-            order = api.submit_order(order_data=req)
+            try:
+                order = api.submit_order(order_data)
+            except TypeError:
+                order = api.submit_order(
+                    getattr(order_data, "symbol", None),
+                    getattr(order_data, "qty", 0),
+                    getattr(order_data, "side", None),
+                )
             if hasattr(order, "status_code") and getattr(order, "status_code") == 429:
                 raise HTTPError(
                     "API rate limit exceeded (429)"
@@ -185,7 +193,14 @@ def submit_order(api, req, log: logging.Logger | None = None):
         except APIError as e:
             if getattr(e, "error", {}).get("code") == 40010001:
                 req.client_order_id = f"{symbol}-{uuid.uuid4().hex}"
-                order = api.submit_order(order_data=req)
+                try:
+                    order = api.submit_order(order_data)
+                except TypeError:
+                    order = api.submit_order(
+                        getattr(order_data, "symbol", None),
+                        getattr(order_data, "qty", 0),
+                        getattr(order_data, "side", None),
+                    )
                 if getattr(order, "id", None):
                     order_id = str(order.id)
                     pending_orders[order_id] = {
