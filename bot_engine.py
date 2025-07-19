@@ -3155,35 +3155,29 @@ def fractional_kelly_size(
     win_prob: float,
     payoff_ratio: float = 1.5,
 ) -> int:
-    # Volatility throttle: if SPY ATR > 2σ, cut kelly in half
-    if is_high_vol_thr_spy():
-        base_frac = ctx.kelly_fraction * 0.5
-    else:
-        base_frac = ctx.kelly_fraction
-    comp = ctx.capital_scaler.compression_factor(balance)
-    base_frac *= comp
-
-    if not os.path.exists(PEAK_EQUITY_FILE):
-        with portalocker.Lock(PEAK_EQUITY_FILE, "w", timeout=5) as f:
-            f.write(str(balance))
-        peak_equity = balance
-    else:
-        with portalocker.Lock(PEAK_EQUITY_FILE, "r+", timeout=5) as f:
-            content = f.read().strip()
-            peak_equity = float(content) if content else balance
-            if balance > peak_equity:
-                f.seek(0)
-                f.truncate()
-                f.write(str(balance))
-                peak_equity = balance
-
-    drawdown = (peak_equity - balance) / peak_equity
+    # AI-AGENT-REF: adaptive kelly fraction based on peak equity drawdown
+    lock_path = PEAK_EQUITY_FILE
+    with portalocker.Lock(
+        lock_path,
+        "r+" if os.path.exists(lock_path) else "w+",
+        timeout=1,
+    ):
+        with open(lock_path, "r+" if os.path.exists(lock_path) else "w+") as f:
+            data = f.read().strip()
+            prev_peak = float(data) if data else balance
+            f.seek(0)
+            f.truncate()
+            f.write(str(max(prev_peak, balance)))
+    drawdown = (prev_peak - balance) / prev_peak
     if drawdown > 0.10:
         frac = 0.3
     elif drawdown > 0.05:
         frac = 0.45
     else:
-        frac = base_frac
+        frac = ctx.kelly_fraction * ctx.capital_scaler.compression_factor(balance)
+    if is_high_vol_thr_spy():
+        frac *= 0.5
+
 
     edge = win_prob - (1 - win_prob) / payoff_ratio
     kelly = max(edge / payoff_ratio, 0) * frac
