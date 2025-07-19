@@ -43,6 +43,7 @@ class RiskEngine:
         self.asset_limits: Dict[str, float] = {}
         self.strategy_limits: Dict[str, float] = {}
         self.exposure: Dict[str, float] = {}
+        self.strategy_exposure: Dict[str, float] = {}
         self.hard_stop = False
         # AI-AGENT-REF: track returns/drawdown for adaptive exposure cap
         self._returns: list[float] = []
@@ -186,6 +187,8 @@ class RiskEngine:
         prev = self.exposure.get(signal.asset_class, 0.0)
         delta = signal.weight if signal.side.lower() == "buy" else -signal.weight
         self.exposure[signal.asset_class] = prev + delta
+        s_prev = self.strategy_exposure.get(signal.strategy, 0.0)
+        self.strategy_exposure[signal.strategy] = s_prev + delta
         logger.info(
             "EXPOSURE_UPDATED",
             extra={
@@ -268,23 +271,19 @@ class RiskEngine:
             return 0
         return max(qty, 0)
 
-    def _apply_weight_limits(self, signal: TradeSignal) -> float:
-        """Return signal weight after applying asset and strategy caps."""
-        asset_cap = 1.1 * self._dynamic_cap(
-            signal.asset_class
-        )  # slight relaxation to reduce unnecessary skips
-        asset_rem = max(asset_cap - self.exposure.get(signal.asset_class, 0.0), 0.0)
-        strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
-        weight = signal.weight
-        if weight > asset_rem:
-            logger.info("ADJUST_WEIGHT_ASSET", extra={"orig": weight, "new": asset_rem})
-            weight = asset_rem
-        if weight > strat_cap:
-            logger.info(
-                "ADJUST_WEIGHT_STRATEGY", extra={"orig": weight, "new": strat_cap}
-            )
-            weight = strat_cap
-        return weight
+    def _apply_weight_limits(self, sig: TradeSignal) -> float:
+        """Return signal weight limited by remaining capacity."""
+        symbol = sig.symbol
+        strat = sig.strategy
+        # compute how much capacity remains
+        asset_cap = self.asset_limits.get(symbol, 1.0)
+        strategy_cap = self.strategy_limits.get(strat, 1.0)
+        used_asset = self.exposure.get(symbol, 0.0)
+        used_strategy = self.strategy_exposure.get(strat, 0.0)
+        max_asset = max(0.0, asset_cap - used_asset)
+        max_strategy = max(0.0, strategy_cap - used_strategy)
+        allowed = min(sig.weight, max_asset, max_strategy)
+        return max(0.0, allowed)
 
     def compute_volatility(self, returns: np.ndarray) -> dict:
         if not isinstance(returns, np.ndarray) or returns.size == 0:
