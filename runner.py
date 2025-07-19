@@ -34,10 +34,7 @@ except ImportError:  # AI-AGENT-REF: gracefully handle optional scaling helpers
     kelly_fraction = lambda *a, **k: None  # type: ignore
 from utils import get_phase_logger, log_cpu_usage
 
-try:  # prefer 'bot' module for backward compat
-    from bot import main  # type: ignore
-except Exception:
-    from bot_engine import main
+from main import main
 
 logger = get_phase_logger(__name__, "RUNNER")
 
