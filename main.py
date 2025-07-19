@@ -36,7 +36,10 @@ import socket
 import utils
 
 import bot_engine
-import runner
+try:
+    import runner
+except ImportError:
+    pass
 
 import config
 from alerting import send_slack_alert
