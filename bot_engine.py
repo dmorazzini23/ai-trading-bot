@@ -517,9 +517,11 @@ def get_latest_close(df: pd.DataFrame) -> float:
     return float(price)
 
 
-def compute_time_range(minutes: int) -> tuple[int, int]:
-    """Return a simple ``(0, minutes)`` range."""
-    return 0, minutes
+def compute_time_range(minutes: int) -> tuple[datetime, datetime]:
+    """Return a UTC datetime range spanning the past ``minutes`` minutes."""
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(minutes=minutes)
+    return start, now
 
 
 def safe_price(price: float) -> float:
