@@ -64,9 +64,6 @@ def _import_retrain(monkeypatch):
     opt = types.ModuleType("optuna")
     opt.create_study = lambda direction: types.SimpleNamespace(optimize=lambda f, n_trials: None, best_params={})
     monkeypatch.setitem(sys.modules, "optuna", opt)
-    jb = types.ModuleType("joblib")
-    jb.dump = lambda obj, path: None
-    monkeypatch.setitem(sys.modules, "joblib", jb)
     skl_ms = types.ModuleType("sklearn.model_selection")
     skl_ms.ParameterSampler = lambda *a, **k: []
     skl_ms.cross_val_score = lambda *a, **k: [0.0]
