@@ -3307,12 +3307,12 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
 
             start_ts = time.monotonic()
             while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
-                if time.monotonic() - start_ts > 30:
+                if time.monotonic() - start_ts > 1:
                     logger.warning(
                         f"Order stuck in PENDING_NEW: {req.symbol}, retrying or monitoring required."
                     )
                     break
-                time.sleep(5)  # AI-AGENT-REF: avoid busy polling
+                time.sleep(0.1)  # AI-AGENT-REF: avoid busy polling
                 order = api.get_order_by_id(order.id)
             logger.info(
                 f"Order status for {req.symbol}: {getattr(order, 'status', '')}"
@@ -5899,6 +5899,7 @@ def _process_symbols(
     current_cash: float,
     model,
     regime_ok: bool,
+    dedupe: bool = False,
 ) -> tuple[list[str], dict[str, int]]:
     processed: list[str] = []
     row_counts: dict[str, int] = {}
@@ -5915,6 +5916,10 @@ def _process_symbols(
     cd_skipped: list[str] = []
 
     for symbol in symbols:
+        if dedupe and symbol in state.position_cache:
+            log_skip_cooldown([symbol])
+            skipped_duplicates.inc()
+            continue
         if symbol in live_positions:
             pos = live_positions[symbol]
             if pos > 0:
