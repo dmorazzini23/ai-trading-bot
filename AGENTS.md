@@ -96,6 +96,7 @@ When running a Codex prompt to refactor or fix:
 | `logger.py`         | Update handlers or test hooks         |
 | `tests/`            | Adapt tests for new behavior          |
 | `requirements*.txt` | Add packages like `pyarrow` if needed |
+| `ai_trading/*`      | Capital scaling & trade logic modules |
 
 ---
 
@@ -131,6 +132,15 @@ This repository is strictly an advanced **AI-powered trading platform**, with ex
 * and robust live trading safety checks.
 
 Unrelated general-purpose refactor patterns (e.g. CRUD templates, simplistic microservices restructuring) should **never override these domain priorities**.
+
+---
+
+## 📜 Recent PR Prompts
+
+- **PR1**: initial package restructure into `ai_trading` modules
+- **PR2**: introduced async trade execution helpers
+- **PR3**: migrated configuration to `pydantic-settings`
+- **PR4**: tightened CI coverage checks
 
 ---
 

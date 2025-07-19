@@ -1,6 +1,7 @@
 import sys
 import types
 import pandas as pd
+import pytest
 from features import build_features_pipeline
 
 dotenv_stub = types.ModuleType("dotenv")
@@ -18,15 +19,22 @@ validate_stub.settings = types.SimpleNamespace(
     WEBHOOK_SECRET="w",
 )
 sys.modules.setdefault("validate_env", validate_stub)
-import os
-os.environ.setdefault("ALPACA_BASE_URL", "http://example.com")
-os.environ.setdefault("WEBHOOK_SECRET", "dummy")
+
+pytestmark = pytest.mark.usefixtures("default_env", "features_env")
 
 import pytest
 
 @pytest.fixture(autouse=True)
 def reload_utils_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "utils", types.ModuleType("utils"))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def features_env(monkeypatch):
+    """Set environment vars required for feature tests."""
+    monkeypatch.setenv("ALPACA_BASE_URL", "http://example.com")
+    monkeypatch.setenv("WEBHOOK_SECRET", "dummy")
     yield
 
 

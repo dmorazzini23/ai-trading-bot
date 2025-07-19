@@ -1,4 +1,5 @@
 import os
+import pytest
 import sys
 from pathlib import Path
 
@@ -10,8 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 if "joblib" in sys.modules:
     del sys.modules["joblib"]
 
-os.environ.setdefault("ALPACA_API_KEY", "dummy")
-os.environ.setdefault("ALPACA_SECRET_KEY", "dummy")
+pytestmark = pytest.mark.usefixtures("default_env")
 import config
 import data_fetcher
 from ml_model import MLModel
@@ -26,8 +26,8 @@ class DummyEngine:
 
 
 def test_end_to_end_pipeline(monkeypatch):
-    os.environ.setdefault("ALPACA_API_KEY", "k")
-    os.environ.setdefault("ALPACA_SECRET_KEY", "s")
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
     config.reload_env()
 
     # prepare mock minute data

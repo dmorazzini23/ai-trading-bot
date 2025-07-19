@@ -7,8 +7,8 @@ import pytest
 import meta_learning
 import sklearn.linear_model
 
+pytestmark = pytest.mark.slow
 
-@pytest.mark.slow
 def test_retrain_meta_learner_success(monkeypatch):
     df = pd.DataFrame({
         "entry_price": [1, 2, 3, 4],
@@ -36,7 +36,6 @@ def test_retrain_meta_learner_success(monkeypatch):
     assert ok
 
 
-@pytest.mark.slow
 def test_retrain_meta_insufficient(monkeypatch):
     df = pd.DataFrame({"entry_price": [1], "exit_price": [2], "signal_tags": ["a"], "side": ["buy"]})
     monkeypatch.setattr(meta_learning.Path, "exists", lambda self: True)
@@ -46,7 +45,6 @@ def test_retrain_meta_insufficient(monkeypatch):
     assert not meta_learning.retrain_meta_learner("trades.csv", "m.pkl", "hist.pkl", min_samples=5)
 
 
-@pytest.mark.slow
 def test_retrain_meta_training_fail(monkeypatch):
     df = pd.DataFrame({
         "entry_price": [1, 2],
@@ -67,7 +65,6 @@ def test_retrain_meta_training_fail(monkeypatch):
     assert not meta_learning.retrain_meta_learner("trades.csv", "m.pkl", "hist.pkl", min_samples=1)
 
 
-@pytest.mark.slow
 def test_retrain_meta_load_history(monkeypatch):
     df = pd.DataFrame({
         "entry_price": [1, 2],
