@@ -273,7 +273,8 @@ class RiskEngine:
 
     def _apply_weight_limits(self, sig: TradeSignal) -> float:
         """Return signal weight limited by remaining capacity."""
-        symbol = sig.symbol
+        # AI-AGENT-REF: use asset class key for exposure caps
+        symbol = sig.asset_class
         strat = sig.strategy
         # compute how much capacity remains
         asset_cap = self.asset_limits.get(symbol, 1.0)

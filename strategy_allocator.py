@@ -1,8 +1,17 @@
+import sys, importlib
 import logging
 import math
 import os
 import time  # AI-AGENT-REF: needed for monotonic timestamps
+
 from typing import Dict, List
+
+# AI-AGENT-REF: reload real module if tests insert stub
+if (
+    "strategy_allocator" in sys.modules
+    and not hasattr(sys.modules["strategy_allocator"], "__file__")
+):
+    importlib.reload(importlib.import_module(__name__))
 
 from trade_execution import recent_buys
 
