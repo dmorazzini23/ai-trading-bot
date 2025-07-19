@@ -631,6 +631,11 @@ def get_minute_df(
         logger.debug(
             "FETCH_ALPACA_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
         )
+        required = ["open", "high", "low", "close", "volume"]
+        missing = set(required) - set(df.columns)
+        if missing:
+            logger.error("get_minute_df missing columns %s", missing)
+            return pd.DataFrame(columns=required)
     except DataFetchException as primary_err:
         alpaca_exc = primary_err
         logger.debug("Alpaca fetch error: %s", primary_err)
@@ -644,6 +649,11 @@ def get_minute_df(
             logger.debug(
                 "FETCH_FINNHUB_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
             )
+            required = ["open", "high", "low", "close", "volume"]
+            missing = set(required) - set(df.columns)
+            if missing:
+                logger.error("get_minute_df missing columns %s", missing)
+                return pd.DataFrame(columns=required)
         except FinnhubAPIException as fh_err:
             finnhub_exc = fh_err
             logger.error("[DataFetcher] Finnhub failed: %s", fh_err)
@@ -660,6 +670,11 @@ def get_minute_df(
                     logger.debug(
                         "FETCH_YFINANCE_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
                     )
+                    required = ["open", "high", "low", "close", "volume"]
+                    missing = set(required) - set(df.columns)
+                    if missing:
+                        logger.error("get_minute_df missing columns %s", missing)
+                        return pd.DataFrame(columns=required)
                 except Exception as exc:
                     yexc = exc
                     logger.error("[DataFetcher] yfinance failed: %s", exc)
@@ -691,6 +706,11 @@ def get_minute_df(
                 logger.debug(
                     "FETCH_YFINANCE_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
                 )
+                required = ["open", "high", "low", "close", "volume"]
+                missing = set(required) - set(df.columns)
+                if missing:
+                    logger.error("get_minute_df missing columns %s", missing)
+                    return pd.DataFrame(columns=required)
             except Exception as exc:
                 yexc = exc
                 logger.error("[DataFetcher] yfinance failed: %s", exc)
