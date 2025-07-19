@@ -315,8 +315,9 @@ def dynamic_position_size(capital: float, volatility: float, drawdown: float) ->
 
     vol = max(volatility, 1e-6)
     kelly_fraction = 0.5 / vol
+    # AI-AGENT-REF: clamp before applying drawdown adjustment
     kelly_fraction = min(max(kelly_fraction, 0.0), 1.0)
-    if drawdown > 0.1:
+    if drawdown > 0.10:
         kelly_fraction *= 0.5
     return capital * kelly_fraction
 

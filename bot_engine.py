@@ -9,8 +9,8 @@ import uuid
 import traceback
 import types
 import warnings
-from datetime import datetime, timezone
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
+from datetime import date
 
 # AI-AGENT-REF: replace utcnow with timezone-aware now
 old_generate = datetime.now(timezone.utc)  # replaced utcnow for tz-aware
@@ -519,6 +519,7 @@ def get_latest_close(df: pd.DataFrame) -> float:
 
 def compute_time_range(minutes: int) -> tuple[datetime, datetime]:
     """Return a UTC datetime range spanning the past ``minutes`` minutes."""
+    # AI-AGENT-REF: provide timezone-aware datetimes
     now = datetime.now(timezone.utc)
     start = now - timedelta(minutes=minutes)
     return start, now
