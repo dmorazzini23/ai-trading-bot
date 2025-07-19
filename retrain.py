@@ -73,7 +73,11 @@ def get_git_hash() -> str:
     try:
         import subprocess
 
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
+        return (
+            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])
+            .decode()
+            .strip()
+        )
     except Exception as e:
         logger.debug("git hash lookup failed: %s", e)
         return "unknown"
@@ -129,7 +133,9 @@ def fetch_sentiment(symbol: str) -> float:
         articles = resp.json().get("articles", [])
         if not articles:
             return 0.0
-        score = sum(1 for a in articles if "positive" in (a.get("title") or "").lower()) / len(articles)
+        score = sum(
+            1 for a in articles if "positive" in (a.get("title") or "").lower()
+        ) / len(articles)
         return float(score)
     except Exception as e:
         logger.exception("Failed to fetch sentiment for %s: %s", symbol, e)
@@ -190,23 +196,18 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     for col in ["high", "low", "close", "volume"]:
         if col not in df.columns:
-            raise KeyError(f"Column '{col}' not found in DataFrame in prepare_indicators")
+            raise KeyError(
+                f"Column '{col}' not found in DataFrame in prepare_indicators"
+            )
         df[col] = df[col].astype(float)
     if "open" in df.columns:
         df["open"] = df["open"].astype(float)
 
-    if df.index.name:
-        df = df.reset_index().rename(columns={df.index.name: "Date"})
-    else:
-        df = df.reset_index().rename(columns={"index": "Date"})
-    if "timestamp" in df.columns and df["Date"].dtype == object:
-        idx = safe_to_datetime(df["timestamp"], context="retrain timestamp")
-    else:
-        idx = safe_to_datetime(df["Date"], context="retrain date")
+    # AI-AGENT-REF: preserve caller-provided index and parse dates without mutation
+    idx = safe_to_datetime(df.index, context="retrain index")
     if idx.empty:
         raise ValueError("Invalid date values in dataframe")
-    df["Date"] = idx
-    df = df.sort_values("Date").set_index("Date")
+    df = df.sort_index()
 
     # Calculate basic TA indicators
     df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"]).astype(float)
@@ -235,7 +236,7 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["atr_band_upper"] = (df["close"] + 1.5 * df["atr"]).astype(float)
     df["atr_band_lower"] = (df["close"] - 1.5 * df["atr"]).astype(float)
     df["avg_vol_20"] = df["volume"].rolling(20).mean().astype(float)
-    df["dow"] = df.index.dayofweek.astype(float)
+    df["dow"] = idx.dayofweek.astype(float)
 
     df["macd"] = np.nan
     df["macds"] = np.nan
@@ -297,7 +298,9 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     df["willr"] = np.nan
     try:
-        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14).astype(float)
+        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14).astype(
+            float
+        )
     except Exception as e:
         logger.exception("Williams %R calculation failed: %s", e)
 
@@ -316,8 +319,12 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         ich = ta.ichimoku(high=df["high"], low=df["low"], close=df["close"])
         conv = ich[0] if isinstance(ich, tuple) else ich.iloc[:, 0]
         base = ich[1] if isinstance(ich, tuple) else ich.iloc[:, 1]
-        df["ichimoku_conv"] = (conv.iloc[:, 0] if hasattr(conv, "iloc") else conv).astype(float)
-        df["ichimoku_base"] = (base.iloc[:, 0] if hasattr(base, "iloc") else base).astype(float)
+        df["ichimoku_conv"] = (
+            conv.iloc[:, 0] if hasattr(conv, "iloc") else conv
+        ).astype(float)
+        df["ichimoku_base"] = (
+            base.iloc[:, 0] if hasattr(base, "iloc") else base
+        ).astype(float)
     except Exception as e:
         logger.exception("Ichimoku calculation failed: %s", e)
 
@@ -348,12 +355,22 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         df["ret_1h"] = df["close"].pct_change(60, fill_method=None).astype(float)
         df["ret_d"] = df["close"].pct_change(390, fill_method=None).astype(float)
         df["ret_w"] = df["close"].pct_change(1950, fill_method=None).astype(float)
-        df["vol_norm"] = (df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()).astype(float)
+        df["vol_norm"] = (
+            df["volume"].rolling(60).mean() / df["volume"].rolling(5).mean()
+        ).astype(float)
         df["5m_vs_1h"] = (df["ret_5m"] - df["ret_1h"]).astype(float)
-        df["vol_5m"] = df["close"].pct_change(fill_method=None).rolling(5).std().astype(float)
-        df["vol_1h"] = df["close"].pct_change(fill_method=None).rolling(60).std().astype(float)
-        df["vol_d"] = df["close"].pct_change(fill_method=None).rolling(390).std().astype(float)
-        df["vol_w"] = df["close"].pct_change(fill_method=None).rolling(1950).std().astype(float)
+        df["vol_5m"] = (
+            df["close"].pct_change(fill_method=None).rolling(5).std().astype(float)
+        )
+        df["vol_1h"] = (
+            df["close"].pct_change(fill_method=None).rolling(60).std().astype(float)
+        )
+        df["vol_d"] = (
+            df["close"].pct_change(fill_method=None).rolling(390).std().astype(float)
+        )
+        df["vol_w"] = (
+            df["close"].pct_change(fill_method=None).rolling(1950).std().astype(float)
+        )
         df["vol_ratio"] = (df["vol_5m"] / df["vol_1h"]).astype(float)
         df["mom_agg"] = (df["ret_5m"] + df["ret_1h"] + df["ret_d"]).astype(float)
         df["lag_close_1"] = df["close"].shift(1).astype(float)
@@ -471,9 +488,7 @@ def build_feature_label_df(
             for col in list(raw.columns):
                 if col.lower() in ["high", "low", "close", "volume"]:
                     raw = raw.rename(columns={col: col.lower()})
-            logger.debug(
-                f"After rename {sym}, tail close:\n{raw[['close']].tail(5)}"
-            )
+            logger.debug(f"After rename {sym}, tail close:\n{raw[['close']].tail(5)}")
             if (
                 "close" not in raw.columns
                 or "high" not in raw.columns
@@ -509,9 +524,7 @@ def build_feature_label_df(
             )
 
             regime_info = detect_regime(raw)
-            logger.debug(
-                f"After regime {sym}, tail close:\n{raw[['close']].tail(5)}"
-            )
+            logger.debug(f"After regime {sym}, tail close:\n{raw[['close']].tail(5)}")
             if isinstance(regime_info, pd.Series):
                 regimes = regime_info.reset_index(drop=True)
             else:
@@ -525,13 +538,13 @@ def build_feature_label_df(
                 label = 1 if ret_pct >= threshold_pct else 0
 
                 row = feat.iloc[i].copy().to_dict()
-                row["regime"] = regimes.iloc[i] if len(regimes) > i else regimes.iloc[-1]
+                row["regime"] = (
+                    regimes.iloc[i] if len(regimes) > i else regimes.iloc[-1]
+                )
                 row["label"] = label
                 rows.append(row)
         except KeyError as e:
-            logger.exception(
-                "[build_feature_label_df] %s missing data: %s", sym, e
-            )
+            logger.exception("[build_feature_label_df] %s missing data: %s", sym, e)
             logger.warning(
                 "[build_feature_label_df] – skipping %s, KeyError: %s", sym, e
             )
@@ -541,7 +554,9 @@ def build_feature_label_df(
     return df_all
 
 
-def log_hyperparam_result(regime: str, generation: int, params: dict, score: float) -> None:
+def log_hyperparam_result(
+    regime: str, generation: int, params: dict, score: float
+) -> None:
     row = [
         datetime.now(timezone.utc).isoformat(),
         regime,
@@ -614,7 +629,9 @@ def evolutionary_search(
     """Simple evolutionary hyperparameter search."""
     best_params = base_params.copy()
     best_score = -np.inf
-    population_params = list(ParameterSampler(param_space, n_iter=population, random_state=SEED))
+    population_params = list(
+        ParameterSampler(param_space, n_iter=population, random_state=SEED)
+    )
     for gen in range(generations):
         scores = []
         for params in population_params:
@@ -633,7 +650,9 @@ def evolutionary_search(
         if not scores:
             logger.warning("No successful CV scores in generation %s", gen)
             continue
-        ranked = sorted(zip(scores, population_params), key=lambda t: t[0], reverse=True)
+        ranked = sorted(
+            zip(scores, population_params), key=lambda t: t[0], reverse=True
+        )
         for rank, (scr, pr) in enumerate(ranked):
             log_hyperparam_result("", gen, pr, scr)
         if ranked[0][0] > best_score:
@@ -662,7 +681,9 @@ def optuna_search(
     """Hyperparameter tuning using Optuna if available."""
     if optuna is None:
         logger.warning("Optuna not installed; falling back to evolutionary search")
-        return evolutionary_search(X, y, base_params, param_space, generations=3, population=n_trials)
+        return evolutionary_search(
+            X, y, base_params, param_space, generations=3, population=n_trials
+        )
 
     def objective(trial):
         params = {k: trial.suggest_categorical(k, v) for k, v in param_space.items()}
@@ -721,7 +742,9 @@ def retrain_meta_learner(
         logger.warning("All minute DataFrames empty; skipping retrain")
         return False
 
-    df_all = build_feature_label_df(raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct)
+    df_all = build_feature_label_df(
+        raw_store, Δ_minutes=Δ_minutes, threshold_pct=threshold_pct
+    )
     if df_all.empty:
         logger.warning(
             "No usable rows after building (Δ, threshold) → skipping retrain."
@@ -732,7 +755,7 @@ def retrain_meta_learner(
     for regime, subset in df_all.groupby("regime"):
         if subset.empty or regime not in MODEL_FILES:
             continue
-        
+
         try:
             X = subset.drop(columns=["label", "regime"])
             y = subset["label"]
@@ -755,7 +778,6 @@ def retrain_meta_learner(
             logger.exception("Error during sample size check for %s: %s", regime, e)
             continue
 
-
         pos_ratio = y_train.mean()
         scoring = "f1" if 0.4 <= pos_ratio <= 0.6 else "roc_auc"
         logger.info(
@@ -765,7 +787,9 @@ def retrain_meta_learner(
             pos_ratio,
         )
 
-        base_params = dict(objective="binary", n_jobs=1, random_state=SEED)  # AI-AGENT-REF: reduce thread usage
+        base_params = dict(
+            objective="binary", n_jobs=1, random_state=SEED
+        )  # AI-AGENT-REF: reduce thread usage
         search_space = {
             "n_estimators": [100, 200, 300, 500],
             "max_depth": [-1, 4, 6, 8],
@@ -812,10 +836,14 @@ def retrain_meta_learner(
                 pipe.named_steps["lgbmclassifier"].feature_importances_,
                 index=X.columns,
             )
-            logger.info("Top feature importances:\n%s", importances.sort_values(ascending=False).head(10))
+            logger.info(
+                "Top feature importances:\n%s",
+                importances.sort_values(ascending=False).head(10),
+            )
             imp_df = pd.DataFrame(
                 {
-                    "timestamp": [datetime.now(timezone.utc).isoformat()] * len(importances),
+                    "timestamp": [datetime.now(timezone.utc).isoformat()]
+                    * len(importances),
                     "feature": importances.index,
                     "importance": importances.values,
                 }
