@@ -1,6 +1,7 @@
-__all__ = ["pre_trade_health_check"]
+#!/usr/bin/env python3.12
 from __future__ import annotations
-
+# (any existing comments or module docstring go below the future import)
+__all__ = ["pre_trade_health_check"]
 import asyncio
 import logging
 import os
