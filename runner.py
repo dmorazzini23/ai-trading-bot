@@ -20,12 +20,18 @@ from indicators import (
     stochastic_rsi,
     hurst_exponent,
 )
-from ai_trading.capital_scaling import (
-    fractional_kelly,
-    volatility_parity,
-    cvar_scaling,
-    kelly_fraction,
-)
+try:
+    from ai_trading.capital_scaling import (
+        fractional_kelly,
+        volatility_parity,
+        cvar_scaling,
+        kelly_fraction,
+    )
+except ImportError:  # AI-AGENT-REF: gracefully handle optional scaling helpers
+    fractional_kelly = lambda *a, **k: None  # type: ignore
+    volatility_parity = lambda *a, **k: None  # type: ignore
+    cvar_scaling = lambda *a, **k: None  # type: ignore
+    kelly_fraction = lambda *a, **k: None  # type: ignore
 from utils import get_phase_logger, log_cpu_usage
 
 try:  # prefer 'bot' module for backward compat
