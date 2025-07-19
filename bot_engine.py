@@ -2465,7 +2465,7 @@ def pre_trade_health_check(
         Summary dictionary of issues encountered.
     """
 
-    min_rows = int(os.getenv("HEALTH_MIN_ROWS", 100))
+    min_rows = int(os.getenv("HEALTH_MIN_ROWS", min_rows))
 
     summary = {
         "checked": 0,
