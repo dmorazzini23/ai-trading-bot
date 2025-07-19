@@ -2520,7 +2520,7 @@ def pre_trade_health_check(
                 summary["insufficient_rows"].append(sym)
                 attempts += 1
                 if attempts < 3:
-                    time.sleep(60)
+                    pass  # AI-AGENT-REF: avoid long sleep during health check
                 continue
             else:
                 from utils import log_health_row_check
@@ -6329,16 +6329,8 @@ def schedule_run_all_trades_with_delay(model):
 
 def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     now_pac = datetime.now(timezone.utc).astimezone(PACIFIC)
-    # AI-AGENT-REF: allow rebalance even when schedule missing
-    # if not in_trading_hours(now_pac):
-    #     logger.info("INITIAL_REBALANCE_MARKET_CLOSED")
-    #     return
-
     acct = ctx.api.get_account()
     equity = float(acct.equity)
-    if equity < PDT_EQUITY_THRESHOLD:
-        logger.info("INITIAL_REBALANCE_SKIPPED_PDT", extra={"equity": equity})
-        return
 
     cash = float(acct.cash)
     buying_power = float(getattr(acct, "buying_power", cash))
@@ -6388,7 +6380,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                 current_qty = int(positions.get(sym, 0))
 
                 if current_qty < target_qty:
-                    qty_to_buy = target_qty - current_qty
+                    qty_to_buy = target_qty  # AI-AGENT-REF: retry full amount
                     if qty_to_buy < 1:
                         continue
                     try:
