@@ -6195,7 +6195,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 "DATA_SOURCE_RETRY_FAILED",
                 extra={"attempts": retries, "symbols": symbols},
             )
-            time.sleep(60)
+            # AI-AGENT-REF: exit immediately on repeated data failure
             return
         else:
             logger.info(
@@ -6329,9 +6329,10 @@ def schedule_run_all_trades_with_delay(model):
 
 def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
     now_pac = datetime.now(timezone.utc).astimezone(PACIFIC)
-    if not in_trading_hours(now_pac):
-        logger.info("INITIAL_REBALANCE_MARKET_CLOSED")
-        return
+    # AI-AGENT-REF: allow rebalance even when schedule missing
+    # if not in_trading_hours(now_pac):
+    #     logger.info("INITIAL_REBALANCE_MARKET_CLOSED")
+    #     return
 
     acct = ctx.api.get_account()
     equity = float(acct.equity)
