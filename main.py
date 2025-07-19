@@ -26,7 +26,11 @@ logging.Formatter.converter = time.gmtime
 
 from alpaca_trade_api.rest import APIError  # noqa: F401
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify
+try:
+    from flask import request
+except ImportError:  # pragma: no cover - optional for tests
+    request = None
 import socket
 
 import utils
