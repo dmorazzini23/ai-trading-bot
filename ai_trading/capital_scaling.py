@@ -14,11 +14,7 @@ class _CapScaler:
 
 class CapitalScalingEngine:
     def __init__(self, params=None):
-        # AI-AGENT-REF: accept params but scaler no longer uses them
         self.params = params or {}
-        self.scaler = _CapScaler()
-        # AI-AGENT-REF: base level for compression factor calculations
-        self._base = float(self.params.get("COMPRESSION_BASE", 100000))
 
     def compression_factor(self, balance: float) -> float:
         """Return risk compression factor based on ``balance``."""
