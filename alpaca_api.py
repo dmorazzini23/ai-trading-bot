@@ -20,9 +20,15 @@ from typing import Any, Dict, Optional
 import pandas as pd
 import requests
 from requests import Session
-from requests.exceptions import HTTPError
-from alpaca.trading.stream import TradingStream
-from alpaca.common.exceptions import APIError
+try:  # AI-AGENT-REF: make optional for unit tests
+    from alpaca.trading.stream import TradingStream
+    from alpaca.common.exceptions import APIError
+except Exception:  # pragma: no cover - optional dependency missing
+    TradingStream = None  # type: ignore[misc]
+
+    class APIError(Exception):
+        """Fallback APIError when alpaca package is unavailable."""
+        pass
 import uuid
 from tenacity import (
     retry,
@@ -129,8 +135,9 @@ def get_account() -> Optional[Dict[str, Any]]:
 
 
 def submit_order(api, req, log: logging.Logger | None = None):
+    symbol = getattr(req, "symbol", None)
     order_data = req  # AI-AGENT-REF: capture request payload
-    if req.symbol in [order["symbol"] for order in pending_orders.values()]:
+    if symbol is not None and symbol in [order["symbol"] for order in pending_orders.values()]:
         logger.info("Skipping duplicate order for %s still pending", getattr(order_data, "symbol", ""))
         return None
     """Submit an order with retry and optional shadow mode."""
@@ -176,7 +183,7 @@ def submit_order(api, req, log: logging.Logger | None = None):
                     getattr(order_data, "side", None),
                 )
             if hasattr(order, "status_code") and getattr(order, "status_code") == 429:
-                raise HTTPError(
+                raise requests.exceptions.HTTPError(
                     "API rate limit exceeded (429)"
                 )  # AI-AGENT-REF: use explicit HTTPError import
             if getattr(order, "id", None):
@@ -213,7 +220,7 @@ def submit_order(api, req, log: logging.Logger | None = None):
                     pending_orders.pop(order_id, None)
                 return order
             raise
-        except HTTPError as e:
+        except requests.exceptions.HTTPError as e:
             if "429" in str(e) or "rate limit" in str(e).lower():
                 wait = attempt * 2
                 _warn_limited(
