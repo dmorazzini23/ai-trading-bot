@@ -48,7 +48,7 @@ class MeanReversionStrategy(Strategy):
                 continue
             z = zscores.iloc[-1]
             if pd.isna(z):
-                logger.warning("%s: invalid z-score", sym)
+                logger.warning("%s: invalid rolling statistics", sym)  # AI-AGENT-REF: clarify log message
                 continue
             scores[sym] = float(z)
             if z > self.z:
