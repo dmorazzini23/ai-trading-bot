@@ -34,7 +34,16 @@ except ImportError:  # AI-AGENT-REF: gracefully handle optional scaling helpers
     kelly_fraction = lambda *a, **k: None  # type: ignore
 from utils import get_phase_logger, log_cpu_usage
 
-from main import main
+# AI-AGENT-REF: allow bot override with fallback to bot_engine
+try:
+    import bot
+except ImportError:
+    import bot_engine as bot
+else:
+    if bot is None or not hasattr(bot, "main"):
+        import bot_engine as bot
+
+main = bot.main
 
 logger = get_phase_logger(__name__, "RUNNER")
 

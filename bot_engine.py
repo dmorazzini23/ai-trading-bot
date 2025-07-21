@@ -4630,16 +4630,19 @@ class EnsembleModel:
 def load_model(path: str = MODEL_PATH):
     import joblib
 
-    rf_exists = os.path.exists(MODEL_RF_PATH)
-    xgb_exists = os.path.exists(MODEL_XGB_PATH)
-    lgb_exists = os.path.exists(MODEL_LGB_PATH)
+    # AI-AGENT-REF: use isfile checks for optional ensemble components
+    rf_exists = os.path.isfile(MODEL_RF_PATH)
+    xgb_exists = os.path.isfile(MODEL_XGB_PATH)
+    lgb_exists = os.path.isfile(MODEL_LGB_PATH)
     if rf_exists and xgb_exists and lgb_exists:
         models = []
         for p in [MODEL_RF_PATH, MODEL_XGB_PATH, MODEL_LGB_PATH]:
             try:
                 models.append(joblib.load(p))
+            except FileNotFoundError:
+                return None
             except Exception as e:
-                logger.exception(f"Failed to load model at {p}: {e}")
+                logger.exception("MODEL_LOAD_FAILED: %s", e)
                 return None
         logger.info(
             "MODEL_LOADED",
@@ -4647,13 +4650,15 @@ def load_model(path: str = MODEL_PATH):
         )
         return EnsembleModel(models)
 
-    if not os.path.exists(path):
+    if not os.path.isfile(path):
         logger.warning("MODEL_MISSING", extra={"path": path})
         return None
     try:
         model = joblib.load(path)
+    except FileNotFoundError:
+        return None
     except Exception as e:
-        logger.exception(f"Failed to load model at {path}: {e}")
+        logger.exception("MODEL_LOAD_FAILED: %s", e)
         return None
     if model is None:
         raise RuntimeError("MODEL_LOAD_FAILED: null model in " + path)
