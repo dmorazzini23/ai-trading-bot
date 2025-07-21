@@ -19,13 +19,13 @@ class _CapScaler:
 
 
 class CapitalScalingEngine:
-    def __init__(self, config=None):
-        self.params = config or {}
-        self._cs = _CapScaler(self.params)
+    def __init__(self, config):
+        self._cs = _CapScaler(config)
 
     def scale_position(self, size: float) -> float:
-        """Scale a raw position size via the internal _CapScaler."""
-        # AI-AGENT-REF: delegate to _CapScaler callable
+        """
+        Wrap the internal _CapScaler so tests can call .scale_position().
+        """
         return self._cs(size)
 
     def compression_factor(self, balance: float) -> float:
