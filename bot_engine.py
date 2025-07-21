@@ -141,7 +141,7 @@ from dataclasses import dataclass, field
 from datetime import time as dt_time
 from datetime import datetime as dt_
 from threading import Lock, Semaphore, Thread
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -4627,8 +4627,10 @@ class EnsembleModel:
         return np.argmax(proba, axis=1)
 
 
-def load_model(path: str = MODEL_PATH):
+def load_model(path: str = MODEL_PATH) -> Optional[Union[dict, EnsembleModel]]:
+    """Load a model from ``path`` supporting both single and ensemble files."""
     import joblib
+
     if not os.path.exists(path):
         return None
 
@@ -4641,8 +4643,6 @@ def load_model(path: str = MODEL_PATH):
         for p in [MODEL_RF_PATH, MODEL_XGB_PATH, MODEL_LGB_PATH]:
             try:
                 models.append(joblib.load(p))
-            except FileNotFoundError:
-                return None
             except Exception as e:
                 logger.exception("MODEL_LOAD_FAILED: %s", e)
                 return None
@@ -4652,20 +4652,20 @@ def load_model(path: str = MODEL_PATH):
         )
         return EnsembleModel(models)
 
-    if not os.path.isfile(path):
-        logger.warning("MODEL_MISSING", extra={"path": path})
-        return None
     try:
-        model = joblib.load(path)
-    except FileNotFoundError:
-        return None
+        obj = joblib.load(path)
+        if isinstance(obj, dict):
+            logger.info("MODEL_LOADED")
+            return obj
+        if isinstance(obj, list):
+            model = EnsembleModel(obj)
+            logger.info("MODEL_LOADED")
+            return model
+        logger.info("MODEL_LOADED")
+        return obj
     except Exception as e:
         logger.exception("MODEL_LOAD_FAILED: %s", e)
         return None
-    if model is None:
-        raise RuntimeError("MODEL_LOAD_FAILED: null model in " + path)
-    logger.info("MODEL_LOADED", extra={"path": path})
-    return model
 
 
 def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
@@ -5995,7 +5995,7 @@ def _process_symbols(
     cd_skipped: list[str] = []
 
     for symbol in symbols:
-        if dedupe and symbol in state.position_cache:
+        if dedupe and symbol in state.position_cache and state.position_cache[symbol] > 0:
             log_skip_cooldown(symbol, state)
             skipped_duplicates.inc()
             continue

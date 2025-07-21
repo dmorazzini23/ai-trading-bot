@@ -8,18 +8,25 @@ import math
 
 
 class _CapScaler:
-    def scale_position(self, size):
+    def __init__(self, config=None):
+        self.config = config or {}
+
+    def __call__(self, size: float) -> float:
+        return self.scale_position(size)
+
+    def scale_position(self, size: float) -> float:
         return size
 
 
 class CapitalScalingEngine:
-    def __init__(self, params=None):
-        self.params = params or {}
+    def __init__(self, config=None):
+        self.params = config or {}
+        self._cs = _CapScaler(self.params)
 
-    def scale_position(self, amount: float) -> float:
-        """Return ``amount`` scaled by parameter ``x``."""
-        # AI-AGENT-REF: simple scalar multiplier for smoke tests
-        return amount * self.params.get("x", 1)
+    def scale_position(self, size: float) -> float:
+        """Scale a raw position size via the internal _CapScaler."""
+        # AI-AGENT-REF: delegate to _CapScaler callable
+        return self._cs(size)
 
     def compression_factor(self, balance: float) -> float:
         """Return risk compression factor based on ``balance``."""
