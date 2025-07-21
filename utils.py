@@ -71,6 +71,8 @@ def log_cpu_usage(lg: logging.Logger, note: str | None = None) -> None:
 MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "30"))
 MIN_HEALTH_ROWS_D = int(os.getenv("MIN_HEALTH_ROWS_DAILY", "5"))
 HEALTH_MIN_ROWS = int(os.getenv("HEALTH_MIN_ROWS", "100"))
+HEALTH_THROTTLE = 10
+_last_health_log = 0.0
 
 
 def log_warning(
@@ -226,16 +228,17 @@ def log_health_row_check(rows: int, passed: bool) -> None:
         _LAST_HEALTH_STATUS = passed
 
 
-def health_rows_passed(rows) -> bool:
-    """Log HEALTH_ROWS every 100 rows at INFO level."""
-    if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)):
-        # AI-AGENT-REF: handle list of row counts
-        rows = rows[-1]
-    if rows % 100 == 0:
-        logger.debug("HEALTH_ROWS_PASSED: received %d rows", rows)
+def health_rows_passed(rows):
+    """Log HEALTH_ROWS_PASSED with throttling."""
+    global _last_health_log
+    now = time.monotonic()
+    if _last_health_log == 0.0 or now - _last_health_log >= HEALTH_THROTTLE:
+        count = len(rows) if not isinstance(rows, (int, float)) else rows
+        logger.debug("HEALTH_ROWS_PASSED: received %d rows", count)
+        _last_health_log = now or 1e-9
     else:
-        logger.debug("HEALTH_ROWS: received %d rows", rows)
-    return True
+        logger.debug("HEALTH_ROWS_THROTTLED")
+    return rows
 
 
 def is_market_open(now: dt.datetime | None = None) -> bool:
