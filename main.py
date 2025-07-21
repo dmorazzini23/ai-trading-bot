@@ -20,9 +20,7 @@ warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 logging.basicConfig(
     format="%(asctime)sZ %(levelname)s [%(name)s] %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
-    level=logging.INFO,
 )
-logging.Formatter.converter = time.gmtime
 
 from alpaca_trade_api.rest import APIError  # noqa: F401
 from dotenv import load_dotenv
@@ -285,9 +283,10 @@ if __name__ == "__main__":
                 try:
                     main()
                     break
-                except DataSourceEmpty:
-                    logging.getLogger(__name__).warning(
-                        "No data on attempt %d/3; retrying", attempt
+                except DataSourceEmpty as e:
+                    logging.getLogger(__name__).warning(str(e))
+                    logging.getLogger(__name__).info(
+                        "Skipped this cycle due to no data; will retry on next heartbeat"
                     )
                     time.sleep(attempt * 2)
             else:
