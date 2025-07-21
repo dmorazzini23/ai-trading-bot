@@ -94,7 +94,6 @@ class MLModel:
         return preds
 
     def save(self, path: str | None = None) -> str:
-        import joblib
         ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         model_dir = Path(__file__).parent / "models"
         path = Path(path) if path else model_dir / f"model_{ts}.pkl"
