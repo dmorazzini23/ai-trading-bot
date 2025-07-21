@@ -2587,9 +2587,7 @@ def pre_trade_health_check(
         | set(summary["missing_columns"])
         | set(summary.get("invalid_values", []))
     )
-
-    if failures and len(failures) == len(symbols):
-        raise RuntimeError("Pre-trade health check failed for all symbols")
+    # AI-AGENT-REF: do not raise when all symbols fail; always return summary
 
     return summary
 
