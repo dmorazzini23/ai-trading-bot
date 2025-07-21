@@ -272,7 +272,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     df["cci"] = np.nan
     try:
-        df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20).astype(float)
+        if hasattr(ta, "cci"):
+            df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20).astype(float)
     except Exception as e:
         logger.exception("CCI calculation failed: %s", e)
 
@@ -292,17 +293,20 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
 
     df["tema"] = np.nan
     try:
-        df["tema"] = ta.tema(df["close"], length=10).astype(float)
+        if hasattr(ta, "tema"):
+            df["tema"] = ta.tema(df["close"], length=10).astype(float)
     except Exception as e:
         logger.exception("TEMA calculation failed: %s", e)
 
     df["willr"] = np.nan
     try:
-        df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14).astype(
-            float
-        )
+        if hasattr(ta, "willr"):
+            df["willr"] = ta.willr(
+                df["high"], df["low"], df["close"], length=14
+            ).astype(float)
     except Exception as e:
-        logger.exception("Williams %R calculation failed: %s", e)
+        # escape the % so logging doesn’t try to interpret %R as a format code
+        logger.exception("Williams %%R calculation failed: %s", e)
 
     df["psar_long"] = np.nan
     df["psar_short"] = np.nan
