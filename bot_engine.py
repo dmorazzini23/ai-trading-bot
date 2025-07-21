@@ -4629,6 +4629,8 @@ class EnsembleModel:
 
 def load_model(path: str = MODEL_PATH):
     import joblib
+    if not os.path.exists(path):
+        return None
 
     # AI-AGENT-REF: use isfile checks for optional ensemble components
     rf_exists = os.path.isfile(MODEL_RF_PATH)
