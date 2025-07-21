@@ -550,6 +550,9 @@ def assert_row_integrity(
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     """Fetches minute-level data, returning an empty DataFrame on error."""
+    # if market is closed, return an empty DataFrame immediately
+    if not market_is_open():
+        return pd.DataFrame()
     try:
         if symbol in _MINUTE_CACHE:
             df_cached, ts = _MINUTE_CACHE[symbol]
