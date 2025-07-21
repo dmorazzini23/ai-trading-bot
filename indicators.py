@@ -70,12 +70,20 @@ def sma(series: tuple[float, ...], period: int) -> pd.Series:
     return s.rolling(window=period).mean()
 
 
-def bollinger_bands(series: pd.Series, window: int = 20, num_std: int = 2) -> pd.DataFrame:
-    ma = series.rolling(window=window).mean()
-    std = series.rolling(window=window).std(ddof=0)
+def bollinger_bands(x, length: int = 20, num_std: float = 2.0) -> pd.DataFrame:
+    # AI-AGENT-REF: accept DataFrame input and preserve index
+    if isinstance(x, pd.DataFrame):
+        series = x.iloc[:, 0]
+    else:
+        series = x
+    ma = series.rolling(length).mean()
+    std = series.rolling(length).std()
     upper = ma + num_std * std
     lower = ma - num_std * std
-    return pd.DataFrame({"bb_upper": upper, "bb_lower": lower, "bb_mid": ma})
+    return pd.DataFrame(
+        {"bb_upper": upper, "bb_lower": lower, "bb_mid": ma},
+        index=series.index,
+    )
 
 
 @lru_cache(maxsize=128)
@@ -216,10 +224,19 @@ def stochastic_rsi(prices: np.ndarray, period: int = 14) -> np.ndarray:
     return np.array([rsi_val] * len(prices))
 
 
-def hurst_exponent(ts: np.ndarray) -> float:
-    """Estimate the Hurst exponent for ``ts``."""
-    lags = range(2, 100)
-    tau = [np.std(np.subtract(ts[lag:], ts[:-lag])) for lag in lags]
+def hurst_exponent(ts):
+    # AI-AGENT-REF: support DataFrame input and downsample large arrays
+    if isinstance(ts, pd.DataFrame):
+        series = ts.iloc[:, 0]
+    else:
+        series = ts
+    arr = series.values
+    n = len(arr)
+    if n > 10000:
+        step = max(1, n // 10000)
+        arr = arr[::step]
+    lags = range(2, 20)
+    tau = [np.std(arr[lag:] - arr[:-lag]) for lag in lags]
     poly = np.polyfit(np.log(lags), np.log(tau), 1)
     return 2.0 * poly[0]
 
