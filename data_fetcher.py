@@ -727,7 +727,10 @@ def get_minute_df(
         logger.critical(
             "EMPTY_DATA", extra={"symbol": symbol, "start": start_dt.isoformat(), "end": end_dt.isoformat()}
         )
-        return pd.DataFrame()
+        logger.warning("Minute-data fetch failed; returning empty DataFrame")
+        return pd.DataFrame(
+            columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
     required_cols = {"open", "high", "low", "close", "volume"}
     missing = required_cols - set(df.columns)
     if missing:
