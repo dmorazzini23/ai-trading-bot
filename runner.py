@@ -55,11 +55,14 @@ signal.signal(signal.SIGINT, _handle_signal)
 def _run_forever() -> NoReturn:
     """Run ``bot.main`` in a loop until a shutdown signal is received."""
 
+    global _shutdown
+
     while not _shutdown:
         try:
             main()
         except SystemExit as exc:  # graceful exit
             if exc.code == 0:
+                _shutdown = True
                 break
             logger.error("Bot exited with code %s", exc.code)
         except requests.exceptions.RequestException as exc:

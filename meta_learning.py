@@ -282,8 +282,12 @@ def retrain_meta_learner(
 def optimize_signals(signal_data: Any, cfg: Any, model: Any | None = None, *, volatility: float = 1.0) -> Any:
     """Optimize trading signals using ``model`` if provided."""
     if model is not None:
-        # when a model instance is provided, return its raw predictions exactly
-        return list(model.predict(signal_data))
+        try:
+            # when a model instance is provided, return its raw predictions exactly
+            return list(model.predict(signal_data))
+        except (ValueError, RuntimeError) as exc:
+            logger.exception("optimize_signals failed: %s", exc)
+            return signal_data
     if model is None:
         model = load_model_checkpoint(cfg.MODEL_PATH)
     if model is None:
