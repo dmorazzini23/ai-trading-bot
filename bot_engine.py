@@ -1852,9 +1852,13 @@ def _parse_local_positions() -> Dict[str, int]:
         # AI-AGENT-REF: tolerate malformed CSV lines
         df = pd.read_csv(
             TRADE_LOG_FILE,
-            on_bad_lines="warn",
+            on_bad_lines="skip",
+            engine="python",
+            usecols=["symbol", "qty", "side", "exit_time"],
             dtype=str,
         )
+        if df.empty:
+            logger.warning("Loaded DataFrame is empty after parsing/fallback")
     except pd.errors.ParserError as e:
         logging.getLogger(__name__).warning(
             "Failed to parse TRADE_LOG_FILE (malformed row): %s; returning empty set",
@@ -1933,7 +1937,7 @@ def audit_positions(ctx: "BotContext") -> None:
 def validate_open_orders(ctx: "BotContext") -> None:
     local = _parse_local_positions()
     if not local:
-        logging.getLogger(__name__).info(
+        logging.getLogger(__name__).debug(
             "No local positions parsed; skipping open-order audit"
         )
         return
@@ -2144,7 +2148,14 @@ class SignalManager:
     def load_signal_weights(self) -> dict[str, float]:
         if not os.path.exists(SIGNAL_WEIGHTS_FILE):
             return {}
-        df = pd.read_csv(SIGNAL_WEIGHTS_FILE)
+        df = pd.read_csv(
+            SIGNAL_WEIGHTS_FILE,
+            on_bad_lines="skip",
+            engine="python",
+            usecols=["signal", "weight"],
+        )
+        if df.empty:
+            logger.warning("Loaded DataFrame is empty after parsing/fallback")
         return {row["signal"]: row["weight"] for _, row in df.iterrows()}
 
     def evaluate(
@@ -2465,7 +2476,7 @@ def pre_trade_health_check(
         Summary dictionary of issues encountered.
     """
 
-    min_rows = int(os.getenv("HEALTH_MIN_ROWS", 100))
+    min_rows = int(os.getenv("HEALTH_MIN_ROWS", min_rows))
 
     summary = {
         "checked": 0,
@@ -2892,7 +2903,14 @@ def check_weekly_loss(ctx: BotContext, state: BotState) -> bool:
 def count_day_trades() -> int:
     if not os.path.exists(TRADE_LOG_FILE):
         return 0
-    df = pd.read_csv(TRADE_LOG_FILE)
+    df = pd.read_csv(
+        TRADE_LOG_FILE,
+        on_bad_lines="skip",
+        engine="python",
+        usecols=["entry_time", "exit_time"],
+    )
+    if df.empty:
+        logger.warning("Loaded DataFrame is empty after parsing/fallback")
     df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
     df["exit_time"] = pd.to_datetime(df["exit_time"], errors="coerce")
     df = df.dropna(subset=["entry_time", "exit_time"])
@@ -3009,7 +3027,14 @@ def too_many_positions(ctx: BotContext) -> bool:
 def too_correlated(ctx: BotContext, sym: str) -> bool:
     if not os.path.exists(TRADE_LOG_FILE):
         return False
-    df = pd.read_csv(TRADE_LOG_FILE)
+    df = pd.read_csv(
+        TRADE_LOG_FILE,
+        on_bad_lines="skip",
+        engine="python",
+        usecols=["symbol", "exit_time"],
+    )
+    if df.empty:
+        logger.warning("Loaded DataFrame is empty after parsing/fallback")
     if "exit_time" not in df.columns or "symbol" not in df.columns:
         return False
     open_syms = df.loc[df.exit_time == "", "symbol"].unique().tolist() + [sym]
@@ -3340,6 +3365,8 @@ def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
                     f"Order for {req.symbol} was {status}: {getattr(order, 'reject_reason', '')}"
                 )
                 raise OrderExecutionError(f"Buy failed for {req.symbol}: {status}")
+            elif status == OrderStatus.NEW:
+                logger.info(f"Order for {req.symbol} is NEW; awaiting fill")
             else:
                 logger.error(
                     f"Order for {req.symbol} status={status}: {getattr(order, 'reject_reason', '')}"
@@ -4665,9 +4692,14 @@ def update_signal_weights() -> None:
         if not os.path.exists(TRADE_LOG_FILE):
             logger.warning("No trades log found; skipping weight update.")
             return
-        df = pd.read_csv(TRADE_LOG_FILE).dropna(
-            subset=["entry_price", "exit_price", "signal_tags"]
-        )
+        df = pd.read_csv(
+            TRADE_LOG_FILE,
+            on_bad_lines="skip",
+            engine="python",
+            usecols=["entry_price", "exit_price", "signal_tags", "side", "confidence", "exit_time"],
+        ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
+        if df.empty:
+            logger.warning("Loaded DataFrame is empty after parsing/fallback")
         direction = np.where(df["side"] == "buy", 1, -1)
         df["pnl"] = (df["exit_price"] - df["entry_price"]) * direction
         df["confidence"] = df.get("confidence", 0.5)
@@ -4699,9 +4731,15 @@ def update_signal_weights() -> None:
 
         ALPHA = 0.2
         if os.path.exists(SIGNAL_WEIGHTS_FILE):
-            old = (
-                pd.read_csv(SIGNAL_WEIGHTS_FILE).set_index("signal")["weight"].to_dict()
+            old_df = pd.read_csv(
+                SIGNAL_WEIGHTS_FILE,
+                on_bad_lines="skip",
+                engine="python",
+                usecols=["signal", "weight"],
             )
+            if old_df.empty:
+                logger.warning("Loaded DataFrame is empty after parsing/fallback")
+            old = old_df.set_index("signal")["weight"].to_dict()
         else:
             old = {}
         merged = {
@@ -4731,10 +4769,14 @@ def run_meta_learning_weight_optimizer(
             logger.warning("METALEARN_NO_TRADES")
             return
 
-        df = pd.read_csv(trade_log_path).dropna(
-            subset=["entry_price", "exit_price", "signal_tags"]
-        )
+        df = pd.read_csv(
+            trade_log_path,
+            on_bad_lines="skip",
+            engine="python",
+            usecols=["entry_price", "exit_price", "signal_tags", "side", "confidence"],
+        ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
+            logger.warning("Loaded DataFrame is empty after parsing/fallback")
             logger.warning("METALEARN_NO_VALID_ROWS")
             return
 
@@ -4795,10 +4837,14 @@ def run_bayesian_meta_learning_optimizer(
             logger.warning("METALEARN_NO_TRADES")
             return
 
-        df = pd.read_csv(trade_log_path).dropna(
-            subset=["entry_price", "exit_price", "signal_tags"]
-        )
+        df = pd.read_csv(
+            trade_log_path,
+            on_bad_lines="skip",
+            engine="python",
+            usecols=["entry_price", "exit_price", "signal_tags", "side"],
+        ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
+            logger.warning("Loaded DataFrame is empty after parsing/fallback")
             logger.warning("METALEARN_NO_VALID_ROWS")
             return
 
@@ -4850,9 +4896,14 @@ def load_global_signal_performance(
     if not os.path.exists(TRADE_LOG_FILE):
         logger.info("METALEARN_NO_HISTORY")
         return None
-    df = pd.read_csv(TRADE_LOG_FILE).dropna(
-        subset=["exit_price", "entry_price", "signal_tags"]
-    )
+    df = pd.read_csv(
+        TRADE_LOG_FILE,
+        on_bad_lines="skip",
+        engine="python",
+        usecols=["exit_price", "entry_price", "signal_tags", "side"],
+    ).dropna(subset=["exit_price", "entry_price", "signal_tags"])
+    if df.empty:
+        logger.warning("Loaded DataFrame is empty after parsing/fallback")
     df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
     df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
     df["signal_tags"] = df["signal_tags"].astype(str)
@@ -5371,7 +5422,14 @@ def daily_summary() -> None:
         if not os.path.exists(TRADE_LOG_FILE):
             logger.info("DAILY_SUMMARY_NO_TRADES")
             return
-        df = pd.read_csv(TRADE_LOG_FILE).dropna(subset=["entry_price", "exit_price"])
+        df = pd.read_csv(
+            TRADE_LOG_FILE,
+            on_bad_lines="skip",
+            engine="python",
+            usecols=["entry_price", "exit_price", "side"],
+        ).dropna(subset=["entry_price", "exit_price"])
+        if df.empty:
+            logger.warning("Loaded DataFrame is empty after parsing/fallback")
         direction = np.where(df["side"] == "buy", 1, -1)
         df["pnl"] = (df.exit_price - df.entry_price) * direction
         total_trades = len(df)
@@ -5459,7 +5517,14 @@ def daily_reset(state: BotState) -> None:
 def _average_reward(n: int = 20) -> float:
     if not os.path.exists(REWARD_LOG_FILE):
         return 0.0
-    df = pd.read_csv(REWARD_LOG_FILE).tail(n)
+    df = pd.read_csv(
+        REWARD_LOG_FILE,
+        on_bad_lines="skip",
+        engine="python",
+        usecols=["reward"],
+    ).tail(n)
+    if df.empty:
+        logger.warning("Loaded DataFrame is empty after parsing/fallback")
     if df.empty or "reward" not in df.columns:
         return 0.0
     return float(df["reward"].mean())

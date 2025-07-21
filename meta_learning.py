@@ -290,9 +290,7 @@ def optimize_signals(signal_data: Any, cfg: Any, model: Any | None = None, *, vo
         preds = np.clip(preds, -1.2, 1.2)
         factor = 1.0 if volatility <= 1.0 else 1.0 / max(volatility, 1e-3)
         preds = preds * factor
-        if preds is not None and len(preds) > 0:
-            return preds  # AI-AGENT-REF: ensure non-empty predictions
-        return signal_data
+        return list(preds)  # AI-AGENT-REF: return list to avoid bool ambiguity
     except (ValueError, RuntimeError) as exc:  # pragma: no cover - model may fail
         logger.exception("optimize_signals failed: %s", exc)
         return signal_data
