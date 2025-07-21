@@ -8,7 +8,7 @@ import threading
 import warnings
 import time
 from datetime import date, timezone
-from typing import Any
+from typing import Any, Sequence
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -222,6 +222,9 @@ def log_health_row_check(rows: int, passed: bool) -> None:
 
 def health_rows_passed(rows) -> bool:
     """Log HEALTH_ROWS every 100 rows at INFO level."""
+    if isinstance(rows, Sequence) and not isinstance(rows, (str, bytes)):
+        # AI-AGENT-REF: handle list of row counts
+        rows = rows[-1]
     if rows % 100 == 0:
         logger.debug("HEALTH_ROWS_PASSED: received %d rows", rows)
     else:
