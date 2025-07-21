@@ -61,6 +61,7 @@ class StrategyAllocator:
             logger.exception("update_reward failed: %s", exc)
 
     def allocate(self, signals: Dict[str, List[TradeSignal]], *, volatility: float | None = None) -> List[TradeSignal]:
+        # top-level method used by tests; do not nest or rename
         try:
             if not isinstance(signals, dict) or not signals:
                 logger.warning("allocate called with empty or invalid signals input")
