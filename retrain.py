@@ -398,8 +398,13 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     if freq == "daily":
         df["sma_50"] = np.nan
         df["sma_200"] = np.nan
-        df["sma_50"] = ta.sma(df["close"], length=50).astype(float)
-        df["sma_200"] = ta.sma(df["close"], length=200).astype(float)
+        try:
+            # AI-AGENT-REF: guard optional pandas_ta SMA availability
+            if hasattr(ta, "sma"):
+                df["sma_50"] = ta.sma(df["close"], length=50).astype(float)
+                df["sma_200"] = ta.sma(df["close"], length=200).astype(float)
+        except Exception as e:
+            logger.exception("SMA calculation failed: %s", e)
         required += ["sma_50", "sma_200"]
         df.dropna(subset=required, how="any", inplace=True)
     else:  # intraday
