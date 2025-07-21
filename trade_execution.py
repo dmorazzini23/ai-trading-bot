@@ -346,7 +346,7 @@ class ExecutionEngine:
                     return float(getattr(p, "qty", 0))
         except APIError as exc:  # pragma: no cover - network or API errors
             if getattr(exc, "code", None) == 40410000:
-                self.logger.warning("No existing position for %s, skipping", symbol)
+                self.logger.debug("No existing position for %s, skipping", symbol)
                 return 0.0
             raise
         except Exception as exc:  # pragma: no cover - network or API errors

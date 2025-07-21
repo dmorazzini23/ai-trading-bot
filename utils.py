@@ -80,9 +80,15 @@ def log_warning(
     if extra is None:
         extra = {}
     if exc is not None:
-        logger.warning("%s: %s", msg, exc, extra=extra, exc_info=True)
+        if msg == "HEALTH_STALE_DATA":
+            logger.debug("%s: %s", msg, exc, extra=extra, exc_info=True)
+        else:
+            logger.warning("%s: %s", msg, exc, extra=extra, exc_info=True)
     else:
-        logger.warning(msg, extra=extra)
+        if msg == "HEALTH_STALE_DATA":
+            logger.debug(msg, extra=extra)
+        else:
+            logger.warning(msg, extra=extra)
 
 
 # Cache of last logged stale timestamp per symbol
