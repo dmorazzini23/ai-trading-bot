@@ -62,13 +62,17 @@ def test_get_minute_df_market_closed(monkeypatch):
 
 
 def test_get_minute_df_missing_columns(monkeypatch):
-    df = pd.DataFrame({"price": [1]}, index=[pd.Timestamp("2024-01-01")])
+    df_bad = pd.DataFrame({"price": [1]}, index=[pd.Timestamp("2024-01-01")])
+    df_good = make_df()
     setup_tf(monkeypatch)
     monkeypatch.setattr(data_fetcher, "is_market_open", lambda: True)
-    monkeypatch.setattr(data_fetcher, "client", DummyClient(df))
+    monkeypatch.setattr(data_fetcher, "_fetch_bars", lambda *a, **k: df_bad)
+    monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", lambda *a, **k: df_good)
     data_fetcher._MINUTE_CACHE.clear()
-    result = data_fetcher.get_minute_df("AAPL", datetime.date(2024, 1, 1), datetime.date(2024, 1, 1))
-    assert result.empty
+    result = data_fetcher.get_minute_df(
+        "AAPL", datetime.date(2024, 1, 1), datetime.date(2024, 1, 1)
+    )
+    pd.testing.assert_frame_equal(result, df_good)
 
 
 def test_get_minute_df_invalid_inputs(monkeypatch):
