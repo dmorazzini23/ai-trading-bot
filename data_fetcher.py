@@ -632,11 +632,23 @@ def get_minute_df(
         logger.debug(
             "FETCH_ALPACA_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
         )
+        if df is None or df.empty:  # AI-AGENT-REF: raise on empty result for fallback
+            raise DataFetchException(
+                symbol,
+                "alpaca",
+                "",
+                f"No minute bars returned for {symbol} from Alpaca",
+            )
         required = ["open", "high", "low", "close", "volume"]
         missing = set(required) - set(df.columns)
         if missing:
             logger.error("get_minute_df missing columns %s", missing)
-            return pd.DataFrame(columns=required)
+            raise DataFetchException(
+                symbol,
+                "alpaca",
+                "",
+                f"Alpaca minute bars for {symbol} missing columns {missing}",
+            )
     except DataFetchException as primary_err:
         alpaca_exc = primary_err
         logger.debug("Alpaca fetch error: %s", primary_err)

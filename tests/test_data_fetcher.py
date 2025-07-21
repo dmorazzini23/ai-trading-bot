@@ -191,18 +191,16 @@ def test_empty_bars_handled(monkeypatch):
     start = pd.Timestamp("2023-01-01", tz="UTC")
     end = start + pd.Timedelta(minutes=1)
 
-    class Resp:
-        status_code = 200
-        text = ""
-
-        def json(self):
-            return {"bars": []}
-
-    monkeypatch.setattr(data_fetcher.requests, "get", lambda *a, **k: Resp())
+    monkeypatch.setattr(data_fetcher, "_fetch_bars", lambda *a, **k: pd.DataFrame())
+    fallback = pd.DataFrame(
+        {"open": [1], "high": [1], "low": [1], "close": [1], "volume": [1]},
+        index=[start],
+    )
+    monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", lambda *a, **k: fallback)
     monkeypatch.setattr(data_fetcher, "is_market_open", lambda: True)
 
     df = data_fetcher.get_minute_df("AAPL", start, end)
-    assert df.empty
+    pd.testing.assert_frame_equal(df, fallback)
 
 
 def test_fetch_bars_empty_uses_last_bar(monkeypatch):
