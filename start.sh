@@ -37,4 +37,4 @@ echo "🔍 Validating environment variables..."
 python validate_env.py
 
 echo "🚀 Starting core trading bot..."
-python main.py
+python -m ai_trading

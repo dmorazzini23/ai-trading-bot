@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-import alerting
+import alerts as alerting
 
 
 def test_send_slack_no_webhook(monkeypatch, caplog):
