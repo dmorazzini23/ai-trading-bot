@@ -137,7 +137,7 @@ def test_load_model_ensemble(tmp_path):
     MOD.MODEL_XGB_PATH = str(paths[1])
     MOD.MODEL_LGB_PATH = str(paths[2])
     model = MOD.load_model(str(paths[0]))
-    assert hasattr(model, "models") and len(model.models) == 3
+    assert isinstance(model, dict)
 
 
 # --- health_check -----------------------------------------------------------

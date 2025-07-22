@@ -44,7 +44,10 @@ def test_skip_cooldown_throttle(monkeypatch, caplog):
 
 def test_cooldown_expired_throttle(monkeypatch, caplog):
     caplog.set_level("INFO")
-    alloc = StrategyAllocator()
+    import importlib
+    import strategy_allocator
+    strategy_allocator = importlib.reload(strategy_allocator)
+    alloc = strategy_allocator.StrategyAllocator()
     alloc.hold_protect = {"AAPL": 1}
     sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s")
     t = [0.0]
