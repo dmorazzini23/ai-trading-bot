@@ -16,7 +16,7 @@ def test_short_close_queued(monkeypatch, caplog):
     monkeypatch.setattr(bot_engine, "_safe_trade", lambda *a, **k: None)
     monkeypatch.setattr(bot_engine.prediction_executor, "submit", lambda fn, s: types.SimpleNamespace(result=lambda: fn(s)))
     monkeypatch.setattr(bot_engine, "log_skip_cooldown", lambda *a, **k: None)
-    monkeypatch.setattr(bot_engine.skipped_duplicates, "inc", lambda: None)
+    bot_engine.skipped_duplicates = types.SimpleNamespace(inc=lambda: None)
 
     processed, _ = bot_engine._process_symbols(["TSLA"], 1000.0, None, True)
     assert processed == []

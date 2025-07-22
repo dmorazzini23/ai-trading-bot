@@ -62,6 +62,12 @@ if "ai_trading.capital_scaling" in sys.modules:
         def update(self, *a, **k):
             pass
 
+        def __call__(self, size):
+            return size
+
+        def scale_position(self, size):
+            return size
+
     sys.modules["ai_trading.capital_scaling"].CapitalScalingEngine = _CapScaler
 
 sys.modules.setdefault("yfinance", types.ModuleType("yfinance"))

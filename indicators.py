@@ -176,7 +176,12 @@ def calculate_vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd
 def get_rsi_signal(series: pd.Series | pd.DataFrame, period: int = 14) -> pd.Series:
     """Return normalized RSI signal handling DataFrame or Series input."""
     if isinstance(series, pd.DataFrame):
-        series = series.get("close") or series.iloc[:, 0]
+        # prefer the 'close' column when present, else use the first column
+        close_col = series.get("close")
+        if close_col is not None:
+            series = close_col.astype(float)
+        else:
+            series = series.iloc[:, 0].astype(float)
     vals = rsi(tuple(series.astype(float)), period)
     return (vals - 50) / 50
 

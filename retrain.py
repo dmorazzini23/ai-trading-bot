@@ -177,6 +177,7 @@ MODEL_FILES = {
 
 # ─── COPY&PASTE of prepare_indicators (unchanged) ─────────────────
 def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
+    import importlib
     # re-import TA each call so test monkeypatches of pandas_ta are used
     ta = importlib.import_module("pandas_ta")
     df = df.copy()
@@ -409,9 +410,9 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
         except Exception as e:
             logger.exception("SMA calculation failed: %s", e)
         required += ["sma_50", "sma_200"]
-        df.dropna(subset=required, how="any", inplace=True)
-    else:  # intraday
-        df.dropna(subset=required, how="all", inplace=True)
+    # only drop rows where *all* required indicators are missing
+    df.dropna(subset=required, how="all", inplace=True)
+    if freq != "daily":  # intraday
         df.reset_index(drop=True, inplace=True)
 
     return df

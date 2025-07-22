@@ -308,6 +308,12 @@ class _CapScaler:
     def update(self, *a, **k):
         pass
 
+    def __call__(self, size):
+        return size
+
+    def scale_position(self, size):
+        return size
+
 
 sys.modules["ai_trading.capital_scaling"].CapitalScalingEngine = _CapScaler
 sys.modules["ai_trading.capital_scaling"].drawdown_adjusted_kelly = lambda *a, **k: 0.02
