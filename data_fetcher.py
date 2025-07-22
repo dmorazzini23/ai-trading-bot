@@ -304,7 +304,6 @@ def get_historical_data(
     start_date,
     end_date,
     timeframe: str,
-    raise_on_empty: bool = False,
 ) -> pd.DataFrame:
     """Fetch historical bars from Alpaca and ensure OHLCV float columns."""
 
@@ -418,8 +417,15 @@ def get_historical_data(
             raise KeyError(f"Missing '{col}' column for {symbol}")
         df[col] = df[col].astype(float)
 
-    if df.empty and raise_on_empty:
-        raise DataFetchError("DATA_SOURCE_EMPTY")
+    if df.empty:
+        logger.warning(
+            "No historical data for %s at timeframe %s; returning empty DataFrame",
+            symbol,
+            timeframe,
+        )
+        return pd.DataFrame(
+            columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
 
     # ensure there's a timestamp column for the tests
     df = df.reset_index()
