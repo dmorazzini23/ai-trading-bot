@@ -170,8 +170,9 @@ def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, fee
     }
     df = df.rename(columns=rename_map)
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-    df.set_index("timestamp", inplace=True)
-    return df[["open", "high", "low", "close", "volume"]]
+    df = df[["timestamp", "open", "high", "low", "close", "volume"]]
+    df = df.reset_index(drop=True)
+    return df
 
 
 # Helper to coerce dates into datetimes
@@ -341,12 +342,12 @@ def get_historical_data(
         raise
 
     tf_map = {
-        "1Min": TimeFrame.Minute,
-        "5Min": TimeFrame(5, TimeFrameUnit.Minute),
-        "1Hour": TimeFrame.Hour,
-        "1Day": TimeFrame.Day,
+        "1MIN": TimeFrame.Minute,
+        "5MIN": TimeFrame(5, TimeFrameUnit.Minute),
+        "1HOUR": TimeFrame.Hour,
+        "1DAY": TimeFrame.Day,
     }
-    tf = tf_map.get(timeframe)
+    tf = tf_map.get(timeframe.upper())
     if tf is None:
         raise ValueError(f"Unsupported timeframe: {timeframe}")
 
@@ -422,8 +423,8 @@ def get_historical_data(
 
     # ensure there's a timestamp column for the tests
     df = df.reset_index()
-    # the reset index column may be called 'index' or the original index name
     df.rename(columns={df.columns[0]: "timestamp"}, inplace=True)
+    df = df.reset_index(drop=True)
     return df[["timestamp", "open", "high", "low", "close", "volume"]]
 
 def get_daily_df(
@@ -481,18 +482,16 @@ def get_daily_df(
             )
             return pd.DataFrame()
 
-        if isinstance(df.index, pd.MultiIndex):
-            df.index = df.index.get_level_values(0)
-        logger.debug("%s raw daily timestamps: %s", symbol, list(df.index[:5]))
+        logger.debug("%s raw daily timestamps: %s", symbol, list(df["timestamp"].head()))
         try:
-            idx = safe_to_datetime(df.index, context=f"{symbol} daily")
+            idx = safe_to_datetime(df["timestamp"], context=f"{symbol} daily")
         except ValueError as e:
             logger.debug("Raw daily data for %s: %s", symbol, df.head().to_dict())
             logger.warning("Invalid date index for %s; skipping. %s", symbol, e)
             return None
         logger.debug("%s parsed daily timestamps: %s", symbol, list(idx[:5]))
-        df.index = idx
-        df["timestamp"] = df.index
+        df["timestamp"] = idx
+        df = df.reset_index(drop=True)
 
         return df[["timestamp", "open", "high", "low", "close", "volume"]]
     except KeyError:
@@ -853,6 +852,7 @@ def fetch_minute_yfinance(symbol: str) -> pd.DataFrame:
     else:
         df.index = idx.tz_convert("UTC")  # AI-AGENT-REF: preserve existing tz
     df = df.rename_axis("timestamp").reset_index()
-    df = df.set_index("timestamp")[["Open", "High", "Low", "Close", "Volume"]]
+    df = df[["timestamp", "Open", "High", "Low", "Close", "Volume"]]
     df.columns = [c.lower() for c in df.columns]
+    df = df.reset_index(drop=True)
     return df

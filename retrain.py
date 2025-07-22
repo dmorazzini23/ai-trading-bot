@@ -236,7 +236,8 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["atr_band_upper"] = (df["close"] + 1.5 * df["atr"]).astype(float)
     df["atr_band_lower"] = (df["close"] - 1.5 * df["atr"]).astype(float)
     df["avg_vol_20"] = df["volume"].rolling(20).mean().astype(float)
-    df["dow"] = idx.dayofweek.astype(float)
+    if len(idx) == len(df):
+        df["dow"] = idx.dayofweek.astype(float)
 
     df["macd"] = np.nan
     df["macds"] = np.nan

@@ -435,10 +435,13 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
             # AI-AGENT-REF: stub passthrough for unit tests
             return position
 class StrategyAllocator:
-    def allocate(self, signals, volatility):
-        # you can wire this into your real allocation logic later,
-        # for now satisfy the test harness
-        return []
+    def __init__(self, *args, **kwargs):
+        # AI-AGENT-REF: delegate to underlying allocator for tests
+        from strategy_allocator import StrategyAllocator as _Alloc
+        self._alloc = _Alloc(*args, **kwargs)
+
+    def allocate(self, *args, **kwargs):
+        return self._alloc.allocate(*args, **kwargs)
 
 
 
