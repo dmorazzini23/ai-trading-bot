@@ -427,10 +427,8 @@ def get_historical_data(
         df[col] = df[col].astype(float)
 
     if df is None or df.empty:
-        logger.warning(f"No data returned for {symbol}, skipping symbol")
-        return pd.DataFrame(
-            columns=["timestamp", "open", "high", "low", "close", "volume"]
-        )
+        # AI-AGENT-REF: raise explicit error when all providers return empty
+        raise DataFetchError(f"No data returned for {symbol}")
 
     # ensure there's a timestamp column for the tests
     df = df.reset_index()
@@ -748,10 +746,8 @@ def get_minute_df(
                 logger.debug("yfinance fetch error: %s", exc)
                 raise DataSourceDownException(symbol) from exc
     if df is None or df.empty:
-        logger.warning(f"No data returned for {symbol}, skipping symbol")
-        return pd.DataFrame(
-            columns=["timestamp", "open", "high", "low", "close", "volume"]
-        )
+        # AI-AGENT-REF: raise explicit error when all providers return empty
+        raise DataFetchError(f"No data returned for {symbol}")
     required_cols = {"open", "high", "low", "close", "volume"}
     missing = required_cols - set(df.columns)
     if missing:
