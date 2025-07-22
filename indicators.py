@@ -173,7 +173,10 @@ def calculate_vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd
     return cum_pv / cum_vol
 
 
-def get_rsi_signal(series: pd.Series, period: int = 14) -> pd.Series:
+def get_rsi_signal(series: pd.Series | pd.DataFrame, period: int = 14) -> pd.Series:
+    """Return normalized RSI signal handling DataFrame or Series input."""
+    if isinstance(series, pd.DataFrame):
+        series = series.get("close") or series.iloc[:, 0]
     vals = rsi(tuple(series.astype(float)), period)
     return (vals - 50) / 50
 

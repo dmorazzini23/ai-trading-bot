@@ -3220,15 +3220,17 @@ def fractional_kelly_size(
             prev_peak = float(data) if data else balance
     else:
         prev_peak = balance
+    base_frac = ctx.kelly_fraction * ctx.capital_scaler.compression_factor(balance)
     drawdown = (prev_peak - balance) / prev_peak
     if drawdown > 0.10:
         frac = 0.3
     elif drawdown > 0.05:
         frac = 0.45
     else:
-        frac = ctx.kelly_fraction * ctx.capital_scaler.compression_factor(balance)
+        frac = base_frac
     if is_high_vol_thr_spy():
         frac *= 0.5
+    cap_scale = frac / base_frac if base_frac else 1.0
 
     edge = win_prob - (1 - win_prob) / payoff_ratio
     kelly = max(edge / payoff_ratio, 0) * frac
@@ -3240,7 +3242,7 @@ def fractional_kelly_size(
         return 1
 
     raw_pos = dollars_to_risk / atr
-    cap_pos = (balance * CAPITAL_CAP) / price if price > 0 else 0
+    cap_pos = (balance * CAPITAL_CAP * cap_scale) / price if price > 0 else 0
     risk_cap = (balance * DOLLAR_RISK_LIMIT) / atr if atr > 0 else raw_pos
     dollar_cap = ctx.max_position_dollars / price if price > 0 else raw_pos
     size = int(round(min(raw_pos, cap_pos, risk_cap, dollar_cap, MAX_POSITION_SIZE)))

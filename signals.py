@@ -334,14 +334,18 @@ def classify_regime(df: pd.DataFrame, window: int = 20) -> pd.Series:
 
 # AI-AGENT-REF: ensemble decision using multiple indicator columns
 def generate_ensemble_signal(df: pd.DataFrame) -> int:
+    def last(col: str) -> float:
+        s = df.get(col, pd.Series(dtype=float))
+        return s.iloc[-1] if not s.empty else np.nan
+
     signals = []
-    if df.get("EMA_5", pd.Series()).iloc[-1] > df.get("EMA_20", pd.Series()).iloc[-1]:
+    if last("EMA_5") > last("EMA_20"):
         signals.append(1)
-    if df.get("SMA_50", pd.Series()).iloc[-1] > df.get("SMA_200", pd.Series()).iloc[-1]:
+    if last("SMA_50") > last("SMA_200"):
         signals.append(1)
-    if df.get("close", pd.Series()).iloc[-1] > df.get("UB", pd.Series()).iloc[-1]:
+    if last("close") > last("UB"):
         signals.append(-1)
-    if df.get("close", pd.Series()).iloc[-1] < df.get("LB", pd.Series()).iloc[-1]:
+    if last("close") < last("LB"):
         signals.append(1)
     avg_signal = np.mean(signals) if signals else 0
     if avg_signal > 0.5:

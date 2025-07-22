@@ -45,7 +45,8 @@ def manual_fractional(balance, price, atr, win_prob, peak):
     kelly = max(edge / 1.5, 0) * frac
     dollars = kelly * balance
     raw = dollars / atr
-    cap_pos = (balance * bot.CAPITAL_CAP) / price
+    cap_scale = frac / base_frac if base_frac else 1.0
+    cap_pos = (balance * bot.CAPITAL_CAP * cap_scale) / price
     risk_cap = (balance * bot.DOLLAR_RISK_LIMIT) / atr
     dollar_cap = 1e9 / price
     size = int(round(min(raw, cap_pos, risk_cap, dollar_cap, bot.MAX_POSITION_SIZE)))
