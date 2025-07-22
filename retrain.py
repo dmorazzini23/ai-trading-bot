@@ -36,7 +36,7 @@ except ImportError:
     pass
 from datetime import date, datetime, time, timedelta, timezone
 
-import pandas_ta as ta
+import importlib
 import requests
 from lightgbm import LGBMClassifier
 
@@ -177,6 +177,8 @@ MODEL_FILES = {
 
 # ─── COPY&PASTE of prepare_indicators (unchanged) ─────────────────
 def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
+    # re-import so tests that monkeypatch sys.modules['pandas_ta'] are honored
+    ta = importlib.import_module("pandas_ta")
     df = df.copy()
 
     rename_map = {}
