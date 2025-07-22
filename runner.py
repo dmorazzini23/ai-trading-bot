@@ -86,7 +86,8 @@ def _run_forever() -> NoReturn:
             if any(time.time() - ts < 2 for ts in recent_buys.values()):
                 logger.info("Post-buy sync wait")
                 time.sleep(2)
-            time.sleep(5)
+            # AI-AGENT-REF: slow down runner loop to once per minute
+            time.sleep(60)
 
 
 if __name__ == "__main__":
