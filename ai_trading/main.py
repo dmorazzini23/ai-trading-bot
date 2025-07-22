@@ -7,11 +7,15 @@ import logging
 import os
 import sys
 import subprocess
+import threading  # AI-AGENT-REF: needed for API serving thread
 from threading import Lock
+from pathlib import Path
+import signal
 
 from bot_engine import run_all_trades_worker, BotState
-from config import Settings as Config
+from config import Settings as Config, validate_environment
 from logger import setup_logging
+from dotenv import load_dotenv
 import utils
 from flask import Flask
 
@@ -63,6 +67,22 @@ def run_all_trades() -> None:
 
 def main() -> int:
     """Entry-point used by ``python -m ai_trading``."""
+    if "--serve-api" in sys.argv:
+        load_dotenv()
+        setup_logging()
+        validate_environment()
+        port = int(os.getenv("FLASK_PORT", 8000))
+        thread = threading.Thread(target=run_flask_app, args=(port,), daemon=True)
+        thread.start()
+        run_bot(sys.prefix, str(Path(__file__).resolve().parents[1] / "run.py"))
+        stop_event = threading.Event()
+        stop_event.set()
+        def _handler(_s, _f):
+            stop_event.set()
+            sys.exit(0)
+        signal.signal(signal.SIGINT, _handler)
+        return 0
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--bot-only", action="store_true")
     args = parser.parse_args()
