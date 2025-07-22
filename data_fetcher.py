@@ -284,6 +284,14 @@ class DataSourceDownException(Exception):
         self.symbol = symbol
 
 
+class DataSourceEmpty(Exception):
+    """Raised when all providers return no data."""
+
+    def __init__(self, symbol: str) -> None:
+        super().__init__(f"No data returned for {symbol}")
+        self.symbol = symbol
+
+
 def get_last_available_bar(symbol: str) -> pd.DataFrame:
     """Return the most recent daily bar for ``symbol`` or empty DataFrame."""
     end = datetime.now(timezone.utc).date()
@@ -428,7 +436,7 @@ def get_historical_data(
 
     if df is None or df.empty:
         # AI-AGENT-REF: raise explicit error when all providers return empty
-        raise DataFetchError(f"No data returned for {symbol}")
+        raise DataSourceEmpty(symbol)
 
     # ensure there's a timestamp column for the tests
     df = df.reset_index()
@@ -747,7 +755,7 @@ def get_minute_df(
                 raise DataSourceDownException(symbol) from exc
     if df is None or df.empty:
         # AI-AGENT-REF: raise explicit error when all providers return empty
-        raise DataFetchError(f"No data returned for {symbol}")
+        raise DataSourceEmpty(symbol)
     required_cols = {"open", "high", "low", "close", "volume"}
     missing = required_cols - set(df.columns)
     if missing:

@@ -41,7 +41,7 @@ pytest
 
 ## Systemd Service
 
-A sample service file `ai-trading-scheduler.service` is provided to run the bot using the `start.sh` helper script. This ensures the virtual environment is activated and all dependencies are installed before the bot starts.
+A sample service file `ai-trading-scheduler.service` is provided. It calls `python -m ai_trading` inside the project virtual environment.
 
 To use it:
 

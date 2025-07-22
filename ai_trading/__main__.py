@@ -4,8 +4,9 @@ from threading import Lock
 from filelock import FileLock, Timeout
 
 from bot_engine import run_all_trades_worker, BotState
-from data_fetcher import DataFetchError
+from data_fetcher import DataSourceEmpty
 import config
+from logger import setup_logging
 
 logger = logging.getLogger(__name__)
 _run_lock = Lock()
@@ -23,14 +24,11 @@ def run_all_trades() -> None:
 
 
 def main() -> None:
-    logging.basicConfig(
-        format="%(asctime)sZ %(levelname)s [%(name)s] %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    )
+    setup_logging()
     while True:
         try:
             run_all_trades()
-        except DataFetchError as exc:
+        except DataSourceEmpty as exc:
             logger.warning("DATA_SOURCE_EMPTY | %s", exc)
         time.sleep(config.SCHEDULER_SLEEP_SECONDS)
 

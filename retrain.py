@@ -921,5 +921,7 @@ def retrain_meta_learner(
 
 
 if __name__ == "__main__":  # pragma: no cover - manual invocation
-    logging.basicConfig(level=logging.INFO)
+    from logger import setup_logging
+
+    setup_logging()
     logger.info("Retrain module loaded; use retrain_meta_learner() from code.")
