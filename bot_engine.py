@@ -30,7 +30,6 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     logging.getLogger(__name__).warning("Running under unsupported Python version")
 
 import config
-from alerting import send_slack_alert
 from logger import setup_logging
 
 LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
@@ -56,7 +55,6 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     error_message = "".join(
         traceback.format_exception(exc_type, exc_value, exc_traceback)
     )
-    send_slack_alert(f"🚨 AI Trading Bot Exception:\n```{error_message}```")
     logging.critical(
         "Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback)
     )
