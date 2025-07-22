@@ -307,14 +307,14 @@ def get_historical_data(
     *,
     raise_on_empty: bool = False,
 ) -> pd.DataFrame:
-"""Fetch historical bars from Alpaca and ensure OHLCV float columns.
+    """Fetch historical bars from Alpaca and ensure OHLCV float columns.
 
     Parameters
     ----------
     raise_on_empty : bool, optional
         If ``True`` and no data is returned, raise :class:`DataFetchError`.
         Defaults to ``False`` where an empty DataFrame is returned instead.
-"""
+    """
 
     if start_date is None or end_date is None:
         logger.error(
