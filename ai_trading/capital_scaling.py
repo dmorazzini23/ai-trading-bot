@@ -23,7 +23,7 @@ class CapitalScalingEngine:
         self._scaler = _CapScaler(config)
 
     def scale_position(self, size: float) -> float:
-        """Scale a target position size (smoke test expects this)."""
+        """Smoke test expects this public API."""
         return self._scaler.scale_position(size)
 
     def compression_factor(self, balance: float) -> float:
