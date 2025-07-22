@@ -429,6 +429,11 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
     class CapitalScalingEngine:
         def __init__(self, *args, **kwargs):
             pass
+
+        def scale_position(self, position):
+            """Return ``position`` unchanged for smoke tests."""
+            # AI-AGENT-REF: stub passthrough for unit tests
+            return position
 class StrategyAllocator:
     def allocate(self, signals, volatility):
         # you can wire this into your real allocation logic later,
@@ -5992,7 +5997,7 @@ def _process_symbols(
     current_cash: float,
     model,
     regime_ok: bool,
-    dedupe: bool = False,
+    skip_duplicates: bool = False,
 ) -> tuple[list[str], dict[str, int]]:
     processed: list[str] = []
     row_counts: dict[str, int] = {}
@@ -6009,8 +6014,9 @@ def _process_symbols(
     cd_skipped: list[str] = []
 
     for symbol in symbols:
-        if dedupe and symbol in state.position_cache and state.position_cache[symbol] > 0:
-            log_skip_cooldown(symbol, state)
+        # skip duplicates when requested
+        if skip_duplicates and state.position_cache.get(symbol, 0) != 0:
+            log_skip_cooldown(symbol, reason="duplicate")
             skipped_duplicates.inc()
             continue
         if symbol in live_positions:

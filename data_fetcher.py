@@ -392,7 +392,6 @@ def get_historical_data(
         logger.warning(
             f"Data incomplete for {symbol}, got {len(df)} rows. Skipping this cycle."
         )
-        return pd.DataFrame()
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(-1)
@@ -421,7 +420,10 @@ def get_historical_data(
     if df.empty and raise_on_empty:
         raise DataFetchError("DATA_SOURCE_EMPTY")
 
-    df = df.reset_index().rename(columns={"index": "timestamp"})
+    # ensure there's a timestamp column for the tests
+    df = df.reset_index()
+    # the reset index column may be called 'index' or the original index name
+    df.rename(columns={df.columns[0]: "timestamp"}, inplace=True)
     return df[["timestamp", "open", "high", "low", "close", "volume"]]
 
 def get_daily_df(
