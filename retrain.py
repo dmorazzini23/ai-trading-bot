@@ -177,7 +177,7 @@ MODEL_FILES = {
 
 # ─── COPY&PASTE of prepare_indicators (unchanged) ─────────────────
 def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
-    # re-import so tests that monkeypatch sys.modules['pandas_ta'] are honored
+    # re-import TA each call so test monkeypatches of pandas_ta are used
     ta = importlib.import_module("pandas_ta")
     df = df.copy()
 

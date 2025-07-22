@@ -440,8 +440,11 @@ class StrategyAllocator:
         from strategy_allocator import StrategyAllocator as _Alloc
         self._alloc = _Alloc(*args, **kwargs)
 
-    def allocate(self, *args, **kwargs):
+    def allocate_signals(self, *args, **kwargs):
         return self._alloc.allocate(*args, **kwargs)
+
+    # tests do alloc.allocate(...), so alias that to the real method
+    allocate = allocate_signals
 
 
 
@@ -6017,6 +6020,9 @@ def _process_symbols(
     cd_skipped: list[str] = []
 
     for symbol in symbols:
+        # if skip_duplicates=True and we already have any position (long or short), just skip
+        if skip_duplicates and BotState().position_cache.get(symbol, 0) != 0:
+            continue
         # skip symbols with existing positions if duplicates should be skipped
         if skip_duplicates and state.position_cache.get(symbol, 0) != 0:
             log_skip_cooldown(symbol, reason="duplicate")
