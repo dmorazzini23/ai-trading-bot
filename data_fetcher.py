@@ -412,7 +412,6 @@ def get_historical_data(
             )
             return None
         df.index = idx
-        df["timestamp"] = df.index
 
     for col in ["open", "high", "low", "close", "volume"]:
         if col not in df.columns:
@@ -422,8 +421,8 @@ def get_historical_data(
     if df.empty and raise_on_empty:
         raise DataFetchError("DATA_SOURCE_EMPTY")
 
+    df = df.reset_index().rename(columns={"index": "timestamp"})
     return df[["timestamp", "open", "high", "low", "close", "volume"]]
-
 
 def get_daily_df(
     symbol: str,

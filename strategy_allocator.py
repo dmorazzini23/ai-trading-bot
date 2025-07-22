@@ -12,8 +12,10 @@ if (
     and not hasattr(sys.modules["strategy_allocator"], "__file__")
 ):
     importlib.reload(importlib.import_module(__name__))
-
-from trade_execution import recent_buys
+try:
+    from trade_execution import recent_buys
+except Exception:  # pragma: no cover - optional dependency
+    recent_buys = {}
 
 from strategies import TradeSignal
 from utils import get_phase_logger
