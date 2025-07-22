@@ -304,8 +304,17 @@ def get_historical_data(
     start_date,
     end_date,
     timeframe: str,
+    *,
+    raise_on_empty: bool = False,
 ) -> pd.DataFrame:
-    """Fetch historical bars from Alpaca and ensure OHLCV float columns."""
+"""Fetch historical bars from Alpaca and ensure OHLCV float columns.
+
+    Parameters
+    ----------
+    raise_on_empty : bool, optional
+        If ``True`` and no data is returned, raise :class:`DataFetchError`.
+        Defaults to ``False`` where an empty DataFrame is returned instead.
+"""
 
     if start_date is None or end_date is None:
         logger.error(
@@ -418,6 +427,9 @@ def get_historical_data(
         df[col] = df[col].astype(float)
 
     if df.empty:
+        if raise_on_empty:
+            # AI-AGENT-REF: optionally raise if no data returned
+            raise DataFetchError(f"No historical data for {symbol}")
         logger.warning(
             "No historical data for %s at timeframe %s; returning empty DataFrame",
             symbol,
