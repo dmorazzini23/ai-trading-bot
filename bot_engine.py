@@ -593,7 +593,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
             df.index = df.index.get_level_values(1)
         df.index = pd.to_datetime(df.index)
         return df
-    except data_fetcher.DataFetchException:
+    except data_fetcher.DataFetchError:
         # AI-AGENT-REF: handle empty data source gracefully
         logger.warning("DATA_SOURCE_EMPTY | symbol=%s", symbol)
         return pd.DataFrame()
