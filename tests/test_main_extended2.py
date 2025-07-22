@@ -50,25 +50,22 @@ def test_run_flask_app_port_in_use(monkeypatch):
 
 def test_run_bot_missing_exec(monkeypatch):
     """run_bot raises when python executable missing."""
-    monkeypatch.setattr(main.os.path, 'isfile', lambda p: False)
+    monkeypatch.setattr(main.os.path, "isfile", lambda p: False)
     with pytest.raises(RuntimeError):
-        main.run_bot('/venv', 'bot.py')
+        main.run_bot([])
 
 
 def test_run_bot_success(monkeypatch):
     """Subprocess is invoked when executable exists."""
-    monkeypatch.setattr(main.os.path, 'isfile', lambda p: True)
-    class P:
-        def wait(self):
-            return 7
-    popen_args = {}
-    def fake_popen(cmd, stdout=None, stderr=None, env=None):
-        popen_args['cmd'] = cmd
-        return P()
-    monkeypatch.setattr(main.subprocess, 'Popen', fake_popen)
-    ret = main.run_bot('/v', 's.py')
+    monkeypatch.setattr(main.os.path, "isfile", lambda p: True)
+    called = {}
+    def fake_call(cmd):
+        called["cmd"] = cmd
+        return 7
+    monkeypatch.setattr(main.subprocess, "call", fake_call)
+    ret = main.run_bot(["--test"], service=False)
     assert ret == 7
-    assert popen_args['cmd'][0] == '/v/bin/python3.12'
+    assert called["cmd"][:3] == [sys.executable, "-m", "ai_trading.main"]
 
 
 def test_validate_environment_missing(monkeypatch):
@@ -81,7 +78,7 @@ def test_validate_environment_missing(monkeypatch):
 def test_main_bot_only(monkeypatch):
     """main runs bot and exits with its return code."""
     monkeypatch.setattr(sys, 'argv', ['ai_trading', '--bot-only'])
-    monkeypatch.setattr(main, 'run_bot', lambda v, s: 5)
+    monkeypatch.setattr(main, 'run_bot', lambda argv=None, service=False: 5)
     monkeypatch.setattr(main, 'run_flask_app', lambda port: None)
     monkeypatch.setattr(main, 'setup_logging', lambda *a, **k: logging.getLogger('t'))
     monkeypatch.setattr(main, 'load_dotenv', lambda *a, **k: None)

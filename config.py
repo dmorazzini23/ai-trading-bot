@@ -263,3 +263,6 @@ __all__ = [
     "PORTFOLIO_EXPOSURE_CAP",
     "set_runtime_config",
 ]
+
+# alias for backwards compatibility
+Config = Settings
