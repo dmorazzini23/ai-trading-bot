@@ -4661,6 +4661,12 @@ def load_model(path: str = MODEL_PATH) -> "Optional[Union[dict, EnsembleModel]]"
     if not os.path.exists(path):
         return None
 
+    loaded = joblib.load(path)
+    # if this is a plain dict, return it directly
+    if isinstance(loaded, dict):
+        logger.info("MODEL_LOADED")
+        return loaded
+
     # AI-AGENT-REF: use isfile checks for optional ensemble components
     rf_exists = os.path.isfile(MODEL_RF_PATH)
     xgb_exists = os.path.isfile(MODEL_XGB_PATH)
@@ -4680,16 +4686,12 @@ def load_model(path: str = MODEL_PATH) -> "Optional[Union[dict, EnsembleModel]]"
         return EnsembleModel(models)
 
     try:
-        obj = joblib.load(path)
-        if isinstance(obj, dict):
-            logger.info("MODEL_LOADED")
-            return obj
-        if isinstance(obj, list):
-            model = EnsembleModel(obj)
+        if isinstance(loaded, list):
+            model = EnsembleModel(loaded)
             logger.info("MODEL_LOADED")
             return model
         logger.info("MODEL_LOADED")
-        return obj
+        return loaded
     except Exception as e:
         logger.exception("MODEL_LOAD_FAILED: %s", e)
         return None

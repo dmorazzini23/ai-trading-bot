@@ -24,7 +24,7 @@ class CapitalScalingEngine:
 
     def scale_position(self, size: float) -> float:
         """Smoke test expects this public API."""
-        return self._scaler.scale_position(size)
+        return self._scaler(size)
 
     def compression_factor(self, balance: float) -> float:
         """Return risk compression factor based on ``balance``."""
