@@ -50,7 +50,7 @@ Edit `backtest.py` to change the `param_grid` dictionary in `main()` for alterna
 
 ## 🚀 Using Optimized Hyperparameters
 
-When running live (`python bot_engine.py`), the bot automatically loads `best_hyperparams.json` if available, falling back to `hyperparams.json` otherwise.
+When running live (`python -m ai_trading`), the bot automatically loads `best_hyperparams.json` if available, falling back to `hyperparams.json` otherwise.
 
 ---
 
@@ -111,7 +111,7 @@ logger.info("Bot starting up")
 ## 🤖 Running the Bot
 
 ```bash
-python bot_engine.py
+python -m ai_trading
 ```
 
 The project modules live under `ai_trading/` including `capital_scaling`,
@@ -134,9 +134,9 @@ asyncio.run(execute_order_async(...))
 For performance investigation:
 
 ```bash
-python -m cProfile bot_engine.py
+python -m cProfile -m ai_trading
 # or
-pyinstrument python bot_engine.py
+pyinstrument python -m ai_trading
 ```
 
 ---

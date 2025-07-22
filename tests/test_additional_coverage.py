@@ -16,7 +16,7 @@ import config
 import meta_learning
 import ml_model
 import risk_engine
-import main
+import ai_trading.__main__ as main
 import utils
 import validate_env
 from strategies.mean_reversion import MeanReversionStrategy
@@ -69,8 +69,9 @@ def test_create_flask_routes():
     sys.modules['flask'] = flask_mod
     sys.modules['flask.testing'] = types.ModuleType('flask.testing')
     sys.modules['flask.testing'].FlaskClient = DummyClient
-    sys.modules.pop('main', None)
-    import main as main_mod
+    sys.modules.pop('ai_trading.__main__', None)
+    import importlib
+    main_mod = importlib.import_module('ai_trading.__main__')
     app = main_mod.create_flask_app()
     client = app.test_client()
     assert client.get("/health").json() == {"status": "ok"}
@@ -79,7 +80,7 @@ def test_create_flask_routes():
 
 def test_main_serve_api(monkeypatch):
     """main launches Flask thread and bot when --serve-api used."""
-    monkeypatch.setattr(sys, "argv", ["main.py", "--serve-api"])
+    monkeypatch.setattr(sys, "argv", ["ai_trading", "--serve-api"])
     monkeypatch.setattr(main, "run_bot", lambda v, s: 0)
     called = {}
 

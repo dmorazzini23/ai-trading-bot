@@ -10,6 +10,14 @@ from datetime import date
 import atexit
 
 import metrics_logger
+
+# Configure root formatting once in UTC
+logging.Formatter.converter = time.gmtime
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)sZ %(levelname)s [%(name)s] %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%SZ",
+)
 from logging.handlers import (
     QueueHandler,
     QueueListener,
