@@ -6017,7 +6017,7 @@ def _process_symbols(
     cd_skipped: list[str] = []
 
     for symbol in symbols:
-        # skip duplicates when requested
+        # skip symbols with existing positions if duplicates should be skipped
         if skip_duplicates and state.position_cache.get(symbol, 0) != 0:
             log_skip_cooldown(symbol, reason="duplicate")
             skipped_duplicates.inc()
