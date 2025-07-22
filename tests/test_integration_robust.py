@@ -321,7 +321,7 @@ sys.modules["ai_trading.capital_scaling"].drawdown_adjusted_kelly_alt = lambda *
 sys.modules["ai_trading.capital_scaling"].volatility_parity_position = lambda *a, **k: 0.01
 sys.modules["ai_trading.capital_scaling"].volatility_parity_position_alt = lambda *a, **k: 0.01
 
-from ai_trading.__main__ import main
+from ai_trading.main import main
 from bot_engine import pre_trade_health_check
 
 

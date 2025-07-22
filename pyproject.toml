@@ -5,7 +5,7 @@ description = "AI trading bot"
 requires-python = "==3.12.3"
 
 [project.scripts]
-ai-trading-bot = "ai_trading.__main__:main"
+ai-trading-bot = "ai_trading.main:main"
 
 [project.optional-dependencies]
 dev = [

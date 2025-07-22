@@ -223,7 +223,7 @@ torch_optim = types.ModuleType("torch.optim")
 torch_optim.Adam = lambda *a, **k: None
 sys.modules["torch.optim"] = torch_optim
 
-from ai_trading.__main__ import main
+from ai_trading.main import main
 from bot_engine import pre_trade_health_check
 
 

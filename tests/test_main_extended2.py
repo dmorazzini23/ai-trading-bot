@@ -17,7 +17,7 @@ class Flask:
 flask_mod.Flask = Flask
 flask_mod.jsonify = lambda *a, **k: {}
 sys.modules["flask"] = flask_mod
-import ai_trading.__main__ as main
+import ai_trading.main as main
 
 
 def test_run_flask_app(monkeypatch):
