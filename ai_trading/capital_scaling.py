@@ -20,12 +20,11 @@ class _CapScaler:
 
 class CapitalScalingEngine:
     def __init__(self, config):
-        self._cs = _CapScaler(config)
+        self._scaler = _CapScaler(config)
 
     def scale_position(self, size: float) -> float:
-        """Return ``size`` unchanged for now (smoke-test stub)."""
-        # AI-AGENT-REF: simple passthrough for unit tests
-        return size
+        """Scale a target position size (smoke test expects this)."""
+        return self._scaler.scale_position(size)
 
     def compression_factor(self, balance: float) -> float:
         """Return risk compression factor based on ``balance``."""
