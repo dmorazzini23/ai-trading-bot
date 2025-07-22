@@ -113,13 +113,11 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
 def get_logger(name: str) -> logging.Logger:
     """Return a named logger, configuring logging on first use."""
     if name not in _loggers:
-        setup_logging()
-        lg = logging.getLogger(name)
-        if not lg.handlers:
-            for h in logging.getLogger().handlers:
-                lg.addHandler(h)
-        lg.setLevel(logging.NOTSET)
-        _loggers[name] = lg
+        root = setup_logging()
+        logger = logging.getLogger(name)
+        logger.handlers = root.handlers.copy()
+        logger.setLevel(root.level)
+        _loggers[name] = logger
     return _loggers[name]
 
 

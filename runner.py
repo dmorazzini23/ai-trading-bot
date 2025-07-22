@@ -6,6 +6,7 @@ Simple runner that restarts the trading bot on failures.
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import time
 from typing import NoReturn
@@ -90,13 +91,14 @@ def _run_forever() -> NoReturn:
             time.sleep(60)
 
 
-if __name__ == "__main__":
-    _run_forever()
 
 
-def start_runner() -> None:
+def start_runner(*, once: bool = False) -> None:
     logger.info("Runner starting")
-    _run_forever()
+    if once:
+        main()
+    else:
+        _run_forever()
 
 
 # AI-AGENT-REF: experimental trading loop utilities
@@ -160,3 +162,10 @@ def run_trading_loop(historical_data: list[dict], portfolio, regime: str = "neut
         portfolio.hold()
 
     return portfolio
+
+
+if __name__ == "__main__":
+    import sys
+    import os
+    once = "--once" in sys.argv or os.getenv("RUN_ONCE", "1") == "1"
+    start_runner(once=once)
