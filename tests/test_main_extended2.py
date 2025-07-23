@@ -71,6 +71,25 @@ def test_run_bot_success(monkeypatch):
     assert called["cmd"][0].startswith("venv/bin/python")
 
 
+def test_run_bot_string_arg(monkeypatch):
+    """Single string arg is converted correctly."""
+    monkeypatch.setattr(main.os.path, "isfile", lambda p: True)
+    called = {}
+
+    class DummyProc:
+        def wait(self):
+            return 1
+
+    def fake_popen(cmd):
+        called["cmd"] = cmd
+        return DummyProc()
+
+    monkeypatch.setattr(main.subprocess, "Popen", fake_popen)
+    ret = main.run_bot("venv", "run.py", "--flag")
+    assert ret == 1
+    assert called["cmd"][1:] == ["run.py", "--flag"]
+
+
 def test_validate_environment_missing(monkeypatch):
     """validate_environment errors when secret missing."""
     monkeypatch.setattr(main.config, 'WEBHOOK_SECRET', '', raising=False)
