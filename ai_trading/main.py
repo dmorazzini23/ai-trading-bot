@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 _run_lock = Lock()
 
 
-def run_bot(venv_dir: str, script: str, argv: list[str] | None = None) -> int:
+def run_bot(venv_dir: str, script: str, argv: list[str] | str | None = None) -> int:
     """Launch the trading bot located at ``script`` using the venv ``venv_dir``."""
     # AI-AGENT-REF: ensure subprocess uses specific interpreter version
     python_exec = os.path.join(
@@ -41,7 +41,10 @@ def run_bot(venv_dir: str, script: str, argv: list[str] | None = None) -> int:
     )
     if not os.path.isfile(python_exec):
         raise RuntimeError(f"Python executable not found: {python_exec}")
-    cmd = [python_exec, script] + (argv or [])
+    args = []
+    if argv:
+        args = argv if isinstance(argv, list) else [argv]
+    cmd = [python_exec, script] + args
     proc = subprocess.Popen(cmd)
     return proc.wait()
 
