@@ -6022,6 +6022,9 @@ def _process_symbols(
     cd_skipped: list[str] = []
 
     for symbol in symbols:
+        if state.position_cache.get(symbol, 0) != 0:
+            # AI-AGENT-REF: skip symbol if already holding a position
+            continue
         # if skip_duplicates=True and we already have any position (long or short), just skip
         if skip_duplicates and BotState().position_cache.get(symbol, 0) != 0:
             continue
