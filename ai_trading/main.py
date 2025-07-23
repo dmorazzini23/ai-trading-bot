@@ -13,6 +13,7 @@ from pathlib import Path
 import signal
 
 from bot_engine import run_all_trades_worker, BotState
+import config  # AI-AGENT-REF: allow tests to patch config attributes
 from config import Settings as Config, validate_environment
 from logger import setup_logging
 from dotenv import load_dotenv
@@ -65,30 +66,33 @@ def run_all_trades() -> None:
         _run_lock.release()
 
 
-def main() -> int:
+def main() -> None:
     """Entry-point used by ``python -m ai_trading``."""
+    load_dotenv()
+    setup_logging()
+    validate_environment()
+    project_root = Path(__file__).resolve().parents[1]
+
+    if "--bot-only" in sys.argv:
+        exit_code = run_bot(sys.prefix, str(project_root / "run.py"))
+        sys.exit(exit_code)
+
     if "--serve-api" in sys.argv:
-        load_dotenv()
-        setup_logging()
-        validate_environment()
         port = int(os.getenv("FLASK_PORT", 8000))
-        thread = threading.Thread(target=run_flask_app, args=(port,), daemon=True)
-        thread.start()
-        run_bot(sys.prefix, str(Path(__file__).resolve().parents[1] / "run.py"))
         stop_event = threading.Event()
-        stop_event.set()
-        def _handler(_s, _f):
+
+        def _handler(_s, _f) -> None:
             stop_event.set()
             sys.exit(0)
-        signal.signal(signal.SIGINT, _handler)
-        return 0
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--bot-only", action="store_true")
-    args = parser.parse_args()
-    if args.bot_only:
-        return run_bot()
-    return run_flask_app()
+        signal.signal(signal.SIGINT, _handler)
+        thread = threading.Thread(target=run_flask_app, args=(port,), daemon=True)
+        thread.start()
+        run_bot(sys.prefix, str(project_root / "run.py"))
+        stop_event.set()
+        return
+
+    run_flask_app()
 
 
 __all__ = [
