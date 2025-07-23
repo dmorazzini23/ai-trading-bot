@@ -168,4 +168,8 @@ if __name__ == "__main__":
     import sys
     import os
     once = "--once" in sys.argv or os.getenv("RUN_ONCE", "1") == "1"
-    start_runner(once=once)
+    try:
+        start_runner(once=once)
+    except SystemExit as exc:  # AI-AGENT-REF: allow clean shutdown
+        if exc.code != 0:
+            raise
