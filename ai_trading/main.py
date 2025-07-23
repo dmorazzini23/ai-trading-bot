@@ -31,14 +31,19 @@ logger = logging.getLogger(__name__)
 _run_lock = Lock()
 
 
-def run_bot(argv=None, service: bool = False) -> int:
-    """Launch the trading bot as a subprocess."""
-    argv = argv or sys.argv[1:]
-    python = sys.executable
-    if not os.path.isfile(python):
-        raise RuntimeError(f"Python executable not found: {python}")
-    cmd = [python, "-m", "ai_trading.main"] + argv
-    return subprocess.call(cmd)
+def run_bot(venv_dir: str, script: str, argv: list[str] | None = None) -> int:
+    """Launch the trading bot located at ``script`` using the venv ``venv_dir``."""
+    # AI-AGENT-REF: ensure subprocess uses specific interpreter version
+    python_exec = os.path.join(
+        venv_dir,
+        "bin",
+        f"python{sys.version_info.major}.{sys.version_info.minor}",
+    )
+    if not os.path.isfile(python_exec):
+        raise RuntimeError(f"Python executable not found: {python_exec}")
+    cmd = [python_exec, script] + (argv or [])
+    proc = subprocess.Popen(cmd)
+    return proc.wait()
 
 
 def create_flask_app() -> Flask:
