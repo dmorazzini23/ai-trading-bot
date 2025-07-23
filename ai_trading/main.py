@@ -14,7 +14,14 @@ import signal
 
 from bot_engine import run_all_trades_worker, BotState
 import config  # AI-AGENT-REF: allow tests to patch config attributes
-from config import Settings as Config, validate_environment
+from config import Settings as Config
+
+
+def validate_environment() -> None:
+    """Expose config validation with testable hook."""
+    if not config.WEBHOOK_SECRET:
+        raise RuntimeError("Missing required environment variables: WEBHOOK_SECRET")
+    config.validate_environment()
 from logger import setup_logging
 from dotenv import load_dotenv
 import utils
@@ -69,13 +76,14 @@ def run_all_trades() -> None:
 def main() -> None:
     """Entry-point used by ``python -m ai_trading``."""
     load_dotenv()
-    setup_logging()
     validate_environment()
+    setup_logging()
     project_root = Path(__file__).resolve().parents[1]
 
     if "--bot-only" in sys.argv:
         exit_code = run_bot(sys.prefix, str(project_root / "run.py"))
         sys.exit(exit_code)
+        return
 
     if "--serve-api" in sys.argv:
         port = int(os.getenv("FLASK_PORT", 8000))
