@@ -37,4 +37,6 @@ echo "🔍 Validating environment variables..."
 python validate_env.py
 
 echo "🚀 Starting core trading bot..."
-python -m ai_trading
+
+# Launch both API and bot loop under one process (unbuffered)
+exec python -u -m ai_trading --serve-api
