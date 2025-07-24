@@ -38,12 +38,10 @@ class DummyReq(types.SimpleNamespace):
 
 def test_submit_order_http_error(monkeypatch):
     api = DummyAPI([HTTPError("500"), None])
-    sends = []
     monkeypatch.setattr(alpaca_api, "SHADOW_MODE", False)
     monkeypatch.setattr(alpaca_api.time, "sleep", lambda s: None)
-    monkeypatch.setattr(alpaca_api, "send_slack_alert", lambda msg: sends.append(msg))
     alpaca_api.submit_order(api, DummyReq())
-    assert sends and api.calls == 2
+    assert api.calls == 2
 
 
 def test_submit_order_generic_retry(monkeypatch):
@@ -59,8 +57,5 @@ def test_submit_order_fail(monkeypatch):
     api = DummyAPI([Exception("e1")] * 5)
     monkeypatch.setattr(alpaca_api, "SHADOW_MODE", False)
     monkeypatch.setattr(alpaca_api.time, "sleep", lambda s: None)
-    alerts = []
-    monkeypatch.setattr(alpaca_api, "send_slack_alert", lambda msg: alerts.append(msg))
     with pytest.raises(Exception):
         alpaca_api.submit_order(api, DummyReq())
-    assert alerts

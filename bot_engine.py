@@ -6005,6 +6005,7 @@ def _process_symbols(
     current_cash: float,
     model,
     regime_ok: bool,
+    close_shorts: bool = False,
     skip_duplicates: bool = False,
 ) -> tuple[list[str], dict[str, int]]:
     processed: list[str] = []
@@ -6016,43 +6017,38 @@ def _process_symbols(
         state.last_trade_direction = {}
 
     now = datetime.now(timezone.utc)
-    live_positions = state.position_cache
 
     filtered: list[str] = []
     cd_skipped: list[str] = []
 
     for symbol in symbols:
-        if state.position_cache.get(symbol, 0) != 0:
-            # AI-AGENT-REF: skip symbol if already holding a position
+        pos = state.position_cache.get(symbol, 0)
+        if pos < 0 and close_shorts:
+            logger.info(
+                "SKIP_SHORT_CLOSE_QUEUED | symbol=%s qty=%s",
+                symbol,
+                -pos,
+            )
             continue
-        # if skip_duplicates=True and we already have any position (long or short), just skip
-        if skip_duplicates and BotState().position_cache.get(symbol, 0) != 0:
-            continue
-        # skip symbols with existing positions if duplicates should be skipped
-        if skip_duplicates and state.position_cache.get(symbol, 0) != 0:
+        if skip_duplicates and pos != 0:
             log_skip_cooldown(symbol, reason="duplicate")
             skipped_duplicates.inc()
             continue
-        if symbol in live_positions:
-            pos = live_positions[symbol]
-            if pos > 0:
-                logger.info("SKIP_HELD_POSITION | already long, skipping close")
-                skipped_duplicates.inc()
-                continue
-            elif pos < 0:
-                logger.info(
-                    "SHORT_CLOSE_QUEUED | symbol=%s  qty=%d",
-                    symbol,
-                    abs(pos),
-                )
-                try:
-                    submit_order(ctx, symbol, abs(pos), "buy")
-                except Exception as exc:
-                    logger.warning("SHORT_CLOSE_FAIL | %s %s", symbol, exc)
-                continue
-            else:
-                # AI-AGENT-REF: flat position means no close action
-                pass
+        if pos > 0:
+            logger.info("SKIP_HELD_POSITION | already long, skipping close")
+            skipped_duplicates.inc()
+            continue
+        if pos < 0:
+            logger.info(
+                "SHORT_CLOSE_QUEUED | symbol=%s  qty=%d",
+                symbol,
+                abs(pos),
+            )
+            try:
+                submit_order(ctx, symbol, abs(pos), "buy")
+            except Exception as exc:
+                logger.warning("SHORT_CLOSE_FAIL | %s %s", symbol, exc)
+            continue
         ts = state.trade_cooldowns.get(symbol)
         if ts and (now - ts).total_seconds() < 60:
             cd_skipped.append(symbol)

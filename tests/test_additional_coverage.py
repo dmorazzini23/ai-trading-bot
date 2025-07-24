@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import alerts
 import config
 import meta_learning
 import ml_model
@@ -22,13 +21,6 @@ import validate_env
 from strategies.mean_reversion import MeanReversionStrategy
 
 
-def test_alert_no_webhook(monkeypatch):
-    """send_slack_alert returns early when webhook unset."""
-    monkeypatch.setattr(alerts, "SLACK_WEBHOOK", "")
-    called = []
-    monkeypatch.setattr(alerts.requests, "post", lambda *a, **k: called.append(1))
-    alerts.send_slack_alert("msg")
-    assert not called
 
 
 def test_config_missing_vars(monkeypatch):

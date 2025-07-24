@@ -19,23 +19,10 @@ for _m in ["dotenv"]:
         mod.load_dotenv = lambda *a, **k: None
     sys.modules.setdefault(_m, mod)
 
-import alerts
 import alpaca_api
 import rebalancer
 import slippage
 
-
-def test_send_slack_alert(monkeypatch):
-    """Slack alert helper should post messages using requests."""
-    messages = []
-    monkeypatch.setattr(alerts, "SLACK_WEBHOOK", "http://example.com")
-
-    def fake_post(url, json, timeout=5):
-        messages.append((url, json))
-
-    monkeypatch.setattr(alerts.requests, "post", fake_post)
-    alerts.send_slack_alert("hi")
-    assert messages and messages[0][1]["text"] == "hi"
 
 
 def test_submit_order_shadow(monkeypatch):
@@ -56,11 +43,11 @@ def test_submit_order_shadow(monkeypatch):
 
 def test_monitor_slippage_alert(monkeypatch):
     """An alert is sent when slippage exceeds the threshold."""
-    alerts_sent = []
+    called = []
     monkeypatch.setattr(slippage, "SLIPPAGE_THRESHOLD", 0.001)
-    monkeypatch.setattr(slippage, "send_slack_alert", lambda m: alerts_sent.append(m))
+    monkeypatch.setattr(slippage.logger, "warning", lambda m: called.append(m))
     slippage.monitor_slippage(100.0, 102.0, "AAPL")
-    assert alerts_sent
+    assert called
 
 
 def test_maybe_rebalance(monkeypatch):

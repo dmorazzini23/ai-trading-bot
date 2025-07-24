@@ -1,6 +1,4 @@
 import logging
-
-from alerts import send_slack_alert
 from validate_env import settings
 from metrics_logger import log_metrics
 
@@ -17,4 +15,3 @@ def monitor_slippage(expected: float | None, actual: float, symbol: str) -> None
         if pct > SLIPPAGE_THRESHOLD:
             msg = f"High slippage {pct:.2%} on {symbol}"
             logger.warning(msg)
-            send_slack_alert(msg)
