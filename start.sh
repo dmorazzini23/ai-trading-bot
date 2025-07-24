@@ -27,4 +27,4 @@ echo "🔍 Validating environment variables..."
 python validate_env.py
 
 echo "🚀 Starting core trading bot..."
-exec python -u -m ai_trading --serve-api
+exec python -u -m ai_trading.main --serve-api
