@@ -1,9 +1,11 @@
 #!/usr/bin/env python3.12
 from __future__ import annotations
+
 # (any existing comments or module docstring go below the future import)
 __all__ = ["pre_trade_health_check"]
 import asyncio
 import logging
+import io
 import os
 import sys
 import time
@@ -432,10 +434,13 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
             """Return ``position`` unchanged for smoke tests."""
             # AI-AGENT-REF: stub passthrough for unit tests
             return position
+
+
 class StrategyAllocator:
     def __init__(self, *args, **kwargs):
         # AI-AGENT-REF: delegate to underlying allocator for tests
         from strategy_allocator import StrategyAllocator as _Alloc
+
         self._alloc = _Alloc(*args, **kwargs)
 
     def allocate_signals(self, *args, **kwargs):
@@ -445,13 +450,13 @@ class StrategyAllocator:
     allocate = allocate_signals
 
 
-
 from data_fetcher import (
     DataFetchError,
     DataFetchException,
     get_minute_df,
     _MINUTE_CACHE,
 )
+
 try:
     from data_fetcher import finnhub_client  # noqa: F401
 except Exception:
@@ -586,6 +591,7 @@ def _load_ml_model(symbol: str):
         return None
     _ML_MODEL_CACHE[symbol] = model
     return model
+
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     """Fetch minute bars with basic retry handling."""
@@ -2120,9 +2126,7 @@ class SignalManager:
         if model is None and symbol is not None:
             model = _load_ml_model(symbol)
         if model is None:
-            logger.warning(
-                "signal_ml skipped: no ML model loaded for %s", symbol
-            )
+            logger.warning("signal_ml skipped: no ML model loaded for %s", symbol)
             return None
         try:
             if hasattr(model, "feature_names_in_"):
@@ -3249,8 +3253,11 @@ def fractional_kelly_size(
 ) -> int:
     # AI-AGENT-REF: adaptive kelly fraction based on historical peak equity
     if os.path.exists(PEAK_EQUITY_FILE):
-        with portalocker.Lock(PEAK_EQUITY_FILE) as lock:
-            data = lock.read()
+        with portalocker.Lock(PEAK_EQUITY_FILE, "r+") as lock:
+            try:
+                data = lock.read()
+            except io.UnsupportedOperation:
+                return 0
             prev_peak = float(data) if data else balance
     else:
         prev_peak = balance
@@ -3271,7 +3278,7 @@ def fractional_kelly_size(
     dollars_to_risk = kelly * balance
     if atr <= 0:
         new_peak = max(balance, prev_peak)
-        with portalocker.Lock(PEAK_EQUITY_FILE) as lock:
+        with portalocker.Lock(PEAK_EQUITY_FILE, "r+") as lock:
             lock.write(str(new_peak))
         return 1
 
@@ -3283,7 +3290,7 @@ def fractional_kelly_size(
     size = max(size, 1)
 
     new_peak = max(balance, prev_peak)
-    with portalocker.Lock(PEAK_EQUITY_FILE) as lock:
+    with portalocker.Lock(PEAK_EQUITY_FILE, "r+") as lock:
         lock.write(str(new_peak))
 
     return size
@@ -4596,9 +4603,12 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     from utils import portfolio_lock
     import portfolio
 
-    current = portfolio.compute_portfolio_weights(
-        ctx, list(ctx.portfolio_weights.keys())
-    )
+    try:
+        positions = ctx.api.get_all_positions()
+        symbols = [p.symbol for p in positions]
+    except Exception:
+        symbols = []
+    current = portfolio.compute_portfolio_weights(ctx, symbols)
     old = ctx.portfolio_weights
     drift = max(abs(current[s] - old.get(s, 0)) for s in current) if current else 0
     if drift <= 0.1:
@@ -4802,7 +4812,14 @@ def update_signal_weights() -> None:
             TRADE_LOG_FILE,
             on_bad_lines="skip",
             engine="python",
-            usecols=["entry_price", "exit_price", "signal_tags", "side", "confidence", "exit_time"],
+            usecols=[
+                "entry_price",
+                "exit_price",
+                "signal_tags",
+                "side",
+                "confidence",
+                "exit_time",
+            ],
         ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
             logger.warning("Loaded DataFrame is empty after parsing/fallback")
@@ -6446,6 +6463,16 @@ def run_all_trades_worker(state: BotState, model) -> None:
             equity = float(acct.equity)
             positions = ctx.api.get_all_positions()
             logger.debug("Raw Alpaca positions: %s", positions)
+            try:
+                from utils import portfolio_lock
+                import portfolio
+
+                with portfolio_lock:
+                    ctx.portfolio_weights = portfolio.compute_portfolio_weights(
+                        ctx, [p.symbol for p in positions]
+                    )
+            except Exception:
+                logger.warning("weight recompute failed", exc_info=True)
             exposure = (
                 sum(abs(float(p.market_value)) for p in positions) / equity * 100
                 if equity > 0
