@@ -2219,7 +2219,6 @@ class SignalManager:
         tuple[int, float, str]
             ``(signal, confidence, label)`` where ``signal`` is -1, 0 or 1.
         """
-        raw_signals: List[Tuple[int, float, str]] = []
         signals: List[Tuple[int, float, str]] = []
         allowed_tags = set(load_global_signal_performance() or [])
         weights = self.load_signal_weights()
@@ -2257,23 +2256,7 @@ class SignalManager:
                     s, w, lab = fn(df, model, ticker)
                 else:
                     s, w, lab = fn(df, model)
-                raw_signals.append((s, w, lab))
-                if allowed_tags and lab not in allowed_tags:
-                    continue
-                if s in (-1, 1):
-                    weight = weights.get(lab, w)
-                    regime_adj = {
-                        "trending": {"momentum": 1.2, "mean_reversion": 0.8},
-                        "mean_reversion": {"momentum": 0.8, "mean_reversion": 1.2},
-                        "high_volatility": {"sentiment": 1.1},
-                        "sideways": {"momentum": 0.9, "mean_reversion": 1.1},
-                    }
-                    if (
-                        state.current_regime in regime_adj
-                        and lab in regime_adj[state.current_regime]
-                    ):
-                        weight *= regime_adj[state.current_regime][lab]
-                    signals.append((s, weight, lab))
+                signals.append((s, w, lab))
             except Exception:
                 continue
 
@@ -2283,23 +2266,15 @@ class SignalManager:
 
         self.last_components = signals
 
-        ml_prob = next((w for s, w, l in raw_signals if l == "ml"), 0.5)
-        adj = []
-        for s, w, l in signals:
-            if l != "ml":
-                adj.append((s, w * ml_prob, l))
-            else:
-                adj.append((s, w, l))
-
-        score = sum(s * w for s, w, _ in adj)
-        conf = max((w for _, w, _ in raw_signals), default=0.0)
+        score = sum(s * w for s, w, _ in signals)
+        conf = max((w for _, w, _ in signals), default=0.0)
         if score > 0.5:
             final = 1
         elif score < -0.5:
             final = -1
         else:
             final = -1
-        label = "+".join(l for _, _, l in raw_signals)
+        label = "+".join(lab for _, _, lab in signals)
         return final, conf, label
 
 
@@ -6105,6 +6080,10 @@ def _process_symbols(
                 symbol,
                 -pos,
             )
+            try:
+                submit_order(ctx, symbol, abs(pos), "buy")
+            except Exception as exc:
+                logger.warning("SHORT_CLOSE_FAIL | %s %s", symbol, exc)
             continue
         if skip_duplicates and pos != 0:
             log_skip_cooldown(symbol, reason="duplicate")

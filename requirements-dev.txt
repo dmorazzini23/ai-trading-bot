@@ -4,3 +4,8 @@ pytest
 pytest-cov
 flake8
 mypy
+pytest-xdist
+numba
+matplotlib
+hypothesis
+pytest-benchmark
