@@ -18,6 +18,8 @@ def test_skip_logic(monkeypatch, caplog):
     monkeypatch.setattr(bot_engine, "log_skip_cooldown", lambda *a, **k: None)
     monkeypatch.setattr(bot_engine.skipped_duplicates, "inc", lambda: None)
 
-    processed, _ = bot_engine._process_symbols(["MSFT", "TSLA"], 1000.0, None, True)
+    processed, _ = bot_engine._process_symbols(
+        ["MSFT", "TSLA"], 1000.0, None, True, True
+    )
     assert processed == []
     assert orders == []

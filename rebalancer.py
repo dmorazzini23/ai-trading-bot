@@ -6,7 +6,6 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import config
-from alerts import send_slack_alert
 from portfolio import compute_portfolio_weights
 
 logger = logging.getLogger(__name__)
@@ -19,7 +18,6 @@ _last_rebalance = datetime.now(timezone.utc)
 def rebalance_portfolio(ctx) -> None:
     """Placeholder for portfolio rebalancing logic."""
     logger.info("Rebalancing portfolio")
-    send_slack_alert("Portfolio rebalancing triggered")
     # Actual rebalance logic would go here
 
 
