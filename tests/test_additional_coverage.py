@@ -64,44 +64,37 @@ def test_create_flask_routes():
     sys.modules.pop('ai_trading.main', None)
     import importlib
     main_mod = importlib.import_module('ai_trading.main')
-    app = main_mod.create_flask_app()
+    import ai_trading.app as app_mod
+    app = app_mod.create_app()
     client = app.test_client()
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/healthz").status_code == 200
 
 
-def test_main_serve_api(monkeypatch):
-    """main launches Flask thread and bot when --serve-api used."""
-    monkeypatch.setattr(sys, "argv", ["ai_trading", "--serve-api"])
-    monkeypatch.setattr(main, "run_bot", lambda v, s, extra_args=None: 0)
+def test_main_starts_api_thread(monkeypatch):
+    """main launches the API thread and runs a cycle."""
+    monkeypatch.setenv("SCHEDULER_ITERATIONS", "1")
     called = {}
 
     class DummyThread:
         def __init__(self, target, args=(), daemon=None):
+            called["created"] = True
             self.target = target
             self.args = args
-            called["created"] = True
 
         def start(self):
             called["started"] = True
             self.target(*self.args)
 
-    monkeypatch.setattr(main, "run_flask_app", lambda port: called.setdefault("port", port))
-    monkeypatch.setattr(main.threading, "Event", lambda: types.SimpleNamespace(set=lambda: called.setdefault("set", True)))
-    monkeypatch.setattr(main.threading, "Thread", DummyThread)
-    monkeypatch.setattr(main, "setup_logging", lambda *a, **k: logging.getLogger("t"))
-    monkeypatch.setattr(main, "load_dotenv", lambda *a, **k: None)
-    monkeypatch.setattr(main, "validate_environment", lambda: None)
-    exit_codes = []
-    monkeypatch.setattr(sys, "exit", lambda code=0: exit_codes.append(code))
-    handlers = {}
-    monkeypatch.setattr(main.signal, "signal", lambda sig, func: handlers.setdefault(sig, func))
+    monkeypatch.setattr(main, "Thread", DummyThread)
+    monkeypatch.setattr(main, "start_api", lambda: called.setdefault("api", True))
+    monkeypatch.setattr(main, "run_cycle", lambda: called.setdefault("cycle", 0) or called.update(cycle=called.get("cycle", 0) + 1))
+    monkeypatch.setattr(main.time, "sleep", lambda s: None)
 
     main.main()
-    assert called["started"] and called["port"] == 9000
-    handlers[signal.SIGINT](signal.SIGINT, None)
-    assert called.get("set")
-    assert exit_codes == [0]
+    assert called.get("created") and called.get("started")
+    assert called.get("api")
+    assert called.get("cycle") == 1
 
 
 def test_meta_update_signal_weights():
