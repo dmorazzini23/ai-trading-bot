@@ -3,7 +3,6 @@
 import logging
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Extra
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +53,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        extra=Extra.ignore,  # AI-AGENT-REF: allow unknown env vars
+        extra="ignore",  # allow unknown env vars (e.g. SLACK_WEBHOOK)
     )
 
 

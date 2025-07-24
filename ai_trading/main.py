@@ -80,7 +80,8 @@ def main() -> None:
     project_root = Path(__file__).resolve().parents[1]
 
     if "--bot-only" in sys.argv:
-        exit_code = run_bot(sys.prefix, str(project_root / "runner.py"))
+        # AI-AGENT-REF: invoke current interpreter rather than venv path
+        exit_code = run_bot(sys.executable, str(project_root / "runner.py"))
         sys.exit(exit_code)
         return
 
@@ -95,8 +96,8 @@ def main() -> None:
         signal.signal(signal.SIGINT, _handler)
         thread = threading.Thread(target=run_flask_app, args=(port,), daemon=True)
         thread.start()
-        # spawn trading child in --bot-only mode
-        run_bot(sys.prefix, str(project_root / "run.py"))
+        # spawn trading child in --bot-only mode using same interpreter
+        run_bot(sys.executable, str(project_root / "run.py"))
         # now block parent until a shutdown signal arrives
         stop_event.wait()
 
