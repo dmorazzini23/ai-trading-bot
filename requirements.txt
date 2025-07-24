@@ -45,3 +45,4 @@ filelock>=3.13.1
 # torch pinned for GPU builds; skip in lightweight test env
 xgboost>=1.7.6
 pytest-asyncio>=0.20.2
+lxml
