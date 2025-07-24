@@ -594,13 +594,15 @@ def _load_ml_model(symbol: str):
 
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
-    """Fetch the last day of minute bars if the market is open."""
-    # AI-AGENT-REF: simplify retry logic for tests
+    """Fetch the last day of minute bars and raise on empty."""
+    # AI-AGENT-REF: raise on empty DataFrame
     now_utc = datetime.now(timezone.utc)
     start_dt = now_utc - timedelta(days=1)
-    if market_is_open():
-        return get_minute_df(symbol, start_dt, now_utc)
-    return pd.DataFrame()
+    df = get_minute_df(symbol, start_dt, now_utc)
+    if df.empty:
+        logger.error(f"Fetch failed: empty DataFrame for {symbol}")
+        raise DataFetchError(f"No data for {symbol}")
+    return df
 
 
 def cancel_all_open_orders(ctx: "BotContext") -> None:
@@ -2235,30 +2237,16 @@ class SignalManager:
         df["sma_50"] = df["close"].rolling(window=50).mean()
         df["sma_200"] = df["close"].rolling(window=200).mean()
 
-        fns = [
-            self.signal_momentum,
-            self.signal_mean_reversion,
-            self.signal_ml,
-            self.signal_sentiment,
-            self.signal_regime,
-            self.signal_stochrsi,
-            self.signal_obv,
-            self.signal_vsa,
+        signals = [
+            self.signal_momentum(df, model),
+            self.signal_mean_reversion(df, model),
+            self.signal_ml(df, model, ticker),
+            self.signal_sentiment(ctx, ticker, df, model),
+            self.signal_regime(state, df, model),
+            self.signal_stochrsi(df, model),
+            self.signal_obv(df, model),
+            self.signal_vsa(df, model),
         ]
-
-        for fn in fns:
-            try:
-                if fn == self.signal_sentiment:
-                    s, w, lab = fn(ctx, ticker, df, model)
-                elif fn == self.signal_regime:
-                    s, w, lab = fn(state, df, model)
-                elif fn == self.signal_ml:
-                    s, w, lab = fn(df, model, ticker)
-                else:
-                    s, w, lab = fn(df, model)
-                signals.append((s, w, lab))
-            except Exception:
-                continue
 
         if not signals:
             state.no_signal_events += 1
@@ -2267,14 +2255,9 @@ class SignalManager:
         self.last_components = signals
 
         score = sum(s * w for s, w, _ in signals)
-        conf = max((w for _, w, _ in signals), default=0.0)
-        if score > 0.5:
-            final = 1
-        elif score < -0.5:
-            final = -1
-        else:
-            final = -1
-        label = "+".join(lab for _, _, lab in signals)
+        final = int(np.sign(score))
+        conf = max(w for _, w, _ in signals)
+        label = "+".join(name for _, _, name in signals)
         return final, conf, label
 
 
@@ -6080,10 +6063,7 @@ def _process_symbols(
                 symbol,
                 -pos,
             )
-            try:
-                submit_order(ctx, symbol, abs(pos), "buy")
-            except Exception as exc:
-                logger.warning("SHORT_CLOSE_FAIL | %s %s", symbol, exc)
+            # AI-AGENT-REF: avoid submitting orders when short-close is skipped
             continue
         if skip_duplicates and pos != 0:
             log_skip_cooldown(symbol, reason="duplicate")

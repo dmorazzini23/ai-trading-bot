@@ -7,6 +7,7 @@ import pytest
 def test_short_close_queued(monkeypatch, caplog):
     state = bot_engine.BotState()
     state.position_cache = {"TSLA": -44}
+    bot_engine.state = state
     caplog.set_level("INFO")
 
     orders = []
