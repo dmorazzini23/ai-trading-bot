@@ -457,6 +457,8 @@ try:
 except Exception:
     finnhub_client = None  # type: ignore
 
+_ML_MODEL_CACHE: dict[str, Any] = {}
+
 
 logger = logging.getLogger(__name__)
 
@@ -568,36 +570,55 @@ def assert_row_integrity(
         )
 
 
+def _load_ml_model(symbol: str):
+    """Load and cache per-symbol ML model from ``models/{symbol}.pkl``."""
+    path = Path("models") / f"{symbol}.pkl"
+    cached = _ML_MODEL_CACHE.get(symbol)
+    if cached is not None:
+        return cached
+    if not path.is_file():
+        logger.error("ML model for %s not found at %s", symbol, path)
+        return None
+    try:
+        model = joblib.load(path)
+    except Exception:
+        logger.error("ML model for %s not found at %s", symbol, path)
+        return None
+    _ML_MODEL_CACHE[symbol] = model
+    return model
+
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
-    """Fetches minute-level data, returning an empty DataFrame on error."""
-    # if market is closed, return an empty DataFrame immediately
+    """Fetch minute bars with basic retry handling."""
     if not market_is_open():
         return pd.DataFrame()
-    try:
-        if symbol in _MINUTE_CACHE:
-            df_cached, ts = _MINUTE_CACHE[symbol]
-            if ts >= datetime.now(timezone.utc) - timedelta(seconds=30):
-                return df_cached.copy()
+    attempts = 0
+    while attempts <= 3:
+        try:
+            if symbol in _MINUTE_CACHE:
+                df_cached, ts = _MINUTE_CACHE[symbol]
+                if ts >= datetime.now(timezone.utc) - timedelta(seconds=30):
+                    return df_cached.copy()
 
-        now_utc = datetime.now(timezone.utc)
-        start_dt = now_utc - timedelta(days=1)
-        df = get_minute_df(symbol, start_dt, now_utc)
-        _MINUTE_CACHE.pop(symbol, None)
-        if isinstance(df, list):
-            df = pd.DataFrame(df)
-        if df is None or df.empty:
+            now_utc = datetime.now(timezone.utc)
+            start_dt = now_utc - timedelta(days=1)
+            df = get_minute_df(symbol, start_dt, now_utc)
+            _MINUTE_CACHE.pop(symbol, None)
+            if isinstance(df, list):
+                df = pd.DataFrame(df)
+            if df is not None and not df.empty:
+                if isinstance(df.index, pd.MultiIndex):
+                    df.index = df.index.get_level_values(1)
+                df.index = pd.to_datetime(df.index)
+                return df
+        except data_fetcher.DataFetchError:
+            pass
+        except Exception as exc:
+            logger.exception("fetch_minute_df_safe failed for %s", symbol, exc_info=exc)
             return pd.DataFrame()
-        if isinstance(df.index, pd.MultiIndex):
-            df.index = df.index.get_level_values(1)
-        df.index = pd.to_datetime(df.index)
-        return df
-    except data_fetcher.DataFetchError:
-        # AI-AGENT-REF: handle empty data source gracefully
-        logger.warning("DATA_SOURCE_EMPTY | symbol=%s", symbol)
-        return pd.DataFrame()
-    except Exception as exc:
-        logger.exception("fetch_minute_df_safe failed for %s", symbol, exc_info=exc)
-        return pd.DataFrame()
+        attempts += 1
+        time.sleep(1)
+    logger.error("No minute bars available for %s after 3 retries", symbol)
+    raise DataFetchError(symbol)
 
 
 def cancel_all_open_orders(ctx: "BotContext") -> None:
@@ -2092,11 +2113,16 @@ class SignalManager:
             logger.exception("Error in signal_vsa")
             return -1, 0.0, "vsa"
 
-    def signal_ml(self, df: pd.DataFrame, model: Any = None) -> Tuple[int, float, str] | None:
+    def signal_ml(
+        self, df: pd.DataFrame, model: Any | None = None, symbol: str | None = None
+    ) -> Tuple[int, float, str] | None:
         """Machine learning prediction signal with probability logging."""
-        # AI-AGENT-REF: gracefully skip ML when model is missing
+        if model is None and symbol is not None:
+            model = _load_ml_model(symbol)
         if model is None:
-            logger.warning("signal_ml skipped: no ML model loaded")
+            logger.warning(
+                "signal_ml skipped: no ML model loaded for %s", symbol
+            )
             return None
         try:
             if hasattr(model, "feature_names_in_"):
@@ -2246,6 +2272,8 @@ class SignalManager:
                     s, w, lab = fn(ctx, ticker, df, model)
                 elif fn == self.signal_regime:
                     s, w, lab = fn(state, df, model)
+                elif fn == self.signal_ml:
+                    s, w, lab = fn(df, model, ticker)
                 else:
                     s, w, lab = fn(df, model)
                 if allowed_tags and lab not in allowed_tags:
@@ -3183,7 +3211,11 @@ def scaled_atr_stop(
 
 
 def liquidity_factor(ctx: BotContext, symbol: str) -> float:
-    df = fetch_minute_df_safe(symbol)
+    try:
+        df = fetch_minute_df_safe(symbol)
+    except DataFetchError:
+        logger.warning("[liquidity_factor] no data for %s", symbol)
+        return 0.0
     if df is None or df.empty:
         return 0.0
     if "volume" not in df.columns:
@@ -3534,7 +3566,11 @@ def vwap_pegged_submit(
     start_time = pytime.time()
     placed = 0
     while placed < total_qty and pytime.time() - start_time < duration:
-        df = fetch_minute_df_safe(symbol)
+        try:
+            df = fetch_minute_df_safe(symbol)
+        except DataFetchError:
+            logger.error("[VWAP] no minute data for %s", symbol)
+            break
         if df is None or df.empty:
             logger.warning(
                 "[VWAP] missing bars, aborting VWAP slice", extra={"symbol": symbol}
@@ -3679,7 +3715,24 @@ def pov_submit(
     retries = 0
     interval = cfg.sleep_interval
     while placed < total_qty:
-        df = fetch_minute_df_safe(symbol)
+        try:
+            df = fetch_minute_df_safe(symbol)
+        except DataFetchError:
+            retries += 1
+            if retries > cfg.max_retries:
+                logger.warning(
+                    f"[pov_submit] no minute data after {cfg.max_retries} retries, aborting",
+                    extra={"symbol": symbol},
+                )
+                return False
+            logger.warning(
+                f"[pov_submit] missing bars, retry {retries}/{cfg.max_retries} in {interval:.1f}s",
+                extra={"symbol": symbol},
+            )
+            sleep_time = interval * (0.8 + 0.4 * random.random())
+            pytime.sleep(sleep_time)
+            interval = min(interval * cfg.backoff_factor, cfg.max_backoff_interval)
+            continue
         if df is None or df.empty:
             retries += 1
             if retries > cfg.max_retries:
@@ -3832,7 +3885,11 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
         logger.info("MARKET_ENTRY", extra={"symbol": symbol, "qty": qty})
         submit_order(ctx, symbol, qty, side)
 
-    raw = fetch_minute_df_safe(symbol)
+    try:
+        raw = fetch_minute_df_safe(symbol)
+    except DataFetchError:
+        logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
+        return
     if raw is None or raw.empty:
         logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
         return
@@ -3877,7 +3934,11 @@ def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> Non
     if qty is None or not np.isfinite(qty) or qty <= 0:
         logger.warning(f"Skipping {symbol}: computed qty <= 0")
         return
-    raw = fetch_minute_df_safe(symbol)
+    try:
+        raw = fetch_minute_df_safe(symbol)
+    except DataFetchError:
+        logger.warning("NO_MINUTE_BARS_POST_EXIT", extra={"symbol": symbol})
+        raw = pd.DataFrame()
     exit_price = get_latest_close(raw) if raw is not None else 1.0
     send_exit_order(ctx, symbol, qty, exit_price, "manual_exit")
     ctx.trade_logger.log_exit(state, symbol, exit_price)
@@ -4079,6 +4140,9 @@ def _fetch_feature_data(
     """
     try:
         raw_df = fetch_minute_df_safe(symbol)
+    except DataFetchError:
+        logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+        return None, None, False
     except APIError as e:
         msg = str(e).lower()
         if "subscription does not permit querying recent sip data" in msg:
@@ -4544,7 +4608,11 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     total_value = float(ctx.api.get_account().portfolio_value)
     for sym, w in current.items():
         target_dollar = w * total_value
-        raw = fetch_minute_df_safe(sym)
+        try:
+            raw = fetch_minute_df_safe(sym)
+        except DataFetchError:
+            logger.warning("REBALANCE_NO_DATA | %s", sym)
+            continue
         price = get_latest_close(raw) if raw is not None else 1.0
         if price <= 0:
             continue
@@ -5705,7 +5773,13 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                     )
                     valid_symbols = []
                     for symbol in symbols:
-                        df_min = fetch_minute_df_safe(symbol)
+                        try:
+                            df_min = fetch_minute_df_safe(symbol)
+                        except DataFetchError:
+                            logger.info(
+                                f"{symbol} returned no minute data; skipping symbol."
+                            )
+                            continue
                         if df_min is None or df_min.empty:
                             logger.info(
                                 f"{symbol} returned no minute data; skipping symbol."
@@ -5917,7 +5991,10 @@ def run_multi_strategy(ctx: BotContext) -> None:
                 price = 0.0
             if price <= 0:
                 time.sleep(2)
-                data = fetch_minute_df_safe(sig.symbol)
+                try:
+                    data = fetch_minute_df_safe(sig.symbol)
+                except DataFetchError:
+                    data = pd.DataFrame()
                 if data is not None and not data.empty:
                     row = data.iloc[-1]
                     logger.debug(
@@ -6071,7 +6148,11 @@ def _process_symbols(
             if not is_market_open():
                 logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
                 return
-            price_df = fetch_minute_df_safe(symbol)
+            try:
+                price_df = fetch_minute_df_safe(symbol)
+            except DataFetchError:
+                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+                return
             # AI-AGENT-REF: record raw row count before validation
             row_counts[symbol] = len(price_df)
             logger.info(f"FETCHED_ROWS | {symbol} rows={len(price_df)}")
@@ -6117,7 +6198,11 @@ def manage_position_risk(ctx: BotContext, position) -> None:
     try:
         atr = utils.get_rolling_atr(symbol)
         vwap = utils.get_current_vwap(symbol)
-        price_df = fetch_minute_df_safe(symbol)
+        try:
+            price_df = fetch_minute_df_safe(symbol)
+        except DataFetchError:
+            logger.critical(f"No minute data for {symbol}, skipping.")
+            return
         logger.debug(f"Latest rows for {symbol}:\n{price_df.tail(3)}")
         if "close" in price_df.columns:
             price_series = price_df["close"].dropna()
