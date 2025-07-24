@@ -18,7 +18,7 @@ def test_short_close_queued(monkeypatch, caplog):
     monkeypatch.setattr(bot_engine, "log_skip_cooldown", lambda *a, **k: None)
     bot_engine.skipped_duplicates = types.SimpleNamespace(inc=lambda: None)
 
-    processed, _ = bot_engine._process_symbols(["TSLA"], 1000.0, None, True)
+    processed, _ = bot_engine._process_symbols(["TSLA"], 1000.0, None, True, True)
     assert processed == []
-    assert orders == [("TSLA", 44, "buy")]
-    assert any("SHORT_CLOSE_QUEUED" in r.message for r in caplog.records)
+    assert orders == []
+    assert any("SKIP_SHORT_CLOSE_QUEUED" in r.message for r in caplog.records)

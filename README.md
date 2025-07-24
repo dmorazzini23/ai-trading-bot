@@ -74,7 +74,6 @@ Additional key variables include:
 
 * `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`: trading credentials
 * `BOT_MODE`: e.g. `balanced`, `production`
-* `SLACK_WEBHOOK`: optional for critical alerts
 * `BOT_LOG_FILE`: path for rotating logs
 * `SCHEDULER_SLEEP_SECONDS`: delay between scheduler cycles (30–60s recommended)
 
@@ -93,7 +92,6 @@ By default logs write to `logs/scheduler.log` or `$BOT_LOG_FILE` if set, plus st
 tail -F logs/scheduler.log
 ```
 
-Enable Slack alerts by setting `SLACK_WEBHOOK`.
 
 Example logging init:
 

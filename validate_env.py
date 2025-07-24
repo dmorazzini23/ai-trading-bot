@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     BUY_THRESHOLD: float = 0.5
     WEBHOOK_SECRET: str = ""
     WEBHOOK_PORT: int = 9000
-    SLACK_WEBHOOK: str | None = None
     SLIPPAGE_THRESHOLD: float = 0.003
     REBALANCE_INTERVAL_MIN: int = 1440
     SHADOW_MODE: bool = False

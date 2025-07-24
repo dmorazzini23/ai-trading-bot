@@ -38,7 +38,6 @@ from tenacity import (
 )
 from ratelimit import limits, sleep_and_retry
 
-from alerts import send_slack_alert
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +232,6 @@ def submit_order(api, req, log: logging.Logger | None = None):
                 time.sleep(wait)
                 continue
             log.error("HTTPError in Alpaca submit_order: %s", e, exc_info=True)
-            send_slack_alert("HTTP error submitting order: %s" % e)
             if attempt == max_retries:
                 raise
         except requests.exceptions.RequestException as exc:
@@ -246,9 +244,6 @@ def submit_order(api, req, log: logging.Logger | None = None):
                 exc_info=True,
             )
             if attempt == max_retries:
-                send_slack_alert(
-                    "Failed to submit order after %s attempts: %s" % (max_retries, exc)
-                )
                 raise
             time.sleep(attempt * 2)
         finally:
