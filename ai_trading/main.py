@@ -31,22 +31,13 @@ logger = logging.getLogger(__name__)
 _run_lock = Lock()
 
 
-def run_bot(venv_dir: str, script: str, argv: list[str] | str | None = None) -> int:
-    """Launch the trading bot located at ``script`` using the venv ``venv_dir``."""
-    # AI-AGENT-REF: ensure subprocess uses specific interpreter version
-    python_exec = os.path.join(
-        venv_dir,
-        "bin",
-        f"python{sys.version_info.major}.{sys.version_info.minor}",
-    )
-    if not os.path.isfile(python_exec):
-        raise RuntimeError(f"Python executable not found: {python_exec}")
-    args: list[str] = []
-    if argv:
-        args = argv if isinstance(argv, list) else [argv]
-    cmd = [python_exec, script] + args
-    proc = subprocess.Popen(cmd)
-    return proc.wait()
+def run_bot(python: str, run_py: str, extra_args: list[str] | None = None) -> int:
+    """Spawn a trading child process using ``python`` to execute ``run_py``."""
+    # AI-AGENT-REF: ensure child process only runs trading loop
+    cmd = [python, "-m", "ai_trading.main", "--bot-only"]
+    if extra_args:
+        cmd.extend(extra_args)
+    return subprocess.call(cmd)
 
 
 def create_flask_app() -> Flask:
@@ -104,9 +95,10 @@ def main() -> None:
         signal.signal(signal.SIGINT, _handler)
         thread = threading.Thread(target=run_flask_app, args=(port,), daemon=True)
         thread.start()
-        run_bot(sys.prefix, str(project_root / "runner.py"))
-        stop_event.set()
-        return
+        # spawn trading child in --bot-only mode
+        run_bot(sys.prefix, str(project_root / "run.py"))
+        # now block parent until a shutdown signal arrives
+        stop_event.wait()
 
     run_flask_app()
 

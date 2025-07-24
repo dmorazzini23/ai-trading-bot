@@ -48,46 +48,46 @@ def test_run_flask_app_port_in_use(monkeypatch):
     assert called == [5678]
 
 
-def test_run_bot_missing_exec(monkeypatch):
-    """run_bot raises when python executable missing."""
-    monkeypatch.setattr(main.os.path, "isfile", lambda p: False)
-    with pytest.raises(RuntimeError):
-        main.run_bot("venv", "run.py")
+def test_run_bot_invokes(monkeypatch):
+    """run_bot delegates to subprocess.call with bot-only."""
+    called = {}
+
+    def fake_call(cmd):
+        called["cmd"] = cmd
+        return 0
+
+    monkeypatch.setattr(main.subprocess, "call", fake_call)
+    ret = main.run_bot("python", "run.py", ["--x"])
+    assert ret == 0
+    assert called["cmd"] == ["python", "-m", "ai_trading.main", "--bot-only", "--x"]
 
 
 def test_run_bot_success(monkeypatch):
-    """Subprocess is invoked when executable exists."""
-    monkeypatch.setattr(main.os.path, "isfile", lambda p: True)
+    """Subprocess call returns code."""
     called = {}
-    class DummyProc:
-        def wait(self):
-            return 7
-    def fake_popen(cmd):
+
+    def fake_call(cmd):
         called["cmd"] = cmd
-        return DummyProc()
-    monkeypatch.setattr(main.subprocess, "Popen", fake_popen)
-    ret = main.run_bot("venv", "run.py", ["--test"])
+        return 7
+
+    monkeypatch.setattr(main.subprocess, "call", fake_call)
+    ret = main.run_bot("python3", "run.py", ["--test"])
     assert ret == 7
-    assert called["cmd"][0].startswith("venv/bin/python")
+    assert called["cmd"] == ["python3", "-m", "ai_trading.main", "--bot-only", "--test"]
 
 
 def test_run_bot_string_arg(monkeypatch):
-    """Single string arg is converted correctly."""
-    monkeypatch.setattr(main.os.path, "isfile", lambda p: True)
+    """String argument appended correctly."""
     called = {}
 
-    class DummyProc:
-        def wait(self):
-            return 1
-
-    def fake_popen(cmd):
+    def fake_call(cmd):
         called["cmd"] = cmd
-        return DummyProc()
+        return 1
 
-    monkeypatch.setattr(main.subprocess, "Popen", fake_popen)
-    ret = main.run_bot("venv", "run.py", "--flag")
+    monkeypatch.setattr(main.subprocess, "call", fake_call)
+    ret = main.run_bot("python3", "run.py", "--flag")
     assert ret == 1
-    assert called["cmd"][1:] == ["run.py", "--flag"]
+    assert called["cmd"] == ["python3", "-m", "ai_trading.main", "--bot-only", "--flag"]
 
 
 def test_validate_environment_missing(monkeypatch):
