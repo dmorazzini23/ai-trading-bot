@@ -73,7 +73,7 @@ def test_create_flask_routes():
 def test_main_serve_api(monkeypatch):
     """main launches Flask thread and bot when --serve-api used."""
     monkeypatch.setattr(sys, "argv", ["ai_trading", "--serve-api"])
-    monkeypatch.setattr(main, "run_bot", lambda v, s: 0)
+    monkeypatch.setattr(main, "run_bot", lambda v, s, extra_args=None: 0)
     called = {}
 
     class DummyThread:
