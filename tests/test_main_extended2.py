@@ -100,7 +100,13 @@ def test_validate_environment_missing(monkeypatch):
 def test_main_bot_only(monkeypatch):
     """main runs bot and exits with its return code."""
     monkeypatch.setattr(sys, 'argv', ['ai_trading', '--bot-only'])
-    monkeypatch.setattr(main, 'run_bot', lambda v, s, argv=None: 5)
+    called = {}
+
+    def _run_bot(python, script, argv=None):
+        called['python'] = python
+        return 5
+
+    monkeypatch.setattr(main, 'run_bot', _run_bot)
     monkeypatch.setattr(main, 'run_flask_app', lambda port: None)
     monkeypatch.setattr(main, 'setup_logging', lambda *a, **k: logging.getLogger('t'))
     monkeypatch.setattr(main, 'load_dotenv', lambda *a, **k: None)
@@ -109,3 +115,4 @@ def test_main_bot_only(monkeypatch):
     monkeypatch.setattr(sys, 'exit', lambda code=0: exits.append(code))
     main.main()
     assert exits == [5]
+    assert called['python'] == sys.executable
