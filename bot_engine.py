@@ -2092,8 +2092,12 @@ class SignalManager:
             logger.exception("Error in signal_vsa")
             return -1, 0.0, "vsa"
 
-    def signal_ml(self, df: pd.DataFrame, model: Any = None) -> Tuple[int, float, str]:
+    def signal_ml(self, df: pd.DataFrame, model: Any = None) -> Tuple[int, float, str] | None:
         """Machine learning prediction signal with probability logging."""
+        # AI-AGENT-REF: gracefully skip ML when model is missing
+        if model is None:
+            logger.warning("signal_ml skipped: no ML model loaded")
+            return None
         try:
             if hasattr(model, "feature_names_in_"):
                 feat = list(model.feature_names_in_)
@@ -2103,10 +2107,10 @@ class SignalManager:
             X = df[feat].iloc[-1].values.reshape(1, -1)
             try:
                 pred = model.predict(X)[0]
-            except ValueError as e:
-                logger.error(f"signal_ml failed: {e}")
+                proba = float(model.predict_proba(X)[0][pred])
+            except Exception as e:
+                logger.error("signal_ml predict failed: %s", e)
                 return -1, 0.0, "ml"
-            proba = float(model.predict_proba(X)[0][pred])
             s = 1 if pred == 1 else -1
             logger.info(
                 "ML_SIGNAL", extra={"prediction": int(pred), "probability": proba}
