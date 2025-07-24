@@ -6,21 +6,23 @@ import time
 from threading import Thread
 
 from dotenv import load_dotenv
+from validate_env import Settings
 
 import ai_trading.app as app
 from ai_trading.runner import run_cycle
 import utils
+
+config = Settings()
 
 logger = logging.getLogger(__name__)
 
 
 def validate_environment() -> None:
     """Ensure required environment variables are present."""
-    import config
-
     if not config.WEBHOOK_SECRET:
-        raise RuntimeError("Missing required environment variables: WEBHOOK_SECRET")
-    config.validate_environment()
+        raise RuntimeError("WEBHOOK_SECRET is required")
+    if not config.ALPACA_API_KEY or not config.ALPACA_SECRET_KEY:
+        raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
 
 
 def run_bot(*_a, **_k) -> int:
@@ -30,11 +32,12 @@ def run_bot(*_a, **_k) -> int:
     return 0
 
 
-def run_flask_app(port: int) -> None:
+def run_flask_app(port: int = 5000) -> None:
     """Launch Flask API on an available port."""
-    application = app.create_app()
+    # AI-AGENT-REF: simplified port fallback logic
     if utils.get_pid_on_port(port):
-        port = utils.get_free_port(port + 1) or (port + 1)
+        port += 1
+    application = app.create_app()
     application.run(host="0.0.0.0", port=port)
 
 
