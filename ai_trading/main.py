@@ -7,8 +7,9 @@ from threading import Thread
 
 from dotenv import load_dotenv
 
-from ai_trading.app import create_app
+import ai_trading.app as app
 from ai_trading.runner import run_cycle
+import utils
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +30,17 @@ def run_bot(*_a, **_k) -> int:
     return 0
 
 
+def run_flask_app(port: int) -> None:
+    """Launch Flask API on an available port."""
+    application = app.create_app()
+    if utils.get_pid_on_port(port):
+        port = utils.get_free_port(port + 1) or (port + 1)
+    application.run(host="0.0.0.0", port=port)
+
+
 def start_api() -> None:
     """Spin up the Flask API server."""
-    app = create_app()
-    app.run(host="0.0.0.0", port=int(os.getenv("API_PORT", 9001)), debug=False)
+    run_flask_app(int(os.getenv("API_PORT", 9001)))
 
 
 def main() -> None:
