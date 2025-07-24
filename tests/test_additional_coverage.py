@@ -57,6 +57,8 @@ def test_create_flask_routes():
     class DummyClient:
         def __init__(self, *a, **k):
             pass
+        def get(self, *a, **k):
+            return types.SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
     flask_mod.testing = types.SimpleNamespace(FlaskClient=DummyClient)
     sys.modules['flask'] = flask_mod
     sys.modules['flask.testing'] = types.ModuleType('flask.testing')
