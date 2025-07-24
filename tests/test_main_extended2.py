@@ -18,6 +18,7 @@ flask_mod.Flask = Flask
 flask_mod.jsonify = lambda *a, **k: {}
 sys.modules["flask"] = flask_mod
 import ai_trading.main as main
+import ai_trading.app as app
 
 
 def test_run_flask_app(monkeypatch):
@@ -28,7 +29,7 @@ def test_run_flask_app(monkeypatch):
         def run(self, host, port):
             called["args"] = (host, port)
 
-    monkeypatch.setattr(main, "create_flask_app", lambda: App())
+    monkeypatch.setattr(app, "create_app", lambda: App())
     main.run_flask_app(1234)
     assert called["args"] == ("0.0.0.0", 1234)
 
@@ -41,53 +42,22 @@ def test_run_flask_app_port_in_use(monkeypatch):
         def run(self, host, port):
             called.append(port)
 
-    monkeypatch.setattr(main, "create_flask_app", lambda: App())
+    monkeypatch.setattr(app, "create_app", lambda: App())
     monkeypatch.setattr(main.utils, "get_pid_on_port", lambda p: 111)
     monkeypatch.setattr(main.utils, "get_free_port", lambda *a, **k: 5678)
     main.run_flask_app(1234)
     assert called == [5678]
 
 
-def test_run_bot_invokes(monkeypatch):
-    """run_bot delegates to subprocess.call with bot-only."""
+def test_run_bot_calls_cycle(monkeypatch):
+    """run_bot executes a trading cycle in-process."""
     called = {}
 
-    def fake_call(cmd):
-        called["cmd"] = cmd
-        return 0
-
-    monkeypatch.setattr(main.subprocess, "call", fake_call)
-    ret = main.run_bot("python", "run.py", ["--x"])
-    assert ret == 0
-    assert called["cmd"] == ["python", "-m", "ai_trading.main", "--bot-only", "--x"]
-
-
-def test_run_bot_success(monkeypatch):
-    """Subprocess call returns code."""
-    called = {}
-
-    def fake_call(cmd):
-        called["cmd"] = cmd
-        return 7
-
-    monkeypatch.setattr(main.subprocess, "call", fake_call)
-    ret = main.run_bot("python3", "run.py", ["--test"])
-    assert ret == 7
-    assert called["cmd"] == ["python3", "-m", "ai_trading.main", "--bot-only", "--test"]
-
-
-def test_run_bot_string_arg(monkeypatch):
-    """String argument appended correctly."""
-    called = {}
-
-    def fake_call(cmd):
-        called["cmd"] = cmd
-        return 1
-
-    monkeypatch.setattr(main.subprocess, "call", fake_call)
-    ret = main.run_bot("python3", "run.py", "--flag")
-    assert ret == 1
-    assert called["cmd"] == ["python3", "-m", "ai_trading.main", "--bot-only", "--flag"]
+    monkeypatch.setattr(
+        main, "run_cycle", lambda: called.setdefault("ran", True)
+    )
+    assert main.run_bot() == 0
+    assert called["ran"]
 
 
 def test_validate_environment_missing(monkeypatch):
@@ -97,22 +67,16 @@ def test_validate_environment_missing(monkeypatch):
         main.validate_environment()
 
 
-def test_main_bot_only(monkeypatch):
-    """main runs bot and exits with its return code."""
-    monkeypatch.setattr(sys, 'argv', ['ai_trading', '--bot-only'])
+def test_main_runs_once(monkeypatch):
+    """main executes a single cycle when configured."""
+    monkeypatch.setenv("SCHEDULER_ITERATIONS", "1")
     called = {}
 
-    def _run_bot(python, script, argv=None):
-        called['python'] = python
-        return 5
-
-    monkeypatch.setattr(main, 'run_bot', _run_bot)
-    monkeypatch.setattr(main, 'run_flask_app', lambda port: None)
-    monkeypatch.setattr(main, 'setup_logging', lambda *a, **k: logging.getLogger('t'))
-    monkeypatch.setattr(main, 'load_dotenv', lambda *a, **k: None)
-    monkeypatch.setattr(main, 'validate_environment', lambda: None)
-    exits = []
-    monkeypatch.setattr(sys, 'exit', lambda code=0: exits.append(code))
+    monkeypatch.setattr(main, "start_api", lambda: called.setdefault("api", True))
+    def _cycle():
+        called["cycle"] = called.get("cycle", 0) + 1
+    monkeypatch.setattr(main, "run_cycle", _cycle)
+    monkeypatch.setattr(main.time, "sleep", lambda s: None)
     main.main()
-    assert exits == [5]
-    assert called['python'] == sys.executable
+    assert called.get("api")
+    assert called.get("cycle") == 1
