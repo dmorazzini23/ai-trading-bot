@@ -2314,7 +2314,8 @@ class SignalManager:
                 adj.append((s, w, l))
 
         score = sum(s * w for s, w, _ in adj)
-        conf = min(abs(score), 1.0)
+        confidences = [w for _, w, _ in signals]
+        conf = max(confidences) if confidences else 0.0
         if score > 0.5:
             final = 1
         elif score < -0.5:
