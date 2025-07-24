@@ -41,7 +41,7 @@ def run_bot(venv_dir: str, script: str, argv: list[str] | str | None = None) -> 
     )
     if not os.path.isfile(python_exec):
         raise RuntimeError(f"Python executable not found: {python_exec}")
-    args = []
+    args: list[str] = []
     if argv:
         args = argv if isinstance(argv, list) else [argv]
     cmd = [python_exec, script] + args
@@ -89,7 +89,7 @@ def main() -> None:
     project_root = Path(__file__).resolve().parents[1]
 
     if "--bot-only" in sys.argv:
-        exit_code = run_bot(sys.prefix, str(project_root / "run.py"))
+        exit_code = run_bot(sys.prefix, str(project_root / "runner.py"))
         sys.exit(exit_code)
         return
 
@@ -104,7 +104,7 @@ def main() -> None:
         signal.signal(signal.SIGINT, _handler)
         thread = threading.Thread(target=run_flask_app, args=(port,), daemon=True)
         thread.start()
-        run_bot(sys.prefix, str(project_root / "run.py"))
+        run_bot(sys.prefix, str(project_root / "runner.py"))
         stop_event.set()
         return
 
