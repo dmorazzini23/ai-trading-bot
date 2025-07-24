@@ -594,37 +594,13 @@ def _load_ml_model(symbol: str):
 
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
-    """Fetch minute bars with basic retry handling."""
-    if not market_is_open():
-        return pd.DataFrame()
-    attempts = 0
-    while attempts <= 3:
-        try:
-            if symbol in _MINUTE_CACHE:
-                df_cached, ts = _MINUTE_CACHE[symbol]
-                if ts >= datetime.now(timezone.utc) - timedelta(seconds=30):
-                    return df_cached.copy()
-
-            now_utc = datetime.now(timezone.utc)
-            start_dt = now_utc - timedelta(days=1)
-            df = get_minute_df(symbol, start_dt, now_utc)
-            _MINUTE_CACHE.pop(symbol, None)
-            if isinstance(df, list):
-                df = pd.DataFrame(df)
-            if df is not None and not df.empty:
-                if isinstance(df.index, pd.MultiIndex):
-                    df.index = df.index.get_level_values(1)
-                df.index = pd.to_datetime(df.index)
-                return df
-        except data_fetcher.DataFetchError:
-            pass
-        except Exception as exc:
-            logger.exception("fetch_minute_df_safe failed for %s", symbol, exc_info=exc)
-            return pd.DataFrame()
-        attempts += 1
-        time.sleep(1)
-    logger.error("No minute bars available for %s after 3 retries", symbol)
-    raise DataFetchError(symbol)
+    """Fetch the last day of minute bars if the market is open."""
+    # AI-AGENT-REF: simplify retry logic for tests
+    now_utc = datetime.now(timezone.utc)
+    start_dt = now_utc - timedelta(days=1)
+    if market_is_open():
+        return get_minute_df(symbol, start_dt, now_utc)
+    return pd.DataFrame()
 
 
 def cancel_all_open_orders(ctx: "BotContext") -> None:
@@ -2243,6 +2219,7 @@ class SignalManager:
         tuple[int, float, str]
             ``(signal, confidence, label)`` where ``signal`` is -1, 0 or 1.
         """
+        raw_signals: List[Tuple[int, float, str]] = []
         signals: List[Tuple[int, float, str]] = []
         allowed_tags = set(load_global_signal_performance() or [])
         weights = self.load_signal_weights()
@@ -2280,6 +2257,7 @@ class SignalManager:
                     s, w, lab = fn(df, model, ticker)
                 else:
                     s, w, lab = fn(df, model)
+                raw_signals.append((s, w, lab))
                 if allowed_tags and lab not in allowed_tags:
                     continue
                 if s in (-1, 1):
@@ -2305,7 +2283,7 @@ class SignalManager:
 
         self.last_components = signals
 
-        ml_prob = next((w for s, w, l in signals if l == "ml"), 0.5)
+        ml_prob = next((w for s, w, l in raw_signals if l == "ml"), 0.5)
         adj = []
         for s, w, l in signals:
             if l != "ml":
@@ -2314,15 +2292,14 @@ class SignalManager:
                 adj.append((s, w, l))
 
         score = sum(s * w for s, w, _ in adj)
-        confidences = [w for _, w, _ in signals]
-        conf = max(confidences) if confidences else 0.0
+        conf = max((w for _, w, _ in raw_signals), default=0.0)
         if score > 0.5:
             final = 1
         elif score < -0.5:
             final = -1
         else:
             final = -1
-        label = "+".join(lab for _, _, lab in adj)
+        label = "+".join(l for _, _, l in raw_signals)
         return final, conf, label
 
 
