@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from flask import Flask
+from flask import Flask, jsonify
 
 
-def create_app() -> Flask:
-    """Flask application factory used by the scheduler API."""
+def create_app():
     app = Flask(__name__)
 
     @app.route("/health")
-    @app.route("/healthz")
-    def _health() -> dict[str, str]:  # pragma: no cover - trivial route
-        return {"status": "ok"}
+    def health():
+        return jsonify(status="ok")
 
     return app
