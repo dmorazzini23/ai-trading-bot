@@ -72,7 +72,7 @@ def test_composite_signal_confidence(monkeypatch):
     monkeypatch.setattr(bot, 'load_global_signal_performance', lambda: [])
     monkeypatch.setattr(sm, 'signal_momentum', lambda df, model=None: (1, 0.4, 'momentum'))
     monkeypatch.setattr(sm, 'signal_mean_reversion', lambda df, model=None: (-1, 0.2, 'mean_reversion'))
-    monkeypatch.setattr(sm, 'signal_ml', lambda df, model=None: (1, 0.6, 'ml'))
+    monkeypatch.setattr(sm, 'signal_ml', lambda df, model=None, symbol=None: (1, 0.6, 'ml'))
     monkeypatch.setattr(sm, 'signal_sentiment', lambda ctx, ticker, df=None, model=None: (1, 0.1, 'sentiment'))
     monkeypatch.setattr(sm, 'signal_regime', lambda state, df, model=None: (1, 1.0, 'regime'))
     monkeypatch.setattr(sm, 'signal_stochrsi', lambda df, model=None: (1, 0.1, 'stochrsi'))

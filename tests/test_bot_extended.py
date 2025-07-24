@@ -3,6 +3,7 @@ import types
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 # Ensure repository root on path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -215,15 +216,14 @@ def test_get_latest_close_edge_cases():
 
 
 def test_fetch_minute_df_safe_market_closed(monkeypatch):
-    """No data is returned when the market is closed."""
-    monkeypatch.setattr(bot, "market_is_open", lambda now=None: False)
-    result = bot.fetch_minute_df_safe("AAPL")
-    assert result.empty
+    """Error is raised when no data is returned."""
+    monkeypatch.setattr(bot, "get_minute_df", lambda *a, **k: pd.DataFrame())
+    with pytest.raises(bot.DataFetchError):
+        bot.fetch_minute_df_safe("AAPL")
 
 
 def test_fetch_minute_df_safe_open(monkeypatch):
     """DataFrame is returned when the market is open."""
-    monkeypatch.setattr(bot, "market_is_open", lambda now=None: True)
     df = pd.DataFrame({"close": [1]}, index=[pd.Timestamp("2024-01-01")])
     monkeypatch.setattr(bot, "get_minute_df", lambda symbol, start_date, end_date: df)
     result = bot.fetch_minute_df_safe("AAPL")

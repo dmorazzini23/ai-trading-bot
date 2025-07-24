@@ -256,19 +256,17 @@ def _build_fetcher_module():
     return mod
 
 
-def test_fetch_minute_df_safe_retries(monkeypatch):
+def test_fetch_minute_df_safe_no_retry(monkeypatch):
     mod = _build_fetcher_module()
     calls = []
 
     def fake_get(sym, start, end):
         calls.append(1)
-        if len(calls) < 4:
-            return pd.DataFrame()
         return pd.DataFrame({"close": [1]}, index=[pd.Timestamp("2023-01-01")])
 
     monkeypatch.setattr(mod, "get_minute_df", fake_get)
     result = mod.fetch_minute_df_safe("AAPL")
-    assert len(calls) == 4
+    assert len(calls) == 1
     assert not result.empty
 
 
@@ -278,4 +276,4 @@ def test_fetch_minute_df_safe_raises(monkeypatch, caplog):
     caplog.set_level("ERROR")
     with pytest.raises(mod.DataFetchError):
         mod.fetch_minute_df_safe("AAPL")
-    assert any("No minute bars available for AAPL" in r.message for r in caplog.records)
+    assert any("empty DataFrame" in r.message for r in caplog.records)
