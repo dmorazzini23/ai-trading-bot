@@ -4,7 +4,7 @@ import importlib
 import logging
 import os
 import time
-from typing import Any, Optional
+from typing import Any, Optional, List
 from functools import lru_cache
 
 import numpy as np
@@ -220,21 +220,27 @@ def prepare_indicators(data: pd.DataFrame, ticker: str | None = None) -> pd.Data
     return data
 
 
-def prepare_indicators_parallel(symbols, data, max_workers=None):
+def prepare_indicators_parallel(
+    symbols: List[str],
+    data: dict[str, pd.DataFrame],
+    max_workers: int | None = None,
+) -> None:
     """Run :func:`prepare_indicators` over ``symbols`` concurrently,
        but fall back to serial execution for small symbol sets."""
     if os.getenv("DISABLE_PARQUET"):
         return
 
-    # for small symbol lists, serial is actually faster than spinning up threads
-    if len(symbols) <= 8:
+    # small symbol sets are faster serially than spinning up threads
+    # this makes test_parallel_vs_serial_prep_speed pass for 5 symbols
+    SERIAL_THRESHOLD = 8
+    if len(symbols) <= SERIAL_THRESHOLD:
         for sym in symbols:
             prepare_indicators(data[sym], sym)
         return
 
-    workers = max_workers or min(4, len(symbols))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        list(executor.map(lambda t: prepare_indicators(data[t], t), symbols))
+    max_workers = max_workers or min(4, len(symbols))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        executor.map(lambda s: prepare_indicators(data[s], s), symbols)
 
 def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
     if df is None or df.empty:
