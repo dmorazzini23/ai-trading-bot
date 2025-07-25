@@ -2241,15 +2241,15 @@ class SignalManager:
             self.signal_obv(df, model),
             self.signal_vsa(df, model),
         ]
-        # drop any None (skipped) signals before unpacking
+        # drop skipped signals
         signals = [s for s in raw if s is not None]
         if not signals:
-            return 0, 0.0, "no_signals"
+            return 0.0, 0.0, "no_signals"
         self.last_components = signals
         score = sum(s * w for s, w, _ in signals)
         confidence = sum(w for _, w, _ in signals)
-        label = "+".join(label for _, _, label in signals)
-        return math.copysign(1, score), confidence, label
+        labels = "+".join(label for _, _, label in signals)
+        return math.copysign(1, score), confidence, labels
 
 
 # ─── G. BOT CONTEXT ───────────────────────────────────────────────────────────
@@ -4119,6 +4119,9 @@ def _fetch_feature_data(
         feat_df = prepare_indicators(df)
         if feat_df is None:
             return raw_df, None, True
+        # AI-AGENT-REF: fallback to raw data when feature engineering drops all rows
+        if feat_df.empty and raw_df is not None:
+            feat_df = raw_df.copy()
     except ValueError as exc:
         logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
         return raw_df, None, True
@@ -6253,6 +6256,24 @@ def run_all_trades_worker(state: BotState, model) -> None:
     state.last_run_at = now
     loop_start = time.monotonic()
     try:
+        # skip this cycle if any orders are still unfilled
+        pending = []
+        if hasattr(ctx.api, "list_orders"):
+            try:
+                pending = ctx.api.list_orders(status="new") + ctx.api.list_orders(status="pending_new")
+            except Exception as exc:  # pragma: no cover - network issues
+                logger.debug(f"order check failed: {exc}")
+        elif hasattr(ctx.api, "get_orders"):
+            try:
+                from alpaca.trading.requests import GetOrdersRequest
+                from alpaca.trading.enums import QueryOrderStatus
+
+                pending = ctx.api.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
+            except Exception as exc:  # pragma: no cover - network issues
+                logger.debug(f"order check failed: {exc}")
+        if pending:
+            logger.warning(f"Skipping trade cycle: {len(pending)} pending orders")
+            return
         if config.VERBOSE:
             logger.info(
                 "RUN_ALL_TRADES_START",
