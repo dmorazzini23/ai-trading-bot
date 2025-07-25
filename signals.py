@@ -226,7 +226,7 @@ def prepare_indicators_parallel(symbols, data, max_workers=None):
     if os.getenv("DISABLE_PARQUET"):
         return
 
-    # AI-AGENT-REF: avoid thread startup cost when few symbols
+    # for small symbol lists, serial is actually faster than spinning up threads
     if len(symbols) <= 8:
         for sym in symbols:
             prepare_indicators(data[sym], sym)
