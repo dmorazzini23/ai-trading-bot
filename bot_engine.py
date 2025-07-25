@@ -586,10 +586,12 @@ def _load_ml_model(symbol: str):
     if cached is not None:
         return cached
     if not path.exists():
-        logger.info("No ML model found for %s, skipping ML signal", symbol)
+        logger.error("ML model for %s not found", symbol)
         return None
+    # AI-AGENT-REF: use joblib for compatibility with tests
+    import joblib
     with path.open("rb") as f:
-        model = pickle.load(f)
+        model = joblib.load(f)
     _ML_MODEL_CACHE[symbol] = model
     return model
 
@@ -2238,7 +2240,7 @@ class SignalManager:
         df["sma_50"] = df["close"].rolling(window=50).mean()
         df["sma_200"] = df["close"].rolling(window=200).mean()
 
-        signals = [
+        raw_signals = [
             self.signal_momentum(df, model),
             self.signal_mean_reversion(df, model),
             self.signal_ml(df, model, ticker),
@@ -2248,6 +2250,8 @@ class SignalManager:
             self.signal_obv(df, model),
             self.signal_vsa(df, model),
         ]
+        # AI-AGENT-REF: filter out skipped signals returned as None
+        signals = [sig for sig in raw_signals if sig is not None]
 
         if not signals:
             state.no_signal_events += 1
