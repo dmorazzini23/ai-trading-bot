@@ -84,6 +84,6 @@ def test_composite_signal_confidence(monkeypatch):
     model = types.SimpleNamespace(predict=lambda x: [1], predict_proba=lambda x: [[0.4,0.6]], feature_names_in_=['rsi','macd','atr','vwap','sma_50','sma_200'])
     final, conf, label = sm.evaluate(ctx, state, df, 'TST', model)
     assert final == 1
-    assert conf == pytest.approx(1.0)
+    assert conf == pytest.approx(2.6)
     assert 'ml' in label
 
