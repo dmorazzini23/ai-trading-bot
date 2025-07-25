@@ -23,6 +23,19 @@ mod.pickle = __import__("pickle")
 mod._ML_MODEL_CACHE = {}
 exec(compile(ast.Module([func], []), filename=str(SRC), mode="exec"), mod.__dict__)
 
+# Provide stub for ai_trading.model_loader used by _load_ml_model
+import sys
+stub = types.ModuleType("ai_trading.model_loader")
+def _stub_load(symbol: str):
+    path = Path("models") / f"{symbol}.pkl"
+    if not path.exists():
+        mod.logger.warning(f"No ML model for {symbol} at {path}")
+        return None
+    with open(path, "rb") as f:
+        return pickle.load(f)
+stub.load_model = _stub_load
+sys.modules["ai_trading.model_loader"] = stub
+
 
 def test_load_missing_logs_error(caplog):
     caplog.set_level("INFO")
