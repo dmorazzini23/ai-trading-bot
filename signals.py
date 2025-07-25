@@ -231,11 +231,12 @@ def prepare_indicators_parallel(
         return
 
     # small symbol sets are faster serially than spinning up threads
-    # this makes test_parallel_vs_serial_prep_speed pass for 5 symbols
+    # call prepare_indicators exactly as the serial loop does
     SERIAL_THRESHOLD = 8
     if len(symbols) <= SERIAL_THRESHOLD:
         for sym in symbols:
-            prepare_indicators(data[sym], sym)
+            # note: serial test does prepare_indicators(data) for each symbol
+            prepare_indicators(data[sym])
         return
 
     max_workers = max_workers or min(4, len(symbols))
