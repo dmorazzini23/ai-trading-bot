@@ -435,8 +435,9 @@ def get_historical_data(
         df[col] = df[col].astype(float)
 
     if df is None or df.empty:
-        # AI-AGENT-REF: raise explicit error when all providers return empty
-        raise DataSourceEmpty(symbol)
+        # AI-AGENT-REF: escalate when all fallbacks return no data
+        logger.error("_fetch_minute_data produced empty result for %s", symbol)
+        raise DataFetchError(f"no data for {symbol}")
 
     # ensure there's a timestamp column for the tests
     df = df.reset_index()
