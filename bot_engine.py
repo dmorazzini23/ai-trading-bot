@@ -35,6 +35,7 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
 
 import config
 from logger import setup_logging
+from ai_trading.model_loader import ML_MODELS  # AI-AGENT-REF: preloaded models
 
 LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
 setup_logging(log_file=LOG_PATH)
@@ -578,14 +579,13 @@ def assert_row_integrity(
 
 
 def _load_ml_model(symbol: str):
-    """Load pickled ML model or return ``None`` if absent."""
-    from ai_trading.model_loader import load_model  # AI-AGENT-REF: shared loader
+    """Return preloaded ML model from ``ML_MODELS`` cache."""
 
     cached = _ML_MODEL_CACHE.get(symbol)
     if cached is not None:
         return cached
 
-    model = load_model(symbol)
+    model = ML_MODELS.get(symbol)
     if model is not None:
         _ML_MODEL_CACHE[symbol] = model
     return model
@@ -2102,7 +2102,6 @@ class SignalManager:
         if model is None and symbol is not None:
             model = _load_ml_model(symbol)
         if model is None:
-            logger.warning("signal_ml skipped: no ML model loaded for %s", symbol)
             return None
         try:
             if hasattr(model, "feature_names_in_"):

@@ -637,9 +637,13 @@ def get_minute_df(
     cached = _MINUTE_CACHE.get(symbol)
     if cached is not None:
         df_cached, ts = cached
-        if not df_cached.empty and ts >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=1):
-            logger.debug("minute cache hit for %s", symbol)
-            return df_cached.copy()
+        if not df_cached.empty:
+            first_idx = df_cached.index[0]
+            if not isinstance(first_idx, pd.Timestamp) or start_dt < first_idx:
+                cached = None
+            elif ts >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=1):
+                logger.debug("minute cache hit for %s", symbol)
+                return df_cached.copy()
 
     alpaca_exc = finnhub_exc = yexc = None
     try:

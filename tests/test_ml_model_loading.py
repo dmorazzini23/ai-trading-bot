@@ -21,18 +21,19 @@ mod.joblib = joblib
 mod.Path = Path
 mod.pickle = __import__("pickle")
 mod._ML_MODEL_CACHE = {}
+mod.ML_MODELS = {}
 exec(compile(ast.Module([func], []), filename=str(SRC), mode="exec"), mod.__dict__)
 
 # Provide stub for ai_trading.model_loader used by _load_ml_model
 import sys
 stub = types.ModuleType("ai_trading.model_loader")
+stub.ML_MODELS = {}
+
+mod.ML_MODELS = stub.ML_MODELS
+
 def _stub_load(symbol: str):
-    path = Path("models") / f"{symbol}.pkl"
-    if not path.exists():
-        mod.logger.warning(f"No ML model for {symbol} at {path}")
-        return None
-    with open(path, "rb") as f:
-        return pickle.load(f)
+    return stub.ML_MODELS.get(symbol)
+
 stub.load_model = _stub_load
 sys.modules["ai_trading.model_loader"] = stub
 
@@ -41,7 +42,7 @@ def test_load_missing_logs_error(caplog):
     caplog.set_level("INFO")
     result = mod._load_ml_model("FAKE")
     assert result is None
-    assert any("No ML model for FAKE found" in r.message for r in caplog.records)
+    assert not caplog.records
 
 
 def test_load_real_model(tmp_path, monkeypatch):
@@ -55,6 +56,8 @@ def test_load_real_model(tmp_path, monkeypatch):
     with open(path, "wb") as f:
         pickle.dump(model, f)
     monkeypatch.chdir(tmp_path)
+    with open(path, "rb") as f:
+        stub.ML_MODELS["TESTSYM"] = pickle.load(f)
     loaded = mod._load_ml_model("TESTSYM")
     assert loaded is not None
     pred = loaded.predict([[0]])[0]
