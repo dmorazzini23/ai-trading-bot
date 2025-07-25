@@ -14,6 +14,13 @@ import numpy as np
 import metrics_logger
 import pandas as pd
 
+import torch
+import torch.nn as _nn
+
+# ensure torch.nn and Parameter live on the torch module
+torch.nn = _nn
+torch.nn.Parameter = _nn.Parameter
+
 open = open  # allow monkeypatching built-in open
 
 logger = logging.getLogger(__name__)
