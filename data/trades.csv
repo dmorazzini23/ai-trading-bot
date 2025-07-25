@@ -536,3 +536,6 @@ ecf4a43c-a437-486e-b99c-f7b7205449e0,2025-07-25T19:55:25.821125+00:00,GOOGL,buy,
 GOOGL,2025-07-25T19:55:25.821710+00:00,193.3,,,163,buy,momentum+mean_reversion+sentiment+regime+stochrsi+obv+vsa,,momentum+mean_reversion+sentiment+regime+stochrsi+obv+vsa,2.9385028313298927,
 ee69ddf3-f4d1-4f1d-92cb-728598cd2e7b,2025-07-25T19:57:44.030271+00:00,TSLA,buy,31,316.28,,"{'status': <OrderStatus.FILLED: 'filled'>, 'mode': 'LIVE'}",
 TSLA,2025-07-25T19:57:44.032144+00:00,315.97,,,63,buy,momentum+mean_reversion+sentiment+regime+stochrsi+obv+vsa,,momentum+mean_reversion+sentiment+regime+stochrsi+obv+vsa,2.813360427828017,
+symbol,entry_time,entry_price,exit_time,exit_price,qty,side,strategy,classification,signal_tags,regime
+AAPL,2024-01-01T09:30,150,2024-01-02T16:00,152,10,buy,mean_reversion,win,rsi+bollinger,bull
+MSFT,2024-01-03T09:30,300,2024-01-04T16:00,295,5,sell,momentum,loss,macd+rsi,bear

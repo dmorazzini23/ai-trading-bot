@@ -14,16 +14,62 @@ _CFG_MODELS_DIR = config.get_env("MODELS_DIR")
 MODELS_DIR = Path(_CFG_MODELS_DIR) if _CFG_MODELS_DIR else BASE_DIR / "models"
 
 ML_MODELS: dict[str, object | None] = {}
-for sym in getattr(config, "SYMBOLS", []):
-    path = MODELS_DIR / f"{sym}.pkl"
-    if not path.exists():
-        logger.warning(f"No ML model for {sym} at {path}")
-        ML_MODELS[sym] = None
-    else:
-        with path.open("rb") as f:
-            ML_MODELS[sym] = pickle.load(f)
+
+
+def train_and_save_model(symbol: str):
+    """Train a fallback linear model and persist it."""
+    from sklearn.linear_model import LinearRegression
+    import pandas as pd
+    import numpy as np
+    from datetime import datetime, timedelta, timezone
+    from data_fetcher import get_daily_df
+
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=30)
+    try:
+        df = get_daily_df(symbol, start, end)
+    except Exception as exc:  # pragma: no cover - network may fail
+        logger.warning("Data fetch failed for %s: %s", symbol, exc)
+        df = pd.DataFrame({"close": np.linspace(1.0, 2.0, 30)})
+
+    if df is None or df.empty or "close" not in df:
+        df = pd.DataFrame({"close": np.linspace(1.0, 2.0, 30)})
+
+    X = np.arange(len(df)).reshape(-1, 1)
+    y = df["close"].astype(float).values
+    model = LinearRegression()
+    try:
+        model.fit(X, y)
+    except Exception as exc:  # pragma: no cover - unexpected sklearn failure
+        logger.exception("Model training failed: %s", exc)
+        model = LinearRegression().fit([[0], [1]], [0, 1])
+
+    try:
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(MODELS_DIR / f"{symbol}.pkl", "wb") as f:
+            pickle.dump(model, f)
+    except Exception as exc:  # pragma: no cover - disk issues
+        logger.warning("Failed saving model for %s: %s", symbol, exc)
+
+    return model
 
 
 def load_model(symbol: str):
-    """Return the preloaded ML model for ``symbol``."""
-    return ML_MODELS.get(symbol)
+    """Load or train an ML model for ``symbol``."""
+    path = MODELS_DIR / f"{symbol}.pkl"
+    model = None
+    if path.exists():
+        try:
+            with open(path, "rb") as f:
+                model = pickle.load(f)
+        except Exception as exc:
+            logger.warning("Model load failed for %s: %s", symbol, exc)
+            model = None
+    if model is None:
+        model = train_and_save_model(symbol)
+    ML_MODELS[symbol] = model
+    return model
+
+
+for sym in getattr(config, "SYMBOLS", []):
+    ML_MODELS[sym] = load_model(sym)

@@ -247,27 +247,41 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
 
 
 def detect_market_regime_hmm(df: pd.DataFrame, n_states: int = 3) -> pd.DataFrame:
-    """Annotate ``df`` with hidden Markov market regimes."""
+    """Annotate ``df`` with HMM-based market regimes."""
     if GaussianHMM is None:
-        df["Regime"] = np.nan
+        logger.warning("hmmlearn not installed; skipping regime detection")
+        df["regime"] = np.nan
+        df["Regime"] = df["regime"]
         return df
-    returns = np.log(df["Close"]).diff().dropna().values.reshape(-1, 1)
-    if len(returns) < n_states * 10:
-        df["Regime"] = np.nan
+
+    col = "close" if "close" in df.columns else "Close"
+    if col not in df:
+        df["regime"] = np.nan
+        df["Regime"] = df["regime"]
         return df
+
+    returns = np.log(df[col]).diff().dropna().values.reshape(-1, 1)
+    n_states = 3 if len(returns) >= 60 else max(2, n_states)
+    if len(returns) < n_states * 5:
+        df["regime"] = np.nan
+        df["Regime"] = df["regime"]
+        return df
+
     try:
         model = GaussianHMM(
             n_components=n_states,
             covariance_type="diag",
-            n_iter=1000,
+            n_iter=200,
             random_state=42,
         )
         model.fit(returns)
-        hidden_states = model.predict(returns)
-        df["Regime"] = np.append([np.nan], hidden_states)
-    except Exception as e:  # pragma: no cover - hmmlearn may fail
-        logger.warning("HMM failed: %s", e)
-        df["Regime"] = np.nan
+        hidden = model.predict(returns)
+        df["regime"] = np.concatenate([[np.nan], hidden])
+    except Exception as exc:  # pragma: no cover - hmmlearn may fail
+        logger.warning("HMM regime detection failed: %s", exc)
+        df["regime"] = np.nan
+
+    df["Regime"] = df["regime"]
     return df
 
 
