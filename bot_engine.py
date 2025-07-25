@@ -579,12 +579,19 @@ def assert_row_integrity(
 
 def _load_ml_model(symbol: str):
     """Load pickled ML model or return ``None`` if absent."""
-    path = Path("models") / f"{symbol}.pkl"
-    if not path.exists():
-        logger.info(f"No ML model for {symbol} found")
+    try:
+        models_dir = Path(__file__).parent / "models"
+    except NameError:  # pragma: no cover - fallback for exec() without __file__
+        models_dir = Path("models")
+    model_path = models_dir / f"{symbol}.pkl"
+    if model_path.exists():
+        with open(model_path, "rb") as f:
+            model = pickle.load(f)
+            logger.info(f"Loaded ML model for {symbol} from {model_path}")
+            return model
+    else:
+        logger.warning(f"No ML model for {symbol} found at {model_path}")
         return None
-    with open(path, "rb") as f:
-        return pickle.load(f)
 
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
@@ -4120,7 +4127,10 @@ def _fetch_feature_data(
         if feat_df is None:
             return raw_df, None, True
         # AI-AGENT-REF: fallback to raw data when feature engineering drops all rows
-        if feat_df.empty and raw_df is not None:
+        if feat_df.empty:
+            logger.warning(
+                "Parsed feature DataFrame is empty; falling back to raw data"
+            )
             feat_df = raw_df.copy()
     except ValueError as exc:
         logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
@@ -6256,23 +6266,14 @@ def run_all_trades_worker(state: BotState, model) -> None:
     state.last_run_at = now
     loop_start = time.monotonic()
     try:
-        # skip this cycle if any orders are still unfilled
-        pending = []
-        if hasattr(ctx.api, "list_orders"):
-            try:
-                pending = ctx.api.list_orders(status="new") + ctx.api.list_orders(status="pending_new")
-            except Exception as exc:  # pragma: no cover - network issues
-                logger.debug(f"order check failed: {exc}")
-        elif hasattr(ctx.api, "get_orders"):
-            try:
-                from alpaca.trading.requests import GetOrdersRequest
-                from alpaca.trading.enums import QueryOrderStatus
-
-                pending = ctx.api.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
-            except Exception as exc:  # pragma: no cover - network issues
-                logger.debug(f"order check failed: {exc}")
-        if pending:
-            logger.warning(f"Skipping trade cycle: {len(pending)} pending orders")
+        # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
+        try:
+            open_orders = ctx.api.list_orders(status="open")
+        except Exception as exc:  # pragma: no cover - network issues
+            logger.debug(f"order check failed: {exc}")
+            open_orders = []
+        if any(o.status in ("new", "pending_new") for o in open_orders):
+            logger.warning("Detected pending orders; skipping this trade cycle")
             return
         if config.VERBOSE:
             logger.info(
