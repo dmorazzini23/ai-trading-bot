@@ -579,19 +579,16 @@ def assert_row_integrity(
 
 def _load_ml_model(symbol: str):
     """Load pickled ML model or return ``None`` if absent."""
-    try:
-        models_dir = Path(__file__).parent / "models"
-    except NameError:  # pragma: no cover - fallback for exec() without __file__
-        models_dir = Path("models")
-    model_path = models_dir / f"{symbol}.pkl"
-    if model_path.exists():
-        with open(model_path, "rb") as f:
-            model = pickle.load(f)
-            logger.info(f"Loaded ML model for {symbol} from {model_path}")
-            return model
-    else:
-        logger.warning(f"No ML model for {symbol} found at {model_path}")
-        return None
+    from ai_trading.model_loader import load_model  # AI-AGENT-REF: shared loader
+
+    cached = _ML_MODEL_CACHE.get(symbol)
+    if cached is not None:
+        return cached
+
+    model = load_model(symbol)
+    if model is not None:
+        _ML_MODEL_CACHE[symbol] = model
+    return model
 
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
