@@ -15,7 +15,7 @@ def test_hmm_regime_detection():
         pytest.skip("hmmlearn not installed")
     df = pd.DataFrame({"Close": np.random.rand(100) + 100})
     df = detect_market_regime_hmm(df)
-    assert "Regime" in df.columns
+    assert "regime" in df.columns
 
 
 @pytest.fixture

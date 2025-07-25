@@ -135,15 +135,22 @@ def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, fee
         "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY,
     }
     _log_http_request("GET", url, params, headers)
-    try:
-        resp = requests.get(url, params=params, headers=headers, timeout=10)
-        if resp.status_code == 400 and "invalid feed" in resp.text.lower() and feed != "sip":
-            logger.warning("Alpaca invalid feed %s for %s; retrying with SIP", feed, symbol)
-            params["feed"] = "sip"
+    delay = 1.0
+    for attempt in range(3):
+        try:
             resp = requests.get(url, params=params, headers=headers, timeout=10)
-    except requests.exceptions.RequestException as exc:
-        logger.exception("HTTP request error for %s", symbol, exc_info=exc)
-        raise DataFetchException(symbol, "alpaca", url, str(exc)) from exc
+            if resp.status_code == 400 and "invalid feed" in resp.text.lower() and feed != "sip":
+                logger.warning("Alpaca invalid feed %s for %s; retrying with SIP", feed, symbol)
+                params["feed"] = "sip"
+                resp = requests.get(url, params=params, headers=headers, timeout=10)
+            break
+        except requests.exceptions.RequestException as exc:
+            logger.warning("HTTP request failed %s/%s for %s: %s", attempt + 1, 3, symbol, exc)
+            if attempt == 2:
+                logger.exception("HTTP request error for %s", symbol, exc_info=exc)
+                raise DataFetchException(symbol, "alpaca", url, str(exc)) from exc
+            time.sleep(delay)
+            delay *= 2
 
     _log_http_response(resp)
     if resp.status_code != 200:

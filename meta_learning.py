@@ -20,21 +20,36 @@ logger = logging.getLogger(__name__)
 
 
 class MetaLearning:
-    """Simple meta-learning stub for dynamic strategy tuning."""
+    """Meta-learning wrapper using a simple linear model."""
 
     def __init__(self, model: Optional[Any] = None) -> None:
-        self.model = model or {}
+        from sklearn.linear_model import Ridge
 
-    def update(self, data: Any) -> None:
-        """Placeholder update routine with basic logging."""
-        logger.info(
-            "Updating MetaLearning with data shape: %s",
-            getattr(data, "shape", None),
-        )
+        self.model = model or Ridge(alpha=1.0)
 
-    def predict(self, features: Any) -> float:
-        """Return a dummy prediction score."""
-        return random.uniform(0, 1)
+    def train(self, df: pd.DataFrame, target: str = "target") -> None:
+        """Fit the meta learner using ``df`` columns except ``target``."""
+        if target not in df:
+            raise ValueError(f"target column '{target}' missing")
+        X = df.drop(columns=[target]).values
+        y = df[target].values
+        self.model.fit(X, y)
+
+    def predict(self, features: Any) -> np.ndarray:
+        """Predict ensemble weights from ``features``."""
+        if hasattr(self.model, "predict"):
+            return np.asarray(self.model.predict(features))
+        raise ValueError("Model not trained")
+
+    def save_checkpoint(self, path: str = "models/meta_learner.pkl") -> None:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(self.model, f)
+
+    def load_checkpoint(self, path: str = "models/meta_learner.pkl") -> None:
+        if Path(path).exists():
+            with open(path, "rb") as f:
+                self.model = pickle.load(f)
 
 
 def normalize_score(score: float, cap: float = 1.2) -> float:
