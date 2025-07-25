@@ -10,6 +10,7 @@ import os
 import sys
 import time
 import uuid
+import math
 import traceback
 import types
 import warnings
@@ -577,23 +578,13 @@ def assert_row_integrity(
 
 
 def _load_ml_model(symbol: str):
-    """
-    Load a pickled ML model for ``symbol`` from the ``models/`` directory.
-    If no file exists, return ``None`` so upstream logic can skip ML signals.
-    """
+    """Load pickled ML model or return ``None`` if absent."""
     path = Path("models") / f"{symbol}.pkl"
-    cached = _ML_MODEL_CACHE.get(symbol)
-    if cached is not None:
-        return cached
     if not path.exists():
-        logger.error("ML model for %s not found", symbol)
+        logger.info(f"No ML model for {symbol} found")
         return None
-    # AI-AGENT-REF: use joblib for compatibility with tests
-    import joblib
-    with path.open("rb") as f:
-        model = joblib.load(f)
-    _ML_MODEL_CACHE[symbol] = model
-    return model
+    with open(path, "rb") as f:
+        return pickle.load(f)
 
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
@@ -2240,7 +2231,7 @@ class SignalManager:
         df["sma_50"] = df["close"].rolling(window=50).mean()
         df["sma_200"] = df["close"].rolling(window=200).mean()
 
-        raw_signals = [
+        raw = [
             self.signal_momentum(df, model),
             self.signal_mean_reversion(df, model),
             self.signal_ml(df, model, ticker),
@@ -2250,20 +2241,15 @@ class SignalManager:
             self.signal_obv(df, model),
             self.signal_vsa(df, model),
         ]
-        # AI-AGENT-REF: filter out skipped signals returned as None
-        signals = [sig for sig in raw_signals if sig is not None]
-
+        # drop any None (skipped) signals before unpacking
+        signals = [s for s in raw if s is not None]
         if not signals:
-            state.no_signal_events += 1
-            return -1, 0.0, "no_signal"
-
+            return 0, 0.0, "no_signals"
         self.last_components = signals
-
         score = sum(s * w for s, w, _ in signals)
-        final = int(np.sign(score))
-        conf = max(w for _, w, _ in signals)
-        label = "+".join(name for _, _, name in signals)
-        return final, conf, label
+        confidence = sum(w for _, w, _ in signals)
+        label = "+".join(label for _, _, label in signals)
+        return math.copysign(1, score), confidence, label
 
 
 # ─── G. BOT CONTEXT ───────────────────────────────────────────────────────────
@@ -4126,6 +4112,8 @@ def _fetch_feature_data(
     df = compute_macds(df)
     logger.debug(f"{symbol} dataframe columns after indicators: {df.columns.tolist()}")
     df = ensure_columns(df, ["macd", "atr", "vwap", "macds"], symbol)
+    if df.empty and raw_df is not None:
+        df = raw_df.copy()
 
     try:
         feat_df = prepare_indicators(df)
