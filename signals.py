@@ -221,9 +221,17 @@ def prepare_indicators(data: pd.DataFrame, ticker: str | None = None) -> pd.Data
 
 
 def prepare_indicators_parallel(symbols, data, max_workers=None):
-    """Run :func:`prepare_indicators` over ``symbols`` concurrently."""
+    """Run :func:`prepare_indicators` over ``symbols`` concurrently,
+       but fall back to serial execution for small symbol sets."""
     if os.getenv("DISABLE_PARQUET"):
         return
+
+    # AI-AGENT-REF: avoid thread startup cost when few symbols
+    if len(symbols) <= 8:
+        for sym in symbols:
+            prepare_indicators(data[sym], sym)
+        return
+
     workers = max_workers or min(4, len(symbols))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         list(executor.map(lambda t: prepare_indicators(data[t], t), symbols))
@@ -246,7 +254,12 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
         return pd.Series(dtype=float)
 
 
-def detect_market_regime_hmm(df: pd.DataFrame, n_states: int = 3) -> pd.DataFrame:
+def detect_market_regime_hmm(
+    df: pd.DataFrame,
+    n_components: int = 3,
+    window_size: int = 1000,
+    max_iter: int = 10,
+) -> pd.DataFrame:
     """Annotate ``df`` with HMM-based market regimes."""
     if GaussianHMM is None:
         logger.warning("hmmlearn not installed; skipping regime detection")
@@ -260,23 +273,25 @@ def detect_market_regime_hmm(df: pd.DataFrame, n_states: int = 3) -> pd.DataFram
         df["Regime"] = df["regime"]
         return df
 
-    returns = np.log(df[col]).diff().dropna().values.reshape(-1, 1)
-    n_states = 3 if len(returns) >= 60 else max(2, n_states)
-    if len(returns) < n_states * 5:
+    # AI-AGENT-REF: train on rolling window for speed
+    all_returns = np.log(df[col]).diff().dropna().values.reshape(-1, 1)
+    if all_returns.size == 0:
         df["regime"] = np.nan
         df["Regime"] = df["regime"]
         return df
 
+    train = all_returns[-window_size:] if all_returns.shape[0] > window_size else all_returns
+
     try:
         model = GaussianHMM(
-            n_components=n_states,
+            n_components=n_components,
             covariance_type="diag",
-            n_iter=200,
+            n_iter=max_iter,
             random_state=42,
         )
-        model.fit(returns)
-        hidden = model.predict(returns)
-        df["regime"] = np.concatenate([[np.nan], hidden])
+        model.fit(train)
+        hidden_full = model.predict(all_returns)
+        df["regime"] = np.concatenate([[hidden_full[0]], hidden_full])
     except Exception as exc:  # pragma: no cover - hmmlearn may fail
         logger.warning("HMM regime detection failed: %s", exc)
         df["regime"] = np.nan
