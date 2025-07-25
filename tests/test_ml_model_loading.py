@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import joblib
+import pickle
 import numpy as np
 import pandas as pd
 import pytest
@@ -18,15 +19,16 @@ mod = types.ModuleType("bot_ml")
 mod.logger = __import__("logging").getLogger("bot_ml")
 mod.joblib = joblib
 mod.Path = Path
+mod.pickle = __import__("pickle")
 mod._ML_MODEL_CACHE = {}
 exec(compile(ast.Module([func], []), filename=str(SRC), mode="exec"), mod.__dict__)
 
 
 def test_load_missing_logs_error(caplog):
-    caplog.set_level("ERROR")
+    caplog.set_level("INFO")
     result = mod._load_ml_model("FAKE")
     assert result is None
-    assert any("ML model for FAKE not found" in r.message for r in caplog.records)
+    assert any("No ML model for FAKE found" in r.message for r in caplog.records)
 
 
 def test_load_real_model(tmp_path, monkeypatch):
@@ -37,7 +39,8 @@ def test_load_real_model(tmp_path, monkeypatch):
     y = np.array([0, 1])
     model.fit(X, y)
     path = models_dir / "TESTSYM.pkl"
-    joblib.dump(model, path)
+    with open(path, "wb") as f:
+        pickle.dump(model, f)
     monkeypatch.chdir(tmp_path)
     loaded = mod._load_ml_model("TESTSYM")
     assert loaded is not None

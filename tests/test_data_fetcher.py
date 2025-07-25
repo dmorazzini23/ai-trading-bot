@@ -120,6 +120,14 @@ def test_subscription_error_logged(monkeypatch, caplog):
 
     monkeypatch.setattr(data_fetcher, "client", DummyClient())
     monkeypatch.setattr(data_fetcher, "TimeFrame", types.SimpleNamespace(Minute="1Min"))
+    def fake_yf(sym):
+        idx = pd.date_range(start="2023-01-01 09:30", periods=5, freq="1min", tz="UTC")
+        return pd.DataFrame(
+            {"timestamp": idx, "open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1},
+        )
+
+    monkeypatch.setattr(data_fetcher, "fetch_minute_yfinance", fake_yf)
+    monkeypatch.setattr(data_fetcher.fh_fetcher, "fetch", lambda *a, **k: fake_yf("AAPL"))
 
     start = pd.Timestamp("2023-01-01", tz="UTC")
     end = pd.Timestamp("2023-01-02", tz="UTC")
