@@ -57,7 +57,6 @@ def test_save_and_load_checkpoint(monkeypatch):
     assert obj is data
 
 
-@pytest.mark.skip(reason="requires full MetaLearning backend")
 def test_optimize_signals(monkeypatch):
     m = types.SimpleNamespace(predict=lambda X: [0] * len(X))
     data = [1, 2]
@@ -158,9 +157,10 @@ def test_update_signal_weights_norm_zero(caplog):
     assert "Normalization factor zero" in caplog.text
 
 
-@pytest.mark.skip(reason="requires full MetaLearning backend")
 def test_portfolio_rl_trigger(monkeypatch):
-    import torch
+    torch = pytest.importorskip("torch")
+    if not hasattr(torch, "nn") or not hasattr(torch.nn, "Parameter"):
+        pytest.skip("torch stubs active")
     class FakeLinear(nn.Module):
         def __init__(self, *a, **k):
             super().__init__()

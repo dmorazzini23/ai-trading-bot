@@ -92,16 +92,13 @@ class FakeBars:
 
 
 def test_get_minute_df(monkeypatch):
-    pytest.skip("Skipping due to stubbed dependencies")
     df = pd.DataFrame(
         {"open": [1.0], "high": [2.0], "low": [0.5], "close": [1.5], "volume": [100]},
         index=[pd.Timestamp("2023-01-01T09:30")],
     )
 
-    def fake_get_stock_bars(*args, **kwargs):
-        return FakeBars(df)
-
-    monkeypatch.setattr(data_fetcher.client, "get_stock_bars", fake_get_stock_bars)
+    monkeypatch.setattr(data_fetcher, "_fetch_bars", lambda *a, **k: df.reset_index().rename(columns={"index": "timestamp"}))
+    monkeypatch.setattr(data_fetcher, "is_market_open", lambda: True)
     result = data_fetcher.get_minute_df("AAPL", datetime.date(2023, 1, 1), datetime.date(2023, 1, 2))
     assert not result.empty
 
@@ -169,7 +166,6 @@ def test_fetch_bars_retry_invalid_feed(monkeypatch):
 
 
 def test_finnhub_403_yfinance(monkeypatch):
-    pytest.skip("Network-dependent; skip in CI")
     def raise_fetch(*a, **k):
         raise data_fetcher.DataFetchException("AAPL", "alpaca", "", "err")
 
