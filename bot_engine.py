@@ -16,6 +16,7 @@ import warnings
 from datetime import datetime, timedelta, timezone
 from datetime import date
 from typing import Optional, Union
+from pathlib import Path
 
 # AI-AGENT-REF: replace utcnow with timezone-aware now
 old_generate = datetime.now(timezone.utc)  # replaced utcnow for tz-aware
@@ -576,19 +577,19 @@ def assert_row_integrity(
 
 
 def _load_ml_model(symbol: str):
-    """Load and cache per-symbol ML model from ``models/{symbol}.pkl``."""
+    """
+    Load a pickled ML model for ``symbol`` from the ``models/`` directory.
+    If no file exists, return ``None`` so upstream logic can skip ML signals.
+    """
     path = Path("models") / f"{symbol}.pkl"
     cached = _ML_MODEL_CACHE.get(symbol)
     if cached is not None:
         return cached
-    if not path.is_file():
-        logger.error("ML model for %s not found at %s", symbol, path)
+    if not path.exists():
+        logger.info("No ML model found for %s, skipping ML signal", symbol)
         return None
-    try:
-        model = joblib.load(path)
-    except Exception:
-        logger.error("ML model for %s not found at %s", symbol, path)
-        return None
+    with path.open("rb") as f:
+        model = pickle.load(f)
     _ML_MODEL_CACHE[symbol] = model
     return model
 
