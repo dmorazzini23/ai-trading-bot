@@ -11,3 +11,13 @@ coverage:
 
 benchmark:
 	pytest tests/test_benchmarks.py --benchmark-only --benchmark-save=latest
+run-backtest:
+	python backtester.py \
+	  --symbols AAPL MSFT GOOG AMZN TSLA \
+	  --data-dir data/historical \
+	  --start 2020-01-01 \
+	  --end 2021-01-01 \
+	  --commission 0.005 \
+	  --slippage-pips 0.1 \
+	  --latency-bars 1
+	

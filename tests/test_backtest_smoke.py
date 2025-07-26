@@ -11,29 +11,36 @@ def force_coverage(mod):
 
 
 @pytest.mark.smoke
-def test_backtest_run_and_optimize(monkeypatch):
-    import backtest
+def test_backtester_engine_basic(tmp_path, capsys):
+    import backtester
 
-    df = pd.DataFrame({"Open": [1.0, 1.1], "Close": [1.05, 1.15]})
-    monkeypatch.setattr(backtest, "load_price_data", lambda s, start, end: df)
-    monkeypatch.setattr(backtest.time, "sleep", lambda *a, **k: None)
-    params = {
-        "BUY_THRESHOLD": 0.1,
-        "TRAILING_FACTOR": 1.0,
-        "TAKE_PROFIT_FACTOR": 2.0,
-        "SCALING_FACTOR": 0.5,
-        "LIMIT_ORDER_SLIPPAGE": 0.001,
-    }
-    result = backtest.run_backtest(["A"], "2024-01-01", "2024-01-02", params)
-    assert "net_pnl" in result
+    df = pd.DataFrame({
+        "Open": [1.0, 1.1],
+        "High": [1.0, 1.1],
+        "Low": [1.0, 1.1],
+        "Close": [1.05, 1.15],
+    })
 
-    monkeypatch.setattr(backtest, "run_backtest", lambda *a, **k: {"net_pnl": 1, "sharpe": 0.5})
-    best = backtest.optimize_hyperparams(
-        None,
-        ["A"],
-        {"start": "2024-01-01", "end": "2024-01-02"},
-        {k: [v] for k, v in params.items()},
-        metric="sharpe",
-    )
-    assert best
-    force_coverage(backtest)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    df.to_csv(data_dir / "AAPL.csv", index=False)
+
+    backtester.main([
+        "--symbols",
+        "AAPL",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2024-01-01",
+        "--end",
+        "2024-01-02",
+    ])
+
+    out = capsys.readouterr().out
+    assert "Net PnL" in out
+
+    engine = backtester.BacktestEngine({"AAPL": df}, backtester.DefaultExecutionModel())
+    result = engine.run(["AAPL"])
+    assert hasattr(result, "net_pnl")
+
+    force_coverage(backtester)
