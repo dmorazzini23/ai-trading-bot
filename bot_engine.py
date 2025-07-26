@@ -2410,13 +2410,13 @@ exec_engine = ExecutionEngine(
 )
 ctx.execution_engine = exec_engine
 
-    # Propagate the capital_scaler to the risk engine so that position_size
-    # can adjust sizing based on account equity, volatility and drawdown.
-    try:
-        if getattr(ctx, "risk_engine", None) is not None and getattr(ctx, "capital_scaler", None) is not None:
-            ctx.risk_engine.capital_scaler = ctx.capital_scaler
-    except Exception:
-        pass
+# Propagate the capital_scaler to the risk engine so that position_size
+# can adjust sizing based on account equity, volatility and drawdown.
+try:
+    if getattr(ctx, "risk_engine", None) is not None and getattr(ctx, "capital_scaler", None) is not None:
+        ctx.risk_engine.capital_scaler = ctx.capital_scaler
+except Exception:
+    pass
 try:
     equity_init = float(ctx.api.get_account().equity)
 except Exception:
