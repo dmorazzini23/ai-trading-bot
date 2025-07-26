@@ -70,9 +70,12 @@ def compute_features(df: pd.DataFrame | None, window: int = 10) -> np.ndarray:
         else:
             atr_series = pd.Series(0.0, index=close.index).tail(window)
 
-        # VWAP bias requires volume; fallback to zeros if missing
-        if {"volume"}.issubset(df.columns):
-            vwap_bias = get_vwap_bias(close, df["volume"].astype(float)).tail(window)
+        # VWAP bias requires high, low and volume; fallback to zeros if missing
+        if {"high", "low", "volume"}.issubset(df.columns):
+            high = df["high"].astype(float)
+            low = df["low"].astype(float)
+            volume = df["volume"].astype(float)
+            vwap_bias = get_vwap_bias(close, high, low, volume).fillna(0.0).tail(window)
         else:
             vwap_bias = pd.Series(0.0, index=close.index).tail(window)
 
