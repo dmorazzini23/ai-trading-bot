@@ -1,5 +1,6 @@
 import types
 import pandas as pd
+import datetime
 import bot_engine
 
 class DummyFetcher:
@@ -24,6 +25,13 @@ def test_partial_initial_rebalance_fill(monkeypatch):
         rebalance_attempts={},
         rebalance_buys={},
     )
+
+    class FakeDateTime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.datetime(2025, 7, 26, 0, 16, tzinfo=datetime.UTC)
+
+    monkeypatch.setattr(bot_engine, "datetime", FakeDateTime)
 
     def fake_submit(ctx_, symbol, qty, side):
         ctx_.api.orders.append((symbol, qty, side))

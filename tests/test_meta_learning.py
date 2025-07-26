@@ -159,8 +159,9 @@ def test_update_signal_weights_norm_zero(caplog):
 
 def test_portfolio_rl_trigger(monkeypatch):
     torch = pytest.importorskip("torch")
-    if not hasattr(torch, "nn") or not hasattr(torch.nn, "Parameter"):
-        pytest.skip("torch stubs active")
+    # AI-AGENT-REF: ensure real torch is loaded during tests
+    # if not hasattr(torch, "nn") or not hasattr(torch.nn, "Parameter"):
+    #     pytest.skip("torch stubs active")
     class FakeLinear(nn.Module):
         def __init__(self, *a, **k):
             super().__init__()
@@ -170,6 +171,8 @@ def test_portfolio_rl_trigger(monkeypatch):
             return x
 
     monkeypatch.setattr(nn, "Linear", lambda *a, **k: FakeLinear())
+    import portfolio_rl
+    monkeypatch.setattr(portfolio_rl.optim, "Adam", lambda *a, **k: types.SimpleNamespace(step=lambda: None))
     learner = meta_learning.PortfolioReinforcementLearner()
     state = np.random.rand(10)
     weights = learner.rebalance_portfolio(state)
