@@ -50,6 +50,18 @@ class RiskEngine:
         self._drawdowns: list[float] = []
         self._last_portfolio_cap: float | None = None
         self._last_equity_cap: float | None = None
+        # maximum acceptable drawdown (fraction between 0 and 1)
+        try:
+            self.max_drawdown_threshold = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.1"))
+        except Exception:
+            self.max_drawdown_threshold = 0.1
+        # cooldown period (in minutes) before trading resumes after a hard stop
+        try:
+            self.hard_stop_cooldown = float(os.getenv("HARD_STOP_COOLDOWN_MIN", "10"))
+        except Exception:
+            self.hard_stop_cooldown = 10.0
+        # timestamp (epoch) until which hard stop remains active
+        self._hard_stop_until: float | None = None
 
     def _dynamic_cap(
         self,
@@ -99,6 +111,8 @@ class RiskEngine:
             self._returns.extend(list(returns))
         if drawdown is not None:
             self._drawdowns.append(float(drawdown))
+            # evaluate drawdown against threshold
+            self._check_drawdown_and_update_stop(float(drawdown))
 
     def refresh_positions(self, api) -> None:
         """Synchronize exposure with live positions."""
@@ -138,10 +152,13 @@ class RiskEngine:
         returns: list[float] | None = None,
         drawdowns: list[float] | None = None,
     ) -> bool:
+        # incorporate latest metrics
         if returns:
             self._returns.extend(list(returns))
         if drawdowns:
             self._drawdowns.extend(list(drawdowns))
+        # update hard stop status based on cooldown
+        self._maybe_lift_hard_stop()
         if self.hard_stop:
             logger.error("TRADING_HALTED_RISK_LIMIT")
             return False
@@ -153,6 +170,8 @@ class RiskEngine:
         asset_cap = 1.1 * self._dynamic_cap(
             signal.asset_class, volatility, cash_ratio
         )  # slight relaxation to reduce unnecessary skips
+        # apply risk scaling to the signal based on volatility and returns
+        signal = self.apply_risk_scaling(signal, volatility=volatility, returns=returns)
         if asset_exp + signal.weight > asset_cap:
             logger.warning(
                 "Exposure cap breach: symbol=%s qty=%s alloc=%.3f exposure=%.2f vs cap=%.2f",
@@ -197,6 +216,72 @@ class RiskEngine:
                 "new": self.exposure[signal.asset_class],
             },
         )
+
+    # ------------------------------------------------------------------
+    # Additional risk checks and scaling
+    # ------------------------------------------------------------------
+    def _check_drawdown_and_update_stop(self, current_drawdown: float) -> None:
+        """
+        Evaluate the latest drawdown and update the hard stop flag if the
+        drawdown exceeds the threshold.  When triggered, trading is
+        disabled until a cooldown period has elapsed.
+
+        Parameters
+        ----------
+        current_drawdown : float
+            The most recent drawdown measurement (0–1).
+        """
+        if current_drawdown >= self.max_drawdown_threshold and not self.hard_stop:
+            self.hard_stop = True
+            import time
+            self._hard_stop_until = time.time() + self.hard_stop_cooldown * 60
+            logger.error(
+                "HARD_STOP_TRIGGERED",
+                extra={"drawdown": current_drawdown, "threshold": self.max_drawdown_threshold},
+            )
+
+    def _maybe_lift_hard_stop(self) -> None:
+        """
+        Lift the hard stop if the cooldown period has expired.  This method
+        should be called before evaluating new trades.
+        """
+        import time
+        if self.hard_stop and self._hard_stop_until is not None:
+            if time.time() >= self._hard_stop_until:
+                self.hard_stop = False
+                self._hard_stop_until = None
+                logger.info("HARD_STOP_CLEARED")
+
+    def apply_risk_scaling(
+        self,
+        signal: TradeSignal,
+        *,
+        volatility: float | None = None,
+        returns: Sequence[float] | None = None,
+    ) -> TradeSignal:
+        """
+        Adjust a signal's weight based on volatility and CVaR.  This function
+        uses a simple inverse‑volatility rule and CVaR scaling to shrink
+        exposures when markets become turbulent.  The original signal is
+        mutated and returned for convenience.
+        """
+        try:
+            scale = 1.0
+            # apply inverse volatility scaling
+            if volatility and volatility > 0:
+                scale *= max(0.5, min(1.0, 0.02 / volatility))
+            # apply CVaR scaling using recent returns
+            if returns:
+                import numpy as np
+                from ai_trading.capital_scaling import cvar_scaling
+                cvar = cvar_scaling(np.asarray(returns), alpha=0.05)
+                if cvar > 0:
+                    scale *= 1.0 / (1.0 + cvar)
+            signal.weight = max(0.0, signal.weight * scale)
+            return signal
+        except Exception as exc:
+            logger.error("Risk scaling failed: %s", exc)
+            return signal
 
     def check_max_drawdown(self, api) -> bool:
         try:

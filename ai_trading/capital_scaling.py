@@ -19,35 +19,118 @@ class _CapScaler:
 
 
 class CapitalScalingEngine:
-    def __init__(self, config):
-        self._scaler = _CapScaler(config)
+    """
+    Engine responsible for adaptive capital scaling.  This implementation
+    introduces a configurable base equity (``_base``) used to compute
+    compression factors.  As the account grows, the base is updated to
+    reflect new equity peaks.  Position sizing is adjusted using
+    volatility and drawdown to preserve capital during turbulent markets.
+    """
 
-    def scale_position(self, size: float) -> float:
-        """Smoke test expects this public API."""
-        return self._scaler(size)
+    def __init__(self, config, initial_equity: float | None = None) -> None:
+        """
+        Create a ``CapitalScalingEngine``.
+
+        Parameters
+        ----------
+        config : dict
+            Configuration dictionary (unused for now but kept for
+            backwards‑compatibility).
+        initial_equity : float, optional
+            Starting account equity.  If provided this value will be used as
+            the baseline for compression; otherwise the baseline remains
+            unset until first update.  A non‑zero baseline prevents
+            division‑by‑zero when computing compression factors.
+        """
+        self._scaler = _CapScaler(config)
+        # baseline account value used for compression
+        self._base: float | None = initial_equity if initial_equity and initial_equity > 0 else None
+
+    def scale_position(self, size: float, *, volatility: float = 0.0, drawdown: float = 0.0) -> float:
+        """
+        Return a position size adjusted for volatility, drawdown and
+        compression factor.  When no baseline is set the original size
+        is returned unchanged.
+
+        Parameters
+        ----------
+        size : float
+            Proposed position size in dollars.
+        volatility : float, optional
+            Realised volatility of the portfolio or asset.  Defaults to ``0``.
+        drawdown : float, optional
+            Current drawdown fraction (0–1).  Defaults to ``0``.
+        """
+        # If no baseline is available, return raw size
+        if self._base is None:
+            return size
+        # compute compression factor based on current size relative to baseline
+        factor = self.compression_factor(size)
+        # adjust sizing using volatility and drawdown (simple Kelly‑like)
+        pos = self.compute_position_size(size, volatility, drawdown)
+        return pos * factor
 
     def compression_factor(self, balance: float) -> float:
-        """Return risk compression factor based on ``balance``."""
+        """Return risk compression factor based on ``balance`` and baseline.
+
+        The factor shrinks positions as the account grows relative to
+        the baseline using a log attenuation.  Returns between ``0.1``
+        and ``1.0`` to avoid over‑compression.
+        """
         try:
-            if balance <= 0 or self._base <= 0:
+            # bail out if baseline is not set
+            if self._base is None or balance <= 0:
                 return 1.0
             ratio = balance / self._base
+            # ratio > 1 implies capital growth; compress accordingly
             factor = 1.0 / (1.0 + math.log1p(max(ratio - 1.0, 0.0)))
             return max(0.1, min(factor, 1.0))
         except Exception:
             return 1.0
 
-    def compute_position_size(self, portfolio_value, volatility, drawdown):
-        # AI-AGENT-REF: dynamic position sizing with volatility and drawdown
-        base_fraction = 0.05  # starting Kelly fraction
-        adjusted_fraction = base_fraction * (1 - min(drawdown / 0.2, 1))
-        adjusted_fraction /= max(volatility, 0.01)
-        position_size = portfolio_value * adjusted_fraction
-        return max(position_size, 0)
+    def compute_position_size(self, portfolio_value: float, volatility: float, drawdown: float) -> float:
+        """
+        Compute a dollar position using a fractional Kelly approach that
+        accounts for drawdown and volatility.  The baseline fraction
+        (default 5 %) is scaled down as drawdown increases and volatility
+        rises.  Returns ``0`` for invalid inputs.
+        """
+        try:
+            base_fraction = 0.05  # starting Kelly fraction
+            if portfolio_value <= 0:
+                return 0.0
+            # shrink fraction based on drawdown (capped at 20 %)
+            adjusted_fraction = base_fraction * (1 - min(drawdown / 0.2, 1))
+            # increase exposure when volatility is low; protect when high
+            adjusted_fraction /= max(volatility, 0.01)
+            position_size = portfolio_value * adjusted_fraction
+            return max(position_size, 0.0)
+        except Exception:
+            return 0.0
 
-    def update(self, ctx, equity_init):
-        # Placeholder for future scaling logic
-        pass
+    def update(self, ctx, equity: float) -> None:
+        """
+        Update internal state with the latest account equity.  If the
+        equity exceeds the previous peak, the baseline is raised to the
+        new value.  This method should be called at the end of each
+        trading cycle.
+
+        Parameters
+        ----------
+        ctx : Any
+            Unused context placeholder for future use.
+        equity : float
+            Current account equity.
+        """
+        try:
+            if equity and equity > 0:
+                if self._base is None:
+                    self._base = equity
+                elif equity > self._base:
+                    self._base = equity
+        except Exception:
+            # swallow errors to avoid crashing calling code
+            pass
 
 
 def volatility_parity_position(base_risk: float, atr_value: float) -> float:
