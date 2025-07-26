@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional, Tuple
 from enum import Enum
 from uuid import uuid4
+from threading import Lock
 
 import numpy as np
 import pandas as pd
@@ -19,6 +20,21 @@ from tenacity import (retry, retry_if_exception_type, stop_after_attempt,
                       wait_exponential, wait_random)
 
 # AI-AGENT-REF: track recent buy timestamps to avoid immediate re-checks
+#
+# Use a dedicated lock around the ``recent_buys`` dict to ensure
+# thread-safe updates and reads.  Multiple threads may place orders in
+# parallel (e.g. via a ThreadPoolExecutor in ``bot_engine.py``).  Without
+# synchronization concurrent reads/writes to this shared mapping can
+# produce race conditions or even ``KeyError``/``RuntimeError`` when the
+# underlying dict is mutated during iteration.  The monotonic timer is
+# used instead of ``time.time()`` to guard against system clock jumps.
+
+# Synchronisation primitive protecting the ``recent_buys`` map.  See
+# ``_check_exposure_cap`` for usage.
+_recent_buys_lock: Lock = Lock()
+
+# Map of symbol → last buy timestamp (monotonic seconds).  Accesses must
+# be guarded by ``_recent_buys_lock``.
 recent_buys: dict[str, float] = {}
 
 # Updated Alpaca SDK imports
@@ -108,6 +124,11 @@ SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 # AI-AGENT-REF: aggregate partial fills across orders
 _partial_fills: dict[str, dict] = {}
 
+# Guard modifications to the partial fills registry.  Partial fill
+# aggregation may occur concurrently from multiple threads as fills
+# arrive, so a lock prevents race conditions or corrupt state.
+_partial_fills_lock: Lock = Lock()
+
 # ---------------------------------------------------------------------------
 # Trailing stop utilities
 # ---------------------------------------------------------------------------
@@ -160,9 +181,33 @@ def should_exit_position(df: pd.DataFrame, entry_price: float, side: str, period
 def generate_client_order_id(
     symbol: str, side: str, order_class: OrderClass
 ) -> str:
-    """Return a deterministic client order id for retries."""
-    seed = f"{symbol}-{side}-{order_class.name}-{time.time_ns()}"
-    return f"{symbol}-{hash(seed) & 0xFFFF_FFFF:x}"
+    """
+    Return a unique client order id for retries.
+
+    The previous implementation derived an identifier from a hashed seed
+    containing ``time.time_ns()``.  In high-concurrency environments
+    (multiple threads submitting orders) the system clock may not tick
+    between calls, leading to collisions.  Colliding ``client_order_id``
+    values cause Alpaca to reject subsequent orders as duplicates.  To
+    eliminate this race entirely we generate a UUID4 for each order.
+
+    Parameters
+    ----------
+    symbol : str
+        Trading symbol (ignored in identifier generation beyond
+        readability).
+    side : str
+        Order side ("buy" or "sell").
+    order_class : OrderClass
+        Execution classification (normal vs initial rebalance).  The
+        class name is included for traceability only.
+
+    Returns
+    -------
+    str
+        A hyphenated identifier combining the symbol and a random UUID4.
+    """
+    return f"{symbol}-{uuid4().hex}"
 
 
 def log_trade(
@@ -257,12 +302,19 @@ def calculate_adv(df: pd.DataFrame, symbol: str, window: int = 30) -> Optional[f
 
 def handle_partial_fill(order_id: str, symbol: str, qty: int, price: float) -> None:
     """Accumulate partial fill data for later aggregation."""
-    if order_id not in _partial_fills:
-        _partial_fills[order_id] = {"symbol": symbol, "qty": 0, "price_sum": 0.0, "fills": 0}
-    data = _partial_fills[order_id]
-    data["qty"] += qty
-    data["price_sum"] += price * qty
-    data["fills"] += 1
+    # Aggregate partial fills in a thread-safe manner.
+    with _partial_fills_lock:
+        if order_id not in _partial_fills:
+            _partial_fills[order_id] = {
+                "symbol": symbol,
+                "qty": 0,
+                "price_sum": 0.0,
+                "fills": 0,
+            }
+        data = _partial_fills[order_id]
+        data["qty"] += qty
+        data["price_sum"] += price * qty
+        data["fills"] += 1
     logging.getLogger(__name__).debug(
         "Partial fill accumulating: %s total_qty=%s", symbol, data["qty"]
     )
@@ -270,7 +322,10 @@ def handle_partial_fill(order_id: str, symbol: str, qty: int, price: float) -> N
 
 def handle_full_fill(order_id: str) -> None:
     """Log aggregated metrics for a fully filled order."""
-    data = _partial_fills.pop(order_id, None)
+    # Remove aggregated data under lock to prevent other threads from
+    # mutating the registry concurrently.
+    with _partial_fills_lock:
+        data = _partial_fills.pop(order_id, None)
     if data:
         avg_price = data["price_sum"] / data["qty"]
         logging.getLogger(__name__).info(
@@ -727,7 +782,13 @@ class ExecutionEngine:
 
     def _check_exposure_cap(self, asset_class: str, qty: int, price: float, symbol: str) -> bool:
         """Return True if submitting qty would exceed exposure cap."""
-        if symbol in recent_buys and time.time() - recent_buys[symbol] < 60:
+        # Check whether a recent buy occurred for this symbol.  Access to
+        # ``recent_buys`` is guarded by ``_recent_buys_lock`` to prevent
+        # concurrent mutations.  Use monotonic clocks for robust
+        # duration measurement, avoiding issues if system time jumps.
+        with _recent_buys_lock:
+            last_ts = recent_buys.get(symbol)
+        if last_ts is not None and (time.monotonic() - last_ts) < 60.0:
             # AI-AGENT-REF: skip exposure cap check briefly after a buy
             self.logger.info("EXPOSURE_CAP_SKIP_RECENT_BUY for %s", symbol)
             return False
@@ -1154,7 +1215,12 @@ class ExecutionEngine:
                 self._flush_partial_buffers(oid)
             if side.lower() == "buy":
                 # AI-AGENT-REF: track recent buys to prevent immediate sell-offs
-                recent_buys[symbol] = time.time()
+                # Record the last buy using monotonic time; guard with
+                # ``_recent_buys_lock`` for thread safety.  Use
+                # ``time.monotonic()`` rather than ``time.time()`` to avoid
+                # issues when the system clock changes.
+                with _recent_buys_lock:
+                    recent_buys[symbol] = time.monotonic()
             else:
                 self.logger.info("EXITING %s via order %s", symbol, oid)
         return last_order

@@ -14,6 +14,7 @@ import logging
 import os
 import time
 from collections import defaultdict
+from threading import Lock
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -53,7 +54,15 @@ DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
 _warn_counts = defaultdict(int)
 
 # Track pending orders awaiting fill or rejection
+
 pending_orders: dict[str, dict[str, Any]] = {}
+
+# Protect concurrent access to ``pending_orders``.  Both synchronous
+# functions (e.g. ``submit_order``) and asynchronous workers (e.g.
+# ``check_stuck_orders``) touch this shared registry.  Without a
+# lock, race conditions can corrupt the dictionary or allow duplicate
+# entries, leading to duplicate cancellations/resubmissions.
+_pending_orders_lock: Lock = Lock()
 
 # AI-AGENT-REF: accumulate partial fills for periodic summary
 partial_fills: dict[str, dict[str, float]] = {}
@@ -136,9 +145,19 @@ def get_account() -> Optional[Dict[str, Any]]:
 def submit_order(api, req, log: logging.Logger | None = None):
     symbol = getattr(req, "symbol", None)
     order_data = req  # AI-AGENT-REF: capture request payload
-    if symbol is not None and symbol in [order["symbol"] for order in pending_orders.values()]:
-        logger.info("Skipping duplicate order for %s still pending", getattr(order_data, "symbol", ""))
-        return None
+    # Check for duplicate pending orders in a thread-safe manner.  Without
+    # locking, concurrent submissions may read/write ``pending_orders``
+    # simultaneously, leading to inconsistent state and duplicate
+    # submissions.  Acquire the lock briefly to snapshot the symbols.
+    if symbol is not None:
+        with _pending_orders_lock:
+            pending_syms = [order_info["symbol"] for order_info in pending_orders.values()]
+        if symbol in pending_syms:
+            logger.info(
+                "Skipping duplicate order for %s still pending",
+                getattr(order_data, "symbol", ""),
+            )
+            return None
     """Submit an order with retry and optional shadow mode."""
     log = log or logger
     if DRY_RUN:
@@ -187,14 +206,19 @@ def submit_order(api, req, log: logging.Logger | None = None):
                 )  # AI-AGENT-REF: use explicit HTTPError import
             if getattr(order, "id", None):
                 order_id = str(order.id)
-                pending_orders[order_id] = {
-                    "symbol": getattr(req, "symbol", ""),
-                    "req": req,
-                    "timestamp": time.monotonic(),
-                    "status": "PENDING_NEW",
-                }
+                # Record the pending order under lock to prevent races.  The
+                # entry is immediately removed after successful submission
+                # to avoid leaking state in DRY_RUN/SHADOW_MODE paths.
+                with _pending_orders_lock:
+                    pending_orders[order_id] = {
+                        "symbol": getattr(req, "symbol", ""),
+                        "req": req,
+                        "timestamp": time.monotonic(),
+                        "status": "PENDING_NEW",
+                    }
             if order_id:
-                pending_orders.pop(order_id, None)
+                with _pending_orders_lock:
+                    pending_orders.pop(order_id, None)
             return order
         except APIError as e:
             if getattr(e, "error", {}).get("code") == 40010001:
@@ -209,14 +233,16 @@ def submit_order(api, req, log: logging.Logger | None = None):
                     )
                 if getattr(order, "id", None):
                     order_id = str(order.id)
-                    pending_orders[order_id] = {
-                        "symbol": symbol,
-                        "req": req,
-                        "timestamp": time.monotonic(),
-                        "status": "PENDING_NEW",
-                    }
+                    with _pending_orders_lock:
+                        pending_orders[order_id] = {
+                            "symbol": symbol,
+                            "req": req,
+                            "timestamp": time.monotonic(),
+                            "status": "PENDING_NEW",
+                        }
                 if order_id:
-                    pending_orders.pop(order_id, None)
+                    with _pending_orders_lock:
+                        pending_orders.pop(order_id, None)
                 return order
             raise
         except requests.exceptions.HTTPError as e:
@@ -248,7 +274,8 @@ def submit_order(api, req, log: logging.Logger | None = None):
             time.sleep(attempt * 2)
         finally:
             if order_id:
-                pending_orders.pop(order_id, None)
+                with _pending_orders_lock:
+                    pending_orders.pop(order_id, None)
 
 
 @retry(
@@ -389,7 +416,12 @@ async def check_stuck_orders(api) -> None:
     while True:
         await asyncio.sleep(10)
         now = time.monotonic()
-        for oid, info in list(pending_orders.items()):
+        # Snapshot pending orders under lock to avoid concurrent mutation while
+        # iterating.  Without this, other threads could remove keys during
+        # iteration, raising ``RuntimeError: dictionary changed size during iteration``.
+        with _pending_orders_lock:
+            items = list(pending_orders.items())
+        for oid, info in items:
             if (
                 now - info.get("timestamp", now) > 60
                 and info.get("status") == "PENDING_NEW"
@@ -410,7 +442,9 @@ async def check_stuck_orders(api) -> None:
                         filled_qty,
                         qty,
                     )
-                    pending_orders.pop(oid, None)
+                    # Remove the completed order under lock
+                    with _pending_orders_lock:
+                        pending_orders.pop(oid, None)
                     continue
                 logger.warning(
                     "\N{WARNING SIGN} Order %s for %s stuck >60s. Cancelling and resubmitting.",
@@ -423,18 +457,43 @@ async def check_stuck_orders(api) -> None:
                     logger.warning("Failed to cancel stuck order %s: %s", oid, exc)
                 if req is not None:
                     try:
-                        new_order = api.submit_order(order_data=req)
+                        try:
+                            # Re-submit the stuck order.  Handle both payload
+                            # forms (object or dict) and catch type errors.
+                            new_order = api.submit_order(order_data=req)
+                        except TypeError:
+                            new_order = api.submit_order(
+                                getattr(req, "symbol", None),
+                                getattr(req, "qty", 0),
+                                getattr(req, "side", None),
+                            )
+                        # If a new order id was returned, record it in
+                        # ``pending_orders`` under the lock.  Doing so
+                        # preserves monitoring for the replacement order.
                         if getattr(new_order, "id", None):
-                            pending_orders[str(new_order.id)] = {
-                                "symbol": symbol,
-                                "req": req,
-                                "timestamp": time.monotonic(),
-                                "status": "PENDING_NEW",
-                            }
-                            logger.info("Resubmitted order %s as %s", oid, new_order.id)
+                            with _pending_orders_lock:
+                                pending_orders[str(new_order.id)] = {
+                                    "symbol": symbol,
+                                    "req": req,
+                                    "timestamp": time.monotonic(),
+                                    "status": "PENDING_NEW",
+                                }
+                            logger.info(
+                                "Resubmitted order %s as %s",
+                                oid,
+                                new_order.id,
+                            )
                     except Exception as exc:  # pragma: no cover - network
-                        logger.exception("Error resubmitting order %s: %s", oid, exc)
-                pending_orders.pop(oid, None)
+                        logger.exception(
+                            "Error resubmitting order %s: %s",
+                            oid,
+                            exc,
+                        )
+                    # Regardless of success, remove the stale order id
+                    # from the registry under lock to avoid repeated
+                    # cancellations.
+                    with _pending_orders_lock:
+                        pending_orders.pop(oid, None)
 
 
 async def start_trade_updates_stream(
