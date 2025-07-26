@@ -14,7 +14,14 @@ log = get_logger(__name__)
 def should_enter_trade(price_data, signals, risk_params):
     """Determine whether a trade entry conditions are met."""
     # AI-AGENT-REF: improved evaluation for unit tests
-    recent_gain = (price_data[-1] - price_data[-2]) / price_data[-2]
+    # Protect against insufficient history
+    try:
+        if price_data is None or len(price_data) < 2:
+            return False
+        recent_gain = (price_data[-1] - price_data[-2]) / max(price_data[-2], 1e-9)
+    except Exception:
+        # if indexing fails return False
+        return False
     signal_strength = signals.get("signal_strength", 0)
     max_risk = risk_params.get("max_risk", 0.02)
     return signal_strength > 0.7 and recent_gain > 0 and max_risk < 0.05
@@ -23,18 +30,35 @@ def should_enter_trade(price_data, signals, risk_params):
 def extract_price(data: Any) -> float:
     """Return the last price from various data structures."""
     # AI-AGENT-REF: handle DataFrame, mapping or sequence inputs
+    import logging
+    logger = logging.getLogger(__name__)
     try:
+        if data is None:
+            logger.warning("extract_price called with None; returning fallback value")
+            return 1e-3
+        # pandas DataFrame or Series
         if hasattr(data, "iloc"):
-            val = data["close"].iloc[-1]
+            if "close" in data.columns and not data.empty:
+                val = data["close"].iloc[-1]
+            else:
+                logger.warning("extract_price: DataFrame missing 'close' column or empty; using fallback")
+                return 1e-3
         elif isinstance(data, dict):
             val = data.get("close") or data.get("price")
+            if val is None:
+                logger.warning("extract_price: dict missing 'close'/'price'; using fallback")
+                return 1e-3
         elif isinstance(data, Sequence):
+            if not data:
+                logger.warning("extract_price: empty sequence; using fallback")
+                return 1e-3
             val = data[-1]
         else:
             val = float(data)
-    except Exception:
-        val = 0.0
-    return float(val or 0.0)
+        return float(val or 1e-3)
+    except Exception as exc:
+        logger.warning("extract_price failed: %s", exc)
+        return 1e-3
 
 def compute_order_price(symbol_data):
     raw_price = extract_price(symbol_data)

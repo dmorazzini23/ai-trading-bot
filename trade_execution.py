@@ -94,6 +94,7 @@ from slippage import monitor_slippage
 from utils import get_phase_logger
 import config
 from collections import deque
+from indicators import get_atr_trailing_stop
 
 
 class OrderClass(str, Enum):
@@ -106,6 +107,54 @@ SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 
 # AI-AGENT-REF: aggregate partial fills across orders
 _partial_fills: dict[str, dict] = {}
+
+# ---------------------------------------------------------------------------
+# Trailing stop utilities
+# ---------------------------------------------------------------------------
+
+def should_exit_position(df: pd.DataFrame, entry_price: float, side: str, period: int = 14, multiplier: float = 1.5) -> bool:
+    """
+    Determine whether a position should be exited based on an ATR trailing stop.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Historical price data containing ``close``, ``high`` and ``low`` columns.
+    entry_price : float
+        The price at which the position was opened.
+    side : str
+        Direction of the position (``'buy'`` for long, ``'sell'`` for short).
+    period : int, optional
+        Lookback period for ATR calculation.  Defaults to ``14``.
+    multiplier : float, optional
+        Multiplier applied to ATR for the stop distance.  Defaults to ``1.5``.
+
+    Returns
+    -------
+    bool
+        ``True`` if the trailing stop level has been breached and the
+        position should be exited, otherwise ``False``.
+
+    Notes
+    -----
+    This helper does not place any orders.  It is intended to be called
+    by higher‑level logic (e.g. in the trading cycle) to decide whether
+    to close an open position.
+    """
+    try:
+        if df is None or df.empty:
+            return False
+        # compute the trailing stop series
+        stops = get_atr_trailing_stop(df["close"], df["high"], df["low"], period=period, multiplier=multiplier)
+        stop_price = stops.iloc[-1]
+        last_close = df["close"].iloc[-1]
+        if side.lower() == "buy":
+            return last_close < stop_price
+        if side.lower() == "sell":
+            return last_close > stop_price
+        return False
+    except Exception:
+        return False
 
 
 def generate_client_order_id(
