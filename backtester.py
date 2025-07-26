@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import os
+import glob, os
+import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -315,11 +316,14 @@ def main(argv: list[str] | None = None) -> None:
     results: Dict[str, BacktestResult] = {}
 
     for symbol in args.symbols:
-        csv_path = os.path.join(args.data_dir, f"{symbol}.csv")
-        if not os.path.isfile(csv_path):
-            logger.warning(f"Missing {csv_path}, skipping {symbol}")
+        # look for any CSV under data_dir matching SYMBOL*.csv (recursively)
+        pattern = os.path.join(args.data_dir, "**", f"{symbol}*.csv")
+        matches = glob.glob(pattern, recursive=True)
+        if not matches:
+            logger.warning(f"No CSV found for {symbol} in {args.data_dir}, skipping")
             continue
-
+        csv_path = matches[0]
+        logger.info(f"Loading backtest data from {csv_path}")
         df = pd.read_csv(csv_path, parse_dates=True, index_col=0)
         df = df.loc[str(args.start) : str(args.end)]
         engine.data = {symbol: df}
@@ -328,8 +332,8 @@ def main(argv: list[str] | None = None) -> None:
         results[symbol] = result
 
     if not results:
-        logger.warning("No valid symbols to backtest")
-        return
+        logger.error("No valid symbols to backtest – please check your --data-dir")
+        sys.exit(1)
 
     summary = [
         {
