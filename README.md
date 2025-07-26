@@ -37,14 +37,14 @@ pip install -r requirements-dev.txt
 ## 📈 Running the Backtester
 
 ```bash
-python backtest.py --symbols SPY,AAPL --start 2024-01-01 --end 2024-12-31
+python backtester.py --symbols SPY,AAPL --start 2024-01-01 --end 2024-12-31
 ```
 
 This runs a grid search over a default hyperparameter grid and writes the best configuration to `best_hyperparams.json`.
 
 ### 🔧 Customizing the Grid
 
-Edit `backtest.py` to change the `param_grid` dictionary in `main()` for alternative parameter ranges.
+Edit `backtester.py` to change the `param_grid` dictionary in `main()` for alternative parameter ranges.
 
 ---
 

@@ -239,31 +239,36 @@ class BacktestEngine:
         }
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> None:
+    """CLI entry point for running a backtest."""
     import argparse
 
     parser = argparse.ArgumentParser(description="Run backtest over historical data")
-    parser.add_argument("--symbols", required=True, help="Comma separated symbols")
-    parser.add_argument("--data", nargs="+", help="symbol:path to CSV or Parquet")
+    parser.add_argument("--symbols", nargs="+", required=True, help="Symbols to backtest")
+    parser.add_argument("--data-dir", default="data/historical", help="Directory with CSV files")
+    parser.add_argument("--start", required=True, help="Backtest start date YYYY-MM-DD")
+    parser.add_argument("--end", required=True, help="Backtest end date YYYY-MM-DD")
     parser.add_argument("--commission", type=float, default=0.0)
-    parser.add_argument("--slippage", type=float, default=0.0)
-    parser.add_argument("--latency", type=int, default=0)
-    args = parser.parse_args()
+    parser.add_argument("--slippage-pips", type=float, default=0.0)
+    parser.add_argument("--latency-bars", type=int, default=0)
+    args = parser.parse_args(argv)
 
     data_dict: Dict[str, pd.DataFrame] = {}
-    for entry in args.data:
-        sym, path = entry.split(":", 1)
-        if path.endswith(".parquet"):
-            df = pd.read_parquet(path)
-        else:
-            df = pd.read_csv(path, parse_dates=[0], index_col=0)
+    for sym in args.symbols:
+        path = os.path.join(args.data_dir, f"{sym}.csv")
+        df = pd.read_csv(path, parse_dates=[0], index_col=0)
+        df = df.loc[str(args.start) : str(args.end)]
         data_dict[sym] = df
 
-    exec_model = DefaultExecutionModel(args.commission, args.slippage, args.latency)
+    exec_model = DefaultExecutionModel(args.commission, args.slippage_pips, args.latency_bars)
     engine = BacktestEngine(data_dict, exec_model)
-    result = engine.run(args.symbols.split(","))
+    result = engine.run(args.symbols)
 
     print("Net PnL:", result.net_pnl)
     print("Sharpe:", result.sharpe)
     result.trades.to_csv("trades.csv", index=False)
     result.equity_curve.to_csv("equity_curve.csv")
+
+
+if __name__ == "__main__":
+    main()

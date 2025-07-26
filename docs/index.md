@@ -6,7 +6,7 @@ harness for optimizing its tunable hyperparameters.
 ## Running the Backtester
 
 ```
-python backtest.py --symbols SPY,AAPL --start 2024-01-01 --end 2024-12-31
+python backtester.py --symbols SPY,AAPL --start 2024-01-01 --end 2024-12-31
 ```
 
 This command runs a grid search over a default parameter grid and writes the best
@@ -14,7 +14,7 @@ combination to `best_hyperparams.json`.
 
 ### Customizing the Parameter Grid
 
-Edit `backtest.py` and modify the `param_grid` dictionary in `main()` to search
+Edit `backtester.py` and modify the `param_grid` dictionary in `main()` to search
 different ranges for each hyperparameter.
 
 ## Using Optimized Hyperparameters
