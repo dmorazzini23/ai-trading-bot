@@ -334,6 +334,14 @@ class ExecutionEngine:
         self._cycle_orders.clear()
         self._seen_orders.clear()
 
+    def end_cycle(self) -> None:
+        """
+        Hook to be called at the end of each trading cycle.  It triggers
+        trailing-stop checks so that ATR stops are enforced without
+        manual intervention.
+        """
+        self.check_trailing_stops()
+
     # -----------------------------------------------------------------
     # Trailing stop management
     # -----------------------------------------------------------------
