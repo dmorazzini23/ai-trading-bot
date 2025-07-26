@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List
 
+from logger import get_logger
+
 import pandas as pd
 
 import config
@@ -18,6 +20,7 @@ except Exception:  # pragma: no cover - fallback for older repo layout
     import trade_execution as execution_api  # type: ignore
 import bot_engine
 
+logger = get_logger(__name__)
 
 @dataclass
 class Order:
@@ -150,10 +153,25 @@ class BacktestEngine:
         config.reload_env()
         self.data = data
         self.execution_model = execution_model
+        self.initial_cash = initial_cash
         self.cash = initial_cash
         self.positions: Dict[str, int] = {s: 0 for s in data}
         self.trades: List[Fill] = []
         self.equity_curve: List[Dict[str, float]] = []
+
+    def reset(self) -> None:
+        """Reset internal state for a new symbol run."""
+        self.cash = self.initial_cash
+        self.positions = {s: 0 for s in self.data}
+        self.trades = []
+        self.equity_curve = []
+
+    def run_single_symbol(self, df: pd.DataFrame, risk: risk_engine.RiskEngine) -> BacktestResult:
+        """Run the backtest for ``df`` using the live bot cycle."""
+        self.data = {"symbol": df}
+        self.positions = {"symbol": 0}
+        self.reset()
+        return self.run(["symbol"])
 
     def _apply_fill(self, fill: Fill, ts: pd.Timestamp) -> None:
         if hasattr(bot_engine, "apply_fill"):
@@ -243,31 +261,94 @@ def main(argv: list[str] | None = None) -> None:
     """CLI entry point for running a backtest."""
     import argparse
 
-    parser = argparse.ArgumentParser(description="Run backtest over historical data")
-    parser.add_argument("--symbols", nargs="+", required=True, help="Symbols to backtest")
-    parser.add_argument("--data-dir", default="data/historical", help="Directory with CSV files")
-    parser.add_argument("--start", required=True, help="Backtest start date YYYY-MM-DD")
-    parser.add_argument("--end", required=True, help="Backtest end date YYYY-MM-DD")
-    parser.add_argument("--commission", type=float, default=0.0)
-    parser.add_argument("--slippage-pips", type=float, default=0.0)
-    parser.add_argument("--latency-bars", type=int, default=0)
+    parser = argparse.ArgumentParser(
+        description="Full‑fidelity backtester (mirrors live bot)."
+    )
+    parser.add_argument(
+        "-s",
+        "--symbols",
+        nargs="+",
+        required=True,
+        help="Tickers to backtest (e.g. AAPL MSFT GOOG).",
+    )
+    parser.add_argument(
+        "-d",
+        "--data-dir",
+        dest="data_dir",
+        required=True,
+        help="Directory containing <SYMBOL>.csv time series.",
+    )
+    parser.add_argument(
+        "--start",
+        type=str,
+        required=True,
+        help="Backtest start date (YYYY-MM-DD).",
+    )
+    parser.add_argument(
+        "--end",
+        type=str,
+        required=True,
+        help="Backtest end date (YYYY-MM-DD).",
+    )
+    parser.add_argument(
+        "--commission",
+        type=float,
+        default=0.0,
+        help="Commission rate per trade (fraction).",
+    )
+    parser.add_argument(
+        "--slippage-pips",
+        type=float,
+        default=0.0,
+        help="Slippage in pips.",
+    )
+    parser.add_argument(
+        "--latency-bars",
+        type=int,
+        default=0,
+        help="Execution latency in bars.",
+    )
     args = parser.parse_args(argv)
 
-    data_dict: Dict[str, pd.DataFrame] = {}
-    for sym in args.symbols:
-        path = os.path.join(args.data_dir, f"{sym}.csv")
-        df = pd.read_csv(path, parse_dates=[0], index_col=0)
+    engine = BacktestEngine({}, DefaultExecutionModel(args.commission, args.slippage_pips, args.latency_bars))
+    risk = risk_engine.RiskEngine()
+    results: Dict[str, BacktestResult] = {}
+
+    for symbol in args.symbols:
+        csv_path = os.path.join(args.data_dir, f"{symbol}.csv")
+        if not os.path.isfile(csv_path):
+            logger.warning(f"Missing {csv_path}, skipping {symbol}")
+            continue
+
+        df = pd.read_csv(csv_path, parse_dates=True, index_col=0)
         df = df.loc[str(args.start) : str(args.end)]
-        data_dict[sym] = df
+        engine.data = {symbol: df}
+        engine.reset()
+        result = engine.run([symbol])
+        results[symbol] = result
 
-    exec_model = DefaultExecutionModel(args.commission, args.slippage_pips, args.latency_bars)
-    engine = BacktestEngine(data_dict, exec_model)
-    result = engine.run(args.symbols)
+    if not results:
+        logger.warning("No valid symbols to backtest")
+        return
 
-    print("Net PnL:", result.net_pnl)
-    print("Sharpe:", result.sharpe)
-    result.trades.to_csv("trades.csv", index=False)
-    result.equity_curve.to_csv("equity_curve.csv")
+    summary = [
+        {
+            "symbol": sym,
+            "pnl": res.net_pnl,
+            "sharpe": res.sharpe,
+            "drawdown": res.max_drawdown,
+        }
+        for sym, res in results.items()
+    ]
+    summary_df = pd.DataFrame(summary)
+    logger.info("\n%s", summary_df.to_string(index=False))
+    summary_df.to_csv("backtest_summary.csv", index=False)
+
+    trades_df = pd.concat(
+        [res.trades.assign(symbol=sym) for sym, res in results.items()],
+        ignore_index=True,
+    )
+    trades_df.to_csv("trades.csv", index=False)
 
 
 if __name__ == "__main__":
