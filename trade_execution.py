@@ -334,6 +334,69 @@ class ExecutionEngine:
         self._cycle_orders.clear()
         self._seen_orders.clear()
 
+    # -----------------------------------------------------------------
+    # Trailing stop management
+    # -----------------------------------------------------------------
+    def check_trailing_stops(self) -> None:
+        """
+        Inspect all open positions and trigger exit orders when an ATR
+        trailing stop has been breached.  This method should be called
+        periodically (e.g. at the end of each trading cycle) to protect
+        gains and limit losses.
+
+        The context ``ctx`` is expected to provide historical price data
+        through ``ctx.trailing_stop_data`` (a mapping from symbols to
+        DataFrames with ``close``, ``high`` and ``low`` columns).  If
+        such data is not available, the function silently returns.
+        """
+        try:
+            # fetch positions from the trading API; gracefully handle missing attributes
+            positions = []
+            try:
+                positions = self.ctx.api.get_all_positions() if hasattr(self.ctx.api, "get_all_positions") else []
+            except Exception as exc:
+                self.logger.error("check_trailing_stops: failed to fetch positions: %s", exc)
+                return
+            # extract trailing stop data container
+            data_map = getattr(self.ctx, "trailing_stop_data", {}) or {}
+            for pos in positions:
+                symbol = getattr(pos, "symbol", None)
+                qty_str = getattr(pos, "qty", "0")
+                try:
+                    qty = float(qty_str)
+                except Exception:
+                    qty = 0.0
+                if not symbol or qty == 0:
+                    continue
+                side = "buy" if qty > 0 else "sell"
+                # entry price may be a string; convert to float
+                entry_price = 0.0
+                try:
+                    entry_price = float(getattr(pos, "avg_entry_price", 0) or 0)
+                except Exception:
+                    entry_price = 0.0
+                # retrieve historical data for trailing stop computation
+                df = data_map.get(symbol)
+                if df is None or getattr(df, "empty", True):
+                    continue
+                try:
+                    if should_exit_position(df, entry_price, side):
+                        # Use last close as approximate exit price
+                        last_close = df["close"].iloc[-1]
+                        # Import send_exit_order lazily to avoid circular import
+                        from bot_engine import send_exit_order  # type: ignore
+                        self.logger.info(
+                            "Trailing stop triggered for %s: qty=%s price=%.2f",
+                            symbol,
+                            qty,
+                            last_close,
+                        )
+                        send_exit_order(self.ctx, symbol, int(abs(qty)), float(last_close), "atr_stop")
+                except Exception as exc:
+                    self.logger.error("check_trailing_stops: error handling %s: %s", symbol, exc)
+        except Exception as exc:
+            self.logger.error("check_trailing_stops: unexpected error: %s", exc)
+
     def _select_api(self, asset_class: str):
         api = self.api
         if asset_class == "crypto" and hasattr(self.ctx, "crypto_api"):
