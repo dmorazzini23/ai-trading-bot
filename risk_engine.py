@@ -353,6 +353,9 @@ class RiskEngine:
 
         weight = self._apply_weight_limits(signal)
 
+        # Pass account equity to capital scaling when available.  If the
+        # RiskEngine has a capital_scaler with a baseline, use account
+        # equity (cash) to derive the final position size.
         dollars = cash * min(weight, 1.0)
         if np.isnan(dollars) or np.isnan(price):
             logger.error("position_size received NaN inputs")

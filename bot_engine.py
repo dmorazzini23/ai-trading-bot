@@ -5944,12 +5944,11 @@ def run_multi_strategy(ctx: BotContext) -> None:
                     if sym and sym not in all_symbols:
                         all_symbols.append(sym)
             if all_symbols:
-                # Construct a placeholder state matrix for each symbol.  A real
-                # implementation would compute features here.  The shape
-                # (len(symbols), window, features) must align with the RL
-                # model's expectation.  For now we use zeros as a dummy state.
+                # Construct a 2-D placeholder state: flatten the (window, features)
+                # dimension so that stable-baselines accepts shape (n_samples, obs_dim).
+                # Here we assume 10 bars x 4 features => obs_dim = 40.
                 import numpy as np  # local import to avoid polluting global namespace
-                dummy_state = np.zeros((len(all_symbols), 10, 4), dtype=float)
+                dummy_state = np.zeros((len(all_symbols), 40), dtype=float)
                 # Batch predict RL actions for each symbol; returns a list of TradeSignal
                 rl_sigs = ctx.rl_agent.predict(dummy_state, symbols=all_symbols)
                 # Append RL signals to the strategy dictionary without overwriting others
@@ -6015,6 +6014,8 @@ def run_multi_strategy(ctx: BotContext) -> None:
                 data.tail(3).to_dict() if isinstance(data, pd.DataFrame) else data,
             )
             continue
+        # Provide the account equity (cash) when sizing positions; this allows
+        # CapitalScalingEngine.scale_position to use equity rather than raw size.
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty is None or not np.isfinite(qty) or qty <= 0:
             logger.warning("Skipping %s: computed qty <= 0", sig.symbol)
@@ -6023,6 +6024,13 @@ def run_multi_strategy(ctx: BotContext) -> None:
             sig.symbol, qty, sig.side, asset_class=sig.asset_class
         )
         ctx.risk_engine.register_fill(sig)
+
+    # At the end of the strategy cycle, trigger trailing-stop checks if an ExecutionEngine is present.
+    try:
+        if hasattr(ctx, "execution_engine"):
+            ctx.execution_engine.end_cycle()
+    except Exception as exc:
+        logger.error("TRAILING_STOP_CHECK_FAILED", extra={"exc": str(exc)})
 
 
 def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[str]]:
