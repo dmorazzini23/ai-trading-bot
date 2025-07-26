@@ -2293,6 +2293,7 @@ class BotContext:
     # AI-AGENT-REF: track client_order_id base for INITIAL_REBALANCE orders
     rebalance_ids: dict[str, str] = field(default_factory=dict)
     rebalance_attempts: dict[str, int] = field(default_factory=dict)
+    trailing_stop_data: dict[str, Any] = field(default_factory=dict)
     risk_engine: "RiskEngine | None" = None
     allocator: "StrategyAllocator | None" = None
     strategies: List[Any] = field(default_factory=list)
@@ -5928,15 +5929,32 @@ def run_multi_strategy(ctx: BotContext) -> None:
             signals_by_strategy[strat.name] = sigs
         except Exception as e:
             logger.warning(f"Strategy {strat.name} failed: {e}")
+    # Optionally augment strategy signals with reinforcement learning signals.
     if config.USE_RL_AGENT:
         try:
-            from ai_trading.rl_trading.inference import load_policy, predict_signal
+            # Lazy load the RL policy and cache it on the context
+            from ai_trading.rl_trading.inference import load_policy
             if not hasattr(ctx, "rl_agent"):
                 ctx.rl_agent = load_policy(config.RL_MODEL_PATH)
-            state = np.zeros((10, 4), dtype=float)
-            rl_sig = predict_signal(ctx.rl_agent, state)
-            if rl_sig:
-                signals_by_strategy = {"rl": [rl_sig]}
+            # Determine the set of symbols that currently have signals from other strategies
+            all_symbols: list[str] = []
+            for sigs in signals_by_strategy.values():
+                for sig in sigs:
+                    sym = getattr(sig, "symbol", None)
+                    if sym and sym not in all_symbols:
+                        all_symbols.append(sym)
+            if all_symbols:
+                # Construct a placeholder state matrix for each symbol.  A real
+                # implementation would compute features here.  The shape
+                # (len(symbols), window, features) must align with the RL
+                # model's expectation.  For now we use zeros as a dummy state.
+                import numpy as np  # local import to avoid polluting global namespace
+                dummy_state = np.zeros((len(all_symbols), 10, 4), dtype=float)
+                # Batch predict RL actions for each symbol; returns a list of TradeSignal
+                rl_sigs = ctx.rl_agent.predict(dummy_state, symbols=all_symbols)
+                # Append RL signals to the strategy dictionary without overwriting others
+                if rl_sigs:
+                    signals_by_strategy["rl"] = rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
         except Exception as exc:
             logger.error("RL_AGENT_ERROR", extra={"exc": str(exc)})
     final = ctx.allocator.allocate(signals_by_strategy)
@@ -6412,6 +6430,8 @@ def run_all_trades_worker(state: BotState, model) -> None:
             state.short_positions = {
                 s for s, q in state.position_cache.items() if q < 0
             }
+            if ctx.execution_engine:
+                ctx.execution_engine.check_trailing_stops()
         except Exception as exc:  # pragma: no cover - safety
             logger.warning("refresh_positions failed: %s", exc)
         logger.info(

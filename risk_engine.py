@@ -274,9 +274,17 @@ class RiskEngine:
             if returns:
                 import numpy as np
                 from ai_trading.capital_scaling import cvar_scaling
-                cvar = cvar_scaling(np.asarray(returns), alpha=0.05)
-                if cvar > 0:
-                    scale *= 1.0 / (1.0 + cvar)
+                arr = np.asarray(list(returns), dtype=float)
+                # ignore NaN/inf values
+                arr = arr[np.isfinite(arr)]
+                if arr.size > 0:
+                    cvar_metric = cvar_scaling(arr, alpha=0.05)
+                    # Only scale down when CVaR indicates heavy negative tail.
+                    # cvar_scaling returns 1.0 for benign distributions and
+                    # >1.0 for fat-tailed losses.  Apply shrinkage only
+                    # when metric exceeds unity.
+                    if cvar_metric > 1.0:
+                        scale *= 1.0 / (1.0 + cvar_metric)
             signal.weight = max(0.0, signal.weight * scale)
             return signal
         except Exception as exc:

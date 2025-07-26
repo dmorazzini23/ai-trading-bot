@@ -2,7 +2,19 @@ import logging
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+# Optional import: avoid import error when dotenv is missing.
+try:
+    from dotenv import load_dotenv  # type: ignore
+except ImportError:  # pragma: no cover - when python-dotenv is not installed
+    def load_dotenv(*args, **kwargs):  # type: ignore[override]
+        """Fallback no-op for ``load_dotenv``.
+
+        This stub allows the configuration module to be imported in
+        environments where ``python-dotenv`` is not installed.  Tests
+        that rely on environment variables should set them directly via
+        ``os.environ``.
+        """
+        return False
 from pydantic_settings import BaseSettings
 
 from validate_env import settings as env_settings
