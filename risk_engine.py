@@ -353,15 +353,36 @@ class RiskEngine:
 
         weight = self._apply_weight_limits(signal)
 
-        # Pass account equity to capital scaling when available.  If the
-        # RiskEngine has a capital_scaler with a baseline, use account
-        # equity (cash) to derive the final position size.
-        dollars = cash * min(weight, 1.0)
-        if np.isnan(dollars) or np.isnan(price):
+        # Compute raw dollars allocated to this trade
+        raw_dollars = cash * min(weight, 1.0)
+        if np.isnan(raw_dollars) or np.isnan(price):
             logger.error("position_size received NaN inputs")
             return 0
+        current_equity = cash
+        if api is not None:
+            try:
+                acct = api.get_account()
+                current_equity = float(getattr(acct, "equity", cash))
+            except Exception:
+                pass
         try:
-            qty = int(round(dollars / price))
+            scaler = getattr(self, "capital_scaler", None)
+            volatility = float(np.std(self._returns[-10:])) if self._returns else 0.0
+            drawdown = abs(min(self._drawdowns)) if self._drawdowns else 0.0
+            if scaler is not None:
+                scaled_dollars = scaler.scale_position(
+                    raw_dollars,
+                    equity=current_equity,
+                    volatility=volatility,
+                    drawdown=drawdown,
+                )
+            else:
+                scaled_dollars = raw_dollars
+        except Exception as exc:
+            logger.error("capital_scaler error: %s", exc)
+            scaled_dollars = raw_dollars
+        try:
+            qty = int(round(scaled_dollars / price))
         except (ZeroDivisionError, OverflowError, TypeError, ValueError) as exc:
             logger.error("position_size division error: %s", exc)
             return 0
