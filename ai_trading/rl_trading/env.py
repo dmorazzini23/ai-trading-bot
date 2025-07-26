@@ -6,11 +6,20 @@ import numpy as np
 
 try:
     import gymnasium as gym
+    # Use the base Env class when gymnasium is available
+    EnvBase = gym.Env
 except Exception:  # pragma: no cover - optional dependency
     gym = None
+    # Define a lightweight fallback base class when gymnasium is missing
+    class _EnvFallback:
+        """Fallback base class when gymnasium is not installed."""
+
+        pass
+
+    EnvBase = _EnvFallback
 
 
-class TradingEnv(gym.Env):  # type: ignore[misc]
+class TradingEnv(EnvBase):  # type: ignore[misc]
     """
     Minimal gym environment for offline training.
 
@@ -21,8 +30,9 @@ class TradingEnv(gym.Env):  # type: ignore[misc]
     """
 
     def __init__(self, data: np.ndarray, window: int = 10, *, transaction_cost: float = 0.0, slippage: float = 0.0) -> None:
+        # When gymnasium is unavailable, raise a clearer error at runtime
         if gym is None:
-            raise ImportError("gymnasium required")
+            raise ImportError("gymnasium required; install gymnasium to use TradingEnv")
         self.data = data.astype(np.float32)
         self.window = window
         self.current = window

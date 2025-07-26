@@ -646,11 +646,24 @@ def get_minute_df(
         df_cached, ts = cached
         if not df_cached.empty:
             first_idx = df_cached.index[0]
-            if not isinstance(first_idx, pd.Timestamp) or start_dt < first_idx:
+            # Normalize index to UTC before comparison.  If the index is
+            # timezone-naive (no tzinfo) we assume it refers to UTC and
+            # localize accordingly.  This prevents comparing naive vs
+            # aware datetimes (which raises TypeError).
+            if isinstance(first_idx, pd.Timestamp):
+                if first_idx.tzinfo is None or first_idx.tzinfo.utcoffset(first_idx) is None:
+                    first_idx = first_idx.tz_localize("UTC")
+            else:
+                # Non-Timestamp index; skip caching
                 cached = None
-            elif ts >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=1):
-                logger.debug("minute cache hit for %s", symbol)
-                return df_cached.copy()
+                first_idx = None  # type: ignore
+            # If after normalization we still have a first index, compare
+            if first_idx is not None and isinstance(first_idx, pd.Timestamp):
+                if start_dt < first_idx:
+                    cached = None
+                elif ts >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=1):
+                    logger.debug("minute cache hit for %s", symbol)
+                    return df_cached.copy()
 
     alpaca_exc = finnhub_exc = yexc = None
     try:
