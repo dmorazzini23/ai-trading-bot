@@ -358,6 +358,7 @@ class RiskEngine:
         if np.isnan(raw_dollars) or np.isnan(price):
             logger.error("position_size received NaN inputs")
             return 0
+        # Determine current account equity; default to cash if unavailable
         current_equity = cash
         if api is not None:
             try:
@@ -365,6 +366,7 @@ class RiskEngine:
                 current_equity = float(getattr(acct, "equity", cash))
             except Exception:
                 pass
+        # Adjust the raw dollars using capital scaling (volatility & drawdown)
         try:
             scaler = getattr(self, "capital_scaler", None)
             volatility = float(np.std(self._returns[-10:])) if self._returns else 0.0

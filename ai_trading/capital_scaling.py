@@ -250,42 +250,6 @@ __all__ = [
     "kelly_fraction",
     "volatility_parity",
     "cvar_scaling",
-    "drawdown_adjusted_kelly_alt",
-    "volatility_parity_position_alt",
 ]
 
-# AI-AGENT-REF: alt API functions with explicit parameters
-def drawdown_adjusted_kelly_alt(account_value: float, equity_peak: float, raw_kelly: float) -> float:
-    """Alternate interface for drawdown_adjusted_kelly."""
-    return drawdown_adjusted_kelly(account_value, equity_peak, raw_kelly)
-
-
-def volatility_parity_position_alt(base_risk: float, atr_value: float) -> float:
-    """Alternate interface for volatility_parity_position."""
-    return volatility_parity_position(base_risk, atr_value)
-
-# Simple aliases for backward compatibility
-drawdown_adjusted_kelly_alias = drawdown_adjusted_kelly
-volatility_parity_position_alias = volatility_parity_position
-
-# AI-AGENT-REF: fallback stubs for optional imports
-if "fractional_kelly" not in globals():
-    def fractional_kelly(*args, **kwargs):
-        """Stub for import; tests don’t execute this."""
-        raise NotImplementedError("fractional_kelly stub")
-
-if "volatility_parity" not in globals():
-    def volatility_parity(*args, **kwargs):
-        """Stub for import; tests don’t execute this."""
-        raise NotImplementedError("volatility_parity stub")
-
-if "cvar_scaling" not in globals():
-    def cvar_scaling(*args, **kwargs):
-        """Stub for import; tests don’t execute this."""
-        raise NotImplementedError("cvar_scaling stub")
-
-if "kelly_fraction" not in globals():
-    def kelly_fraction(*args, **kwargs):
-        """Stub for import; tests don’t execute this."""
-        raise NotImplementedError("kelly_fraction stub")
 
