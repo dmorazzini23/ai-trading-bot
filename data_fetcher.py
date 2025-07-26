@@ -646,18 +646,13 @@ def get_minute_df(
         df_cached, ts = cached
         if not df_cached.empty:
             first_idx = df_cached.index[0]
-            # Normalize index to UTC before comparison.  If the index is
-            # timezone-naive (no tzinfo) we assume it refers to UTC and
-            # localize accordingly.  This prevents comparing naive vs
-            # aware datetimes (which raises TypeError).
+            # Normalize naive timestamps to UTC so offset-aware comparisons succeed
             if isinstance(first_idx, pd.Timestamp):
                 if first_idx.tzinfo is None or first_idx.tzinfo.utcoffset(first_idx) is None:
                     first_idx = first_idx.tz_localize("UTC")
             else:
-                # Non-Timestamp index; skip caching
                 cached = None
                 first_idx = None  # type: ignore
-            # If after normalization we still have a first index, compare
             if first_idx is not None and isinstance(first_idx, pd.Timestamp):
                 if start_dt < first_idx:
                     cached = None
