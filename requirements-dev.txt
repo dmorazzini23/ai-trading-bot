@@ -8,4 +8,6 @@ pytest-xdist
 numba
 matplotlib
 hypothesis
+stable-baselines3==2.3.2
+gymnasium==0.29.1
 pytest-benchmark
