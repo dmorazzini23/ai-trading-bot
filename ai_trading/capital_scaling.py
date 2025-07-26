@@ -238,6 +238,21 @@ def cvar_scaling(returns: np.ndarray, alpha: float = 0.05) -> float:
     cvar = np.mean(sorted_returns[sorted_returns <= var])
     return abs(cvar) if cvar < 0 else 1.0
 
+# ---------------------------------------------------------------------------
+# Backward-compatible helper functions
+# These functions provide legacy aliases for older modules/tests. They
+# delegate to the primary implementations above and should be considered
+# deprecated. Remove them only after confirming nothing references them.
+
+def drawdown_adjusted_kelly_alt(account_value: float, equity_peak: float, raw_kelly: float) -> float:
+    """Legacy wrapper for drawdown_adjusted_kelly."""
+    return drawdown_adjusted_kelly(account_value, equity_peak, raw_kelly)
+
+
+def volatility_parity_position_alt(base_risk: float, atr_value: float) -> float:
+    """Legacy wrapper for volatility_parity_position."""
+    return volatility_parity_position(base_risk, atr_value)
+
 
 __all__ = [
     "CapitalScalingEngine",
@@ -250,6 +265,9 @@ __all__ = [
     "kelly_fraction",
     "volatility_parity",
     "cvar_scaling",
+    # legacy aliases retained for backward compatibility
+    "drawdown_adjusted_kelly_alt",
+    "volatility_parity_position_alt",
 ]
 
 
