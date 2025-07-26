@@ -76,6 +76,8 @@ Additional key variables include:
 * `BOT_MODE`: e.g. `balanced`, `production`
 * `BOT_LOG_FILE`: path for rotating logs
 * `SCHEDULER_SLEEP_SECONDS`: delay between scheduler cycles (30–60s recommended)
+* `USE_RL_AGENT`: enable reinforcement-learning decisions
+* `RL_MODEL_PATH`: path to the saved RL policy
 
 
 ## Data Sources

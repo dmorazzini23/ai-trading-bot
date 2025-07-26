@@ -38,6 +38,9 @@ transformers==4.35.2
 # Address dateutil utcfromtimestamp deprecation
 python-dateutil>=2.9.0
 optuna==3.6.1
+# reinforcement learning
+stable-baselines3==2.3.2
+gymnasium==0.29.1
 # Monitor CPU load
 psutil>=5.9.8
 # For Python 3.12 wheels use the CPU index when installing PyTorch locally

@@ -627,7 +627,7 @@ class ExecutionEngine:
         projected = current + weight
         if projected > cap:
             self.logger.info(
-                "EXPOSURE_CAP_BREACH", 
+                "EXPOSURE_CAP_BREACH",
                 extra={
                     "symbol": symbol,
                     "qty": qty,
@@ -637,6 +637,16 @@ class ExecutionEngine:
             )
             return True
         return False
+
+    def _execute_sliced(self, symbol: str, qty: int, side: str, method: str):
+        """Execute order in slices using TWAP/VWAP."""
+        slices = max(1, int(os.getenv("EXEC_SLICES", "5")))
+        delay = float(os.getenv("EXEC_WINDOW", "60")) / slices
+        filled = None
+        for _ in range(slices):
+            filled = self.execute_order(symbol, qty // slices, side, method="market")
+            time.sleep(delay)
+        return filled
 
     def _flush_partial_buffers(self, force_id: str | None = None) -> None:
         """Emit consolidated fill logs when ``force_id`` is provided."""
@@ -912,11 +922,15 @@ class ExecutionEngine:
             self.orders_total.inc()
         return filled_qty
 
-    def execute_order(self, symbol: str, qty: int, side: str, asset_class: str = "equity") -> Optional[Order]:
+    def execute_order(
+        self, symbol: str, qty: int, side: str, asset_class: str = "equity", method: str = "market"
+    ) -> Optional[Order]:
         """Execute an order for the given asset class."""
         remaining = int(round(qty))
         last_order = None
         api = self._select_api(asset_class)
+        if method in ("twap", "vwap"):
+            return self._execute_sliced(symbol, remaining, side, method)
         existing = self._available_qty(api, symbol)
         if side.lower() == "buy" and existing > 0:
             self.logger.info("SKIP_HELD_POSITION | already long, skipping buy")

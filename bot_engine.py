@@ -36,6 +36,7 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
 import config
 from logger import setup_logging
 from ai_trading.model_loader import ML_MODELS  # AI-AGENT-REF: preloaded models
+import numpy as np
 
 LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
 setup_logging(log_file=LOG_PATH)
@@ -5927,6 +5928,17 @@ def run_multi_strategy(ctx: BotContext) -> None:
             signals_by_strategy[strat.name] = sigs
         except Exception as e:
             logger.warning(f"Strategy {strat.name} failed: {e}")
+    if config.USE_RL_AGENT:
+        try:
+            from ai_trading.rl_trading.inference import load_policy, predict_signal
+            if not hasattr(ctx, "rl_agent"):
+                ctx.rl_agent = load_policy(config.RL_MODEL_PATH)
+            state = np.zeros((10, 4), dtype=float)
+            rl_sig = predict_signal(ctx.rl_agent, state)
+            if rl_sig:
+                signals_by_strategy = {"rl": [rl_sig]}
+        except Exception as exc:
+            logger.error("RL_AGENT_ERROR", extra={"exc": str(exc)})
     final = ctx.allocator.allocate(signals_by_strategy)
     acct = ctx.api.get_account()
     cash = float(getattr(acct, "cash", 0))

@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     MODEL_RF_PATH: str = "model_rf.pkl"
     MODEL_XGB_PATH: str = "model_xgb.pkl"
     MODEL_LGB_PATH: str = "model_lgb.pkl"
+    RL_MODEL_PATH: str = "rl_agent.zip"
+    USE_RL_AGENT: bool = False
     SECTOR_EXPOSURE_CAP: float = 0.4
     MAX_OPEN_POSITIONS: int = 10
     WEEKLY_DRAWDOWN_LIMIT: float = 0.15

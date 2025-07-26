@@ -2,7 +2,7 @@ import logging
 import os
 import random
 import warnings
-from typing import Any, Dict
+from typing import Any, Dict, Sequence
 
 import numpy as np
 import pandas as pd
@@ -479,3 +479,38 @@ def dynamic_stop_price(
     if not stops:
         return entry_price
     return max(stops) if direction == "long" else min(stops)
+
+
+# --- new risk management helpers -----------------------------------------
+
+def compute_stop_levels(entry_price: float, atr: float, take_mult: float = 2.0) -> tuple[float, float]:
+    """Return stop-loss and take-profit levels using ATR."""
+    stop = entry_price - atr
+    take = entry_price + take_mult * atr
+    return stop, take
+
+
+def correlation_position_weights(corr: pd.DataFrame, base: dict[str, float]) -> dict[str, float]:
+    """Scale weights inversely proportional to asset correlations."""
+    weights = {}
+    for sym, w in base.items():
+        if sym in corr.columns:
+            c = corr[sym].abs().mean()
+            scale = 1.0 / (1.0 + c)
+            weights[sym] = w * scale
+        else:
+            weights[sym] = w
+    return weights
+
+
+def drawdown_circuit(drawdowns: Sequence[float], limit: float = 0.2) -> bool:
+    """Return True if cumulative drawdown exceeds ``limit``."""
+    dd = abs(min(0.0, min(drawdowns))) if drawdowns else 0.0
+    return dd > limit
+
+
+def volatility_filter(atr: float, sma: float, threshold: float = 0.05) -> bool:
+    """Return True when volatility below ``threshold`` relative to SMA."""
+    if sma == 0:
+        return True
+    return atr / sma < threshold
