@@ -2410,6 +2410,13 @@ exec_engine = ExecutionEngine(
 )
 ctx.execution_engine = exec_engine
 
+    # Propagate the capital_scaler to the risk engine so that position_size
+    # can adjust sizing based on account equity, volatility and drawdown.
+    try:
+        if getattr(ctx, "risk_engine", None) is not None and getattr(ctx, "capital_scaler", None) is not None:
+            ctx.risk_engine.capital_scaler = ctx.capital_scaler
+    except Exception:
+        pass
 try:
     equity_init = float(ctx.api.get_account().equity)
 except Exception:
@@ -5944,16 +5951,34 @@ def run_multi_strategy(ctx: BotContext) -> None:
                     if sym and sym not in all_symbols:
                         all_symbols.append(sym)
             if all_symbols:
-                # Construct a 2-D placeholder state: flatten the (window, features)
-                # dimension so that stable-baselines accepts shape (n_samples, obs_dim).
-                # Here we assume 10 bars x 4 features => obs_dim = 40.
+                # Compute meaningful feature vectors for each symbol instead of using
+                # placeholder zeros.  The RL agent expects a 1-D observation per
+                # symbol; we derive this from recent returns and technical
+                # indicators (RSI, ATR).  Additional features can be added
+                # by modifying ``compute_features`` in ``ai_trading.rl_trading.features``.
                 import numpy as np  # local import to avoid polluting global namespace
-                dummy_state = np.zeros((len(all_symbols), 40), dtype=float)
-                # Batch predict RL actions for each symbol; returns a list of TradeSignal
-                rl_sigs = ctx.rl_agent.predict(dummy_state, symbols=all_symbols)
-                # Append RL signals to the strategy dictionary without overwriting others
-                if rl_sigs:
-                    signals_by_strategy["rl"] = rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
+                from ai_trading.rl_trading.features import compute_features
+
+                states: list[np.ndarray] = []
+                for sym in all_symbols:
+                    # Try to fetch recent daily price data; fallback to minute data.
+                    df = None
+                    try:
+                        df = ctx.data_fetcher.get_daily_df(ctx, sym)
+                    except Exception:
+                        df = None
+                    if df is None or getattr(df, "empty", True):
+                        try:
+                            df = ctx.data_fetcher.get_minute_df(ctx, sym)
+                        except Exception:
+                            df = None
+                    state_vec = compute_features(df, window=10)
+                    states.append(state_vec)
+                if states:
+                    state_mat = np.stack(states).astype(np.float32)
+                    rl_sigs = ctx.rl_agent.predict(state_mat, symbols=all_symbols)
+                    if rl_sigs:
+                        signals_by_strategy["rl"] = rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
         except Exception as exc:
             logger.error("RL_AGENT_ERROR", extra={"exc": str(exc)})
     final = ctx.allocator.allocate(signals_by_strategy)
