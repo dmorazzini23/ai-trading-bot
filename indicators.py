@@ -5,6 +5,9 @@ import numpy as np
 import pandas as pd
 from functools import lru_cache
 from numba import jit
+from typing import Any, Tuple
+
+_INDICATOR_CACHE: dict[Tuple[str, Any], Any] = {}
 
 
 def ichimoku_fallback(high: pd.Series, low: pd.Series, close: pd.Series) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -191,6 +194,19 @@ def get_atr_trailing_stop(close: pd.Series, high: pd.Series, low: pd.Series, per
     return close - multiplier * atr_series
 
 
+def cached_atr_trailing_stop(symbol: str, df: pd.DataFrame, period: int = 14, multiplier: float = 1.5) -> pd.Series:
+    """Return ATR stop with simple caching by symbol and last timestamp."""
+    if df is None or df.empty:
+        return pd.Series(dtype=float)
+    ts = df.index[-1]
+    key = (symbol, ts)
+    if key in _INDICATOR_CACHE:
+        return _INDICATOR_CACHE[key]
+    stops = get_atr_trailing_stop(df["close"], df["high"], df["low"], period, multiplier)
+    _INDICATOR_CACHE[key] = stops
+    return stops
+
+
 def get_vwap_bias(close: pd.Series, high: pd.Series, low: pd.Series, volume: pd.Series) -> pd.Series:
     vwap_series = calculate_vwap(high, low, close, volume)
     bias = close / vwap_series - 1
@@ -267,6 +283,7 @@ __all__ = [
     "calculate_vwap",
     "get_rsi_signal",
     "get_atr_trailing_stop",
+    "cached_atr_trailing_stop",
     "get_vwap_bias",
     "vwap",
     "donchian_channel",

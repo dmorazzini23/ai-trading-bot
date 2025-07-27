@@ -21,6 +21,8 @@ from typing import Any, Dict, Optional
 import pandas as pd
 import requests
 from requests import Session
+import config
+import utils
 try:  # AI-AGENT-REF: make optional for unit tests
     from alpaca.trading.stream import TradingStream
     from alpaca.common.exceptions import APIError
@@ -70,6 +72,7 @@ partial_fills: dict[str, dict[str, float]] = {}
 partial_fill_tracker: set[str] = set()
 
 ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
+RATE_LIMIT_BUDGET = int(os.getenv("RATE_LIMIT_BUDGET", str(config.RATE_LIMIT_BUDGET)))
 
 
 def _build_headers() -> dict:
@@ -96,7 +99,7 @@ def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
 
 
 @sleep_and_retry
-@limits(calls=190, period=60)
+@limits(calls=RATE_LIMIT_BUDGET, period=60)
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=1, max=16),
@@ -247,7 +250,7 @@ def submit_order(api, req, log: logging.Logger | None = None):
             raise
         except requests.exceptions.HTTPError as e:
             if "429" in str(e) or "rate limit" in str(e).lower():
-                wait = attempt * 2
+                wait = utils.backoff_delay(attempt)
                 _warn_limited(
                     "order-rate-limit",
                     "Rate limit hit for Alpaca order (attempt %s/%s), sleeping %ss",
@@ -271,7 +274,7 @@ def submit_order(api, req, log: logging.Logger | None = None):
             )
             if attempt == max_retries:
                 raise
-            time.sleep(attempt * 2)
+            time.sleep(utils.backoff_delay(attempt))
         finally:
             if order_id:
                 with _pending_orders_lock:

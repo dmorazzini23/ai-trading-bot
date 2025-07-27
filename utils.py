@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import config
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,16 @@ def should_log_stale(symbol: str, last_ts: pd.Timestamp, *, ttl: int = 300) -> b
         return False
     _STALE_CACHE[symbol] = (last_ts, now)
     return True
+
+
+def backoff_delay(attempt: int, base: float = 1.0, cap: float = 30.0, jitter: float = 0.1) -> float:
+    """Return exponential backoff delay with jitter."""
+    exp = base * (2 ** max(0, attempt - 1))
+    delay = min(exp, cap)
+    if jitter > 0:
+        jitter_amt = random.uniform(-jitter * delay, jitter * delay)
+        delay = max(0.0, delay + jitter_amt)
+    return delay
 
 
 MARKET_OPEN_TIME = dt.time(9, 30)
