@@ -3,6 +3,8 @@ from __future__ import annotations
 
 # (any existing comments or module docstring go below the future import)
 __all__ = ["pre_trade_health_check"]
+from logging_config import setup_logging
+setup_logging()
 import asyncio
 import logging
 import io
