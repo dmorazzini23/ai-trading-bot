@@ -6292,75 +6292,202 @@ def run_all_trades_worker(state: BotState, model) -> None:
     import uuid
 
     loop_id = str(uuid.uuid4())
-    if not run_lock.acquire(blocking=False):
+    acquired = run_lock.acquire(blocking=False)
+    if not acquired:
         logger.info("RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
-    if not hasattr(state, "trade_cooldowns"):
-        state.trade_cooldowns = {}
-    if not hasattr(state, "last_trade_direction"):
-        state.last_trade_direction = {}
-    if state.running:
-        logger.warning(
-            "RUN_ALL_TRADES_SKIPPED_OVERLAP",
-            extra={"last_duration": getattr(state, "last_loop_duration", 0.0)},
-        )
-        return
-    now = datetime.now(timezone.utc)
-    for sym, ts in list(state.trade_cooldowns.items()):
-        if (now - ts).total_seconds() > TRADE_COOLDOWN_MIN * 60:
-            state.trade_cooldowns.pop(sym, None)
-    if (
-        state.last_run_at
-        and (now - state.last_run_at).total_seconds() < RUN_INTERVAL_SECONDS
-    ):
-        logger.warning("RUN_ALL_TRADES_SKIPPED_RECENT")
-        return
-    if not is_market_open():
-        logger.info("MARKET_CLOSED_NO_FETCH")
-        return  # FIXED: skip work when market closed
-    state.pdt_blocked = check_pdt_rule(ctx)
-    if state.pdt_blocked:
-        return
-    state.running = True
-    state.last_run_at = now
-    loop_start = time.monotonic()
-    try:
-        # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
-        try:
-            open_orders = ctx.api.list_orders(status="open")
-        except Exception as exc:  # pragma: no cover - network issues
-            logger.debug(f"order check failed: {exc}")
-            open_orders = []
-        if any(o.status in ("new", "pending_new") for o in open_orders):
-            logger.warning("Detected pending orders; skipping this trade cycle")
-            return
-        if config.VERBOSE:
-            logger.info(
-                "RUN_ALL_TRADES_START",
-                extra={"timestamp": datetime.now(timezone.utc).isoformat()},
+    try:  # AI-AGENT-REF: ensure lock released on every exit
+        if not hasattr(state, "trade_cooldowns"):
+            state.trade_cooldowns = {}
+        if not hasattr(state, "last_trade_direction"):
+            state.last_trade_direction = {}
+        if state.running:
+            logger.warning(
+                "RUN_ALL_TRADES_SKIPPED_OVERLAP",
+                extra={"last_duration": getattr(state, "last_loop_duration", 0.0)},
             )
-
-        current_cash, regime_ok, symbols = _prepare_run(ctx, state)
-
-        # AI-AGENT-REF: honor global halt flag before processing symbols
-        if check_halt_flag(ctx):
-            _log_health_diagnostics(ctx, "halt_flag_loop")
-            logger.info("TRADING_HALTED_VIA_FLAG: Managing existing positions only.")
+            return
+        now = datetime.now(timezone.utc)
+        for sym, ts in list(state.trade_cooldowns.items()):
+            if (now - ts).total_seconds() > TRADE_COOLDOWN_MIN * 60:
+                state.trade_cooldowns.pop(sym, None)
+        if (
+            state.last_run_at
+            and (now - state.last_run_at).total_seconds() < RUN_INTERVAL_SECONDS
+        ):
+            logger.warning("RUN_ALL_TRADES_SKIPPED_RECENT")
+            return
+        if not is_market_open():
+            logger.info("MARKET_CLOSED_NO_FETCH")
+            return  # FIXED: skip work when market closed
+        state.pdt_blocked = check_pdt_rule(ctx)
+        if state.pdt_blocked:
+            return
+        state.running = True
+        state.last_run_at = now
+        loop_start = time.monotonic()
+        try:
+            # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
             try:
-                portfolio = ctx.api.get_all_positions()
-                for pos in portfolio:
-                    manage_position_risk(ctx, pos)
+                open_orders = ctx.api.list_orders(status="open")
             except Exception as exc:  # pragma: no cover - network issues
-                logger.warning(f"HALT_MANAGE_FAIL: {exc}")
-            logger.info("HALT_SKIP_NEW_TRADES")
-            _send_heartbeat()
-            # log summary even when halted
+                logger.debug(f"order check failed: {exc}")
+                open_orders = []
+            if any(o.status in ("new", "pending_new") for o in open_orders):
+                logger.warning("Detected pending orders; skipping this trade cycle")
+                return
+            if config.VERBOSE:
+                logger.info(
+                    "RUN_ALL_TRADES_START",
+                    extra={"timestamp": datetime.now(timezone.utc).isoformat()},
+                )
+
+            current_cash, regime_ok, symbols = _prepare_run(ctx, state)
+
+            # AI-AGENT-REF: honor global halt flag before processing symbols
+            if check_halt_flag(ctx):
+                _log_health_diagnostics(ctx, "halt_flag_loop")
+                logger.info("TRADING_HALTED_VIA_FLAG: Managing existing positions only.")
+                try:
+                    portfolio = ctx.api.get_all_positions()
+                    for pos in portfolio:
+                        manage_position_risk(ctx, pos)
+                except Exception as exc:  # pragma: no cover - network issues
+                    logger.warning(f"HALT_MANAGE_FAIL: {exc}")
+                logger.info("HALT_SKIP_NEW_TRADES")
+                _send_heartbeat()
+                # log summary even when halted
+                try:
+                    acct = ctx.api.get_account()
+                    cash = float(acct.cash)
+                    equity = float(acct.equity)
+                    positions = ctx.api.get_all_positions()
+                    logger.debug("Raw Alpaca positions: %s", positions)
+                    exposure = (
+                        sum(abs(float(p.market_value)) for p in positions) / equity * 100
+                        if equity > 0
+                        else 0.0
+                    )
+                    logger.info(
+                        f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
+                    )
+                    logger.info(
+                        "Positions detail: %s",
+                        [
+                            {
+                                "symbol": p.symbol,
+                                "qty": int(p.qty),
+                                "avg_price": float(p.avg_entry_price),
+                                "market_value": float(p.market_value),
+                            }
+                            for p in positions
+                        ],
+                    )
+                    logger.info(
+                        "Weights vs positions: weights=%s positions=%s cash=%.2f",
+                        ctx.portfolio_weights,
+                        {p.symbol: int(p.qty) for p in positions},
+                        cash,
+                    )
+                except Exception as exc:  # pragma: no cover - network issues
+                    logger.warning(f"SUMMARY_FAIL: {exc}")
+                return
+
+            retries = 3
+            processed, row_counts = [], {}
+            for attempt in range(retries):
+                processed, row_counts = _process_symbols(
+                    symbols, current_cash, model, regime_ok
+                )
+                if processed:
+                    if attempt:
+                        logger.info(
+                            "DATA_SOURCE_RETRY_SUCCESS",
+                            extra={"attempt": attempt + 1, "symbols": symbols},
+                        )
+                    break
+                time.sleep(2)
+
+            # AI-AGENT-REF: abort only if all symbols returned zero rows
+            if sum(row_counts.values()) == 0:
+                last_ts = None
+                for sym in symbols:
+                    ts = ctx.data_fetcher._minute_timestamps.get(sym)
+                    if last_ts is None or (ts and ts > last_ts):
+                        last_ts = ts
+                logger.critical(
+                    "DATA_SOURCE_EMPTY",
+                    extra={
+                        "symbols": symbols,
+                        "endpoint": "minute",
+                        "last_success": last_ts.isoformat() if last_ts else "unknown",
+                        "row_counts": row_counts,
+                    },
+                )
+                logger.info(
+                    "DATA_SOURCE_RETRY_FAILED",
+                    extra={"attempts": retries, "symbols": symbols},
+                )
+                # AI-AGENT-REF: exit immediately on repeated data failure
+                return
+            else:
+                logger.info(
+                    "DATA_SOURCE_RETRY_FINAL",
+                    extra={"success": True, "attempts": attempt + 1},
+                )
+
+            skipped = [s for s in symbols if s not in processed]
+            if skipped:
+                logger.info(
+                    "CYCLE_SKIPPED_SUMMARY",
+                    extra={"count": len(skipped), "symbols": skipped},
+                )
+                if len(skipped) == len(symbols):
+                    state.skipped_cycles += 1
+                else:
+                    state.skipped_cycles = 0
+            else:
+                state.skipped_cycles = 0
+            if state.skipped_cycles >= 2:
+                logger.critical(
+                    "ALL_SYMBOLS_SKIPPED_TWO_CYCLES",
+                    extra={
+                        "hint": "Check data provider API keys and entitlements; test data fetch manually from the server; review data fetcher logs",
+                    },
+                )
+
+            run_multi_strategy(ctx)
+            try:
+                ctx.risk_engine.refresh_positions(ctx.api)
+                pos_list = ctx.api.get_all_positions()
+                state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
+                state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
+                state.short_positions = {
+                    s for s, q in state.position_cache.items() if q < 0
+                }
+                if ctx.execution_engine:
+                    ctx.execution_engine.check_trailing_stops()
+            except Exception as exc:  # pragma: no cover - safety
+                logger.warning("refresh_positions failed: %s", exc)
+            logger.info(
+                f"RUN_ALL_TRADES_COMPLETE | processed={len(row_counts)} symbols, total_rows={sum(row_counts.values())}"
+            )
             try:
                 acct = ctx.api.get_account()
                 cash = float(acct.cash)
                 equity = float(acct.equity)
                 positions = ctx.api.get_all_positions()
                 logger.debug("Raw Alpaca positions: %s", positions)
+                try:
+                    from utils import portfolio_lock
+                    import portfolio
+
+                    with portfolio_lock:
+                        ctx.portfolio_weights = portfolio.compute_portfolio_weights(
+                            ctx, [p.symbol for p in positions]
+                        )
+                except Exception:
+                    logger.warning("weight recompute failed", exc_info=True)
                 exposure = (
                     sum(abs(float(p.market_value)) for p in positions) / equity * 100
                     if equity > 0
@@ -6387,166 +6514,43 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     {p.symbol: int(p.qty) for p in positions},
                     cash,
                 )
+                try:
+                    adaptive_cap = ctx.risk_engine._adaptive_global_cap()
+                except Exception:
+                    adaptive_cap = 0.0
+                logger.info(
+                    "CYCLE SUMMARY: cash=$%.0f equity=$%.0f exposure=%.0f%% positions=%d adaptive_cap=%.1f",
+                    cash,
+                    equity,
+                    exposure,
+                    len(positions),
+                    adaptive_cap,
+                )
             except Exception as exc:  # pragma: no cover - network issues
                 logger.warning(f"SUMMARY_FAIL: {exc}")
-            return
-
-        retries = 3
-        processed, row_counts = [], {}
-        for attempt in range(retries):
-            processed, row_counts = _process_symbols(
-                symbols, current_cash, model, regime_ok
-            )
-            if processed:
-                if attempt:
-                    logger.info(
-                        "DATA_SOURCE_RETRY_SUCCESS",
-                        extra={"attempt": attempt + 1, "symbols": symbols},
-                    )
-                break
-            time.sleep(2)
-
-        # AI-AGENT-REF: abort only if all symbols returned zero rows
-        if sum(row_counts.values()) == 0:
-            last_ts = None
-            for sym in symbols:
-                ts = ctx.data_fetcher._minute_timestamps.get(sym)
-                if last_ts is None or (ts and ts > last_ts):
-                    last_ts = ts
-            logger.critical(
-                "DATA_SOURCE_EMPTY",
-                extra={
-                    "symbols": symbols,
-                    "endpoint": "minute",
-                    "last_success": last_ts.isoformat() if last_ts else "unknown",
-                    "row_counts": row_counts,
-                },
-            )
-            logger.info(
-                "DATA_SOURCE_RETRY_FAILED",
-                extra={"attempts": retries, "symbols": symbols},
-            )
-            # AI-AGENT-REF: exit immediately on repeated data failure
-            return
-        else:
-            logger.info(
-                "DATA_SOURCE_RETRY_FINAL",
-                extra={"success": True, "attempts": attempt + 1},
-            )
-
-        skipped = [s for s in symbols if s not in processed]
-        if skipped:
-            logger.info(
-                "CYCLE_SKIPPED_SUMMARY",
-                extra={"count": len(skipped), "symbols": skipped},
-            )
-            if len(skipped) == len(symbols):
-                state.skipped_cycles += 1
-            else:
-                state.skipped_cycles = 0
-        else:
-            state.skipped_cycles = 0
-        if state.skipped_cycles >= 2:
-            logger.critical(
-                "ALL_SYMBOLS_SKIPPED_TWO_CYCLES",
-                extra={
-                    "hint": "Check data provider API keys and entitlements; test data fetch manually from the server; review data fetcher logs",
-                },
-            )
-
-        run_multi_strategy(ctx)
-        try:
-            ctx.risk_engine.refresh_positions(ctx.api)
-            pos_list = ctx.api.get_all_positions()
-            state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
-            state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
-            state.short_positions = {
-                s for s, q in state.position_cache.items() if q < 0
-            }
-            if ctx.execution_engine:
-                ctx.execution_engine.check_trailing_stops()
-        except Exception as exc:  # pragma: no cover - safety
-            logger.warning("refresh_positions failed: %s", exc)
-        logger.info(
-            f"RUN_ALL_TRADES_COMPLETE | processed={len(row_counts)} symbols, total_rows={sum(row_counts.values())}"
-        )
-        try:
-            acct = ctx.api.get_account()
-            cash = float(acct.cash)
-            equity = float(acct.equity)
-            positions = ctx.api.get_all_positions()
-            logger.debug("Raw Alpaca positions: %s", positions)
             try:
-                from utils import portfolio_lock
-                import portfolio
-
-                with portfolio_lock:
-                    ctx.portfolio_weights = portfolio.compute_portfolio_weights(
-                        ctx, [p.symbol for p in positions]
-                    )
-            except Exception:
-                logger.warning("weight recompute failed", exc_info=True)
-            exposure = (
-                sum(abs(float(p.market_value)) for p in positions) / equity * 100
-                if equity > 0
-                else 0.0
-            )
-            logger.info(
-                f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
-            )
-            logger.info(
-                "Positions detail: %s",
-                [
-                    {
-                        "symbol": p.symbol,
-                        "qty": int(p.qty),
-                        "avg_price": float(p.avg_entry_price),
-                        "market_value": float(p.market_value),
-                    }
-                    for p in positions
-                ],
-            )
-            logger.info(
-                "Weights vs positions: weights=%s positions=%s cash=%.2f",
-                ctx.portfolio_weights,
-                {p.symbol: int(p.qty) for p in positions},
-                cash,
-            )
-            try:
-                adaptive_cap = ctx.risk_engine._adaptive_global_cap()
-            except Exception:
-                adaptive_cap = 0.0
-            logger.info(
-                "CYCLE SUMMARY: cash=$%.0f equity=$%.0f exposure=%.0f%% positions=%d adaptive_cap=%.1f",
-                cash,
-                equity,
-                exposure,
-                len(positions),
-                adaptive_cap,
-            )
-        except Exception as exc:  # pragma: no cover - network issues
-            logger.warning(f"SUMMARY_FAIL: {exc}")
-        try:
-            acct = ctx.api.get_account()
-            pnl = float(acct.equity) - float(acct.last_equity)
-            logger.info(
-                "LOOP_PNL",
-                extra={
-                    "loop_id": loop_id,
-                    "pnl": pnl,
-                    "mode": "SHADOW" if config.SHADOW_MODE else "LIVE",
-                },
-            )
+                acct = ctx.api.get_account()
+                pnl = float(acct.equity) - float(acct.last_equity)
+                logger.info(
+                    "LOOP_PNL",
+                    extra={
+                        "loop_id": loop_id,
+                        "pnl": pnl,
+                        "mode": "SHADOW" if config.SHADOW_MODE else "LIVE",
+                    },
+                )
+            except Exception as e:
+                logger.warning(f"Failed P&L retrieval: {e}")
         except Exception as e:
-            logger.warning(f"Failed P&L retrieval: {e}")
-    except Exception as e:
-        logger.error(f"Exception in trading loop: {e}", exc_info=True)
+            logger.error(f"Exception in trading loop: {e}", exc_info=True)
+        finally:
+            # Always reset running flag
+            state.running = False
+            state.last_loop_duration = time.monotonic() - loop_start
+            _log_loop_heartbeat(loop_id, loop_start)
     finally:
-        # Always reset running flag
-        state.running = False
-        state.last_loop_duration = time.monotonic() - loop_start
-        _log_loop_heartbeat(loop_id, loop_start)
-        run_lock.release()
+        if acquired:
+            run_lock.release()
 
 
 def schedule_run_all_trades(model):
