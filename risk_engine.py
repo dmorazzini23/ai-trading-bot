@@ -7,6 +7,7 @@ from typing import Any, Dict, Sequence
 import numpy as np
 import pandas as pd
 import metrics_logger
+import config
 
 warnings.filterwarnings(
     "ignore",
@@ -20,8 +21,9 @@ from utils import get_phase_logger
 
 logger = get_phase_logger(__name__, "RISK_CHECK")
 
-random.seed(42)
-np.random.seed(42)
+# Set deterministic seed from configuration
+random.seed(config.SEED)
+np.random.seed(config.SEED)
 # AI-AGENT-REF: compatibility with pandas_ta expecting numpy.NaN constant
 if not hasattr(np, "NaN"):
     np.NaN = np.nan

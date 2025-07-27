@@ -171,6 +171,8 @@ DISABLE_DAILY_RETRAIN = env_settings.DISABLE_DAILY_RETRAIN
 TRADE_LOG_FILE = str((ROOT_DIR / env_settings.TRADE_LOG_FILE).resolve())
 EQUITY_EXPOSURE_CAP = float(os.getenv("EQUITY_EXPOSURE_CAP", "2.5"))
 PORTFOLIO_EXPOSURE_CAP = float(os.getenv("PORTFOLIO_EXPOSURE_CAP", "2.5"))
+SEED = int(os.getenv("SEED", str(env_settings.SEED)))
+RATE_LIMIT_BUDGET = int(os.getenv("RATE_LIMIT_BUDGET", str(env_settings.RATE_LIMIT_BUDGET)))
 VERBOSE = os.getenv("VERBOSE", "1").lower() not in ("0", "false")
 VERBOSE_LOGGING = os.getenv("VERBOSE_LOGGING", "1").lower() not in ("0", "false")
 # Minimum delay between scheduler iterations. Recommended 30–60s to
@@ -274,6 +276,8 @@ __all__ = [
     "TRADE_AUDIT_DIR",
     "EQUITY_EXPOSURE_CAP",
     "PORTFOLIO_EXPOSURE_CAP",
+    "SEED",
+    "RATE_LIMIT_BUDGET",
     "set_runtime_config",
 ]
 

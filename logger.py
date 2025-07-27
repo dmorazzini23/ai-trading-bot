@@ -6,8 +6,10 @@ import os
 import queue
 import sys
 import csv
+import json
 from datetime import date
 import atexit
+import config
 
 import metrics_logger
 
@@ -31,6 +33,27 @@ class UTCFormatter(logging.Formatter):
     """Formatter with UTC timestamps and structured phase tags."""
 
     converter = time.gmtime
+
+
+class JSONFormatter(logging.Formatter):
+    """JSON log formatter with secret masking."""
+
+    converter = time.gmtime
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "name": record.name,
+            "msg": record.getMessage(),
+        }
+        for k, v in record.__dict__.items():
+            if k in {"msg", "args", "levelname", "levelno", "name", "created", "msecs", "relativeCreated", "asctime"}:
+                continue
+            if "key" in k.lower() or "secret" in k.lower():
+                v = config.mask_secret(str(v))
+            payload[k] = v
+        return json.dumps(payload)
 
 _configured = False
 _loggers: Dict[str, logging.Logger] = {}
@@ -62,8 +85,8 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
 
     logger.setLevel(logging.DEBUG)
 
-    formatter = UTCFormatter(
-        "%(asctime)sZ %(levelname)s [%(bot_phase)s] %(name)s - %(message)s"
+    formatter = JSONFormatter(
+        "%(asctime)sZ"
     )
 
     class _PhaseFilter(logging.Filter):

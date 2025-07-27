@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 config.reload_env()
 
 # Set deterministic random seeds for reproducibility
-SEED = 42
+SEED = config.SEED
 random.seed(SEED)
 np.random.seed(SEED)
 try:

@@ -1,6 +1,7 @@
 """Order execution engine with Alpaca integration and slippage logging."""
 
 import csv
+import asyncio
 import logging
 import logging.handlers
 import math
@@ -18,6 +19,7 @@ import numpy as np
 import pandas as pd
 from tenacity import (retry, retry_if_exception_type, stop_after_attempt,
                       wait_exponential, wait_random)
+import utils
 
 # AI-AGENT-REF: track recent buy timestamps to avoid immediate re-checks
 #
@@ -110,7 +112,7 @@ from slippage import monitor_slippage
 from utils import get_phase_logger
 import config
 from collections import deque
-from indicators import get_atr_trailing_stop
+from indicators import cached_atr_trailing_stop
 
 
 class OrderClass(str, Enum):
@@ -166,7 +168,8 @@ def should_exit_position(df: pd.DataFrame, entry_price: float, side: str, period
         if df is None or df.empty:
             return False
         # compute the trailing stop series
-        stops = get_atr_trailing_stop(df["close"], df["high"], df["low"], period=period, multiplier=multiplier)
+        sym_key = str(df.get("symbol", ["_"])[-1]) if "symbol" in df else "_"
+        stops = cached_atr_trailing_stop(sym_key, df, period=period, multiplier=multiplier)
         stop_price = stops.iloc[-1]
         last_close = df["close"].iloc[-1]
         if side.lower() == "buy":
@@ -946,7 +949,99 @@ class ExecutionEngine:
                     },
                     e,
                 )
-                time.sleep(backoff)
+                time.sleep(utils.backoff_delay(attempt))
+                backoff = min(backoff * 2, 30)
+                if use_rebalance_id:
+                    rebalance_attempts[symbol] = rebalance_attempts.get(symbol, 0) + 1
+                if attempt == 2:
+                    self.logger.warning(
+                        "submit_order failed for %s after retries: %s",
+                        symbol,
+                        e,
+                    )
+                    return None
+            except (RuntimeError, ValueError) as exc:
+                self.logger.exception(
+                    "Unexpected error placing order for %s: %s",
+                    symbol,
+                    exc,
+                )
+                return None
+        return None
+
+    async def _submit_with_retry_async(
+        self,
+        api: TradingClient,
+        order_req: object,
+        symbol: str,
+        side: str,
+        slice_qty: int,
+    ) -> Optional[Order]:
+        """Async variant of :meth:`_submit_with_retry`."""
+        self.logger.info(
+            "ORDER_SUBMIT",
+            extra={
+                "symbol": symbol,
+                "side": side,
+                "qty": slice_qty,
+                "type": order_req.__class__.__name__,
+            },
+        )
+        order_class = getattr(order_req, "order_class", OrderClass.NORMAL)
+        base_cid = getattr(
+            order_req,
+            "client_order_id",
+            generate_client_order_id(symbol, side, order_class),
+        )
+        rebalance_ids = getattr(self.ctx, "rebalance_ids", {})
+        rebalance_attempts = getattr(self.ctx, "rebalance_attempts", {})
+        use_rebalance_id = symbol in rebalance_ids
+        if use_rebalance_id:
+            base_cid = rebalance_ids[symbol]
+        else:
+            if isinstance(order_req, dict):
+                order_req.setdefault("client_order_id", base_cid)
+            else:
+                setattr(order_req, "client_order_id", base_cid)
+        backoff = 1
+        for attempt in range(3):
+            if order_class is OrderClass.INITIAL_REBALANCE:
+                cid = f"{base_cid}-{uuid4().hex[:8]}"
+                if isinstance(order_req, dict):
+                    order_req["client_order_id"] = cid
+                else:
+                    setattr(order_req, "client_order_id", cid)
+            elif use_rebalance_id:
+                cid = base_cid if attempt == 0 and not rebalance_attempts.get(symbol) else f"{base_cid}_{uuid4().hex[:8]}"
+                if isinstance(order_req, dict):
+                    order_req["client_order_id"] = cid
+                else:
+                    setattr(order_req, "client_order_id", cid)
+            elif attempt:
+                new_cid = f"{base_cid}-{uuid4().hex[:8]}"
+                if isinstance(order_req, dict):
+                    order_req["client_order_id"] = new_cid
+                else:
+                    setattr(order_req, "client_order_id", new_cid)
+            try:
+                order = submit_order(api, order_req, self.logger)
+                self.logger.info("Order submit response for %s: %s", symbol, order)
+                if not getattr(order, "id", None) and not SHADOW_MODE:
+                    self.logger.error("Order failed for %s: %s", symbol, order)
+                return order
+            except (APIError, TimeoutError) as e:
+                self.logger.error(
+                    "ORDER_SUBMIT_ERROR %s | params=%s | %s",
+                    symbol,
+                    {
+                        "symbol": getattr(order_req, "symbol", ""),
+                        "qty": getattr(order_req, "qty", 0),
+                        "side": getattr(order_req, "side", ""),
+                        "type": order_req.__class__.__name__,
+                    },
+                    e,
+                )
+                await asyncio.sleep(utils.backoff_delay(attempt + 1))
                 backoff = min(backoff * 2, 30)
                 if use_rebalance_id:
                     rebalance_attempts[symbol] = rebalance_attempts.get(symbol, 0) + 1
@@ -978,7 +1073,22 @@ class ExecutionEngine:
                 backoff = 1
             except Exception as exc:  # pragma: no cover - network
                 self.logger.debug("ORDER_POLL_FAIL %s: %s", order_id, exc)
-            time.sleep(backoff)
+            time.sleep(utils.backoff_delay(int(backoff)))
+            backoff = min(backoff * 2, 30)
+
+    async def _wait_for_fill_async(self, order_id: str) -> None:
+        """Async variant of :meth:`_wait_for_fill`."""
+        backoff = 1
+        while True:
+            try:
+                od = self.api.get_order_by_id(order_id)
+                status = getattr(od, "status", "")
+                if status in {"filled", "canceled", "rejected"}:
+                    return
+                backoff = 1
+            except Exception as exc:  # pragma: no cover - network
+                self.logger.debug("ORDER_POLL_FAIL %s: %s", order_id, exc)
+            await asyncio.sleep(utils.backoff_delay(int(backoff)))
             backoff = min(backoff * 2, 30)
 
     def _handle_order_result(
@@ -1103,6 +1213,129 @@ class ExecutionEngine:
             self.orders_total.inc()
         return filled_qty
 
+    async def _handle_order_result_async(
+        self,
+        symbol: str,
+        side: str,
+        order: Order,
+        expected_price: Optional[float],
+        slice_qty: int,
+        start_time: float,
+    ) -> int:
+        """Async variant of :meth:`_handle_order_result`."""
+        self._flush_partial_buffers()
+        status = getattr(order, "status", "")
+        order_id = getattr(order, "id", "")
+        if status in ("new", "pending_new"):
+            await asyncio.sleep(1)
+            try:
+                refreshed = self.api.get_order_by_id(order_id)
+                status = getattr(refreshed, "status", status)
+                order = refreshed
+            except Exception as exc:  # pragma: no cover - network issues
+                self.logger.debug("Order refresh failed for %s: %s", order_id, exc)
+            if status not in {"filled", "canceled", "rejected"}:
+                await self._wait_for_fill_async(order_id)
+        if not self._check_order_active(symbol, order, status, order_id):
+            return 0
+        fill_price = float(
+            getattr(order, "filled_avg_price", expected_price or 0) or 0
+        )
+        latency = (time.monotonic() - start_time)
+        if status in ("new", "pending_new"):
+            self.logger.info(
+                "ORDER_PENDING", extra={"symbol": symbol, "order_id": order_id, "wait_s": latency}
+            )
+            return 0
+        self._log_slippage(symbol, expected_price, fill_price, order_id=order_id)
+        latency *= 1000.0
+        filled_qty = 0
+        if status == "filled":
+            self.logger.info(
+                "ORDER_FILLED",
+                extra={
+                    "symbol": symbol,
+                    "order_id": order_id,
+                    "latency_ms": latency,
+                    "price": fill_price,
+                },
+            )
+            audit_log_trade(
+                symbol,
+                int(getattr(order, "filled_qty", slice_qty)),
+                side,
+                fill_price,
+                datetime.now(timezone.utc).isoformat(),
+                {"status": status, "mode": "SHADOW" if SHADOW_MODE else "LIVE"},
+            )
+            log_json_audit(
+                {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "symbol": symbol,
+                    "qty": int(getattr(order, "filled_qty", slice_qty)),
+                    "price": fill_price,
+                    "order_id": order_id,
+                    "client_order_id": getattr(order, "client_order_id", order_id),
+                    "status": status,
+                    "partial_fills": getattr(order, "legs", []),
+                }
+            )
+            actual_qty = int(getattr(order, "filled_qty", slice_qty))
+            log_trade(
+                symbol,
+                actual_qty,
+                side,
+                fill_price,
+                datetime.now(timezone.utc).isoformat(),
+                order_id,
+            )
+            filled_qty = actual_qty
+            if order_id in self._partial_buffer:
+                buf = self._partial_buffer[order_id]
+                add_qty = max(0, slice_qty - buf["qty"])
+                buf["qty"] += add_qty
+                buf["count"] += 1 if add_qty else 0
+                buf["total_price"] += add_qty * fill_price
+                self._flush_partial_buffers(order_id)
+        elif status == "partially_filled":
+            part_qty = int(getattr(order, "filled_qty", 0) or 0)
+            self._partial_buffer.setdefault(
+                order_id,
+                {
+                    "qty": 0,
+                    "count": 0,
+                    "total_price": 0.0,
+                    "symbol": symbol,
+                    "ts": time.monotonic(),
+                },
+            )
+            buf = self._partial_buffer[order_id]
+            buf["qty"] += part_qty
+            buf["count"] += 1
+            buf["total_price"] += part_qty * fill_price
+            buf["ts"] = time.monotonic()
+            self._flush_partial_buffers()
+            filled_qty = part_qty
+        elif status in ("pending_new", "new"):
+            self.logger.info("Order status for %s: %s", symbol, status)
+        elif status in ("rejected", "failed"):
+            self.logger.error("Order failed for %s: %s", symbol, status)
+        else:
+            self.logger.error(
+                "ORDER_STATUS",
+                extra={"symbol": symbol, "order_id": order_id, "status": status},
+            )
+
+        if status not in ("filled", "accepted", "new", "pending_new", "partially_filled"):
+            self.logger.warning(
+                "UNEXPECTED_ORDER_STATUS", extra={"symbol": symbol, "status": status}
+            )
+        if status not in {"filled", "canceled", "rejected"}:
+            await self._wait_for_fill_async(order_id)
+        if self.orders_total is not None:
+            self.orders_total.inc()
+        return filled_qty
+
     def execute_order(
         self, symbol: str, qty: int, side: str, asset_class: str = "equity", method: str = "market"
     ) -> Optional[Order]:
@@ -1219,6 +1452,123 @@ class ExecutionEngine:
                 # ``_recent_buys_lock`` for thread safety.  Use
                 # ``time.monotonic()`` rather than ``time.time()`` to avoid
                 # issues when the system clock changes.
+                with _recent_buys_lock:
+                    recent_buys[symbol] = time.monotonic()
+            else:
+                self.logger.info("EXITING %s via order %s", symbol, oid)
+        return last_order
+
+    async def execute_order_async(
+        self, symbol: str, qty: int, side: str, asset_class: str = "equity", method: str = "market"
+    ) -> Optional[Order]:
+        """Asynchronous variant of :meth:`execute_order`."""
+        remaining = int(round(qty))
+        last_order = None
+        api = self._select_api(asset_class)
+        if method in ("twap", "vwap"):
+            return await asyncio.to_thread(self._execute_sliced, symbol, remaining, side, method)
+        existing = self._available_qty(api, symbol)
+        if side.lower() == "buy" and existing > 0:
+            self.logger.info("SKIP_HELD_POSITION | already long, skipping buy")
+            return None
+        if side.lower() == "sell" and existing == 0:
+            self.logger.info("SKIP_NO_POSITION | no shares to sell, skipping")
+            return None
+        if side.lower() == "sell":
+            avail = self._available_qty(api, symbol)
+            if avail <= 0:
+                self.logger.info("No position to sell for %s, skipping.", symbol)
+                return None
+            if remaining > avail:
+                self.logger.warning(
+                    "Requested %s but only %s available for %s; adjusting",
+                    remaining,
+                    avail,
+                    symbol,
+                )
+                remaining = int(round(avail))
+        steps = 0
+        tried_partial = False
+        max_steps = 20
+        while remaining > 0 and steps < max_steps:
+            remaining, skip = self._assess_liquidity(symbol, remaining, attempted=tried_partial)
+            if skip or remaining <= 0:
+                break
+            if not tried_partial and remaining < qty:
+                tried_partial = True
+            if side.lower() == "sell":
+                avail = self._available_qty(api, symbol)
+                if avail < remaining:
+                    self.logger.warning(
+                        "Available qty reduced for %s: %s -> %s",
+                        symbol,
+                        remaining,
+                        avail,
+                    )
+                    remaining = int(round(avail))
+                    if remaining <= 0:
+                        break
+            order_req, expected_price = self._prepare_order(
+                symbol, side, remaining
+            )
+            slice_qty = getattr(order_req, "qty", remaining)
+            if side.lower() == "sell" and slice_qty > self._available_qty(api, symbol):
+                slice_qty = int(round(self._available_qty(api, symbol)))
+                if isinstance(order_req, dict):
+                    order_req["qty"] = slice_qty
+                else:
+                    setattr(order_req, "qty", slice_qty)
+            if side.lower() == "buy" and not self._has_buy_power(
+                api, slice_qty, expected_price
+            ):
+                break
+            if side.lower() == "sell" and not self._can_sell(
+                api, symbol, slice_qty
+            ):
+                break
+            if expected_price and self._check_exposure_cap(asset_class, slice_qty, expected_price, symbol):
+                break
+            order_key = getattr(order_req, "client_order_id", f"{symbol}-{side}")
+            order_cls = getattr(order_req, "order_class", OrderClass.NORMAL)
+            if self._is_duplicate_order(order_req):
+                self.logger.info(
+                    "DUPLICATE_ORDER_SKIP",
+                    extra={"symbol": symbol, "client_order_id": order_key},
+                )
+                break
+            if order_cls is not OrderClass.INITIAL_REBALANCE:
+                self._cycle_orders.add(order_key)
+            start = time.monotonic()
+            order = await self._submit_with_retry_async(
+                api, order_req, symbol, side, slice_qty
+            )
+            if order is None:
+                break
+            filled = await self._handle_order_result_async(
+                symbol, side, order, expected_price, slice_qty, start
+            )
+            if filled > 0:
+                self._seen_orders.add(
+                    getattr(order, "id", "") or order_key
+                )
+            if filled <= 0:
+                break
+            last_order = order
+            remaining -= filled
+            steps += 1
+            if remaining > 0:
+                await asyncio.sleep(random.uniform(0.05, 0.15))
+        if steps >= max_steps and remaining > 0:
+            self.logger.error(
+                "ORDER_MAX_STEPS_EXCEEDED",
+                extra={"symbol": symbol, "remaining": remaining},
+            )
+        self._record_fill_steps(max(1, steps))
+        if last_order:
+            oid = getattr(last_order, "id", None)
+            if oid:
+                self._flush_partial_buffers(oid)
+            if side.lower() == "buy":
                 with _recent_buys_lock:
                     recent_buys[symbol] = time.monotonic()
             else:

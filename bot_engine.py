@@ -152,7 +152,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 
 # Set deterministic random seeds for reproducibility
-SEED = 42
+SEED = config.SEED
 random.seed(SEED)
 np.random.seed(SEED)
 

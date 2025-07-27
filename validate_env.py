@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     MINUTE_CACHE_TTL: int = 60
     EQUITY_EXPOSURE_CAP: float = 2.5
     PORTFOLIO_EXPOSURE_CAP: float = 2.5
+    SEED: int = 42
+    RATE_LIMIT_BUDGET: int = 190
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -60,6 +62,12 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def generate_schema() -> dict:
+    """Return JSONSchema for the environment settings."""
+    # AI-AGENT-REF: expose env schema for validation in CI
+    return Settings.model_json_schema()
 
 
 def _main() -> None:  # pragma: no cover - simple CLI helper
