@@ -8,7 +8,7 @@ import sys
 import csv
 import json
 import traceback
-from datetime import date
+from datetime import date, datetime
 import atexit
 import config
 
@@ -40,6 +40,14 @@ class JSONFormatter(logging.Formatter):
     """JSON log formatter with secret masking."""
 
     converter = time.gmtime
+
+    def _json_default(self, obj):
+        """Fallback serialization for unsupported types."""
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        if hasattr(obj, "tolist"):
+            return obj.tolist()
+        return str(obj)
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {
@@ -84,7 +92,7 @@ class JSONFormatter(logging.Formatter):
             payload["exc"] = "".join(
                 traceback.format_exception_only(exc_type, exc_value)
             ).strip()
-        return json.dumps(payload)
+        return json.dumps(payload, default=self._json_default)
 
 _configured = False
 _loggers: Dict[str, logging.Logger] = {}

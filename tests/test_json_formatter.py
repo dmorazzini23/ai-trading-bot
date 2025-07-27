@@ -36,3 +36,26 @@ def test_json_formatter_exc_info():
     data = json.loads(out)
     assert data["exc"].startswith("ValueError: boom")
     assert "exc_info" not in data
+
+
+def test_json_formatter_serializes_nonstandard_types():
+    fmt = logger.JSONFormatter("%(asctime)sZ")
+    import numpy as np
+    from datetime import datetime, date
+
+    class Foo:
+        def __str__(self):
+            return "FOO"
+
+    rec = _make_record(
+        arr=np.array([1, 2, 3]),
+        dt=datetime(2024, 1, 2, 3, 4, 5),
+        d=date(2024, 1, 3),
+        foo=Foo(),
+    )
+    out = fmt.format(rec)
+    data = json.loads(out)
+    assert data["arr"] == [1, 2, 3]
+    assert data["dt"].startswith("2024-01-02T03:04:05")
+    assert data["d"] == "2024-01-03"
+    assert data["foo"] == "FOO"
