@@ -7,6 +7,7 @@ import queue
 import sys
 import csv
 import json
+import traceback
 from datetime import date
 import atexit
 import config
@@ -47,12 +48,42 @@ class JSONFormatter(logging.Formatter):
             "name": record.name,
             "msg": record.getMessage(),
         }
+        omit = {
+            "msg",
+            "message",
+            "args",
+            "levelname",
+            "levelno",
+            "name",
+            "created",
+            "msecs",
+            "relativeCreated",
+            "asctime",
+            "pathname",
+            "filename",
+            "module",
+            "exc_info",
+            "exc_text",
+            "stack_info",
+            "lineno",
+            "funcName",
+            "thread",
+            "threadName",
+            "processName",
+            "process",
+            "taskName",
+        }
         for k, v in record.__dict__.items():
-            if k in {"msg", "args", "levelname", "levelno", "name", "created", "msecs", "relativeCreated", "asctime"}:
+            if k in omit:
                 continue
             if "key" in k.lower() or "secret" in k.lower():
                 v = config.mask_secret(str(v))
             payload[k] = v
+        if record.exc_info:
+            exc_type, exc_value, _exc_tb = record.exc_info
+            payload["exc"] = "".join(
+                traceback.format_exception_only(exc_type, exc_value)
+            ).strip()
         return json.dumps(payload)
 
 _configured = False
