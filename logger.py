@@ -114,7 +114,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     queue_handler = QueueHandler(_log_queue)
     queue_handler.setLevel(logging.DEBUG if debug else logging.INFO)
     queue_handler.addFilter(_PhaseFilter())
-    queue_handler.setFormatter(formatter)
+    # AI-AGENT-REF: QueueHandler should enqueue raw records without formatting
     logger.handlers = [queue_handler]
     # AI-AGENT-REF: use background queue listener to reduce I/O blocking
     _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
