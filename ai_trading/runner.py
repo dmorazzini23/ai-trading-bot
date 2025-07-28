@@ -13,7 +13,6 @@ _last_run_time = 0.0
 _min_interval = 5.0  # Minimum seconds between runs
 
 
-
 def run_cycle() -> None:
     """Execute a single trading cycle if not already running."""
     global _last_run_time
