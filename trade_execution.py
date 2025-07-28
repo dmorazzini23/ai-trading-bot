@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional, Tuple
 from enum import Enum
 from uuid import uuid4
-from threading import Lock
+from threading import Lock, RLock
 
 import numpy as np
 import pandas as pd
@@ -34,10 +34,26 @@ import utils
 # Synchronisation primitive protecting the ``recent_buys`` map.  See
 # ``_check_exposure_cap`` for usage.
 _recent_buys_lock: Lock = Lock()
+_RECENT_BUYS_MAX_SIZE = 1000  # Prevent memory growth
 
 # Map of symbol → last buy timestamp (monotonic seconds).  Accesses must
 # be guarded by ``_recent_buys_lock``.
 recent_buys: dict[str, float] = {}
+
+# Order submission safety
+_order_submission_lock: RLock = RLock()
+_pending_orders: set[str] = set()
+
+def cleanup_recent_buys() -> None:
+    """Clean up old entries from recent_buys to prevent memory leaks."""
+    with _recent_buys_lock:
+        if len(recent_buys) > _RECENT_BUYS_MAX_SIZE:
+            current_time = time.monotonic()
+            cutoff_time = current_time - 3600
+            expired_symbols = [sym for sym, ts in recent_buys.items() if ts < cutoff_time]
+            for sym in expired_symbols:
+                del recent_buys[sym]
+            logger.debug("Cleaned up %d expired recent_buys entries", len(expired_symbols))
 
 # Updated Alpaca SDK imports
 try:
@@ -105,6 +121,26 @@ except ImportError:
 
     def submit_order(*args, **kwargs):
         raise RuntimeError("Alpaca API unavailable")
+
+def safe_submit_order(api_client, order_request) -> dict:
+    """Thread-safe order submission with duplicate prevention."""
+    symbol = getattr(order_request, 'symbol', 'UNKNOWN')
+    order_key = f"{symbol}_{getattr(order_request, 'side', 'UNKNOWN')}_{time.time()}"
+
+    with _order_submission_lock:
+        if symbol in _pending_orders:
+            logger.warning("Order already pending for %s, skipping duplicate", symbol)
+            return {"status": "duplicate_prevented", "symbol": symbol}
+
+        _pending_orders.add(symbol)
+
+    try:
+        result = submit_order(api_client, order_request)
+        logger.info("Order submitted successfully for %s", symbol)
+        return result
+    finally:
+        with _order_submission_lock:
+            _pending_orders.discard(symbol)
 
 
 from audit import log_trade as audit_log_trade, log_json_audit
@@ -264,7 +300,7 @@ def place_order(symbol: str, qty: int, side: str):
         side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,
         time_in_force=TimeInForce.DAY,
     )
-    order = submit_order(None, req)
+    order = safe_submit_order(None, req)
     log_order(order)
     return order
 
@@ -546,7 +582,7 @@ class ExecutionEngine:
 
     def submit_order(self, order_request):
         """Placeholder for order submission logic."""
-        return submit_order(self.api, order_request, self.logger)
+        return safe_submit_order(self.api, order_request)
 
     @retry(
         stop=stop_after_attempt(3),
@@ -932,7 +968,7 @@ class ExecutionEngine:
                 else:
                     setattr(order_req, "client_order_id", new_cid)
             try:
-                order = submit_order(api, order_req, self.logger)
+                order = safe_submit_order(api, order_req)
                 self.logger.info(
                     "Order submit response for %s: %s",
                     symbol,
@@ -1028,7 +1064,7 @@ class ExecutionEngine:
                 else:
                     setattr(order_req, "client_order_id", new_cid)
             try:
-                order = submit_order(api, order_req, self.logger)
+                order = safe_submit_order(api, order_req)
                 self.logger.info(
                     "Order submit response for %s: %s",
                     symbol,

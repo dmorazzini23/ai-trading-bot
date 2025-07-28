@@ -44,7 +44,12 @@ if not logging.getLogger().handlers:
     setup_logging(log_file=LOG_PATH)
 # Mirror config to maintain historical constant name
 MIN_CYCLE = config.SCHEDULER_SLEEP_SECONDS
-config.validate_env_vars()
+# AI-AGENT-REF: guard environment validation with explicit error logging
+try:
+    config.validate_env_vars()
+except Exception as e:
+    logger.critical("Environment validation failed: %s", e)
+    raise SystemExit(1) from e
 config.log_config(config.REQUIRED_ENV_VARS)
 
 # Provide a no-op ``profile`` decorator when line_profiler is not active.
@@ -138,6 +143,7 @@ import logging
 import random
 import re
 import signal
+from contextlib import contextmanager
 import sys
 import threading
 import time as pytime
@@ -305,6 +311,22 @@ def get_full_datetime_range():
     if _FULL_DATETIME_RANGE is None:
         _FULL_DATETIME_RANGE = pd.date_range(start="09:30", end="16:00", freq="1T")
     return _FULL_DATETIME_RANGE
+
+
+# AI-AGENT-REF: add simple timeout helper for API calls
+@contextmanager
+def timeout_protection(seconds: int = 30):
+    """Context manager to enforce timeouts on operations."""
+    def timeout_handler(signum, frame):
+        raise TimeoutError(f"Operation timed out after {seconds} seconds")
+
+    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
 
 
 @lru_cache(maxsize=None)
@@ -495,10 +517,18 @@ def market_is_open(now: datetime | None = None) -> bool:
     from utils import is_market_open as utils_market_open
 
     """Return True if the market is currently open."""
-    if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
-        logger.info("FORCE_MARKET_OPEN is enabled; overriding market hours checks.")
-        return True
-    return utils_market_open(now)
+    try:
+        with timeout_protection(10):
+            if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
+                logger.info("FORCE_MARKET_OPEN is enabled; overriding market hours checks.")
+                return True
+            return utils_market_open(now)
+    except TimeoutError:
+        logger.error("Market status check timed out, assuming market closed")
+        return False
+    except Exception as e:
+        logger.error("Market status check failed: %s", e)
+        return False
 
 
 # backward compatibility
@@ -1911,6 +1941,8 @@ def audit_positions(ctx: "BotContext") -> None:
     except Exception:
         return
 
+    max_order_size = int(os.getenv("MAX_ORDER_SIZE", "1000"))
+
     # 3) For any symbol in remote whose remote_qty != local_qty, correct via market order
     for sym, rq in remote.items():
         lq = local.get(sym, 0)
@@ -1921,7 +1953,7 @@ def audit_positions(ctx: "BotContext") -> None:
                 try:
                     req = MarketOrderRequest(
                         symbol=sym,
-                        qty=diff,
+                        qty=min(abs(diff), max_order_size),
                         side=OrderSide.SELL,
                         time_in_force=TimeInForce.DAY,
                     )
@@ -1934,7 +1966,7 @@ def audit_positions(ctx: "BotContext") -> None:
                 try:
                     req = MarketOrderRequest(
                         symbol=sym,
-                        qty=abs(diff),
+                        qty=min(abs(diff), max_order_size),
                         side=OrderSide.BUY,
                         time_in_force=TimeInForce.DAY,
                     )
@@ -1946,10 +1978,19 @@ def audit_positions(ctx: "BotContext") -> None:
     # 4) For any symbol in local that is not in remote, submit order matching the local side
     for sym, lq in local.items():
         if sym not in remote:
+            # AI-AGENT-REF: prevent oversize orders on unmatched locals
+            if abs(lq) > max_order_size:
+                logger.warning(
+                    "Order size %d exceeds maximum %d for %s", abs(lq), max_order_size, sym
+                )
+                continue
             try:
                 side = OrderSide.BUY if lq > 0 else OrderSide.SELL
                 req = MarketOrderRequest(
-                    symbol=sym, qty=abs(lq), side=side, time_in_force=TimeInForce.DAY
+                    symbol=sym,
+                    qty=abs(lq),
+                    side=side,
+                    time_in_force=TimeInForce.DAY,
                 )
                 safe_submit_order(ctx.api, req)
             except Exception as exc:
