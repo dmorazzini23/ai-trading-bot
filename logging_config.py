@@ -1,7 +1,7 @@
 import logging
 import json
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class JsonFormatter(logging.Formatter):
@@ -26,7 +26,7 @@ class JsonFormatter(logging.Formatter):
             return json.dumps(log_record, default=str)
         except Exception as e:
             # Fallback to simple format if JSON fails
-            return f"{datetime.utcnow().isoformat()} {record.levelname} {record.name} {record.getMessage()}"
+            return f"{datetime.now(timezone.utc).isoformat()} {record.levelname} {record.name} {record.getMessage()}"
 
 
 def setup_logging():

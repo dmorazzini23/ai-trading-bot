@@ -15,28 +15,45 @@ def ichimoku_fallback(
     high: pd.Series, low: pd.Series, close: pd.Series
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Simple Ichimoku cloud implementation used when pandas_ta is unavailable."""
-    high = pd.Series(high)
-    low = pd.Series(low)
-    close = pd.Series(close)
+    # AI-AGENT-REF: Add input validation and error handling
+    try:
+        # Validate inputs
+        if len(high) == 0 or len(low) == 0 or len(close) == 0:
+            raise ValueError("Input series cannot be empty")
+        
+        if len(high) < 52:  # Need at least 52 periods for proper calculation
+            raise ValueError("Insufficient data: need at least 52 periods for Ichimoku")
+        
+        high = pd.Series(high)
+        low = pd.Series(low)
+        close = pd.Series(close)
 
-    conv = (high.rolling(9).max() + low.rolling(9).min()) / 2
-    base = (high.rolling(26).max() + low.rolling(26).min()) / 2
-    span_a = ((conv + base) / 2).shift(26)
-    span_b = ((high.rolling(52).max() + low.rolling(52).min()) / 2).shift(26)
-    lagging = close.shift(-26)
+        # Validate data integrity
+        if high.isna().all() or low.isna().all() or close.isna().all():
+            raise ValueError("Input series contain only NaN values")
 
-    df = pd.DataFrame(
-        {
-            "ITS_9": conv,
-            "IKS_26": base,
-            "ISA_26": span_a,
-            "ISB_52": span_b,
-            "ICS_26": lagging,
-        }
-    )
+        conv = (high.rolling(9).max() + low.rolling(9).min()) / 2
+        base = (high.rolling(26).max() + low.rolling(26).min()) / 2
+        span_a = ((conv + base) / 2).shift(26)
+        span_b = ((high.rolling(52).max() + low.rolling(52).min()) / 2).shift(26)
+        lagging = close.shift(-26)
 
-    signal = pd.DataFrame(df)
-    return df, signal
+        df = pd.DataFrame(
+            {
+                "ITS_9": conv,
+                "IKS_26": base,
+                "ISA_26": span_a,
+                "ISB_52": span_b,
+                "ICS_26": lagging,
+            }
+        )
+
+        signal = pd.DataFrame(df)
+        return df, signal
+    except Exception as e:
+        # Return empty DataFrames on error to prevent system crash
+        empty_df = pd.DataFrame()
+        return empty_df, empty_df
 
 
 @jit(nopython=True)
@@ -69,46 +86,141 @@ def rsi_numba(prices: np.ndarray, period: int = 14) -> np.ndarray:
 
 @lru_cache(maxsize=128)
 def ema(series: tuple[float, ...], period: int) -> pd.Series:
-    s = pd.Series(series)
-    return s.ewm(span=period, adjust=False).mean()
+    """Calculate EMA with input validation."""
+    try:
+        # AI-AGENT-REF: Add input validation
+        if period <= 0:
+            raise ValueError("Period must be positive")
+        if len(series) == 0:
+            raise ValueError("Input series cannot be empty")
+        
+        s = pd.Series(series)
+        
+        # Check for all NaN values
+        if s.isna().all():
+            raise ValueError("Input series contains only NaN values")
+        
+        return s.ewm(span=period, adjust=False).mean()
+    except Exception as e:
+        # Return empty Series on error
+        return pd.Series(dtype=float)
 
 
 @lru_cache(maxsize=128)
 def sma(series: tuple[float, ...], period: int) -> pd.Series:
-    s = pd.Series(series)
-    return s.rolling(window=period).mean()
+    """Calculate SMA with input validation."""
+    try:
+        # AI-AGENT-REF: Add input validation
+        if period <= 0:
+            raise ValueError("Period must be positive")
+        if len(series) == 0:
+            raise ValueError("Input series cannot be empty")
+        
+        s = pd.Series(series)
+        
+        # Check for all NaN values
+        if s.isna().all():
+            raise ValueError("Input series contains only NaN values")
+        
+        return s.rolling(window=period).mean()
+    except Exception as e:
+        # Return empty Series on error
+        return pd.Series(dtype=float)
 
 
 def bollinger_bands(x, length: int = 20, num_std: float = 2.0) -> pd.DataFrame:
     """Calculate Bollinger Bands for given price series."""
-    if isinstance(x, (list, tuple)):
-        x = pd.Series(x)
-    elif hasattr(x, "close"):
-        x = x["close"]
+    try:
+        # AI-AGENT-REF: Add input validation and error handling
+        if length <= 0:
+            raise ValueError("Length must be positive")
+        if num_std < 0:
+            raise ValueError("Number of standard deviations must be non-negative")
+        
+        if isinstance(x, (list, tuple)):
+            x = pd.Series(x)
+        elif hasattr(x, "close"):
+            x = x["close"]
+        
+        # Validate we have enough data
+        if len(x) < length:
+            raise ValueError(f"Insufficient data: need at least {length} periods")
+        
+        # Check for all NaN values
+        if x.isna().all():
+            raise ValueError("Input series contains only NaN values")
 
-    sma = x.rolling(window=length).mean()
-    std = x.rolling(window=length).std()
+        sma = x.rolling(window=length).mean()
+        std = x.rolling(window=length).std()
 
-    upper = sma + (std * num_std)
-    lower = sma - (std * num_std)
+        # Handle case where std is 0 (no price movement)
+        std = std.fillna(0)
 
-    return pd.DataFrame({"upper": upper, "middle": sma, "lower": lower})
+        upper = sma + (std * num_std)
+        lower = sma - (std * num_std)
+
+        return pd.DataFrame({"upper": upper, "middle": sma, "lower": lower})
+    except Exception as e:
+        # Return empty DataFrame on error to prevent system crash
+        return pd.DataFrame({"upper": pd.Series(dtype=float), 
+                           "middle": pd.Series(dtype=float), 
+                           "lower": pd.Series(dtype=float)})
 
 
 @lru_cache(maxsize=128)
 def rsi(series: tuple[float, ...], period: int = 14) -> pd.Series:
-    arr = np.asarray(series, dtype=float)
-    return pd.Series(rsi_numba(arr, period))
+    """Calculate RSI with input validation."""
+    try:
+        # AI-AGENT-REF: Add input validation
+        if period <= 0:
+            raise ValueError("Period must be positive")
+        if len(series) < period + 1:  # Need at least period+1 for diff calculation
+            raise ValueError(f"Insufficient data: need at least {period + 1} values")
+        
+        arr = np.asarray(series, dtype=float)
+        
+        # Check for all NaN values
+        if np.isnan(arr).all():
+            raise ValueError("Input series contains only NaN values")
+        
+        result = rsi_numba(arr, period)
+        return pd.Series(result)
+    except Exception as e:
+        # Return empty Series on error
+        return pd.Series(dtype=float)
 
 
 def atr(
     high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
 ) -> pd.Series:
-    hl = high - low
-    hc = (high - close.shift()).abs()
-    lc = (low - close.shift()).abs()
-    tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
-    return tr.rolling(period).mean()
+    """Calculate Average True Range with input validation."""
+    try:
+        # AI-AGENT-REF: Add input validation
+        if period <= 0:
+            raise ValueError("Period must be positive")
+        
+        # Validate input series
+        for series, name in [(high, "high"), (low, "low"), (close, "close")]:
+            if len(series) == 0:
+                raise ValueError(f"{name} series cannot be empty")
+            if series.isna().all():
+                raise ValueError(f"{name} series contains only NaN values")
+        
+        # Check all series have same length
+        if not (len(high) == len(low) == len(close)):
+            raise ValueError("High, low, and close series must have same length")
+        
+        if len(high) < period + 1:  # Need period+1 for shift operation
+            raise ValueError(f"Insufficient data: need at least {period + 1} periods")
+        
+        hl = high - low
+        hc = (high - close.shift()).abs()
+        lc = (low - close.shift()).abs()
+        tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
+        return tr.rolling(period).mean()
+    except Exception as e:
+        # Return empty Series on error
+        return pd.Series(dtype=float)
 
 
 def mean_reversion_zscore(series: pd.Series, window: int = 20) -> pd.Series:
@@ -247,17 +359,55 @@ def get_vwap_bias(
 
 # AI-AGENT-REF: additional indicator utilities for complex strategies
 def vwap(prices: np.ndarray, volumes: np.ndarray) -> float:
-    """Return the volume weighted average price for ``prices``."""
-    return np.sum(prices * volumes) / np.sum(volumes)
+    """Return the volume weighted average price for prices with validation."""
+    try:
+        # AI-AGENT-REF: Add input validation
+        if len(prices) == 0 or len(volumes) == 0:
+            raise ValueError("Prices and volumes arrays cannot be empty")
+        
+        if len(prices) != len(volumes):
+            raise ValueError("Prices and volumes arrays must have same length")
+        
+        if np.isnan(prices).all() or np.isnan(volumes).all():
+            raise ValueError("Input arrays contain only NaN values")
+        
+        total_volume = np.sum(volumes)
+        if total_volume == 0:
+            raise ValueError("Total volume cannot be zero")
+        
+        return np.sum(prices * volumes) / total_volume
+    except Exception as e:
+        # Return 0 on error to prevent system crash
+        return 0.0
 
 
 def donchian_channel(
     highs: np.ndarray, lows: np.ndarray, period: int = 20
 ) -> dict[str, float]:
-    """Return Donchian channel bounds using ``period`` lookback."""
-    upper = np.max(highs[-period:])
-    lower = np.min(lows[-period:])
-    return {"upper": upper, "lower": lower}
+    """Return Donchian channel bounds using period lookback with validation."""
+    try:
+        # AI-AGENT-REF: Add input validation
+        if period <= 0:
+            raise ValueError("Period must be positive")
+        
+        if len(highs) == 0 or len(lows) == 0:
+            raise ValueError("Highs and lows arrays cannot be empty")
+        
+        if len(highs) != len(lows):
+            raise ValueError("Highs and lows arrays must have same length")
+        
+        if len(highs) < period:
+            raise ValueError(f"Insufficient data: need at least {period} periods")
+        
+        if np.isnan(highs).all() or np.isnan(lows).all():
+            raise ValueError("Input arrays contain only NaN values")
+        
+        upper = np.max(highs[-period:])
+        lower = np.min(lows[-period:])
+        return {"upper": upper, "lower": lower}
+    except Exception as e:
+        # Return safe default values on error
+        return {"upper": 0.0, "lower": 0.0}
 
 
 def obv(closes: np.ndarray, volumes: np.ndarray) -> np.ndarray:

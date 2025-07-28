@@ -45,7 +45,18 @@ class RiskEngine:
         """Initialize the engine with an optional trading config."""
         # AI-AGENT-REF: fix param shadowing bug when ``config`` is None
         self.config = cfg if cfg is not None else config.CONFIG
-        self.global_limit = self.config.exposure_cap_aggressive
+        
+        # AI-AGENT-REF: Add comprehensive validation for risk parameters
+        try:
+            exposure_cap = getattr(self.config, 'exposure_cap_aggressive', 0.8)
+            if not isinstance(exposure_cap, (int, float)) or not (0 < exposure_cap <= 1.0):
+                logger.warning("Invalid exposure_cap_aggressive %s, using default 0.8", exposure_cap)
+                exposure_cap = 0.8
+            self.global_limit = exposure_cap
+        except Exception as e:
+            logger.error("Error validating exposure_cap_aggressive: %s, using default", e)
+            self.global_limit = 0.8
+        
         self.asset_limits: Dict[str, float] = {}
         self.strategy_limits: Dict[str, float] = {}
         self.exposure: Dict[str, float] = {}
@@ -69,15 +80,27 @@ class RiskEngine:
         from threading import Event
         self._update_event = Event()
         self._last_update = 0.0
-        # maximum acceptable drawdown (fraction between 0 and 1)
+        
+        # Validate maximum acceptable drawdown (fraction between 0 and 1)
         try:
-            self.max_drawdown_threshold = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.1"))
-        except Exception:
+            max_drawdown = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.1"))
+            if not (0 < max_drawdown <= 1.0):
+                logger.warning("Invalid MAX_DRAWDOWN_THRESHOLD %s, using default 0.1", max_drawdown)
+                max_drawdown = 0.1
+            self.max_drawdown_threshold = max_drawdown
+        except (ValueError, TypeError) as e:
+            logger.error("Error parsing MAX_DRAWDOWN_THRESHOLD: %s, using default 0.1", e)
             self.max_drawdown_threshold = 0.1
-        # cooldown period (in minutes) before trading resumes after a hard stop
+            
+        # Validate cooldown period (in minutes) before trading resumes after a hard stop
         try:
-            self.hard_stop_cooldown = float(os.getenv("HARD_STOP_COOLDOWN_MIN", "10"))
-        except Exception:
+            cooldown = float(os.getenv("HARD_STOP_COOLDOWN_MIN", "10"))
+            if cooldown < 0:
+                logger.warning("Invalid HARD_STOP_COOLDOWN_MIN %s, using default 10", cooldown)
+                cooldown = 10.0
+            self.hard_stop_cooldown = cooldown
+        except (ValueError, TypeError) as e:
+            logger.error("Error parsing HARD_STOP_COOLDOWN_MIN: %s, using default 10", e)
             self.hard_stop_cooldown = 10.0
         # timestamp (epoch) until which hard stop remains active
         self._hard_stop_until: float | None = None
