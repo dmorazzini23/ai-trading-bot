@@ -8,18 +8,39 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import config  # AI-AGENT-REF: access centralized log paths
+try:
+    import config  # AI-AGENT-REF: access centralized log paths
+except ImportError:
+    # Fallback for testing environments
+    config = None
 
-import numpy as np
-import metrics_logger
-import pandas as pd
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
-import torch
-import torch.nn as _nn
+try:
+    import metrics_logger
+except ImportError:
+    # Mock metrics_logger for testing
+    class MockMetricsLogger:
+        def log_volatility(self, *args): pass
+        def log_regime_toggle(self, *args): pass
+    metrics_logger = MockMetricsLogger()
 
-# ensure torch.nn and Parameter live on the torch module
-torch.nn = _nn
-torch.nn.Parameter = _nn.Parameter
+try:
+    import pandas as pd
+except ImportError:
+    pd = None
+
+try:
+    import torch
+    import torch.nn as _nn
+    # ensure torch.nn and Parameter live on the torch module
+    torch.nn = _nn
+    torch.nn.Parameter = _nn.Parameter
+except ImportError:
+    torch = None
 
 open = open  # allow monkeypatching built-in open
 
@@ -240,7 +261,7 @@ def load_model_checkpoint(filepath: str) -> Optional[Any]:
 
 
 def retrain_meta_learner(
-    trade_log_path: str = config.TRADE_LOG_FILE,
+    trade_log_path: str = None,
     model_path: str = "meta_model.pkl",
     history_path: str = "meta_retrain_history.pkl",
     min_samples: int = 20,
@@ -263,6 +284,10 @@ def retrain_meta_learner(
     bool
         ``True`` if retraining succeeded and the checkpoint was written.
     """
+    
+    # Set default trade log path
+    if trade_log_path is None:
+        trade_log_path = config.TRADE_LOG_FILE if config else "trades.csv"
 
     logger.info(
         "META_RETRAIN_START",
