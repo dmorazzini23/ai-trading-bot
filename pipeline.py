@@ -59,14 +59,18 @@ class FeatureBuilder(BaseEstimator, TransformerMixin):
         df = X.copy()
         if hasattr(df, "columns"):
             close = df["close"].astype(float)
+            # Calculate returns once and reuse
+            returns = close.pct_change().fillna(0)
+
             features = {
-                "returns": close.pct_change(fill_method=None).fillna(0),
+                "returns": returns,
                 "ma10": close.rolling(10).mean().bfill(),
                 "ma30": close.rolling(30).mean().bfill(),
-                "vol": close.pct_change(fill_method=None).rolling(10).std().fillna(0),
+                "vol": returns.rolling(10).std().fillna(0),
                 "sma_50": close.rolling(50).mean().bfill(),
                 "sma_200": close.rolling(200).mean().bfill(),
                 "price_change": (close.diff() > 0).astype(int),
+                "rsi": self._calculate_rsi(close),  # Add RSI for better signals
             }
             arr = np.column_stack(
                 [
@@ -77,10 +81,19 @@ class FeatureBuilder(BaseEstimator, TransformerMixin):
                     features["sma_50"],
                     features["sma_200"],
                     features["price_change"],
+                    features["rsi"],
                 ]
             )
             return arr
         return np.asarray(df, dtype=float)
+
+    def _calculate_rsi(self, close, period=14):
+        """Calculate RSI indicator."""
+        delta = close.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
 
 
 model_pipeline = Pipeline(

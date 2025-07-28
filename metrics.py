@@ -13,7 +13,14 @@ def compute_basic_metrics(df: pd.DataFrame) -> dict[str, float]:
     ret = df["return"].astype(float)
     if ret.empty:
         return {"sharpe": 0.0, "max_drawdown": 0.0}
-    sharpe = ret.mean() / (ret.std() or 1e-9) * (252 ** 0.5)
+    # More robust Sharpe calculation
+    mean_return = ret.mean()
+    std_return = ret.std()
+    if std_return == 0 or pd.isna(std_return):
+        sharpe = 0.0
+    else:
+        sharpe = (mean_return / std_return) * np.sqrt(252)
+
     cumulative = (1 + ret).cumprod()
     drawdown = cumulative.cummax() - cumulative
     max_dd = drawdown.max()

@@ -31,10 +31,17 @@ except Exception:  # pragma: no cover - optional dependency
     client = None
 else:
     # Global Alpaca data client using config credentials
-    client = StockHistoricalDataClient(
-        api_key=ALPACA_API_KEY,
-        secret_key=ALPACA_SECRET_KEY,
-    )
+    try:
+        client = StockHistoricalDataClient(
+            api_key=ALPACA_API_KEY,
+            secret_key=ALPACA_SECRET_KEY,
+        )
+    except Exception as e:
+        logger.error("Failed to initialize Alpaca client: %s", e)
+        client = None
+
+# Session management for HTTP requests
+_session = None
 logger = logging.getLogger(__name__)
 
 # Default market data feed for Alpaca requests
@@ -59,6 +66,15 @@ def _log_http_response(resp: requests.Response) -> None:
     logger.debug("HTTP_RESPONSE status=%s body=%s", resp.status_code, resp.text[:300])
 
 _rate_limit_lock = threading.Lock()
+
+
+def get_session():
+    """Get or create HTTP session with proper cleanup."""
+    global _session
+    if _session is None:
+        _session = requests.Session()
+        _session.headers.update({'User-Agent': 'AI-Trading-Bot/1.0'})
+    return _session
 try:
     import requests
     from requests import Session

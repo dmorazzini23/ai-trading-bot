@@ -27,6 +27,13 @@ _fields = [
 
 def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposure=None):
     """Persist a trade event to ``TRADE_LOG_FILE`` and log a summary."""
+    # Validate critical parameters
+    if not symbol or not isinstance(symbol, str):
+        logger.error("Invalid symbol provided: %s", symbol)
+        return
+    if fill_price <= 0 or qty == 0:
+        logger.error("Invalid trade parameters: price=%s, qty=%s", fill_price, qty)
+        return
     global _disable_trade_log
     if _disable_trade_log:
         # Skip writing after a permission error was encountered

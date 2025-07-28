@@ -3,8 +3,6 @@ from __future__ import annotations
 
 # (any existing comments or module docstring go below the future import)
 __all__ = ["pre_trade_health_check"]
-from logging_config import setup_logging
-setup_logging()
 import asyncio
 import logging
 import io
@@ -36,12 +34,14 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     logging.getLogger(__name__).warning("Running under unsupported Python version")
 
 import config
-from logger import setup_logging
 from ai_trading.model_loader import ML_MODELS  # AI-AGENT-REF: preloaded models
 import numpy as np
 
 LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
-setup_logging(log_file=LOG_PATH)
+# Set up logging only once
+if not logging.getLogger().handlers:
+    from logger import setup_logging  # AI-AGENT-REF: lazy logger import
+    setup_logging(log_file=LOG_PATH)
 # Mirror config to maintain historical constant name
 MIN_CYCLE = config.SCHEDULER_SLEEP_SECONDS
 config.validate_env_vars()
