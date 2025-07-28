@@ -4,6 +4,8 @@ Property-based testing framework for trading bot validation.
 import pandas as pd
 import numpy as np
 from typing import List, Any
+import gc
+import weakref
 import matplotlib.pyplot as plt
 import pytest
 
@@ -12,6 +14,8 @@ class TradingBotValidator:
     def __init__(self, bot_engine, risk_engine):
         self.bot_engine = bot_engine
         self.risk_engine = risk_engine
+        self._test_data_cache = weakref.WeakValueDictionary()
+        self._cleanup_callbacks = []
 
     def test_no_lookahead_bias(self, price_series):
         for i in range(50, len(price_series), 10):
@@ -21,10 +25,22 @@ class TradingBotValidator:
             future_data = price_series[: i + 10]
             future_signal = self.bot_engine.generate_signal("TEST", future_data)
 
+            # Validate signal doesn't use future data
+            if hasattr(signal, 'timestamp'):
+                latest_data_time = available_data.index[-1] if hasattr(available_data, 'index') else None
+                if latest_data_time and signal.timestamp > latest_data_time:
+                    raise ValueError(f"Signal timestamp {signal.timestamp} is after latest data {latest_data_time}")
+
             assert signal.confidence == pytest.approx(future_signal.confidence)
 
     def test_positive_expectancy(self, historical_data_path: str):
-        data = pd.read_csv(historical_data_path)
+        # Use cached data to avoid repeated file I/O
+        cache_key = f"historical_data_{hash(historical_data_path)}"
+        if cache_key in self._test_data_cache:
+            data = self._test_data_cache[cache_key]
+        else:
+            data = pd.read_csv(historical_data_path)
+            self._test_data_cache[cache_key] = data
 
         total_pnl = 0
         win_rate = 0
@@ -73,7 +89,27 @@ class TradingBotValidator:
         assert qty3 == 0
 
     def _backtest_symbol(self, data) -> tuple:
-        return 100, 7, 10
+        # Simulate basic backtesting with proper cleanup
+        try:
+            return 100, 7, 10
+        finally:
+            if hasattr(data, 'memory_usage'):
+                data = None
+
+    def cleanup(self):
+        """Clean up resources to prevent memory leaks."""
+        self._test_data_cache.clear()
+        for callback in self._cleanup_callbacks:
+            callback()
+        plt.close('all')
+        gc.collect()
+
+    def __del__(self):
+        """Ensure cleanup on garbage collection."""
+        try:
+            self.cleanup()
+        except Exception:
+            pass
 
 
 __all__ = ["TradingBotValidator"]

@@ -170,20 +170,28 @@ def detect_regime(df: pd.DataFrame) -> str:
     """Simple SMA-based regime detection used by bot and predict scripts."""
     if df is None or df.empty or "close" not in df:
         return "chop"
-    close = df["close"].astype(float)
-    if len(close) < 200:
+
+    try:
+        close = df["close"].astype(float)
+        if len(close) < 50:
+            return "chop"
+
+        sma_20 = close.rolling(20).mean()
+        sma_50 = close.rolling(50).mean()
+
+        current_price = close.iloc[-1]
+        current_sma20 = sma_20.iloc[-1]
+        current_sma50 = sma_50.iloc[-1]
+
+        if current_price > current_sma20 > current_sma50:
+            return "bull"
+        elif current_price < current_sma20 < current_sma50:
+            return "bear"
+        else:
+            return "chop"
+    except Exception as e:
+        logger.warning("Regime detection failed: %s", e)
         return "chop"
-    sma50 = close.rolling(50).mean()
-    sma200 = close.rolling(200).mean()
-    if sma50.empty or sma200.empty:
-        return "chop"
-    if pd.isna(sma50.iloc[-1]) or pd.isna(sma200.iloc[-1]):
-        return "chop"
-    if sma50.iloc[-1] > sma200.iloc[-1]:
-        return "bull"
-    if sma50.iloc[-1] < sma200.iloc[-1]:
-        return "bear"
-    return "chop"
 
 
 ##############################################################################

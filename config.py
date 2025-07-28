@@ -151,6 +151,25 @@ def validate_environment() -> None:
             "Missing required environment variables: " + ", ".join(missing)
         )
 
+    # Validate API key formats
+    api_key = os.getenv("ALPACA_API_KEY", "")
+    if api_key and len(api_key) < 10:
+        raise RuntimeError("ALPACA_API_KEY appears to be invalid (too short)")
+
+    secret_key = os.getenv("ALPACA_SECRET_KEY", "")
+    if secret_key and len(secret_key) < 10:
+        raise RuntimeError("ALPACA_SECRET_KEY appears to be invalid (too short)")
+
+    # Validate base URL format
+    base_url = os.getenv("ALPACA_BASE_URL", "")
+    if base_url and not base_url.startswith(("http://", "https://")):
+        raise RuntimeError("ALPACA_BASE_URL must start with http:// or https://")
+
+    # Validate webhook secret
+    webhook_secret = os.getenv("WEBHOOK_SECRET", "")
+    if webhook_secret and len(webhook_secret) < 8:
+        raise RuntimeError("WEBHOOK_SECRET must be at least 8 characters")
+
 
 ALPACA_API_KEY = env_settings.ALPACA_API_KEY
 ALPACA_SECRET_KEY = env_settings.ALPACA_SECRET_KEY
@@ -242,14 +261,24 @@ def validate_alpaca_credentials() -> None:
 
 
 def validate_env_vars() -> None:
-    """Ensure critical environment variables are present.
+    """Comprehensive environment variable validation."""
+    try:
+        load_dotenv()
+        validate_environment()
 
-    This function is intended to be called at startup. It reloads ``.env``
-    and raises ``RuntimeError`` if any required variables are missing.
-    """
-    load_dotenv()
-    _require_env_vars(*REQUIRED_ENV_VARS)
-    log_config(REQUIRED_ENV_VARS)
+        # Additional runtime validations
+        scheduler_sleep = os.getenv("SCHEDULER_SLEEP_SECONDS", "30")
+        try:
+            sleep_val = int(scheduler_sleep)
+            if not (1 <= sleep_val <= 3600):
+                raise ValueError("SCHEDULER_SLEEP_SECONDS must be between 1 and 3600")
+        except ValueError as e:
+            raise RuntimeError(f"Invalid SCHEDULER_SLEEP_SECONDS: {e}")
+
+        logger.info("Environment validation completed successfully")
+    except Exception as e:
+        logger.error("Environment validation failed: %s", e)
+        raise
 
 
 __all__ = [
