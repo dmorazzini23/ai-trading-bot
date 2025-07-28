@@ -6,12 +6,7 @@ import pytest
 
 from strategies import TradeSignal
 
-# Ensure clean import of strategy_allocator module
-for module_name in list(sys.modules.keys()):
-    if "strategy_allocator" in module_name:
-        sys.modules.pop(module_name, None)
-
-strategy_allocator = importlib.import_module("strategy_allocator")
+import strategy_allocator
 
 
 def force_coverage(mod):
