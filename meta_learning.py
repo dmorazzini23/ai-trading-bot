@@ -49,14 +49,28 @@ class MetaLearning:
         raise ValueError("Model not trained")
 
     def save_checkpoint(self, path: str = "models/meta_learner.pkl") -> None:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "wb") as f:
-            pickle.dump(self.model, f)
+        """Save model checkpoint with error handling."""
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "wb") as f:
+                pickle.dump(self.model, f)
+            logger.info("Model checkpoint saved to %s", path)
+        except (OSError, IOError, pickle.PickleError) as e:
+            logger.error("Failed to save model checkpoint to %s: %s", path, e)
+            raise
 
     def load_checkpoint(self, path: str = "models/meta_learner.pkl") -> None:
+        """Load model checkpoint with error handling."""
         if Path(path).exists():
-            with open(path, "rb") as f:
-                self.model = pickle.load(f)
+            try:
+                with open(path, "rb") as f:
+                    self.model = pickle.load(f)
+                logger.info("Model checkpoint loaded from %s", path)
+            except (OSError, IOError, pickle.PickleError, EOFError) as e:
+                logger.error("Failed to load model checkpoint from %s: %s", path, e)
+                raise
+        else:
+            logger.warning("Model checkpoint file does not exist: %s", path)
 
 
 def normalize_score(score: float, cap: float = 1.2) -> float:
