@@ -34,6 +34,19 @@ except Exception:  # pragma: no cover - optional dependency
         def reshape(self, *args):
             return self
             
+        def __sub__(self, other):
+            if isinstance(other, (list, ArrayStub)):
+                return ArrayStub([a - b for a, b in zip(self, other)])
+            return ArrayStub([x - other for x in self])
+            
+        def __truediv__(self, other):
+            if isinstance(other, (list, ArrayStub)):
+                return ArrayStub([a / b if b != 0 else 0 for a, b in zip(self, other)])
+            return ArrayStub([x / other if other != 0 else 0 for x in self])
+            
+        def max(self):
+            return max(self) if self else 0
+            
         def __getattr__(self, name):
             return lambda *args, **kwargs: self
     
@@ -51,8 +64,29 @@ except Exception:  # pragma: no cover - optional dependency
     numpy_mod.sum = sum
     numpy_mod.exp = lambda x: 2.718281828 ** x
     numpy_mod.log = lambda x: 0.0
-    numpy_mod.maximum = max
+    
+    # Create maximum with accumulate method
+    class MaximumStub:
+        @staticmethod
+        def accumulate(arr):
+            """Mock accumulate that returns cumulative max."""
+            if not arr:
+                return ArrayStub([])
+            result = []
+            max_so_far = arr[0]
+            for val in arr:
+                max_so_far = max(max_so_far, val)
+                result.append(max_so_far)
+            return ArrayStub(result)
+        
+        def __call__(self, *args):
+            return max(*args) if args else 0
+    
+    numpy_mod.maximum = MaximumStub()
     numpy_mod.minimum = min
+    numpy_mod.max = lambda x: max(x) if x else 0
+    numpy_mod.isscalar = lambda x: isinstance(x, (int, float, complex))
+    numpy_mod.bool_ = bool
     numpy_mod.__file__ = "stub"
     sys.modules["numpy"] = numpy_mod
     sys.modules["np"] = numpy_mod
@@ -80,10 +114,29 @@ except Exception:  # pragma: no cover - optional dependency
             self.data = data or {}
             
         def __getitem__(self, key):
-            return [1, 2, 3]  # Return dummy data
+            return SeriesStub([1, 2, 3])  # Return SeriesStub instead of list
             
         def iloc(self):
             return self
+            
+        @property 
+        def columns(self):
+            return lambda *args, **kwargs: True  # Mock columns check
+            
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: self
+    
+    # Create minimal Series stub
+    class SeriesStub(list):
+        def __init__(self, data=None):
+            super().__init__(data or [1, 2, 3])
+            
+        @property
+        def is_monotonic_increasing(self):
+            return True  # Mock for monotonic check
+            
+        def accumulate(self, *args, **kwargs):
+            return SeriesStub(self)  # Return self for accumulate
             
         def __getattr__(self, name):
             return lambda *args, **kwargs: self
@@ -107,7 +160,7 @@ except Exception:  # pragma: no cover - optional dependency
 
     pandas_mod.DataFrame = DataFrameStub
     pandas_mod.Timestamp = TimestampStub
-    pandas_mod.Series = list
+    pandas_mod.Series = SeriesStub
     pandas_mod.read_csv = read_csv
     pandas_mod.read_parquet = read_parquet
     pandas_mod.concat = concat
