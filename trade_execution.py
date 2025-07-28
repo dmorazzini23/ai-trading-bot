@@ -933,7 +933,11 @@ class ExecutionEngine:
                     setattr(order_req, "client_order_id", new_cid)
             try:
                 order = submit_order(api, order_req, self.logger)
-                self.logger.info("Order submit response for %s: %s", symbol, order)
+                self.logger.info(
+                    "Order submit response for %s: %s",
+                    symbol,
+                    utils.format_order_for_log(order),
+                )
                 if not getattr(order, "id", None) and not SHADOW_MODE:
                     self.logger.error("Order failed for %s: %s", symbol, order)
                 return order
@@ -1025,7 +1029,11 @@ class ExecutionEngine:
                     setattr(order_req, "client_order_id", new_cid)
             try:
                 order = submit_order(api, order_req, self.logger)
-                self.logger.info("Order submit response for %s: %s", symbol, order)
+                self.logger.info(
+                    "Order submit response for %s: %s",
+                    symbol,
+                    utils.format_order_for_log(order),
+                )
                 if not getattr(order, "id", None) and not SHADOW_MODE:
                     self.logger.error("Order failed for %s: %s", symbol, order)
                 return order
