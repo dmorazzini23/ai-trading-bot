@@ -316,17 +316,36 @@ def get_full_datetime_range():
 # AI-AGENT-REF: add simple timeout helper for API calls
 @contextmanager
 def timeout_protection(seconds: int = 30):
-    """Context manager to enforce timeouts on operations."""
-    def timeout_handler(signum, frame):
-        raise TimeoutError(f"Operation timed out after {seconds} seconds")
+    """Context manager to enforce timeouts on operations.
+    
+    Uses signal-based timeout in main thread, graceful fallback in worker threads.
+    For worker threads, we don't enforce strict timeouts since signal doesn't work,
+    but we still provide the context manager interface for compatibility.
+    """
+    # Check if we're in the main thread
+    is_main_thread = threading.current_thread() is threading.main_thread()
+    
+    if is_main_thread:
+        # Use signal-based timeout (original behavior) for main thread
+        def timeout_handler(signum, frame):
+            raise TimeoutError(f"Operation timed out after {seconds} seconds")
 
-    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-    signal.alarm(seconds)
-    try:
-        yield
-    finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, old_handler)
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(seconds)
+        try:
+            yield
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+    else:
+        # For worker threads, just yield without timeout enforcement
+        # Most operations in market_is_open are fast (time checks, simple calculations)
+        # and don't require strict timeout enforcement
+        try:
+            yield
+        except Exception:
+            # Re-raise any exceptions from the wrapped code
+            raise
 
 
 @lru_cache(maxsize=None)
