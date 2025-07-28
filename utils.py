@@ -11,6 +11,8 @@ import warnings
 import time
 from datetime import date, timezone
 from typing import Any, Sequence
+from enum import Enum
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -118,6 +120,26 @@ def backoff_delay(attempt: int, base: float = 1.0, cap: float = 30.0, jitter: fl
         jitter_amt = random.uniform(-jitter * delay, jitter * delay)
         delay = max(0.0, delay + jitter_amt)
     return delay
+
+
+def format_order_for_log(order: Any) -> str:
+    """Return compact string representation of an order for logging."""
+    if order is None:
+        return ""
+    parts = []
+    for k, v in vars(order).items():
+        if isinstance(v, (dt.datetime, date)):
+            val = v.isoformat()
+        elif isinstance(v, Enum):
+            val = v.value
+        elif isinstance(v, UUID):
+            val = str(v)
+        elif isinstance(v, (int, float, bool)) or v is None:
+            val = v
+        else:
+            val = str(v)
+        parts.append(f"{k}={val}")
+    return ", ".join(parts)
 
 
 MARKET_OPEN_TIME = dt.time(9, 30)

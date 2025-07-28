@@ -1734,10 +1734,8 @@ class TradeLogger:
                             "reward",
                         ]
                     )
-            except PermissionError as exc:  # AI-AGENT-REF: avoid duplicate audit log
-                logger.debug(
-                    "TradeLogger init unable to write %s: %s", path, exc
-                )
+            except PermissionError:
+                logger.debug("TradeLogger init path not writable: %s", path)
         if not os.path.exists(REWARD_LOG_FILE):
             try:
                 os.makedirs(os.path.dirname(REWARD_LOG_FILE) or ".", exist_ok=True)
@@ -1784,10 +1782,8 @@ class TradeLogger:
                         "",
                     ]
                 )
-        except PermissionError as exc:  # AI-AGENT-REF: avoid duplicate audit log
-            logger.debug(
-                "TradeLogger entry unable to write %s: %s", self.path, exc
-            )
+        except PermissionError:
+            logger.debug("TradeLogger entry log skipped; path not writable")
 
     def log_exit(self, state: BotState, symbol: str, exit_price: float) -> None:
         try:
@@ -1831,10 +1827,8 @@ class TradeLogger:
                 w = csv.writer(f)
                 w.writerow(header)
                 w.writerows(data)
-        except PermissionError as exc:  # AI-AGENT-REF: avoid duplicate audit log
-            logger.debug(
-                "TradeLogger exit unable to write %s: %s", self.path, exc
-            )
+        except PermissionError:
+            logger.debug("TradeLogger exit log skipped; path not writable")
             return
 
         # log reward
