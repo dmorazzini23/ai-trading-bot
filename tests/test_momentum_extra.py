@@ -32,3 +32,10 @@ def test_generate_ret_nan(monkeypatch):
     ctx.data_fetcher.df.loc[len(df)-1, "close"] = float('nan')
     monkeypatch.setattr(momentum.pd, "isna", lambda v: True)
     assert strat.generate(ctx) == []
+
+
+def test_threshold_skip():
+    df = pd.DataFrame({"close": [1, 1.02, 1.03]})
+    ctx = Ctx(df)
+    strat = MomentumStrategy(lookback=1, threshold=0.05)
+    assert strat.generate(ctx) == []

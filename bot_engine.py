@@ -3450,7 +3450,25 @@ def send_exit_order(
             side=OrderSide.SELL,
             time_in_force=TimeInForce.DAY,
         )
-        safe_submit_order(ctx.api, req)
+        order = safe_submit_order(ctx.api, req)
+        if order is not None:
+            from strategies import TradeSignal
+            try:
+                acct = ctx.api.get_account()
+                eq = float(getattr(acct, "equity", 0) or 0)
+                wt = (exit_qty * price) / eq if eq > 0 else 0.0
+                ctx.risk_engine.register_fill(
+                    TradeSignal(
+                        symbol=symbol,
+                        side="sell",
+                        confidence=1.0,
+                        strategy="exit",
+                        weight=abs(wt),
+                        asset_class="equity",
+                    )
+                )
+            except Exception:
+                logger.debug("register_fill exit failed", exc_info=True)
         return
 
     limit_order = safe_submit_order(
@@ -3463,6 +3481,24 @@ def send_exit_order(
             limit_price=price,
         ),
     )
+    if limit_order is not None:
+        from strategies import TradeSignal
+        try:
+            acct = ctx.api.get_account()
+            eq = float(getattr(acct, "equity", 0) or 0)
+            wt = (exit_qty * price) / eq if eq > 0 else 0.0
+            ctx.risk_engine.register_fill(
+                TradeSignal(
+                    symbol=symbol,
+                    side="sell",
+                    confidence=1.0,
+                    strategy="exit",
+                    weight=abs(wt),
+                    asset_class="equity",
+                )
+            )
+        except Exception:
+            logger.debug("register_fill exit failed", exc_info=True)
     pytime.sleep(5)
     try:
         o2 = ctx.api.get_order_by_id(limit_order.id)
@@ -6037,6 +6073,9 @@ def run_multi_strategy(ctx: BotContext) -> None:
             continue
         # Provide the account equity (cash) when sizing positions; this allows
         # CapitalScalingEngine.scale_position to use equity rather than raw size.
+        if sig.side == "buy" and ctx.risk_engine.position_exists(ctx.api, sig.symbol):
+            logger.info("SKIP_DUPLICATE_LONG", extra={"symbol": sig.symbol})
+            continue
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty is None or not np.isfinite(qty) or qty <= 0:
             logger.warning("Skipping %s: computed qty <= 0", sig.symbol)
@@ -6090,7 +6129,7 @@ def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[st
     with portfolio_lock:
         ctx.portfolio_weights = portfolio.compute_portfolio_weights(ctx, symbols)
     acct = ctx.api.get_account()
-    current_cash = float(acct.cash)
+    current_cash = float(getattr(acct, "buying_power", acct.cash))
     regime_ok = check_market_regime(state)
     return current_cash, regime_ok, symbols
 
@@ -6293,6 +6332,10 @@ def run_all_trades_worker(state: BotState, model) -> None:
         logger.info("RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
     try:  # AI-AGENT-REF: ensure lock released on every exit
+        try:
+            ctx.risk_engine.wait_for_exposure_update(0.5)
+        except Exception:
+            pass
         if not hasattr(state, "trade_cooldowns"):
             state.trade_cooldowns = {}
         if not hasattr(state, "last_trade_direction"):

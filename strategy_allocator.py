@@ -34,6 +34,7 @@ class StrategyAllocator:
         self.hold_protect: Dict[str, int] = {}
         self.hold_cycles = int(os.getenv("HOLD_PROTECT_CYCLES", 5))
         self.delta_threshold = float(os.getenv("DELTA_THRESHOLD", 0.3))
+        self.exit_confirm: Dict[str, int] = {}
         # AI-AGENT-REF: track cooldown log state for throttling
         self._last_cooldown_log: Dict[str, float] = {}
         self._last_signal_hash: int | None = None
@@ -161,11 +162,20 @@ class StrategyAllocator:
                     last_conf = self.last_confidence.get(s.symbol, 0.0)
                     if last_dir and last_dir != s.side:
                         if s.side == "sell" and self.hold_protect.get(s.symbol, 0) > 0:
-                            # AI-AGENT-REF: remove hold protection block; log only
                             logger.info("HOLD_PROTECT_ACTIVE", extra={"symbol": s.symbol})
+                        if s.side == "sell" and last_dir == "buy":
+                            cnt = self.exit_confirm.get(s.symbol, 0) + 1
+                            if cnt < 2:
+                                self.exit_confirm[s.symbol] = cnt
+                                logger.info("EXIT_CONFIRM_WAIT", extra={"symbol": s.symbol, "count": cnt})
+                                continue
+                            self.exit_confirm.pop(s.symbol, None)
                         if s.confidence < last_conf + self.delta_threshold:
                             logger.info("SKIP_DELTA_THRESHOLD", extra={"symbol": s.symbol})
                             continue
+                    else:
+                        if s.side == "buy":
+                            self.exit_confirm[s.symbol] = 0
                     s.weight *= weight
                     results.append(s)
                     if s.side == "sell":

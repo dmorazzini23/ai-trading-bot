@@ -46,12 +46,15 @@ class MeanReversionStrategy(Strategy):
             zscores = mean_reversion_zscore(close_series, self.lookback)
             if zscores.empty:
                 continue
+            if len(zscores) < 2:
+                continue
             z = zscores.iloc[-1]
+            prev = zscores.iloc[-2]
             if pd.isna(z):
                 logger.warning("%s: invalid rolling statistics", sym)  # AI-AGENT-REF: clarify log message
                 continue
             scores[sym] = float(z)
-            if z > self.z:
+            if z > self.z and prev > self.z:
                 signals.append(
                     TradeSignal(
                         symbol=sym,
@@ -61,7 +64,7 @@ class MeanReversionStrategy(Strategy):
                         asset_class=asset_class_for(sym),
                     )
                 )
-            elif z < -self.z:
+            elif z < -self.z and prev < -self.z:
                 signals.append(
                     TradeSignal(
                         symbol=sym,
