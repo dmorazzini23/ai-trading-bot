@@ -1,5 +1,16 @@
 # 🚀 AI Trading Bot
 
+## AI Trading Bot Optimization
+
+This update introduces several critical improvements:
+
+1. **Fixed StrategyAllocator Hold Protection Bug**
+2. **Reduced Delta Threshold** from 0.3 to 0.02
+3. **ATR-Based Position Sizing** using total equity
+4. **Signal Confirmation** requiring consecutive bars
+5. **Dynamic Exposure Management** adjusting caps based on performance
+
+
 ![CI](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/python-app.yml/badge.svg)
 [![codecov](https://codecov.io/gh/dmorazzini23/ai-trading-bot/branch/main/graph/badge.svg)](https://codecov.io/gh/dmorazzini23/ai-trading-bot)
 [![deploy](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/deploy.yml/badge.svg)](https://github.com/dmorazzini23/ai-trading-bot/actions/workflows/deploy.yml)

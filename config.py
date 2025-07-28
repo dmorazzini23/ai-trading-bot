@@ -279,7 +279,83 @@ __all__ = [
     "SEED",
     "RATE_LIMIT_BUDGET",
     "set_runtime_config",
+    "TradingConfig",
+    "CONFIG",
 ]
 
 # alias for backwards compatibility
 Config = Settings
+
+# --- Trading bot parameters ----------------------------
+
+from dataclasses import dataclass
+from typing import Dict, Any
+
+
+@dataclass
+class TradingConfig:
+    """Centralized configuration for trading parameters."""
+
+    # Risk Management
+    max_drawdown_threshold: float = 0.08
+    position_size_min_usd: float = 100.0
+    kelly_fraction_max: float = 0.25
+    max_trades: int = 15
+
+    # Signal Processing
+    signal_confirmation_bars: int = 2
+    trade_cooldown_min: float = 5.0
+    delta_threshold: float = 0.02
+
+    # Volatility & ATR
+    volatility_lookback_days: int = 20
+    atr_multiplier: float = 2.0
+
+    # Exposure Management
+    exposure_cap_aggressive: float = 0.8
+    exposure_cap_conservative: float = 0.4
+
+    @classmethod
+    def from_env(cls) -> "TradingConfig":
+        """Load configuration from environment variables."""
+        import os
+
+        return cls(
+            max_drawdown_threshold=float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.08")),
+            position_size_min_usd=float(os.getenv("POSITION_SIZE_MIN_USD", "100.0")),
+            kelly_fraction_max=float(os.getenv("KELLY_FRACTION_MAX", "0.25")),
+            max_trades=int(os.getenv("MAX_TRADES", "15")),
+            signal_confirmation_bars=int(os.getenv("SIGNAL_CONFIRMATION_BARS", "2")),
+            trade_cooldown_min=float(os.getenv("TRADE_COOLDOWN_MIN", "5.0")),
+            delta_threshold=float(os.getenv("DELTA_THRESHOLD", "0.02")),
+            volatility_lookback_days=int(os.getenv("VOLATILITY_LOOKBACK_DAYS", "20")),
+            atr_multiplier=float(os.getenv("ATR_MULTIPLIER", "2.0")),
+            exposure_cap_aggressive=float(os.getenv("EXPOSURE_CAP_AGGRESSIVE", "0.8")),
+            exposure_cap_conservative=float(os.getenv("EXPOSURE_CAP_CONSERVATIVE", "0.4")),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for optimization algorithms."""
+        return {
+            "max_drawdown_threshold": self.max_drawdown_threshold,
+            "kelly_fraction_max": self.kelly_fraction_max,
+            "signal_confirmation_bars": self.signal_confirmation_bars,
+            "atr_multiplier": self.atr_multiplier,
+            "delta_threshold": self.delta_threshold,
+            "exposure_cap_aggressive": self.exposure_cap_aggressive,
+            "exposure_cap_conservative": self.exposure_cap_conservative,
+        }
+
+    @classmethod
+    def from_optimization(cls, params: Dict[str, Any]) -> "TradingConfig":
+        """Create configuration from optimization parameters."""
+        config = cls.from_env()
+        for key, value in params.items():
+            if hasattr(config, key):
+                setattr(config, key, value)
+        return config
+
+
+# default trading configuration used across modules
+CONFIG = TradingConfig.from_env()
+

@@ -3,6 +3,7 @@ import os
 import random
 import warnings
 from typing import Any, Dict, Sequence
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -40,12 +41,22 @@ CURRENT_TRADES = 0
 class RiskEngine:
     """Cross-strategy risk manager."""
 
-    def __init__(self) -> None:
-        self.global_limit = float(os.getenv("EQUITY_EXPOSURE_CAP", "2.5"))
+    def __init__(self, config: config.TradingConfig | None = None) -> None:
+        self.config = config or config.CONFIG
+        self.global_limit = self.config.exposure_cap_aggressive
         self.asset_limits: Dict[str, float] = {}
         self.strategy_limits: Dict[str, float] = {}
         self.exposure: Dict[str, float] = {}
         self.strategy_exposure: Dict[str, float] = {}
+        self._positions: Dict[str, int] = {}
+        self._atr_cache: Dict[str, tuple] = {}
+        self._volatility_cache: Dict[str, tuple] = {}
+        try:
+            from data_client import DataClient
+        except Exception:  # pragma: no cover - optional dependency
+            self.data_client = None
+        else:
+            self.data_client = DataClient()
         self.hard_stop = False
         # AI-AGENT-REF: track returns/drawdown for adaptive exposure cap
         self._returns: list[float] = []
@@ -99,16 +110,61 @@ class RiskEngine:
     def _current_volatility(self) -> float:
         return float(np.std(self._returns[-10:])) if self._returns else 0.0
 
+    def _get_atr_data(self, symbol: str, lookback: int = 14) -> float | None:
+        """Return ATR value for ``symbol``."""
+        try:
+            if symbol in self._atr_cache:
+                ts, val = self._atr_cache[symbol]
+                from datetime import datetime, timedelta
+                if datetime.now() - ts < timedelta(minutes=30):
+                    return val
+
+            if self.data_client is None:
+                return None
+            bars = self.data_client.get_bars(symbol, lookback + 10)
+            if len(bars) < lookback:
+                return None
+            high = np.array([b.h for b in bars])
+            low = np.array([b.l for b in bars])
+            close = np.array([b.c for b in bars])
+            tr1 = np.abs(high[1:] - low[1:])
+            tr2 = np.abs(high[1:] - close[:-1])
+            tr3 = np.abs(low[1:] - close[:-1])
+            tr = np.maximum(tr1, np.maximum(tr2, tr3))
+            atr = float(np.mean(tr[-lookback:]))
+            from datetime import datetime
+            self._atr_cache[symbol] = (datetime.now(), atr)
+            return atr
+        except Exception as exc:
+            logger.warning("ATR calculation error for %s: %s", symbol, exc)
+            return None
+
     def _adaptive_global_cap(self) -> float:
-        vol = self._current_volatility()
-        max_cap = float(os.getenv("PORTFOLIO_EXPOSURE_CAP", "2.5"))
-        if vol < 0.015:
-            cap = max_cap
-        elif vol < 0.03:
-            cap = max(2.0, max_cap - 0.5)
+        base_cap = self.global_limit
+
+        if len(self._returns) < self.config.volatility_lookback_days:
+            return base_cap * self.config.exposure_cap_conservative
+
+        recent_returns = np.array(self._returns[-self.config.volatility_lookback_days:])
+
+        mean_return = np.mean(recent_returns)
+        vol = np.std(recent_returns) if np.std(recent_returns) > 0 else 0.01
+        sharpe_proxy = mean_return / vol
+
+        cumulative = np.cumprod(1 + recent_returns)
+        running_max = np.maximum.accumulate(cumulative)
+        drawdown = (cumulative - running_max) / running_max
+        max_dd = abs(np.min(drawdown)) if len(drawdown) > 0 else 0
+
+        if sharpe_proxy > 0.5 and max_dd < 0.05:
+            multiplier = min(1.2, 1 + sharpe_proxy * 0.3)
+        elif sharpe_proxy < -0.3 or max_dd > 0.1:
+            multiplier = max(0.3, 1 - max_dd * 2)
         else:
-            cap = max(2.0, max_cap - 1.0)
-        return cap
+            multiplier = 1.0
+
+        adaptive_cap = base_cap * multiplier
+        return np.clip(adaptive_cap, base_cap * 0.3, base_cap * 1.5)
 
     def update_portfolio_metrics(
         self, returns: list[float] | None = None, drawdown: float | None = None
@@ -227,6 +283,18 @@ class RiskEngine:
         self._last_update = time.monotonic()
         self._update_event.set()
 
+    def update_position(self, symbol: str, quantity: int, side: str) -> None:
+        """Update exposure for a symbol."""
+        if side == "buy":
+            self._positions[symbol] = self._positions.get(symbol, 0) + quantity
+        else:
+            self._positions[symbol] = self._positions.get(symbol, 0) - quantity
+
+    def update_returns(self, daily_return: float) -> None:
+        """Append ``daily_return`` to history for adaptive calculations."""
+        self._returns.append(daily_return)
+        self._returns = self._returns[-90:]
+
     # ------------------------------------------------------------------
     # Additional risk checks and scaling
     # ------------------------------------------------------------------
@@ -320,140 +388,68 @@ class RiskEngine:
             logger.error("check_max_drawdown failed: %s", exc)
             return False
 
-    def position_size(
-        self, signal: TradeSignal, cash: float, price: float, api=None
-    ) -> int:
-        volatility = float(np.std(self._returns[-10:])) if self._returns else 0.0
-        drawdown = abs(min(self._drawdowns)) if self._drawdowns else 0.0
-        logger.debug(
-            "POSITION_SIZE_START",
-            extra={
-                "symbol": getattr(signal, "symbol", "N/A"),
-                "cash": cash,
-                "price": price,
-                "weight": getattr(signal, "weight", 0.0),
-                "volatility": volatility,
-                "drawdown": drawdown,
-            },
-        )
-        if self.hard_stop:
-            logger.error("HARD_STOP_ACTIVE")
-            return 0
-        if not isinstance(signal, TradeSignal):
-            logger.error("position_size called with invalid signal type")
+    def position_size(self, signal: Any, cash: float, price: float, api=None) -> int:
+        if price <= 0:
+            logger.warning("Invalid price %s for %s", price, signal.symbol)
             return 0
 
-        if api is not None and not self.check_max_drawdown(api):
-            return 0
-
-        if cash <= 0 or price <= 0:
-            logger.warning(
-                "Invalid cash %.2f or price %.2f for position sizing", cash, price
-            )
-            return 0
-
-        if not self.can_trade(signal):
-            asset_exp = self.exposure.get(signal.asset_class, 0.0)
-            asset_cap = 1.1 * self._dynamic_cap(
-                signal.asset_class
-            )  # slight relaxation to reduce unnecessary skips
-            projected = asset_exp + signal.weight
-            if projected > asset_cap:
-                qty_intended = int(round(cash * min(signal.weight, 1.0) / price))
-                logger.warning(
-                    "EXPOSURE_CAP_SKIP",
-                    extra={
-                        "symbol": signal.symbol,
-                        "qty": qty_intended,
-                        "allocation": signal.weight,
-                        "exposure": projected,
-                        "cap": asset_cap,
-                    },
-                )
-            return 0
-
-        weight = self._apply_weight_limits(signal)
-        logger.debug(
-            "POSITION_WEIGHT",
-            extra={
-                "symbol": signal.symbol,
-                "raw": getattr(signal, "weight", 0.0),
-                "capped": weight,
-            },
-        )
-
-        # Compute raw dollars allocated to this trade
-        raw_dollars = cash * min(weight, 1.0)
-        if np.isnan(raw_dollars) or np.isnan(price):
-            logger.error("position_size received NaN inputs")
-            return 0
-        # Determine current account equity; default to cash if unavailable
-        current_equity = cash
-        if api is not None:
-            try:
-                acct = api.get_account()
-                current_equity = float(getattr(acct, "equity", cash))
-            except Exception:
-                pass
-        # Adjust the raw dollars using capital scaling (volatility & drawdown)
         try:
-            scaler = getattr(self, "capital_scaler", None)
-            volatility = float(np.std(self._returns[-10:])) if self._returns else 0.0
-            drawdown = abs(min(self._drawdowns)) if self._drawdowns else 0.0
-            if scaler is not None:
-                scaled_dollars = scaler.scale_position(
-                    raw_dollars,
-                    equity=current_equity,
-                    volatility=volatility,
-                    drawdown=drawdown,
-                )
+            if api:
+                account = api.get_account()
+                total_equity = float(getattr(account, "equity", cash))
             else:
-                scaled_dollars = raw_dollars
-        except Exception as exc:
-            logger.error("capital_scaler error: %s", exc)
-            scaled_dollars = raw_dollars
+                total_equity = cash
+        except Exception as e:
+            logger.warning("Error getting account equity: %s", e)
+            total_equity = cash
+
         try:
-            qty = int(round(scaled_dollars / price))
-        except (ZeroDivisionError, OverflowError, TypeError, ValueError) as exc:
-            logger.error("position_size division error: %s", exc)
-            return 0
-        qty = max(qty, 0)
-        logger.debug(
-            "POSITION_SIZE_RESULT",
-            extra={"symbol": signal.symbol, "qty": qty, "weight": weight},
-        )
+            atr_data = self._get_atr_data(signal.symbol)
+            if atr_data and atr_data > 0:
+                risk_per_trade = total_equity * 0.01
+                stop_distance = atr_data * self.config.atr_multiplier
+                raw_qty = risk_per_trade / stop_distance
+            else:
+                weight = self._apply_weight_limits(signal)
+                raw_qty = (total_equity * weight) / price
+        except Exception as exc:
+            logger.warning("ATR calculation failed for %s: %s", signal.symbol, exc)
+            weight = self._apply_weight_limits(signal)
+            raw_qty = (total_equity * weight) / price
+
+        min_qty = self.config.position_size_min_usd / price
+        qty = max(int(raw_qty), int(min_qty)) if raw_qty >= min_qty else 0
         return qty
 
     def _apply_weight_limits(self, sig: TradeSignal) -> float:
-        """Return signal weight limited by remaining capacity."""
-        # AI-AGENT-REF: use asset class key for exposure caps
-        symbol = sig.asset_class
-        strat = sig.strategy
-        # compute how much capacity remains
-        asset_cap = self.asset_limits.get(symbol, 1.0)
-        strategy_cap = self.strategy_limits.get(strat, 1.0)
-        used_asset = self.exposure.get(symbol, 0.0)
-        used_strategy = self.strategy_exposure.get(strat, 0.0)
-        max_asset = max(0.0, asset_cap - used_asset)
-        max_strategy = max(0.0, strategy_cap - used_strategy)
-        allowed = min(sig.weight, max_asset, max_strategy)
-        return max(0.0, allowed)
+        """Apply confidence-based weight limits."""
+        base_weight = min(sig.confidence * 0.01, self.config.kelly_fraction_max)
+        return base_weight
 
     def compute_volatility(self, returns: np.ndarray) -> dict:
-        if not isinstance(returns, np.ndarray) or returns.size == 0:
-            logger.warning("Empty or invalid returns series—skipping risk computation")
-            return {"volatility": 0.0}
+        """Return multiple volatility estimates."""
+        if len(returns) == 0:
+            return {"volatility": 0.0, "mad": 0.0, "garch_vol": 0.0}
 
-        if np.isnan(returns).any() or np.isinf(returns).any():
-            logger.error("Failed computing volatility: invalid values present")
-            vol = 0.0
-        else:
-            try:
-                vol = float(np.std(returns))
-            except (ValueError, TypeError) as exc:
-                logger.error("Failed computing volatility: %s", exc)
-                vol = 0.0
-        return {"volatility": vol}
+        std_vol = float(np.std(returns))
+        mad = float(np.median(np.abs(returns - np.median(returns))))
+
+        try:
+            alpha, beta = 0.1, 0.85
+            garch_vol = 0.0
+            for i in range(1, len(returns)):
+                garch_vol = alpha * returns[i - 1] ** 2 + beta * garch_vol
+            garch_vol = float(np.sqrt(garch_vol))
+        except Exception:
+            garch_vol = std_vol
+
+        primary_vol = mad * 1.4826 if mad > 0 else std_vol
+        return {
+            "volatility": primary_vol,
+            "std_vol": std_vol,
+            "mad": mad,
+            "garch_vol": garch_vol,
+        }
 
 
 def dynamic_position_size(capital: float, volatility: float, drawdown: float) -> float:
