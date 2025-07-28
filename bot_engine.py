@@ -6368,22 +6368,26 @@ def run_all_trades_worker(state: BotState, model) -> None:
                         f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
                     )
                     logger.info(
-                        "Positions detail: %s",
-                        [
-                            {
-                                "symbol": p.symbol,
-                                "qty": int(p.qty),
-                                "avg_price": float(p.avg_entry_price),
-                                "market_value": float(p.market_value),
-                            }
-                            for p in positions
-                        ],
+                        "POSITIONS_DETAIL",
+                        extra={
+                            "positions": [
+                                {
+                                    "symbol": p.symbol,
+                                    "qty": int(p.qty),
+                                    "avg_price": float(p.avg_entry_price),
+                                    "market_value": float(p.market_value),
+                                }
+                                for p in positions
+                            ],
+                        },
                     )
                     logger.info(
-                        "Weights vs positions: weights=%s positions=%s cash=%.2f",
-                        ctx.portfolio_weights,
-                        {p.symbol: int(p.qty) for p in positions},
-                        cash,
+                        "WEIGHTS_VS_POSITIONS",
+                        extra={
+                            "weights": ctx.portfolio_weights,
+                            "positions": {p.symbol: int(p.qty) for p in positions},
+                            "cash": cash,
+                        },
                     )
                 except Exception as exc:  # pragma: no cover - network issues
                     logger.warning(f"SUMMARY_FAIL: {exc}")
@@ -6493,22 +6497,26 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
                 )
                 logger.info(
-                    "Positions detail: %s",
-                    [
-                        {
-                            "symbol": p.symbol,
-                            "qty": int(p.qty),
-                            "avg_price": float(p.avg_entry_price),
-                            "market_value": float(p.market_value),
-                        }
-                        for p in positions
-                    ],
+                    "POSITIONS_DETAIL",
+                    extra={
+                        "positions": [
+                            {
+                                "symbol": p.symbol,
+                                "qty": int(p.qty),
+                                "avg_price": float(p.avg_entry_price),
+                                "market_value": float(p.market_value),
+                            }
+                            for p in positions
+                        ],
+                    },
                 )
                 logger.info(
-                    "Weights vs positions: weights=%s positions=%s cash=%.2f",
-                    ctx.portfolio_weights,
-                    {p.symbol: int(p.qty) for p in positions},
-                    cash,
+                    "WEIGHTS_VS_POSITIONS",
+                    extra={
+                        "weights": ctx.portfolio_weights,
+                        "positions": {p.symbol: int(p.qty) for p in positions},
+                        "cash": cash,
+                    },
                 )
                 try:
                     adaptive_cap = ctx.risk_engine._adaptive_global_cap()
