@@ -11,6 +11,7 @@ import config
 TRADE_LOG_FILE = config.TRADE_LOG_FILE
 
 logger = logging.getLogger(__name__)
+_disable_trade_log = False
 _fields = [
     "id",
     "timestamp",
@@ -26,6 +27,10 @@ _fields = [
 
 def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposure=None):
     """Persist a trade event to ``TRADE_LOG_FILE`` and log a summary."""
+    global _disable_trade_log
+    if _disable_trade_log:
+        # Skip writing after a permission error was encountered
+        return
     # AI-AGENT-REF: record exposure and intent
     logger.info(
         "Trade Log | symbol=%s, qty=%s, side=%s, fill_price=%.2f, exposure=%s, timestamp=%s",
@@ -70,6 +75,9 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
         logger.error(
             "ERROR [audit] permission denied writing %s: %s", TRADE_LOG_FILE, exc
         )
+        if not _disable_trade_log:
+            _disable_trade_log = True
+            logger.warning("Trade log disabled due to permission error")
     except Exception as exc:  # pragma: no cover - other I/O errors
         logger.error("Failed to record trade: %s", exc)
 
