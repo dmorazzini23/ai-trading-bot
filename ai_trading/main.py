@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from threading import Thread
+import threading
 
 from dotenv import load_dotenv
 from validate_env import Settings
@@ -35,8 +36,16 @@ def run_bot(*_a, **_k) -> int:
 def run_flask_app(port: int = 5000) -> None:
     """Launch Flask API on an available port."""
     # AI-AGENT-REF: simplified port fallback logic
-    if utils.get_pid_on_port(port):
+    max_attempts = 10
+    original_port = port
+
+    for attempt in range(max_attempts):
+        if not utils.get_pid_on_port(port):
+            break
         port += 1
+    else:
+        raise RuntimeError(f"Could not find available port starting from {original_port}")
+
     application = app.create_app()
     application.run(host="0.0.0.0", port=port)
 
@@ -51,8 +60,18 @@ def main() -> None:
     load_dotenv()
     validate_environment()
 
-    t = Thread(target=start_api, daemon=True)
+    # Ensure API is ready before starting trading cycles
+    api_ready = threading.Event()
+
+    def start_api_with_signal():
+        start_api()
+        api_ready.set()
+
+    t = Thread(target=start_api_with_signal, daemon=True)
     t.start()
+
+    # Wait for API to be ready
+    api_ready.wait(timeout=10)
 
     interval = int(os.getenv("SCHEDULER_SLEEP_SECONDS", 30))
     iterations = int(os.getenv("SCHEDULER_ITERATIONS", 0))  # AI-AGENT-REF: test hook
