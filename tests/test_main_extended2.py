@@ -46,7 +46,7 @@ def test_run_flask_app_port_in_use(monkeypatch):
     monkeypatch.setattr(main.utils, "get_pid_on_port", lambda p: 111)
     monkeypatch.setattr(main.utils, "get_free_port", lambda *a, **k: 5678)
     main.run_flask_app(1234)
-    assert called == [1235]
+    assert called == [5678]
 
 
 def test_run_bot_calls_cycle(monkeypatch):

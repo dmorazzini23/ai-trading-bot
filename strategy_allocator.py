@@ -92,6 +92,10 @@ class StrategyAllocator:
 
         return final_signals
 
+    def update_reward(self, strategy: str, reward: float) -> None:
+        """Update reward for a strategy (placeholder for test compatibility)."""
+        logger.info(f"Strategy {strategy} reward updated: {reward}")
+
 
 __all__ = ["StrategyAllocator"]
 

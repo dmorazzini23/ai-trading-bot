@@ -35,7 +35,7 @@ def run_bot(*_a, **_k) -> int:
 
 def run_flask_app(port: int = 5000) -> None:
     """Launch Flask API on an available port."""
-    # AI-AGENT-REF: simplified port fallback logic
+    # AI-AGENT-REF: simplified port fallback logic with get_free_port fallback
     max_attempts = 10
     original_port = port
 
@@ -44,7 +44,11 @@ def run_flask_app(port: int = 5000) -> None:
             break
         port += 1
     else:
-        raise RuntimeError(f"Could not find available port starting from {original_port}")
+        # If consecutive ports are all occupied, use get_free_port as fallback
+        free_port = utils.get_free_port()
+        if free_port is None:
+            raise RuntimeError(f"Could not find available port starting from {original_port}")
+        port = free_port
 
     application = app.create_app()
     application.run(host="0.0.0.0", port=port)
