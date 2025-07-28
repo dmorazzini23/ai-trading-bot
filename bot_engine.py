@@ -1734,9 +1734,9 @@ class TradeLogger:
                             "reward",
                         ]
                     )
-            except PermissionError as exc:  # AI-AGENT-REF: handle file perms
-                logger.error(
-                    "ERROR [audit] permission denied writing %s: %s", path, exc
+            except PermissionError as exc:  # AI-AGENT-REF: avoid duplicate audit log
+                logger.debug(
+                    "TradeLogger init unable to write %s: %s", path, exc
                 )
         if not os.path.exists(REWARD_LOG_FILE):
             try:
@@ -1784,9 +1784,9 @@ class TradeLogger:
                         "",
                     ]
                 )
-        except PermissionError as exc:  # AI-AGENT-REF: handle file perms
-            logger.error(
-                "ERROR [audit] permission denied writing %s: %s", self.path, exc
+        except PermissionError as exc:  # AI-AGENT-REF: avoid duplicate audit log
+            logger.debug(
+                "TradeLogger entry unable to write %s: %s", self.path, exc
             )
 
     def log_exit(self, state: BotState, symbol: str, exit_price: float) -> None:
@@ -1831,9 +1831,9 @@ class TradeLogger:
                 w = csv.writer(f)
                 w.writerow(header)
                 w.writerows(data)
-        except PermissionError as exc:  # AI-AGENT-REF: handle file perms
-            logger.error(
-                "ERROR [audit] permission denied writing %s: %s", self.path, exc
+        except PermissionError as exc:  # AI-AGENT-REF: avoid duplicate audit log
+            logger.debug(
+                "TradeLogger exit unable to write %s: %s", self.path, exc
             )
             return
 
@@ -5958,10 +5958,10 @@ def run_multi_strategy(ctx: BotContext) -> None:
                 # symbol; we derive this from recent returns and technical
                 # indicators (RSI, ATR).  Additional features can be added
                 # by modifying ``compute_features`` in ``ai_trading.rl_trading.features``.
-                import numpy as np  # local import to avoid polluting global namespace
+                import numpy as _np  # AI-AGENT-REF: alias to avoid shadowing global np
                 from ai_trading.rl_trading.features import compute_features
 
-                states: list[np.ndarray] = []
+                states: list[_np.ndarray] = []
                 for sym in all_symbols:
                     # Try to fetch recent daily price data; fallback to minute data.
                     df = None
@@ -5977,7 +5977,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
                     state_vec = compute_features(df, window=10)
                     states.append(state_vec)
                 if states:
-                    state_mat = np.stack(states).astype(np.float32)
+                    state_mat = _np.stack(states).astype(_np.float32)
                     rl_sigs = ctx.rl_agent.predict(state_mat, symbols=all_symbols)
                     if rl_sigs:
                         signals_by_strategy["rl"] = rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
