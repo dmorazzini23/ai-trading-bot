@@ -146,6 +146,60 @@ def get_account() -> Optional[Dict[str, Any]]:
 
 
 def submit_order(api, req, log: logging.Logger | None = None):
+    # AI-AGENT-REF: Add comprehensive input validation for order submission
+    log = log or logger
+    
+    # Validate API client
+    if api is None:
+        log.error("API client is None, cannot submit order")
+        raise ValueError("API client cannot be None")
+    
+    # Validate order request object
+    if req is None:
+        log.error("Order request is None")
+        raise ValueError("Order request cannot be None")
+    
+    # Extract and validate order parameters
+    symbol = getattr(req, "symbol", None)
+    qty = getattr(req, "qty", None)
+    side = getattr(req, "side", None)
+    
+    # Validate symbol
+    if not symbol or not isinstance(symbol, str):
+        log.error("Invalid symbol: %s", symbol)
+        raise ValueError("Symbol must be a non-empty string")
+    
+    symbol = symbol.upper().strip()  # Normalize symbol
+    if not symbol.isalnum():
+        log.error("Symbol contains invalid characters: %s", symbol)
+        raise ValueError("Symbol must contain only alphanumeric characters")
+    
+    # Validate quantity
+    if qty is None:
+        log.error("Quantity is None for symbol %s", symbol)
+        raise ValueError("Quantity cannot be None")
+    
+    try:
+        qty = float(qty)
+        if qty <= 0:
+            log.error("Invalid quantity %s for symbol %s", qty, symbol)
+            raise ValueError("Quantity must be positive")
+        if qty > 1000000:  # Reasonable upper limit
+            log.error("Quantity %s too large for symbol %s", qty, symbol)
+            raise ValueError("Quantity exceeds maximum allowed")
+    except (ValueError, TypeError) as e:
+        log.error("Invalid quantity format %s for symbol %s: %s", qty, symbol, e)
+        raise ValueError(f"Invalid quantity format: {qty}")
+    
+    # Validate side
+    valid_sides = {"buy", "sell", "BUY", "SELL"}
+    if side not in valid_sides:
+        log.error("Invalid order side %s for symbol %s", side, symbol)
+        raise ValueError(f"Order side must be one of {valid_sides}")
+    
+    # Log validated order details
+    log.info("Submitting validated order: %s %s shares of %s", side, qty, symbol)
+    
     symbol = getattr(req, "symbol", None)
     order_data = req  # AI-AGENT-REF: capture request payload
     # Check for duplicate pending orders in a thread-safe manner.  Without

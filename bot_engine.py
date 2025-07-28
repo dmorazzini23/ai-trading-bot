@@ -490,7 +490,22 @@ try:
 except Exception:
     finnhub_client = None  # type: ignore
 
+# AI-AGENT-REF: Add cache size management to prevent memory leaks
 _ML_MODEL_CACHE: dict[str, Any] = {}
+_ML_MODEL_CACHE_MAX_SIZE = 100  # Limit cache size to prevent memory issues
+
+
+def _cleanup_ml_model_cache():
+    """Clean up ML model cache if it gets too large."""
+    global _ML_MODEL_CACHE
+    if len(_ML_MODEL_CACHE) > _ML_MODEL_CACHE_MAX_SIZE:
+        # Keep only the most recently used items (simple LRU-like behavior)
+        # For now, just clear half the cache when it gets too large
+        items_to_remove = len(_ML_MODEL_CACHE) // 2
+        keys_to_remove = list(_ML_MODEL_CACHE.keys())[:items_to_remove]
+        for key in keys_to_remove:
+            _ML_MODEL_CACHE.pop(key, None)
+        logger.info("Cleaned up ML model cache, removed %d items", items_to_remove)
 
 
 logger = logging.getLogger(__name__)
@@ -613,6 +628,9 @@ def assert_row_integrity(
 
 def _load_ml_model(symbol: str):
     """Return preloaded ML model from ``ML_MODELS`` cache."""
+    
+    # AI-AGENT-REF: Check cache size and cleanup if needed
+    _cleanup_ml_model_cache()
 
     cached = _ML_MODEL_CACHE.get(symbol)
     if cached is not None:
@@ -949,6 +967,40 @@ ENTRY_END_OFFSET = timedelta(minutes=params.get("ENTRY_END_OFFSET_MIN", 15))
 REGIME_LOOKBACK = 14
 REGIME_ATR_THRESHOLD = 20.0
 RF_ESTIMATORS = 300
+# AI-AGENT-REF: Add comprehensive validation for critical trading parameters
+def validate_trading_parameters():
+    """Validate critical trading parameters and log warnings for invalid values."""
+    global CAPITAL_CAP, DOLLAR_RISK_LIMIT, MAX_POSITION_SIZE, CONF_THRESHOLD, BUY_THRESHOLD
+    
+    # Validate CAPITAL_CAP (should be between 0.01 and 0.5)
+    if not isinstance(CAPITAL_CAP, (int, float)) or not (0.01 <= CAPITAL_CAP <= 0.5):
+        logger.error("Invalid CAPITAL_CAP %s, using default 0.08", CAPITAL_CAP)
+        CAPITAL_CAP = 0.08
+    
+    # Validate DOLLAR_RISK_LIMIT (should be between 0.005 and 0.1)
+    if not isinstance(DOLLAR_RISK_LIMIT, (int, float)) or not (0.005 <= DOLLAR_RISK_LIMIT <= 0.1):
+        logger.error("Invalid DOLLAR_RISK_LIMIT %s, using default 0.02", DOLLAR_RISK_LIMIT)
+        DOLLAR_RISK_LIMIT = 0.02
+    
+    # Validate MAX_POSITION_SIZE (should be between 1 and 10000)
+    if not isinstance(MAX_POSITION_SIZE, int) or not (1 <= MAX_POSITION_SIZE <= 10000):
+        logger.error("Invalid MAX_POSITION_SIZE %s, using default 1000", MAX_POSITION_SIZE)
+        MAX_POSITION_SIZE = 1000
+    
+    # Validate CONF_THRESHOLD (should be between 0.5 and 0.95)
+    if not isinstance(CONF_THRESHOLD, (int, float)) or not (0.5 <= CONF_THRESHOLD <= 0.95):
+        logger.error("Invalid CONF_THRESHOLD %s, using default 0.75", CONF_THRESHOLD)
+        CONF_THRESHOLD = 0.75
+    
+    # Validate BUY_THRESHOLD (should be between 0.1 and 0.9)
+    if not isinstance(BUY_THRESHOLD, (int, float)) or not (0.1 <= BUY_THRESHOLD <= 0.9):
+        logger.error("Invalid BUY_THRESHOLD %s, using default 0.2", BUY_THRESHOLD)
+        BUY_THRESHOLD = 0.2
+    
+    logger.info("Trading parameters validated: CAPITAL_CAP=%.3f, DOLLAR_RISK_LIMIT=%.3f, MAX_POSITION_SIZE=%d",
+                CAPITAL_CAP, DOLLAR_RISK_LIMIT, MAX_POSITION_SIZE)
+
+
 RF_MAX_DEPTH = 3
 RF_MIN_SAMPLES_LEAF = 5
 ATR_LENGTH = 10
@@ -956,6 +1008,10 @@ CONF_THRESHOLD = params.get("CONF_THRESHOLD", 0.75)
 CONFIRMATION_COUNT = params.get("CONFIRMATION_COUNT", 2)
 CAPITAL_CAP = params.get("CAPITAL_CAP", 0.08)
 DOLLAR_RISK_LIMIT = float(config.get_env("DOLLAR_RISK_LIMIT", "0.02"))
+
+# Validate parameters after loading
+validate_trading_parameters()
+
 PACIFIC = ZoneInfo("America/Los_Angeles")
 PDT_DAY_TRADE_LIMIT = params.get("PDT_DAY_TRADE_LIMIT", 3)
 PDT_EQUITY_THRESHOLD = params.get("PDT_EQUITY_THRESHOLD", 25_000.0)
@@ -3181,13 +3237,95 @@ def scaled_atr_stop(
     max_factor: float = 2.0,
     min_factor: float = 0.5,
 ) -> Tuple[float, float]:
-    total = (market_close - market_open).total_seconds()
-    elapsed = (now - market_open).total_seconds()
-    α = max(0, min(1, 1 - elapsed / total))
-    factor = min_factor + α * (max_factor - min_factor)
-    stop = entry_price - factor * atr
-    take = entry_price + factor * atr
-    return stop, take
+    """Calculate scaled ATR stop-loss and take-profit with comprehensive validation."""
+    try:
+        # AI-AGENT-REF: Add comprehensive input validation for stop-loss calculation
+        
+        # Validate entry price
+        if not isinstance(entry_price, (int, float)) or entry_price <= 0:
+            logger.error("Invalid entry price for ATR stop: %s", entry_price)
+            return entry_price * 0.95, entry_price * 1.05  # Return conservative defaults
+        
+        # Validate ATR
+        if not isinstance(atr, (int, float)) or atr < 0:
+            logger.error("Invalid ATR for stop calculation: %s", atr)
+            return entry_price * 0.95, entry_price * 1.05
+        
+        if atr == 0:
+            logger.warning("ATR is zero, using 1% stop/take levels")
+            return entry_price * 0.99, entry_price * 1.01
+        
+        # Validate datetime inputs
+        if not all(isinstance(dt, datetime) for dt in [now, market_open, market_close]):
+            logger.error("Invalid datetime inputs for ATR stop calculation")
+            return entry_price * 0.95, entry_price * 1.05
+        
+        # Validate market times make sense
+        if market_close <= market_open:
+            logger.error("Invalid market times: close=%s <= open=%s", market_close, market_open)
+            return entry_price * 0.95, entry_price * 1.05
+        
+        # Validate factors
+        if not isinstance(max_factor, (int, float)) or max_factor <= 0:
+            logger.warning("Invalid max_factor %s, using default 2.0", max_factor)
+            max_factor = 2.0
+        
+        if not isinstance(min_factor, (int, float)) or min_factor < 0:
+            logger.warning("Invalid min_factor %s, using default 0.5", min_factor)
+            min_factor = 0.5
+        
+        if min_factor > max_factor:
+            logger.warning("min_factor %s > max_factor %s, swapping", min_factor, max_factor)
+            min_factor, max_factor = max_factor, min_factor
+        
+        # Calculate time-based scaling factor
+        total = (market_close - market_open).total_seconds()
+        elapsed = (now - market_open).total_seconds()
+        
+        # Handle edge cases
+        if total <= 0:
+            logger.warning("Invalid market session duration: %s seconds", total)
+            α = 0.5  # Use middle factor
+        else:
+            α = max(0, min(1, 1 - elapsed / total))
+        
+        factor = min_factor + α * (max_factor - min_factor)
+        
+        # Validate factor is reasonable
+        if factor <= 0 or factor > 10:  # Sanity check - no more than 10x ATR
+            logger.warning("Calculated factor %s out of bounds, capping", factor)
+            factor = max(0.1, min(factor, 10.0))
+        
+        stop = entry_price - factor * atr
+        take = entry_price + factor * atr
+        
+        # Validate calculated levels are reasonable
+        if stop < 0:
+            logger.warning("Calculated stop price %s is negative, adjusting", stop)
+            stop = entry_price * 0.5  # Minimum 50% stop
+        
+        if take <= entry_price:
+            logger.warning("Calculated take profit %s <= entry price %s, adjusting", take, entry_price)
+            take = entry_price * 1.1  # Minimum 10% profit target
+        
+        # Ensure stop is below entry and take is above entry
+        if stop >= entry_price:
+            logger.warning("Stop price %s >= entry price %s, adjusting", stop, entry_price)
+            stop = entry_price * 0.95
+        
+        if take <= entry_price:
+            logger.warning("Take profit %s <= entry price %s, adjusting", take, entry_price)
+            take = entry_price * 1.05
+        
+        logger.debug("ATR stop calculation: entry=%s, atr=%s, factor=%s, stop=%s, take=%s", 
+                    entry_price, atr, factor, stop, take)
+        
+        return stop, take
+        
+    except Exception as e:
+        logger.error("Error in ATR stop calculation: %s", e)
+        # Return conservative defaults on error
+        return entry_price * 0.95, entry_price * 1.05
 
 
 def liquidity_factor(ctx: BotContext, symbol: str) -> float:
@@ -3227,47 +3365,136 @@ def fractional_kelly_size(
     win_prob: float,
     payoff_ratio: float = 1.5,
 ) -> int:
-    # AI-AGENT-REF: adaptive kelly fraction based on historical peak equity
-    if os.path.exists(PEAK_EQUITY_FILE):
-        with portalocker.Lock(PEAK_EQUITY_FILE, "r+") as lock:
+    """Calculate position size using fractional Kelly criterion with comprehensive validation."""
+    # AI-AGENT-REF: Add comprehensive input validation for Kelly calculation
+    try:
+        # Validate inputs
+        if not isinstance(balance, (int, float)) or balance <= 0:
+            logger.error("Invalid balance for Kelly calculation: %s", balance)
+            return 0
+        
+        if not isinstance(price, (int, float)) or price <= 0:
+            logger.error("Invalid price for Kelly calculation: %s", price)
+            return 0
+        
+        if not isinstance(atr, (int, float)) or atr < 0:
+            logger.warning("Invalid ATR for Kelly calculation: %s, using minimum position", atr)
+            return 1
+        
+        if not isinstance(win_prob, (int, float)) or not (0 <= win_prob <= 1):
+            logger.error("Invalid win probability for Kelly calculation: %s", win_prob)
+            return 0
+        
+        if not isinstance(payoff_ratio, (int, float)) or payoff_ratio <= 0:
+            logger.error("Invalid payoff ratio for Kelly calculation: %s", payoff_ratio)
+            return 0
+        
+        # Validate ctx object and its attributes
+        if not hasattr(ctx, 'kelly_fraction') or not isinstance(ctx.kelly_fraction, (int, float)):
+            logger.error("Invalid kelly_fraction in context")
+            return 0
+        
+        if not hasattr(ctx, 'max_position_dollars') or not isinstance(ctx.max_position_dollars, (int, float)):
+            logger.error("Invalid max_position_dollars in context")
+            return 0
+        
+        # AI-AGENT-REF: adaptive kelly fraction based on historical peak equity
+        if os.path.exists(PEAK_EQUITY_FILE):
             try:
-                data = lock.read()
-            except io.UnsupportedOperation:
-                return 0
-            prev_peak = float(data) if data else balance
-    else:
-        prev_peak = balance
-    base_frac = ctx.kelly_fraction * ctx.capital_scaler.compression_factor(balance)
-    drawdown = (prev_peak - balance) / prev_peak
-    if drawdown > 0.10:
-        frac = 0.3
-    elif drawdown > 0.05:
-        frac = 0.45
-    else:
-        frac = base_frac
-    if is_high_vol_thr_spy():
-        frac *= 0.5
-    cap_scale = frac / base_frac if base_frac else 1.0
+                with portalocker.Lock(PEAK_EQUITY_FILE, "r+") as lock:
+                    try:
+                        data = lock.read()
+                    except io.UnsupportedOperation:
+                        logger.warning("Cannot read peak equity file, using current balance")
+                        return 0
+                    prev_peak = float(data) if data else balance
+                    if prev_peak <= 0:
+                        logger.warning("Invalid peak equity %s, using current balance", prev_peak)
+                        prev_peak = balance
+            except (OSError, IOError, ValueError) as e:
+                logger.warning("Error reading peak equity file: %s, using current balance", e)
+                prev_peak = balance
+        else:
+            prev_peak = balance
+        
+        base_frac = ctx.kelly_fraction * ctx.capital_scaler.compression_factor(balance)
+        
+        # Validate base_frac
+        if not isinstance(base_frac, (int, float)) or base_frac < 0 or base_frac > 1:
+            logger.error("Invalid base fraction calculated: %s", base_frac)
+            return 0
+        
+        drawdown = (prev_peak - balance) / prev_peak if prev_peak > 0 else 0
+        
+        # Apply drawdown-based risk reduction
+        if drawdown > 0.10:
+            frac = 0.3
+        elif drawdown > 0.05:
+            frac = 0.45
+        else:
+            frac = base_frac
+        
+        # Apply volatility-based risk reduction
+        try:
+            if is_high_vol_thr_spy():
+                frac *= 0.5
+        except Exception as e:
+            logger.warning("Error checking SPY volatility: %s", e)
+        
+        cap_scale = frac / base_frac if base_frac > 0 else 1.0
 
-    edge = win_prob - (1 - win_prob) / payoff_ratio
-    kelly = max(edge / payoff_ratio, 0) * frac
-    dollars_to_risk = kelly * balance
-    if atr <= 0:
-        new_peak = max(balance, prev_peak)
-        with portalocker.Lock(PEAK_EQUITY_FILE, "r+") as lock:
-            lock.write(str(new_peak))
-        return 1
+        # Calculate Kelly edge with validation
+        edge = win_prob - (1 - win_prob) / payoff_ratio if payoff_ratio > 0 else 0
+        kelly = max(edge / payoff_ratio, 0) * frac if payoff_ratio > 0 else 0
+        
+        # Validate Kelly fraction is reasonable
+        if kelly < 0 or kelly > 1:
+            logger.warning("Kelly fraction %s out of bounds, capping", kelly)
+            kelly = max(0, min(kelly, 1))
+        
+        dollars_to_risk = kelly * balance
+        
+        if atr <= 0:
+            logger.warning("ATR is zero or negative, using minimum position size")
+            try:
+                new_peak = max(balance, prev_peak)
+                with portalocker.Lock(PEAK_EQUITY_FILE, "w") as lock:
+                    lock.write(str(new_peak))
+            except (OSError, IOError) as e:
+                logger.warning("Error updating peak equity file: %s", e)
+            return 1
 
-    raw_pos = dollars_to_risk / atr
-    cap_pos = (balance * CAPITAL_CAP * cap_scale) / price if price > 0 else 0
-    risk_cap = (balance * DOLLAR_RISK_LIMIT) / atr if atr > 0 else raw_pos
-    dollar_cap = ctx.max_position_dollars / price if price > 0 else raw_pos
-    size = int(round(min(raw_pos, cap_pos, risk_cap, dollar_cap, MAX_POSITION_SIZE)))
-    size = max(size, 1)
-
-    new_peak = max(balance, prev_peak)
-    with portalocker.Lock(PEAK_EQUITY_FILE, "r+") as lock:
-        lock.write(str(new_peak))
+        # Calculate position sizes with multiple caps
+        raw_pos = dollars_to_risk / atr if atr > 0 else 0
+        cap_pos = (balance * CAPITAL_CAP * cap_scale) / price if price > 0 else 0
+        risk_cap = (balance * DOLLAR_RISK_LIMIT) / atr if atr > 0 else raw_pos
+        dollar_cap = ctx.max_position_dollars / price if price > 0 else raw_pos
+        
+        # Apply all limits
+        size = int(round(min(raw_pos, cap_pos, risk_cap, dollar_cap, MAX_POSITION_SIZE)))
+        size = max(size, 1)  # Ensure minimum position size
+        
+        # Validate final size is reasonable
+        if size > MAX_POSITION_SIZE:
+            logger.warning("Position size %s exceeds maximum, capping", size)
+            size = MAX_POSITION_SIZE
+        
+        # Update peak equity
+        try:
+            new_peak = max(balance, prev_peak)
+            with portalocker.Lock(PEAK_EQUITY_FILE, "w") as lock:
+                lock.write(str(new_peak))
+        except (OSError, IOError) as e:
+            logger.warning("Error updating peak equity file: %s", e)
+        
+        logger.debug("Kelly calculation: balance=%s, price=%s, atr=%s, win_prob=%s, size=%s", 
+                    balance, price, atr, win_prob, size)
+        
+        return size
+        
+    except Exception as e:
+        logger.error("Error in Kelly calculation: %s", e)
+        return 0
 
     return size
 
@@ -6763,6 +6990,13 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
 def main() -> None:
     logger.info("Main trading bot starting...")
     config.reload_env()
+    
+    # AI-AGENT-REF: Add comprehensive health check on startup
+    try:
+        from health_check import log_health_summary
+        log_health_summary()
+    except Exception as e:
+        logger.warning("Health check failed on startup: %s", e)
 
     def _handle_term(signum, frame):
         logger.info("PROCESS_TERMINATION", extra={"signal": signum})

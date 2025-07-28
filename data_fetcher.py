@@ -74,7 +74,27 @@ def get_session():
     if _session is None:
         _session = requests.Session()
         _session.headers.update({'User-Agent': 'AI-Trading-Bot/1.0'})
+        # AI-AGENT-REF: Set reasonable timeouts to prevent hanging
+        _session.timeout = (10, 30)  # (connect_timeout, read_timeout)
     return _session
+
+
+def cleanup_session():
+    """Clean up HTTP session resources."""
+    global _session
+    if _session is not None:
+        try:
+            _session.close()
+            logger.debug("HTTP session closed successfully")
+        except Exception as e:
+            logger.warning("Error closing HTTP session: %s", e)
+        finally:
+            _session = None
+
+
+# AI-AGENT-REF: Ensure session cleanup on module exit
+import atexit
+atexit.register(cleanup_session)
 try:
     import requests
     from requests import Session
