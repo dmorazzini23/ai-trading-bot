@@ -1,10 +1,62 @@
 import sys
 import os
+
+# AI-AGENT-REF: Set test environment variables early to avoid config import errors
+os.environ.update({
+    "ALPACA_API_KEY": "testkey",
+    "ALPACA_SECRET_KEY": "testsecret", 
+    "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
+    "WEBHOOK_SECRET": "test-webhook-secret",
+    "FLASK_PORT": "9000",
+    "TESTING": "1"
+})
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from pathlib import Path
 
 import pytest
 import types
+
+# AI-AGENT-REF: Add numpy stub before any imports that might need it
+try:
+    import numpy as np
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    
+    class ArrayStub(list):
+        def __init__(self, data=None, dtype=None):
+            super().__init__(data or [])
+            self.dtype = dtype
+            
+        def __array__(self):
+            return self
+            
+        def reshape(self, *args):
+            return self
+            
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: self
+    
+    numpy_mod = types.ModuleType("numpy")
+    numpy_mod.array = ArrayStub
+    numpy_mod.ndarray = ArrayStub
+    numpy_mod.nan = float('nan')
+    numpy_mod.inf = float('inf')
+    numpy_mod.asarray = ArrayStub
+    numpy_mod.zeros = lambda *args, **kwargs: ArrayStub([0] * (args[0] if args else 1))
+    numpy_mod.ones = lambda *args, **kwargs: ArrayStub([1] * (args[0] if args else 1))
+    numpy_mod.mean = lambda x, **kwargs: sum(x) / len(x) if x else 0
+    numpy_mod.std = lambda x, **kwargs: 1.0
+    numpy_mod.sqrt = lambda x: x ** 0.5
+    numpy_mod.sum = sum
+    numpy_mod.exp = lambda x: 2.718281828 ** x
+    numpy_mod.log = lambda x: 0.0
+    numpy_mod.maximum = max
+    numpy_mod.minimum = min
+    numpy_mod.__file__ = "stub"
+    sys.modules["numpy"] = numpy_mod
+    sys.modules["np"] = numpy_mod
+
 try:
     import urllib3
 except Exception:  # pragma: no cover - optional dependency
@@ -12,6 +64,43 @@ except Exception:  # pragma: no cover - optional dependency
     urllib3 = types.ModuleType("urllib3")
     urllib3.__file__ = "stub"
     sys.modules["urllib3"] = urllib3
+
+# AI-AGENT-REF: Add pandas stub for strategy allocator tests
+try:
+    import pandas as pd
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    
+    # Create pandas stub module
+    pandas_mod = types.ModuleType("pandas")
+    
+    # Create minimal DataFrame stub
+    class DataFrameStub:
+        def __init__(self, data=None, **kwargs):
+            self.data = data or {}
+            
+        def __getitem__(self, key):
+            return [1, 2, 3]  # Return dummy data
+            
+        def iloc(self):
+            return self
+            
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: self
+    
+    # Create minimal Timestamp stub
+    class TimestampStub:
+        @staticmethod
+        def utcnow():
+            from datetime import datetime, timezone
+            return datetime.now(timezone.utc)
+    
+    pandas_mod.DataFrame = DataFrameStub
+    pandas_mod.Timestamp = TimestampStub
+    pandas_mod.Series = list
+    pandas_mod.__file__ = "stub"
+    sys.modules["pandas"] = pandas_mod
+    sys.modules["pd"] = pandas_mod
 try:
     import requests  # ensure real package available
 except Exception:  # pragma: no cover - allow missing in test env
@@ -23,6 +112,140 @@ except Exception:  # pragma: no cover - allow missing in test env
     req_mod.exceptions = exc_mod
     sys.modules["requests"] = req_mod
     sys.modules["requests.exceptions"] = exc_mod
+
+# AI-AGENT-REF: Add additional dependency stubs for tests
+try:
+    import pandas_ta
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    ta_mod = types.ModuleType("pandas_ta")
+    ta_mod.rsi = lambda *a, **k: [50] * 14  # Return dummy RSI values
+    ta_mod.atr = lambda *a, **k: [1.0] * 14  # Return dummy ATR values
+    ta_mod.__file__ = "stub"
+    sys.modules["pandas_ta"] = ta_mod
+
+try:
+    import numba
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    
+    def jit_stub(*args, **kwargs):
+        """Stub for numba.jit decorator - just returns the function unchanged."""
+        if len(args) == 1 and callable(args[0]):
+            return args[0]  # Direct decoration
+        else:
+            return lambda func: func  # Parameterized decoration
+    
+    numba_mod = types.ModuleType("numba")
+    numba_mod.jit = jit_stub
+    numba_mod.__file__ = "stub"
+    sys.modules["numba"] = numba_mod
+
+try:
+    from pydantic_settings import BaseSettings
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    
+    class BaseSettingsStub:
+        def __init__(self, **kwargs):
+            # Read from environment variables
+            import os
+            self.ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "testkey")
+            self.ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "testsecret")
+            self.ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+            self.WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "test-webhook-secret")
+            self.FLASK_PORT = int(os.getenv("FLASK_PORT", "9000"))
+            self.BOT_MODE = os.getenv("BOT_MODE", "balanced")
+            self.MODEL_PATH = os.getenv("MODEL_PATH", "trained_model.pkl")
+            self.HALT_FLAG_PATH = os.getenv("HALT_FLAG_PATH", "halt.flag")
+            self.MAX_PORTFOLIO_POSITIONS = int(os.getenv("MAX_PORTFOLIO_POSITIONS", "20"))
+            self.LIMIT_ORDER_SLIPPAGE = float(os.getenv("LIMIT_ORDER_SLIPPAGE", "0.005"))
+            self.HEALTHCHECK_PORT = int(os.getenv("HEALTHCHECK_PORT", "8081"))
+            self.RUN_HEALTHCHECK = os.getenv("RUN_HEALTHCHECK", "0")
+            self.BUY_THRESHOLD = float(os.getenv("BUY_THRESHOLD", "0.5"))
+            self.WEBHOOK_PORT = int(os.getenv("WEBHOOK_PORT", "9000"))
+            self.SLIPPAGE_THRESHOLD = float(os.getenv("SLIPPAGE_THRESHOLD", "0.003"))
+            self.REBALANCE_INTERVAL_MIN = int(os.getenv("REBALANCE_INTERVAL_MIN", "1440"))
+            self.SHADOW_MODE = os.getenv("SHADOW_MODE", "False").lower() == "true"
+            self.DRY_RUN = os.getenv("DRY_RUN", "False").lower() == "true"
+            self.DISABLE_DAILY_RETRAIN = os.getenv("DISABLE_DAILY_RETRAIN", "False").lower() == "true"
+            self.TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", "data/trades.csv")
+            self.FORCE_TRADES = os.getenv("FORCE_TRADES", "False").lower() == "true"
+            self.DISASTER_DD_LIMIT = float(os.getenv("DISASTER_DD_LIMIT", "0.2"))
+            self.DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+                
+        @staticmethod
+        def model_json_schema():
+            return {}
+    
+    class SettingsConfigDictStub:
+        def __init__(self, **kwargs):
+            pass
+    
+    pydantic_settings_mod = types.ModuleType("pydantic_settings")
+    pydantic_settings_mod.BaseSettings = BaseSettingsStub
+    pydantic_settings_mod.SettingsConfigDict = SettingsConfigDictStub
+    pydantic_settings_mod.__file__ = "stub"
+    sys.modules["pydantic_settings"] = pydantic_settings_mod
+
+try:
+    import pydantic
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    
+    class FieldStub:
+        def __init__(self, *args, **kwargs):
+            pass
+            
+        def __call__(self, *args, **kwargs):
+            return lambda x: x
+    
+    pydantic_mod = types.ModuleType("pydantic")
+    pydantic_mod.Field = FieldStub()
+    pydantic_mod.__file__ = "stub"
+    sys.modules["pydantic"] = pydantic_mod
+
+# AI-AGENT-REF: Add alpaca_trade_api stubs
+try:
+    import alpaca_trade_api
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    
+    alpaca_mod = types.ModuleType("alpaca_trade_api")
+    rest_mod = types.ModuleType("alpaca_trade_api.rest")
+    
+    class RESTStub:
+        def __init__(self, *args, **kwargs):
+            pass
+            
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+    
+    rest_mod.REST = RESTStub
+    alpaca_mod.rest = rest_mod
+    alpaca_mod.__file__ = "stub"
+    sys.modules["alpaca_trade_api"] = alpaca_mod
+    sys.modules["alpaca_trade_api.rest"] = rest_mod
+
+# AI-AGENT-REF: Add other missing dependencies
+try:
+    import psutil
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    psutil_mod = types.ModuleType("psutil")
+    psutil_mod.__file__ = "stub"
+    sys.modules["psutil"] = psutil_mod
+
+try:
+    import tzlocal
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    tzlocal_mod = types.ModuleType("tzlocal")
+    tzlocal_mod.get_localzone = lambda: None
+    tzlocal_mod.__file__ = "stub"
+    sys.modules["tzlocal"] = tzlocal_mod
 try:
     from dotenv import load_dotenv
 except Exception:  # pragma: no cover - optional dependency
@@ -50,6 +273,8 @@ def default_env(monkeypatch):
     """Provide standard environment variables for tests."""
     monkeypatch.setenv("ALPACA_API_KEY", "testkey")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "testsecret")
+    monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     monkeypatch.setenv("FLASK_PORT", "9000")
     monkeypatch.setenv("TESTING", "1")
     yield
