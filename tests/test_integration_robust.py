@@ -296,6 +296,9 @@ class _Alloc:
     def __init__(self, *a, **k):
         pass
 
+    def allocate(self, *a, **k):
+        return []
+
 
 sys.modules["strategy_allocator"].StrategyAllocator = _Alloc
 sys.modules["ai_trading.capital_scaling"] = types.ModuleType("ai_trading.capital_scaling")

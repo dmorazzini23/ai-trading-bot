@@ -1,5 +1,11 @@
 import importlib
 from strategies import TradeSignal
+import sys
+
+# Ensure clean import of strategy_allocator module
+for module_name in list(sys.modules.keys()):
+    if "strategy_allocator" in module_name:
+        sys.modules.pop(module_name, None)
 
 strategy_allocator = importlib.import_module("strategy_allocator")
 
