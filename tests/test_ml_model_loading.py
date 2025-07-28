@@ -10,11 +10,12 @@ import pandas as pd
 import pytest
 from sklearn.dummy import DummyClassifier
 
-# Extract _load_ml_model from bot_engine using AST to avoid heavy import
+# Extract _load_ml_model and _cleanup_ml_model_cache from bot_engine using AST to avoid heavy import
 SRC = Path(__file__).resolve().parents[1] / "bot_engine.py"
 source = SRC.read_text()
 tree = ast.parse(source)
 func = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_load_ml_model")
+cleanup_func = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_cleanup_ml_model_cache")
 mod = types.ModuleType("bot_ml")
 mod.logger = __import__("logging").getLogger("bot_ml")
 mod.joblib = joblib
@@ -22,7 +23,8 @@ mod.Path = Path
 mod.pickle = __import__("pickle")
 mod._ML_MODEL_CACHE = {}
 mod.ML_MODELS = {}
-exec(compile(ast.Module([func], []), filename=str(SRC), mode="exec"), mod.__dict__)
+mod._ML_MODEL_CACHE_MAX_SIZE = 100  # Add the cache size constant
+exec(compile(ast.Module([cleanup_func, func], []), filename=str(SRC), mode="exec"), mod.__dict__)
 
 # Provide stub for ai_trading.model_loader used by _load_ml_model
 import sys

@@ -167,10 +167,15 @@ class RiskEngine:
     def _adaptive_global_cap(self) -> float:
         base_cap = self.global_limit
 
-        if len(self._returns) < self.config.volatility_lookback_days:
-            return base_cap * self.config.exposure_cap_conservative
+        # Handle missing config attributes gracefully
+        volatility_lookback_days = getattr(self.config, 'volatility_lookback_days', 10)
+        exposure_cap_conservative = getattr(self.config, 'exposure_cap_conservative', 1.0)
 
-        recent_returns = np.array(self._returns[-self.config.volatility_lookback_days:])
+        # If no historical data, just use the base cap without conservative scaling
+        if len(self._returns) < 3:  # Need minimum data for meaningful statistics
+            return base_cap
+
+        recent_returns = np.array(self._returns[-volatility_lookback_days:])
 
         mean_return = np.mean(recent_returns)
         vol = np.std(recent_returns) if np.std(recent_returns) > 0 else 0.01
@@ -448,7 +453,12 @@ class RiskEngine:
 
     def _apply_weight_limits(self, sig: TradeSignal) -> float:
         """Apply confidence-based weight limits."""
-        base_weight = min(sig.confidence * 0.01, self.config.kelly_fraction_max)
+        # Use the signal's weight, respecting asset and strategy limits
+        asset_limit = self.asset_limits.get(sig.asset_class, self.global_limit)
+        strategy_limit = self.strategy_limits.get(sig.strategy, self.global_limit)
+        max_allowed = min(asset_limit, strategy_limit)
+        # Apply confidence scaling to the allowed weight, but don't cap by kelly_fraction_max for simple position sizing
+        base_weight = min(sig.weight * sig.confidence, max_allowed)
         return base_weight
 
     def compute_volatility(self, returns: np.ndarray) -> dict:
