@@ -112,14 +112,29 @@ def load_weights(path: str, default: np.ndarray | None = None) -> np.ndarray:
         
     try:
         if p.exists():
-            with open(p, "rb") as f:
-                weights = pickle.load(f)
+            # Try CSV format first (matches update_weights format)
+            try:
+                weights = np.loadtxt(p, delimiter=",")
                 if isinstance(weights, np.ndarray):
                     return weights
-                else:
-                    logger.warning("Invalid weights format in %s, using default", path)
+            except (ValueError, OSError):
+                # Fallback to pickle format for backward compatibility
+                with open(p, "rb") as f:
+                    weights = pickle.load(f)
+                    if isinstance(weights, np.ndarray):
+                        return weights
+                    else:
+                        logger.warning("Invalid weights format in %s, using default", path)
         else:
-            logger.debug("Weights file %s not found, using default", path)
+            logger.debug("Weights file %s not found, creating with default", path)
+            # Create the default weights file when it doesn't exist
+            if default.size > 0:
+                try:
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    np.savetxt(p, default, delimiter=",")
+                    logger.info("Created default weights file: %s", path)
+                except Exception as e:
+                    logger.error("Failed initializing weights file %s: %s", path, e)
     except Exception as e:
         logger.warning("Failed to load weights from %s: %s", path, e)
         
