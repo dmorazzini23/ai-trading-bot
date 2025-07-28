@@ -1,3 +1,1 @@
-class BaseSettings:
-    def __init__(self, **kwargs):
-        pass
+mock_deps.py
