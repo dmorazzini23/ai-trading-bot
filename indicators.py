@@ -1,4 +1,5 @@
 """Technical indicator helpers used across the bot."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -10,7 +11,9 @@ from typing import Any, Tuple
 _INDICATOR_CACHE: dict[Tuple[str, Any], Any] = {}
 
 
-def ichimoku_fallback(high: pd.Series, low: pd.Series, close: pd.Series) -> tuple[pd.DataFrame, pd.DataFrame]:
+def ichimoku_fallback(
+    high: pd.Series, low: pd.Series, close: pd.Series
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Simple Ichimoku cloud implementation used when pandas_ta is unavailable."""
     high = pd.Series(high)
     low = pd.Series(low)
@@ -22,13 +25,15 @@ def ichimoku_fallback(high: pd.Series, low: pd.Series, close: pd.Series) -> tupl
     span_b = ((high.rolling(52).max() + low.rolling(52).min()) / 2).shift(26)
     lagging = close.shift(-26)
 
-    df = pd.DataFrame({
-        "ITS_9": conv,
-        "IKS_26": base,
-        "ISA_26": span_a,
-        "ISB_52": span_b,
-        "ICS_26": lagging,
-    })
+    df = pd.DataFrame(
+        {
+            "ITS_9": conv,
+            "IKS_26": base,
+            "ISA_26": span_a,
+            "ISB_52": span_b,
+            "ICS_26": lagging,
+        }
+    )
 
     signal = pd.DataFrame(df)
     return df, signal
@@ -61,6 +66,7 @@ def rsi_numba(prices: np.ndarray, period: int = 14) -> np.ndarray:
 
 # AI-AGENT-REF: new vectorized indicator helpers with caching
 
+
 @lru_cache(maxsize=128)
 def ema(series: tuple[float, ...], period: int) -> pd.Series:
     s = pd.Series(series)
@@ -74,19 +80,19 @@ def sma(series: tuple[float, ...], period: int) -> pd.Series:
 
 
 def bollinger_bands(x, length: int = 20, num_std: float = 2.0) -> pd.DataFrame:
-    # AI-AGENT-REF: accept DataFrame input and preserve index
-    if isinstance(x, pd.DataFrame):
-        series = x.iloc[:, 0]
-    else:
-        series = x
-    ma = series.rolling(length).mean()
-    std = series.rolling(length).std()
-    upper = ma + num_std * std
-    lower = ma - num_std * std
-    return pd.DataFrame(
-        {"bb_upper": upper, "bb_lower": lower, "bb_mid": ma},
-        index=series.index,
-    )
+    """Calculate Bollinger Bands for given price series."""
+    if isinstance(x, (list, tuple)):
+        x = pd.Series(x)
+    elif hasattr(x, "close"):
+        x = x["close"]
+
+    sma = x.rolling(window=length).mean()
+    std = x.rolling(window=length).std()
+
+    upper = sma + (std * num_std)
+    lower = sma - (std * num_std)
+
+    return pd.DataFrame({"upper": upper, "middle": sma, "lower": lower})
 
 
 @lru_cache(maxsize=128)
@@ -95,7 +101,9 @@ def rsi(series: tuple[float, ...], period: int = 14) -> pd.Series:
     return pd.Series(rsi_numba(arr, period))
 
 
-def atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
+def atr(
+    high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
+) -> pd.Series:
     hl = high - low
     hc = (high - close.shift()).abs()
     lc = (low - close.shift()).abs()
@@ -107,6 +115,7 @@ def mean_reversion_zscore(series: pd.Series, window: int = 20) -> pd.Series:
     rolling_mean = series.rolling(window).mean()
     rolling_std = series.rolling(window).std(ddof=0)
     return (series - rolling_mean) / rolling_std
+
 
 # AI-AGENT-REF: helper to compute multiple EMAs across common horizons
 def compute_ema(df: pd.DataFrame, periods: list[int] | None = None) -> pd.DataFrame:
@@ -125,7 +134,9 @@ def compute_sma(df: pd.DataFrame, periods: list[int] | None = None) -> pd.DataFr
 
 
 # AI-AGENT-REF: compute standard Bollinger Bands and width
-def compute_bollinger(df: pd.DataFrame, window: int = 20, num_std: int = 2) -> pd.DataFrame:
+def compute_bollinger(
+    df: pd.DataFrame, window: int = 20, num_std: int = 2
+) -> pd.DataFrame:
     df["MB"] = df["close"].rolling(window=window).mean()
     df["STD"] = df["close"].rolling(window=window).std()
     df["UB"] = df["MB"] + (num_std * df["STD"])
@@ -151,7 +162,9 @@ def compute_atr(df: pd.DataFrame, periods: list[int] | None = None) -> pd.DataFr
 
 
 # AI-AGENT-REF: additional indicator utilities
-def calculate_macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> tuple[pd.Series, pd.Series]:
+def calculate_macd(
+    close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
+) -> tuple[pd.Series, pd.Series]:
     """Return MACD and signal line series."""
     ema_fast = close.ewm(span=fast, adjust=False).mean()
     ema_slow = close.ewm(span=slow, adjust=False).mean()
@@ -160,16 +173,23 @@ def calculate_macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int
     return macd_line, signal_line
 
 
-def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
-    tr = pd.concat([
-        high - low,
-        (high - close.shift()).abs(),
-        (low - close.shift()).abs(),
-    ], axis=1).max(axis=1)
+def calculate_atr(
+    high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
+) -> pd.Series:
+    tr = pd.concat(
+        [
+            high - low,
+            (high - close.shift()).abs(),
+            (low - close.shift()).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
     return tr.rolling(period).mean()
 
 
-def calculate_vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
+def calculate_vwap(
+    high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series
+) -> pd.Series:
     typical_price = (high + low + close) / 3
     cum_pv = (typical_price * volume).cumsum()
     cum_vol = volume.cumsum()
@@ -189,12 +209,20 @@ def get_rsi_signal(series: pd.Series | pd.DataFrame, period: int = 14) -> pd.Ser
     return (vals - 50) / 50
 
 
-def get_atr_trailing_stop(close: pd.Series, high: pd.Series, low: pd.Series, period: int = 14, multiplier: float = 1.5) -> pd.Series:
+def get_atr_trailing_stop(
+    close: pd.Series,
+    high: pd.Series,
+    low: pd.Series,
+    period: int = 14,
+    multiplier: float = 1.5,
+) -> pd.Series:
     atr_series = calculate_atr(high, low, close, period)
     return close - multiplier * atr_series
 
 
-def cached_atr_trailing_stop(symbol: str, df: pd.DataFrame, period: int = 14, multiplier: float = 1.5) -> pd.Series:
+def cached_atr_trailing_stop(
+    symbol: str, df: pd.DataFrame, period: int = 14, multiplier: float = 1.5
+) -> pd.Series:
     """Return ATR stop with simple caching by symbol and last timestamp."""
     if df is None or df.empty:
         return pd.Series(dtype=float)
@@ -202,15 +230,20 @@ def cached_atr_trailing_stop(symbol: str, df: pd.DataFrame, period: int = 14, mu
     key = (symbol, ts)
     if key in _INDICATOR_CACHE:
         return _INDICATOR_CACHE[key]
-    stops = get_atr_trailing_stop(df["close"], df["high"], df["low"], period, multiplier)
+    stops = get_atr_trailing_stop(
+        df["close"], df["high"], df["low"], period, multiplier
+    )
     _INDICATOR_CACHE[key] = stops
     return stops
 
 
-def get_vwap_bias(close: pd.Series, high: pd.Series, low: pd.Series, volume: pd.Series) -> pd.Series:
+def get_vwap_bias(
+    close: pd.Series, high: pd.Series, low: pd.Series, volume: pd.Series
+) -> pd.Series:
     vwap_series = calculate_vwap(high, low, close, volume)
     bias = close / vwap_series - 1
     return bias
+
 
 # AI-AGENT-REF: additional indicator utilities for complex strategies
 def vwap(prices: np.ndarray, volumes: np.ndarray) -> float:
@@ -218,7 +251,9 @@ def vwap(prices: np.ndarray, volumes: np.ndarray) -> float:
     return np.sum(prices * volumes) / np.sum(volumes)
 
 
-def donchian_channel(highs: np.ndarray, lows: np.ndarray, period: int = 20) -> dict[str, float]:
+def donchian_channel(
+    highs: np.ndarray, lows: np.ndarray, period: int = 20
+) -> dict[str, float]:
     """Return Donchian channel bounds using ``period`` lookback."""
     upper = np.max(highs[-period:])
     lower = np.min(lows[-period:])
@@ -291,4 +326,3 @@ __all__ = [
     "stochastic_rsi",
     "hurst_exponent",
 ]
-

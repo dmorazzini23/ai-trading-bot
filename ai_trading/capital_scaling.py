@@ -44,7 +44,9 @@ class CapitalScalingEngine:
         """
         self._scaler = _CapScaler(config)
         # baseline account value used for compression
-        self._base: float | None = initial_equity if initial_equity and initial_equity > 0 else None
+        self._base: float | None = (
+            initial_equity if initial_equity and initial_equity > 0 else None
+        )
 
     def scale_position(
         self,
@@ -94,8 +96,8 @@ class CapitalScalingEngine:
         # Compute the theoretical dollar size based on risk metrics
         base_size = self.compute_position_size(eff_equity, volatility, drawdown)
         adjusted = base_size * factor
-        # Never exceed the caller's proposed size
-        return min(size, adjusted)
+        # Cap at the requested size to prevent over-leverage
+        return min(adjusted, size)
 
     def compression_factor(self, equity: float) -> float:
         """
@@ -107,17 +109,17 @@ class CapitalScalingEngine:
         scaling.
         """
         try:
-            # bail out if baseline is not set or equity is invalid
-            if self._base is None or equity <= 0:
+            if self._base is None or self._base <= 0:
                 return 1.0
             ratio = equity / self._base
-            # ratio > 1 implies account growth; compress accordingly
-            factor = 1.0 / (1.0 + math.log1p(max(ratio - 1.0, 0.0)))
-            return max(0.1, min(factor, 1.0))
+            factor = math.log(max(ratio, 0.1)) / math.log(2) + 1
+            return max(0.1, min(2.0, factor))
         except Exception:
             return 1.0
 
-    def compute_position_size(self, equity: float, volatility: float, drawdown: float) -> float:
+    def compute_position_size(
+        self, equity: float, volatility: float, drawdown: float
+    ) -> float:
         """
         Compute a dollar position using a fractional Kelly approach.
 
@@ -128,18 +130,19 @@ class CapitalScalingEngine:
 
         Returns ``0`` for invalid inputs.
         """
-        try:
-            base_fraction = 0.05  # starting Kelly fraction
-            if equity <= 0:
-                return 0.0
-            # shrink fraction based on drawdown (capped at 20 %)
-            adjusted_fraction = base_fraction * (1 - min(drawdown / 0.2, 1))
-            # increase exposure when volatility is low; protect when high
-            adjusted_fraction /= max(volatility, 0.01)
-            position_size = equity * adjusted_fraction
-            return max(position_size, 0.0)
-        except Exception:
+        if equity <= 0:
             return 0.0
+
+        # Base allocation (2% of equity)
+        base_allocation = equity * 0.02
+
+        # Volatility adjustment (reduce size in high volatility)
+        vol_adjustment = 1.0 / (1.0 + volatility * 10)
+
+        # Drawdown adjustment (reduce size during drawdowns)
+        dd_adjustment = 1.0 - min(drawdown, 0.5)
+
+        return base_allocation * vol_adjustment * dd_adjustment
 
     def update(self, ctx, equity: float) -> None:
         """
@@ -165,6 +168,11 @@ class CapitalScalingEngine:
             # swallow errors to avoid crashing calling code
             pass
 
+    def update_baseline(self, equity: float) -> None:
+        """Update the baseline equity for compression calculations."""
+        if self._base is None or equity > self._base:
+            self._base = equity
+
 
 def volatility_parity_position(base_risk: float, atr_value: float) -> float:
     """Scale position based on volatility parity, with a non-zero minimum floor."""
@@ -173,7 +181,9 @@ def volatility_parity_position(base_risk: float, atr_value: float) -> float:
     return base_risk / atr_value
 
 
-def dynamic_fractional_kelly(base_fraction: float, drawdown: float, volatility_spike: bool) -> float:
+def dynamic_fractional_kelly(
+    base_fraction: float, drawdown: float, volatility_spike: bool
+) -> float:
     """Adjust Kelly fraction based on drawdown and volatility."""
     adjustment = 1.0
     if drawdown > 0.10:
@@ -184,7 +194,9 @@ def dynamic_fractional_kelly(base_fraction: float, drawdown: float, volatility_s
 
 
 # AI-AGENT-REF: adjust Kelly fraction by current drawdown
-def drawdown_adjusted_kelly(account_value: float, equity_peak: float, raw_kelly: float) -> float:
+def drawdown_adjusted_kelly(
+    account_value: float, equity_peak: float, raw_kelly: float
+) -> float:
     """Scale down kelly fraction during drawdowns."""
     if equity_peak == 0:
         return raw_kelly
@@ -213,7 +225,9 @@ def decay_position(position: float, atr: float, atr_mean: float) -> float:
         return position * 0.9
     return position
 
+
 # AI-AGENT-REF: new capital scaling helpers for risk regimes
+
 
 def fractional_kelly(kelly: float, regime: str = "neutral") -> float:
     """Return Kelly fraction adjusted for market ``regime``."""
@@ -238,13 +252,17 @@ def cvar_scaling(returns: np.ndarray, alpha: float = 0.05) -> float:
     cvar = np.mean(sorted_returns[sorted_returns <= var])
     return abs(cvar) if cvar < 0 else 1.0
 
+
 # ---------------------------------------------------------------------------
 # Backward-compatible helper functions
 # These functions provide legacy aliases for older modules/tests. They
 # delegate to the primary implementations above and should be considered
 # deprecated. Remove them only after confirming nothing references them.
 
-def drawdown_adjusted_kelly_alt(account_value: float, equity_peak: float, raw_kelly: float) -> float:
+
+def drawdown_adjusted_kelly_alt(
+    account_value: float, equity_peak: float, raw_kelly: float
+) -> float:
     """Legacy wrapper for drawdown_adjusted_kelly."""
     return drawdown_adjusted_kelly(account_value, equity_peak, raw_kelly)
 
@@ -269,5 +287,3 @@ __all__ = [
     "drawdown_adjusted_kelly_alt",
     "volatility_parity_position_alt",
 ]
-
-

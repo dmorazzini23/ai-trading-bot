@@ -66,7 +66,9 @@ def compute_features(df: pd.DataFrame | None, window: int = 10) -> np.ndarray:
         if {"high", "low"}.issubset(df.columns):
             high = df["high"].astype(float)
             low = df["low"].astype(float)
-            atr_series = calculate_atr(high, low, close, period=14).fillna(0.0).tail(window)
+            atr_series = (
+                calculate_atr(high, low, close, period=14).fillna(0.0).tail(window)
+            )
         else:
             atr_series = pd.Series(0.0, index=close.index).tail(window)
 
@@ -82,12 +84,14 @@ def compute_features(df: pd.DataFrame | None, window: int = 10) -> np.ndarray:
         # Compute Bollinger band position: normalized between −1 and 1 (close relative to upper/lower bands)
         if {"high", "low"}.issubset(df.columns):
             bb = bollinger_bands(close, length=20, num_std=2.0)
-            bb_upper = bb["bb_upper"].tail(window).fillna(method="bfill")
-            bb_lower = bb["bb_lower"].tail(window).fillna(method="bfill")
-            bb_mid = bb["bb_mid"].tail(window).fillna(method="bfill")
+            bb_upper = bb["upper"].tail(window).fillna(method="bfill")
+            bb_lower = bb["lower"].tail(window).fillna(method="bfill")
+            bb_mid = bb["middle"].tail(window).fillna(method="bfill")
             # Avoid division by zero by adding epsilon to denominator
             bb_range = (bb_upper - bb_lower).replace(0.0, np.nan).fillna(method="bfill")
-            bollinger_pos = ((close.tail(window) - bb_mid) / bb_range).clip(-1.0, 1.0).fillna(0.0)
+            bollinger_pos = (
+                ((close.tail(window) - bb_mid) / bb_range).clip(-1.0, 1.0).fillna(0.0)
+            )
         else:
             bollinger_pos = pd.Series(0.0, index=close.index).tail(window)
 
@@ -107,14 +111,16 @@ def compute_features(df: pd.DataFrame | None, window: int = 10) -> np.ndarray:
             obv_norm = pd.Series(0.0, index=close.index).tail(window)
 
         # Concatenate all series into one feature vector
-        feat = np.concatenate([
-            returns.to_numpy(dtype=np.float32),
-            rsi_series.to_numpy(dtype=np.float32),
-            atr_series.to_numpy(dtype=np.float32),
-            vwap_bias.to_numpy(dtype=np.float32),
-            bollinger_pos.to_numpy(dtype=np.float32),
-            obv_norm.to_numpy(dtype=np.float32),
-        ])
+        feat = np.concatenate(
+            [
+                returns.to_numpy(dtype=np.float32),
+                rsi_series.to_numpy(dtype=np.float32),
+                atr_series.to_numpy(dtype=np.float32),
+                vwap_bias.to_numpy(dtype=np.float32),
+                bollinger_pos.to_numpy(dtype=np.float32),
+                obv_norm.to_numpy(dtype=np.float32),
+            ]
+        )
         if feat.size < total_len:
             feat = np.pad(feat, (0, total_len - feat.size), constant_values=0.0)
         return feat[:total_len]
