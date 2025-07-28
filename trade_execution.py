@@ -1107,6 +1107,7 @@ class ExecutionEngine:
         expected_price: Optional[float],
         slice_qty: int,
         start_time: float,
+        asset_class: str = "equity",
     ) -> int:
         self._flush_partial_buffers()
         status = getattr(order, "status", "")
@@ -1175,6 +1176,23 @@ class ExecutionEngine:
                 order_id,
             )
             filled_qty = actual_qty
+            if getattr(self.ctx, "risk_engine", None):
+                try:
+                    acct = self.api.get_account()
+                    equity = float(getattr(acct, "equity", 0) or 0)
+                    weight = (actual_qty * fill_price) / equity if equity > 0 else 0.0
+                    from strategies import TradeSignal
+                    sig = TradeSignal(
+                        symbol=symbol,
+                        side=side,
+                        confidence=1.0,
+                        strategy="exec",
+                        weight=abs(weight),
+                        asset_class=asset_class,
+                    )
+                    self.ctx.risk_engine.register_fill(sig)
+                except Exception as exc:  # pragma: no cover - best effort
+                    self.logger.debug("register_fill_failed %s", exc)
             if order_id in self._partial_buffer:
                 buf = self._partial_buffer[order_id]
                 add_qty = max(0, slice_qty - buf["qty"])
@@ -1201,6 +1219,23 @@ class ExecutionEngine:
             buf["ts"] = time.monotonic()
             self._flush_partial_buffers()
             filled_qty = part_qty
+            if filled_qty > 0 and getattr(self.ctx, "risk_engine", None):
+                try:
+                    acct = self.api.get_account()
+                    equity = float(getattr(acct, "equity", 0) or 0)
+                    weight = (filled_qty * fill_price) / equity if equity > 0 else 0.0
+                    from strategies import TradeSignal
+                    sig = TradeSignal(
+                        symbol=symbol,
+                        side=side,
+                        confidence=1.0,
+                        strategy="exec",
+                        weight=abs(weight),
+                        asset_class=asset_class,
+                    )
+                    self.ctx.risk_engine.register_fill(sig)
+                except Exception as exc:  # pragma: no cover - best effort
+                    self.logger.debug("register_fill_failed %s", exc)
         elif status in ("pending_new", "new"):
             self.logger.info("Order status for %s: %s", symbol, status)
         elif status in ("rejected", "failed"):
@@ -1229,6 +1264,7 @@ class ExecutionEngine:
         expected_price: Optional[float],
         slice_qty: int,
         start_time: float,
+        asset_class: str = "equity",
     ) -> int:
         """Async variant of :meth:`_handle_order_result`."""
         self._flush_partial_buffers()
@@ -1298,6 +1334,23 @@ class ExecutionEngine:
                 order_id,
             )
             filled_qty = actual_qty
+            if getattr(self.ctx, "risk_engine", None):
+                try:
+                    acct = self.api.get_account()
+                    equity = float(getattr(acct, "equity", 0) or 0)
+                    weight = (actual_qty * fill_price) / equity if equity > 0 else 0.0
+                    from strategies import TradeSignal
+                    sig = TradeSignal(
+                        symbol=symbol,
+                        side=side,
+                        confidence=1.0,
+                        strategy="exec",
+                        weight=abs(weight),
+                        asset_class=asset_class,
+                    )
+                    self.ctx.risk_engine.register_fill(sig)
+                except Exception as exc:  # pragma: no cover - best effort
+                    self.logger.debug("register_fill_failed %s", exc)
             if order_id in self._partial_buffer:
                 buf = self._partial_buffer[order_id]
                 add_qty = max(0, slice_qty - buf["qty"])
@@ -1324,6 +1377,23 @@ class ExecutionEngine:
             buf["ts"] = time.monotonic()
             self._flush_partial_buffers()
             filled_qty = part_qty
+            if filled_qty > 0 and getattr(self.ctx, "risk_engine", None):
+                try:
+                    acct = self.api.get_account()
+                    equity = float(getattr(acct, "equity", 0) or 0)
+                    weight = (filled_qty * fill_price) / equity if equity > 0 else 0.0
+                    from strategies import TradeSignal
+                    sig = TradeSignal(
+                        symbol=symbol,
+                        side=side,
+                        confidence=1.0,
+                        strategy="exec",
+                        weight=abs(weight),
+                        asset_class=asset_class,
+                    )
+                    self.ctx.risk_engine.register_fill(sig)
+                except Exception as exc:  # pragma: no cover - best effort
+                    self.logger.debug("register_fill_failed %s", exc)
         elif status in ("pending_new", "new"):
             self.logger.info("Order status for %s: %s", symbol, status)
         elif status in ("rejected", "failed"):
@@ -1431,7 +1501,7 @@ class ExecutionEngine:
             if order is None:
                 break
             filled = self._handle_order_result(
-                symbol, side, order, expected_price, slice_qty, start
+                symbol, side, order, expected_price, slice_qty, start, asset_class
             )
             if filled > 0:
                 self._seen_orders.add(
@@ -1553,7 +1623,7 @@ class ExecutionEngine:
             if order is None:
                 break
             filled = await self._handle_order_result_async(
-                symbol, side, order, expected_price, slice_qty, start
+                symbol, side, order, expected_price, slice_qty, start, asset_class
             )
             if filled > 0:
                 self._seen_orders.add(

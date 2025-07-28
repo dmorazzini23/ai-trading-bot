@@ -45,6 +45,9 @@ def test_register_and_position_size(monkeypatch):
     assert qty == 10
     eng.register_fill(sig)
     assert eng.exposure["equity"] == sig.weight
+    sell = TradeSignal(symbol="AAPL", side="sell", confidence=1.0, strategy="s", weight=sig.weight)
+    eng.register_fill(sell)
+    assert round(eng.exposure["equity"], 6) == 0
 
 
 def test_check_max_drawdown():

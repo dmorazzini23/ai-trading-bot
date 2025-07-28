@@ -52,6 +52,10 @@ class RiskEngine:
         self._drawdowns: list[float] = []
         self._last_portfolio_cap: float | None = None
         self._last_equity_cap: float | None = None
+        # AI-AGENT-REF: signal exposure updates to trading loop
+        from threading import Event
+        self._update_event = Event()
+        self._last_update = 0.0
         # maximum acceptable drawdown (fraction between 0 and 1)
         try:
             self.max_drawdown_threshold = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.1"))
@@ -128,7 +132,8 @@ class RiskEngine:
                 asset = getattr(p, "asset_class", "equity")
                 qty = float(getattr(p, "qty", 0) or 0)
                 price = float(getattr(p, "avg_entry_price", 0) or 0)
-                weight = abs(qty * price / equity) if equity > 0 else 0.0
+                # AI-AGENT-REF: use signed quantity to track net exposure
+                weight = qty * price / equity if equity > 0 else 0.0
                 exposure[asset] = exposure.get(asset, 0.0) + weight
             self.exposure = exposure
         except Exception as exc:  # pragma: no cover - best effort
@@ -218,6 +223,9 @@ class RiskEngine:
                 "new": self.exposure[signal.asset_class],
             },
         )
+        import time
+        self._last_update = time.monotonic()
+        self._update_event.set()
 
     # ------------------------------------------------------------------
     # Additional risk checks and scaling
@@ -253,6 +261,11 @@ class RiskEngine:
                 self.hard_stop = False
                 self._hard_stop_until = None
                 logger.info("HARD_STOP_CLEARED")
+
+    def wait_for_exposure_update(self, timeout: float = 0.5) -> None:
+        """Block until an exposure update occurs or ``timeout`` elapses."""
+        self._update_event.wait(timeout)
+        self._update_event.clear()
 
     def apply_risk_scaling(
         self,
@@ -310,12 +323,18 @@ class RiskEngine:
     def position_size(
         self, signal: TradeSignal, cash: float, price: float, api=None
     ) -> int:
+        volatility = float(np.std(self._returns[-10:])) if self._returns else 0.0
+        drawdown = abs(min(self._drawdowns)) if self._drawdowns else 0.0
         logger.debug(
-            "Pricing inputs for %s | cash: %.2f, price: %.2f, signal: %s",
-            getattr(signal, "symbol", "N/A"),
-            cash,
-            price,
-            signal,
+            "POSITION_SIZE_START",
+            extra={
+                "symbol": getattr(signal, "symbol", "N/A"),
+                "cash": cash,
+                "price": price,
+                "weight": getattr(signal, "weight", 0.0),
+                "volatility": volatility,
+                "drawdown": drawdown,
+            },
         )
         if self.hard_stop:
             logger.error("HARD_STOP_ACTIVE")
@@ -354,6 +373,14 @@ class RiskEngine:
             return 0
 
         weight = self._apply_weight_limits(signal)
+        logger.debug(
+            "POSITION_WEIGHT",
+            extra={
+                "symbol": signal.symbol,
+                "raw": getattr(signal, "weight", 0.0),
+                "capped": weight,
+            },
+        )
 
         # Compute raw dollars allocated to this trade
         raw_dollars = cash * min(weight, 1.0)
@@ -390,7 +417,12 @@ class RiskEngine:
         except (ZeroDivisionError, OverflowError, TypeError, ValueError) as exc:
             logger.error("position_size division error: %s", exc)
             return 0
-        return max(qty, 0)
+        qty = max(qty, 0)
+        logger.debug(
+            "POSITION_SIZE_RESULT",
+            extra={"symbol": signal.symbol, "qty": qty, "weight": weight},
+        )
+        return qty
 
     def _apply_weight_limits(self, sig: TradeSignal) -> float:
         """Return signal weight limited by remaining capacity."""

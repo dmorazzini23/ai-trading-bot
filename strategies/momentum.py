@@ -17,8 +17,10 @@ class MomentumStrategy(Strategy):
 
     name = "momentum"
 
-    def __init__(self, lookback: int = 20) -> None:
+    def __init__(self, lookback: int = 20, threshold: float | None = None) -> None:
         self.lookback = lookback
+        import os
+        self.threshold = float(os.getenv("MOMENTUM_THRESHOLD", "0.01")) if threshold is None else threshold
 
     def generate(self, ctx) -> List[TradeSignal]:
         signals: List[TradeSignal] = []
@@ -35,7 +37,8 @@ class MomentumStrategy(Strategy):
                 logger.warning("%s: no valid momentum data", sym)
                 continue
             ret = ret_series.iloc[-1]
-            if pd.isna(ret):
+            if pd.isna(ret) or abs(ret) < self.threshold:
+                logger.debug("%s momentum below threshold", sym)
                 continue
             side = "buy" if ret > 0 else "sell"
             signals.append(
