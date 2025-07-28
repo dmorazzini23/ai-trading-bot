@@ -47,10 +47,20 @@ if not TESTING:
 
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]
 if missing_vars:
-    raise RuntimeError(
-        f"Missing required environment variables: {', '.join(missing_vars)}"
-    )
+    if not TESTING:
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing_vars)}")
+    else:
+        logger.warning("Missing environment variables in test mode: %s", missing_vars)
 
+# Validate critical numeric environment variables
+try:
+    if os.getenv('FLASK_PORT'):
+        port = int(os.getenv('FLASK_PORT'))
+        if not (1024 <= port <= 65535):
+            raise ValueError(f'FLASK_PORT must be between 1024 and 65535, got {port}')
+except ValueError as e:
+    if not TESTING:
+        raise RuntimeError(f'Invalid FLASK_PORT: {e}')
 REQUIRED_ENV_VARS = [
     "ALPACA_API_KEY",
     "ALPACA_SECRET_KEY",
@@ -358,4 +368,3 @@ class TradingConfig:
 
 # default trading configuration used across modules
 CONFIG = TradingConfig.from_env()
-

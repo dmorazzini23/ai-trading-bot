@@ -95,21 +95,21 @@ def load_weights(path: str, default: np.ndarray | None = None) -> np.ndarray:
     p = Path(path)
     if default is None:
         default = np.zeros(0)
-    if not p.exists():
-        logger.error("Signal weight file missing: %s", path)
-        if default.size > 0:
-            try:
-                np.savetxt(p, default, delimiter=",")
-                logger.info("Initialized default weights at %s", path)
-            except OSError as exc:
-                logger.exception("Failed initializing default weights: %s", exc)
-        return default
+        
     try:
-        weights = np.loadtxt(p, delimiter=",")
-        return weights
-    except (OSError, ValueError) as exc:
-        logger.exception("Failed to load signal weights: %s", exc)
-        return default
+        if p.exists():
+            with open(p, "rb") as f:
+                weights = pickle.load(f)
+                if isinstance(weights, np.ndarray):
+                    return weights
+                else:
+                    logger.warning("Invalid weights format in %s, using default", path)
+        else:
+            logger.debug("Weights file %s not found, using default", path)
+    except Exception as e:
+        logger.warning("Failed to load weights from %s: %s", path, e)
+        
+    return default
 
 
 def update_weights(
