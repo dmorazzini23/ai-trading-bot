@@ -88,7 +88,11 @@ def atomic_joblib_dump(obj, path: str) -> None:
     import tempfile
 
     dir_name = os.path.dirname(path)
-    os.makedirs(dir_name, exist_ok=True)
+    # Thread-safe directory creation
+    try:
+        os.makedirs(dir_name, exist_ok=True)
+    except FileExistsError:
+        pass  # Another thread created it
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
     os.close(fd)
     try:
@@ -121,30 +125,47 @@ def load_reward_by_band(n: int = 200) -> dict:
         return {}
     return df.groupby("band")["reward"].mean().to_dict()
 
+# (Copy your real implementation from bot.py.)
 
 def fetch_sentiment(symbol: str) -> float:
     """Lightweight sentiment score using NewsAPI headlines."""
     if not NEWS_API_KEY:
+        logger.debug("No NEWS_API_KEY configured, returning neutral sentiment")
         return 0.0
+    
     try:
-        url = f"https://newsapi.org/v2/everything?q={symbol}&pageSize=5&sortBy=publishedAt&apiKey={NEWS_API_KEY}"
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        articles = resp.json().get("articles", [])
+        url = "https://newsapi.org/v2/everything"
+        params = {
+            "q": symbol,
+            "apiKey": NEWS_API_KEY,
+            "pageSize": 10,
+            "sortBy": "publishedAt",
+            "language": "en",
+        }
+        
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        
+        data = response.json()
+        articles = data.get("articles", [])
+        
         if not articles:
             return 0.0
-        score = sum(
-            1 for a in articles if "positive" in (a.get("title") or "").lower()
-        ) / len(articles)
-        return float(score)
+            
+        positive_words = ["up", "rise", "gain", "bull", "positive", "growth", "increase"]
+        negative_words = ["down", "fall", "drop", "bear", "negative", "decline", "decrease"]
+        
+        sentiment_score = 0.0
+        for article in articles:
+            title = article.get("title", "").lower()
+            sentiment_score += sum(1 for word in positive_words if word in title)
+            sentiment_score -= sum(1 for word in negative_words if word in title)
+        
+        return max(-1.0, min(1.0, sentiment_score / max(len(articles), 1)))
+        
     except Exception as e:
-        logger.exception("Failed to fetch sentiment for %s: %s", symbol, e)
+        logger.warning("Failed to fetch sentiment for %s: %s", symbol, e)
         return 0.0
-
-
-##############################################################################
-# Inline `detect_regime` so we don’t import bot.py at module load time.
-# (Copy your real implementation from bot.py.)
 def detect_regime(df: pd.DataFrame) -> str:
     """Simple SMA-based regime detection used by bot and predict scripts."""
     if df is None or df.empty or "close" not in df:

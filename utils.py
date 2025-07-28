@@ -1,6 +1,4 @@
 """Utility functions for common operations across the bot."""
-from logging_config import setup_logging
-setup_logging()
 
 import datetime as dt
 import logging
@@ -103,14 +101,17 @@ _STALE_CACHE: dict[str, tuple[pd.Timestamp, float]] = {}
 
 
 def should_log_stale(symbol: str, last_ts: pd.Timestamp, *, ttl: int = 300) -> bool:
-    """Return True if stale data warning should be emitted."""
-    prev = _STALE_CACHE.get(symbol)
-    now = time.time()
-    if prev and prev[0] == last_ts and now - prev[1] < ttl:
-        return False
-    _STALE_CACHE[symbol] = (last_ts, now)
-    return True
+    """Check if stale data warning should be logged for this symbol."""
+    import time
+    current_time = time.time()
 
+    if symbol in _STALE_CACHE:
+        cached_ts, cached_time = _STALE_CACHE[symbol]
+        if cached_ts == last_ts and (current_time - cached_time) < ttl:
+            return False
+
+    _STALE_CACHE[symbol] = (last_ts, current_time)
+    return True
 
 def backoff_delay(attempt: int, base: float = 1.0, cap: float = 30.0, jitter: float = 0.1) -> float:
     """Return exponential backoff delay with jitter."""

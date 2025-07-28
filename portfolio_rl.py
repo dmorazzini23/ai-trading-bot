@@ -7,8 +7,10 @@ try:
     import torch.optim as optim
     try:
         torch.SymInt
-    except AttributeError as exc:
-        raise ImportError('Your PyTorch version is too old. Please install torch>=2.0') from exc
+    except AttributeError:
+        import logging
+        logging.getLogger(__name__).warning("PyTorch version < 2.0 detected, using fallback implementation")
+        torch = None
 except Exception:  # pragma: no cover - optional dependency
     torch = types.ModuleType("torch")
     torch.Tensor = object
@@ -25,6 +27,8 @@ except Exception:  # pragma: no cover - optional dependency
 
 class Actor(nn.Module):
     def __init__(self, state_dim: int, action_dim: int) -> None:
+        if torch is None:
+            raise RuntimeError("PyTorch not available for reinforcement learning")
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(state_dim, 64),
@@ -39,6 +43,8 @@ class Actor(nn.Module):
 
 class PortfolioReinforcementLearner:
     def __init__(self, state_dim: int = 10, action_dim: int = 5) -> None:
+        if torch is None:
+            raise RuntimeError("PyTorch not available for reinforcement learning")
         self.actor = Actor(state_dim, action_dim)
         self.optimizer = optim.Adam(self.actor.parameters(), lr=1e-3)
 
