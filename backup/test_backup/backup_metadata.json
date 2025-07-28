@@ -1,0 +1,60 @@
+{
+  "name": "test_backup",
+  "timestamp": "2025-07-28 21:05:00.708572+00:00",
+  "path": "backup/test_backup",
+  "files_backed_up": [
+    {
+      "file": "tickers.csv",
+      "size": 26,
+      "checksum": "06f487bc6a322ce7f16bbb080b59790d"
+    },
+    {
+      "file": "trades.csv",
+      "size": 85487,
+      "checksum": "fa20d976fce6173a8325deb406e1a64f"
+    },
+    {
+      "file": "trained_model.pkl",
+      "size": 544793,
+      "checksum": "19635b466373793b49b2b5fd10c97e3c"
+    },
+    {
+      "file": "best_hyperparams.json",
+      "size": 90,
+      "checksum": "0d7efa414de39080e2bef8f3f444fe5b"
+    },
+    {
+      "file": "hyperparams.json",
+      "size": 443,
+      "checksum": "dc579342be2b44421aad1787916fb3c1"
+    },
+    {
+      "file": "config.py",
+      "size": 14215,
+      "checksum": "7d34d3f53757c5ee1685b21a4f53fdf1"
+    },
+    {
+      "file": "config.sample.py",
+      "size": 1808,
+      "checksum": "59ba9d4d4aacf6b0fc0ee0b49a2bb1e9"
+    },
+    {
+      "file": "config_server.py",
+      "size": 1722,
+      "checksum": "f8dab81d760331bdd034b1198d803056"
+    },
+    {
+      "file": "hyperparams.json",
+      "size": 443,
+      "checksum": "dc579342be2b44421aad1787916fb3c1"
+    },
+    {
+      "file": "trades.csv",
+      "size": 85487,
+      "checksum": "fa20d976fce6173a8325deb406e1a64f"
+    }
+  ],
+  "total_size": 797601,
+  "success": true,
+  "files_count": 13
+}
