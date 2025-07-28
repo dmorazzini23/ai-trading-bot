@@ -3,7 +3,7 @@ import os
 import random
 import warnings
 from typing import Any, Dict, Sequence
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -140,8 +140,8 @@ class RiskEngine:
         try:
             if symbol in self._atr_cache:
                 ts, val = self._atr_cache[symbol]
-                from datetime import datetime, timedelta
-                if datetime.now() - ts < timedelta(minutes=30):
+                from datetime import datetime, timedelta, timezone
+                if datetime.now(timezone.utc) - ts < timedelta(minutes=30):
                     return val
 
             if self.data_client is None:
@@ -157,8 +157,8 @@ class RiskEngine:
             tr3 = np.abs(low[1:] - close[:-1])
             tr = np.maximum(tr1, np.maximum(tr2, tr3))
             atr = float(np.mean(tr[-lookback:]))
-            from datetime import datetime
-            self._atr_cache[symbol] = (datetime.now(), atr)
+            from datetime import datetime, timezone
+            self._atr_cache[symbol] = (datetime.now(timezone.utc), atr)
             return atr
         except Exception as exc:
             logger.warning("ATR calculation error for %s: %s", symbol, exc)
