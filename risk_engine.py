@@ -41,8 +41,10 @@ CURRENT_TRADES = 0
 class RiskEngine:
     """Cross-strategy risk manager."""
 
-    def __init__(self, config: config.TradingConfig | None = None) -> None:
-        self.config = config or config.CONFIG
+    def __init__(self, cfg: config.TradingConfig | None = None) -> None:
+        """Initialize the engine with an optional trading config."""
+        # AI-AGENT-REF: fix param shadowing bug when ``config`` is None
+        self.config = cfg if cfg is not None else config.CONFIG
         self.global_limit = self.config.exposure_cap_aggressive
         self.asset_limits: Dict[str, float] = {}
         self.strategy_limits: Dict[str, float] = {}
