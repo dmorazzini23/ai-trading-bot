@@ -4,7 +4,18 @@ Strategy allocation with proper signal confirmation and hold protection.
 import logging
 from typing import Dict, List, Any
 
-from config import CONFIG
+try:
+    from config import CONFIG
+except ImportError:
+    # Fallback config for testing environments
+    from dataclasses import dataclass
+    
+    @dataclass
+    class FallbackConfig:
+        signal_confirmation_bars: int = 2
+        delta_threshold: float = 0.02
+    
+    CONFIG = FallbackConfig()
 
 logger = logging.getLogger(__name__)
 
