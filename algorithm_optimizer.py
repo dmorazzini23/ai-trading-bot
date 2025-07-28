@@ -261,7 +261,7 @@ class AlgorithmOptimizer:
     
     def _get_trading_phase(self) -> TradingPhase:
         """Determine current trading phase based on time."""
-        now = datetime.now().time()
+        now = datetime.now(timezone.utc).time()
         
         # EST trading hours (simplified)
         if now.hour < 9 or (now.hour == 9 and now.minute < 30):

@@ -293,7 +293,7 @@ class DataReplicationManager:
     def create_backup(self, backup_name: Optional[str] = None) -> Dict[str, Any]:
         """Create a full backup of critical data."""
         try:
-            backup_name = backup_name or f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            backup_name = backup_name or f"backup_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
             backup_path = self.backup_dir / backup_name
             backup_path.mkdir(parents=True, exist_ok=True)
             
@@ -422,7 +422,7 @@ class DataReplicationManager:
     def cleanup_old_backups(self):
         """Clean up old backups based on retention policy."""
         try:
-            cutoff_date = datetime.now() - timedelta(days=self.retention_days)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=self.retention_days)
             removed_count = 0
             
             for backup_path in self.backup_dir.iterdir():
