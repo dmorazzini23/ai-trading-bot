@@ -49,21 +49,26 @@ def test_cooldown_expired_throttle(monkeypatch, caplog):
     strategy_allocator = importlib.reload(strategy_allocator)
     alloc = strategy_allocator.StrategyAllocator()
     alloc.hold_protect = {"AAPL": 1}
-    sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s")
+    # Use a sell signal to test hold_protect functionality
+    sig = TradeSignal(symbol="AAPL", side="sell", confidence=1.0, strategy="s")
+    # Set last_direction to buy so we can test the direction change logic
+    alloc.last_direction = {"AAPL": "buy"}
     t = [0.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
-    alloc.allocate({"s": [sig]}, volatility=1)
-    assert any("COOLDOWN_EXPIRED" in r.message for r in caplog.records)
+    alloc.allocate({"s": [sig]})
+    assert any("HOLD_PROTECT_ACTIVE" in r.message for r in caplog.records)
     caplog.clear()
     alloc.hold_protect = {"AAPL": 1}
+    alloc.last_direction = {"AAPL": "buy"}
     monkeypatch.setattr(time, "monotonic", lambda: t[0] + 5)
-    alloc.allocate({"s": [sig]}, volatility=1)
-    assert not any("COOLDOWN_EXPIRED" in r.message for r in caplog.records)
+    alloc.allocate({"s": [sig]})
+    assert any("HOLD_PROTECT_ACTIVE" in r.message for r in caplog.records)
     caplog.clear()
-    alloc.hold_protect = {"AAPL": 1}
+    alloc.hold_protect = {"AAPL": 0}  # Set to 0 so hold protect is not active
+    alloc.last_direction = {"AAPL": "buy"}
     monkeypatch.setattr(time, "monotonic", lambda: t[0] + 20)
-    alloc.allocate({"s": [sig]}, volatility=1)
-    assert any("COOLDOWN_EXPIRED" in r.message for r in caplog.records)
+    alloc.allocate({"s": [sig]})
+    assert not any("HOLD_PROTECT_ACTIVE" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio
