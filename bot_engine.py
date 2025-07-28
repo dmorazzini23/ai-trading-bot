@@ -1008,6 +1008,7 @@ CONF_THRESHOLD = params.get("CONF_THRESHOLD", 0.75)
 CONFIRMATION_COUNT = params.get("CONFIRMATION_COUNT", 2)
 CAPITAL_CAP = params.get("CAPITAL_CAP", 0.08)
 DOLLAR_RISK_LIMIT = float(config.get_env("DOLLAR_RISK_LIMIT", "0.02"))
+BUY_THRESHOLD = params.get("BUY_THRESHOLD", 0.2)
 
 # Validate parameters after loading
 validate_trading_parameters()
@@ -1015,7 +1016,6 @@ validate_trading_parameters()
 PACIFIC = ZoneInfo("America/Los_Angeles")
 PDT_DAY_TRADE_LIMIT = params.get("PDT_DAY_TRADE_LIMIT", 3)
 PDT_EQUITY_THRESHOLD = params.get("PDT_EQUITY_THRESHOLD", 25_000.0)
-BUY_THRESHOLD = params.get("BUY_THRESHOLD", 0.2)
 FINNHUB_RPM = int(config.get_env("FINNHUB_RPM", "60"))
 
 # Regime symbols (makes SPY configurable)
