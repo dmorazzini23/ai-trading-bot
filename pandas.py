@@ -1,6 +1,14 @@
 # Minimal pandas mock for testing
 import datetime
 
+class Timestamp:
+    def __init__(self, *args, **kwargs):
+        pass
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+    def __call__(self, *args, **kwargs):
+        return self
+
 class DataFrame:
     def __init__(self, data=None, index=None, columns=None):
         pass
@@ -34,12 +42,15 @@ def __getattr__(name):
         return DataFrame
     elif name == 'Series':
         return Series
+    elif name == 'Timestamp':
+        return Timestamp
     return lambda *args, **kwargs: None
 
 # Make the module look like pandas
 pd = type('MockPandas', (), {
     'DataFrame': DataFrame,
     'Series': Series,
+    'Timestamp': Timestamp,
     'read_csv': read_csv,
     'read_parquet': read_parquet,
     'concat': concat,
