@@ -2223,16 +2223,18 @@ class TradeLogger:
         self.path = path
         if not os.path.exists(path):
             try:
-                with portalocker.Lock(path, "w", timeout=5) as f:
-                    csv.writer(f).writerow(
-                        [
-                            "symbol",
-                            "entry_time",
-                            "entry_price",
-                            "exit_time",
-                            "exit_price",
-                            "qty",
-                            "side",
+                with open(path, "w") as f:
+                    portalocker.lock(f, portalocker.LOCK_EX)
+                    try:
+                        csv.writer(f).writerow(
+                            [
+                                "symbol",
+                                "entry_time",
+                                "entry_price",
+                                "exit_time",
+                                "exit_price",
+                                "qty",
+                                "side",
                             "strategy",
                             "classification",
                             "signal_tags",
@@ -2240,6 +2242,8 @@ class TradeLogger:
                             "reward",
                         ]
                     )
+                    finally:
+                        portalocker.unlock(f)
             except PermissionError:
                 logger.debug("TradeLogger init path not writable: %s", path)
         if not os.path.exists(REWARD_LOG_FILE):
@@ -2271,68 +2275,76 @@ class TradeLogger:
     ) -> None:
         now_iso = datetime.now(timezone.utc).isoformat()
         try:
-            with portalocker.Lock(self.path, "a", timeout=5) as f:
-                csv.writer(f).writerow(
-                    [
-                        symbol,
-                        now_iso,
-                        price,
-                        "",
-                        "",
-                        qty,
-                        side,
-                        strategy,
-                        "",
-                        signal_tags,
-                        confidence,
-                        "",
-                    ]
-                )
+            with open(self.path, "a") as f:
+                portalocker.lock(f, portalocker.LOCK_EX)
+                try:
+                    csv.writer(f).writerow(
+                        [
+                            symbol,
+                            now_iso,
+                            price,
+                            "",
+                            "",
+                            qty,
+                            side,
+                            strategy,
+                            "",
+                            signal_tags,
+                            confidence,
+                            "",
+                        ]
+                    )
+                finally:
+                    portalocker.unlock(f)
         except PermissionError:
             logger.debug("TradeLogger entry log skipped; path not writable")
 
     def log_exit(self, state: BotState, symbol: str, exit_price: float) -> None:
         try:
-            with portalocker.Lock(self.path, "r+", timeout=5) as f:
-                rows = list(csv.reader(f))
-                header, data = rows[0], rows[1:]
-                pnl = 0.0
-                conf = 0.0
-                for row in data:
-                    if row[0] == symbol and row[3] == "":
-                        entry_t = datetime.fromisoformat(row[1])
-                        days = (datetime.now(timezone.utc) - entry_t).days
-                        cls = (
-                            "day_trade"
-                            if days == 0
-                            else "swing_trade" if days < 5 else "long_trade"
-                        )
-                        row[3], row[4], row[8] = (
-                            datetime.now(timezone.utc).isoformat(),
-                            exit_price,
-                            cls,
-                        )
-                        # Compute PnL
-                        entry_price = float(row[2])
-                        pnl = (exit_price - entry_price) * (
-                            1 if row[6] == "buy" else -1
-                        )
-                        if len(row) >= 11:
-                            try:
-                                conf = float(row[10])
-                            except Exception:
-                                conf = 0.0
-                        if len(row) >= 12:
-                            row[11] = pnl * conf
-                        else:
-                            row.append(conf)
-                            row.append(pnl * conf)
-                        break
-                f.seek(0)
-                f.truncate()
-                w = csv.writer(f)
-                w.writerow(header)
-                w.writerows(data)
+            with open(self.path, "r+") as f:
+                portalocker.lock(f, portalocker.LOCK_EX)
+                try:
+                    rows = list(csv.reader(f))
+                    header, data = rows[0], rows[1:]
+                    pnl = 0.0
+                    conf = 0.0
+                    for row in data:
+                        if row[0] == symbol and row[3] == "":
+                            entry_t = datetime.fromisoformat(row[1])
+                            days = (datetime.now(timezone.utc) - entry_t).days
+                            cls = (
+                                "day_trade"
+                                if days == 0
+                                else "swing_trade" if days < 5 else "long_trade"
+                            )
+                            row[3], row[4], row[8] = (
+                                datetime.now(timezone.utc).isoformat(),
+                                exit_price,
+                                cls,
+                            )
+                            # Compute PnL
+                            entry_price = float(row[2])
+                            pnl = (exit_price - entry_price) * (
+                                1 if row[6] == "buy" else -1
+                            )
+                            if len(row) >= 11:
+                                try:
+                                    conf = float(row[10])
+                                except Exception:
+                                    conf = 0.0
+                            if len(row) >= 12:
+                                row[11] = pnl * conf
+                            else:
+                                row.append(conf)
+                                row.append(pnl * conf)
+                            break
+                    f.seek(0)
+                    f.truncate()
+                    w = csv.writer(f)
+                    w.writerow(header)
+                    w.writerows(data)
+                finally:
+                    portalocker.unlock(f)
         except PermissionError:
             logger.debug("TradeLogger exit log skipped; path not writable")
             return
@@ -3961,16 +3973,20 @@ def fractional_kelly_size(
         # AI-AGENT-REF: adaptive kelly fraction based on historical peak equity
         if os.path.exists(PEAK_EQUITY_FILE):
             try:
-                with portalocker.Lock(PEAK_EQUITY_FILE, "r+") as lock:
+                with open(PEAK_EQUITY_FILE, "r+") as lock:
+                    portalocker.lock(lock, portalocker.LOCK_EX)
                     try:
-                        data = lock.read()
-                    except io.UnsupportedOperation:
-                        logger.warning("Cannot read peak equity file, using current balance")
-                        return 0
-                    prev_peak = float(data) if data else balance
-                    if prev_peak <= 0:
-                        logger.warning("Invalid peak equity %s, using current balance", prev_peak)
-                        prev_peak = balance
+                        try:
+                            data = lock.read()
+                        except io.UnsupportedOperation:
+                            logger.warning("Cannot read peak equity file, using current balance")
+                            return 0
+                        prev_peak = float(data) if data else balance
+                        if prev_peak <= 0:
+                            logger.warning("Invalid peak equity %s, using current balance", prev_peak)
+                            prev_peak = balance
+                    finally:
+                        portalocker.unlock(lock)
             except (OSError, IOError, ValueError) as e:
                 logger.warning("Error reading peak equity file: %s, using current balance", e)
                 prev_peak = balance
@@ -4018,8 +4034,12 @@ def fractional_kelly_size(
             logger.warning("ATR is zero or negative, using minimum position size")
             try:
                 new_peak = max(balance, prev_peak)
-                with portalocker.Lock(PEAK_EQUITY_FILE, "w") as lock:
-                    lock.write(str(new_peak))
+                with open(PEAK_EQUITY_FILE, "w") as lock:
+                    portalocker.lock(lock, portalocker.LOCK_EX)
+                    try:
+                        lock.write(str(new_peak))
+                    finally:
+                        portalocker.unlock(lock)
             except (OSError, IOError) as e:
                 logger.warning("Error updating peak equity file: %s", e)
             return 1
@@ -4042,8 +4062,12 @@ def fractional_kelly_size(
         # Update peak equity
         try:
             new_peak = max(balance, prev_peak)
-            with portalocker.Lock(PEAK_EQUITY_FILE, "w") as lock:
-                lock.write(str(new_peak))
+            with open(PEAK_EQUITY_FILE, "w") as lock:
+                portalocker.lock(lock, portalocker.LOCK_EX)
+                try:
+                    lock.write(str(new_peak))
+                finally:
+                    portalocker.unlock(lock)
         except (OSError, IOError) as e:
             logger.warning("Error updating peak equity file: %s", e)
         
