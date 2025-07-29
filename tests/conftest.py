@@ -6,6 +6,7 @@ os.environ.update({
     "ALPACA_API_KEY": "testkey",
     "ALPACA_SECRET_KEY": "testsecret", 
     "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
+    "ALPACA_DATA_FEED": "iex",
     "WEBHOOK_SECRET": "test-webhook-secret",
     "FLASK_PORT": "9000",
     "TESTING": "1"
