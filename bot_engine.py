@@ -2618,7 +2618,11 @@ async def on_trade_update(event):
     logger.info(f"Trade update for {symbol}: {status}")
 
 
-stream.subscribe_trade_updates(on_trade_update)
+# AI-AGENT-REF: add null check for stream to handle Alpaca unavailable gracefully
+if stream is not None:
+    stream.subscribe_trade_updates(on_trade_update)
+else:
+    logger.info("Trade updates stream not available - running in degraded mode")
 ctx = BotContext(
     api=trading_client,
     data_client=data_client,
