@@ -3294,6 +3294,9 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
 )
 def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
     acct = safe_alpaca_get_account(ctx)
+    if acct is None:
+        logger.warning("Daily loss check skipped - Alpaca account unavailable")
+        return False
     equity = float(acct.equity)
     today_date = date.today()
     limit = params.get("DAILY_LOSS_LIMIT", 0.07)
@@ -3320,6 +3323,9 @@ def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
 def check_weekly_loss(ctx: BotContext, state: BotState) -> bool:
     """Weekly portfolio drawdown guard."""
     acct = safe_alpaca_get_account(ctx)
+    if acct is None:
+        logger.warning("Weekly loss check skipped - Alpaca account unavailable")
+        return False
     equity = float(acct.equity)
     today_date = date.today()
     week_start = today_date - timedelta(days=today_date.weekday())
@@ -6814,7 +6820,8 @@ def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[st
     cancel_all_open_orders(ctx)
     audit_positions(ctx)
     try:
-        equity = float(ctx.api.get_account().equity)
+        acct = safe_alpaca_get_account(ctx)
+        equity = float(acct.equity) if acct else 0.0
     except Exception:
         equity = 0.0
     ctx.capital_scaler.update(ctx, equity)
@@ -6841,8 +6848,13 @@ def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[st
         logger.warning(f"pre_trade_health_check failure: {exc}")
     with portfolio_lock:
         ctx.portfolio_weights = portfolio.compute_portfolio_weights(ctx, symbols)
-    acct = ctx.api.get_account()
-    current_cash = float(getattr(acct, "buying_power", acct.cash))
+    acct = safe_alpaca_get_account(ctx)
+    if acct:
+        current_cash = float(getattr(acct, "buying_power", acct.cash))
+    else:
+        # Fallback for degraded mode when Alpaca is unavailable
+        logger.warning("Alpaca account unavailable - using fallback cash value for degraded mode")
+        current_cash = 10000.0  # Default fallback value for simulation mode
     regime_ok = check_market_regime(state)
     return current_cash, regime_ok, symbols
 
