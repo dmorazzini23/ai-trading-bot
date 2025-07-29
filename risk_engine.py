@@ -448,17 +448,29 @@ class RiskEngine:
             raw_qty = (total_equity * weight) / price
 
         min_qty = self.config.position_size_min_usd / price
-        qty = max(int(raw_qty), int(min_qty)) if raw_qty >= min_qty else 0
+        # Always use the maximum of calculated quantity and minimum requirement
+        qty = max(int(raw_qty), int(min_qty))
         return qty
 
     def _apply_weight_limits(self, sig: TradeSignal) -> float:
-        """Apply confidence-based weight limits."""
-        # Use the signal's weight, respecting asset and strategy limits
+        """Apply confidence-based weight limits considering current exposure."""
+        # Get current exposure levels
+        current_asset_exposure = self.exposure.get(sig.asset_class, 0.0)
+        current_strategy_exposure = self.strategy_exposure.get(sig.strategy, 0.0)
+        
+        # Calculate available capacity
         asset_limit = self.asset_limits.get(sig.asset_class, self.global_limit)
         strategy_limit = self.strategy_limits.get(sig.strategy, self.global_limit)
-        max_allowed = min(asset_limit, strategy_limit)
-        # Apply confidence scaling to the allowed weight, but don't cap by kelly_fraction_max for simple position sizing
-        base_weight = min(sig.weight * sig.confidence, max_allowed)
+        
+        available_asset_capacity = max(0.0, asset_limit - current_asset_exposure)
+        available_strategy_capacity = max(0.0, strategy_limit - current_strategy_exposure)
+        
+        # The maximum weight we can allocate is the minimum of available capacities
+        max_allowed = min(available_asset_capacity, available_strategy_capacity)
+        
+        # Apply confidence scaling to the signal weight, but respect available capacity
+        requested_weight = sig.weight * sig.confidence
+        base_weight = min(requested_weight, max_allowed)
         return base_weight
 
     def compute_volatility(self, returns: np.ndarray) -> dict:
@@ -466,8 +478,17 @@ class RiskEngine:
         if len(returns) == 0:
             return {"volatility": 0.0, "mad": 0.0, "garch_vol": 0.0}
 
-        std_vol = float(np.std(returns))
-        mad = float(np.median(np.abs(returns - np.median(returns))))
+        # Check for invalid values and handle numpy operation errors
+        try:
+            if np.any(np.isnan(returns)) or np.any(np.isinf(returns)):
+                logger.error("compute_volatility: invalid values in returns array")
+                return {"volatility": 0.0, "mad": 0.0, "garch_vol": 0.0}
+            
+            std_vol = float(np.std(returns))
+            mad = float(np.median(np.abs(returns - np.median(returns))))
+        except (ValueError, TypeError, RuntimeError) as exc:
+            logger.error("compute_volatility: error in numpy operations: %s", exc)
+            return {"volatility": 0.0, "mad": 0.0, "garch_vol": 0.0}
 
         try:
             alpha, beta = 0.1, 0.85
