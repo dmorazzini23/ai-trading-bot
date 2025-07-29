@@ -1457,6 +1457,25 @@ class FinnhubFetcherLegacy:
 _last_fh_prefetch_date: Optional[date] = None
 
 
+def safe_get_stock_bars(client, request, symbol: str, context: str = ""):
+    """Safely get stock bars with proper null checking and error handling."""
+    try:
+        response = client.get_stock_bars(request)
+        if response is None:
+            logger.error(f"ALPACA {context} FETCH ERROR for {symbol}: get_stock_bars returned None")
+            return None
+        if not hasattr(response, 'df'):
+            logger.error(f"ALPACA {context} FETCH ERROR for {symbol}: response missing 'df' attribute")
+            return None
+        return response.df
+    except AttributeError as e:
+        logger.error(f"ALPACA {context} FETCH ERROR for {symbol}: AttributeError: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"ALPACA {context} FETCH ERROR for {symbol}: {type(e).__name__}: {e}")
+        return None
+
+
 @dataclass
 class DataFetcher:
     def __post_init__(self):
@@ -1498,7 +1517,9 @@ class DataFetcher:
                 end=end_ts,
                 feed=_DEFAULT_FEED,
             )
-            bars = client.get_stock_bars(req).df
+            bars = safe_get_stock_bars(client, req, symbol, "DAILY")
+            if bars is None:
+                return None
             if isinstance(bars.columns, pd.MultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
@@ -1531,7 +1552,9 @@ class DataFetcher:
                 logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
                     req.feed = "iex"
-                    df_iex = client.get_stock_bars(req).df
+                    df_iex = safe_get_stock_bars(client, req, symbol, "IEX DAILY")
+                    if df_iex is None:
+                        return None
                     if isinstance(df_iex.columns, pd.MultiIndex):
                         df_iex = df_iex.xs(symbol, level=0, axis=1)
                     else:
