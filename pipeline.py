@@ -11,8 +11,12 @@ import config
 try:
     from sklearn.base import BaseEstimator, TransformerMixin
 except ImportError:
-    BaseEstimator = object
-    TransformerMixin = object
+    class BaseEstimator:
+        pass
+    
+    class TransformerMixin:
+        pass
+    
     print("WARNING: sklearn not available, using basic object inheritance")
 
 try:
