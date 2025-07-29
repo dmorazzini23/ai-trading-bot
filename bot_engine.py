@@ -397,9 +397,20 @@ from alpaca.data.timeframe import TimeFrame
 from meta_learning import optimize_signals
 from metrics_logger import log_metrics
 from pipeline import model_pipeline
-from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import BayesianRidge, Ridge
+
+# ML dependencies with graceful error handling
+try:
+    from sklearn.decomposition import PCA
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.linear_model import BayesianRidge, Ridge
+except ImportError:
+    # Provide mock classes for graceful degradation
+    PCA = None
+    RandomForestClassifier = None
+    BayesianRidge = None
+    Ridge = None
+    print("WARNING: sklearn not available, ML features will be disabled")
+
 from utils import log_warning, model_lock, safe_to_datetime
 
 try:

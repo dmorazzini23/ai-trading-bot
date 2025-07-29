@@ -1,7 +1,20 @@
-import numpy as np
+# Core dependencies with graceful error handling
+try:
+    import numpy as np
+except ImportError:
+    print("WARNING: numpy not available in pipeline.py")
+    np = None
 
 import config
-from sklearn.base import BaseEstimator, TransformerMixin
+
+# ML dependencies with graceful error handling
+try:
+    from sklearn.base import BaseEstimator, TransformerMixin
+except ImportError:
+    BaseEstimator = object
+    TransformerMixin = object
+    print("WARNING: sklearn not available, using basic object inheritance")
+
 try:
     from sklearn.linear_model import SGDRegressor
 except Exception:  # pragma: no cover - optional dependency
@@ -15,6 +28,8 @@ except Exception:  # pragma: no cover - optional dependency
             return self
 
         def predict(self, X):
+            if np is None:
+                return [0] * len(X)
             return np.zeros(len(X))
 try:
     from sklearn.pipeline import Pipeline
@@ -43,11 +58,15 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     class StandardScaler:
         def fit(self, X, y=None):
+            if np is None:
+                return self
             self.mean_ = np.mean(X, axis=0)
             self.std_ = np.std(X, axis=0) + 1e-9
             return self
 
         def transform(self, X):
+            if np is None:
+                return X
             return (X - self.mean_) / self.std_
 
 
