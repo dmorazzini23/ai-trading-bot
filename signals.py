@@ -185,9 +185,11 @@ def calculate_macd(
 
 
 def _validate_input_df(data) -> None:
-    if data is None or not isinstance(data, Any):
+    if data is None:
         raise ValueError("Input must be a DataFrame")
-    if "close" not in data.columns:
+    if pd is not None and not isinstance(data, pd.DataFrame):
+        raise ValueError("Input must be a DataFrame")
+    if hasattr(data, 'columns') and "close" not in data.columns:
         raise ValueError("Input data missing 'close' column")
 
 

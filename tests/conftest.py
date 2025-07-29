@@ -87,6 +87,26 @@ except Exception:  # pragma: no cover - optional dependency
     numpy_mod.max = lambda x: max(x) if x else 0
     numpy_mod.isscalar = lambda x: isinstance(x, (int, float, complex))
     numpy_mod.bool_ = bool
+    
+    # Add random module stub
+    class RandomStub:
+        @staticmethod
+        def seed(x):
+            pass
+        @staticmethod
+        def random(*args):
+            return 0.5
+        @staticmethod
+        def randint(*args):
+            return 1
+        @staticmethod
+        def choice(arr):
+            return arr[0] if arr else None
+        @staticmethod
+        def normal(*args):
+            return 0.0
+    
+    numpy_mod.random = RandomStub()
     numpy_mod.__file__ = "stub"
     sys.modules["numpy"] = numpy_mod
     sys.modules["np"] = numpy_mod
@@ -121,7 +141,21 @@ except Exception:  # pragma: no cover - optional dependency
             
         @property 
         def columns(self):
-            return lambda *args, **kwargs: True  # Mock columns check
+            return ["open", "high", "low", "close", "volume"]  # Return actual column names
+            
+        @property
+        def index(self):
+            class IndexStub:
+                dtype = object
+                def get_level_values(self, level):
+                    return [1, 2, 3]
+                def __getitem__(self, idx):
+                    return (1, 2)  # Return a tuple for MultiIndex-like behavior
+            return IndexStub()
+            
+        @property
+        def empty(self):
+            return False
             
         def __getattr__(self, name):
             return lambda *args, **kwargs: self
@@ -157,13 +191,22 @@ except Exception:  # pragma: no cover - optional dependency
     
     def concat(*args, **kwargs):
         return DataFrameStub()
+        
+    def to_datetime(*args, **kwargs):
+        return TimestampStub()
+        
+    class MultiIndex:
+        def __init__(self, *args, **kwargs):
+            pass
 
     pandas_mod.DataFrame = DataFrameStub
     pandas_mod.Timestamp = TimestampStub
     pandas_mod.Series = SeriesStub
+    pandas_mod.MultiIndex = MultiIndex
     pandas_mod.read_csv = read_csv
     pandas_mod.read_parquet = read_parquet
     pandas_mod.concat = concat
+    pandas_mod.to_datetime = to_datetime
     pandas_mod.__file__ = "stub"
     sys.modules["pandas"] = pandas_mod
     sys.modules["pd"] = pandas_mod
@@ -316,6 +359,126 @@ except Exception:  # pragma: no cover - optional dependency
     sys.modules["alpaca_trade_api"] = alpaca_mod
     sys.modules["alpaca_trade_api.rest"] = rest_mod
 
+# AI-AGENT-REF: Add alpaca-py SDK stubs for newer API
+try:
+    from alpaca.common.exceptions import APIError
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    from enum import Enum
+    
+    # Common module
+    common_mod = types.ModuleType("alpaca.common")
+    exceptions_mod = types.ModuleType("alpaca.common.exceptions")
+    
+    class APIError(Exception):
+        pass
+    
+    exceptions_mod.APIError = APIError
+    common_mod.exceptions = exceptions_mod
+    
+    # Data module  
+    data_mod = types.ModuleType("alpaca.data")
+    models_mod = types.ModuleType("alpaca.data.models")
+    requests_mod = types.ModuleType("alpaca.data.requests")
+    
+    class Quote:
+        bid_price = 0
+        ask_price = 0
+    
+    class StockLatestQuoteRequest:
+        def __init__(self, symbol_or_symbols):
+            self.symbols = symbol_or_symbols
+    
+    models_mod.Quote = Quote
+    requests_mod.StockLatestQuoteRequest = StockLatestQuoteRequest
+    data_mod.models = models_mod
+    data_mod.requests = requests_mod
+    
+    # Trading module
+    trading_mod = types.ModuleType("alpaca.trading")
+    client_mod = types.ModuleType("alpaca.trading.client")
+    enums_mod = types.ModuleType("alpaca.trading.enums")
+    trading_models_mod = types.ModuleType("alpaca.trading.models")
+    trading_requests_mod = types.ModuleType("alpaca.trading.requests")
+    
+    class TradingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+    
+    class OrderSide:
+        BUY = "buy"
+        SELL = "sell"
+    
+    class TimeInForce:
+        DAY = "day"
+    
+    class AlpacaOrderClass(str, Enum):
+        SIMPLE = "simple"
+        MLEG = "mleg"
+        BRACKET = "bracket"
+        OCO = "oco"
+        OTO = "oto"
+    
+    class QueryOrderStatus(str, Enum):
+        OPEN = "open"
+        CLOSED = "closed"
+        ALL = "all"
+    
+    class Order(dict):
+        pass
+    
+    class MarketOrderRequest(dict):
+        def __init__(self, symbol, qty, side, time_in_force):
+            super().__init__(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                time_in_force=time_in_force,
+            )
+
+    class LimitOrderRequest(dict):
+        def __init__(self, symbol, qty, side, time_in_force, limit_price):
+            super().__init__(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                time_in_force=time_in_force,
+                limit_price=limit_price,
+            )
+    
+    client_mod.TradingClient = TradingClient
+    enums_mod.OrderSide = OrderSide
+    enums_mod.TimeInForce = TimeInForce
+    enums_mod.OrderClass = AlpacaOrderClass
+    enums_mod.QueryOrderStatus = QueryOrderStatus
+    trading_models_mod.Order = Order
+    trading_requests_mod.LimitOrderRequest = LimitOrderRequest
+    trading_requests_mod.MarketOrderRequest = MarketOrderRequest
+    trading_mod.client = client_mod
+    trading_mod.enums = enums_mod
+    trading_mod.models = trading_models_mod
+    trading_mod.requests = trading_requests_mod
+    
+    # Main alpaca module
+    alpaca_main_mod = types.ModuleType("alpaca")
+    alpaca_main_mod.common = common_mod
+    alpaca_main_mod.data = data_mod
+    alpaca_main_mod.trading = trading_mod
+    
+    sys.modules["alpaca"] = alpaca_main_mod
+    sys.modules["alpaca.common"] = common_mod
+    sys.modules["alpaca.common.exceptions"] = exceptions_mod
+    sys.modules["alpaca.data"] = data_mod
+    sys.modules["alpaca.data.models"] = models_mod
+    sys.modules["alpaca.data.requests"] = requests_mod
+    sys.modules["alpaca.trading"] = trading_mod
+    sys.modules["alpaca.trading.client"] = client_mod
+    sys.modules["alpaca.trading.enums"] = enums_mod
+    sys.modules["alpaca.trading.models"] = trading_models_mod
+    sys.modules["alpaca.trading.requests"] = trading_requests_mod
+
 # AI-AGENT-REF: Add other missing dependencies
 try:
     import psutil
@@ -338,6 +501,149 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     def load_dotenv(*a, **k):
         pass
+
+# AI-AGENT-REF: Add BeautifulSoup stub
+try:
+    from bs4 import BeautifulSoup
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    
+    class BeautifulSoup:
+        def __init__(self, *args, **kwargs):
+            pass
+        
+        def find(self, *args, **kwargs):
+            return None
+        
+        def find_all(self, *args, **kwargs):
+            return []
+        
+        def get_text(self, *args, **kwargs):
+            return ""
+    
+    bs4_mod = types.ModuleType("bs4")
+    bs4_mod.BeautifulSoup = BeautifulSoup
+    bs4_mod.__file__ = "stub"
+    sys.modules["bs4"] = bs4_mod
+
+# AI-AGENT-REF: Add Flask stub
+try:
+    from flask import Flask
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    
+    class Flask:
+        def __init__(self, *args, **kwargs):
+            pass
+        
+        def route(self, *args, **kwargs):
+            def decorator(f):
+                return f
+            return decorator
+        
+        def run(self, *args, **kwargs):
+            pass
+        
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+    
+    flask_mod = types.ModuleType("flask")
+    flask_mod.Flask = Flask
+    flask_mod.request = types.SimpleNamespace()
+    flask_mod.jsonify = lambda x: x
+    flask_mod.__file__ = "stub"
+    sys.modules["flask"] = flask_mod
+
+# AI-AGENT-REF: Add ratelimit stub
+try:
+    from ratelimit import limits, sleep_and_retry
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    
+    def limits(*args, **kwargs):
+        def decorator(f):
+            return f
+        return decorator
+    
+    def sleep_and_retry(f):
+        return f
+    
+    ratelimit_mod = types.ModuleType("ratelimit")
+    ratelimit_mod.limits = limits
+    ratelimit_mod.sleep_and_retry = sleep_and_retry
+    ratelimit_mod.__file__ = "stub"
+    sys.modules["ratelimit"] = ratelimit_mod
+
+# AI-AGENT-REF: Add pybreaker stub
+try:
+    import pybreaker
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    
+    class CircuitBreaker:
+        def __init__(self, *args, **kwargs):
+            pass
+        
+        def __call__(self, func):
+            return func
+        
+        def __enter__(self):
+            return self
+        
+        def __exit__(self, *args):
+            pass
+    
+    pybreaker_mod = types.ModuleType("pybreaker")
+    pybreaker_mod.CircuitBreaker = CircuitBreaker
+    pybreaker_mod.__file__ = "stub"
+    sys.modules["pybreaker"] = pybreaker_mod
+
+# AI-AGENT-REF: Add prometheus_client stub
+try:
+    from prometheus_client import Counter, Gauge, Histogram, start_http_server
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    
+    class Counter:
+        def __init__(self, *args, **kwargs):
+            pass
+        def inc(self, *args, **kwargs):
+            pass
+        def labels(self, *args, **kwargs):
+            return self
+    
+    class Gauge:
+        def __init__(self, *args, **kwargs):
+            pass
+        def set(self, *args, **kwargs):
+            pass
+        def labels(self, *args, **kwargs):
+            return self
+    
+    class Histogram:
+        def __init__(self, *args, **kwargs):
+            pass
+        def observe(self, *args, **kwargs):
+            pass
+        def time(self):
+            return self
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def labels(self, *args, **kwargs):
+            return self
+    
+    def start_http_server(*args, **kwargs):
+        pass
+    
+    prometheus_mod = types.ModuleType("prometheus_client")
+    prometheus_mod.Counter = Counter
+    prometheus_mod.Gauge = Gauge
+    prometheus_mod.Histogram = Histogram
+    prometheus_mod.start_http_server = start_http_server
+    prometheus_mod.__file__ = "stub"
+    sys.modules["prometheus_client"] = prometheus_mod
 
 
 def pytest_configure() -> None:
