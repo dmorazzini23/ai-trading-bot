@@ -262,9 +262,37 @@ class OrderRequest:
     
     def copy(self, **updates) -> 'OrderRequest':
         """Create a copy of the order request with optional updates."""
-        data = self.to_dict()
-        data.update(updates)
-        return OrderRequest(**data)
+        # Copy the original attributes, preserving enums
+        kwargs = {
+            'symbol': self.symbol,
+            'side': self.side,
+            'quantity': self.quantity,
+            'order_type': self.order_type,
+            'price': self.price,
+            'strategy': self.strategy,
+            'time_in_force': self.time_in_force,
+            'client_order_id': self.client_order_id,
+            'stop_price': self.stop_price,
+            'target_price': self.target_price,
+            'min_quantity': self.min_quantity,
+            'max_participation_rate': self.max_participation_rate,
+            'urgency_level': self.urgency_level,
+            'notes': self.notes,
+            'max_slippage_bps': self.max_slippage_bps,
+            'position_size_limit': self.position_size_limit,
+            'source_system': self.source_system
+        }
+        
+        # Apply updates
+        kwargs.update(updates)
+        
+        # Create new instance with potentially new client_order_id
+        if 'client_order_id' not in updates:
+            # Generate a new unique client_order_id for the copy
+            import time
+            kwargs['client_order_id'] = f"req_{int(time.time() * 1000)}"  # Use milliseconds for uniqueness
+        
+        return OrderRequest(**kwargs)
     
     def __str__(self) -> str:
         """String representation of order request."""
