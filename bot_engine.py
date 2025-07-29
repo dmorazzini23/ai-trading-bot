@@ -426,7 +426,10 @@ try:
     try:
         # Test basic functionality that commonly fails in compatibility issues
         test_client = TradingClient.__name__  # Basic attribute access
-        test_enums = (OrderSide.BUY, QueryOrderStatus.OPEN, TimeInForce.DAY)  # Enum access
+        # Test enum access individually to avoid iteration issues in Python 3.12.3
+        test_buy = OrderSide.BUY
+        test_open = QueryOrderStatus.OPEN  
+        test_day = TimeInForce.DAY
         logger.info("Alpaca Trading Client imported successfully")
         logger.debug("Alpaca compatibility check passed for Python %s", sys.version)
     except Exception as compat_error:
@@ -741,6 +744,10 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
 
         def end_cycle(self) -> None:
             self._log("end_cycle")
+
+        def check_trailing_stops(self) -> None:
+            """Stub method for trailing stops check - used when real execution engine unavailable."""
+            self._log("check_trailing_stops")
 
 
 try:
@@ -7495,7 +7502,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 logger.warning(f"SUMMARY_FAIL: {exc}")
             try:
                 acct = ctx.api.get_account()
-                pnl = float(acct.equity) - float(acct.last_equity)
+                # Handle case where account object might not have last_equity attribute
+                last_equity = getattr(acct, 'last_equity', acct.equity)
+                pnl = float(acct.equity) - float(last_equity)
                 logger.info(
                     "LOOP_PNL",
                     extra={

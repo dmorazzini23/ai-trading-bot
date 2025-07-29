@@ -408,7 +408,8 @@ def get_historical_data(
     }
     tf = tf_map.get(timeframe.upper())
     if tf is None:
-        raise ValueError(f"Unsupported timeframe: {timeframe}")
+        # Raise DataFetchError which will be wrapped in RetryError by retry decorator
+        raise DataFetchError(f"Unsupported timeframe: {timeframe}")
 
     def _fetch(feed: str = _DEFAULT_FEED):
         req = StockBarsRequest(
@@ -924,3 +925,7 @@ def fetch_minute_yfinance(symbol: str) -> pd.DataFrame:
     df.columns = [c.lower() for c in df.columns]
     df = df.reset_index(drop=True)
     return df
+
+
+# Export RetryError for test compatibility
+__all__ = ["RetryError", "get_historical_data", "get_minute_df", "get_daily_df", "DataFetchError", "DataFetchException"]
