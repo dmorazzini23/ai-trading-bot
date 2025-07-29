@@ -448,6 +448,10 @@ except Exception as e:
     class MockTradingStream:
         def __init__(self, *args, **kwargs):
             pass
+        
+        def subscribe_trade_updates(self, callback):
+            """Mock method for subscribe_trade_updates"""
+            pass
     
     Order = MockOrder
     GetOrdersRequest = MockRequest

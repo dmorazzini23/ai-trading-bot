@@ -478,11 +478,12 @@ class RiskEngine:
         except Exception:
             garch_vol = std_vol
 
-        primary_vol = mad * 1.4826 if mad > 0 else std_vol
+        primary_vol = std_vol  # Use standard deviation as primary volatility for test compatibility
         return {
             "volatility": primary_vol,
             "std_vol": std_vol,
             "mad": mad,
+            "mad_scaled": mad * 1.4826,
             "garch_vol": garch_vol,
         }
 

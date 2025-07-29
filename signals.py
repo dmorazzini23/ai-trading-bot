@@ -123,7 +123,7 @@ def _compute_macd_df(
     macd_line = fast_ema - slow_ema
     signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
     histogram = macd_line - signal_line
-    return Any(
+    return pd.DataFrame(
         {"macd": macd_line, "signal": signal_line, "histogram": histogram}
     )
 
@@ -135,7 +135,7 @@ def _cached_macd(
     slow_period: int,
     signal_period: int,
 ) -> Optional[Any]:
-    series = Any(prices_tuple)
+    series = pd.Series(prices_tuple)
     return _compute_macd_df(series, fast_period, slow_period, signal_period)
 
 
@@ -274,19 +274,19 @@ def prepare_indicators_parallel(
 def generate_signal(df, column: str) -> Any:
     if df is None or df.empty:
         logger.error("Dataframe is None or empty in generate_signal")
-        return Any(dtype=float)
+        return pd.Series(dtype=float)
 
     if column not in df.columns:
         logger.error("Required column '%s' not found in dataframe", column)
-        return Any(dtype=float)
+        return pd.Series(dtype=float)
 
     try:
         values = df[column].to_numpy()
         signal = np.sign(values)
-        return Any(signal, index=df.index).fillna(0).astype(int)
+        return pd.Series(signal, index=df.index).fillna(0).astype(int)
     except (ValueError, TypeError) as exc:
         logger.error("Exception generating signal: %s", exc, exc_info=True)
-        return Any(dtype=float)
+        return pd.Series(dtype=float)
 
 
 def detect_market_regime_hmm(
@@ -339,15 +339,15 @@ def compute_signal_matrix(df) -> Optional[Any]:
     """Return a matrix of z-scored indicator signals."""
 
     if df is None or df.empty:
-        return Any()
+        return pd.DataFrame()
     global _LAST_SIGNAL_BAR, _LAST_SIGNAL_MATRIX
     last_bar = df.index[-1] if not df.empty else None
     if last_bar is not None and last_bar == _LAST_SIGNAL_BAR:
         # AI-AGENT-REF: reuse previously computed indicators for same bar
-        return _LAST_SIGNAL_MATRIX.copy() if _LAST_SIGNAL_MATRIX is not None else Any()
+        return _LAST_SIGNAL_MATRIX.copy() if _LAST_SIGNAL_MATRIX is not None else pd.DataFrame()
     required = {"close", "high", "low"}
     if not required.issubset(df.columns):
-        return Any()
+        return pd.DataFrame()
 
     macd_df = calculate_macd(df["close"])
     rsi_series = rsi(tuple(df["close"].fillna(method="ffill").astype(float)), 14)
@@ -359,7 +359,7 @@ def compute_signal_matrix(df) -> Optional[Any]:
     def _z(series) -> Any:
         return (series - series.rolling(20).mean()) / series.rolling(20).std(ddof=0)
 
-    matrix = Any(index=df.index)
+    matrix = pd.DataFrame(index=df.index)
     if macd_df is not None and not macd_df.empty:
         matrix["macd"] = _z(macd_df["macd"])
     matrix["rsi"] = _z(rsi_series)
@@ -376,30 +376,30 @@ def ensemble_vote_signals(signal_matrix) -> Any:
     """Return voting-based entry signals from ``signal_matrix``."""
 
     if signal_matrix is None or signal_matrix.empty:
-        return Any(dtype=int)
+        return pd.Series(dtype=int)
     pos = (signal_matrix > 0.5).sum(axis=1)
     neg = (signal_matrix < -0.5).sum(axis=1)
     votes = np.where(pos >= 2, 1, np.where(neg >= 2, -1, 0))
-    return Any(votes, index=signal_matrix.index)
+    return pd.Series(votes, index=signal_matrix.index)
 
 
 def classify_regime(df, window: int = 20) -> Any:
     """Classify each row as 'trend' or 'mean_revert' based on volatility."""
 
     if df is None or df.empty or "close" not in df:
-        return Any(dtype=object)
+        return pd.Series(dtype=object)
     returns = df["close"].pct_change()
     vol = returns.rolling(window).std()
     med = vol.rolling(window).median()
     dev = vol.rolling(window).std()
     regime = np.where(vol > med + dev, "trend", "mean_revert")
-    return Any(regime, index=df.index)
+    return pd.Series(regime, index=df.index)
 
 
 # AI-AGENT-REF: ensemble decision using multiple indicator columns
 def generate_ensemble_signal(df) -> int:
     def last(col: str) -> float:
-        s = df.get(col, Any(dtype=float))
+        s = df.get(col, pd.Series(dtype=float))
         return s.iloc[-1] if not s.empty else np.nan
 
     signals = []

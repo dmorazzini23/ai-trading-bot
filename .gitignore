@@ -24,6 +24,10 @@ logs/
 slippage.csv
 reward_log.csv
 
+# Test and hypothesis cache
+.hypothesis/
+.pytest_cache/
+
 # Generated data files
 =*                     # e.g. “=0.29.36”
 cache_*.csv
