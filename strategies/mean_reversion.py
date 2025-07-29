@@ -54,7 +54,8 @@ class MeanReversionStrategy(Strategy):
                 logger.warning("%s: invalid rolling statistics", sym)  # AI-AGENT-REF: clarify log message
                 continue
             scores[sym] = float(z)
-            if z > self.z and prev > self.z:
+            # AI-AGENT-REF: Fix mean reversion logic to match expected behavior - only check current z-score
+            if z > self.z:
                 signals.append(
                     TradeSignal(
                         symbol=sym,
@@ -64,7 +65,7 @@ class MeanReversionStrategy(Strategy):
                         asset_class=asset_class_for(sym),
                     )
                 )
-            elif z < -self.z and prev < -self.z:
+            elif z < -self.z:
                 signals.append(
                     TradeSignal(
                         symbol=sym,
