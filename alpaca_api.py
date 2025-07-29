@@ -359,8 +359,22 @@ def fetch_bars(
     end: str | None = None,
 ) -> pd.DataFrame:
     """Return OHLCV bars ``DataFrame`` from Alpaca REST API."""
-
-    bars_df = api.get_bars(symbols, timeframe, start=start, end=end).df
+    
+    try:
+        bars_response = api.get_bars(symbols, timeframe, start=start, end=end)
+        if bars_response is None:
+            logger.warning("Alpaca get_bars returned None for symbols: %s", symbols)
+            return pd.DataFrame()
+        if not hasattr(bars_response, 'df'):
+            logger.warning("Alpaca get_bars response missing 'df' attribute for symbols: %s", symbols)
+            return pd.DataFrame()
+        bars_df = bars_response.df
+    except AttributeError as e:
+        logger.error("ALPACA BARS FETCH ERROR for %s: AttributeError: %s", symbols, e)
+        return pd.DataFrame()
+    except Exception as e:
+        logger.error("ALPACA BARS FETCH ERROR for %s: %s: %s", symbols, type(e).__name__, e)
+        return pd.DataFrame()
 
     if bars_df is None or bars_df.empty:
         logger.warning("No data received for symbols: %s", symbols)

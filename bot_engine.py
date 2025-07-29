@@ -1664,7 +1664,9 @@ class DataFetcher:
                 end=last_closed_minute,
                 feed=_DEFAULT_FEED,
             )
-            bars = client.get_stock_bars(req).df
+            bars = safe_get_stock_bars(client, req, symbol, "MINUTE")
+            if bars is None:
+                return None
             if isinstance(bars.columns, pd.MultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
@@ -1700,7 +1702,9 @@ class DataFetcher:
                 logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
                     req.feed = "iex"
-                    df_iex = client.get_stock_bars(req).df
+                    df_iex = safe_get_stock_bars(client, req, symbol, "IEX MINUTE")
+                    if df_iex is None:
+                        return None
                     if isinstance(df_iex.columns, pd.MultiIndex):
                         df_iex = df_iex.xs(symbol, level=0, axis=1)
                     else:
@@ -1773,7 +1777,9 @@ class DataFetcher:
                     feed=_DEFAULT_FEED,
                 )
                 try:
-                    bars_day = ctx.data_client.get_stock_bars(bars_req).df
+                    bars_day = safe_get_stock_bars(ctx.data_client, bars_req, symbol, "INTRADAY")
+                    if bars_day is None:
+                        return []
                 except APIError as e:
                     if (
                         "subscription does not permit" in str(e).lower()
@@ -1790,7 +1796,9 @@ class DataFetcher:
                             e,
                         )
                         bars_req.feed = "iex"
-                        bars_day = ctx.data_client.get_stock_bars(bars_req).df
+                        bars_day = safe_get_stock_bars(ctx.data_client, bars_req, symbol, "IEX INTRADAY")
+                        if bars_day is None:
+                            return []
                     else:
                         raise
                 if isinstance(bars_day.columns, pd.MultiIndex):
@@ -1858,7 +1866,9 @@ def prefetch_daily_data(
             end=end_date,
             feed=_DEFAULT_FEED,
         )
-        bars = client.get_stock_bars(req).df
+        bars = safe_get_stock_bars(client, req, str(symbols), "BULK DAILY")
+        if bars is None:
+            return {}
         if isinstance(bars.columns, pd.MultiIndex):
             grouped_raw = {
                 sym: bars.xs(sym, level=0, axis=1)
@@ -1888,7 +1898,9 @@ def prefetch_daily_data(
             logger.info(f"ATTEMPTING IEX-DELAYERED BULK FETCH FOR {symbols}")
             try:
                 req.feed = "iex"
-                bars_iex = client.get_stock_bars(req).df
+                bars_iex = safe_get_stock_bars(client, req, str(symbols), "IEX BULK DAILY")
+                if bars_iex is None:
+                    return {}
                 if isinstance(bars_iex.columns, pd.MultiIndex):
                     grouped_raw = {
                         sym: bars_iex.xs(sym, level=0, axis=1)
@@ -1923,7 +1935,9 @@ def prefetch_daily_data(
                             end=end_date,
                             feed=_DEFAULT_FEED,
                         )
-                        df_sym = client.get_stock_bars(req_sym).df
+                        df_sym = safe_get_stock_bars(client, req_sym, sym, "FALLBACK DAILY")
+                        if df_sym is None:
+                            continue
                         df_sym = df_sym.drop(columns=["symbol"], errors="ignore")
                         try:
                             idx = safe_to_datetime(
@@ -5870,7 +5884,16 @@ else:
                 'volume': [1000] * 100,
             })
         else:
-            bars = ctx.data_client.get_stock_bars(bars_req).df
+            bars = safe_get_stock_bars(ctx.data_client, bars_req, "SPY", "REGIME")
+            if bars is None:
+                logger.warning("Data client returned None, using mock regime data")
+                bars = pd.DataFrame({
+                    'close': [100.0] * 100,
+                    'open': [99.0] * 100,
+                    'high': [101.0] * 100,
+                    'low': [98.0] * 100,
+                    'volume': [1000] * 100,
+                })
     except APIError as e:
         if "subscription does not permit" in str(e).lower() and _DEFAULT_FEED != "iex":
             logger.warning(
@@ -5887,7 +5910,16 @@ else:
                     'volume': [1000] * 100,
                 })
             else:
-                bars = ctx.data_client.get_stock_bars(bars_req).df
+                bars = safe_get_stock_bars(ctx.data_client, bars_req, "SPY", "IEX REGIME")
+                if bars is None:
+                    logger.warning("IEX data client returned None, using mock data")
+                    bars = pd.DataFrame({
+                        'close': [100.0] * 100,
+                        'open': [99.0] * 100,
+                        'high': [101.0] * 100,
+                        'low': [98.0] * 100,
+                        'volume': [1000] * 100,
+                    })
         else:
             raise
     # 1) If columns are (symbol, field), select our one symbol

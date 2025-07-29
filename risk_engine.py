@@ -448,7 +448,8 @@ class RiskEngine:
             raw_qty = (total_equity * weight) / price
 
         min_qty = self.config.position_size_min_usd / price
-        qty = max(int(raw_qty), int(min_qty)) if raw_qty >= min_qty else 0
+        # Always use the maximum of calculated quantity and minimum requirement
+        qty = max(int(raw_qty), int(min_qty))
         return qty
 
     def _apply_weight_limits(self, sig: TradeSignal) -> float:
