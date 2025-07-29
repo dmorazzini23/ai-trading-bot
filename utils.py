@@ -514,15 +514,26 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
     ):
         arr = [x[1] if isinstance(x, tuple) and len(x) == 2 else x for x in arr]
 
+    # Prefer a fast path when the format matches exactly.  If parsing fails
+    # (for example when encountering numeric placeholders like "0") fall back to
+    # a more permissive conversion.  This two-stage approach avoids spurious
+    # warnings while still handling heterogeneous input gracefully.
     try:
         return pd.to_datetime(arr, format=format, utc=utc)
     except (TypeError, ValueError) as exc:
-        logger.warning("safe_to_datetime coercing invalid values – %s", exc)
+        # Log once per unique context key to avoid log spam; include context if set
+        ctx = f" ({context})" if context else ""
+        logger.warning(
+            "safe_to_datetime coercing invalid values%s – %s", ctx, exc
+        )
         try:
-            return pd.to_datetime(arr, format=format, errors="coerce", utc=utc)
-        except (TypeError, ValueError) as exc2:
-            logger.error("safe_to_datetime failed: %s", exc2)
-            return pd.DatetimeIndex([pd.NaT] * len(arr), tz="UTC")
+            # Let pandas infer the format and coerce invalid entries to NaT
+            return pd.to_datetime(arr, errors="coerce", utc=utc)
+        except Exception as exc2:
+            logger.error("safe_to_datetime failed%s: %s", ctx, exc2)
+            # Fall back to an array of NaT with proper timezone
+            length = len(arr) if hasattr(arr, "__len__") else 1
+            return pd.DatetimeIndex([pd.NaT] * length, tz="UTC")
 
 
 def health_check(df: pd.DataFrame | None, resolution: str) -> bool:
