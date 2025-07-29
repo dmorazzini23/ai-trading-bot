@@ -1,0 +1,4 @@
+# file: /home/runner/work/ai-trading-bot/ai-trading-bot/strategies/mean_reversion.py
+# hypothesis_version: 6.136.6
+
+[0.75, 'STRATEGY', 'buy', 'close', 'mean_reversion', 'sell', 'tickers']

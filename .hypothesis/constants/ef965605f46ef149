@@ -1,0 +1,4 @@
+# file: /usr/lib/python3/dist-packages/dateutil/tz/_common.py
+# hypothesis_version: 6.136.6
+
+['%s(...)', 'day', 'enfold', 'fold', 'hour', 'microsecond', 'minute', 'month', 'second', 'tzinfo', 'tzname_in_python2', 'year']

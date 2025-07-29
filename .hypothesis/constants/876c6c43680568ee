@@ -1,0 +1,4 @@
+# file: /home/runner/work/ai-trading-bot/ai-trading-bot/indicators.py
+# hypothesis_version: 6.136.6
+
+[0.0, 1e-09, 1.0, 1.5, 2.0, 100.0, 100, 128, 200, 10000, 'BollingerWidth', 'ICS_26', 'IKS_26', 'ISA_26', 'ISB_52', 'ITS_9', 'LB', 'MB', 'STD', 'UB', 'atr', 'bollinger_bands', 'calculate_atr', 'calculate_macd', 'calculate_vwap', 'close', 'compute_atr', 'compute_bollinger', 'compute_ema', 'compute_sma', 'donchian_channel', 'ema', 'get_rsi_signal', 'get_vwap_bias', 'high', 'hurst_exponent', 'ichimoku_fallback', 'low', 'lower', 'middle', 'obv', 'rsi', 'rsi_numba', 'sma', 'stochastic_rsi', 'upper', 'vwap']

@@ -1,0 +1,4 @@
+# file: /home/runner/work/ai-trading-bot/ai-trading-bot/signals.py
+# hypothesis_version: 6.136.6
+
+[-0.5, 0.0, 0.001, 0.5, 1.0, 128, 1000, 'Close', 'DISABLE_PARQUET', 'EMA_20', 'EMA_5', 'LB', 'Regime', 'SMA_200', 'SMA_50', 'UB', 'all', 'atr_move', 'close', 'columns', 'diag', 'ffill', 'high', 'histogram', 'low', 'macd', 'mean_rev_z', 'mean_revert', 'pyarrow', 'regime', 'rsi', 'signal', 'sma_diff', 'trend']
