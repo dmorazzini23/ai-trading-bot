@@ -8,7 +8,7 @@ real-time monitoring, and advanced risk management capabilities.
 import asyncio
 import time
 from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 # Use the centralized logger as per AGENTS.md
@@ -27,6 +27,282 @@ from ..risk import (
     RiskManager
 )
 from ..monitoring import AlertManager, AlertSeverity
+
+
+class ExecutionResult:
+    """
+    Execution result class for tracking order execution outcomes.
+    
+    Provides comprehensive tracking of execution status, order details,
+    execution timestamp, and any error messages or metadata.
+    """
+    
+    def __init__(self, status: str, order_id: str, symbol: str, 
+                 side: Optional[str] = None, quantity: Optional[int] = None,
+                 fill_price: Optional[float] = None, message: str = "",
+                 execution_time: Optional[datetime] = None, **kwargs):
+        """Initialize execution result."""
+        # AI-AGENT-REF: Execution result tracking for order outcomes
+        self.status = status  # success, failed, rejected, etc.
+        self.order_id = order_id
+        self.symbol = symbol
+        self.side = side
+        self.quantity = quantity
+        self.fill_price = fill_price
+        self.message = message
+        self.execution_time = execution_time or datetime.now()
+        
+        # Additional metadata
+        self.actual_slippage_bps = kwargs.get("actual_slippage_bps", 0.0)
+        self.execution_time_ms = kwargs.get("execution_time_ms", 0.0)
+        self.notional_value = kwargs.get("notional_value", 0.0)
+        self.error_code = kwargs.get("error_code")
+        self.venue = kwargs.get("venue", "simulation")
+        
+        # Track timestamp using UTC as per AGENTS.md
+        self.timestamp = datetime.now(timezone.utc)
+        
+        logger.debug(f"ExecutionResult created: {self.status} for order {self.order_id}")
+    
+    @property
+    def is_successful(self) -> bool:
+        """Check if execution was successful."""
+        return self.status.lower() == "success"
+    
+    @property
+    def is_failed(self) -> bool:
+        """Check if execution failed."""
+        return self.status.lower() in ["failed", "error", "rejected"]
+    
+    @property
+    def is_partial(self) -> bool:
+        """Check if execution was partial."""
+        return self.status.lower() in ["partial", "partially_filled"]
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert execution result to dictionary representation."""
+        return {
+            "status": self.status,
+            "order_id": self.order_id,
+            "symbol": self.symbol,
+            "side": self.side,
+            "quantity": self.quantity,
+            "fill_price": self.fill_price,
+            "message": self.message,
+            "execution_time": self.execution_time.isoformat() if self.execution_time else None,
+            "timestamp": self.timestamp.isoformat(),
+            "actual_slippage_bps": self.actual_slippage_bps,
+            "execution_time_ms": self.execution_time_ms,
+            "notional_value": self.notional_value,
+            "error_code": self.error_code,
+            "venue": self.venue,
+            "is_successful": self.is_successful,
+            "is_failed": self.is_failed,
+            "is_partial": self.is_partial
+        }
+    
+    def __str__(self) -> str:
+        """String representation of execution result."""
+        return f"ExecutionResult({self.status}: {self.order_id} {self.symbol})"
+    
+    def __repr__(self) -> str:
+        """Detailed string representation."""
+        return (f"ExecutionResult(status='{self.status}', order_id='{self.order_id}', "
+                f"symbol='{self.symbol}', quantity={self.quantity}, "
+                f"fill_price={self.fill_price})")
+
+
+class OrderRequest:
+    """
+    Order request class for encapsulating order parameters with validation.
+    
+    Provides order parameter validation, serialization capabilities for API requests,
+    and integration with the existing execution system.
+    """
+    
+    def __init__(self, symbol: str, side: OrderSide, quantity: int,
+                 order_type: OrderType = OrderType.MARKET, price: Optional[float] = None,
+                 strategy: str = "unknown", time_in_force: str = "DAY", **kwargs):
+        """Initialize order request with validation."""
+        # AI-AGENT-REF: Order request with validation and serialization
+        self.symbol = symbol.upper() if symbol else ""
+        self.side = side
+        self.quantity = quantity
+        self.order_type = order_type
+        self.price = price
+        self.strategy = strategy
+        self.time_in_force = time_in_force
+        
+        # Additional parameters
+        self.client_order_id = kwargs.get("client_order_id", f"req_{int(time.time())}")
+        self.stop_price = kwargs.get("stop_price")
+        self.target_price = kwargs.get("target_price")
+        self.min_quantity = kwargs.get("min_quantity", 0)
+        self.max_participation_rate = kwargs.get("max_participation_rate", 0.1)
+        self.urgency_level = kwargs.get("urgency_level", "normal")
+        self.notes = kwargs.get("notes", "")
+        
+        # Risk parameters
+        self.max_slippage_bps = kwargs.get("max_slippage_bps", 50)
+        self.position_size_limit = kwargs.get("position_size_limit")
+        
+        # Metadata
+        self.created_at = datetime.now(timezone.utc)
+        self.source_system = kwargs.get("source_system", "ai_trading")
+        self.request_id = kwargs.get("request_id", f"req_{self.created_at.strftime('%Y%m%d_%H%M%S')}")
+        
+        # Validate the request upon creation
+        self._validation_errors = []
+        self._is_valid = self._validate()
+        
+        logger.debug(f"OrderRequest created: {self.side} {self.quantity} {self.symbol}")
+    
+    def _validate(self) -> bool:
+        """Validate order request parameters."""
+        self._validation_errors = []
+        
+        # Symbol validation
+        if not self.symbol or len(self.symbol) < 1:
+            self._validation_errors.append("Symbol is required and cannot be empty")
+        
+        # Quantity validation
+        if self.quantity <= 0:
+            self._validation_errors.append("Quantity must be positive")
+        
+        if self.quantity > 1000000:  # Reasonable upper limit
+            self._validation_errors.append("Quantity exceeds maximum limit")
+        
+        # Side validation
+        if not isinstance(self.side, OrderSide):
+            self._validation_errors.append("Side must be a valid OrderSide enum")
+        
+        # Order type validation
+        if not isinstance(self.order_type, OrderType):
+            self._validation_errors.append("Order type must be a valid OrderType enum")
+        
+        # Price validation for limit orders
+        if self.order_type == OrderType.LIMIT:
+            if not self.price or self.price <= 0:
+                self._validation_errors.append("Limit orders require a valid price")
+        
+        # Stop price validation
+        if self.order_type in [OrderType.STOP, OrderType.STOP_LIMIT]:
+            if not self.stop_price or self.stop_price <= 0:
+                self._validation_errors.append("Stop orders require a valid stop price")
+        
+        # Risk parameter validation
+        if self.max_slippage_bps < 0 or self.max_slippage_bps > 1000:
+            self._validation_errors.append("Max slippage must be between 0 and 1000 basis points")
+        
+        if self.max_participation_rate <= 0 or self.max_participation_rate > 1:
+            self._validation_errors.append("Max participation rate must be between 0 and 1")
+        
+        return len(self._validation_errors) == 0
+    
+    @property
+    def is_valid(self) -> bool:
+        """Check if order request is valid."""
+        return self._is_valid
+    
+    @property
+    def validation_errors(self) -> List[str]:
+        """Get validation errors."""
+        return self._validation_errors.copy()
+    
+    @property
+    def notional_value(self) -> float:
+        """Calculate notional value of the order."""
+        price = self.price or 100.0  # Default price for market orders
+        return abs(self.quantity * price)
+    
+    def validate(self) -> Tuple[bool, List[str]]:
+        """Validate order request and return result with errors."""
+        self._is_valid = self._validate()
+        return self._is_valid, self.validation_errors
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert order request to dictionary for API serialization."""
+        return {
+            "symbol": self.symbol,
+            "side": self.side.value if isinstance(self.side, OrderSide) else self.side,
+            "quantity": self.quantity,
+            "order_type": self.order_type.value if isinstance(self.order_type, OrderType) else self.order_type,
+            "price": self.price,
+            "stop_price": self.stop_price,
+            "target_price": self.target_price,
+            "time_in_force": self.time_in_force,
+            "client_order_id": self.client_order_id,
+            "strategy": self.strategy,
+            "min_quantity": self.min_quantity,
+            "max_participation_rate": self.max_participation_rate,
+            "urgency_level": self.urgency_level,
+            "max_slippage_bps": self.max_slippage_bps,
+            "notes": self.notes,
+            "created_at": self.created_at.isoformat(),
+            "source_system": self.source_system,
+            "request_id": self.request_id,
+            "notional_value": self.notional_value,
+            "is_valid": self.is_valid
+        }
+    
+    def to_api_request(self, broker_format: str = "alpaca") -> Dict[str, Any]:
+        """Convert to broker-specific API request format."""
+        if broker_format.lower() == "alpaca":
+            return {
+                "symbol": self.symbol,
+                "side": self.side.value,
+                "type": self.order_type.value,
+                "qty": str(self.quantity),
+                "time_in_force": self.time_in_force,
+                "client_order_id": self.client_order_id
+            }
+        else:
+            # Generic format
+            return self.to_dict()
+    
+    def copy(self, **updates) -> 'OrderRequest':
+        """Create a copy of the order request with optional updates."""
+        # Copy the original attributes, preserving enums
+        kwargs = {
+            'symbol': self.symbol,
+            'side': self.side,
+            'quantity': self.quantity,
+            'order_type': self.order_type,
+            'price': self.price,
+            'strategy': self.strategy,
+            'time_in_force': self.time_in_force,
+            'client_order_id': self.client_order_id,
+            'stop_price': self.stop_price,
+            'target_price': self.target_price,
+            'min_quantity': self.min_quantity,
+            'max_participation_rate': self.max_participation_rate,
+            'urgency_level': self.urgency_level,
+            'notes': self.notes,
+            'max_slippage_bps': self.max_slippage_bps,
+            'position_size_limit': self.position_size_limit,
+            'source_system': self.source_system
+        }
+        
+        # Apply updates
+        kwargs.update(updates)
+        
+        # Create new instance with potentially new client_order_id
+        if 'client_order_id' not in updates:
+            # Generate a new unique client_order_id for the copy
+            import time
+            kwargs['client_order_id'] = f"req_{int(time.time() * 1000)}"  # Use milliseconds for uniqueness
+        
+        return OrderRequest(**kwargs)
+    
+    def __str__(self) -> str:
+        """String representation of order request."""
+        return f"OrderRequest({self.side.value} {self.quantity} {self.symbol} @ {self.order_type.value})"
+    
+    def __repr__(self) -> str:
+        """Detailed string representation."""
+        return (f"OrderRequest(symbol='{self.symbol}', side={self.side}, "
+                f"quantity={self.quantity}, order_type={self.order_type}, "
+                f"price={self.price}, valid={self.is_valid})")
 
 
 class ProductionExecutionCoordinator:
@@ -71,11 +347,68 @@ class ProductionExecutionCoordinator:
         
         logger.info(f"ProductionExecutionCoordinator initialized with equity=${account_equity:,.2f}")
     
+    async def submit_order_request(self, order_request: OrderRequest) -> ExecutionResult:
+        """
+        Submit order using OrderRequest object with comprehensive safety checks.
+        
+        Args:
+            order_request: OrderRequest object containing order parameters
+            
+        Returns:
+            ExecutionResult object with execution outcome
+        """
+        try:
+            # Validate order request
+            if not order_request.is_valid:
+                error_msg = f"Invalid order request: {'; '.join(order_request.validation_errors)}"
+                logger.warning(error_msg)
+                return ExecutionResult(
+                    status="rejected",
+                    order_id=order_request.client_order_id,
+                    symbol=order_request.symbol,
+                    side=order_request.side.value if isinstance(order_request.side, OrderSide) else order_request.side,
+                    quantity=order_request.quantity,
+                    message=error_msg
+                )
+            
+            # Submit using the existing submit_order method
+            return await self.submit_order(
+                symbol=order_request.symbol,
+                side=order_request.side,
+                quantity=order_request.quantity,
+                order_type=order_request.order_type,
+                price=order_request.price,
+                strategy=order_request.strategy,
+                metadata={
+                    "client_order_id": order_request.client_order_id,
+                    "time_in_force": order_request.time_in_force,
+                    "stop_price": order_request.stop_price,
+                    "target_price": order_request.target_price,
+                    "min_quantity": order_request.min_quantity,
+                    "max_participation_rate": order_request.max_participation_rate,
+                    "urgency_level": order_request.urgency_level,
+                    "notes": order_request.notes,
+                    "source_system": order_request.source_system,
+                    "request_id": order_request.request_id
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Error submitting order request: {e}")
+            return ExecutionResult(
+                status="error",
+                order_id=order_request.client_order_id,
+                symbol=order_request.symbol,
+                side=order_request.side.value if isinstance(order_request.side, OrderSide) else order_request.side,
+                quantity=order_request.quantity,
+                message=f"Submission error: {e}"
+            )
+    
     async def submit_order(self, symbol: str, side: OrderSide, quantity: int,
                           order_type: OrderType = OrderType.MARKET,
                           price: Optional[float] = None,
                           strategy: str = "unknown",
-                          metadata: Dict = None) -> Dict[str, Any]:
+                          metadata: Dict = None) -> ExecutionResult:
         """
         Submit order with comprehensive safety checks and optimization.
         
@@ -138,7 +471,15 @@ class ProductionExecutionCoordinator:
             
         except Exception as e:
             logger.error(f"Error in order submission: {e}")
-            return {"status": "error", "message": f"Submission error: {e}"}
+            return ExecutionResult(
+                status="error", 
+                order_id="unknown",
+                symbol=symbol,
+                side=side.value if isinstance(side, OrderSide) else side,
+                quantity=quantity,
+                message=f"Submission error: {e}",
+                error_code="submission_error"
+            )
     
     async def _comprehensive_safety_check(self, order: Order) -> Dict[str, Any]:
         """Perform comprehensive safety checks before execution."""
@@ -262,7 +603,7 @@ class ProductionExecutionCoordinator:
             return {"impact_level": "unknown", "estimated_slippage_bps": 0}
     
     async def _execute_order_with_monitoring(self, order: Order, 
-                                           impact_analysis: Dict) -> Dict[str, Any]:
+                                           impact_analysis: Dict) -> ExecutionResult:
         """Execute order with real-time monitoring."""
         try:
             # Add to pending orders
@@ -295,16 +636,18 @@ class ProductionExecutionCoordinator:
             expected_price = order.price or fill_price
             actual_slippage_bps = abs(fill_price - expected_price) / expected_price * 10000
             
-            return {
-                "status": "success",
-                "order_id": order.id,
-                "symbol": order.symbol,
-                "quantity": order.quantity,
-                "fill_price": fill_price,
-                "actual_slippage_bps": actual_slippage_bps,
-                "execution_time": order.executed_at,
-                "message": f"Order executed successfully at ${fill_price:.2f}"
-            }
+            return ExecutionResult(
+                status="success",
+                order_id=order.id,
+                symbol=order.symbol,
+                side=order.side.value if isinstance(order.side, OrderSide) else order.side,
+                quantity=order.quantity,
+                fill_price=fill_price,
+                execution_time=order.executed_at,
+                message=f"Order executed successfully at ${fill_price:.2f}",
+                actual_slippage_bps=actual_slippage_bps,
+                notional_value=order.quantity * fill_price
+            )
             
         except Exception as e:
             logger.error(f"Error executing order {order.id}: {e}")
@@ -313,11 +656,15 @@ class ProductionExecutionCoordinator:
             if order.id in self.pending_orders:
                 del self.pending_orders[order.id]
             
-            return {
-                "status": "failed",
-                "order_id": order.id,
-                "message": f"Execution failed: {e}"
-            }
+            return ExecutionResult(
+                status="failed",
+                order_id=order.id,
+                symbol=order.symbol,
+                side=order.side.value if isinstance(order.side, OrderSide) else order.side,
+                quantity=order.quantity,
+                message=f"Execution failed: {e}",
+                error_code="execution_error"
+            )
     
     async def _post_execution_processing(self, order: Order, execution_result: Dict,
                                        original_quantity: int):
@@ -397,17 +744,17 @@ class ProductionExecutionCoordinator:
         except Exception as e:
             logger.error(f"Error handling order rejection: {e}")
     
-    def _create_order_result(self, order: Order, status: str, message: str) -> Dict[str, Any]:
+    def _create_order_result(self, order: Order, status: str, message: str) -> ExecutionResult:
         """Create standardized order result."""
-        return {
-            "status": status,
-            "order_id": order.id,
-            "symbol": order.symbol,
-            "side": order.side.value,
-            "quantity": order.quantity,
-            "message": message,
-            "timestamp": datetime.now()
-        }
+        return ExecutionResult(
+            status=status,
+            order_id=order.id,
+            symbol=order.symbol,
+            side=order.side.value if isinstance(order.side, OrderSide) else order.side,
+            quantity=order.quantity,
+            message=message,
+            execution_time=datetime.now(timezone.utc)
+        )
     
     def _update_position_tracking(self, order: Order):
         """Update internal position tracking."""
@@ -561,11 +908,16 @@ class ProductionExecutionCoordinator:
         except Exception as e:
             logger.error(f"Error updating account equity: {e}")
     
-    async def cancel_order(self, order_id: str) -> Dict[str, Any]:
+    async def cancel_order(self, order_id: str) -> ExecutionResult:
         """Cancel a pending order."""
         try:
             if order_id not in self.pending_orders:
-                return {"status": "error", "message": "Order not found or not cancellable"}
+                return ExecutionResult(
+                    status="error",
+                    order_id=order_id,
+                    symbol="unknown",
+                    message="Order not found or not cancellable"
+                )
             
             order = self.pending_orders[order_id]
             order.status = OrderStatus.CANCELED
@@ -576,12 +928,21 @@ class ProductionExecutionCoordinator:
             
             logger.info(f"Order {order_id} cancelled successfully")
             
-            return {
-                "status": "success",
-                "order_id": order_id,
-                "message": "Order cancelled successfully"
-            }
+            return ExecutionResult(
+                status="success",
+                order_id=order_id,
+                symbol=order.symbol,
+                side=order.side.value if isinstance(order.side, OrderSide) else order.side,
+                quantity=order.quantity,
+                message="Order cancelled successfully"
+            )
             
         except Exception as e:
             logger.error(f"Error cancelling order {order_id}: {e}")
-            return {"status": "error", "message": f"Cancellation error: {e}"}
+            return ExecutionResult(
+                status="error",
+                order_id=order_id,
+                symbol="unknown",
+                message=f"Cancellation error: {e}",
+                error_code="cancellation_error"
+            )
