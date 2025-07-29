@@ -316,6 +316,120 @@ except Exception:  # pragma: no cover - optional dependency
     sys.modules["alpaca_trade_api"] = alpaca_mod
     sys.modules["alpaca_trade_api.rest"] = rest_mod
 
+# AI-AGENT-REF: Add alpaca-py SDK stubs for newer API
+try:
+    from alpaca.common.exceptions import APIError
+except Exception:  # pragma: no cover - optional dependency
+    import types
+    from enum import Enum
+    
+    # Common module
+    common_mod = types.ModuleType("alpaca.common")
+    exceptions_mod = types.ModuleType("alpaca.common.exceptions")
+    
+    class APIError(Exception):
+        pass
+    
+    exceptions_mod.APIError = APIError
+    common_mod.exceptions = exceptions_mod
+    
+    # Data module  
+    data_mod = types.ModuleType("alpaca.data")
+    models_mod = types.ModuleType("alpaca.data.models")
+    requests_mod = types.ModuleType("alpaca.data.requests")
+    
+    class Quote:
+        bid_price = 0
+        ask_price = 0
+    
+    class StockLatestQuoteRequest:
+        def __init__(self, symbol_or_symbols):
+            self.symbols = symbol_or_symbols
+    
+    models_mod.Quote = Quote
+    requests_mod.StockLatestQuoteRequest = StockLatestQuoteRequest
+    data_mod.models = models_mod
+    data_mod.requests = requests_mod
+    
+    # Trading module
+    trading_mod = types.ModuleType("alpaca.trading")
+    client_mod = types.ModuleType("alpaca.trading.client")
+    enums_mod = types.ModuleType("alpaca.trading.enums")
+    trading_models_mod = types.ModuleType("alpaca.trading.models")
+    trading_requests_mod = types.ModuleType("alpaca.trading.requests")
+    
+    class TradingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+    
+    class OrderSide:
+        BUY = "buy"
+        SELL = "sell"
+    
+    class TimeInForce:
+        DAY = "day"
+    
+    class AlpacaOrderClass(str, Enum):
+        SIMPLE = "simple"
+        MLEG = "mleg"
+        BRACKET = "bracket"
+        OCO = "oco"
+        OTO = "oto"
+    
+    class Order(dict):
+        pass
+    
+    class MarketOrderRequest(dict):
+        def __init__(self, symbol, qty, side, time_in_force):
+            super().__init__(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                time_in_force=time_in_force,
+            )
+
+    class LimitOrderRequest(dict):
+        def __init__(self, symbol, qty, side, time_in_force, limit_price):
+            super().__init__(
+                symbol=symbol,
+                qty=qty,
+                side=side,
+                time_in_force=time_in_force,
+                limit_price=limit_price,
+            )
+    
+    client_mod.TradingClient = TradingClient
+    enums_mod.OrderSide = OrderSide
+    enums_mod.TimeInForce = TimeInForce
+    enums_mod.OrderClass = AlpacaOrderClass
+    trading_models_mod.Order = Order
+    trading_requests_mod.LimitOrderRequest = LimitOrderRequest
+    trading_requests_mod.MarketOrderRequest = MarketOrderRequest
+    trading_mod.client = client_mod
+    trading_mod.enums = enums_mod
+    trading_mod.models = trading_models_mod
+    trading_mod.requests = trading_requests_mod
+    
+    # Main alpaca module
+    alpaca_main_mod = types.ModuleType("alpaca")
+    alpaca_main_mod.common = common_mod
+    alpaca_main_mod.data = data_mod
+    alpaca_main_mod.trading = trading_mod
+    
+    sys.modules["alpaca"] = alpaca_main_mod
+    sys.modules["alpaca.common"] = common_mod
+    sys.modules["alpaca.common.exceptions"] = exceptions_mod
+    sys.modules["alpaca.data"] = data_mod
+    sys.modules["alpaca.data.models"] = models_mod
+    sys.modules["alpaca.data.requests"] = requests_mod
+    sys.modules["alpaca.trading"] = trading_mod
+    sys.modules["alpaca.trading.client"] = client_mod
+    sys.modules["alpaca.trading.enums"] = enums_mod
+    sys.modules["alpaca.trading.models"] = trading_models_mod
+    sys.modules["alpaca.trading.requests"] = trading_requests_mod
+
 # AI-AGENT-REF: Add other missing dependencies
 try:
     import psutil
