@@ -87,6 +87,7 @@ except Exception:  # pragma: no cover - optional dependency
     numpy_mod.max = lambda x: max(x) if x else 0
     numpy_mod.isscalar = lambda x: isinstance(x, (int, float, complex))
     numpy_mod.bool_ = bool
+    numpy_mod.linspace = lambda start, stop, num: ArrayStub([start + (stop - start) * i / (num - 1) for i in range(num)])
     
     # Add random module stub
     class RandomStub:
