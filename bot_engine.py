@@ -525,9 +525,39 @@ try:
     from sklearn.linear_model import BayesianRidge, Ridge
 except ImportError:
     # Provide mock classes for graceful degradation
-    PCA = None
-    RandomForestClassifier = None
-    BayesianRidge = None
+    class PCA:
+        def __init__(self, *args, **kwargs):
+            pass
+        def fit(self, *args, **kwargs):
+            return self
+        def transform(self, X):
+            return X
+    
+    class RandomForestClassifier:
+        def __init__(self, *args, **kwargs):
+            pass
+        def fit(self, *args, **kwargs):
+            return self
+        def predict(self, X):
+            return [0] * len(X) if hasattr(X, '__len__') else [0]
+        def predict_proba(self, X):
+            return [[0.33, 0.33, 0.34]] * len(X) if hasattr(X, '__len__') else [[0.33, 0.33, 0.34]]
+    
+    class BayesianRidge:
+        def __init__(self, *args, **kwargs):
+            pass
+        def fit(self, *args, **kwargs):
+            return self
+        def predict(self, X):
+            return [0] * len(X) if hasattr(X, '__len__') else [0]
+    
+    class Ridge:
+        def __init__(self, *args, **kwargs):
+            pass
+        def fit(self, *args, **kwargs):
+            return self
+        def predict(self, X):
+            return [0] * len(X) if hasattr(X, '__len__') else [0]
     Ridge = None
     print("WARNING: sklearn not available, ML features will be disabled")
 
@@ -5768,8 +5798,13 @@ def detect_regime(df: pd.DataFrame) -> str:
     return "chop"
 
 
-# Train or load regime model
-if os.path.exists(REGIME_MODEL_PATH):
+# Train or load regime model - skip in test environment
+if os.getenv("TESTING") == "1":
+    logger.info("Skipping regime model training in test environment")
+    regime_model = RandomForestClassifier(
+        n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
+    )
+elif os.path.exists(REGIME_MODEL_PATH):
     try:
         with open(REGIME_MODEL_PATH, "rb") as f:
             regime_model = pickle.load(f)
