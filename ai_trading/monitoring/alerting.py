@@ -8,8 +8,8 @@ for critical trading events, system failures, and performance issues.
 import json
 import smtplib
 import requests
-from email.mime.text import MimeText
-from email.mime.multipart import MimeMultipart
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from typing import Dict, List, Optional, Any, Callable
 from datetime import datetime, timedelta
 from enum import Enum
@@ -104,14 +104,14 @@ class EmailAlerter:
                 return False
             
             # Create email message
-            msg = MimeMultipart()
+            msg = MIMEMultipart()
             msg['From'] = self.username
             msg['To'] = ', '.join(recipients)
             msg['Subject'] = f"[{alert.severity.value.upper()}] {alert.title}"
             
             # Create email body
             body = self._create_email_body(alert)
-            msg.attach(MimeText(body, 'html'))
+            msg.attach(MIMEText(body, 'html'))
             
             # Send email
             with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
