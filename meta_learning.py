@@ -56,9 +56,16 @@ class MetaLearning:
     """Meta-learning wrapper using a simple linear model."""
 
     def __init__(self, model: Optional[Any] = None) -> None:
-        from sklearn.linear_model import Ridge
-
-        self.model = model or Ridge(alpha=1.0)
+        try:
+            from sklearn.linear_model import Ridge
+            self.model = model or Ridge(alpha=1.0)
+        except ImportError:
+            print("WARNING: sklearn not available, using dummy model")
+            # Create a dummy model that does nothing
+            self.model = type('DummyModel', (), {
+                'fit': lambda *a, **k: None,
+                'predict': lambda *a, **k: [0] * len(a[0]) if a else [0]
+            })()
 
     def train(self, df: "pd.DataFrame", target: str = "target") -> None:
         """Fit the meta learner using ``df`` columns except ``target``."""
@@ -341,9 +348,13 @@ def retrain_meta_learner(
     y = df["outcome"].values
     sample_w = df["pnl"].abs() + 1e-3
 
-    from sklearn.linear_model import Ridge
+    try:
+        from sklearn.linear_model import Ridge
+        model = Ridge(alpha=1.0, fit_intercept=True)
+    except ImportError:
+        logger.warning("sklearn not available, meta-learning disabled")
+        return {}
 
-    model = Ridge(alpha=1.0, fit_intercept=True)
     try:
         model.fit(X, y, sample_weight=sample_w)
     except (ValueError, RuntimeError) as exc:  # pragma: no cover - sklearn failure
