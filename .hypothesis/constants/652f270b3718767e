@@ -1,0 +1,4 @@
+# file: /usr/lib/python3/dist-packages/pytz/tzinfo.py
+# hypothesis_version: 6.136.6
+
+[1970, '<StaticTzInfo %r>', 'DST', 'STD', '_tzinfos']

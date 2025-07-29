@@ -1,0 +1,4 @@
+# file: /home/runner/work/ai-trading-bot/ai-trading-bot/validate_env.py
+# hypothesis_version: 6.136.6
+
+[0.003, 0.005, 0.02, 0.15, 0.2, 0.4, 0.5, 2.5, 190, 1440, 8081, 9000, 50000, '.env', '0', '__main__', 'balanced', 'data/trades.csv', 'halt.flag', 'iex', 'ignore', 'model_lgb.pkl', 'model_rf.pkl', 'model_xgb.pkl', 'rl_agent.zip', 'trained_model.pkl', 'utf-8']

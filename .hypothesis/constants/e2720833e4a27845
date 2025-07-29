@@ -1,0 +1,4 @@
+# file: /home/runner/work/ai-trading-bot/ai-trading-bot/strategies/base.py
+# hypothesis_version: 6.136.6
+
+[0.0, 1.0, 'BTC', 'ETH', 'USD', 'base', 'crypto', 'equity', 'forex']

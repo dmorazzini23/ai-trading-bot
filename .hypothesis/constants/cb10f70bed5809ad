@@ -1,0 +1,4 @@
+# file: /home/runner/work/ai-trading-bot/ai-trading-bot/strategies/momentum.py
+# hypothesis_version: 6.136.6
+
+['0.01', 'MOMENTUM_THRESHOLD', 'buy', 'close', 'momentum', 'sell', 'tickers']

@@ -1,0 +1,4 @@
+# file: /home/runner/work/ai-trading-bot/ai-trading-bot/metrics_logger.py
+# hypothesis_version: 6.136.6
+
+[0.0, 'ATR_STOP', 'PYRAMID_ADD', 'REGIME_TOGGLE', 'VOLATILITY_READING', 'a', 'max_drawdown', 'position', 'regime', 'stop', 'symbol', 'utf-8', 'value']
