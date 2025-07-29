@@ -2624,8 +2624,6 @@ data_client = None
 stream = None
 
 # -----------------------------------------------------------------------------
-# NullTradingClient stub
-#
 # Initialize Alpaca trading clients directly
 trading_client = TradingClient(API_KEY, API_SECRET, paper=paper)
 data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
@@ -2765,8 +2763,6 @@ def pre_trade_health_check(
         "timezone_issues": [],
     }
 
-    # Validate API connectivity only when an Alpaca client is available.  When
-    # running in degraded mode (e.g. Alpaca dependencies missing), ctx.api may be None or lack
     # Test the Alpaca trading client to ensure it's accessible
     try:
         if ctx.api is not None and hasattr(ctx.api, "get_account"):
