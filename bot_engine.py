@@ -269,11 +269,25 @@ def retry_if_exception_type(*args, **kwargs):
     return _riet(*args, **kwargs)
 
 
+# Tenacity retry error import with validation
 try:
-    from tenacity import RetryError
+    # Import RetryError from tenacity.  In some test environments Tenacity may be
+    # monkeypatched so that RetryError is not actually an exception class.  To
+    # avoid ``TypeError: catching classes that do not inherit from BaseException``
+    # when using ``except RetryError``, verify that the imported symbol is a
+    # proper exception type.  Fall back to a simple Exception subclass when
+    # Tenacity is unavailable or invalid.
+    from tenacity import RetryError as _TenacityRetryError  # type: ignore[assignment]
+    if not isinstance(_TenacityRetryError, type) or not issubclass(
+        _TenacityRetryError, BaseException
+    ):
+        raise TypeError("Invalid RetryError type")
+    RetryError = _TenacityRetryError  # type: ignore[assignment]
 except Exception:
 
-    class RetryError(Exception):
+    class RetryError(Exception):  # pragma: no cover - fallback when tenacity.RetryError is invalid
+        """Fallback RetryError used when Tenacity's RetryError is unavailable or not an exception."""
+
         pass
 
 
@@ -694,8 +708,39 @@ try:
 except Exception:  # pragma: no cover - allow tests with stubbed module
 
     class ExecutionEngine:
-        def __init__(self, *args, **kwargs):
-            pass
+        """
+        Fallback execution engine used when the real trade_execution module is
+        unavailable.  Many parts of the trading logic expect an execution
+        engine exposing ``execute_order`` as well as ``start_cycle`` and
+        ``end_cycle`` hooks.  Without these methods the bot would raise
+        AttributeError.  This stub logs invocation of each method and returns
+        dummy order objects.
+        """
+
+        def __init__(self, *args, **kwargs) -> None:
+            # Provide a logger specific to the stub
+            self._logger = logging.getLogger(__name__ + ".StubExecutionEngine")
+
+        def _log(self, method: str, *args, **kwargs) -> None:
+            self._logger.debug(
+                "StubExecutionEngine.%s called with args=%s kwargs=%s",
+                method,
+                args,
+                kwargs,
+            )
+
+        def execute_order(self, symbol: str, qty: int, side: str):
+            """Simulate an order execution and return a dummy order object."""
+            self._log("execute_order", symbol, qty, side)
+            # Return a simple namespace with an id attribute to mimic a real order
+            return types.SimpleNamespace(id=None)
+
+        # Provide empty hooks for cycle management used elsewhere in the code
+        def start_cycle(self) -> None:
+            self._log("start_cycle")
+
+        def end_cycle(self) -> None:
+            self._log("end_cycle")
 
 
 try:
@@ -2811,6 +2856,87 @@ trading_client = None
 data_client = None
 stream = None
 
+# -----------------------------------------------------------------------------
+# NullTradingClient stub
+#
+# When Alpaca trading is unavailable (e.g. incompatible Python version or missing
+# dependencies), many parts of the bot still assume a trading client exists
+# and call methods such as ``get_account``, ``get_all_positions``, and
+# ``get_asset``.  A ``None`` trading client leads to ``AttributeError``
+# exceptions deep in the trading logic.  To avoid littering the codebase with
+# explicit ``if ctx.api is None`` checks, we provide a minimal stub client that
+# exposes the common Alpaca client methods.  Each method returns a sensible
+# fallback value (empty lists, zeros, or simple objects with the required
+# attributes) and logs its usage.  This allows the bot to continue operating
+# in simulation/degraded mode without failing outright.
+class NullTradingClient:
+    """Fallback trading client that implements a subset of the Alpaca API."""
+
+    # Marker attribute to indicate stub status
+    is_stub = True
+
+    def __init__(self) -> None:
+        # Provide a logger specific to the stub
+        self._logger = logging.getLogger(__name__ + ".NullTradingClient")
+
+    def _log(self, method: str, *args, **kwargs) -> None:
+        self._logger.debug(
+            "NullTradingClient.%s called with args=%s kwargs=%s", method, args, kwargs
+        )
+
+    def get_account(self):
+        """Return a dummy account with zero balances."""
+        self._log("get_account")
+        return types.SimpleNamespace(
+            cash=0.0,
+            equity=0.0,
+            buying_power=0.0,
+            portfolio_value=0.0,
+        )
+
+    def get_all_positions(self):
+        """Return an empty position list."""
+        self._log("get_all_positions")
+        return []
+
+    def get_asset(self, symbol: str):
+        """Return a dummy asset that is shortable with unlimited shares."""
+        self._log("get_asset", symbol)
+        return types.SimpleNamespace(
+            symbol=symbol,
+            shortable=True,
+            shortable_shares=10_000,
+        )
+
+    def get_open_position(self, symbol: str):
+        """Return ``None`` indicating no open position."""
+        self._log("get_open_position", symbol)
+        return None
+
+    def get_order_by_id(self, order_id: str):
+        """Return a dummy order object with no filled quantity."""
+        self._log("get_order_by_id", order_id)
+        return types.SimpleNamespace(id=order_id, filled_qty=0)
+
+    def cancel_order_by_id(self, order_id: str):
+        """No-op cancellation."""
+        self._log("cancel_order_by_id", order_id)
+        return None
+
+    def submit_order(self, *args, **kwargs):
+        """Return a dummy order record with no id."""
+        self._log("submit_order", *args, **kwargs)
+        return types.SimpleNamespace(id=None)
+
+    def get_orders(self, *args, **kwargs):
+        """Return an empty list of orders."""
+        self._log("get_orders", *args, **kwargs)
+        return []
+
+    def list_orders(self, *args, **kwargs):
+        """Legacy alias for ``get_orders``."""
+        return self.get_orders(*args, **kwargs)
+
 if ALPACA_AVAILABLE:
     try:
         trading_client = TradingClient(API_KEY, API_SECRET, paper=paper)
@@ -2830,12 +2956,19 @@ if ALPACA_AVAILABLE:
     except Exception as e:
         logger.error("Failed to initialize Alpaca trading clients: %s", e)
         logger.warning("Trading functionality will be limited")
-        trading_client = None
+        # Fall back to a null client to avoid attribute errors throughout the bot.  When
+        # Alpaca initialization fails (e.g. due to network issues or compatibility
+        # problems), using ``None`` here causes subsequent calls to ``ctx.api`` to
+        # raise AttributeError.  Assign ``NullTradingClient()`` instead to keep the
+        # bot running in degraded mode.
+        trading_client = NullTradingClient()
         data_client = None
         stream = None
 else:
     logger.warning("Alpaca not available - trading clients will not be initialized")
     logger.info("Running in paper trading simulation mode")
+    # Assign null client when Alpaca is unavailable
+    trading_client = NullTradingClient()
 
 
 async def on_trade_update(event):
@@ -3974,6 +4107,10 @@ def check_alpaca_available(operation_name: str = "operation") -> bool:
         return False
     if trading_client is None:
         logger.warning("Trading client not initialized for %s - skipping", operation_name)
+        return False
+    # Treat null/stub trading clients as unavailable for operations that depend on Alpaca
+    if hasattr(trading_client, "is_stub") and getattr(trading_client, "is_stub", False):
+        logger.warning("Alpaca trading client unavailable for %s - skipping", operation_name)
         return False
     return True
 
