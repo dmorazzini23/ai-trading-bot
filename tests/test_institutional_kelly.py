@@ -37,8 +37,9 @@ class TestKellyCriterion:
         # Kelly formula: f = (bp - q) / b
         # b = 0.02/0.01 = 2, p = 0.6, q = 0.4
         # f = (2*0.6 - 0.4) / 2 = (1.2 - 0.4) / 2 = 0.4
-        expected = 0.4
-        assert abs(kelly_fraction - expected) < 0.001
+        # But this gets capped at max_fraction = 0.25
+        expected = 0.25  # Capped at max_fraction
+        assert kelly_fraction == pytest.approx(expected, rel=1e-3)
     
     def test_kelly_with_max_fraction_cap(self):
         """Test Kelly fraction is capped at maximum."""
