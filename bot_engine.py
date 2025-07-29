@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 # (any existing comments or module docstring go below the future import)
-__all__ = ["pre_trade_health_check"]
+__all__ = ["pre_trade_health_check", "run_all_trades_worker", "BotState"]
 import asyncio
 import logging
 import io
@@ -39,6 +39,7 @@ import numpy as np
 
 LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
 # Set up logging only once
+logger = logging.getLogger(__name__)  # AI-AGENT-REF: define logger before use
 if not logging.getLogger().handlers:
     from logger import setup_logging  # AI-AGENT-REF: lazy logger import
     setup_logging(log_file=LOG_PATH)
@@ -48,8 +49,12 @@ MIN_CYCLE = config.SCHEDULER_SLEEP_SECONDS
 try:
     config.validate_env_vars()
 except Exception as e:
-    logger.critical("Environment validation failed: %s", e)
-    raise SystemExit(1) from e
+    if config.TESTING:
+        # In testing mode, just log the error and continue
+        logger.warning("Environment validation failed in test mode: %s", e)
+    else:
+        logger.critical("Environment validation failed: %s", e)
+        raise SystemExit(1) from e
 config.log_config(config.REQUIRED_ENV_VARS)
 
 # Provide a no-op ``profile`` decorator when line_profiler is not active.

@@ -34,6 +34,19 @@ except Exception:  # pragma: no cover - optional dependency
         def reshape(self, *args):
             return self
             
+        def __sub__(self, other):
+            if isinstance(other, (list, ArrayStub)):
+                return ArrayStub([a - b for a, b in zip(self, other)])
+            return ArrayStub([x - other for x in self])
+            
+        def __truediv__(self, other):
+            if isinstance(other, (list, ArrayStub)):
+                return ArrayStub([a / b if b != 0 else 0 for a, b in zip(self, other)])
+            return ArrayStub([x / other if other != 0 else 0 for x in self])
+            
+        def max(self):
+            return max(self) if self else 0
+            
         def __getattr__(self, name):
             return lambda *args, **kwargs: self
     
@@ -51,8 +64,29 @@ except Exception:  # pragma: no cover - optional dependency
     numpy_mod.sum = sum
     numpy_mod.exp = lambda x: 2.718281828 ** x
     numpy_mod.log = lambda x: 0.0
-    numpy_mod.maximum = max
+    
+    # Create maximum with accumulate method
+    class MaximumStub:
+        @staticmethod
+        def accumulate(arr):
+            """Mock accumulate that returns cumulative max."""
+            if not arr:
+                return ArrayStub([])
+            result = []
+            max_so_far = arr[0]
+            for val in arr:
+                max_so_far = max(max_so_far, val)
+                result.append(max_so_far)
+            return ArrayStub(result)
+        
+        def __call__(self, *args):
+            return max(*args) if args else 0
+    
+    numpy_mod.maximum = MaximumStub()
     numpy_mod.minimum = min
+    numpy_mod.max = lambda x: max(x) if x else 0
+    numpy_mod.isscalar = lambda x: isinstance(x, (int, float, complex))
+    numpy_mod.bool_ = bool
     numpy_mod.__file__ = "stub"
     sys.modules["numpy"] = numpy_mod
     sys.modules["np"] = numpy_mod
@@ -80,10 +114,29 @@ except Exception:  # pragma: no cover - optional dependency
             self.data = data or {}
             
         def __getitem__(self, key):
-            return [1, 2, 3]  # Return dummy data
+            return SeriesStub([1, 2, 3])  # Return SeriesStub instead of list
             
         def iloc(self):
             return self
+            
+        @property 
+        def columns(self):
+            return lambda *args, **kwargs: True  # Mock columns check
+            
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: self
+    
+    # Create minimal Series stub
+    class SeriesStub(list):
+        def __init__(self, data=None):
+            super().__init__(data or [1, 2, 3])
+            
+        @property
+        def is_monotonic_increasing(self):
+            return True  # Mock for monotonic check
+            
+        def accumulate(self, *args, **kwargs):
+            return SeriesStub(self)  # Return self for accumulate
             
         def __getattr__(self, name):
             return lambda *args, **kwargs: self
@@ -95,9 +148,22 @@ except Exception:  # pragma: no cover - optional dependency
             from datetime import datetime, timezone
             return datetime.now(timezone.utc)
     
+    # Add pandas functions
+    def read_csv(*args, **kwargs):
+        return DataFrameStub()
+    
+    def read_parquet(*args, **kwargs):
+        return DataFrameStub()
+    
+    def concat(*args, **kwargs):
+        return DataFrameStub()
+
     pandas_mod.DataFrame = DataFrameStub
     pandas_mod.Timestamp = TimestampStub
-    pandas_mod.Series = list
+    pandas_mod.Series = SeriesStub
+    pandas_mod.read_csv = read_csv
+    pandas_mod.read_parquet = read_parquet
+    pandas_mod.concat = concat
     pandas_mod.__file__ = "stub"
     sys.modules["pandas"] = pandas_mod
     sys.modules["pd"] = pandas_mod
@@ -153,6 +219,11 @@ except Exception:  # pragma: no cover - optional dependency
             self.ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "testkey")
             self.ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "testsecret")
             self.ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+            self.ALPACA_DATA_FEED = os.getenv("ALPACA_DATA_FEED", "iex")  # Missing attribute added
+            self.FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", None)
+            self.FUNDAMENTAL_API_KEY = os.getenv("FUNDAMENTAL_API_KEY", None)
+            self.NEWS_API_KEY = os.getenv("NEWS_API_KEY", None)
+            self.IEX_API_TOKEN = os.getenv("IEX_API_TOKEN", None)
             self.WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "test-webhook-secret")
             self.FLASK_PORT = int(os.getenv("FLASK_PORT", "9000"))
             self.BOT_MODE = os.getenv("BOT_MODE", "balanced")
@@ -172,7 +243,23 @@ except Exception:  # pragma: no cover - optional dependency
             self.TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", "data/trades.csv")
             self.FORCE_TRADES = os.getenv("FORCE_TRADES", "False").lower() == "true"
             self.DISASTER_DD_LIMIT = float(os.getenv("DISASTER_DD_LIMIT", "0.2"))
+            # Add missing attributes from validate_env.py
+            self.MODEL_RF_PATH = os.getenv("MODEL_RF_PATH", "model_rf.pkl")
+            self.MODEL_XGB_PATH = os.getenv("MODEL_XGB_PATH", "model_xgb.pkl")
+            self.MODEL_LGB_PATH = os.getenv("MODEL_LGB_PATH", "model_lgb.pkl")
+            self.RL_MODEL_PATH = os.getenv("RL_MODEL_PATH", "rl_agent.zip")
+            self.USE_RL_AGENT = os.getenv("USE_RL_AGENT", "False").lower() == "true"
+            self.SECTOR_EXPOSURE_CAP = float(os.getenv("SECTOR_EXPOSURE_CAP", "0.4"))
+            self.MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "10"))
+            self.WEEKLY_DRAWDOWN_LIMIT = float(os.getenv("WEEKLY_DRAWDOWN_LIMIT", "0.15"))
+            self.VOLUME_THRESHOLD = int(os.getenv("VOLUME_THRESHOLD", "50000"))
             self.DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
+            self.FINNHUB_RPM = int(os.getenv("FINNHUB_RPM", "60"))
+            self.MINUTE_CACHE_TTL = int(os.getenv("MINUTE_CACHE_TTL", "60"))
+            self.EQUITY_EXPOSURE_CAP = float(os.getenv("EQUITY_EXPOSURE_CAP", "2.5"))
+            self.PORTFOLIO_EXPOSURE_CAP = float(os.getenv("PORTFOLIO_EXPOSURE_CAP", "2.5"))
+            self.SEED = int(os.getenv("SEED", "42"))
+            self.RATE_LIMIT_BUDGET = int(os.getenv("RATE_LIMIT_BUDGET", "190"))
             for k, v in kwargs.items():
                 setattr(self, k, v)
                 
