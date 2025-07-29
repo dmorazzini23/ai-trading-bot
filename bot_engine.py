@@ -858,7 +858,16 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 def cancel_all_open_orders(ctx: "BotContext") -> None:
     """
     On startup or each run, cancel every Alpaca order whose status is 'open'.
+    Gracefully handles cases where Alpaca is unavailable.
     """
+    if not check_alpaca_available("cancel open orders"):
+        logger.info("Skipping cancel_all_open_orders - Alpaca unavailable")
+        return
+    
+    if ctx.api is None:
+        logger.warning("ctx.api is None - cannot cancel orders")
+        return
+        
     try:
         req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
         open_orders = ctx.api.get_orders(req)
@@ -869,11 +878,9 @@ def cancel_all_open_orders(ctx: "BotContext") -> None:
                 try:
                     ctx.api.cancel_order_by_id(od.id)
                 except Exception as exc:
-                    logger.exception("bot.py unexpected", exc_info=exc)
-                    raise
+                    logger.exception("Failed to cancel order %s", getattr(od, "id", "unknown"), exc_info=exc)
     except Exception as exc:
-        logger.exception("bot.py unexpected", exc_info=exc)
-        raise
+        logger.warning("Failed to cancel open orders: %s", exc, exc_info=True)
 
 
 def reconcile_positions(ctx: "BotContext") -> None:
@@ -1326,6 +1333,15 @@ ensure_alpaca_credentials()
 # Prometheus-safe account fetch
 @breaker
 def safe_alpaca_get_account(ctx: "BotContext"):
+    """Safely get account information, handling Alpaca unavailable scenarios.
+    
+    Returns None when Alpaca is unavailable, allowing graceful degradation.
+    """
+    if not check_alpaca_available("account fetch"):
+        return None
+    if ctx.api is None:
+        logger.warning("ctx.api is None - Alpaca trading client unavailable")
+        return None
     return ctx.api.get_account()
 
 
@@ -3352,8 +3368,23 @@ def count_day_trades() -> int:
     retry=retry_if_exception_type(APIError),
 )
 def check_pdt_rule(ctx: BotContext) -> bool:
+    """Check PDT rule with graceful degradation when Alpaca is unavailable.
+    
+    Returns False when Alpaca is unavailable, allowing the bot to continue
+    operating in simulation mode.
+    """
     acct = safe_alpaca_get_account(ctx)
-    equity = float(acct.equity)
+    
+    # If account is unavailable (Alpaca not available), assume no PDT blocking
+    if acct is None:
+        logger.info("PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions")
+        return False
+    
+    try:
+        equity = float(acct.equity)
+    except (AttributeError, TypeError, ValueError):
+        logger.warning("PDT_CHECK_FAILED - Invalid equity value, assuming no PDT restrictions")
+        return False
 
     api_day_trades = getattr(acct, "pattern_day_trades", None) or getattr(
         acct, "pattern_day_trades_count", None
@@ -4432,7 +4463,21 @@ def update_trailing_stop(
 def calculate_entry_size(
     ctx: BotContext, symbol: str, price: float, atr: float, win_prob: float
 ) -> int:
-    cash = float(ctx.api.get_account().cash)
+    """Calculate entry size with graceful handling of Alpaca unavailability."""
+    if not check_alpaca_available("calculate entry size"):
+        logger.info("Using default entry size - Alpaca unavailable")
+        return 1  # Return minimal position size as fallback
+        
+    if ctx.api is None:
+        logger.warning("ctx.api is None - using default entry size")
+        return 1
+        
+    try:
+        cash = float(ctx.api.get_account().cash)
+    except Exception as exc:
+        logger.warning("Failed to get cash for entry size calculation: %s", exc)
+        return 1
+        
     cap_pct = ctx.params.get("CAPITAL_CAP", CAPITAL_CAP)
     cap_sz = int(round((cash * cap_pct) / price)) if price > 0 else 0
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
@@ -4454,9 +4499,22 @@ def calculate_entry_size(
 
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
-    buying_pw = float(ctx.api.get_account().buying_power)
-    if buying_pw <= 0:
-        logger.info("NO_BUYING_POWER", extra={"symbol": symbol})
+    """Execute entry order with graceful handling of Alpaca unavailability."""
+    if not check_alpaca_available("execute entry"):
+        logger.info("Skipping execute_entry - Alpaca unavailable")
+        return
+        
+    if ctx.api is None:
+        logger.warning("ctx.api is None - cannot execute entry")
+        return
+        
+    try:
+        buying_pw = float(ctx.api.get_account().buying_power)
+        if buying_pw <= 0:
+            logger.info("NO_BUYING_POWER", extra={"symbol": symbol})
+            return
+    except Exception as exc:
+        logger.warning("Failed to get buying power for %s: %s", symbol, exc)
         return
     if qty is None or qty <= 0 or not np.isfinite(qty):
         logger.error(
@@ -7277,15 +7335,28 @@ def schedule_run_all_trades_with_delay(model):
 
 
 def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
-    now_pac = datetime.now(timezone.utc).astimezone(PACIFIC)
-    acct = ctx.api.get_account()
-    equity = float(acct.equity)
+    """Initial portfolio rebalancing with graceful handling of Alpaca unavailability."""
+    if not check_alpaca_available("initial rebalance"):
+        logger.info("Skipping initial_rebalance - Alpaca unavailable")
+        return
+        
+    if ctx.api is None:
+        logger.warning("ctx.api is None - cannot perform initial rebalance")
+        return
+        
+    try:
+        now_pac = datetime.now(timezone.utc).astimezone(PACIFIC)
+        acct = ctx.api.get_account()
+        equity = float(acct.equity)
 
-    cash = float(acct.cash)
-    buying_power = float(getattr(acct, "buying_power", cash))
-    n = len(symbols)
-    if n == 0 or cash <= 0 or buying_power <= 0:
-        logger.info("INITIAL_REBALANCE_NO_SYMBOLS_OR_NO_CASH")
+        cash = float(acct.cash)
+        buying_power = float(getattr(acct, "buying_power", cash))
+        n = len(symbols)
+        if n == 0 or cash <= 0 or buying_power <= 0:
+            logger.info("INITIAL_REBALANCE_NO_SYMBOLS_OR_NO_CASH")
+            return
+    except Exception as exc:
+        logger.warning("Failed to get account info for initial rebalance: %s", exc)
         return
 
     # Determine current UTC time
