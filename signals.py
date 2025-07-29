@@ -7,37 +7,59 @@ import time
 from typing import Any, Optional, List
 from functools import lru_cache
 
-import numpy as np
-import pandas as pd
+# Core dependencies with graceful error handling
+try:
+    import numpy as np
+except ImportError:
+    print("WARNING: numpy not available, some features will be disabled")
+    np = None
+
+try:
+    import pandas as pd
+except ImportError:
+    print("WARNING: pandas not available, some features will be disabled")
+    pd = None
+
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime, timezone
 
+# Optional ML dependencies
 try:
     from hmmlearn.hmm import GaussianHMM
 except ImportError:  # pragma: no cover - optional dependency
     GaussianHMM = None
 
-from indicators import rsi, atr, mean_reversion_zscore
+# Import indicators with error handling
+try:
+    from indicators import rsi, atr, mean_reversion_zscore
+except ImportError:
+    print("WARNING: indicators module not available, some features will be disabled")
+    rsi = atr = mean_reversion_zscore = None
 
 # Cache the last computed signal matrix to avoid recomputation
-_LAST_SIGNAL_BAR: pd.Timestamp | None = None
-_LAST_SIGNAL_MATRIX: pd.DataFrame | None = None
+_LAST_SIGNAL_BAR = None
+_LAST_SIGNAL_MATRIX = None
 
 def get_utcnow():
     return datetime.now(timezone.utc)
 
 # AI-AGENT-REF: safe close retrieval for pipelines
-def robust_signal_price(df: pd.DataFrame) -> float:
+def robust_signal_price(df) -> float:
+    """Get closing price from dataframe with fallback."""
+    if pd is None:
+        return 1e-3
     try:
         return df['close'].iloc[-1]
     except Exception:
         return 1e-3
 
 
-def rolling_mean(arr: np.ndarray, window: int) -> np.ndarray:
+def rolling_mean(arr, window: int):
     """Simple rolling mean using cumulative sum for speed."""
+    if np is None:
+        return []
     if window <= 0:
         raise ValueError("window must be positive")
     arr = np.asarray(arr, dtype=float)
@@ -87,17 +109,21 @@ def _validate_macd_input(close_prices, min_len):
 
 
 def _compute_macd_df(
-    close_prices: pd.Series,
+    close_prices,
     fast_period: int,
     slow_period: int,
     signal_period: int,
-) -> pd.DataFrame:
+):
+    """Compute MACD dataframe with graceful fallback."""
+    if pd is None:
+        return None
+        
     fast_ema = close_prices.ewm(span=fast_period, adjust=False).mean()
     slow_ema = close_prices.ewm(span=slow_period, adjust=False).mean()
     macd_line = fast_ema - slow_ema
     signal_line = macd_line.ewm(span=signal_period, adjust=False).mean()
     histogram = macd_line - signal_line
-    return pd.DataFrame(
+    return Any(
         {"macd": macd_line, "signal": signal_line, "histogram": histogram}
     )
 
@@ -108,22 +134,22 @@ def _cached_macd(
     fast_period: int,
     slow_period: int,
     signal_period: int,
-) -> pd.DataFrame:
-    series = pd.Series(prices_tuple)
+) -> Optional[Any]:
+    series = Any(prices_tuple)
     return _compute_macd_df(series, fast_period, slow_period, signal_period)
 
 
 def calculate_macd(
-    close_prices: pd.Series,
+    close_prices,
     fast_period: int = 12,
     slow_period: int = 26,
     signal_period: int = 9,
-) -> Optional[pd.DataFrame]:
+) -> Optional[Any]:
     """Calculate MACD indicator values with validation.
 
     Parameters
     ----------
-    close_prices : pd.Series
+    close_prices 
         Series of closing prices.
     fast_period : int
         Fast EMA period. Defaults to ``12``.
@@ -134,7 +160,7 @@ def calculate_macd(
 
     Returns
     -------
-    Optional[pd.DataFrame]
+    Optional[Any]
         DataFrame containing ``macd``, ``signal`` and ``histogram`` columns or
         ``None`` if the calculation fails.
     """
@@ -158,14 +184,14 @@ def calculate_macd(
         return None
 
 
-def _validate_input_df(data: pd.DataFrame) -> None:
-    if data is None or not isinstance(data, pd.DataFrame):
+def _validate_input_df(data) -> None:
+    if data is None or not isinstance(data, Any):
         raise ValueError("Input must be a DataFrame")
     if "close" not in data.columns:
         raise ValueError("Input data missing 'close' column")
 
 
-def _apply_macd(data: pd.DataFrame) -> pd.DataFrame:
+def _apply_macd(data) -> Optional[Any]:
     macd_df = calculate_macd(data["close"])
     if macd_df is None or macd_df.empty:
         logger.warning("MACD indicator calculation failed, returning None")
@@ -180,17 +206,17 @@ def _apply_macd(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def prepare_indicators(data: pd.DataFrame, ticker: str | None = None) -> pd.DataFrame:
+def prepare_indicators(data, ticker: str | None = None) -> Optional[Any]:
     """Prepare indicator columns for a trading strategy.
 
     Parameters
     ----------
-    data : pd.DataFrame
+    data 
         Market data containing at least a ``close`` column.
 
     Returns
     -------
-    pd.DataFrame
+    Any
         Data enriched with indicator columns.
 
     Raises
@@ -222,7 +248,7 @@ def prepare_indicators(data: pd.DataFrame, ticker: str | None = None) -> pd.Data
 
 def prepare_indicators_parallel(
     symbols: List[str],
-    data: dict[str, pd.DataFrame],
+    data: dict[str, Any],
     max_workers: int | None = None,
 ) -> None:
     """Run :func:`prepare_indicators` over ``symbols`` concurrently,
@@ -243,30 +269,30 @@ def prepare_indicators_parallel(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         executor.map(lambda s: prepare_indicators(data[s], s), symbols)
 
-def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
+def generate_signal(df, column: str) -> Any:
     if df is None or df.empty:
         logger.error("Dataframe is None or empty in generate_signal")
-        return pd.Series(dtype=float)
+        return Any(dtype=float)
 
     if column not in df.columns:
         logger.error("Required column '%s' not found in dataframe", column)
-        return pd.Series(dtype=float)
+        return Any(dtype=float)
 
     try:
         values = df[column].to_numpy()
         signal = np.sign(values)
-        return pd.Series(signal, index=df.index).fillna(0).astype(int)
+        return Any(signal, index=df.index).fillna(0).astype(int)
     except (ValueError, TypeError) as exc:
         logger.error("Exception generating signal: %s", exc, exc_info=True)
-        return pd.Series(dtype=float)
+        return Any(dtype=float)
 
 
 def detect_market_regime_hmm(
-    df: pd.DataFrame,
+    df,
     n_components: int = 3,
     window_size: int = 1000,
     max_iter: int = 10,
-) -> pd.DataFrame:
+) -> Optional[Any]:
     """Annotate ``df`` with HMM-based market regimes."""
     if GaussianHMM is None:
         logger.warning("hmmlearn not installed; skipping regime detection")
@@ -307,19 +333,19 @@ def detect_market_regime_hmm(
     return df
 
 
-def compute_signal_matrix(df: pd.DataFrame) -> pd.DataFrame:
+def compute_signal_matrix(df) -> Optional[Any]:
     """Return a matrix of z-scored indicator signals."""
 
     if df is None or df.empty:
-        return pd.DataFrame()
+        return Any()
     global _LAST_SIGNAL_BAR, _LAST_SIGNAL_MATRIX
     last_bar = df.index[-1] if not df.empty else None
     if last_bar is not None and last_bar == _LAST_SIGNAL_BAR:
         # AI-AGENT-REF: reuse previously computed indicators for same bar
-        return _LAST_SIGNAL_MATRIX.copy() if _LAST_SIGNAL_MATRIX is not None else pd.DataFrame()
+        return _LAST_SIGNAL_MATRIX.copy() if _LAST_SIGNAL_MATRIX is not None else Any()
     required = {"close", "high", "low"}
     if not required.issubset(df.columns):
-        return pd.DataFrame()
+        return Any()
 
     macd_df = calculate_macd(df["close"])
     rsi_series = rsi(tuple(df["close"].fillna(method="ffill").astype(float)), 14)
@@ -328,10 +354,10 @@ def compute_signal_matrix(df: pd.DataFrame) -> pd.DataFrame:
     atr_move = df["close"].diff() / atr_series.replace(0, np.nan)
     mean_rev = mean_reversion_zscore(df["close"], 20)
 
-    def _z(series: pd.Series) -> pd.Series:
+    def _z(series) -> Any:
         return (series - series.rolling(20).mean()) / series.rolling(20).std(ddof=0)
 
-    matrix = pd.DataFrame(index=df.index)
+    matrix = Any(index=df.index)
     if macd_df is not None and not macd_df.empty:
         matrix["macd"] = _z(macd_df["macd"])
     matrix["rsi"] = _z(rsi_series)
@@ -344,34 +370,34 @@ def compute_signal_matrix(df: pd.DataFrame) -> pd.DataFrame:
     return matrix
 
 
-def ensemble_vote_signals(signal_matrix: pd.DataFrame) -> pd.Series:
+def ensemble_vote_signals(signal_matrix) -> Any:
     """Return voting-based entry signals from ``signal_matrix``."""
 
     if signal_matrix is None or signal_matrix.empty:
-        return pd.Series(dtype=int)
+        return Any(dtype=int)
     pos = (signal_matrix > 0.5).sum(axis=1)
     neg = (signal_matrix < -0.5).sum(axis=1)
     votes = np.where(pos >= 2, 1, np.where(neg >= 2, -1, 0))
-    return pd.Series(votes, index=signal_matrix.index)
+    return Any(votes, index=signal_matrix.index)
 
 
-def classify_regime(df: pd.DataFrame, window: int = 20) -> pd.Series:
+def classify_regime(df, window: int = 20) -> Any:
     """Classify each row as 'trend' or 'mean_revert' based on volatility."""
 
     if df is None or df.empty or "close" not in df:
-        return pd.Series(dtype=object)
+        return Any(dtype=object)
     returns = df["close"].pct_change()
     vol = returns.rolling(window).std()
     med = vol.rolling(window).median()
     dev = vol.rolling(window).std()
     regime = np.where(vol > med + dev, "trend", "mean_revert")
-    return pd.Series(regime, index=df.index)
+    return Any(regime, index=df.index)
 
 
 # AI-AGENT-REF: ensemble decision using multiple indicator columns
-def generate_ensemble_signal(df: pd.DataFrame) -> int:
+def generate_ensemble_signal(df) -> int:
     def last(col: str) -> float:
-        s = df.get(col, pd.Series(dtype=float))
+        s = df.get(col, Any(dtype=float))
         return s.iloc[-1] if not s.empty else np.nan
 
     signals = []
