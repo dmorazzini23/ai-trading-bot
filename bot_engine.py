@@ -408,144 +408,26 @@ except Exception as import_exc:  # pragma: no cover - fallback when requests is 
 import schedule
 import yfinance as yf
 
-# Alpaca v3 SDK imports with graceful fallback
-# AI-AGENT-REF: conditional import to handle Python 3.12 compatibility issues
-ALPACA_AVAILABLE = True
-TradingClient = None
-OrderSide = None
-QueryOrderStatus = None
-TimeInForce = None
-APIError = Exception  # fallback to generic exception
+# Alpaca v3 SDK imports - direct imports for real trading
+from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
+from alpaca_trade_api.rest import APIError
 
-try:
-    from alpaca.trading.client import TradingClient
-    from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
-    from alpaca_trade_api.rest import APIError
-    
-    # Check for Python 3.12.3 compatibility issues
-    try:
-        # Test basic functionality that commonly fails in compatibility issues
-        test_client = TradingClient.__name__  # Basic attribute access
-        # Test enum access individually to avoid iteration issues in Python 3.12.3
-        test_buy = OrderSide.BUY
-        test_open = QueryOrderStatus.OPEN  
-        test_day = TimeInForce.DAY
-        logger.info("Alpaca Trading Client imported successfully")
-        logger.debug("Alpaca compatibility check passed for Python %s", sys.version)
-    except Exception as compat_error:
-        ALPACA_AVAILABLE = False
-        logger.error(
-            "Alpaca Trading Client compatibility issue with Python %s: %s",
-            sys.version,
-            compat_error,
-        )
-        logger.warning(
-            "Detected alpaca-py compatibility issue. Consider upgrading alpaca-py or using Python 3.11"
-        )
-        # Do not re-raise: continue in degraded mode and construct mock classes
-        pass
-        
-except ImportError as e:
-    ALPACA_AVAILABLE = False
-    logger.warning("Alpaca Trading Client not installed: %s", e)
-    logger.info("Install alpaca-py for live trading: pip install alpaca-py")
-except Exception as e:
-    ALPACA_AVAILABLE = False
-    logger.error("Alpaca Trading Client unavailable - service will run in degraded mode: %s", e)
-    logger.warning("Trading functionality will be limited. Please check alpaca-py compatibility with Python %s", sys.version)
-    
-    # Check if this is a known Python 3.12.3 compatibility issue
-    if "function' object is not iterable" in str(e):
-        logger.error("Detected known alpaca-py compatibility issue with Python 3.12.3")
-        logger.info("Workaround: Use Python 3.11 or wait for alpaca-py update")
-    elif "module" in str(e).lower() and "not found" in str(e).lower():
-        logger.info("Missing alpaca dependencies. Install with: pip install alpaca-py alpaca-trade-api")
-    
-    # Create minimal mock enums to prevent AttributeError issues
-    class MockOrderSide:
-        BUY = "buy"
-        SELL = "sell"
-    
-    class MockQueryOrderStatus:
-        OPEN = "open"
-        CLOSED = "closed"
-        CANCELLED = "cancelled"
-    
-    class MockTimeInForce:
-        DAY = "day"
-        GTC = "gtc"
-        IOC = "ioc"
-        FOK = "fok"
-    
-    OrderSide = MockOrderSide()
-    QueryOrderStatus = MockQueryOrderStatus()
-    TimeInForce = MockTimeInForce()
+logger.info("Alpaca Trading Client imported successfully")
+logger.debug("Alpaca ready for trading with Python %s", sys.version)
 
-try:
-    if ALPACA_AVAILABLE:
-        from alpaca.trading.enums import OrderStatus
-    else:
-        raise ImportError("Alpaca not available")
-except Exception:  # pragma: no cover - older alpaca-trade-api or alpaca unavailable
-    from enum import Enum
-
-    class OrderStatus(str, Enum):
-        """Fallback enumeration for pre-v3 Alpaca SDKs."""
-
-        PENDING_NEW = "pending_new"
-        FILLED = "filled"
-        CANCELLED = "cancelled"
-        REJECTED = "rejected"
+from alpaca.trading.enums import OrderStatus
 
 
-# Alpaca models and requests with graceful fallback
-# AI-AGENT-REF: conditional import for trading models
-Order = None
-GetOrdersRequest = None
-LimitOrderRequest = None
-MarketOrderRequest = None
-TradingStream = None
-
-try:
-    if ALPACA_AVAILABLE:
-        from alpaca.trading.models import Order
-        from alpaca.trading.requests import (
-            GetOrdersRequest,
-            LimitOrderRequest,
-            MarketOrderRequest,
-        )
-        # Legacy import removed; using alpaca-py trading stream instead
-        from alpaca.trading.stream import TradingStream
-        logger.debug("Alpaca trading models and requests imported successfully")
-    else:
-        raise ImportError("Alpaca not available")
-except Exception as e:
-    logger.warning("Alpaca trading models unavailable: %s", e)
-    
-    # Create minimal mock classes
-    class MockOrder:
-        def __init__(self, **kwargs):
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-    
-    class MockRequest:
-        def __init__(self, **kwargs):
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-    
-    class MockTradingStream:
-        def __init__(self, *args, **kwargs):
-            pass
-        
-        def subscribe_trade_updates(self, callback):
-            """Mock method for subscribe_trade_updates"""
-            pass
-    
-    Order = MockOrder
-    GetOrdersRequest = MockRequest
-    LimitOrderRequest = MockRequest  
-    MarketOrderRequest = MockRequest
-    TradingStream = MockTradingStream
+# Alpaca models and requests - direct imports for real trading
+from alpaca.trading.models import Order
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    LimitOrderRequest,
+    MarketOrderRequest,
+)
+from alpaca.trading.stream import TradingStream
+logger.debug("Alpaca trading models and requests imported successfully")
 from bs4 import BeautifulSoup
 from flask import Flask
 
@@ -556,62 +438,13 @@ from rebalancer import maybe_rebalance as original_rebalance
 ALPACA_BASE_URL = config.ALPACA_BASE_URL
 import pickle
 
-# Alpaca data client imports with graceful fallback  
-# AI-AGENT-REF: conditional import for data client
-StockHistoricalDataClient = None
-Quote = None
-StockBarsRequest = None
-StockLatestQuoteRequest = None
-TimeFrame = None
+# Alpaca data client imports - direct imports for real trading
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.models import Quote
+from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
+from alpaca.data.timeframe import TimeFrame
 
-try:
-    if ALPACA_AVAILABLE:
-        from alpaca.data.historical import StockHistoricalDataClient
-        from alpaca.data.models import Quote
-        from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
-        from alpaca.data.timeframe import TimeFrame
-        
-        # Test data client compatibility
-        try:
-            test_timeframe = TimeFrame.Day  # Basic enum access
-            logger.debug("Alpaca data client imports successful")
-        except Exception as data_compat_error:
-            logger.error("Alpaca data client compatibility issue: %s", data_compat_error)
-            raise data_compat_error
-    else:
-        raise ImportError("Alpaca not available from trading client import")
-except Exception as e:
-    logger.warning("Alpaca data client unavailable: %s", e)
-    
-    # Create minimal mock classes
-    class MockDataClient:
-        def __init__(self, *args, **kwargs):
-            pass
-        def get_stock_bars(self, *args, **kwargs):
-            return None
-        def get_stock_latest_quote(self, *args, **kwargs):
-            return None
-    
-    class MockQuote:
-        def __init__(self, **kwargs):
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-    
-    class MockRequest:
-        def __init__(self, **kwargs):
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-    
-    class MockTimeFrame:
-        Minute = "1Min"
-        Hour = "1Hour"
-        Day = "1Day"
-    
-    StockHistoricalDataClient = MockDataClient
-    Quote = MockQuote
-    StockBarsRequest = MockRequest
-    StockLatestQuoteRequest = MockRequest
-    TimeFrame = MockTimeFrame()
+logger.debug("Alpaca data client imports successful")
 
 from meta_learning import optimize_signals
 from metrics_logger import log_metrics
@@ -957,12 +790,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
 def cancel_all_open_orders(ctx: "BotContext") -> None:
     """
     On startup or each run, cancel every Alpaca order whose status is 'open'.
-    Gracefully handles cases where Alpaca is unavailable.
     """
-    if not check_alpaca_available("cancel open orders"):
-        logger.info("Skipping cancel_all_open_orders - Alpaca unavailable")
-        return
-    
     if ctx.api is None:
         logger.warning("ctx.api is None - cannot cancel orders")
         return
@@ -1227,7 +1055,6 @@ class BotState:
     rolling_losses: list[float] = field(default_factory=list)
     mode_obj: BotMode = field(default_factory=lambda: BotMode(BOT_MODE))
     no_signal_events: int = 0
-    fallback_watchlist_events: int = 0
     indicator_failures: int = 0
     pdt_blocked: bool = False
     # Cached positions from broker for the current cycle
@@ -1432,12 +1259,7 @@ ensure_alpaca_credentials()
 # Prometheus-safe account fetch
 @breaker
 def safe_alpaca_get_account(ctx: "BotContext"):
-    """Safely get account information, handling Alpaca unavailable scenarios.
-    
-    Returns None when Alpaca is unavailable, allowing graceful degradation.
-    """
-    if not check_alpaca_available("account fetch"):
-        return None
+    """Safely get account information."""
     if ctx.api is None:
         logger.warning("ctx.api is None - Alpaca trading client unavailable")
         return None
@@ -1622,49 +1444,6 @@ def safe_get_stock_bars(client, request, symbol: str, context: str = ""):
         return None
 
 
-def generate_fallback_data(symbol: str, days: int = 30) -> pd.DataFrame:
-    """Generate mock market data when Alpaca is unavailable."""
-    import numpy as np
-    from datetime import timedelta
-    
-    logger.info(f"Generating fallback market data for {symbol} ({days} days)")
-    
-    # Generate realistic-looking price data
-    np.random.seed(hash(symbol) % 10000)  # Consistent seed per symbol
-    start_price = 100.0  # Base price
-    
-    dates = pd.date_range(
-        start=datetime.now(timezone.utc) - timedelta(days=days), 
-        periods=days, 
-        freq='D'
-    )
-    
-    # Random walk with slight upward bias
-    returns = np.random.normal(0.001, 0.02, days)  # 0.1% daily return, 2% volatility
-    prices = [start_price]
-    for ret in returns:
-        prices.append(prices[-1] * (1 + ret))
-    
-    # Generate OHLCV data
-    highs = [p * (1 + abs(np.random.normal(0, 0.01))) for p in prices[1:]]
-    lows = [p * (1 - abs(np.random.normal(0, 0.01))) for p in prices[1:]]
-    volumes = [int(np.random.normal(1000000, 200000)) for _ in range(days)]
-    
-    df = pd.DataFrame({
-        'open': prices[:-1],
-        'high': highs,
-        'low': lows,
-        'close': prices[1:],
-        'volume': volumes
-    }, index=dates)
-    
-    # Ensure high >= max(open, close) and low <= min(open, close)
-    df['high'] = np.maximum(df['high'], np.maximum(df['open'], df['close']))
-    df['low'] = np.minimum(df['low'], np.minimum(df['open'], df['close']))
-    
-    return df
-
-
 @dataclass
 class DataFetcher:
     def __post_init__(self):
@@ -1691,21 +1470,9 @@ class DataFetcher:
 
         api_key = config.get_env("ALPACA_API_KEY")
         api_secret = config.get_env("ALPACA_SECRET_KEY")
-        if not api_key or not api_secret or not ALPACA_AVAILABLE:
-            if not ALPACA_AVAILABLE:
-                logger.warning(f"Alpaca unavailable, using fallback data for {symbol}")
-            else:
-                logger.warning(f"Alpaca credentials missing, using fallback data for {symbol}")
-            
-            # Use fallback data generation
-            df = generate_fallback_data(symbol, days=150)
-            if not df.empty:
-                with cache_lock:
-                    self._daily_cache[symbol] = df
-                return df
-            else:
-                logger.error(f"Failed to generate fallback data for {symbol}")
-                return None
+        if not api_key or not api_secret:
+            logger.error(f"Missing Alpaca credentials for {symbol}")
+            return None
                 
         client = StockHistoricalDataClient(api_key, api_secret)
 
@@ -1808,27 +1575,8 @@ class DataFetcher:
                     index=[dummy_date],
                 )
         except Exception as e:
-            logger.warning(f"ALPACA DAILY FETCH EXCEPTION for {symbol}: {repr(e)}")
-            logger.info(f"Using fallback data generation for {symbol}")
-            
-            # Try to use realistic fallback data instead of zeros
-            try:
-                df = generate_fallback_data(symbol, days=150)
-                if not df.empty:
-                    logger.info(f"Generated realistic fallback data for {symbol}")
-                else:
-                    raise ValueError("Fallback data generation failed")
-            except Exception as fallback_err:
-                logger.warning(f"Fallback data generation failed for {symbol}: {fallback_err}")
-                # Final fallback to zero data
-                ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
-                if ts is None:
-                    ts = pd.Timestamp.now(tz="UTC")
-                dummy_date = ts
-                df = pd.DataFrame(
-                    [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
-                    index=[dummy_date],
-                )
+            logger.error(f"Failed to fetch daily data for {symbol}: {repr(e)}")
+            return None
 
         with cache_lock:
             self._daily_cache[symbol] = df
@@ -2878,116 +2626,17 @@ stream = None
 # -----------------------------------------------------------------------------
 # NullTradingClient stub
 #
-# When Alpaca trading is unavailable (e.g. incompatible Python version or missing
-# dependencies), many parts of the bot still assume a trading client exists
-# and call methods such as ``get_account``, ``get_all_positions``, and
-# ``get_asset``.  A ``None`` trading client leads to ``AttributeError``
-# exceptions deep in the trading logic.  To avoid littering the codebase with
-# explicit ``if ctx.api is None`` checks, we provide a minimal stub client that
-# exposes the common Alpaca client methods.  Each method returns a sensible
-# fallback value (empty lists, zeros, or simple objects with the required
-# attributes) and logs its usage.  This allows the bot to continue operating
-# in simulation/degraded mode without failing outright.
-class NullTradingClient:
-    """Fallback trading client that implements a subset of the Alpaca API."""
+# Initialize Alpaca trading clients directly
+trading_client = TradingClient(API_KEY, API_SECRET, paper=paper)
+data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
-    # Marker attribute to indicate stub status
-    is_stub = True
-
-    def __init__(self) -> None:
-        # Provide a logger specific to the stub
-        self._logger = logging.getLogger(__name__ + ".NullTradingClient")
-
-    def _log(self, method: str, *args, **kwargs) -> None:
-        self._logger.debug(
-            "NullTradingClient.%s called with args=%s kwargs=%s", method, args, kwargs
-        )
-
-    def get_account(self):
-        """Return a dummy account with zero balances."""
-        self._log("get_account")
-        return types.SimpleNamespace(
-            cash=0.0,
-            equity=0.0,
-            buying_power=0.0,
-            portfolio_value=0.0,
-        )
-
-    def get_all_positions(self):
-        """Return an empty position list."""
-        self._log("get_all_positions")
-        return []
-
-    def get_asset(self, symbol: str):
-        """Return a dummy asset that is shortable with unlimited shares."""
-        self._log("get_asset", symbol)
-        return types.SimpleNamespace(
-            symbol=symbol,
-            shortable=True,
-            shortable_shares=10_000,
-        )
-
-    def get_open_position(self, symbol: str):
-        """Return ``None`` indicating no open position."""
-        self._log("get_open_position", symbol)
-        return None
-
-    def get_order_by_id(self, order_id: str):
-        """Return a dummy order object with no filled quantity."""
-        self._log("get_order_by_id", order_id)
-        return types.SimpleNamespace(id=order_id, filled_qty=0)
-
-    def cancel_order_by_id(self, order_id: str):
-        """No-op cancellation."""
-        self._log("cancel_order_by_id", order_id)
-        return None
-
-    def submit_order(self, *args, **kwargs):
-        """Return a dummy order record with no id."""
-        self._log("submit_order", *args, **kwargs)
-        return types.SimpleNamespace(id=None)
-
-    def get_orders(self, *args, **kwargs):
-        """Return an empty list of orders."""
-        self._log("get_orders", *args, **kwargs)
-        return []
-
-    def list_orders(self, *args, **kwargs):
-        """Legacy alias for ``get_orders``."""
-        return self.get_orders(*args, **kwargs)
-
-if ALPACA_AVAILABLE:
-    try:
-        trading_client = TradingClient(API_KEY, API_SECRET, paper=paper)
-        # alias get_order for v2 SDK differences
-        data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
-
-        # WebSocket for order status updates
-        # use the new Stream class; explicitly set feed and base_url
-
-        # Create a trading stream for order status updates
-        stream = TradingStream(
-            API_KEY,
-            API_SECRET,
-            paper=True,
-        )
-        logger.info("Alpaca trading clients initialized successfully")
-    except Exception as e:
-        logger.error("Failed to initialize Alpaca trading clients: %s", e)
-        logger.warning("Trading functionality will be limited")
-        # Fall back to a null client to avoid attribute errors throughout the bot.  When
-        # Alpaca initialization fails (e.g. due to network issues or compatibility
-        # problems), using ``None`` here causes subsequent calls to ``ctx.api`` to
-        # raise AttributeError.  Assign ``NullTradingClient()`` instead to keep the
-        # bot running in degraded mode.
-        trading_client = NullTradingClient()
-        data_client = None
-        stream = None
-else:
-    logger.warning("Alpaca not available - trading clients will not be initialized")
-    logger.info("Running in paper trading simulation mode")
-    # Assign null client when Alpaca is unavailable
-    trading_client = NullTradingClient()
+# Create a trading stream for order status updates
+stream = TradingStream(
+    API_KEY,
+    API_SECRET,
+    paper=True,
+)
+logger.info("Alpaca trading clients initialized successfully")
 
 
 async def on_trade_update(event):
@@ -3003,10 +2652,7 @@ async def on_trade_update(event):
 
 
 # AI-AGENT-REF: add null check for stream to handle Alpaca unavailable gracefully
-if stream is not None:
-    stream.subscribe_trade_updates(on_trade_update)
-else:
-    logger.info("Trade updates stream not available - running in degraded mode")
+stream.subscribe_trade_updates(on_trade_update)
 ctx = BotContext(
     api=trading_client,
     data_client=data_client,
@@ -3121,18 +2767,16 @@ def pre_trade_health_check(
 
     # Validate API connectivity only when an Alpaca client is available.  When
     # running in degraded mode (e.g. Alpaca dependencies missing), ctx.api may be None or lack
-    # get_account.  Attempting to call it would raise AttributeError and abort the health check.
-    # Skip the call when unavailable and log a warning; if an error occurs, log it but do not abort.
+    # Test the Alpaca trading client to ensure it's accessible
     try:
         if ctx.api is not None and hasattr(ctx.api, "get_account"):
             ctx.api.get_account()
         else:
-            logger.warning(
-                "Alpaca trading client unavailable for account fetch - skipping"
-            )
+            logger.error("Alpaca trading client unavailable for account fetch")
+            return summary
     except Exception as exc:  # pragma: no cover - network dep
         logger.critical("PRE_TRADE_HEALTH_API_ERROR", extra={"error": str(exc)})
-        # Do not propagate: continue in degraded mode
+        return summary
 
     for sym in symbols:
         summary["checked"] += 1
@@ -4130,27 +3774,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     return exec_engine.execute_order(symbol, qty, side)
 
 
-# AI-AGENT-REF: utility function to check alpaca availability
-def check_alpaca_available(operation_name: str = "operation") -> bool:
-    """Check if Alpaca trading functionality is available."""
-    if not ALPACA_AVAILABLE:
-        logger.warning("Alpaca trading client unavailable for %s - skipping", operation_name)
-        return False
-    if trading_client is None:
-        logger.warning("Trading client not initialized for %s - skipping", operation_name)
-        return False
-    # Treat null/stub trading clients as unavailable for operations that depend on Alpaca
-    if hasattr(trading_client, "is_stub") and getattr(trading_client, "is_stub", False):
-        logger.warning("Alpaca trading client unavailable for %s - skipping", operation_name)
-        return False
-    return True
-
-
 def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
-    # AI-AGENT-REF: check alpaca availability before attempting order submission
-    if not check_alpaca_available("order submission"):
-        return None
-        
     config.reload_env()
     if not market_is_open():
         logger.warning(
@@ -4693,10 +4317,7 @@ def update_trailing_stop(
 def calculate_entry_size(
     ctx: BotContext, symbol: str, price: float, atr: float, win_prob: float
 ) -> int:
-    """Calculate entry size with graceful handling of Alpaca unavailability."""
-    if not check_alpaca_available("calculate entry size"):
-        logger.info("Using default entry size - Alpaca unavailable")
-        return 1  # Return minimal position size as fallback
+    """Calculate entry size based on account balance and risk parameters."""
         
     if ctx.api is None:
         logger.warning("ctx.api is None - using default entry size")
@@ -4729,10 +4350,7 @@ def calculate_entry_size(
 
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
-    """Execute entry order with graceful handling of Alpaca unavailability."""
-    if not check_alpaca_available("execute entry"):
-        logger.info("Skipping execute_entry - Alpaca unavailable")
-        return
+    """Execute entry order."""
         
     if ctx.api is None:
         logger.warning("ctx.api is None - cannot execute entry")
@@ -6846,7 +6464,6 @@ def health() -> str:
     summary = {
         "status": status,
         "no_signal_events": state.no_signal_events,
-        "fallback_watchlist_events": state.fallback_watchlist_events,
         "indicator_failures": state.indicator_failures,
     }
     from flask import jsonify
@@ -7061,7 +6678,6 @@ def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[st
         logger.warning(
             "No candidates found after filtering, using top 5 tickers fallback."
         )
-        state.fallback_watchlist_events += 1
         symbols = full_watchlist[:5]
     logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
     ctx.tickers = symbols
@@ -7076,9 +6692,8 @@ def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[st
     if acct:
         current_cash = float(getattr(acct, "buying_power", acct.cash))
     else:
-        # Fallback for degraded mode when Alpaca is unavailable
-        logger.warning("Alpaca account unavailable - using fallback cash value for degraded mode")
-        current_cash = 10000.0  # Default fallback value for simulation mode
+        logger.error("Failed to get account information from Alpaca")
+        return 0.0, False, []
     regime_ok = check_market_regime(state)
     return current_cash, regime_ok, symbols
 
@@ -7573,10 +7188,7 @@ def schedule_run_all_trades_with_delay(model):
 
 
 def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
-    """Initial portfolio rebalancing with graceful handling of Alpaca unavailability."""
-    if not check_alpaca_available("initial rebalance"):
-        logger.info("Skipping initial_rebalance - Alpaca unavailable")
-        return
+    """Initial portfolio rebalancing."""
         
     if ctx.api is None:
         logger.warning("ctx.api is None - cannot perform initial rebalance")
