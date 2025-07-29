@@ -1,0 +1,165 @@
+{
+  "environment": "production",
+  "debug": false,
+  "timezone": "America/New_York",
+  
+  "database": {
+    "url": "postgresql://trading_user:password@localhost:5432/ai_trading_prod",
+    "pool_size": 20,
+    "max_overflow": 30,
+    "pool_timeout": 30,
+    "echo": false
+  },
+  
+  "alpaca": {
+    "api_key": "your_api_key_here",
+    "secret_key": "your_secret_key_here",
+    "base_url": "https://api.alpaca.markets",
+    "data_url": "https://data.alpaca.markets",
+    "paper_trading": false,
+    "max_requests_per_minute": 200
+  },
+  
+  "redis": {
+    "url": "redis://localhost:6379/0",
+    "max_connections": 20,
+    "retry_on_timeout": true
+  },
+  
+  "risk": {
+    "max_portfolio_exposure": 0.95,
+    "max_position_size": 0.08,
+    "max_sector_exposure": 0.25,
+    "max_daily_loss": 0.03,
+    "max_drawdown": 0.10,
+    "var_limit_95": 0.015,
+    "var_limit_99": 0.030,
+    "correlation_limit": 0.65,
+    "leverage_limit": 2.5,
+    "stop_loss_threshold": 0.015
+  },
+  
+  "strategies": [
+    {
+      "strategy_id": "momentum_large_cap",
+      "strategy_type": "momentum",
+      "enabled": true,
+      "allocation": 0.30,
+      "timeframe": "5m",
+      "symbols": ["SPY", "QQQ", "DIA", "IWM"],
+      "max_positions": 4,
+      "risk_level": "MEDIUM",
+      "parameters": {
+        "lookback_period": 20,
+        "momentum_threshold": 0.02,
+        "rsi_oversold": 30,
+        "rsi_overbought": 70,
+        "volume_factor": 1.5,
+        "volatility_filter": true,
+        "market_regime_filter": true
+      }
+    },
+    {
+      "strategy_id": "mean_reversion_etf",
+      "strategy_type": "mean_reversion",
+      "enabled": true,
+      "allocation": 0.25,
+      "timeframe": "15m",
+      "symbols": ["XLF", "XLE", "XLK", "XLV", "XLI", "XLP"],
+      "max_positions": 6,
+      "risk_level": "MEDIUM",
+      "parameters": {
+        "bollinger_period": 20,
+        "bollinger_std": 2.0,
+        "rsi_period": 14,
+        "rsi_oversold": 25,
+        "rsi_overbought": 75,
+        "volume_confirmation": true,
+        "mean_reversion_strength": 0.8
+      }
+    },
+    {
+      "strategy_id": "breakout_commodities",
+      "strategy_type": "breakout",
+      "enabled": true,
+      "allocation": 0.20,
+      "timeframe": "1h",
+      "symbols": ["GLD", "SLV", "USO", "UNG", "DBA"],
+      "max_positions": 3,
+      "risk_level": "HIGH",
+      "parameters": {
+        "breakout_period": 20,
+        "volume_threshold": 2.0,
+        "atr_multiplier": 2.5,
+        "consolidation_period": 10,
+        "minimum_range": 0.01
+      }
+    },
+    {
+      "strategy_id": "ml_regime_detection",
+      "strategy_type": "ml",
+      "enabled": true,
+      "allocation": 0.15,
+      "timeframe": "1d",
+      "symbols": ["SPY", "TLT", "GLD", "VIX"],
+      "max_positions": 4,
+      "risk_level": "LOW",
+      "parameters": {
+        "model_type": "random_forest",
+        "features": ["returns", "volatility", "volume", "sentiment"],
+        "lookback_window": 60,
+        "prediction_horizon": 5,
+        "confidence_threshold": 0.7,
+        "rebalancing_frequency": "weekly"
+      }
+    },
+    {
+      "strategy_id": "ensemble_meta",
+      "strategy_type": "ensemble",
+      "enabled": true,
+      "allocation": 0.10,
+      "timeframe": "30m",
+      "symbols": ["SPY", "QQQ", "IWM"],
+      "max_positions": 3,
+      "risk_level": "MEDIUM",
+      "parameters": {
+        "sub_strategies": ["momentum_large_cap", "mean_reversion_etf"],
+        "weights": [0.6, 0.4],
+        "correlation_threshold": 0.8,
+        "ensemble_method": "weighted_average",
+        "dynamic_weights": true
+      }
+    }
+  ],
+  
+  "logging": {
+    "level": "INFO",
+    "log_dir": "logs",
+    "max_file_size": 52428800,
+    "backup_count": 10,
+    "enable_console": true,
+    "enable_file": true,
+    "enable_audit": true,
+    "structured_format": true
+  },
+  
+  "monitoring": {
+    "enable_prometheus": true,
+    "prometheus_port": 8000,
+    "enable_alerts": true,
+    "alert_webhook_url": "https://hooks.slack.com/your-webhook",
+    "health_check_interval": 60,
+    "performance_report_interval": 3600
+  },
+  
+  "symbols": [
+    "SPY", "QQQ", "IWM", "DIA", "EFA", "EEM",
+    "GLD", "SLV", "TLT", "VNQ", "USO", "UNG",
+    "XLF", "XLE", "XLK", "XLV", "XLI", "XLP",
+    "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"
+  ],
+  
+  "market_data_sources": ["alpaca", "yfinance", "iex"],
+  "max_workers": 8,
+  "request_timeout": 30
+}
