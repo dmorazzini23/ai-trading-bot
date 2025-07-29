@@ -36,5 +36,4 @@ peak_equity.txt
 metrics/
 models/
 regime_model.pkl
-__init__.py
 sklearn_fix_summary.md
