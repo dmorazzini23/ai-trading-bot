@@ -294,10 +294,18 @@ sys.modules["strategy_allocator"] = types.ModuleType("strategy_allocator")
 
 class _Alloc:
     def __init__(self, *a, **k):
-        pass
+        # AI-AGENT-REF: Add config attribute for test compatibility
+        from types import SimpleNamespace
+        self.config = SimpleNamespace()
+        self.config.delta_threshold = 0.02
+        self.config.signal_confirmation_bars = 2
 
     def allocate(self, *a, **k):
         return []
+    
+    def update_reward(self, strategy: str, reward: float) -> None:
+        """Update reward for a strategy (placeholder for test compatibility)."""
+        pass
 
 
 sys.modules["strategy_allocator"].StrategyAllocator = _Alloc

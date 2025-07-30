@@ -99,7 +99,11 @@ warnings.filterwarnings(
 
 import pandas as pd
 # AI-AGENT-REF: Preserve real pandas.DataFrame type before lazy module override
-_REAL_PD_DATAFRAME = pd.core.frame.DataFrame
+try:
+    _REAL_PD_DATAFRAME = pd.core.frame.DataFrame
+except AttributeError:
+    # Fallback for different pandas versions or test environments
+    _REAL_PD_DATAFRAME = pd.DataFrame
 
 import utils
 from features import (
@@ -2600,7 +2604,15 @@ class BotContext:
 
 data_fetcher = DataFetcher()
 signal_manager = SignalManager()
-trade_logger = TradeLogger()
+# AI-AGENT-REF: Lazy initialization for trade logger to speed up imports in testing
+trade_logger = None
+
+def get_trade_logger():
+    """Get trade logger instance, creating it lazily."""
+    global trade_logger
+    if trade_logger is None:
+        trade_logger = TradeLogger()
+    return trade_logger
 risk_engine = None
 allocator = None
 strategies = None
@@ -2680,7 +2692,7 @@ ctx = BotContext(
     data_client=data_client,
     data_fetcher=data_fetcher,
     signal_manager=signal_manager,
-    trade_logger=trade_logger,
+    trade_logger=get_trade_logger(),
     sem=Semaphore(4),
     volume_threshold=VOLUME_THRESHOLD,
     entry_start_offset=ENTRY_START_OFFSET,
