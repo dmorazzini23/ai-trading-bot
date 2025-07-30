@@ -73,12 +73,14 @@ def load_model(symbol: str):
 
 # AI-AGENT-REF: Defer model loading in testing environments to prevent import blocking
 import os
+import sys
 # AI-AGENT-REF: More aggressive testing mode detection to prevent import hangs
 _is_testing = (
     os.getenv("TESTING") 
+    or os.getenv("PYTEST_RUNNING")
     or getattr(config, "TESTING", False) 
     or "pytest" in sys.modules 
-    or "test_" in os.path.basename(sys.argv[0])
+    or "test_" in os.path.basename(sys.argv[0] if sys.argv else "")
 )
 if not _is_testing:
     for sym in getattr(config, "SYMBOLS", []):
