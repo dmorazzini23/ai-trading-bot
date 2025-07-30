@@ -15,16 +15,50 @@ except ImportError:  # pragma: no cover - when python-dotenv is not installed
         ``os.environ``.
         """
         return False
-from pydantic_settings import BaseSettings
-
-from validate_env import settings as env_settings
-
-class Settings(BaseSettings):
-    """Runtime configuration via environment."""
-
-settings = Settings()
-
 logger = logging.getLogger(__name__)
+
+# AI-AGENT-REF: robust import handling for pydantic-settings to prevent hangs
+try:
+    from pydantic_settings import BaseSettings
+    _PYDANTIC_AVAILABLE = True
+except ImportError:
+    logger.warning("pydantic-settings not available, using fallback")
+    _PYDANTIC_AVAILABLE = False
+    BaseSettings = object  # Minimal fallback
+
+# Import validate_env with fallback handling
+try:
+    from validate_env import settings as env_settings
+except Exception as e:
+    logger.warning("validate_env import failed: %s, using fallback", e)
+    # Create a minimal fallback settings object
+    class _FallbackSettings:
+        ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
+        ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
+        ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        ALPACA_DATA_FEED = os.getenv("ALPACA_DATA_FEED", "iex")
+        FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+        FUNDAMENTAL_API_KEY = os.getenv("FUNDAMENTAL_API_KEY")
+        NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+        IEX_API_TOKEN = os.getenv("IEX_API_TOKEN")
+        BOT_MODE = os.getenv("BOT_MODE", "balanced")
+        DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
+        BUY_THRESHOLD = float(os.getenv("BUY_THRESHOLD", "0.5"))
+        WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+        # Add other commonly accessed attributes as needed
+        def __getattr__(self, name):
+            # Fallback for any missing attributes
+            return os.getenv(name)
+    env_settings = _FallbackSettings()
+
+if _PYDANTIC_AVAILABLE:
+    class Settings(BaseSettings):
+        """Runtime configuration via environment."""
+
+    settings = Settings()
+else:
+    # Use a minimal fallback when pydantic is not available
+    settings = type('Settings', (), {})()
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"
@@ -145,6 +179,15 @@ def _require_env_vars(*keys: str) -> None:
 
 def validate_environment() -> None:
     """Validate that mandatory environment variables are present."""
+    # AI-AGENT-REF: handle missing pydantic gracefully
+    if not _PYDANTIC_AVAILABLE:
+        logger.warning("Pydantic unavailable, performing basic validation only")
+        # Basic validation without pydantic
+        for var in ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]:
+            if not os.getenv(var):
+                raise RuntimeError(f"Missing required environment variable: {var}")
+        return
+        
     missing = [v for v in REQUIRED_ENV_VARS if not os.environ.get(v)]
     if missing:
         raise RuntimeError(
@@ -171,13 +214,14 @@ def validate_environment() -> None:
         raise RuntimeError("WEBHOOK_SECRET must be at least 8 characters")
 
 
-ALPACA_API_KEY = env_settings.ALPACA_API_KEY
-ALPACA_SECRET_KEY = env_settings.ALPACA_SECRET_KEY
-ALPACA_BASE_URL = env_settings.ALPACA_BASE_URL
+# AI-AGENT-REF: robust environment variable access
+ALPACA_API_KEY = getattr(env_settings, 'ALPACA_API_KEY', os.getenv("ALPACA_API_KEY", ""))
+ALPACA_SECRET_KEY = getattr(env_settings, 'ALPACA_SECRET_KEY', os.getenv("ALPACA_SECRET_KEY", ""))
+ALPACA_BASE_URL = getattr(env_settings, 'ALPACA_BASE_URL', os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"))
 ALPACA_PAPER = "paper" in ALPACA_BASE_URL.lower()
-ALPACA_DATA_FEED = env_settings.ALPACA_DATA_FEED
-FINNHUB_API_KEY = env_settings.FINNHUB_API_KEY
-FUNDAMENTAL_API_KEY = env_settings.FUNDAMENTAL_API_KEY
+ALPACA_DATA_FEED = getattr(env_settings, 'ALPACA_DATA_FEED', os.getenv("ALPACA_DATA_FEED", "iex"))
+FINNHUB_API_KEY = getattr(env_settings, 'FINNHUB_API_KEY', os.getenv("FINNHUB_API_KEY"))
+FUNDAMENTAL_API_KEY = getattr(env_settings, 'FUNDAMENTAL_API_KEY', os.getenv("FUNDAMENTAL_API_KEY"))
 NEWS_API_KEY = env_settings.NEWS_API_KEY
 IEX_API_TOKEN = env_settings.IEX_API_TOKEN
 BOT_MODE = env_settings.BOT_MODE

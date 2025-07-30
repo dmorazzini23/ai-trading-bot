@@ -42,7 +42,7 @@ mods = [
     "ratelimit",
     "trade_execution",
     "ai_trading.capital_scaling",
-    "strategy_allocator",
+    # "strategy_allocator",  # AI-AGENT-REF: Don't mock this, it interferes with other tests
     "torch",
 ]
 for name in mods:
@@ -193,7 +193,8 @@ sys.modules["prometheus_client"].Histogram = lambda *a, **k: None
 sys.modules["metrics_logger"].log_metrics = lambda *a, **k: None
 sys.modules["finnhub"].FinnhubAPIException = Exception
 sys.modules["finnhub"].Client = lambda *a, **k: None
-sys.modules["strategy_allocator"].StrategyAllocator = object
+# AI-AGENT-REF: Don't mock strategy_allocator to avoid test interference
+# sys.modules["strategy_allocator"].StrategyAllocator = object
 sys.modules.setdefault("ratelimit", types.ModuleType("ratelimit"))
 sys.modules["ratelimit"].limits = lambda *a, **k: lambda f: f
 sys.modules["ratelimit"].sleep_and_retry = lambda f: f
@@ -218,12 +219,16 @@ torch_nn.Sequential = lambda *a, **k: None
 torch_nn.Linear = lambda *a, **k: None
 torch_nn.ReLU = lambda *a, **k: None
 torch_nn.Softmax = lambda *a, **k: None
+torch_nn.Parameter = object  # AI-AGENT-REF: add missing Parameter for meta_learning.py
 sys.modules["torch.nn"] = torch_nn
+# AI-AGENT-REF: ensure torch.nn is accessible from torch module for meta_learning.py
+sys.modules["torch"].nn = torch_nn
 torch_optim = types.ModuleType("torch.optim")
 torch_optim.Adam = lambda *a, **k: None
 sys.modules["torch.optim"] = torch_optim
 
-from ai_trading.main import main
+# AI-AGENT-REF: Remove ai_trading.main import that causes deep torch dependency chain
+# from ai_trading.main import main  # Not used in this test, causes torch import issues
 from bot_engine import pre_trade_health_check
 
 

@@ -2870,8 +2870,21 @@ def pre_trade_health_check(
             )
             summary.setdefault("invalid_values", []).append(sym)
 
-        orig_range = isinstance(df.index, pd.RangeIndex)
-        if not isinstance(df.index, pd.DatetimeIndex):
+        # AI-AGENT-REF: robust isinstance check that handles mocked pandas modules  
+        try:
+            orig_range = isinstance(df.index, pd.RangeIndex)
+        except (TypeError, AttributeError):
+            # Handle cases where pd.RangeIndex is not a proper type (e.g., during mocking)
+            orig_range = str(type(df.index).__name__) == "RangeIndex"
+        
+        # AI-AGENT-REF: robust isinstance check for DatetimeIndex too
+        try:
+            is_datetime_index = isinstance(df.index, pd.DatetimeIndex)
+        except (TypeError, AttributeError):
+            # Handle cases where pd.DatetimeIndex is not a proper type (e.g., during mocking)
+            is_datetime_index = str(type(df.index).__name__) == "DatetimeIndex"
+            
+        if not is_datetime_index:
             df.index = pd.to_datetime(df.index, errors="coerce", utc=True)
         if getattr(df.index, "tz", None) is None:
             log_warning("HEALTH_TZ_MISSING", extra={"symbol": sym})

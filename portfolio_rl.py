@@ -10,8 +10,10 @@ try:
     except AttributeError:
         import logging
         logging.getLogger(__name__).warning("PyTorch version < 2.0 detected, using fallback implementation")
-        torch = None
+        # AI-AGENT-REF: Don't set torch to None, keep fallback objects for type annotations
+        pass
 except Exception:  # pragma: no cover - optional dependency
+    # AI-AGENT-REF: Create comprehensive torch fallback that supports type annotations
     torch = types.ModuleType("torch")
     torch.Tensor = object
     torch.tensor = lambda *a, **k: np.array([])
@@ -25,9 +27,13 @@ except Exception:  # pragma: no cover - optional dependency
     optim.Adam = lambda *a, **k: None
 
 
+# AI-AGENT-REF: Check if torch is real PyTorch or fallback module
+_TORCH_AVAILABLE = hasattr(torch, '__version__') and hasattr(torch, 'nn') and hasattr(torch.nn, 'Module')
+
+
 class Actor(nn.Module):
     def __init__(self, state_dim: int, action_dim: int) -> None:
-        if torch is None:
+        if not _TORCH_AVAILABLE:
             raise RuntimeError("PyTorch not available for reinforcement learning")
         super().__init__()
         self.net = nn.Sequential(
@@ -43,7 +49,7 @@ class Actor(nn.Module):
 
 class PortfolioReinforcementLearner:
     def __init__(self, state_dim: int = 10, action_dim: int = 5) -> None:
-        if torch is None:
+        if not _TORCH_AVAILABLE:
             raise RuntimeError("PyTorch not available for reinforcement learning")
         self.actor = Actor(state_dim, action_dim)
         self.optimizer = optim.Adam(self.actor.parameters(), lr=1e-3)
