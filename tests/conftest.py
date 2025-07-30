@@ -417,16 +417,25 @@ except Exception:  # pragma: no cover - optional dependency
         def seed(x):
             pass
         @staticmethod
-        def random(*args):
+        def random(*args, **kwargs):
+            if 'size' in kwargs:
+                size = kwargs['size']
+                return [0.5] * size
             return 0.5
         @staticmethod
-        def randint(*args):
+        def randint(*args, **kwargs):
+            if 'size' in kwargs:
+                size = kwargs['size']
+                return [1] * size
             return 1
         @staticmethod
         def choice(arr):
             return arr[0] if arr else None
         @staticmethod
-        def normal(*args):
+        def normal(*args, **kwargs):
+            if 'size' in kwargs:
+                size = kwargs['size']
+                return [0.0] * size
             return 0.0
     
     numpy_mod.random = RandomStub()
