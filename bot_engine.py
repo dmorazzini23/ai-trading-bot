@@ -1127,6 +1127,17 @@ ENTRY_END_OFFSET = timedelta(minutes=params.get("ENTRY_END_OFFSET_MIN", 15))
 REGIME_LOOKBACK = 14
 REGIME_ATR_THRESHOLD = 20.0
 RF_ESTIMATORS = 300
+
+# AI-AGENT-REF: Initialize trading parameters before validation to prevent NameError
+RF_MAX_DEPTH = 3
+RF_MIN_SAMPLES_LEAF = 5
+ATR_LENGTH = 10
+CONF_THRESHOLD = params.get("CONF_THRESHOLD", 0.75)
+CONFIRMATION_COUNT = params.get("CONFIRMATION_COUNT", 2)
+CAPITAL_CAP = params.get("CAPITAL_CAP", 0.08)
+DOLLAR_RISK_LIMIT = float(config.get_env("DOLLAR_RISK_LIMIT", "0.02"))
+BUY_THRESHOLD = params.get("BUY_THRESHOLD", 0.2)
+
 # AI-AGENT-REF: Add comprehensive validation for critical trading parameters
 def validate_trading_parameters():
     """Validate critical trading parameters and log warnings for invalid values."""
@@ -1159,16 +1170,6 @@ def validate_trading_parameters():
     
     logger.info("Trading parameters validated: CAPITAL_CAP=%.3f, DOLLAR_RISK_LIMIT=%.3f, MAX_POSITION_SIZE=%d",
                 CAPITAL_CAP, DOLLAR_RISK_LIMIT, MAX_POSITION_SIZE)
-
-
-RF_MAX_DEPTH = 3
-RF_MIN_SAMPLES_LEAF = 5
-ATR_LENGTH = 10
-CONF_THRESHOLD = params.get("CONF_THRESHOLD", 0.75)
-CONFIRMATION_COUNT = params.get("CONFIRMATION_COUNT", 2)
-CAPITAL_CAP = params.get("CAPITAL_CAP", 0.08)
-DOLLAR_RISK_LIMIT = float(config.get_env("DOLLAR_RISK_LIMIT", "0.02"))
-BUY_THRESHOLD = params.get("BUY_THRESHOLD", 0.2)
 
 # AI-AGENT-REF: Defer parameter validation in testing environments to prevent import blocking
 # Validate parameters after loading

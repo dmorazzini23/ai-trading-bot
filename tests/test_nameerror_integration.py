@@ -38,34 +38,12 @@ os.environ.update({
 })
 
 try:
-    # Add timeout mechanism to prevent hangs - simplified approach
-    import signal
-    import sys
-    
-    def timeout_handler(signum, frame):
-        print("TIMEOUT: bot_engine import took too long")
-        sys.exit(3)
-    
-    # Only set up signal handling if available (Unix-like systems)
-    try:
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(15)  # Reduced timeout to 15 seconds
-        signal_available = True
-    except (AttributeError, OSError):
-        # signal.SIGALRM not available on Windows or other systems
-        signal_available = False
-        print("Signal-based timeout not available, relying on subprocess timeout")
-    
     # This should trigger validate_trading_parameters() during import
     import bot_engine
     
-    if signal_available:
-        signal.alarm(0)  # Cancel timeout
     print("SUCCESS: bot_engine imported without NameError")
     exit_code = 0
 except NameError as e:
-    if signal_available:
-        signal.alarm(0)  # Cancel timeout
     if "BUY_THRESHOLD" in str(e):
         print(f"FAILURE: NameError for BUY_THRESHOLD still occurs: {e}")
         exit_code = 1
@@ -76,8 +54,6 @@ except NameError as e:
         print(f"OTHER_NAMEERROR: {e}")
         exit_code = 2
 except Exception as e:
-    if signal_available:
-        signal.alarm(0)  # Cancel timeout
     # Other exceptions are expected due to missing dependencies, incomplete env, etc.
     print(f"OTHER_EXCEPTION: {type(e).__name__}: {e}")
     exit_code = 0  # This is OK
@@ -104,14 +80,14 @@ sys.exit(exit_code)
                 capture_output=True,
                 text=True,
                 env=env,
-                timeout=20  # Reduced from 30 to 20 seconds to match internal timeout
+                timeout=15  # Reduced timeout to prevent worker hanging
             )
         except subprocess.TimeoutExpired as e:
-            # Handle subprocess timeout
-            print(f"Subprocess timeout after 20 seconds")
+            # Handle subprocess timeout gracefully
+            print(f"Subprocess timeout after 15 seconds")
             print(f"Stdout so far: {e.stdout}")
             print(f"Stderr so far: {e.stderr}")
-            assert False, f"Subprocess timeout - bot_engine import took longer than 20 seconds"
+            assert False, f"Subprocess timeout - bot_engine import took longer than 15 seconds"
         
         print(f"Test script output: {result.stdout}")
         if result.stderr:
@@ -122,8 +98,6 @@ sys.exit(exit_code)
             assert False, f"NameError for BUY_THRESHOLD or other trading parameter still occurs: {result.stdout}"
         elif result.returncode == 2:
             assert False, f"Unexpected NameError: {result.stdout}"
-        elif result.returncode == 3:
-            assert False, f"Import timeout - bot_engine import took longer than internal timeout: {result.stdout}"
         # exit code 0 means success or expected exception
         
     finally:
