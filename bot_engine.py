@@ -2884,14 +2884,29 @@ def pre_trade_health_check(
             # Handle cases where pd.DatetimeIndex is not a proper type (e.g., during mocking)
             is_datetime_index = str(type(df.index).__name__) == "DatetimeIndex"
             
-        if not is_datetime_index:
-            df.index = pd.to_datetime(df.index, errors="coerce", utc=True)
-        if getattr(df.index, "tz", None) is None:
-            log_warning("HEALTH_TZ_MISSING", extra={"symbol": sym})
-            df.index = df.index.tz_localize(timezone.utc)
-            summary["timezone_issues"].append(sym)
-        else:
-            df.index = df.index.tz_convert("UTC")
+        # AI-AGENT-REF: only convert to datetime if not already datetime and not a RangeIndex
+        if not is_datetime_index and not orig_range:
+            datetime_result = pd.to_datetime(df.index, errors="coerce", utc=True)
+            # Check if conversion resulted in all NaT values
+            if datetime_result.isna().all():
+                log_warning(
+                    "HEALTH_DATETIME_CONVERSION_FAILED", 
+                    extra={"symbol": sym, "index_type": str(type(df.index).__name__)}
+                )
+                summary.setdefault("datetime_conversion_failures", []).append(sym)
+                continue  # Skip further processing for this symbol
+            df.index = datetime_result
+        
+        # AI-AGENT-REF: only handle timezone for datetime indices, not RangeIndex
+        if not orig_range and (is_datetime_index or not is_datetime_index):
+            # Only process timezone if we have a datetime-like index
+            if hasattr(df.index, 'tz'):
+                if getattr(df.index, "tz", None) is None:
+                    log_warning("HEALTH_TZ_MISSING", extra={"symbol": sym})
+                    df.index = df.index.tz_localize(timezone.utc)
+                    summary["timezone_issues"].append(sym)
+                else:
+                    df.index = df.index.tz_convert("UTC")
 
         # Require data to be recent
         if not orig_range:
