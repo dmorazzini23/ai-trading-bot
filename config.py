@@ -45,6 +45,12 @@ except Exception as e:
         DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
         BUY_THRESHOLD = float(os.getenv("BUY_THRESHOLD", "0.5"))
         WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+        TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", "test_trades.csv")  # AI-AGENT-REF: add missing TRADE_LOG_FILE
+        SEED = int(os.getenv("SEED", "42"))  # AI-AGENT-REF: add missing SEED 
+        RATE_LIMIT_BUDGET = int(os.getenv("RATE_LIMIT_BUDGET", "190"))  # AI-AGENT-REF: add missing RATE_LIMIT_BUDGET
+        REBALANCE_INTERVAL_MIN = int(os.getenv("REBALANCE_INTERVAL_MIN", "60"))  # AI-AGENT-REF: add missing value
+        SHADOW_MODE = os.getenv("SHADOW_MODE", "True").lower() in ("true", "1")  # AI-AGENT-REF: add missing value
+        DISABLE_DAILY_RETRAIN = os.getenv("DISABLE_DAILY_RETRAIN", "False").lower() in ("true", "1")  # AI-AGENT-REF: add missing value
         # Add other commonly accessed attributes as needed
         def __getattr__(self, name):
             # Fallback for any missing attributes
@@ -240,8 +246,9 @@ SLIPPAGE_THRESHOLD = env_settings.SLIPPAGE_THRESHOLD
 REBALANCE_INTERVAL_MIN = env_settings.REBALANCE_INTERVAL_MIN
 SHADOW_MODE = env_settings.SHADOW_MODE
 DISABLE_DAILY_RETRAIN = env_settings.DISABLE_DAILY_RETRAIN
-# AI-AGENT-REF: unify trade log path under data/
-TRADE_LOG_FILE = str((ROOT_DIR / env_settings.TRADE_LOG_FILE).resolve())
+# AI-AGENT-REF: unify trade log path under data/ with None guard
+trade_log_file = env_settings.TRADE_LOG_FILE or "test_trades.csv"  # AI-AGENT-REF: fallback if None
+TRADE_LOG_FILE = str((ROOT_DIR / trade_log_file).resolve())
 EQUITY_EXPOSURE_CAP = float(os.getenv("EQUITY_EXPOSURE_CAP", "2.5"))
 PORTFOLIO_EXPOSURE_CAP = float(os.getenv("PORTFOLIO_EXPOSURE_CAP", "2.5"))
 SEED = int(os.getenv("SEED", str(env_settings.SEED)))
