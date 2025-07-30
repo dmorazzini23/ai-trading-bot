@@ -423,6 +423,14 @@ class RiskEngine:
         if self.hard_stop:
             return 0
             
+        # AI-AGENT-REF: Check if we can trade this signal
+        if not self.can_trade(signal):
+            return 0
+            
+        # AI-AGENT-REF: Check max drawdown if API is available
+        if api and not self.check_max_drawdown(api):
+            return 0
+            
         if price <= 0:
             logger.warning("Invalid price %s for %s", price, getattr(signal, 'symbol', 'UNKNOWN'))
             return 0
