@@ -8,25 +8,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12.3'
       - name: Cache pip
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install torch==2.2.2+cpu --extra-index-url https://download.pytorch.org/whl/cpu
-          pip install pydantic-settings>=0.1.0 pydantic>=2.0 python-dateutil>=2.9.2
-          pip install -r requirements-dev.txt
+        run: make install-dev
       - name: Lint
-        run: |
-          flake8 .
-          mypy .
+        run: make lint
       - name: Test
-        run: pytest --cov
+        run: make test-ci

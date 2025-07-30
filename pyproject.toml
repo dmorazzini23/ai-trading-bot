@@ -9,11 +9,22 @@ ai-trading-bot = "ai_trading.main:main"
 
 [project.optional-dependencies]
 dev = [
-  "pytest",
-  "flake8",
-  "black",
-  "mkdocs",
+  "pytest>=7.0.0",
+  "pytest-cov>=4.0.0", 
+  "pytest-xdist>=3.0.0",
+  "pytest-benchmark>=4.0.0",
+  "pytest-asyncio>=0.20.2",
+  "flake8>=6.0.0",
+  "mypy>=1.0.0",
+  "black>=23.0.0",
+  "hypothesis>=6.0.0",
+  "coverage>=7.0.0",
 ]
 test = [
-  "pytest",
+  "pytest>=7.0.0",
+  "pytest-cov>=4.0.0",
+  "pytest-xdist>=3.0.0", 
+  "pytest-benchmark>=4.0.0",
+  "pytest-asyncio>=0.20.2",
+  "hypothesis>=6.0.0",
 ]

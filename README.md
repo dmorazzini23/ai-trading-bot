@@ -28,13 +28,23 @@ The project targets **Python 3.12.3**.
 
 ## ⚙️ Installation
 
+### Quick Start
+
+```bash
+git clone https://github.com/dmorazzini23/ai-trading-bot.git
+cd ai-trading-bot
+make install-dev
+make validate-env
+```
+
+### Manual Installation
+
 Create a virtual environment and install the dependencies:
 
 ```bash
 python3.12 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-pip install pydantic-settings pydantic>=2.0 python-dateutil>=2.9.2
 ```
 
 For development & testing, install additional tools:
@@ -42,6 +52,10 @@ For development & testing, install additional tools:
 ```bash
 pip install -r requirements-dev.txt
 ```
+
+### Development Setup
+
+For comprehensive development setup instructions, see [**docs/DEVELOPMENT.md**](docs/DEVELOPMENT.md).
 
 ---
 
