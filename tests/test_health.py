@@ -218,12 +218,16 @@ torch_nn.Sequential = lambda *a, **k: None
 torch_nn.Linear = lambda *a, **k: None
 torch_nn.ReLU = lambda *a, **k: None
 torch_nn.Softmax = lambda *a, **k: None
+torch_nn.Parameter = object  # AI-AGENT-REF: add missing Parameter for meta_learning.py
 sys.modules["torch.nn"] = torch_nn
+# AI-AGENT-REF: ensure torch.nn is accessible from torch module for meta_learning.py
+sys.modules["torch"].nn = torch_nn
 torch_optim = types.ModuleType("torch.optim")
 torch_optim.Adam = lambda *a, **k: None
 sys.modules["torch.optim"] = torch_optim
 
-from ai_trading.main import main
+# AI-AGENT-REF: Remove ai_trading.main import that causes deep torch dependency chain
+# from ai_trading.main import main  # Not used in this test, causes torch import issues
 from bot_engine import pre_trade_health_check
 
 

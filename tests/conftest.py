@@ -471,13 +471,25 @@ except Exception:  # pragma: no cover - optional dependency
                 self._length = len(data[first_key]) if isinstance(data[first_key], list) else 5
             else:
                 self._length = 5
+            # Initialize index attribute for getting/setting
+            self._index = None
                 
         def __len__(self):
             return self._length
             
         def __getitem__(self, key):
-            # Return the actual data if available, otherwise default
-            if isinstance(self.data, dict) and key in self.data:
+            # Handle list of column names (multiple column selection)
+            if isinstance(key, list):
+                # Return a new DataFrame with selected columns
+                selected_data = {}
+                for col in key:
+                    if isinstance(self.data, dict) and col in self.data:
+                        selected_data[col] = self.data[col]
+                    else:
+                        selected_data[col] = [1] * self._length  # Fallback data
+                return DataFrameStub(selected_data)
+            # Handle single column name
+            elif isinstance(self.data, dict) and key in self.data:
                 return SeriesStub(self.data[key])
             return SeriesStub([1, 2, 3])  # Fallback for missing keys
             
@@ -490,17 +502,40 @@ except Exception:  # pragma: no cover - optional dependency
             
         @property
         def index(self):
-            class IndexStub:
-                dtype = object
-                def get_level_values(self, level):
-                    return [1, 2, 3]
-                def __getitem__(self, idx):
-                    return (1, 2)  # Return a tuple for MultiIndex-like behavior
-            return IndexStub()
+            if self._index is None:
+                class IndexStub:
+                    dtype = object
+                    def get_level_values(self, level):
+                        return [1, 2, 3]
+                    def __getitem__(self, idx):
+                        return (1, 2)  # Return a tuple for MultiIndex-like behavior
+                    def tz_localize(self, tz):
+                        return self  # Return self for method chaining
+                    @property 
+                    def tz(self):
+                        return None  # No timezone by default
+                self._index = IndexStub()
+            return self._index
+            
+        @index.setter 
+        def index(self, value):
+            self._index = value
             
         @property
         def empty(self):
             return self._length == 0
+            
+        def isna(self):
+            """Return a DataFrame-like object with all False values (no NaN in test data)."""
+            class IsNaResult:
+                def any(self):
+                    """Return a Series-like object with all False values."""
+                    class AnyResult:
+                        def any(self):
+                            """Return False since we have no NaN values in test data."""
+                            return False
+                    return AnyResult()
+            return IsNaResult()
             
         def __getattr__(self, name):
             return lambda *args, **kwargs: self
@@ -616,6 +651,18 @@ except Exception:  # pragma: no cover - optional dependency
         def utcnow():
             from datetime import datetime, timezone
             return datetime.now(timezone.utc)
+            
+        @staticmethod
+        def now(tz=None):
+            from datetime import datetime, timezone
+            if tz == "UTC" or tz == timezone.utc:
+                return datetime.now(timezone.utc)
+            return datetime.now()
+            
+        def __sub__(self, other):
+            # Support timestamp arithmetic for comparisons
+            from datetime import datetime, timezone, timedelta
+            return datetime.now(timezone.utc) - timedelta(days=1)  # Return a reasonable past time
     
     # Add pandas functions
     def read_csv(*args, **kwargs):
@@ -628,7 +675,21 @@ except Exception:  # pragma: no cover - optional dependency
         return DataFrameStub()
         
     def to_datetime(*args, **kwargs):
-        return TimestampStub()
+        # Return an index-like object that supports tz_localize
+        class DatetimeIndexStub:
+            def __init__(self, *args, **kwargs):
+                pass
+            def tz_localize(self, tz):
+                return self  # Return self for method chaining
+            def tz_convert(self, tz):
+                return self  # Return self for method chaining
+            def __getitem__(self, idx):
+                from datetime import datetime, timezone
+                return datetime.now(timezone.utc)  # Return a timestamp
+            @property
+            def tz(self):
+                return kwargs.get('utc') if 'utc' in kwargs else None
+        return DatetimeIndexStub(*args, **kwargs)
         
     def isna(obj):
         """Check for NaN values."""
@@ -640,8 +701,27 @@ except Exception:  # pragma: no cover - optional dependency
         def __init__(self, *args, **kwargs):
             pass
 
+    # Simple Timedelta stub
+    class TimedeltaStub:
+        def __init__(self, days=0, **kwargs):
+            from datetime import timedelta
+            self.td = timedelta(days=days, **kwargs)
+        
+        def __rmul__(self, other):
+            return self
+        
+        def __sub__(self, other):
+            return self.td
+            
+        def __rsub__(self, other):
+            from datetime import datetime, timezone
+            if hasattr(other, '__sub__'):
+                return other - self.td
+            return datetime.now(timezone.utc) - self.td
+
     pandas_mod.DataFrame = DataFrameStub
     pandas_mod.Timestamp = TimestampStub
+    pandas_mod.Timedelta = TimedeltaStub
     pandas_mod.Series = SeriesStub
     pandas_mod.MultiIndex = MultiIndex
     pandas_mod.read_csv = read_csv
