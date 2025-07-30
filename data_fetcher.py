@@ -185,7 +185,7 @@ def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, fee
             if attempt == 2:
                 logger.exception("HTTP request error for %s", symbol, exc_info=exc)
                 raise DataFetchException(symbol, "alpaca", url, str(exc)) from exc
-            time.sleep(delay)
+            pytime.sleep(delay)
             delay *= 2
 
     _log_http_response(resp)
