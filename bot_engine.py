@@ -98,8 +98,8 @@ warnings.filterwarnings(
 )
 
 import pandas as pd
-# AI-AGENT-REF: Preserve real pandas.DataFrame class before lazy module override
-_REAL_PD_DATAFRAME = pd.DataFrame
+# AI-AGENT-REF: Preserve real pandas.DataFrame type before lazy module override
+_REAL_PD_DATAFRAME = pd.core.frame.DataFrame
 
 import utils
 from features import (
