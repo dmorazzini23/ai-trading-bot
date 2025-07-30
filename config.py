@@ -396,6 +396,7 @@ class TradingConfig:
     signal_confirmation_bars: int = 2
     trade_cooldown_min: float = 5.0
     delta_threshold: float = 0.02
+    min_confidence: float = 0.6  # AI-AGENT-REF: add missing min_confidence attribute
 
     # Volatility & ATR
     volatility_lookback_days: int = 20
@@ -418,6 +419,7 @@ class TradingConfig:
             signal_confirmation_bars=int(os.getenv("SIGNAL_CONFIRMATION_BARS", "2")),
             trade_cooldown_min=float(os.getenv("TRADE_COOLDOWN_MIN", "5.0")),
             delta_threshold=float(os.getenv("DELTA_THRESHOLD", "0.02")),
+            min_confidence=float(os.getenv("MIN_CONFIDENCE", "0.6")),  # AI-AGENT-REF: add min_confidence env var
             volatility_lookback_days=int(os.getenv("VOLATILITY_LOOKBACK_DAYS", "20")),
             atr_multiplier=float(os.getenv("ATR_MULTIPLIER", "2.0")),
             exposure_cap_aggressive=float(os.getenv("EXPOSURE_CAP_AGGRESSIVE", "0.8")),
@@ -432,6 +434,7 @@ class TradingConfig:
             "signal_confirmation_bars": self.signal_confirmation_bars,
             "atr_multiplier": self.atr_multiplier,
             "delta_threshold": self.delta_threshold,
+            "min_confidence": self.min_confidence,  # AI-AGENT-REF: add min_confidence to dict conversion
             "exposure_cap_aggressive": self.exposure_cap_aggressive,
             "exposure_cap_conservative": self.exposure_cap_conservative,
         }
