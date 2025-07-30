@@ -28,6 +28,7 @@ os.environ.update({
     "BOT_MODE": "balanced",
     "DOLLAR_RISK_LIMIT": "0.02",
     "TESTING": "1",  # Enable testing mode to avoid expensive validations
+    "PYTEST_RUNNING": "1",  # Prevent ML model loading during tests
     "TRADE_LOG_FILE": "test_trades.csv",
     "SEED": "42",
     "RATE_LIMIT_BUDGET": "190",
