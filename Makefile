@@ -11,13 +11,13 @@ validate-env:
 	python scripts/validate_test_environment.py
 
 # Testing targets
-test-all: clean validate-env
+test-all: clean install-dev validate-env
 	PYTHONPATH=. pytest --maxfail=3 --disable-warnings -n auto -v
 
-test-fast: clean validate-env
+test-fast: clean install-dev validate-env
 	PYTHONPATH=. pytest --maxfail=1 --disable-warnings -x
 
-test-ci: clean validate-env
+test-ci: clean install-dev validate-env
 	PYTHONPATH=. pytest --maxfail=5 --disable-warnings --tb=short
 
 clean:
@@ -25,10 +25,10 @@ clean:
 	find . -name "*.pyc" -delete
 	rm -rf .pytest_cache htmlcov coverage .coverage
 
-coverage:
+coverage: install-dev
 	PYTHONPATH=. pytest --cov=. --cov-report=html --cov-report=term
 
-benchmark:
+benchmark: install-dev
 	PYTHONPATH=. pytest tests/test_benchmarks.py --benchmark-only --benchmark-save=latest
 
 # Linting and code quality
