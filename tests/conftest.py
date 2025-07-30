@@ -1,6 +1,104 @@
 import sys
 import os
 
+# AI-AGENT-REF: Add dotenv stub early to prevent import errors
+try:
+    from dotenv import load_dotenv
+except Exception:
+    def load_dotenv(*a, **k):
+        pass
+    import types
+    dotenv_mod = types.ModuleType("dotenv")
+    dotenv_mod.load_dotenv = load_dotenv
+    dotenv_mod.__file__ = "stub"
+    sys.modules["dotenv"] = dotenv_mod
+
+# AI-AGENT-REF: Add hypothesis stub early
+try:
+    from hypothesis import given, settings, HealthCheck
+except Exception:
+    import types
+    
+    def given(*args, **kwargs):
+        def decorator(f):
+            return f
+        return decorator
+    
+    def settings(*args, **kwargs):
+        def decorator(f):
+            return f
+        return decorator
+    
+    class HealthCheck:
+        too_slow = "too_slow"
+        filter_too_much = "filter_too_much"
+        function_scoped_fixture = "function_scoped_fixture"
+    
+    # Add strategies module
+    class Strategies:
+        @staticmethod
+        def text():
+            return "test_string"
+        
+        @staticmethod
+        def integers(min_value=None, max_value=None):
+            return 42
+            
+        @staticmethod
+        def floats(min_value=None, max_value=None, allow_nan=True, allow_infinity=True, **kwargs):
+            return 1.0
+            
+        @staticmethod
+        def lists(elements, min_size=0, max_size=None, **kwargs):
+            return [1, 2, 3]
+    
+    hypothesis_mod = types.ModuleType("hypothesis")
+    hypothesis_mod.given = given
+    hypothesis_mod.settings = settings
+    hypothesis_mod.HealthCheck = HealthCheck
+    hypothesis_mod.strategies = Strategies()
+    hypothesis_mod.__file__ = "stub"
+    sys.modules["hypothesis"] = hypothesis_mod
+
+# AI-AGENT-REF: Add portalocker stub early
+try:
+    import portalocker
+except Exception:
+    import types
+    class LockStub:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+    
+    portalocker_mod = types.ModuleType("portalocker")
+    portalocker_mod.Lock = LockStub
+    portalocker_mod.LOCK_EX = 1
+    portalocker_mod.LOCK_NB = 2
+    portalocker_mod.__file__ = "stub"
+    sys.modules["portalocker"] = portalocker_mod
+
+# AI-AGENT-REF: Add schedule stub early
+try:
+    import schedule
+except Exception:
+    import types
+    class ScheduleStub:
+        def __init__(self):
+            pass
+        def every(self, *args):
+            return self
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: self
+    
+    schedule_mod = types.ModuleType("schedule")
+    schedule_mod.every = lambda *a: ScheduleStub()
+    schedule_mod.run_pending = lambda: None
+    schedule_mod.__file__ = "stub"
+    sys.modules["schedule"] = schedule_mod
+
 # AI-AGENT-REF: Set test environment variables early to avoid config import errors
 os.environ.update({
     "ALPACA_API_KEY": "testkey",
@@ -465,7 +563,11 @@ except Exception:  # pragma: no cover - optional dependency
         def __getattr__(self, name):
             return lambda *args, **kwargs: None
     
+    class APIError(Exception):
+        pass
+
     rest_mod.REST = RESTStub
+    rest_mod.APIError = APIError
     alpaca_mod.rest = rest_mod
     alpaca_mod.__file__ = "stub"
     sys.modules["alpaca_trade_api"] = alpaca_mod
@@ -492,6 +594,8 @@ except Exception:  # pragma: no cover - optional dependency
     data_mod = types.ModuleType("alpaca.data")
     models_mod = types.ModuleType("alpaca.data.models")
     requests_mod = types.ModuleType("alpaca.data.requests")
+    historical_mod = types.ModuleType("alpaca.data.historical")
+    timeframe_mod = types.ModuleType("alpaca.data.timeframe")
     
     class Quote:
         bid_price = 0
@@ -501,10 +605,30 @@ except Exception:  # pragma: no cover - optional dependency
         def __init__(self, symbol_or_symbols):
             self.symbols = symbol_or_symbols
     
+    class StockBarsRequest:
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class StockHistoricalDataClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+    
+    class TimeFrame:
+        DAY = "day"
+        HOUR = "hour"
+        MINUTE = "minute"
+
     models_mod.Quote = Quote
     requests_mod.StockLatestQuoteRequest = StockLatestQuoteRequest
+    requests_mod.StockBarsRequest = StockBarsRequest
+    historical_mod.StockHistoricalDataClient = StockHistoricalDataClient
+    timeframe_mod.TimeFrame = TimeFrame
     data_mod.models = models_mod
     data_mod.requests = requests_mod
+    data_mod.historical = historical_mod
+    data_mod.timeframe = timeframe_mod
     
     # Trading module
     trading_mod = types.ModuleType("alpaca.trading")
@@ -512,6 +636,7 @@ except Exception:  # pragma: no cover - optional dependency
     enums_mod = types.ModuleType("alpaca.trading.enums")
     trading_models_mod = types.ModuleType("alpaca.trading.models")
     trading_requests_mod = types.ModuleType("alpaca.trading.requests")
+    trading_stream_mod = types.ModuleType("alpaca.trading.stream")
     
     class TradingClient:
         def __init__(self, *args, **kwargs):
@@ -538,6 +663,25 @@ except Exception:  # pragma: no cover - optional dependency
         CLOSED = "closed"
         ALL = "all"
     
+    class OrderStatus(str, Enum):
+        NEW = "new"
+        PARTIALLY_FILLED = "partially_filled"
+        FILLED = "filled"
+        DONE_FOR_DAY = "done_for_day"
+        CANCELED = "canceled"
+        EXPIRED = "expired"
+        REPLACED = "replaced"
+        PENDING_CANCEL = "pending_cancel"
+        PENDING_REPLACE = "pending_replace"
+        PENDING_REVIEW = "pending_review"
+        ACCEPTED = "accepted"
+        PENDING_NEW = "pending_new"
+        ACCEPTED_FOR_BIDDING = "accepted_for_bidding"
+        STOPPED = "stopped"
+        REJECTED = "rejected"
+        SUSPENDED = "suspended"
+        CALCULATED = "calculated"
+    
     class Order(dict):
         pass
     
@@ -560,18 +704,32 @@ except Exception:  # pragma: no cover - optional dependency
                 limit_price=limit_price,
             )
     
+    class GetOrdersRequest(dict):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+    
+    class TradingStream:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+    
     client_mod.TradingClient = TradingClient
     enums_mod.OrderSide = OrderSide
     enums_mod.TimeInForce = TimeInForce
     enums_mod.OrderClass = AlpacaOrderClass
     enums_mod.QueryOrderStatus = QueryOrderStatus
+    enums_mod.OrderStatus = OrderStatus
     trading_models_mod.Order = Order
     trading_requests_mod.LimitOrderRequest = LimitOrderRequest
     trading_requests_mod.MarketOrderRequest = MarketOrderRequest
+    trading_requests_mod.GetOrdersRequest = GetOrdersRequest
+    trading_stream_mod.TradingStream = TradingStream
     trading_mod.client = client_mod
     trading_mod.enums = enums_mod
     trading_mod.models = trading_models_mod
     trading_mod.requests = trading_requests_mod
+    trading_mod.stream = trading_stream_mod
     
     # Main alpaca module
     alpaca_main_mod = types.ModuleType("alpaca")
@@ -585,11 +743,14 @@ except Exception:  # pragma: no cover - optional dependency
     sys.modules["alpaca.data"] = data_mod
     sys.modules["alpaca.data.models"] = models_mod
     sys.modules["alpaca.data.requests"] = requests_mod
+    sys.modules["alpaca.data.historical"] = historical_mod
+    sys.modules["alpaca.data.timeframe"] = timeframe_mod
     sys.modules["alpaca.trading"] = trading_mod
     sys.modules["alpaca.trading.client"] = client_mod
     sys.modules["alpaca.trading.enums"] = enums_mod
     sys.modules["alpaca.trading.models"] = trading_models_mod
     sys.modules["alpaca.trading.requests"] = trading_requests_mod
+    sys.modules["alpaca.trading.stream"] = trading_stream_mod
 
 # AI-AGENT-REF: Add other missing dependencies
 try:
@@ -608,11 +769,6 @@ except Exception:  # pragma: no cover - optional dependency
     tzlocal_mod.get_localzone = lambda: None
     tzlocal_mod.__file__ = "stub"
     sys.modules["tzlocal"] = tzlocal_mod
-try:
-    from dotenv import load_dotenv
-except Exception:  # pragma: no cover - optional dependency
-    def load_dotenv(*a, **k):
-        pass
 
 # AI-AGENT-REF: Add BeautifulSoup stub
 try:
