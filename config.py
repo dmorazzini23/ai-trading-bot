@@ -367,7 +367,7 @@ __all__ = [
 ]
 
 # alias for backwards compatibility
-Config = Settings
+Config = settings
 
 # --- Trading bot parameters ----------------------------
 

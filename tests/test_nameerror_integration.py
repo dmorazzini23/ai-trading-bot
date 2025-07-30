@@ -18,21 +18,42 @@ def test_bot_engine_import_no_nameerror():
 import os
 import sys
 
-# Set minimal required environment variables
+# Set minimal required environment variables to prevent hangs/errors
 os.environ.update({
     "ALPACA_API_KEY": "PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",  # Valid format
     "ALPACA_SECRET_KEY": "SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD",  # Valid format
+    "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
+    "WEBHOOK_SECRET": "test-webhook-secret",
+    "FLASK_PORT": "9000",
     "BOT_MODE": "balanced",
     "DOLLAR_RISK_LIMIT": "0.02",
     "TESTING": "1",  # Enable testing mode to avoid expensive validations
+    "TRADE_LOG_FILE": "test_trades.csv",
+    "SEED": "42",
+    "RATE_LIMIT_BUDGET": "190",
+    # Add more environment variables that could prevent import hangs
+    "DISABLE_DAILY_RETRAIN": "True",
+    "DRY_RUN": "True",
+    "SHADOW_MODE": "True",
 })
 
 try:
+    # Add timeout mechanism to prevent hangs
+    import signal
+    def timeout_handler(signum, frame):
+        print("TIMEOUT: bot_engine import took too long")
+        sys.exit(3)
+    
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(20)  # 20 second timeout for import
+    
     # This should trigger validate_trading_parameters() during import
     import bot_engine
+    signal.alarm(0)  # Cancel timeout
     print("SUCCESS: bot_engine imported without NameError")
     exit_code = 0
 except NameError as e:
+    signal.alarm(0)  # Cancel timeout
     if "BUY_THRESHOLD" in str(e):
         print(f"FAILURE: NameError for BUY_THRESHOLD still occurs: {e}")
         exit_code = 1
@@ -43,6 +64,7 @@ except NameError as e:
         print(f"OTHER_NAMEERROR: {e}")
         exit_code = 2
 except Exception as e:
+    signal.alarm(0)  # Cancel timeout
     # Other exceptions are expected due to missing dependencies, incomplete env, etc.
     print(f"OTHER_EXCEPTION: {type(e).__name__}: {e}")
     exit_code = 0  # This is OK
@@ -80,6 +102,8 @@ sys.exit(exit_code)
             assert False, f"NameError for BUY_THRESHOLD or other trading parameter still occurs: {result.stdout}"
         elif result.returncode == 2:
             assert False, f"Unexpected NameError: {result.stdout}"
+        elif result.returncode == 3:
+            assert False, f"Import timeout - bot_engine import took longer than 20 seconds: {result.stdout}"
         # exit code 0 means success or expected exception
         
     finally:
