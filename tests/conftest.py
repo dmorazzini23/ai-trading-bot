@@ -1198,9 +1198,15 @@ def reload_utils_module():
 @pytest.fixture(autouse=True)
 def stub_capital_scaling(monkeypatch):
     """Provide simple stubs for heavy capital scaling functions."""
-    import ai_trading.capital_scaling as cs
-    monkeypatch.setattr(cs, "drawdown_adjusted_kelly", lambda *a, **k: 0.02)
-    monkeypatch.setattr(cs, "volatility_parity_position", lambda *a, **k: 0.01)
+    try:
+        import ai_trading.capital_scaling as cs
+        # Only set attributes if they exist
+        if hasattr(cs, "drawdown_adjusted_kelly"):
+            monkeypatch.setattr(cs, "drawdown_adjusted_kelly", lambda *a, **k: 0.02)
+        if hasattr(cs, "volatility_parity_position"):
+            monkeypatch.setattr(cs, "volatility_parity_position", lambda *a, **k: 0.01)
+    except ImportError:
+        pass
     
     # Add missing bot_engine functions
     try:
