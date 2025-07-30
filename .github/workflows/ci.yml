@@ -26,4 +26,4 @@ jobs:
           pip install -r requirements-dev.txt
       - name: Test
         run: |
-          pytest --maxfail=1 --disable-warnings --strict-markers --cov=ai_trading --cov-fail-under=80
+          make test-all
