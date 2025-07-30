@@ -6721,7 +6721,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
             logger.critical(
                 "Failed after retries: non-positive price for %s. Data context: %r",
                 sig.symbol,
-                data.tail(3).to_dict() if isinstance(data, _RealDataFrame) else data,
+                data.tail(3).to_dict() if hasattr(data, 'tail') and hasattr(data, 'to_dict') else data,
             )
             continue
         # Provide the account equity (cash) when sizing positions; this allows
@@ -7680,10 +7680,10 @@ def compute_ichimoku(
         else:
             ich_df = ich
             signal_df = pd.DataFrame(index=ich_df.index)
-        # AI-AGENT-REF: Use preserved real DataFrame class to avoid mock contamination
-        if not isinstance(ich_df, _RealDataFrame):
+        # AI-AGENT-REF: Use attribute check instead of isinstance to avoid type errors
+        if not hasattr(ich_df, 'iloc') or not hasattr(ich_df, 'columns'):
             ich_df = pd.DataFrame(ich_df)
-        if not isinstance(signal_df, _RealDataFrame):
+        if not hasattr(signal_df, 'iloc') or not hasattr(signal_df, 'columns'):
             signal_df = pd.DataFrame(signal_df)
         return ich_df, signal_df
     except Exception as exc:  # pragma: no cover - defensive
