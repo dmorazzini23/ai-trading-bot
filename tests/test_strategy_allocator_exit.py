@@ -1,8 +1,42 @@
 from strategies import TradeSignal
-import strategy_allocator
+import sys
+import importlib
+from pathlib import Path
+import pytest
+
+# Add the project root to sys.path to ensure we can import the real module
+project_root = Path(__file__).resolve().parents[1]
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 
-def test_exit_confirmation():
+@pytest.fixture(autouse=True)
+def ensure_real_strategy_allocator():
+    """Ensure we get the real strategy_allocator module, not a mock."""
+    # Save the original module if it exists
+    original_module = sys.modules.get('strategy_allocator')
+    
+    # Remove any existing mock module
+    if 'strategy_allocator' in sys.modules:
+        del sys.modules['strategy_allocator']
+    
+    # Import the real module from file path
+    import strategy_allocator
+    
+    # Verify we have the real StrategyAllocator class
+    assert hasattr(strategy_allocator.StrategyAllocator, '__init__')
+    assert hasattr(strategy_allocator.StrategyAllocator(), 'config')
+    
+    yield strategy_allocator
+    
+    # Cleanup: restore original module if it was there
+    if original_module and hasattr(original_module, 'StrategyAllocator'):
+        if original_module.StrategyAllocator != object:
+            sys.modules['strategy_allocator'] = original_module
+
+
+def test_exit_confirmation(ensure_real_strategy_allocator):
+    strategy_allocator = ensure_real_strategy_allocator
     alloc = strategy_allocator.StrategyAllocator()
     # Explicitly set configuration to ensure test isolation
     alloc.config.delta_threshold = 0.0  # Allow repeated signals with same confidence
