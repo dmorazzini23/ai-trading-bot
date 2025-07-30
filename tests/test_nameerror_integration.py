@@ -24,6 +24,7 @@ os.environ.update({
     "ALPACA_SECRET_KEY": "SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD",  # Valid format
     "BOT_MODE": "balanced",
     "DOLLAR_RISK_LIMIT": "0.02",
+    "TESTING": "1",  # Enable testing mode to avoid expensive validations
 })
 
 try:
