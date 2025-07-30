@@ -14,6 +14,7 @@ except (ImportError, RuntimeError, TypeError, AttributeError):
     class FallbackConfig:
         signal_confirmation_bars: int = 2
         delta_threshold: float = 0.02
+        min_confidence: float = 0.6  # AI-AGENT-REF: add missing min_confidence to fallback config
     
     CONFIG = FallbackConfig()
 
@@ -54,7 +55,8 @@ class StrategyAllocator:
 
                 if len(self.signal_history[key]) >= self.config.signal_confirmation_bars:
                     avg_conf = sum(self.signal_history[key]) / len(self.signal_history[key])
-                    if avg_conf > 0.6:
+                    # AI-AGENT-REF: use configurable min_confidence instead of hardcoded 0.6
+                    if avg_conf > self.config.min_confidence:
                         s.confidence = avg_conf
                         confirmed[strategy].append(s)
                         logger.debug(f"Signal approved: {s.symbol}")
