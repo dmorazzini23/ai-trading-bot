@@ -27,6 +27,13 @@ reward_log.csv
 # Test and hypothesis cache
 .hypothesis/
 .pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.mypy_cache/
+
+# Benchmark results
+.benchmarks/
 
 # Generated data files
 =*                     # e.g. “=0.29.36”

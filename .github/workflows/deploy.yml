@@ -27,6 +27,8 @@ jobs:
           git pull origin main
           source venv/bin/activate
           pip install -r requirements.txt
+          # Install dev dependencies if requirements-dev.txt exists
+          [ -f requirements-dev.txt ] && pip install -r requirements-dev.txt || echo "No dev requirements file found"
           if ! sudo systemctl restart ai-trading-scheduler.service; then
             echo "Restart failed, rolling back" >&2
             git reset --hard "$PREV_COMMIT"
