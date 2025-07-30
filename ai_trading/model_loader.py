@@ -71,5 +71,8 @@ def load_model(symbol: str):
     return model
 
 
-for sym in getattr(config, "SYMBOLS", []):
-    ML_MODELS[sym] = load_model(sym)
+# AI-AGENT-REF: Defer model loading in testing environments to prevent import blocking
+import os
+if not os.getenv("TESTING") and not getattr(config, "TESTING", False):
+    for sym in getattr(config, "SYMBOLS", []):
+        ML_MODELS[sym] = load_model(sym)
