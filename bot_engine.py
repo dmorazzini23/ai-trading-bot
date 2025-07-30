@@ -2870,7 +2870,12 @@ def pre_trade_health_check(
             )
             summary.setdefault("invalid_values", []).append(sym)
 
-        orig_range = isinstance(df.index, pd.RangeIndex)
+        # AI-AGENT-REF: robust isinstance check that handles mocked pandas modules  
+        try:
+            orig_range = isinstance(df.index, pd.RangeIndex)
+        except (TypeError, AttributeError):
+            # Handle cases where pd.RangeIndex is not a proper type (e.g., during mocking)
+            orig_range = str(type(df.index).__name__) == "RangeIndex"
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index, errors="coerce", utc=True)
         if getattr(df.index, "tz", None) is None:
