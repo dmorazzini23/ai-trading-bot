@@ -4,6 +4,7 @@ import strategy_allocator
 
 def test_exit_confirmation():
     alloc = strategy_allocator.StrategyAllocator()
+    alloc.config.delta_threshold = 0.0  # Allow repeated signals with same confidence
     buy = TradeSignal(symbol="A", side="buy", confidence=1.0, strategy="s")
     sell = TradeSignal(symbol="A", side="sell", confidence=1.0, strategy="s")
     
