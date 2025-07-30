@@ -455,21 +455,75 @@ if not os.environ.get('PYTEST_RUNNING'):
     from alpaca.trading.stream import TradingStream
     logger.debug("Alpaca trading models and requests imported successfully")
 else:
-    # Mock Alpaca for tests
+    # FIXED Mock classes that can be called with arguments
     class MockTradingClient:
-        def __init__(self, *args, **kwargs): pass
-        def get_account(self): return type('Account', (), {'equity': '100000'})()
-        def submit_order(self, *args, **kwargs): return {'status': 'filled'}
+        def __init__(self, *args, **kwargs): 
+            pass
+        def get_account(self): 
+            return type('Account', (), {'equity': '100000'})()
+        def submit_order(self, *args, **kwargs): 
+            return {'status': 'filled'}
+    
+    class MockMarketOrderRequest:
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class MockLimitOrderRequest:
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class MockGetOrdersRequest:
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class MockOrderSide:
+        BUY = 'buy'
+        SELL = 'sell'
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class MockTimeInForce:
+        DAY = 'day'
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class MockOrderStatus:
+        FILLED = 'filled'
+        OPEN = 'open'
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class MockQueryOrderStatus:
+        FILLED = 'filled'
+        OPEN = 'open'
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class MockOrder:
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class MockTradingStream:
+        def __init__(self, *args, **kwargs):
+            pass
+        def subscribe_trades(self, *args, **kwargs):
+            pass
+        def subscribe_quotes(self, *args, **kwargs):
+            pass
+        def run(self, *args, **kwargs):
+            pass
+    
+    # Assign the mock classes
     TradingClient = MockTradingClient
-    MarketOrderRequest = object
-    LimitOrderRequest = object
-    GetOrdersRequest = object
-    OrderSide = type('OrderSide', (), {'BUY': 'buy', 'SELL': 'sell'})()
-    TimeInForce = type('TimeInForce', (), {'DAY': 'day'})()
-    OrderStatus = type('OrderStatus', (), {'FILLED': 'filled', 'OPEN': 'open'})()
-    QueryOrderStatus = type('QueryOrderStatus', (), {'FILLED': 'filled', 'OPEN': 'open'})()
-    Order = object
-    TradingStream = object
+    MarketOrderRequest = MockMarketOrderRequest
+    LimitOrderRequest = MockLimitOrderRequest
+    GetOrdersRequest = MockGetOrdersRequest
+    OrderSide = MockOrderSide()  # Instance for attribute access
+    TimeInForce = MockTimeInForce()  # Instance for attribute access
+    OrderStatus = MockOrderStatus()  # Instance for attribute access
+    QueryOrderStatus = MockQueryOrderStatus()  # Instance for attribute access
+    Order = MockOrder
+    TradingStream = MockTradingStream
     APIError = Exception
 from bs4 import BeautifulSoup
 from flask import Flask
@@ -489,15 +543,38 @@ if not os.environ.get('PYTEST_RUNNING'):
     from alpaca.data.timeframe import TimeFrame
     logger.debug("Alpaca data client imports successful")
 else:
-    # Mock Alpaca data client for tests
+    # FIXED Mock Alpaca data client classes that can be called with arguments
     class MockStockHistoricalDataClient:
-        def __init__(self, *args, **kwargs): pass
-        def get_stock_bars(self, *args, **kwargs): return []
+        def __init__(self, *args, **kwargs):
+            pass
+        def get_stock_bars(self, *args, **kwargs):
+            return type('Bars', (), {'df': None})()
+    
+    class MockQuote:
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class MockStockBarsRequest:
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class MockStockLatestQuoteRequest:
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    class MockTimeFrame:
+        Minute = 'minute'
+        Hour = 'hour'
+        Day = 'day'
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    # Assign the mock classes
     StockHistoricalDataClient = MockStockHistoricalDataClient
-    Quote = object
-    StockBarsRequest = object
-    StockLatestQuoteRequest = object
-    TimeFrame = type('TimeFrame', (), {'Day': 'Day', 'Hour': 'Hour'})()
+    Quote = MockQuote
+    StockBarsRequest = MockStockBarsRequest
+    StockLatestQuoteRequest = MockStockLatestQuoteRequest
+    TimeFrame = MockTimeFrame()  # Instance for attribute access
     logger.debug("Alpaca data client mocks initialized for tests")
 
 from meta_learning import optimize_signals
