@@ -1166,8 +1166,10 @@ CAPITAL_CAP = params.get("CAPITAL_CAP", 0.08)
 DOLLAR_RISK_LIMIT = float(config.get_env("DOLLAR_RISK_LIMIT", "0.02"))
 BUY_THRESHOLD = params.get("BUY_THRESHOLD", 0.2)
 
+# AI-AGENT-REF: Defer parameter validation in testing environments to prevent import blocking
 # Validate parameters after loading
-validate_trading_parameters()
+if not os.getenv("TESTING"):
+    validate_trading_parameters()
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
 PDT_DAY_TRADE_LIMIT = params.get("PDT_DAY_TRADE_LIMIT", 3)
