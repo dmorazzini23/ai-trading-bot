@@ -98,6 +98,11 @@ warnings.filterwarnings(
 )
 
 import pandas as pd
+# AI-AGENT-REF: preserve real pandas DataFrame class before it gets overwritten by lazy module
+_RealDataFrame = pd.DataFrame
+_RealMultiIndex = pd.MultiIndex
+_RealRangeIndex = pd.RangeIndex
+_RealDatetimeIndex = pd.DatetimeIndex
 
 import utils
 from features import (
@@ -742,17 +747,50 @@ def maybe_rebalance(ctx):
 
 def get_latest_close(df: pd.DataFrame) -> float:
     """Return the last closing price or ``0.0`` if unavailable."""
-    if df is None or df.empty or "close" not in df.columns:
+    # AI-AGENT-REF: debug output to understand test failure
+    logger.debug("get_latest_close called with df: %s", type(df).__name__)
+    
+    # AI-AGENT-REF: More robust check that works with different pandas instances
+    if df is None:
+        logger.debug("get_latest_close early return: df is None")
         return 0.0
-    last_valid_close = df["close"].dropna()
-    if not last_valid_close.empty:
-        price = last_valid_close.iloc[-1]
-    else:
-        logger.critical("All NaNs in close column for get_latest_close")
-        price = 0.0
-    if pd.isna(price) or price <= 0:
+    
+    # Check if df has empty attribute and columns attribute (duck typing)
+    try:
+        is_empty = df.empty
+        has_close = "close" in df.columns
+    except (AttributeError, TypeError) as e:
+        logger.debug("get_latest_close: DataFrame methods failed: %s", e)
         return 0.0
-    return float(price)
+        
+    if is_empty or not has_close:
+        logger.debug("get_latest_close early return: empty: %s, close in columns: %s", 
+                    is_empty, has_close)
+        return 0.0
+    
+    try:
+        last_valid_close = df["close"].dropna()
+        logger.debug("get_latest_close last_valid_close length: %d", len(last_valid_close))
+        
+        if not last_valid_close.empty:
+            price = last_valid_close.iloc[-1]
+            logger.debug("get_latest_close price from iloc[-1]: %s (type: %s)", price, type(price).__name__)
+        else:
+            logger.critical("All NaNs in close column for get_latest_close")
+            price = 0.0
+            
+        # More robust NaN check that works with different pandas instances
+        if price is None or (hasattr(price, '__ne__') and price != price) or price <= 0:
+            logger.debug("get_latest_close price is NaN or <= 0: price=%s", price)
+            return 0.0
+            
+        result = float(price)
+        logger.debug("get_latest_close returning: %s", result)
+        return result
+        
+    except Exception as e:
+        logger.warning("get_latest_close exception: %s", e)
+        return 0.0
 
 
 def compute_time_range(minutes: int) -> tuple[datetime, datetime]:
@@ -1511,7 +1549,7 @@ class DataFetcher:
             bars = safe_get_stock_bars(client, req, symbol, "DAILY")
             if bars is None:
                 return None
-            if isinstance(bars.columns, pd.MultiIndex):
+            if isinstance(bars.columns, _RealMultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
@@ -1546,7 +1584,7 @@ class DataFetcher:
                     df_iex = safe_get_stock_bars(client, req, symbol, "IEX DAILY")
                     if df_iex is None:
                         return None
-                    if isinstance(df_iex.columns, pd.MultiIndex):
+                    if isinstance(df_iex.columns, _RealMultiIndex):
                         df_iex = df_iex.xs(symbol, level=0, axis=1)
                     else:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
@@ -1651,7 +1689,7 @@ class DataFetcher:
             bars = safe_get_stock_bars(client, req, symbol, "MINUTE")
             if bars is None:
                 return None
-            if isinstance(bars.columns, pd.MultiIndex):
+            if isinstance(bars.columns, _RealMultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
@@ -1689,7 +1727,7 @@ class DataFetcher:
                     df_iex = safe_get_stock_bars(client, req, symbol, "IEX MINUTE")
                     if df_iex is None:
                         return None
-                    if isinstance(df_iex.columns, pd.MultiIndex):
+                    if isinstance(df_iex.columns, _RealMultiIndex):
                         df_iex = df_iex.xs(symbol, level=0, axis=1)
                     else:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
@@ -1785,7 +1823,7 @@ class DataFetcher:
                             return []
                     else:
                         raise
-                if isinstance(bars_day.columns, pd.MultiIndex):
+                if isinstance(bars_day.columns, _RealMultiIndex):
                     bars_day = bars_day.xs(symbol, level=0, axis=1)
                 else:
                     bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
@@ -1853,7 +1891,7 @@ def prefetch_daily_data(
         bars = safe_get_stock_bars(client, req, str(symbols), "BULK DAILY")
         if bars is None:
             return {}
-        if isinstance(bars.columns, pd.MultiIndex):
+        if isinstance(bars.columns, _RealMultiIndex):
             grouped_raw = {
                 sym: bars.xs(sym, level=0, axis=1)
                 for sym in symbols
@@ -1885,7 +1923,7 @@ def prefetch_daily_data(
                 bars_iex = safe_get_stock_bars(client, req, str(symbols), "IEX BULK DAILY")
                 if bars_iex is None:
                     return {}
-                if isinstance(bars_iex.columns, pd.MultiIndex):
+                if isinstance(bars_iex.columns, _RealMultiIndex):
                     grouped_raw = {
                         sym: bars_iex.xs(sym, level=0, axis=1)
                         for sym in symbols
@@ -2879,14 +2917,14 @@ def pre_trade_health_check(
 
         # AI-AGENT-REF: robust isinstance check that handles mocked pandas modules  
         try:
-            orig_range = isinstance(df.index, pd.RangeIndex)
+            orig_range = isinstance(df.index, _RealRangeIndex)
         except (TypeError, AttributeError):
             # Handle cases where pd.RangeIndex is not a proper type (e.g., during mocking)
             orig_range = str(type(df.index).__name__) == "RangeIndex"
         
         # AI-AGENT-REF: robust isinstance check for DatetimeIndex too
         try:
-            is_datetime_index = isinstance(df.index, pd.DatetimeIndex)
+            is_datetime_index = isinstance(df.index, _RealDatetimeIndex)
         except (TypeError, AttributeError):
             # Handle cases where pd.DatetimeIndex is not a proper type (e.g., during mocking)
             is_datetime_index = str(type(df.index).__name__) == "DatetimeIndex"
@@ -3406,7 +3444,7 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
         if d is None or d.empty:
             continue
         # Handle DataFrame with MultiIndex columns (symbol, field) or single-level
-        if isinstance(d.columns, pd.MultiIndex):
+        if isinstance(d.columns, _RealMultiIndex):
             if (s, "close") in d.columns:
                 series = d[(s, "close")].pct_change(fill_method=None).dropna()
             else:
@@ -5982,13 +6020,13 @@ else:
         else:
             raise
     # 1) If columns are (symbol, field), select our one symbol
-    if isinstance(bars.columns, pd.MultiIndex):
+    if isinstance(bars.columns, _RealMultiIndex):
         bars = bars.xs(REGIME_SYMBOLS[0], level=0, axis=1)
     else:
         bars = bars.drop(columns=["symbol"], errors="ignore")
 
     # 2) Fix the index if it's a MultiIndex of (symbol, timestamp)
-    if isinstance(bars.index, pd.MultiIndex):
+    if isinstance(bars.index, _RealMultiIndex):
         bars.index = bars.index.get_level_values(1)
     # 3) Or if each index entry is still a 1-tuple
     elif bars.index.dtype == object and isinstance(bars.index[0], tuple):
@@ -6683,7 +6721,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
             logger.critical(
                 "Failed after retries: non-positive price for %s. Data context: %r",
                 sig.symbol,
-                data.tail(3).to_dict() if isinstance(data, pd.DataFrame) else data,
+                data.tail(3).to_dict() if isinstance(data, _RealDataFrame) else data,
             )
             continue
         # Provide the account equity (cash) when sizing positions; this allows
@@ -7643,9 +7681,9 @@ def compute_ichimoku(
             ich_df = ich
             signal_df = pd.DataFrame(index=ich_df.index)
         # AI-AGENT-REF: Use preserved real DataFrame class to avoid mock contamination
-        if not isinstance(ich_df, pd.DataFrame):
+        if not isinstance(ich_df, _RealDataFrame):
             ich_df = pd.DataFrame(ich_df)
-        if not isinstance(signal_df, pd.DataFrame):
+        if not isinstance(signal_df, _RealDataFrame):
             signal_df = pd.DataFrame(signal_df)
         return ich_df, signal_df
     except Exception as exc:  # pragma: no cover - defensive

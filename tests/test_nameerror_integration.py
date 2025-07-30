@@ -80,14 +80,14 @@ sys.exit(exit_code)
                 capture_output=True,
                 text=True,
                 env=env,
-                timeout=15  # Reduced timeout to prevent worker hanging
+                timeout=5  # Aggressive timeout - import should complete quickly
             )
         except subprocess.TimeoutExpired as e:
             # Handle subprocess timeout gracefully
-            print(f"Subprocess timeout after 15 seconds")
+            print(f"Subprocess timeout after 5 seconds")
             print(f"Stdout so far: {e.stdout}")
             print(f"Stderr so far: {e.stderr}")
-            assert False, f"Subprocess timeout - bot_engine import took longer than 15 seconds"
+            assert False, f"Subprocess timeout - bot_engine import took longer than 5 seconds"
         
         print(f"Test script output: {result.stdout}")
         if result.stderr:
