@@ -42,7 +42,7 @@ mods = [
     "ratelimit",
     "trade_execution",
     "ai_trading.capital_scaling",
-    "strategy_allocator",
+    # "strategy_allocator",  # AI-AGENT-REF: Don't mock this, it interferes with other tests
     "torch",
 ]
 for name in mods:
@@ -193,7 +193,8 @@ sys.modules["prometheus_client"].Histogram = lambda *a, **k: None
 sys.modules["metrics_logger"].log_metrics = lambda *a, **k: None
 sys.modules["finnhub"].FinnhubAPIException = Exception
 sys.modules["finnhub"].Client = lambda *a, **k: None
-sys.modules["strategy_allocator"].StrategyAllocator = object
+# AI-AGENT-REF: Don't mock strategy_allocator to avoid test interference
+# sys.modules["strategy_allocator"].StrategyAllocator = object
 sys.modules.setdefault("ratelimit", types.ModuleType("ratelimit"))
 sys.modules["ratelimit"].limits = lambda *a, **k: lambda f: f
 sys.modules["ratelimit"].sleep_and_retry = lambda f: f

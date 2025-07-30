@@ -465,11 +465,16 @@ except Exception:  # pragma: no cover - optional dependency
         def __init__(self, data=None, **kwargs):
             self.data = data or {}
             # If data is a dict with lists, use the length of the first list
+            # If data is empty dict or None, use 0 rows (empty DataFrame)
             # Otherwise default to 5 rows for testing
             if isinstance(data, dict) and data:
                 first_key = next(iter(data))
                 self._length = len(data[first_key]) if isinstance(data[first_key], list) else 5
+            elif isinstance(data, dict):
+                # Empty dict case - should be empty DataFrame
+                self._length = 0
             else:
+                # Default case for testing
                 self._length = 5
             # Initialize index attribute for getting/setting
             self._index = None
@@ -498,7 +503,14 @@ except Exception:  # pragma: no cover - optional dependency
             
         @property 
         def columns(self):
-            return ["open", "high", "low", "close", "volume"]  # Return actual column names
+            class ColumnsStub(list):
+                def __init__(self, data):
+                    super().__init__(data)
+                def tolist(self):
+                    return list(self)
+            if isinstance(self.data, dict):
+                return ColumnsStub(list(self.data.keys()))
+            return ColumnsStub(["open", "high", "low", "close", "volume"])  # Default columns
             
         @property
         def index(self):
