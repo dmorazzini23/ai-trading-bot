@@ -29,14 +29,22 @@ class StrategyAllocator:
         self.hold_protect: Dict[str, int] = {}
 
     def allocate(self, signals_by_strategy: Dict[str, List[Any]]) -> List[Any]:
+        # Add debug logging
+        logger.debug(f"Allocate called with {len(signals_by_strategy)} strategies")
+        
         confirmed_signals = self._confirm_signals(signals_by_strategy)
-        return self._allocate_confirmed(confirmed_signals)
+        result = self._allocate_confirmed(confirmed_signals)
+        
+        logger.debug(f"Returning {len(result)} signals")
+        return result
 
     def _confirm_signals(self, signals_by_strategy: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
         confirmed: Dict[str, List[Any]] = {}
         for strategy, signals in signals_by_strategy.items():
+            logger.debug(f"Processing strategy {strategy} with {len(signals)} signals")
             confirmed[strategy] = []
             for s in signals:
+                logger.debug(f"Signal: {s.symbol}, confidence: {s.confidence}")
                 key = f"{s.symbol}_{s.side}"
                 if key not in self.signal_history:
                     self.signal_history[key] = []
@@ -49,6 +57,11 @@ class StrategyAllocator:
                     if avg_conf > 0.6:
                         s.confidence = avg_conf
                         confirmed[strategy].append(s)
+                        logger.debug(f"Signal approved: {s.symbol}")
+                    else:
+                        logger.debug(f"Signal rejected: {s.symbol}, avg_conf: {avg_conf}")
+                else:
+                    logger.debug(f"Signal not confirmed yet: {s.symbol}, history length: {len(self.signal_history[key])}")
         return confirmed
 
     def _allocate_confirmed(self, confirmed_signals: Dict[str, List[Any]]) -> List[Any]:
