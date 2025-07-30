@@ -62,7 +62,19 @@ def test_fractional_kelly_drawdown(monkeypatch, tmp_path):
     monkeypatch.setattr(bot, 'PEAK_EQUITY_FILE', tmp_path / 'p.txt')
     monkeypatch.setattr(bot, 'is_high_vol_thr_spy', lambda: False)
     monkeypatch.setattr(bot.os.path, 'exists', lambda p: False)
-    monkeypatch.setattr(bot, 'portalocker', types.SimpleNamespace(Lock=DummyLock))
+    monkeypatch.setattr(bot, 'portalocker', types.SimpleNamespace(
+        Lock=DummyLock,
+        lock=lambda f, mode: None,  # Mock lock function
+        unlock=lambda f: None,     # Mock unlock function
+        LOCK_EX=1                  # Mock lock constant
+    ))
+    
+    # Mock the open function to return DummyLock instance
+    import builtins
+    def mock_open(filename, mode='r'):
+        return DummyLock()
+    monkeypatch.setattr(builtins, 'open', mock_open)
+    
     size1 = bot.fractional_kelly_size(ctx, 10000, 50, 2.0, 0.6)
     DummyLock.data = str(10600)
     monkeypatch.setattr(bot.os.path, 'exists', lambda p: True)

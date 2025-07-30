@@ -774,10 +774,10 @@ def get_minute_df(
                     )
                     logger.debug("yfinance fetch error: %s", exc)
                     raise DataSourceDownException(symbol) from exc
-                else:
-                    logger.critical(
-                        "Secondary provider failed for %s: %s", symbol, fh_err
-                    )
+            else:
+                logger.critical(
+                    "Secondary provider failed for %s: %s", symbol, fh_err
+                )
                 raise DataSourceDownException(symbol) from fh_err
         except Exception as fh_err:
             finnhub_exc = fh_err

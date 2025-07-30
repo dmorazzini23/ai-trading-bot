@@ -3,6 +3,7 @@ import types
 
 import pandas as pd
 import pytest
+from tenacity import RetryError
 
 import data_fetcher
 
@@ -50,7 +51,7 @@ def test_get_historical_data(monkeypatch):
 
 def test_get_historical_data_bad_timeframe(monkeypatch):
     setup_tf(monkeypatch)
-    with pytest.raises(data_fetcher.RetryError):
+    with pytest.raises(data_fetcher.DataFetchError):
         data_fetcher.get_historical_data("AAPL", datetime.date(2024, 1, 1), datetime.date(2024, 1, 2), "10Min")
 
 
