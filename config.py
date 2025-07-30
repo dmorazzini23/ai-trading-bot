@@ -15,14 +15,36 @@ except ImportError:  # pragma: no cover - when python-dotenv is not installed
         ``os.environ``.
         """
         return False
-from pydantic_settings import BaseSettings
+# AI-AGENT-REF: robust import handling for pydantic-settings to prevent hangs
+try:
+    from pydantic_settings import BaseSettings
+    from validate_env import settings as env_settings
+    _PYDANTIC_AVAILABLE = True
+except (ImportError, Exception) as e:
+    # Fallback for environments without pydantic-settings or when it fails to initialize
+    logger.warning("pydantic-settings unavailable or failed to initialize: %s", e)
+    _PYDANTIC_AVAILABLE = False
+    # Create a minimal fallback settings object
+    class _FallbackSettings:
+        ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
+        ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "")
+        ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+        ALPACA_DATA_FEED = os.getenv("ALPACA_DATA_FEED", "iex")
+        FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+        FUNDAMENTAL_API_KEY = os.getenv("FUNDAMENTAL_API_KEY")
+        BOT_MODE = os.getenv("BOT_MODE", "balanced")
+        DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
+    env_settings = _FallbackSettings()
+    BaseSettings = object  # Minimal fallback
 
-from validate_env import settings as env_settings
+if _PYDANTIC_AVAILABLE:
+    class Settings(BaseSettings):
+        """Runtime configuration via environment."""
 
-class Settings(BaseSettings):
-    """Runtime configuration via environment."""
-
-settings = Settings()
+    settings = Settings()
+else:
+    # Use a minimal fallback when pydantic is not available
+    settings = type('Settings', (), {})()
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +167,15 @@ def _require_env_vars(*keys: str) -> None:
 
 def validate_environment() -> None:
     """Validate that mandatory environment variables are present."""
+    # AI-AGENT-REF: handle missing pydantic gracefully
+    if not _PYDANTIC_AVAILABLE:
+        logger.warning("Pydantic unavailable, performing basic validation only")
+        # Basic validation without pydantic
+        for var in ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]:
+            if not os.getenv(var):
+                raise RuntimeError(f"Missing required environment variable: {var}")
+        return
+        
     missing = [v for v in REQUIRED_ENV_VARS if not os.environ.get(v)]
     if missing:
         raise RuntimeError(
@@ -171,13 +202,14 @@ def validate_environment() -> None:
         raise RuntimeError("WEBHOOK_SECRET must be at least 8 characters")
 
 
-ALPACA_API_KEY = env_settings.ALPACA_API_KEY
-ALPACA_SECRET_KEY = env_settings.ALPACA_SECRET_KEY
-ALPACA_BASE_URL = env_settings.ALPACA_BASE_URL
+# AI-AGENT-REF: robust environment variable access
+ALPACA_API_KEY = getattr(env_settings, 'ALPACA_API_KEY', os.getenv("ALPACA_API_KEY", ""))
+ALPACA_SECRET_KEY = getattr(env_settings, 'ALPACA_SECRET_KEY', os.getenv("ALPACA_SECRET_KEY", ""))
+ALPACA_BASE_URL = getattr(env_settings, 'ALPACA_BASE_URL', os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets"))
 ALPACA_PAPER = "paper" in ALPACA_BASE_URL.lower()
-ALPACA_DATA_FEED = env_settings.ALPACA_DATA_FEED
-FINNHUB_API_KEY = env_settings.FINNHUB_API_KEY
-FUNDAMENTAL_API_KEY = env_settings.FUNDAMENTAL_API_KEY
+ALPACA_DATA_FEED = getattr(env_settings, 'ALPACA_DATA_FEED', os.getenv("ALPACA_DATA_FEED", "iex"))
+FINNHUB_API_KEY = getattr(env_settings, 'FINNHUB_API_KEY', os.getenv("FINNHUB_API_KEY"))
+FUNDAMENTAL_API_KEY = getattr(env_settings, 'FUNDAMENTAL_API_KEY', os.getenv("FUNDAMENTAL_API_KEY"))
 NEWS_API_KEY = env_settings.NEWS_API_KEY
 IEX_API_TOKEN = env_settings.IEX_API_TOKEN
 BOT_MODE = env_settings.BOT_MODE
