@@ -98,12 +98,6 @@ warnings.filterwarnings(
 )
 
 import pandas as pd
-# AI-AGENT-REF: Preserve real pandas.DataFrame type before lazy module override
-try:
-    _REAL_PD_DATAFRAME = pd.core.frame.DataFrame
-except AttributeError:
-    # Fallback for different pandas versions or test environments
-    _REAL_PD_DATAFRAME = pd.DataFrame
 
 import utils
 from features import (
@@ -7649,9 +7643,9 @@ def compute_ichimoku(
             ich_df = ich
             signal_df = pd.DataFrame(index=ich_df.index)
         # AI-AGENT-REF: Use preserved real DataFrame class to avoid mock contamination
-        if not isinstance(ich_df, _REAL_PD_DATAFRAME):
+        if not isinstance(ich_df, pd.DataFrame):
             ich_df = pd.DataFrame(ich_df)
-        if not isinstance(signal_df, _REAL_PD_DATAFRAME):
+        if not isinstance(signal_df, pd.DataFrame):
             signal_df = pd.DataFrame(signal_df)
         return ich_df, signal_df
     except Exception as exc:  # pragma: no cover - defensive
