@@ -12,7 +12,7 @@ from typing import List, Tuple
 REQUIRED_PACKAGES = [
     ('pytest', 'pytest'),
     ('pytest_cov', 'pytest-cov'), 
-    ('pytest_xdist', 'pytest-xdist'),
+    ('xdist', 'pytest-xdist'),
     ('pytest_benchmark', 'pytest-benchmark'),
     ('pytest_asyncio', 'pytest-asyncio'),
     ('hypothesis', 'hypothesis'),
