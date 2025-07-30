@@ -98,6 +98,8 @@ warnings.filterwarnings(
 )
 
 import pandas as pd
+# AI-AGENT-REF: preserve real pandas DataFrame class before it gets overwritten by lazy module
+_RealDataFrame = pd.DataFrame
 
 import utils
 from features import (
@@ -742,17 +744,28 @@ def maybe_rebalance(ctx):
 
 def get_latest_close(df: pd.DataFrame) -> float:
     """Return the last closing price or ``0.0`` if unavailable."""
+    # AI-AGENT-REF: debug output to understand test failure
+    logger.debug("get_latest_close called with df: %s", type(df).__name__)
     if df is None or df.empty or "close" not in df.columns:
+        logger.debug("get_latest_close early return: df is None: %s, empty: %s, close in columns: %s", 
+                    df is None, df.empty if df is not None else "N/A", 
+                    "close" in df.columns if df is not None else "N/A")
         return 0.0
     last_valid_close = df["close"].dropna()
+    logger.debug("get_latest_close last_valid_close length: %d", len(last_valid_close))
     if not last_valid_close.empty:
         price = last_valid_close.iloc[-1]
+        logger.debug("get_latest_close price from iloc[-1]: %s (type: %s)", price, type(price).__name__)
     else:
         logger.critical("All NaNs in close column for get_latest_close")
         price = 0.0
     if pd.isna(price) or price <= 0:
+        logger.debug("get_latest_close price is NaN or <= 0: pd.isna=%s, price<=0=%s, price=%s", 
+                    pd.isna(price), price <= 0, price)
         return 0.0
-    return float(price)
+    result = float(price)
+    logger.debug("get_latest_close returning: %s", result)
+    return result
 
 
 def compute_time_range(minutes: int) -> tuple[datetime, datetime]:
@@ -7643,9 +7656,9 @@ def compute_ichimoku(
             ich_df = ich
             signal_df = pd.DataFrame(index=ich_df.index)
         # AI-AGENT-REF: Use preserved real DataFrame class to avoid mock contamination
-        if not isinstance(ich_df, pd.DataFrame):
+        if not isinstance(ich_df, _RealDataFrame):
             ich_df = pd.DataFrame(ich_df)
-        if not isinstance(signal_df, pd.DataFrame):
+        if not isinstance(signal_df, _RealDataFrame):
             signal_df = pd.DataFrame(signal_df)
         return ich_df, signal_df
     except Exception as exc:  # pragma: no cover - defensive
