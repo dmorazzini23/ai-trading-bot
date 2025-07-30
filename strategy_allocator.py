@@ -86,7 +86,7 @@ class StrategyAllocator:
             self.last_confidence[s.symbol] = s.confidence
 
             if s.side == "buy":
-                self.hold_protect[s.symbol] = 3
+                self.hold_protect[s.symbol] = 4  # Changed from 3 to 4
 
             final_signals.append(s)
 

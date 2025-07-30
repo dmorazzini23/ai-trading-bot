@@ -8,6 +8,10 @@ class MockWait:
     def __add__(self, other):
         return self
 
+class RetryError(Exception):
+    """Mock RetryError exception for testing."""
+    pass
+
 def stop_after_attempt(*args):
     return None
 

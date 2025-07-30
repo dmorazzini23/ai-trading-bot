@@ -18,6 +18,10 @@ params = []
 
 for module in modules:
     for name, func in inspect.getmembers(module, inspect.isfunction):
+        # skip private functions
+        if name.startswith("_"):
+            print(f"Skipping private function {module.__name__}.{name}")
+            continue
         sig = inspect.signature(func)
         required_positional = [
             p for p in sig.parameters.values()

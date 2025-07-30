@@ -44,10 +44,13 @@ def test_skip_cooldown_throttle(monkeypatch, caplog):
 
 def test_cooldown_expired_throttle(monkeypatch, caplog):
     caplog.set_level("INFO")
+    # Ensure we capture logs from the strategy_allocator module
+    caplog.set_level("INFO", logger="strategy_allocator")
     import importlib
     import strategy_allocator
     strategy_allocator = importlib.reload(strategy_allocator)
     alloc = strategy_allocator.StrategyAllocator()
+    alloc.config.signal_confirmation_bars = 1  # Allow single confirmation
     alloc.hold_protect = {"AAPL": 1}
     # Use a sell signal to test hold_protect functionality
     sig = TradeSignal(symbol="AAPL", side="sell", confidence=1.0, strategy="s")
@@ -55,6 +58,7 @@ def test_cooldown_expired_throttle(monkeypatch, caplog):
     alloc.last_direction = {"AAPL": "buy"}
     t = [0.0]
     monkeypatch.setattr(time, "monotonic", lambda: t[0])
+    
     alloc.allocate({"s": [sig]})
     assert any("HOLD_PROTECT_ACTIVE" in r.message for r in caplog.records)
     caplog.clear()

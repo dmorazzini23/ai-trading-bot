@@ -18,6 +18,7 @@ def force_coverage(mod):
 @pytest.mark.smoke
 def test_allocator():
     alloc = strategy_allocator.StrategyAllocator()
+    alloc.config.delta_threshold = 0.0  # Allow repeated signals with same confidence
     sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
     # Call allocate twice to build up signal history for confirmation
     alloc.allocate({"s1": [sig]})  # First call to start history

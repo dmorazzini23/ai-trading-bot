@@ -57,13 +57,13 @@ def ichimoku_fallback(
 
 
 @jit(nopython=True)
-def rsi_numba(prices: np.ndarray, period: int = 14) -> np.ndarray:
-    """Compute RSI using a fast numba implementation."""
-    deltas = np.diff(prices)
+def _rsi_numba_core(prices_array: np.ndarray, period: int = 14) -> np.ndarray:
+    """Core RSI computation using numba."""
+    deltas = np.diff(prices_array)
     gains = np.where(deltas > 0, deltas, 0.0)
     losses = np.where(deltas < 0, -deltas, 0.0)
-    rsi = np.zeros_like(prices)
-    if prices.size <= period:
+    rsi = np.zeros_like(prices_array)
+    if prices_array.size <= period:
         return rsi
 
     avg_gain = gains[:period].mean()
@@ -72,13 +72,26 @@ def rsi_numba(prices: np.ndarray, period: int = 14) -> np.ndarray:
     rsi[:period] = 100.0 - 100.0 / (1.0 + rs)
 
     # AI-AGENT-REF: loop retained for sequential smoothing; numba handles speed
-    for i in range(period, len(prices)):
+    for i in range(period, len(prices_array)):
         avg_gain = (avg_gain * (period - 1) + gains[i - 1]) / period
         avg_loss = (avg_loss * (period - 1) + losses[i - 1]) / period
         rs = avg_gain / avg_loss if avg_loss != 0 else 0.0
         rsi[i] = 100.0 - 100.0 / (1.0 + rs)
 
     return rsi
+
+
+def rsi_numba(prices, period: int = 14):
+    """Compute RSI using a fast numba implementation."""
+    # Handle DataFrame/Series input by extracting close prices
+    if hasattr(prices, 'close'):
+        prices_array = prices['close'].values
+    elif hasattr(prices, 'values'):
+        prices_array = prices.values
+    else:
+        prices_array = np.asarray(prices, dtype=float)
+    
+    return _rsi_numba_core(prices_array, period)
 
 
 # AI-AGENT-REF: new vectorized indicator helpers with caching

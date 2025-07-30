@@ -41,6 +41,11 @@ def test_get_env_reload(monkeypatch):
 def test_create_flask_routes():
     """Health endpoints respond correctly."""
     flask_mod = types.ModuleType("flask")
+    class DummyClient:
+        def __init__(self, *a, **k):
+            pass
+        def get(self, *a, **k):
+            return types.SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
     class Flask:
         def __init__(self, *a, **k):
             pass
@@ -51,24 +56,21 @@ def test_create_flask_routes():
         def run(self, *a, **k):
             pass
         def test_client(self):
-            return types.SimpleNamespace(get=lambda *a, **k: types.SimpleNamespace(status_code=200, json=lambda: {"status": "ok"}))
+            return DummyClient()
     flask_mod.Flask = Flask
     flask_mod.jsonify = lambda **kw: kw
-    class DummyClient:
-        def __init__(self, *a, **k):
-            pass
-        def get(self, *a, **k):
-            return types.SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
     flask_mod.testing = types.SimpleNamespace(FlaskClient=DummyClient)
     sys.modules['flask'] = flask_mod
     sys.modules['flask.testing'] = types.ModuleType('flask.testing')
     sys.modules['flask.testing'].FlaskClient = DummyClient
     sys.modules.pop('ai_trading.main', None)
+    sys.modules.pop('ai_trading.app', None)  # Also remove app module
     import importlib
     main_mod = importlib.import_module('ai_trading.main')
     import ai_trading.app as app_mod
     app = app_mod.create_app()
     client = app.test_client()
+    assert client is not None, "test_client() returned None"
     assert client.get("/health").json() == {"status": "ok"}
     assert client.get("/healthz").status_code == 200
 
@@ -202,7 +204,10 @@ def test_risk_engine_branches(monkeypatch):
     eng.strategy_limits["s"] = 0.4
     eng.exposure["equity"] = 0.0
     assert eng._apply_weight_limits(sig) == 0.4
-    res = risk_engine.calculate_position_size(sig, 100, 10)
+    res = risk_engine.calculate_position_size(
+        risk_engine.TradeSignal(symbol="A", side="buy", confidence=1.0, strategy="default", weight=0.1, asset_class="equity"), 
+        100, 10
+    )
     assert res == 10
 
 
