@@ -6,7 +6,7 @@ from typing import Dict, List, Any
 
 try:
     from config import CONFIG
-except ImportError:
+except (ImportError, RuntimeError, TypeError, AttributeError):
     # Fallback config for testing environments
     from dataclasses import dataclass
     
