@@ -15,15 +15,22 @@ except ImportError:  # pragma: no cover - when python-dotenv is not installed
         ``os.environ``.
         """
         return False
+logger = logging.getLogger(__name__)
+
 # AI-AGENT-REF: robust import handling for pydantic-settings to prevent hangs
 try:
     from pydantic_settings import BaseSettings
-    from validate_env import settings as env_settings
     _PYDANTIC_AVAILABLE = True
-except (ImportError, Exception) as e:
-    # Fallback for environments without pydantic-settings or when it fails to initialize
-    logger.warning("pydantic-settings unavailable or failed to initialize: %s", e)
+except ImportError:
+    logger.warning("pydantic-settings not available, using fallback")
     _PYDANTIC_AVAILABLE = False
+    BaseSettings = object  # Minimal fallback
+
+# Import validate_env with fallback handling
+try:
+    from validate_env import settings as env_settings
+except Exception as e:
+    logger.warning("validate_env import failed: %s, using fallback", e)
     # Create a minimal fallback settings object
     class _FallbackSettings:
         ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "")
@@ -32,10 +39,17 @@ except (ImportError, Exception) as e:
         ALPACA_DATA_FEED = os.getenv("ALPACA_DATA_FEED", "iex")
         FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
         FUNDAMENTAL_API_KEY = os.getenv("FUNDAMENTAL_API_KEY")
+        NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+        IEX_API_TOKEN = os.getenv("IEX_API_TOKEN")
         BOT_MODE = os.getenv("BOT_MODE", "balanced")
         DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
+        BUY_THRESHOLD = float(os.getenv("BUY_THRESHOLD", "0.5"))
+        WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+        # Add other commonly accessed attributes as needed
+        def __getattr__(self, name):
+            # Fallback for any missing attributes
+            return os.getenv(name)
     env_settings = _FallbackSettings()
-    BaseSettings = object  # Minimal fallback
 
 if _PYDANTIC_AVAILABLE:
     class Settings(BaseSettings):
@@ -45,8 +59,6 @@ if _PYDANTIC_AVAILABLE:
 else:
     # Use a minimal fallback when pydantic is not available
     settings = type('Settings', (), {})()
-
-logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"
