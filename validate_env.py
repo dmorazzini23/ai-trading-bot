@@ -7,7 +7,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import validator, Field
+from pydantic import field_validator, Field
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,8 @@ class Settings(BaseSettings):
         extra="ignore"  # allow unknown env vars (e.g. SLACK_WEBHOOK)
     )
     
-    @validator('ALPACA_API_KEY')
+    @field_validator('ALPACA_API_KEY')
+    @classmethod
     def validate_alpaca_api_key(cls, v):
         """Validate Alpaca API key format and security."""
         if not v:
@@ -119,7 +120,8 @@ class Settings(BaseSettings):
             
         return v
     
-    @validator('ALPACA_SECRET_KEY')
+    @field_validator('ALPACA_SECRET_KEY')
+    @classmethod
     def validate_alpaca_secret_key(cls, v):
         """Validate Alpaca secret key format and security."""
         if not v:
@@ -136,7 +138,8 @@ class Settings(BaseSettings):
             
         return v
     
-    @validator('ALPACA_BASE_URL')
+    @field_validator('ALPACA_BASE_URL')
+    @classmethod
     def validate_alpaca_base_url(cls, v):
         """Validate Alpaca base URL format."""
         valid_urls = [
@@ -152,7 +155,8 @@ class Settings(BaseSettings):
             
         return v
     
-    @validator('BOT_MODE')
+    @field_validator('BOT_MODE')
+    @classmethod
     def validate_bot_mode(cls, v):
         """Validate trading bot mode."""
         valid_modes = ['conservative', 'balanced', 'aggressive', 'paper', 'testing']
@@ -160,14 +164,16 @@ class Settings(BaseSettings):
             raise ValueError(f"BOT_MODE must be one of: {valid_modes}")
         return v.lower()
     
-    @validator('TRADING_MODE')
+    @field_validator('TRADING_MODE')
+    @classmethod
     def validate_trading_mode(cls, v):
         """Validate trading mode."""
         if v not in ["paper", "live"]:
             raise ValueError(f"Invalid TRADING_MODE: {v}. Must be 'paper' or 'live'")
         return v
     
-    @validator('FORCE_TRADES')
+    @field_validator('FORCE_TRADES')
+    @classmethod
     def validate_force_trades(cls, v):
         """Warn about dangerous FORCE_TRADES setting."""
         if v:
