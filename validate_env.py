@@ -13,7 +13,10 @@ class Settings(BaseSettings):
     FLASK_PORT: int = 9000
     ALPACA_API_KEY: str
     ALPACA_SECRET_KEY: str
-    ALPACA_BASE_URL: str = "https://paper-api.alpaca.markets"
+    
+    # AI-AGENT-REF: Support for live vs paper trading configuration
+    TRADING_MODE: str = "paper"  # paper, live
+    ALPACA_BASE_URL: str = "https://paper-api.alpaca.markets"  # Default to paper for safety
     ALPACA_DATA_FEED: str = "iex"
     FINNHUB_API_KEY: str | None = None
     FUNDAMENTAL_API_KEY: str | None = None
@@ -62,6 +65,37 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def validate_trading_mode() -> None:
+    """Validate trading mode configuration and set appropriate URLs."""
+    # AI-AGENT-REF: Trading mode validation and URL configuration
+    if settings.TRADING_MODE not in ["paper", "live"]:
+        raise ValueError(f"Invalid TRADING_MODE: {settings.TRADING_MODE}. Must be 'paper' or 'live'")
+    
+    # Auto-configure base URL based on trading mode if not explicitly set
+    if settings.TRADING_MODE == "live":
+        if settings.ALPACA_BASE_URL == "https://paper-api.alpaca.markets":
+            logger.warning("TRADING_MODE is 'live' but ALPACA_BASE_URL is paper trading URL")
+            logger.warning("Auto-configuring for live trading. Set ALPACA_BASE_URL explicitly to override.")
+            settings.ALPACA_BASE_URL = "https://api.alpaca.markets"
+        logger.critical("LIVE TRADING MODE ENABLED - Real money at risk!")
+    else:
+        if settings.ALPACA_BASE_URL != "https://paper-api.alpaca.markets":
+            logger.info("TRADING_MODE is 'paper', ensuring paper trading URL")
+            settings.ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
+        logger.info("Paper trading mode enabled - Safe for testing")
+
+
+def get_alpaca_config() -> dict:
+    """Get Alpaca client configuration based on current settings."""
+    validate_trading_mode()
+    return {
+        "api_key": settings.ALPACA_API_KEY,
+        "secret_key": settings.ALPACA_SECRET_KEY,
+        "base_url": settings.ALPACA_BASE_URL,
+        "paper": settings.TRADING_MODE == "paper"
+    }
 
 
 def generate_schema() -> dict:
