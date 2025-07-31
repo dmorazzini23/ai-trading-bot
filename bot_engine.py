@@ -1522,29 +1522,80 @@ class BotMode:
 
 @dataclass
 class BotState:
+    """
+    Central state management for the AI trading bot.
+    
+    This class maintains all critical bot state information including risk metrics,
+    trading positions, performance tracking, and operational controls. It serves as
+    the primary data structure for coordinating trading decisions and risk management
+    across the entire system.
+    
+    Attributes:
+        loss_streak (int): Current consecutive losing trade count for drawdown protection
+        streak_halt_until (Optional[datetime]): Timestamp until which trading is halted due to streak
+        day_start_equity (Optional[tuple[date, float]]): Daily equity baseline for performance tracking
+        week_start_equity (Optional[tuple[date, float]]): Weekly equity baseline for performance tracking
+        last_drawdown (float): Most recent portfolio drawdown percentage (-1.0 to 0.0)
+        updates_halted (bool): Flag indicating if position updates are temporarily disabled
+        running (bool): Current execution state of the trading loop
+        current_regime (str): Detected market regime ('bull', 'bear', 'sideways', 'volatile')
+        rolling_losses (list[float]): Sliding window of recent trade P&L for trend analysis
+        mode_obj (BotMode): Trading mode configuration (conservative/balanced/aggressive)
+        no_signal_events (int): Count of cycles with insufficient trading signals
+        indicator_failures (int): Count of technical indicator calculation failures
+        pdt_blocked (bool): Pattern Day Trader rule violation flag
+        position_cache (Dict[str, int]): Cached broker positions to avoid redundant API calls
+        long_positions (set[str]): Set of symbols with current long positions
+        short_positions (set[str]): Set of symbols with current short positions
+        last_run_at (Optional[datetime]): Timestamp of last trading cycle execution
+        last_loop_duration (float): Duration in seconds of the previous trading cycle
+        trade_cooldowns (Dict[str, datetime]): Per-symbol cooldown periods to prevent overtrading
+        last_trade_direction (Dict[str, str]): Last trade direction per symbol ('buy'/'sell')
+        skipped_cycles (int): Count of trading cycles skipped due to market/risk conditions
+    
+    Examples:
+        >>> state = BotState()
+        >>> state.running = True
+        >>> state.current_regime = "bull"
+        >>> state.position_cache['AAPL'] = 100  # 100 shares long
+        >>> print(f"Bot running: {state.running}, Regime: {state.current_regime}")
+        Bot running: True, Regime: bull
+        
+    Note:
+        This class uses dataclass fields with default factories to ensure proper
+        initialization of mutable default values across instances.
+    """
+    
+    # Risk Management State
     loss_streak: int = 0
     streak_halt_until: Optional[datetime] = None
     day_start_equity: Optional[tuple[date, float]] = None
     week_start_equity: Optional[tuple[date, float]] = None
     last_drawdown: float = 0.0
+    
+    # Operational State
     updates_halted: bool = False
     running: bool = False
     current_regime: str = "sideways"
     rolling_losses: list[float] = field(default_factory=list)
     mode_obj: BotMode = field(default_factory=lambda: BotMode(BOT_MODE))
+    
+    # Signal & Indicator State
     no_signal_events: int = 0
     indicator_failures: int = 0
     pdt_blocked: bool = False
-    # Cached positions from broker for the current cycle
+    
+    # Position Management
     position_cache: Dict[str, int] = field(default_factory=dict)
     long_positions: set[str] = field(default_factory=set)
     short_positions: set[str] = field(default_factory=set)
-    # Timestamp of last run to prevent duplicate cycles
+    
+    # Execution Timing
     last_run_at: Optional[datetime] = None
     last_loop_duration: float = 0.0
-    # Record of last exit/entry time per symbol for cooldowns
+    
+    # Trade Management
     trade_cooldowns: Dict[str, datetime] = field(default_factory=dict)
-    # Track direction of last filled trade per symbol
     last_trade_direction: Dict[str, str] = field(default_factory=dict)
     skipped_cycles: int = 0
 
@@ -3312,21 +3363,88 @@ data_source_health_check(ctx, REGIME_SYMBOLS)
 def pre_trade_health_check(
     ctx: BotContext, symbols: Sequence[str], min_rows: int = 30
 ) -> dict:
-    """Validate API connectivity and data sanity prior to trading.
+    """
+    Comprehensive system health validation before trading execution.
+
+    Performs critical pre-flight checks to ensure the trading system is ready
+    for safe operation. Validates API connectivity, data quality, account status,
+    and system resources before allowing any trading activity.
+
+    This function serves as the primary gatekeeper for trading operations,
+    preventing execution when critical issues are detected that could lead to
+    trading failures, incorrect decisions, or financial losses.
 
     Parameters
     ----------
     ctx : BotContext
-        Global bot context with API clients.
+        Global bot context containing API clients, configuration, and shared
+        resources. Must include valid Alpaca API connection and risk engine.
     symbols : Sequence[str]
-        Symbols to validate.
+        List of trading symbols to validate data availability and quality.
+        Example: ['SPY', 'AAPL', 'MSFT']
     min_rows : int, optional
-        Minimum required row count per symbol, by default ``30``.
+        Minimum required number of historical data rows per symbol for
+        reliable technical analysis. Default is 30 bars.
 
     Returns
     -------
     dict
-        Summary dictionary of issues encountered.
+        Comprehensive health check summary containing:
+        
+        - **checked** (int): Total number of symbols validated
+        - **failures** (list): List of validation failure descriptions
+        - **api_status** (str): Alpaca API connectivity status
+        - **data_quality** (dict): Per-symbol data quality metrics
+        - **account_status** (dict): Trading account health information
+        - **system_resources** (dict): Memory, CPU, and disk usage
+        - **risk_limits** (dict): Current risk exposure and limits
+        - **is_healthy** (bool): Overall system health status
+
+    Raises
+    ------
+    ConnectionError
+        If critical API connections cannot be established
+    ValueError
+        If configuration parameters are invalid or missing
+    RuntimeError
+        If system is in an unsafe state for trading
+
+    Examples
+    --------
+    >>> from bot_engine import pre_trade_health_check
+    >>> symbols = ['SPY', 'QQQ', 'IWM']
+    >>> health = pre_trade_health_check(ctx, symbols, min_rows=50)
+    >>> if health['is_healthy']:
+    ...     print("System ready for trading")
+    ...     proceed_with_trading()
+    ... else:
+    ...     print(f"Health issues: {health['failures']}")
+    ...     handle_health_issues(health)
+
+    Validation Checks
+    -----------------
+    1. **API Connectivity**: Verifies Alpaca API authentication and rate limits
+    2. **Market Data**: Ensures sufficient historical data for analysis
+    3. **Account Status**: Validates buying power and trading permissions
+    4. **Data Quality**: Checks for gaps, stale data, and anomalies
+    5. **Risk Limits**: Verifies current exposure within configured limits
+    6. **System Resources**: Monitors memory, CPU, and disk usage
+    7. **Market Hours**: Confirms market is open for trading
+    8. **Configuration**: Validates all required settings are present
+
+    Notes
+    -----
+    - This function should be called before every trading cycle
+    - Failed health checks will prevent trade execution
+    - Results are logged for monitoring and debugging
+    - Automatic retry logic handles transient failures
+    - Critical failures trigger immediate trading halt
+
+    See Also
+    --------
+    BotContext : Global context management
+    BotState : Trading state management
+    run_all_trades_worker : Main trading execution function
     """
 
     min_rows = int(os.getenv("HEALTH_MIN_ROWS", min_rows))
@@ -7482,11 +7600,132 @@ def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
 
 
 def run_all_trades_worker(state: BotState, model) -> None:
-    """Run the full trading cycle for all candidate symbols.
+    """
+    Execute the complete trading cycle for all candidate symbols.
 
-    This fetches data, executes strategy logic and places orders. The function
-    guards against overlapping runs and ensures the market is open before
-    proceeding.
+    This is the core trading function that orchestrates the entire algorithmic
+    trading process. It fetches market data, calculates technical indicators,
+    generates trading signals, applies risk management, and executes trades
+    based on the configured strategy parameters.
+
+    The function implements comprehensive safety checks including market hours
+    validation, risk limit enforcement, and overlap prevention to ensure safe
+    and reliable trading operations.
+
+    Parameters
+    ----------
+    state : BotState
+        Current bot state containing position information, risk metrics,
+        trading history, and operational flags. This object is modified
+        during execution to track state changes.
+    model : object
+        Machine learning model instance for signal generation and prediction.
+        Can be any trained model with a predict() method compatible with
+        the bot's feature engineering pipeline.
+
+    Returns
+    -------
+    None
+        This function modifies the state object in-place and executes trades
+        as side effects. Trading results are logged and stored in the state
+        for subsequent analysis.
+
+    Raises
+    ------
+    RuntimeError
+        If critical trading conditions are not met or system is unhealthy
+    ConnectionError
+        If API connections fail during critical operations
+    ValueError
+        If invalid trading parameters or data quality issues are detected
+
+    Trading Process Flow
+    -------------------
+    1. **Pre-flight Checks**
+       - Verify market is open for trading
+       - Check for overlapping execution (prevents race conditions)
+       - Validate system health and API connectivity
+       - Ensure risk limits are within acceptable ranges
+
+    2. **Data Acquisition**
+       - Fetch real-time and historical market data
+       - Validate data quality and completeness
+       - Handle data provider failover if needed
+       - Cache data for performance optimization
+
+    3. **Technical Analysis**
+       - Calculate technical indicators across multiple timeframes
+       - Generate trading signals using configured strategies
+       - Apply machine learning predictions and meta-learning
+       - Aggregate signals with confidence scoring
+
+    4. **Risk Management**
+       - Calculate optimal position sizes using Kelly criterion
+       - Check portfolio heat and individual position limits
+       - Apply drawdown protection and loss streak controls
+       - Validate trades against PDT and margin rules
+
+    5. **Trade Execution**
+       - Generate order instructions for qualified signals
+       - Execute trades through broker API with retry logic
+       - Monitor fill status and handle partial fills
+       - Update position tracking and performance metrics
+
+    6. **State Management**
+       - Update bot state with new positions and metrics
+       - Record trade history and performance statistics
+       - Set cooldown periods to prevent overtrading
+       - Log results for monitoring and analysis
+
+    Safety Features
+    ---------------
+    - **Overlap Prevention**: Uses locking to prevent concurrent execution
+    - **Market Hours**: Only trades during official market hours
+    - **Risk Limits**: Enforces position size and portfolio heat limits
+    - **Health Checks**: Validates system health before trading
+    - **Error Handling**: Graceful handling of API and data failures
+    - **Cooldown Periods**: Prevents rapid-fire trading on same symbols
+    - **Emergency Stops**: Automatic halt on critical errors or high losses
+
+    Examples
+    --------
+    >>> import asyncio
+    >>> from bot_engine import BotState, run_all_trades_worker
+    >>> from ml_model import load_trained_model
+    >>> 
+    >>> # Initialize bot state and model
+    >>> state = BotState()
+    >>> model = load_trained_model('models/trading_model.pkl')
+    >>> 
+    >>> # Execute trading cycle
+    >>> run_all_trades_worker(state, model)
+    >>> 
+    >>> # Check results
+    >>> print(f"Trades executed: {len(state.position_cache)}")
+    >>> print(f"Last loop duration: {state.last_loop_duration:.2f}s")
+
+    Performance Considerations
+    -------------------------
+    - Uses parallel processing for indicator calculations
+    - Implements data caching to reduce API calls
+    - Optimizes database queries for position tracking
+    - Monitors memory usage and performs cleanup
+    - Tracks execution time for performance optimization
+
+    Notes
+    -----
+    - This function should only be called when markets are open
+    - Execution is thread-safe and prevents overlapping runs
+    - All trades are logged for audit and compliance purposes
+    - Performance metrics are automatically collected and stored
+    - The function will gracefully handle API rate limits and failures
+
+    See Also
+    --------
+    BotState : Central state management
+    pre_trade_health_check : System health validation
+    BotContext : Global context and configuration
+    trade_execution : Order execution and monitoring
     """
     import uuid
 

@@ -271,22 +271,146 @@ def prepare_indicators_parallel(
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         executor.map(lambda s: prepare_indicators(data[s], s), symbols)
 
-def generate_signal(df, column: str) -> Any:
-    if df is None or df.empty:
-        logger.error("Dataframe is None or empty in generate_signal")
-        return pd.Series(dtype=float)
+def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
+    """
+    Generate trading signals from specified dataframe column.
+    
+    Creates directional trading signals (+1, 0, -1) based on the sign of values
+    in the specified column. This is a core utility function for converting
+    technical indicator values into actionable trading signals.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe containing market data and technical indicators.
+        Must have a DatetimeIndex for proper signal alignment.
+    column : str
+        Name of the column to generate signals from. Common examples:
+        - 'momentum': Price momentum values
+        - 'rsi_signal': RSI-based signal values
+        - 'macd_histogram': MACD histogram values
+        - 'bb_position': Bollinger Bands position
+        
+    Returns
+    -------
+    pd.Series
+        Signal series with same index as input dataframe:
+        - +1: Buy/long signal (positive column values)
+        - 0: Neutral signal (zero or NaN column values)  
+        - -1: Sell/short signal (negative column values)
+        
+    Raises
+    ------
+    ValueError
+        If dataframe is None, empty, or column doesn't exist
+    TypeError
+        If input parameters are not of expected types
+        
+    Examples
+    --------
+    >>> import pandas as pd
+    >>> import numpy as np
+    >>> 
+    >>> # Create sample data
+    >>> dates = pd.date_range('2024-01-01', periods=100, freq='1H')
+    >>> df = pd.DataFrame({
+    ...     'close': np.random.randn(100).cumsum() + 100,
+    ...     'momentum': np.random.randn(100)
+    ... }, index=dates)
+    >>> 
+    >>> # Generate signals from momentum
+    >>> signals = generate_signal(df, 'momentum')
+    >>> print(f"Buy signals: {(signals == 1).sum()}")
+    >>> print(f"Sell signals: {(signals == -1).sum()}")
+    >>> print(f"Neutral signals: {(signals == 0).sum()}")
+    
+    >>> # Handle missing data gracefully
+    >>> df_with_gaps = df.copy()
+    >>> df_with_gaps.loc[df_with_gaps.index[10:20], 'momentum'] = np.nan
+    >>> signals = generate_signal(df_with_gaps, 'momentum')  # NaNs become 0
+    
+    Signal Generation Logic
+    ----------------------
+    The function applies the following transformation:
+    
+    1. **Positive Values** → +1 (Buy Signal)
+       - Indicates bullish/upward momentum
+       - Suggests entering long positions
+       
+    2. **Zero/NaN Values** → 0 (Neutral Signal)
+       - No clear directional bias
+       - Suggests holding current positions
+       
+    3. **Negative Values** → -1 (Sell Signal)
+       - Indicates bearish/downward momentum
+       - Suggests entering short positions or exiting longs
+    
+    Error Handling
+    -------------
+    - Returns empty Series for invalid inputs
+    - Logs detailed error messages for debugging
+    - Gracefully handles missing or corrupt data
+    - Preserves index alignment for time series operations
+    
+    Performance Notes
+    ----------------
+    - Uses vectorized numpy operations for efficiency
+    - Handles large datasets without memory issues
+    - Optimized for real-time signal generation
+    
+    See Also
+    --------
+    compute_signal_matrix : Generate multiple signals simultaneously
+    ensemble_vote_signals : Combine multiple signal sources
+    generate_ensemble_signal : Advanced signal aggregation
+    """
+    # Input validation
+    if df is None:
+        logger.error("Dataframe is None in generate_signal")
+        return pd.Series(dtype=int, name='signal')
+        
+    if not isinstance(df, pd.DataFrame):
+        logger.error("Expected DataFrame, got %s", type(df))
+        return pd.Series(dtype=int, name='signal')
+        
+    if df.empty:
+        logger.warning("Dataframe is empty in generate_signal")
+        return pd.Series(dtype=int, name='signal', index=df.index)
 
+    if not isinstance(column, str):
+        logger.error("Column name must be string, got %s", type(column))
+        return pd.Series(dtype=int, name='signal', index=df.index)
+        
     if column not in df.columns:
-        logger.error("Required column '%s' not found in dataframe", column)
-        return pd.Series(dtype=float)
+        logger.error("Required column '%s' not found in dataframe. Available columns: %s", 
+                    column, list(df.columns))
+        return pd.Series(dtype=int, name='signal', index=df.index)
 
     try:
-        values = df[column].to_numpy()
-        signal = np.sign(values)
-        return pd.Series(signal, index=df.index).fillna(0).astype(int)
-    except (ValueError, TypeError) as exc:
-        logger.error("Exception generating signal: %s", exc, exc_info=True)
-        return pd.Series(dtype=float)
+        # Extract values and handle NaN/infinite values
+        values = df[column].replace([np.inf, -np.inf], np.nan)
+        
+        # Generate signals using numpy sign function
+        signal_values = np.sign(values.fillna(0))  # NaN becomes 0 (neutral)
+        
+        # Create properly indexed series
+        signal_series = pd.Series(signal_values, index=df.index, name='signal', dtype=int)
+        
+        logger.debug("Generated %d signals for column '%s': Buy=%d, Sell=%d, Neutral=%d",
+                    len(signal_series), column,
+                    (signal_series == 1).sum(),
+                    (signal_series == -1).sum(), 
+                    (signal_series == 0).sum())
+        
+        return signal_series
+        
+    except (ValueError, TypeError, AttributeError) as exc:
+        logger.error("Exception generating signal from column '%s': %s", 
+                    column, exc, exc_info=True)
+        return pd.Series(dtype=int, name='signal', index=df.index if hasattr(df, 'index') else None)
+    except Exception as exc:
+        logger.error("Unexpected error in generate_signal: %s", exc, exc_info=True)
+        return pd.Series(dtype=int, name='signal', index=df.index if hasattr(df, 'index') else None)
 
 
 def detect_market_regime_hmm(

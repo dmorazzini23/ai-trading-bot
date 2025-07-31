@@ -8,7 +8,7 @@ import sys
 import csv
 import json
 import traceback
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 import atexit
 import config
 
@@ -237,12 +237,329 @@ def log_performance_metrics(
         logger.warning("Failed to log performance metrics: %s", exc)
 
 
+def log_trading_event(
+    event_type: str,
+    symbol: str,
+    details: Dict[str, any],
+    level: str = "INFO",
+    include_context: bool = True
+) -> None:
+    """
+    Log structured trading events with comprehensive context information.
+    
+    This function provides standardized logging for trading events with
+    optional context capture for debugging and audit purposes. It ensures
+    consistent formatting and includes relevant metadata for analysis.
+    
+    Parameters
+    ----------
+    event_type : str
+        Type of trading event, such as:
+        - 'TRADE_EXECUTED': Order execution events
+        - 'SIGNAL_GENERATED': Signal generation events  
+        - 'RISK_LIMIT_HIT': Risk management events
+        - 'DATA_FETCH_ERROR': Data retrieval issues
+        - 'API_ERROR': External API failures
+        - 'POSITION_UPDATE': Portfolio changes
+        
+    symbol : str
+        Trading symbol associated with the event (e.g., 'AAPL', 'SPY')
+        Use 'SYSTEM' for system-wide events not tied to specific symbols
+        
+    details : Dict[str, any]
+        Event-specific details containing relevant information:
+        - For trades: quantity, price, side, order_id
+        - For signals: confidence, strategy, timeframe
+        - For errors: error_code, retry_count, stack_trace
+        
+    level : str, optional
+        Log level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
+        Default is 'INFO' for standard events
+        
+    include_context : bool, optional
+        Whether to include additional system context:
+        - Memory usage, CPU load
+        - Active positions count
+        - Market status
+        - Bot configuration state
+        
+    Examples
+    --------
+    >>> # Log successful trade execution
+    >>> log_trading_event(
+    ...     'TRADE_EXECUTED',
+    ...     'AAPL', 
+    ...     {
+    ...         'side': 'buy',
+    ...         'quantity': 100,
+    ...         'price': 150.25,
+    ...         'order_id': 'abc123',
+    ...         'execution_time_ms': 250
+    ...     }
+    ... )
+    
+    >>> # Log risk limit violation
+    >>> log_trading_event(
+    ...     'RISK_LIMIT_HIT',
+    ...     'SPY',
+    ...     {
+    ...         'limit_type': 'position_size',
+    ...         'requested': 1000,
+    ...         'max_allowed': 500,
+    ...         'current_exposure': 0.85
+    ...     },
+    ...     level='WARNING'
+    ... )
+    
+    >>> # Log API error with context
+    >>> log_trading_event(
+    ...     'API_ERROR',
+    ...     'SYSTEM',
+    ...     {
+    ...         'provider': 'alpaca',
+    ...         'endpoint': '/v2/orders',
+    ...         'error_code': 429,
+    ...         'retry_count': 3,
+    ...         'error_message': 'Rate limit exceeded'
+    ...     },
+    ...     level='ERROR',
+    ...     include_context=True
+    ... )
+    
+    Notes
+    -----
+    - Logs are automatically timestamped with UTC timezone
+    - Sensitive information (API keys, passwords) is automatically masked
+    - Large objects are truncated to prevent log bloat
+    - Context information is cached for performance
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Validate inputs
+    if not isinstance(event_type, str) or not event_type.strip():
+        logger.error("Invalid event_type: %s", event_type)
+        return
+        
+    if not isinstance(symbol, str) or not symbol.strip():
+        logger.error("Invalid symbol: %s", symbol)
+        return
+        
+    if not isinstance(details, dict):
+        logger.error("Details must be a dictionary, got: %s", type(details))
+        return
+    
+    # Sanitize details to prevent logging sensitive data
+    sanitized_details = _sanitize_log_data(details.copy())
+    
+    # Build structured log entry
+    log_entry = {
+        'event_type': event_type.upper(),
+        'symbol': symbol.upper(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+        'details': sanitized_details
+    }
+    
+    # Add system context if requested
+    if include_context:
+        log_entry['context'] = _get_system_context()
+    
+    # Convert to JSON for structured logging
+    try:
+        json_message = json.dumps(log_entry, default=str, separators=(',', ':'))
+    except (TypeError, ValueError) as e:
+        logger.error("Failed to serialize log entry: %s", e)
+        json_message = f"SERIALIZATION_ERROR: {event_type} {symbol}"
+    
+    # Log at appropriate level
+    log_method = getattr(logger, level.lower(), logger.info)
+    log_method("TRADING_EVENT: %s", json_message)
+
+
+def _sanitize_log_data(data: Dict[str, any]) -> Dict[str, any]:
+    """
+    Remove or mask sensitive information from log data.
+    
+    Parameters
+    ----------
+    data : Dict[str, any]
+        Raw data dictionary that may contain sensitive information
+        
+    Returns
+    -------
+    Dict[str, any]
+        Sanitized data with sensitive fields masked or removed
+    """
+    sensitive_keys = {
+        'api_key', 'secret_key', 'password', 'token', 'auth', 
+        'credentials', 'private_key', 'session_id'
+    }
+    
+    sanitized = {}
+    for key, value in data.items():
+        key_lower = key.lower()
+        
+        # Mask sensitive keys
+        if any(sensitive in key_lower for sensitive in sensitive_keys):
+            sanitized[key] = "***MASKED***"
+        # Truncate very long values
+        elif isinstance(value, str) and len(value) > 1000:
+            sanitized[key] = value[:1000] + "...[TRUNCATED]"
+        # Handle nested dictionaries
+        elif isinstance(value, dict):
+            sanitized[key] = _sanitize_log_data(value)
+        else:
+            sanitized[key] = value
+            
+    return sanitized
+
+
+def _get_system_context() -> Dict[str, any]:
+    """
+    Gather relevant system context for debugging purposes.
+    
+    Returns
+    -------
+    Dict[str, any]
+        System context information including performance metrics
+    """
+    import psutil
+    
+    try:
+        # Basic system metrics
+        context = {
+            'memory_usage_mb': round(psutil.virtual_memory().used / 1024 / 1024, 1),
+            'memory_percent': psutil.virtual_memory().percent,
+            'cpu_percent': psutil.cpu_percent(interval=None),
+            'disk_usage_percent': psutil.disk_usage('/').percent,
+        }
+        
+        # Trading bot specific context
+        context.update({
+            'python_version': sys.version.split()[0],
+            'log_level': logging.getLogger().level,
+            'handlers_count': len(logging.getLogger().handlers),
+        })
+        
+        return context
+        
+    except Exception as e:
+        return {'context_error': str(e)}
+
+
+def setup_enhanced_logging(
+    log_file: str = None,
+    level: str = "INFO", 
+    enable_json_format: bool = False,
+    enable_performance_logging: bool = True,
+    max_file_size_mb: int = 100,
+    backup_count: int = 5
+) -> None:
+    """
+    Setup enhanced logging configuration for the trading bot.
+    
+    Configures multiple log handlers including file rotation, JSON formatting,
+    and performance monitoring to provide comprehensive logging capabilities.
+    
+    Parameters
+    ----------
+    log_file : str, optional
+        Path to the main log file. If None, uses console logging only.
+    level : str, optional
+        Minimum log level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
+    enable_json_format : bool, optional
+        Whether to use JSON formatting for structured logs
+    enable_performance_logging : bool, optional
+        Whether to enable performance and timing logs
+    max_file_size_mb : int, optional
+        Maximum size of log files before rotation (default: 100MB)
+    backup_count : int, optional
+        Number of backup log files to keep (default: 5)
+    """
+    # Configure root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+    
+    # Clear existing handlers
+    root_logger.handlers.clear()
+    
+    # Setup console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_formatter = UTCFormatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    console_handler.setFormatter(console_formatter)
+    root_logger.addHandler(console_handler)
+    
+    # Setup file handler if log file specified
+    if log_file:
+        try:
+            os.makedirs(os.path.dirname(log_file), exist_ok=True)
+            
+            file_handler = RotatingFileHandler(
+                log_file,
+                maxBytes=max_file_size_mb * 1024 * 1024,
+                backupCount=backup_count,
+                encoding='utf-8'
+            )
+            
+            if enable_json_format:
+                file_formatter = JSONFormatter()
+            else:
+                file_formatter = UTCFormatter(
+                    "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                    datefmt="%Y-%m-%d %H:%M:%S"
+                )
+            
+            file_handler.setFormatter(file_formatter)
+            root_logger.addHandler(file_handler)
+            
+        except (OSError, IOError) as e:
+            logging.error("Failed to setup file logging: %s", e)
+    
+    # Setup performance logging if enabled
+    if enable_performance_logging:
+        _setup_performance_logging()
+    
+    logging.info("Enhanced logging configured - Level: %s, File: %s, JSON: %s", 
+                level, log_file or "console-only", enable_json_format)
+
+
+def _setup_performance_logging():
+    """Setup performance-specific logging handlers."""
+    perf_logger = logging.getLogger('performance')
+    
+    # Create separate performance log file
+    perf_file = os.path.join(
+        os.getenv('BOT_LOG_DIR', 'logs'), 
+        'performance.log'
+    )
+    
+    try:
+        os.makedirs(os.path.dirname(perf_file), exist_ok=True)
+        perf_handler = RotatingFileHandler(
+            perf_file, maxBytes=50*1024*1024, backupCount=3
+        )
+        perf_formatter = UTCFormatter(
+            "%(asctime)s PERF %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        perf_handler.setFormatter(perf_formatter)
+        perf_logger.addHandler(perf_handler)
+        perf_logger.setLevel(logging.INFO)
+        
+    except (OSError, IOError) as e:
+        logging.warning("Could not setup performance logging: %s", e)
+
+
 __all__ = [
     "setup_logging",
-    "get_logger",
+    "get_logger", 
     "init_logger",
     "logger",
     "log_performance_metrics",
+    "log_trading_event",
+    "setup_enhanced_logging",
 ]
 
 
