@@ -26,8 +26,14 @@ except ImportError:
             return 0
         def empty(self):
             return True
+    class MockSeries:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __len__(self):
+            return 0
     class MockPandas:
         DataFrame = MockDataFrame
+        Series = MockSeries
         Timestamp = datetime  # AI-AGENT-REF: mock Timestamp with datetime
         def read_csv(self, *args, **kwargs):
             return MockDataFrame()

@@ -6,8 +6,8 @@ signal combination logic, and timeframe conflict resolution for
 institutional-grade trading strategies.
 """
 
-import numpy as np
-import pandas as pd
+# AI-AGENT-REF: use centralized import management
+from .imports import np, pd, NUMPY_AVAILABLE, PANDAS_AVAILABLE
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, timedelta
 from enum import Enum
