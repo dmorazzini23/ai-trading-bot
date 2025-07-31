@@ -3093,9 +3093,13 @@ def _initialize_alpaca_clients():
     if trading_client is not None:
         return  # Already initialized
     
-    # Only initialize in non-test environments or when explicitly needed
+    # In test environments, create stub clients instead of real ones
     if os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"):
-        logger.debug("Skipping Alpaca client initialization in test environment")
+        logger.debug("Creating stub Alpaca clients for test environment")
+        # Create stub objects to prevent AttributeError during tests
+        trading_client = type('StubClient', (), {'get_account': lambda: None})()
+        data_client = type('StubClient', (), {'get_stock_bars': lambda x: None})()
+        stream = type('StubClient', (), {'subscribe_trades': lambda x: None})()
         return
         
     try:
