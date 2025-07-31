@@ -7,7 +7,7 @@ import types
 import warnings
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional, Sequence
+from typing import Any, Optional, Sequence, Union
 
 import requests  # AI-AGENT-REF: ensure requests import for function annotations
 
@@ -393,19 +393,135 @@ def get_last_available_bar(symbol: str) -> pd.DataFrame:
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
 def get_historical_data(
     symbol: str,
-    start_date,
-    end_date,
+    start_date: Union[str, date, datetime, pd.Timestamp],
+    end_date: Union[str, date, datetime, pd.Timestamp],
     timeframe: str,
     *,
     raise_on_empty: bool = False,
+    provider: Optional[str] = None,
+    validate_data: bool = True,
 ) -> pd.DataFrame:
-    """Fetch historical bars from Alpaca and ensure OHLCV float columns.
+    """
+    Fetch historical market data with comprehensive validation and error handling.
+
+    This function retrieves historical OHLCV (Open, High, Low, Close, Volume) data
+    for a specified symbol and time range. It implements automatic provider failover,
+    data quality validation, and robust error handling to ensure reliable data
+    for trading analysis.
 
     Parameters
     ----------
+    symbol : str
+        Trading symbol in uppercase format (e.g., 'AAPL', 'SPY', 'MSFT').
+        Must be a valid symbol supported by the configured data providers.
+    start_date : Union[str, date, datetime, pd.Timestamp]
+        Start date for historical data in various formats:
+        - String: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'
+        - date/datetime objects
+        - pandas Timestamp
+    end_date : Union[str, date, datetime, pd.Timestamp]
+        End date for historical data (same format options as start_date).
+        Must be after start_date and not in the future.
+    timeframe : str
+        Data frequency/timeframe:
+        - '1MIN': 1-minute bars
+        - '5MIN': 5-minute bars  
+        - '15MIN': 15-minute bars
+        - '1HOUR': 1-hour bars
+        - '1DAY': Daily bars
     raise_on_empty : bool, optional
-        If ``True`` and no data is returned, raise :class:`DataFetchError`.
-        Defaults to ``False`` where an empty DataFrame is returned instead.
+        If True, raises DataFetchError when no data is returned.
+        If False (default), returns empty DataFrame with proper columns.
+    provider : Optional[str], optional
+        Specific data provider to use ('alpaca', 'finnhub', 'yahoo').
+        If None, uses automatic provider selection with failover.
+    validate_data : bool, optional
+        If True (default), performs data quality validation including:
+        - Gap detection and reporting
+        - Price anomaly checking
+        - Volume validation
+        - Timestamp consistency
+
+    Returns
+    -------
+    pd.DataFrame
+        Historical market data with DatetimeIndex and columns:
+        - 'open' (float): Opening prices
+        - 'high' (float): High prices
+        - 'low' (float): Low prices
+        - 'close' (float): Closing prices  
+        - 'volume' (int): Trading volume
+        - Additional columns may include 'vwap', 'trade_count'
+
+    Raises
+    ------
+    ValueError
+        If start_date/end_date are None or invalid format
+    TypeError
+        If date parameters are not supported types
+    DataFetchError
+        If raise_on_empty=True and no data is retrieved
+    ConnectionError
+        If all data providers fail to respond
+    TimeoutError
+        If data retrieval exceeds configured timeout
+
+    Examples
+    --------
+    >>> from data_fetcher import get_historical_data
+    >>> from datetime import datetime, timedelta
+    >>> 
+    >>> # Get 30 days of hourly data
+    >>> end_date = datetime.now()
+    >>> start_date = end_date - timedelta(days=30)
+    >>> data = get_historical_data('AAPL', start_date, end_date, '1HOUR')
+    >>> print(f"Retrieved {len(data)} bars")
+    >>> print(data.head())
+
+    >>> # Get daily data with specific provider
+    >>> data = get_historical_data(
+    ...     'SPY', '2024-01-01', '2024-01-31', '1DAY',
+    ...     provider='alpaca', validate_data=True
+    ... )
+
+    >>> # Handle missing data gracefully
+    >>> try:
+    ...     data = get_historical_data('INVALID', '2024-01-01', '2024-01-02', '1DAY', 
+    ...                              raise_on_empty=True)
+    ... except DataFetchError:
+    ...     print("No data available for symbol")
+
+    Data Quality Validation
+    ----------------------
+    When validate_data=True, the function performs:
+    
+    1. **Completeness Check**: Ensures no missing time periods
+    2. **Price Validation**: Checks for unrealistic price movements
+    3. **Volume Validation**: Verifies non-negative volume values
+    4. **Gap Detection**: Identifies and reports data gaps
+    5. **Consistency Check**: Validates OHLC relationships (High >= Low, etc.)
+
+    Provider Failover Logic
+    ----------------------
+    1. **Primary**: Alpaca Markets (real-time, low latency)
+    2. **Secondary**: Finnhub (alternative commercial data)
+    3. **Fallback**: Yahoo Finance (free, delayed data)
+
+    Each provider is tried sequentially until data is successfully retrieved
+    or all providers are exhausted.
+
+    Performance Notes
+    ----------------
+    - Results are cached to reduce redundant API calls
+    - Implements connection pooling for improved performance
+    - Uses compression for large data transfers
+    - Automatically handles rate limiting with exponential backoff
+
+    See Also
+    --------
+    _fetch_bars : Low-level data fetching implementation
+    ensure_datetime : Date/time parsing utilities
+    DataFetchError : Custom exception for data retrieval failures
     """
 
     if start_date is None or end_date is None:

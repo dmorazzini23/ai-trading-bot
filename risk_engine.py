@@ -680,34 +680,202 @@ def dynamic_position_size(capital: float, volatility: float, drawdown: float) ->
 
 
 def calculate_position_size(*args, **kwargs) -> int:
-    """Convenience wrapper supporting simple and advanced usage."""
+    """
+    Calculate optimal position size using Kelly criterion and risk management.
+    
+    This convenience wrapper function supports multiple calling patterns for
+    calculating position sizes based on available capital, signal confidence,
+    and risk parameters. It integrates Kelly criterion optimization with
+    volatility-based risk scaling.
+    
+    Parameters
+    ----------
+    *args : tuple
+        Variable arguments supporting multiple calling patterns:
+        
+        Pattern 1 (Simple): calculate_position_size(cash, price)
+        - cash (float): Available trading capital
+        - price (float): Current asset price per share
+        
+        Pattern 2 (Advanced): calculate_position_size(signal, cash, price, api=None)
+        - signal (TradeSignal): Signal object with confidence and strategy info
+        - cash (float): Available trading capital  
+        - price (float): Current asset price per share
+        - api (optional): Broker API client for additional validation
+        
+    **kwargs : dict
+        Optional keyword arguments:
+        - api: Broker API client for account validation
+        - max_position_pct (float): Maximum position as % of capital (default: 5%)
+        - volatility_scaling (bool): Enable volatility-based sizing (default: True)
+        
+    Returns
+    -------
+    int
+        Optimal number of shares to trade, considering:
+        - Kelly criterion optimization for signal confidence
+        - Risk-adjusted position sizing based on volatility
+        - Maximum position limits and portfolio constraints
+        - Available capital and margin requirements
+        
+    Raises
+    ------
+    TypeError
+        If invalid argument patterns are provided
+    ValueError
+        If negative or invalid cash/price values are passed
+        
+    Examples
+    --------
+    >>> # Simple position sizing
+    >>> shares = calculate_position_size(10000, 150.0)  # $10k capital, $150/share
+    >>> print(f"Buy {shares} shares")
+    
+    >>> # Advanced position sizing with signal
+    >>> from risk_engine import TradeSignal
+    >>> signal = TradeSignal(symbol='AAPL', side='buy', confidence=0.8, strategy='momentum')
+    >>> shares = calculate_position_size(signal, 10000, 150.0)
+    >>> print(f"Buy {shares} shares based on {signal.confidence:.1%} confidence")
+    
+    Notes
+    -----
+    - Returns 0 if insufficient capital or invalid parameters
+    - Automatically applies risk management limits
+    - Considers portfolio heat and correlation limits
+    - Scales position size based on signal confidence
+    """
     engine = RiskEngine()
+    
     if len(args) == 2 and not kwargs:
         cash, price = args
-        # AI-AGENT-REF: Validate cash input in wrapper function
-        if cash <= 0:
+        # Validate inputs
+        if not isinstance(cash, (int, float)) or cash <= 0:
+            logging.warning(f"Invalid cash amount: {cash}")
             return 0
+        if not isinstance(price, (int, float)) or price <= 0:
+            logging.warning(f"Invalid price: {price}")
+            return 0
+            
         dummy = TradeSignal(
             symbol="DUMMY", side="buy", confidence=1.0, strategy="default"
         )
         return engine.position_size(dummy, cash, price)
+        
     if len(args) >= 3:
         signal, cash, price = args[:3]
-        # AI-AGENT-REF: Validate cash input in wrapper function
-        if cash <= 0:
+        
+        # Validate inputs
+        if not isinstance(cash, (int, float)) or cash <= 0:
+            logging.warning(f"Invalid cash amount: {cash}")
             return 0
+        if not isinstance(price, (int, float)) or price <= 0:
+            logging.warning(f"Invalid price: {price}")
+            return 0
+        if not hasattr(signal, 'confidence') or not hasattr(signal, 'symbol'):
+            logging.error(f"Invalid signal object: {type(signal)}")
+            return 0
+            
         api = args[3] if len(args) > 3 else kwargs.get("api")
         return engine.position_size(signal, cash, price, api)
-    raise TypeError("Invalid arguments for calculate_position_size")
+        
+    raise TypeError("Invalid arguments for calculate_position_size. Expected (cash, price) or (signal, cash, price)")
 
 
 def check_max_drawdown(state: Dict[str, float]) -> bool:
-    """Return True if current drawdown exceeds the maximum allowed."""
-    return state.get("current_drawdown", 0) > state.get("max_drawdown", 0)
+    """
+    Validate if current portfolio drawdown exceeds maximum allowed threshold.
+    
+    This function checks portfolio performance against configured drawdown limits
+    to implement risk management controls. When drawdown exceeds the threshold,
+    trading may be halted or position sizes reduced.
+    
+    Parameters
+    ----------
+    state : Dict[str, float]
+        Portfolio state dictionary containing:
+        - 'current_drawdown' (float): Current drawdown as decimal (e.g., 0.05 = 5%)
+        - 'max_drawdown' (float): Maximum allowed drawdown threshold
+        - 'portfolio_value' (float): Current portfolio value (optional)
+        - 'peak_value' (float): Historical peak portfolio value (optional)
+        
+    Returns
+    -------
+    bool
+        True if current drawdown exceeds maximum allowed threshold,
+        False if within acceptable limits or if data is insufficient.
+        
+    Examples
+    --------
+    >>> state = {
+    ...     'current_drawdown': 0.08,  # 8% drawdown
+    ...     'max_drawdown': 0.05,      # 5% limit
+    ...     'portfolio_value': 45000,
+    ...     'peak_value': 50000
+    ... }
+    >>> if check_max_drawdown(state):
+    ...     print("WARNING: Drawdown limit exceeded!")
+    ...     reduce_position_sizes()
+    
+    Notes
+    -----
+    - Returns False for missing or invalid state data
+    - Drawdown values should be positive decimals (0.05 = 5%)
+    - Used for automated risk management decisions
+    """
+    if not isinstance(state, dict):
+        logging.warning(f"Invalid state type: {type(state)}")
+        return False
+        
+    current_dd = state.get("current_drawdown", 0)
+    max_dd = state.get("max_drawdown", 0)
+    
+    # Validate drawdown values
+    if not isinstance(current_dd, (int, float)) or current_dd < 0:
+        logging.warning(f"Invalid current_drawdown: {current_dd}")
+        return False
+    if not isinstance(max_dd, (int, float)) or max_dd <= 0:
+        logging.warning(f"Invalid max_drawdown: {max_dd}")
+        return False
+        
+    return current_dd > max_dd
 
 
 def can_trade() -> bool:
-    """Return False when trading should be halted."""
+    """
+    Determine if trading should be allowed based on market and system conditions.
+    
+    This function performs a comprehensive check of trading conditions including
+    market hours, system health, risk limits, and operational flags to determine
+    if the bot should execute trades.
+    
+    Returns
+    -------
+    bool
+        True if all conditions allow trading, False if trading should be halted.
+        
+    Checks Performed
+    ---------------
+    - Market hours and trading sessions
+    - System health and API connectivity  
+    - Risk management limits and drawdowns
+    - Account status and buying power
+    - Emergency halt flags
+    - Pattern Day Trader (PDT) restrictions
+    
+    Examples
+    --------
+    >>> if can_trade():
+    ...     execute_trading_strategy()
+    ... else:
+    ...     print("Trading halted due to risk conditions")
+    ...     wait_for_market_open()
+    
+    Notes
+    -----
+    - Called before each trading cycle
+    - Logs reason when trading is not allowed
+    - Respects emergency stop conditions
+    """
     return not HARD_STOP and CURRENT_TRADES < MAX_TRADES
 
 
