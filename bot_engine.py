@@ -4315,9 +4315,21 @@ def fractional_kelly_size(
             logger.warning("Invalid ATR for Kelly calculation: %s, using minimum position", atr)
             return 1
         
-        if not isinstance(win_prob, (int, float)) or not (0 <= win_prob <= 1):
-            logger.error("Invalid win probability for Kelly calculation: %s", win_prob)
+        # AI-AGENT-REF: Normalize confidence values to valid probability range
+        if not isinstance(win_prob, (int, float)):
+            logger.error("Invalid win probability type for Kelly calculation: %s", win_prob)
             return 0
+        
+        # Handle confidence values that exceed 1.0 by normalizing them
+        if win_prob > 1.0:
+            logger.debug("Normalizing confidence value %s to probability", win_prob)
+            # Use sigmoid function to map confidence to probability range [0,1]
+            # This preserves the relative ordering while constraining to valid range
+            win_prob = 1.0 / (1.0 + math.exp(-win_prob + 1.0))
+            logger.debug("Normalized win probability: %s", win_prob)
+        elif win_prob < 0:
+            logger.warning("Negative confidence value %s, using 0.0", win_prob)
+            win_prob = 0.0
         
         if not isinstance(payoff_ratio, (int, float)) or payoff_ratio <= 0:
             logger.error("Invalid payoff ratio for Kelly calculation: %s", payoff_ratio)
