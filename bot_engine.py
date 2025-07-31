@@ -46,18 +46,7 @@ try:
     import numpy as np
 except ImportError:
     # AI-AGENT-REF: numpy not available, create minimal fallback for import compatibility
-    class MockNumpy:
-        def __init__(self):
-            self.nan = float('nan')  # AI-AGENT-REF: add nan attribute
-            self.NaN = float('nan')  # AI-AGENT-REF: add NaN attribute 
-            # Add random module mock
-            self.random = self
-        def array(self, *args, **kwargs):
-            return []
-        def mean(self, *args, **kwargs):
-            return 0.0
-        def std(self, *args, **kwargs):
-            return 1.0
+    class MockRandom:
         def uniform(self, low=0, high=1, size=None):
             """Mock uniform random distribution."""
             if size is None:
@@ -74,6 +63,22 @@ except ImportError:
                 return [int((low + high) / 2)] * size
             else:
                 return [int((low + high) / 2)] * size
+        def seed(self, *args, **kwargs):
+            """Mock random seed."""
+            pass
+
+    class MockNumpy:
+        def __init__(self):
+            self.nan = float('nan')  # AI-AGENT-REF: add nan attribute
+            self.NaN = float('nan')  # AI-AGENT-REF: add NaN attribute 
+            # Add random module mock
+            self.random = MockRandom()
+        def array(self, *args, **kwargs):
+            return []
+        def mean(self, *args, **kwargs):
+            return 0.0
+        def std(self, *args, **kwargs):
+            return 1.0
         def arange(self, *args, **kwargs):
             """Mock numpy arange."""
             if len(args) == 1:
@@ -88,9 +93,6 @@ except ImportError:
                 return not (math.isnan(x) or math.isinf(x))
             except:
                 return True
-        def seed(self, *args, **kwargs):
-            """Mock random seed."""
-            pass
     np = MockNumpy()
 
 LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
