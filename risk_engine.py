@@ -462,27 +462,40 @@ class RiskEngine:
             return False
 
     def position_size(self, signal: Any, cash: float, price: float, api=None) -> int:
-        # AI-AGENT-REF: Return 0 when hard stop is active
+        """
+        Calculate optimal position size using Kelly criterion and risk management.
+        
+        This is the core position sizing algorithm that combines multiple risk factors:
+        - Kelly criterion for optimal bet sizing
+        - ATR-based volatility scaling  
+        - Maximum position limits
+        - Account equity validation
+        """
+        # Hard stop check - immediately return 0 if emergency halt is active
         if self.hard_stop:
             return 0
             
-        # AI-AGENT-REF: Check if we can trade this signal
+        # Validate signal meets basic trading criteria (confidence, timing, etc.)
         if not self.can_trade(signal):
             return 0
             
-        # AI-AGENT-REF: Check max drawdown if API is available
+        # Check maximum drawdown limits if API connection available
+        # This prevents new positions when portfolio is experiencing large losses
         if api and not self.check_max_drawdown(api):
             return 0
             
+        # Basic input validation - price must be positive
         if price <= 0:
             logger.warning("Invalid price %s for %s", price, getattr(signal, 'symbol', 'UNKNOWN'))
             return 0
             
-        # AI-AGENT-REF: Return 0 for invalid cash amounts (zero or negative)
+        # Cash validation - must have positive available capital
         if cash <= 0:
             logger.warning("Invalid cash amount %s for %s", cash, getattr(signal, 'symbol', 'UNKNOWN'))
             return 0
 
+        # Get total account equity for position sizing calculations
+        # Total equity includes cash + current position values
         try:
             if api:
                 account = api.get_account()
@@ -493,28 +506,41 @@ class RiskEngine:
             logger.warning("Error getting account equity: %s", e)
             total_equity = cash
 
-        # AI-AGENT-REF: Validate total_equity after API call
+        # Validate equity amount after API call
         if total_equity <= 0:
             logger.warning("Invalid total equity %s for %s", total_equity, getattr(signal, 'symbol', 'UNKNOWN'))
             return 0
 
         try:
-            # AI-AGENT-REF: Add validation for signal object before accessing symbol
+            # Signal validation - ensure it has required attributes
             if not hasattr(signal, 'symbol'):
                 logger.warning("Invalid signal object missing symbol attribute")
                 return 0
                 
+            # ATR-based position sizing (preferred method for volatility adjustment)
+            # This approach sizes positions based on the Average True Range to
+            # maintain consistent risk per trade regardless of price volatility
             atr_data = self._get_atr_data(signal.symbol)
             if atr_data and atr_data > 0:
+                # Risk 1% of total equity per trade (configurable risk budget)
                 risk_per_trade = total_equity * 0.01
+                
+                # Calculate stop distance using ATR multiplier
+                # Higher volatility stocks get wider stops but smaller position sizes
                 stop_distance = atr_data * self.config.atr_multiplier
+                
+                # Position size = Risk Budget / Stop Distance
+                # This ensures each trade risks the same dollar amount
                 raw_qty = risk_per_trade / stop_distance
             else:
+                # Fallback to Kelly criterion-based weight calculation
+                # Used when ATR data is unavailable or invalid
                 weight = self._apply_weight_limits(signal)
                 raw_qty = (total_equity * weight) / price
         except Exception as exc:
             logger.warning("ATR calculation failed for %s: %s", getattr(signal, 'symbol', 'UNKNOWN'), exc)
             try:
+                # Secondary fallback to basic percentage-based sizing
                 weight = self._apply_weight_limits(signal)
                 raw_qty = (total_equity * weight) / price
             except Exception:
