@@ -81,23 +81,29 @@ When running live (`python -m ai_trading`), the bot automatically loads `best_hy
 
 ## 🔑 Configuration
 
-Copy the example environment:
+### API Keys Setup
+
+⚠️ **IMPORTANT**: You must configure your Alpaca API keys before running the bot.
 
 ```bash
 cp .env.example .env
+# Edit .env and replace YOUR_ALPACA_API_KEY_HERE with your real API keys
 ```
 
-Provide your Alpaca API credentials:
+📖 **For detailed API key setup instructions, see: [docs/API_KEY_SETUP.md](docs/API_KEY_SETUP.md)**
 
-```bash
-ALPACA_API_KEY=your_key
-ALPACA_SECRET_KEY=your_secret
-FLASK_PORT=9000
-```
+### Quick Configuration
 
-Additional key variables include:
+1. Get your API keys from [Alpaca Markets](https://app.alpaca.markets/paper/dashboard/overview)
+2. Replace placeholders in `.env`:
+   ```bash
+   ALPACA_API_KEY=YOUR_ACTUAL_API_KEY_HERE
+   ALPACA_SECRET_KEY=YOUR_ACTUAL_SECRET_KEY_HERE
+   ALPACA_BASE_URL=https://paper-api.alpaca.markets  # Use paper trading for testing
+   ```
 
-* `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`: trading credentials
+### Additional Configuration Variables
+
 * `BOT_MODE`: e.g. `balanced`, `production`
 * `BOT_LOG_FILE`: path for rotating logs
 * `SCHEDULER_SLEEP_SECONDS`: delay between scheduler cycles (30–60s recommended)
