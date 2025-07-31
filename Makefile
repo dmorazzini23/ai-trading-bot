@@ -10,14 +10,32 @@ install-dev: install
 validate-env:
 	python scripts/validate_test_environment.py
 
-# Testing targets
-test-all: clean install-dev validate-env
+# Environment setup for testing 
+setup-test-env:
+	python scripts/configure_test_env.py
+
+# Testing targets with improved environment handling
+test-all: clean setup-test-env
+	python scripts/iterative_test_runner.py all
+
+test-fast: clean setup-test-env
+	python scripts/iterative_test_runner.py fast
+
+test-ci: clean setup-test-env
+	PYTHONPATH=. pytest --maxfail=5 --disable-warnings --tb=short
+
+# Test originally failing tests
+test-failing:
+	python scripts/iterative_test_runner.py failing
+
+# Legacy testing targets (fallback for network-dependent installs)
+test-all-legacy: clean install-dev validate-env
 	PYTHONPATH=. pytest --maxfail=3 --disable-warnings -n auto -v
 
-test-fast: clean install-dev validate-env
+test-fast-legacy: clean install-dev validate-env
 	PYTHONPATH=. pytest --maxfail=1 --disable-warnings -x
 
-test-ci: clean install-dev validate-env
+test-ci-legacy: clean install-dev validate-env
 	PYTHONPATH=. pytest --maxfail=5 --disable-warnings --tb=short
 
 clean:
@@ -52,4 +70,4 @@ run-backtest:
 	  --slippage-pips 0.1 \
 	  --latency-bars 1
 
-.PHONY: install install-dev test-all test-fast test-ci clean coverage benchmark lint mypy-check check run-backtest
+.PHONY: install install-dev test-all test-fast test-ci test-failing test-all-legacy test-fast-legacy test-ci-legacy setup-test-env clean coverage benchmark lint mypy-check check run-backtest

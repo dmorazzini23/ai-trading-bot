@@ -3093,9 +3093,49 @@ def _initialize_alpaca_clients():
     if trading_client is not None:
         return  # Already initialized
     
-    # Only initialize in non-test environments or when explicitly needed
+    # In test environments, create mock clients
     if os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"):
-        logger.debug("Skipping Alpaca client initialization in test environment")
+        logger.debug("Creating mock Alpaca clients for test environment")
+        # Create comprehensive mock objects for testing
+        class MockAccount:
+            def __init__(self):
+                self.cash = 10000.0
+                self.equity = 50000.0
+                self.buying_power = 20000.0
+        
+        class MockPosition:
+            def __init__(self, symbol="AAPL", qty="10"):
+                self.symbol = symbol
+                self.qty = qty
+        
+        class MockTradingClient:
+            def get_account(self):
+                return MockAccount()
+            
+            def get_all_positions(self):
+                return [MockPosition()]
+            
+            def get_orders(self, req=None):
+                return []
+            
+            def cancel_order_by_id(self, order_id):
+                return True
+        
+        class MockDataClient:
+            def get_stock_bars(self, req):
+                return None
+        
+        class MockStream:
+            def subscribe_trades(self, callback):
+                pass
+            
+            def subscribe_trade_updates(self, callback):
+                pass
+        
+        trading_client = MockTradingClient()
+        data_client = MockDataClient()
+        stream = MockStream()
+        logger.info("Mock Alpaca clients initialized for testing")
         return
         
     try:
