@@ -71,6 +71,11 @@ except ImportError:
             if len(args) == 1:
                 return [1] * args[0]
             return []
+            
+        @property
+        def random(self):
+            import random
+            return random
     
     np = MockNumpy()
 
