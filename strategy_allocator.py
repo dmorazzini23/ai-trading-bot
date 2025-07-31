@@ -106,7 +106,64 @@ class StrategyAllocator:
 
             final_signals.append(s)
 
+        # AI-AGENT-REF: Assign portfolio weights to final signals
+        self._assign_portfolio_weights(final_signals)
         return final_signals
+    
+    def _assign_portfolio_weights(self, signals: List[Any]) -> None:
+        """Assign portfolio weights to signals based on confidence and risk management."""
+        if not signals:
+            return
+            
+        # Get exposure cap from config (default 88%)
+        max_total_exposure = getattr(self.config, 'exposure_cap_aggressive', 0.88)
+        
+        # Group signals by asset class for exposure management
+        buy_signals = [s for s in signals if s.side == "buy"]
+        sell_signals = [s for s in signals if s.side == "sell"]
+        
+        # Handle buy signals with portfolio allocation
+        if buy_signals:
+            # Calculate total confidence for normalization
+            total_confidence = sum(s.confidence for s in buy_signals)
+            
+            if total_confidence > 0:
+                # Allocate weights based on confidence, but cap total exposure
+                available_exposure = max_total_exposure
+                
+                for signal in buy_signals:
+                    # Base weight from confidence proportion
+                    confidence_weight = (signal.confidence / total_confidence) * available_exposure
+                    
+                    # Cap individual position at reasonable maximum (e.g., 25% for diversification)
+                    max_individual_weight = min(0.25, available_exposure / len(buy_signals) * 1.5)
+                    signal.weight = min(confidence_weight, max_individual_weight)
+                    
+                    logger.debug(f"Assigned weight {signal.weight:.3f} to {signal.symbol} (confidence={signal.confidence:.3f})")
+            else:
+                # Fallback: equal weight distribution
+                equal_weight = min(max_total_exposure / len(buy_signals), 0.15)  # Cap at 15% per position
+                for signal in buy_signals:
+                    signal.weight = equal_weight
+                    logger.debug(f"Assigned equal weight {signal.weight:.3f} to {signal.symbol}")
+        
+        # Handle sell signals (exit positions, so weight represents position to close)
+        for signal in sell_signals:
+            # For sell signals, weight should represent the fraction of the position to close
+            # Default to 100% (full position exit)
+            signal.weight = 1.0
+            logger.debug(f"Assigned exit weight {signal.weight:.3f} to {signal.symbol}")
+        
+        # Validate total exposure doesn't exceed cap
+        total_buy_weight = sum(s.weight for s in buy_signals)
+        if total_buy_weight > max_total_exposure:
+            logger.warning(f"Total buy weight {total_buy_weight:.3f} exceeds cap {max_total_exposure:.3f}, scaling down")
+            scale_factor = max_total_exposure / total_buy_weight
+            for signal in buy_signals:
+                signal.weight *= scale_factor
+                logger.debug(f"Scaled weight to {signal.weight:.3f} for {signal.symbol}")
+        
+        logger.info(f"Portfolio allocation: {len(buy_signals)} buys (total weight: {sum(s.weight for s in buy_signals):.3f}), {len(sell_signals)} sells")
 
     def update_reward(self, strategy: str, reward: float) -> None:
         """Update reward for a strategy (placeholder for test compatibility)."""

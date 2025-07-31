@@ -602,8 +602,9 @@ class RiskEngine:
         # The maximum weight we can allocate is the minimum of available capacities
         max_allowed = min(available_asset_capacity, available_strategy_capacity)
         
-        # Apply confidence scaling to the signal weight, but respect available capacity
-        requested_weight = sig.weight * sig.confidence
+        # AI-AGENT-REF: Use signal weight directly (confidence already factored into weight by allocator)
+        # The strategy allocator already assigns weights based on confidence and portfolio constraints
+        requested_weight = sig.weight
         base_weight = min(requested_weight, max_allowed)
         return base_weight
 
