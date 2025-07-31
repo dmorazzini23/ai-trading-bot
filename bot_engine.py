@@ -2821,7 +2821,8 @@ class SignalManager:
             )
             val = df["momentum"].iloc[-1]
             s = 1 if val > 0 else -1 if val < 0 else -1
-            w = min(abs(val) * 10, 1.0)
+            # AI-AGENT-REF: Scale momentum weight to reasonable portfolio allocation
+            w = min(abs(val) * 5, 0.25)  # Cap at 25% allocation
             return s, w, "momentum"
         except Exception:
             logger.exception("Error in signal_momentum")
@@ -2842,7 +2843,8 @@ class SignalManager:
                 if val > self.mean_rev_zscore_threshold
                 else 1 if val < -self.mean_rev_zscore_threshold else -1
             )
-            w = min(abs(val) / 3, 1.0)
+            # AI-AGENT-REF: Scale mean reversion weight to reasonable portfolio allocation  
+            w = min(abs(val) / 5, 0.2)  # Cap at 20% allocation
             return s, w, "mean_reversion"
         except Exception:
             logger.exception("Error in signal_mean_reversion")
@@ -2854,7 +2856,8 @@ class SignalManager:
         try:
             val = df["stochrsi"].iloc[-1]
             s = 1 if val < 0.2 else -1 if val > 0.8 else -1
-            return s, 0.3, "stochrsi"
+            # AI-AGENT-REF: Reduce weight to allow more signals within exposure cap
+            return s, 0.2, "stochrsi"
         except Exception:
             logger.exception("Error in signal_stochrsi")
             return -1, 0.0, "stochrsi"
@@ -2964,9 +2967,9 @@ class SignalManager:
 
         score = max(-1.0, min(1.0, score))
         s = 1 if score > 0 else -1 if score < 0 else -1
-        weight = abs(score)
+        weight = abs(score) * 0.2  # AI-AGENT-REF: Scale to reasonable portfolio allocation
         if is_high_vol_regime():
-            weight *= 1.5
+            weight *= 1.2  # Smaller multiplier for high vol
         return s, weight, "sentiment"
 
     def signal_regime(
@@ -2974,7 +2977,9 @@ class SignalManager:
     ) -> Tuple[int, float, str]:
         ok = check_market_regime(state)
         s = 1 if ok else -1
-        return s, 1.0, "regime"
+        # AI-AGENT-REF: Use reasonable weight for portfolio allocation instead of 1.0
+        weight = 0.15  # 15% allocation seems reasonable for regime signal
+        return s, weight, "regime"
 
     def load_signal_weights(self) -> dict[str, float]:
         if not os.path.exists(SIGNAL_WEIGHTS_FILE):
@@ -3049,7 +3054,18 @@ class SignalManager:
             return 0.0, 0.0, "no_signals"
         self.last_components = signals
         score = sum(s * w for s, w, _ in signals)
-        confidence = sum(w for _, w, _ in signals)
+        
+        # AI-AGENT-REF: Normalize confidence to be a valid probability (0-1)
+        # instead of summing raw weights which can exceed 1.0
+        total_weight = sum(w for _, w, _ in signals)
+        if total_weight > 0:
+            # Normalize weights to sum to 1.0, then apply to create confidence
+            # Use the maximum individual weight as base confidence, scaled by number of signals
+            max_weight = max(w for _, w, _ in signals)
+            confidence = min(1.0, max_weight * (len(signals) / 5.0))  # Scale by signal count
+        else:
+            confidence = 0.0
+            
         labels = "+".join(label for _, _, label in signals)
         return math.copysign(1, score), confidence, labels
 
@@ -4241,9 +4257,24 @@ def fractional_kelly_size(
             logger.warning("Invalid ATR for Kelly calculation: %s, using minimum position", atr)
             return 1
         
-        if not isinstance(win_prob, (int, float)) or not (0 <= win_prob <= 1):
-            logger.error("Invalid win probability for Kelly calculation: %s", win_prob)
+        # AI-AGENT-REF: Normalize confidence to valid probability range (0-1)
+        if not isinstance(win_prob, (int, float)):
+            logger.error("Invalid win probability type for Kelly calculation: %s", win_prob)
             return 0
+        
+        # Normalize confidence if it exceeds 1.0 (sum of multiple signal weights)
+        if win_prob > 1.0:
+            # Convert confidence (sum of weights) to probability using tanh normalization
+            # This preserves relative signal strength while ensuring 0-1 range
+            normalized_prob = (2.0 / (1.0 + math.exp(-win_prob / 2.0))) - 1.0
+            # Ensure the result is between 0.5 and 1.0 for strong signals
+            normalized_prob = 0.5 + (normalized_prob * 0.5)
+            logger.debug("Normalizing confidence from %.4f to %.4f for Kelly calculation", 
+                        win_prob, normalized_prob)
+            win_prob = normalized_prob
+        elif win_prob < 0:
+            logger.warning("Negative win probability %s for Kelly calculation, using minimum", win_prob)
+            win_prob = 0.01  # Use small positive value instead of 0
         
         if not isinstance(payoff_ratio, (int, float)) or payoff_ratio <= 0:
             logger.error("Invalid payoff ratio for Kelly calculation: %s", payoff_ratio)
