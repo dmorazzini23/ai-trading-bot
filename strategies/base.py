@@ -18,7 +18,7 @@ class TradeSignal:
     confidence: float
     strategy: str
     asset_class: str = "equity"
-    weight: float = 1.0
+    weight: float = 0.0  # AI-AGENT-REF: Default to 0.0, will be set by portfolio management
     price: float = 0.0
 
 
