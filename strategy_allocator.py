@@ -57,7 +57,7 @@ class StrategyAllocator:
                     avg_conf = sum(self.signal_history[key]) / len(self.signal_history[key])
                     # AI-AGENT-REF: use configurable min_confidence instead of hardcoded 0.6
                     min_conf_threshold = getattr(self.config, 'min_confidence', 0.6)
-                    if avg_conf > min_conf_threshold:
+                    if avg_conf >= min_conf_threshold:
                         s.confidence = avg_conf
                         confirmed[strategy].append(s)
                         logger.debug(f"Signal approved: {s.symbol}")
@@ -150,9 +150,18 @@ class StrategyAllocator:
         # Handle sell signals (exit positions, so weight represents position to close)
         for signal in sell_signals:
             # For sell signals, weight should represent the fraction of the position to close
-            # Default to 100% (full position exit)
-            signal.weight = 1.0
-            logger.debug(f"Assigned exit weight {signal.weight:.3f} to {signal.symbol}")
+            # AI-AGENT-REF: Fix sell signal weight assignment to respect exposure caps
+            
+            # For position exits, we need to size based on current position, not total capital
+            # The weight should represent the portfolio allocation of the position being closed
+            # rather than trying to allocate 100% of total capital
+            
+            # Use a reasonable default that respects exposure caps
+            # This should be set based on actual position size, but for safety, cap at max exposure
+            max_exit_weight = min(0.25, max_total_exposure / max(len(sell_signals), 1))  # Cap individual exits
+            signal.weight = max_exit_weight
+            
+            logger.debug(f"Assigned exit weight {signal.weight:.3f} to {signal.symbol} (was defaulting to 1.0)")
         
         # Validate total exposure doesn't exceed cap
         total_buy_weight = sum(s.weight for s in buy_signals)
