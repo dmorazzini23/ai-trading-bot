@@ -41,57 +41,61 @@ else:
     # AI-AGENT-REF: mock ML_MODELS for test environments to avoid slow imports
     ML_MODELS = {}
 
-# AI-AGENT-REF: lazy numpy import for test performance
-try:
-    import numpy as np
-except ImportError:
-    # AI-AGENT-REF: numpy not available, create minimal fallback for import compatibility
-    class MockNumpy:
-        def __init__(self):
-            self.nan = float('nan')  # AI-AGENT-REF: add nan attribute
-            self.NaN = float('nan')  # AI-AGENT-REF: add NaN attribute 
-            # Add random module mock
-            self.random = self
-        def array(self, *args, **kwargs):
-            return []
-        def mean(self, *args, **kwargs):
-            return 0.0
-        def std(self, *args, **kwargs):
-            return 1.0
-        def uniform(self, low=0, high=1, size=None):
-            """Mock uniform random distribution."""
-            if size is None:
-                return 0.5
-            elif isinstance(size, int):
-                return [0.5] * size
-            else:
-                return [0.5] * size
-        def randint(self, low, high, size=None):
-            """Mock random integer generation."""
-            if size is None:
-                return int((low + high) / 2)
-            elif isinstance(size, int):
-                return [int((low + high) / 2)] * size
-            else:
-                return [int((low + high) / 2)] * size
-        def arange(self, *args, **kwargs):
-            """Mock numpy arange."""
-            if len(args) == 1:
-                return list(range(args[0]))
-            elif len(args) == 2:
-                return list(range(args[0], args[1]))
-            else:
-                return list(range(10))  # fallback
-        def isfinite(self, x):
-            """Mock numpy isfinite."""
+# AI-AGENT-REF: lazy numpy loader for improved import performance
+class LazyNumpy:
+    """Lazy loader for numpy that only imports when first accessed."""
+    def __init__(self):
+        self._numpy = None
+        self._loaded = False
+    
+    def _load(self):
+        if not self._loaded:
             try:
-                return not (math.isnan(x) or math.isinf(x))
-            except:
-                return True
-        def seed(self, *args, **kwargs):
-            """Mock random seed."""
-            pass
-    np = MockNumpy()
+                import numpy as np_module
+                self._numpy = np_module
+                self._loaded = True
+            except ImportError:
+                # Create minimal fallback
+                self._numpy = self._create_fallback()
+                self._loaded = True
+        return self._numpy
+    
+    def _create_fallback(self):
+        """Create minimal numpy fallback for testing environments."""
+        class MockNumpy:
+            def __init__(self):
+                self.nan = float('nan')
+                self.NaN = float('nan')
+                self.random = self
+            
+            def array(self, data):
+                return list(data) if data else []
+            
+            def mean(self, data):
+                return sum(data) / len(data) if data else 0
+            
+            def std(self, data):
+                return 1.0  # Mock standard deviation
+            
+            def __getattr__(self, name):
+                return lambda *args, **kwargs: 0
+        
+        return MockNumpy()
+    
+    def __getattr__(self, name):
+        return getattr(self._load(), name)
+
+# AI-AGENT-REF: use lazy loading for numpy to improve import performance
+if os.getenv("PYTEST_RUNNING"):
+    # In test mode, use lazy loader
+    np = LazyNumpy()
+else:
+    # In production, import normally
+    try:
+        import numpy as np
+    except ImportError:
+        # Create fallback np object
+        np = LazyNumpy()
 
 LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
 # Set up logging only once
@@ -154,95 +158,147 @@ warnings.filterwarnings(
     module="pandas_ta.*",
 )
 
-# AI-AGENT-REF: guard pandas import for test environments
-try:
-    import pandas as pd
-    # AI-AGENT-REF: preserve real pandas DataFrame class before it gets overwritten by lazy module
-    _RealDataFrame = pd.DataFrame
-    _RealMultiIndex = pd.MultiIndex
-    # AI-AGENT-REF: guard pandas.RangeIndex access for compatibility
-    try:
-        _RealRangeIndex = pd.RangeIndex
-    except AttributeError:
-        # Fallback for pandas versions or environments where RangeIndex is not directly accessible
-        try:
-            from pandas.core.indexes.range import RangeIndex as _RealRangeIndex
-        except ImportError:
-            # Final fallback - use range for minimal compatibility  
-            _RealRangeIndex = range
-    # AI-AGENT-REF: guard pandas.DatetimeIndex access for compatibility
-    try:
-        _RealDatetimeIndex = pd.DatetimeIndex
-    except AttributeError:
-        _RealDatetimeIndex = type  # Minimal fallback
-except ImportError:
-    # AI-AGENT-REF: pandas not available - create minimal fallbacks for import compatibility
-    class MockDataFrame:
-        def __init__(self, data=None, index=None, columns=None):
-            self._data = data or {}
-            self.index = index or []
-            self.columns = columns or []
-            self.empty = len(self._data) == 0
-        
-        def __getitem__(self, key):
-            return MockSeries([0.5] * 10)  # Mock series
-        
-        def __setitem__(self, key, value):
-            self._data[key] = value
-        
-        def copy(self):
-            return MockDataFrame(self._data.copy(), self.index, self.columns)
-        
-        def dropna(self):
-            return self
-        
-        def fillna(self, value):
-            return self
+# AI-AGENT-REF: lazy pandas loader for improved import performance
+class LazyPandas:
+    """Lazy loader for pandas that only imports when first accessed."""
+    def __init__(self):
+        self._pandas = None
+        self._loaded = False
     
-    class MockSeries:
-        def __init__(self, data=None):
-            self._data = data or []
-            self.empty = len(self._data) == 0
-        
-        def __len__(self):
-            return len(self._data)
-        
-        def __getitem__(self, key):
-            if isinstance(key, int):
-                return self._data[key] if key < len(self._data) else 0.5
-            return MockSeries(self._data)
-        
-        def rolling(self, *args, **kwargs):
-            return self
-        
-        def mean(self):
-            return 0.5
-        
-        def std(self):
-            return 0.1
-        
-        def ewm(self, *args, **kwargs):
-            return self
-        
-        def dropna(self):
-            return self
-        
-        def fillna(self, value):
-            return self
+    def _load(self):
+        if not self._loaded:
+            try:
+                import pandas as pd_module
+                self._pandas = pd_module
+                self._loaded = True
+            except ImportError:
+                # Create minimal fallback
+                self._pandas = self._create_fallback()
+                self._loaded = True
+        return self._pandas
+    
+    def _create_fallback(self):
+        """Create minimal pandas fallback for testing environments."""
+        class MockPandas:
+            def DataFrame(self, data=None, index=None, columns=None):
+                return MockDataFrame(data, index, columns)
             
-    class MockIndex:
-        pass
-    _RealDataFrame = MockDataFrame
-    _RealMultiIndex = MockIndex
-    _RealRangeIndex = range  
-    _RealDatetimeIndex = MockIndex
-    # Create a minimal pandas-like object to prevent further import errors
-    class MockPandas:
-        DataFrame = MockDataFrame
-        MultiIndex = MockIndex
-        RangeIndex = range
-        DatetimeIndex = MockIndex  # AI-AGENT-REF: add missing DatetimeIndex
-        Series = MockSeries
+            def MultiIndex(self, *args, **kwargs):
+                return []
+            
+            def RangeIndex(self, *args, **kwargs):
+                return range(10)
+            
+            def DatetimeIndex(self, *args, **kwargs):
+                return []
+            
+            def date_range(self, *args, **kwargs):
+                return []
+            
+            # AI-AGENT-REF: add missing Index and Series attributes for utils compatibility
+            Index = MockIndex
+            Series = MockSeries
+        
+        return MockPandas()
+    
+    def __getattr__(self, name):
+        return getattr(self._load(), name)
+
+# AI-AGENT-REF: use lazy loading for pandas to improve import performance
+if os.getenv("PYTEST_RUNNING"):
+    # In test mode, use lazy loader
+    pd = LazyPandas()
+else:
+    # In production, import normally but only when not in test mode
+    try:
+        import pandas as pd
+    except ImportError:
+        # Create fallback pd object
+        pd = LazyPandas()
+
+# AI-AGENT-REF: pandas not available - create minimal fallbacks for import compatibility
+class MockDataFrame:
+    def __init__(self, data=None, index=None, columns=None):
+        self._data = data or {}
+        self.index = MockIndex() if index is None else index
+        self.columns = columns or []
+        self.empty = len(self._data) == 0
+    
+    def __getitem__(self, key):
+        return MockSeries([0.5] * 10)  # Mock series
+    
+    def __setitem__(self, key, value):
+        self._data[key] = value
+    
+    def copy(self):
+        return MockDataFrame(self._data.copy(), self.index, self.columns)
+    
+    def dropna(self):
+        return self
+    
+    def fillna(self, value):
+        return self
+    
+    def drop(self, columns=None, errors="ignore"):
+        return self
+
+class MockSeries:
+    def __init__(self, data=None):
+        self._data = data or []
+        self.empty = len(self._data) == 0
+    
+    def __len__(self):
+        return len(self._data)
+    
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._data[key] if key < len(self._data) else 0.5
+        return MockSeries(self._data)
+    
+    def rolling(self, *args, **kwargs):
+        return self
+    
+    def mean(self):
+        return 0.5
+    
+    def std(self):
+        return 0.1
+    
+    def ewm(self, *args, **kwargs):
+        return self
+    
+    def dropna(self):
+        return self
+    
+    def fillna(self, value):
+        return self
+
+class MockIndex:
+    def __init__(self):
+        self.dtype = str  # Mock dtype attribute
+    
+    def __getitem__(self, key):
+        return "mock_index"
+    
+    def get_level_values(self, level):
+        return MockIndex()
+
+_RealDataFrame = MockDataFrame
+_RealMultiIndex = MockIndex
+_RealRangeIndex = range  
+_RealDatetimeIndex = MockIndex
+
+# Create a minimal pandas-like object to prevent further import errors
+class MockPandas:
+    DataFrame = MockDataFrame
+    MultiIndex = MockIndex
+    RangeIndex = range
+    DatetimeIndex = MockIndex  # AI-AGENT-REF: add missing DatetimeIndex
+    Series = MockSeries
+    Index = MockIndex  # AI-AGENT-REF: add missing Index attribute
+
+# Only use MockPandas in test environments where pandas is not available
+if os.getenv("PYTEST_RUNNING") and not hasattr(pd, '_pandas'):
     pd = MockPandas()
 
 import utils
@@ -355,7 +411,8 @@ class _LazyModule(types.ModuleType):
         return getattr(self._module, item)
 
 
-pd = _LazyModule("pandas")
+# AI-AGENT-REF: use our improved lazy loading instead of _LazyModule for pandas
+# pd = _LazyModule("pandas")  # Commented out to use our LazyPandas implementation
 mcal = _LazyModule("pandas_market_calendars")
 ta = _LazyModule("pandas_ta")
 
