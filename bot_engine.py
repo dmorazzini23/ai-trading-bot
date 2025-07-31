@@ -5508,7 +5508,26 @@ def _enter_long(
     if current_price <= 0 or pd.isna(current_price):
         logger.critical(f"Invalid price computed for {symbol}: {current_price}")
         return True
+    
+    # AI-AGENT-REF: Get target weight with sensible fallback for signal-based trading
     target_weight = ctx.portfolio_weights.get(symbol, 0.0)
+    if target_weight == 0.0:
+        # If no portfolio weight exists (e.g., new signal), calculate a reasonable default
+        # Based on confidence and ensuring we don't exceed exposure limits
+        confidence_weight = conf * 0.15  # Max 15% for high confidence signals
+        exposure_cap = getattr(ctx.config, 'exposure_cap_aggressive', 0.88) if hasattr(ctx, 'config') else 0.88
+        
+        # Get current total exposure to avoid exceeding cap
+        try:
+            positions = ctx.api.get_all_positions()
+            current_exposure = sum(abs(float(p.market_value)) for p in positions) / float(ctx.api.get_account().equity)
+            available_exposure = max(0, exposure_cap - current_exposure)
+            target_weight = min(confidence_weight, available_exposure, 0.15)  # Cap at 15%
+            logger.info(f"Computed weight for {symbol}: {target_weight:.3f} (confidence={conf:.3f}, available_exposure={available_exposure:.3f})")
+        except Exception as e:
+            logger.warning(f"Could not compute dynamic weight for {symbol}: {e}, using confidence-based weight")
+            target_weight = min(confidence_weight, 0.10)  # Conservative 10% fallback
+    
     raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
     if raw_qty is None or not np.isfinite(raw_qty) or raw_qty <= 0:
         logger.warning(f"Skipping {symbol}: computed qty <= 0")

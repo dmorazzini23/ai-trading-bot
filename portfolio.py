@@ -16,7 +16,7 @@ def compute_portfolio_weights(ctx, symbols: List[str]) -> Dict[str, float]:
     with _portfolio_lock:
         n = len(symbols)
         if n == 0:
-            logger.warning("No tickers to weight—skipping.")
+            logger.debug("No tickers to weight—skipping (no existing positions).")
             return {}
 
         if n > 50:  # Prevent excessive diversification
