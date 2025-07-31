@@ -694,100 +694,56 @@ except ImportError:
             return pd.DataFrame()
     yf = MockYfinance()
 
-# Alpaca v3 SDK imports - conditional lazy loading for tests
-if not os.environ.get('PYTEST_RUNNING'):
-    # Only import Alpaca when not in tests
-    from alpaca.trading.client import TradingClient
-    from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce
-    from alpaca_trade_api.rest import APIError
-    
-    logger.info("Alpaca Trading Client imported successfully")
-    logger.debug("Alpaca ready for trading with Python %s", sys.version)
-    
-    from alpaca.trading.enums import OrderStatus
-    
-    # Alpaca models and requests - direct imports for real trading
-    from alpaca.trading.models import Order
-    from alpaca.trading.requests import (
-        GetOrdersRequest,
-        LimitOrderRequest,
-        MarketOrderRequest,
+# AI-AGENT-REF: Clean separation of production and test Alpaca imports
+if os.environ.get('PYTEST_RUNNING'):
+    # Import mocks from separate test module
+    from tests.mocks import (
+        MockTradingClient as TradingClient,
+        MockMarketOrderRequest as MarketOrderRequest,
+        MockLimitOrderRequest as LimitOrderRequest,
+        MockGetOrdersRequest as GetOrdersRequest,
+        MockOrder as Order,
+        MockTradingStream as TradingStream,
+        mock_order_side as OrderSide,
+        mock_time_in_force as TimeInForce,
+        mock_order_status as OrderStatus,
+        mock_query_order_status as QueryOrderStatus
     )
-    from alpaca.trading.stream import TradingStream
-    logger.debug("Alpaca trading models and requests imported successfully")
-else:
-    # FIXED Mock classes that can be called with arguments
-    class MockTradingClient:
-        def __init__(self, *args, **kwargs): 
-            pass
-        def get_account(self): 
-            return type('Account', (), {'equity': '100000'})()
-        def submit_order(self, *args, **kwargs): 
-            return {'status': 'filled'}
-    
-    class MockMarketOrderRequest:
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    class MockLimitOrderRequest:
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    class MockGetOrdersRequest:
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    class MockOrderSide:
-        BUY = 'buy'
-        SELL = 'sell'
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    class MockTimeInForce:
-        DAY = 'day'
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    class MockOrderStatus:
-        FILLED = 'filled'
-        OPEN = 'open'
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    class MockQueryOrderStatus:
-        FILLED = 'filled'
-        OPEN = 'open'
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    class MockOrder:
-        def __init__(self, *args, **kwargs):
-            pass
-    
-    class MockTradingStream:
-        def __init__(self, *args, **kwargs):
-            pass
-        def subscribe_trades(self, *args, **kwargs):
-            pass
-        def subscribe_quotes(self, *args, **kwargs):
-            pass
-        def subscribe_trade_updates(self, *args, **kwargs):  # AI-AGENT-REF: add missing method
-            pass
-        def run(self, *args, **kwargs):
-            pass
-    
-    # Assign the mock classes
-    TradingClient = MockTradingClient
-    MarketOrderRequest = MockMarketOrderRequest
-    LimitOrderRequest = MockLimitOrderRequest
-    GetOrdersRequest = MockGetOrdersRequest
-    OrderSide = MockOrderSide()  # Instance for attribute access
-    TimeInForce = MockTimeInForce()  # Instance for attribute access
-    OrderStatus = MockOrderStatus()  # Instance for attribute access
-    QueryOrderStatus = MockQueryOrderStatus()  # Instance for attribute access
-    Order = MockOrder
-    TradingStream = MockTradingStream
     APIError = Exception
+    logger.debug("Mock Alpaca classes imported for testing")
+else:
+    # Production imports - real Alpaca SDK
+    try:
+        from alpaca.trading.client import TradingClient
+        from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce, OrderStatus
+        from alpaca.trading.models import Order
+        from alpaca.trading.requests import (
+            GetOrdersRequest,
+            LimitOrderRequest,
+            MarketOrderRequest,
+        )
+        from alpaca.trading.stream import TradingStream
+        from alpaca_trade_api.rest import APIError
+        
+        logger.info("Real Alpaca Trading SDK imported successfully")
+        logger.debug("Production trading ready with Python %s", sys.version)
+    except ImportError as e:
+        logger.error("Failed to import Alpaca SDK: %s", e)
+        logger.warning("Falling back to mock classes for development")
+        # Fallback to mocks if Alpaca SDK not available
+        from tests.mocks import (
+            MockTradingClient as TradingClient,
+            MockMarketOrderRequest as MarketOrderRequest,
+            MockLimitOrderRequest as LimitOrderRequest,
+            MockGetOrdersRequest as GetOrdersRequest,
+            MockOrder as Order,
+            MockTradingStream as TradingStream,
+            mock_order_side as OrderSide,
+            mock_time_in_force as TimeInForce,
+            mock_order_status as OrderStatus,
+            mock_query_order_status as QueryOrderStatus
+        )
+        APIError = Exception
 
 # AI-AGENT-REF: guard bs4 import for test environments
 try:

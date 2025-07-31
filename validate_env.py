@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     # Critical API Keys (Required)
     ALPACA_API_KEY: str = Field(..., min_length=1, description="Alpaca API key for trading")
     ALPACA_SECRET_KEY: str = Field(..., min_length=1, description="Alpaca secret key for trading")
+    
+    # AI-AGENT-REF: Support for live vs paper trading configuration
+    TRADING_MODE: str = Field(default="paper", description="Trading mode (paper/live)")
     ALPACA_BASE_URL: str = Field(default="https://paper-api.alpaca.markets", description="Alpaca API base URL")
     ALPACA_DATA_FEED: str = Field(default="iex", description="Alpaca data feed source")
     
@@ -80,12 +83,19 @@ class Settings(BaseSettings):
     # Performance and Rate Limiting
     REBALANCE_INTERVAL_MIN: int = Field(default=1440, ge=1, description="Portfolio rebalance interval (minutes)")
     FINNHUB_RPM: int = Field(default=60, ge=1, le=300, description="Finnhub requests per minute limit")
+    
+    # Additional fields from main branch
+    MINUTE_CACHE_TTL: int = Field(default=60, description="Cache TTL for minute data")
+    EQUITY_EXPOSURE_CAP: float = Field(default=2.5, description="Maximum equity exposure")
+    PORTFOLIO_EXPOSURE_CAP: float = Field(default=2.5, description="Maximum portfolio exposure")
+    SEED: int = Field(default=42, description="Random seed for reproducibility")
+    RATE_LIMIT_BUDGET: int = Field(default=190, description="API rate limit budget")
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
-        extra="allow"
+        extra="ignore"  # allow unknown env vars (e.g. SLACK_WEBHOOK)
     )
     
     @validator('ALPACA_API_KEY')
@@ -150,12 +160,54 @@ class Settings(BaseSettings):
             raise ValueError(f"BOT_MODE must be one of: {valid_modes}")
         return v.lower()
     
+    @validator('TRADING_MODE')
+    def validate_trading_mode(cls, v):
+        """Validate trading mode."""
+        if v not in ["paper", "live"]:
+            raise ValueError(f"Invalid TRADING_MODE: {v}. Must be 'paper' or 'live'")
+        return v
+    
     @validator('FORCE_TRADES')
     def validate_force_trades(cls, v):
         """Warn about dangerous FORCE_TRADES setting."""
         if v:
             logger.warning("⚠️  FORCE_TRADES is enabled - this bypasses safety checks!")
         return v
+
+
+# Create global settings instance
+settings = Settings()
+
+
+def validate_trading_mode() -> None:
+    """Validate trading mode configuration and set appropriate URLs."""
+    # AI-AGENT-REF: Trading mode validation and URL configuration
+    if settings.TRADING_MODE not in ["paper", "live"]:
+        raise ValueError(f"Invalid TRADING_MODE: {settings.TRADING_MODE}. Must be 'paper' or 'live'")
+    
+    # Auto-configure base URL based on trading mode if not explicitly set
+    if settings.TRADING_MODE == "live":
+        if settings.ALPACA_BASE_URL == "https://paper-api.alpaca.markets":
+            logger.warning("TRADING_MODE is 'live' but ALPACA_BASE_URL is paper trading URL")
+            logger.warning("Auto-configuring for live trading. Set ALPACA_BASE_URL explicitly to override.")
+            settings.ALPACA_BASE_URL = "https://api.alpaca.markets"
+        logger.critical("LIVE TRADING MODE ENABLED - Real money at risk!")
+    else:
+        if settings.ALPACA_BASE_URL != "https://paper-api.alpaca.markets":
+            logger.info("TRADING_MODE is 'paper', ensuring paper trading URL")
+            settings.ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
+        logger.info("Paper trading mode enabled - Safe for testing")
+
+
+def get_alpaca_config() -> dict:
+    """Get Alpaca client configuration based on current settings."""
+    validate_trading_mode()
+    return {
+        "api_key": settings.ALPACA_API_KEY,
+        "secret_key": settings.ALPACA_SECRET_KEY,
+        "base_url": settings.ALPACA_BASE_URL,
+        "paper": settings.TRADING_MODE == "paper"
+    }
 
 
 def validate_environment() -> tuple[bool, List[str], Settings]:
@@ -172,8 +224,6 @@ def validate_environment() -> tuple[bool, List[str], Settings]:
     errors = []
     
     try:
-        settings = Settings()
-        
         # Additional security checks
         security_errors = _perform_security_checks(settings)
         errors.extend(security_errors)
@@ -286,7 +336,7 @@ def validate_trading_environment() -> bool:
     bool
         True if environment is ready for trading, False otherwise
     """
-    is_valid, errors, settings = validate_environment()
+    is_valid, errors, settings_obj = validate_environment()
     
     if not is_valid:
         logger.error("Environment validation failed - trading cannot proceed")
@@ -299,20 +349,6 @@ def validate_trading_environment() -> bool:
     
     logger.info(f"Trading environment ready - Mode: {settings.BOT_MODE}, URL: {settings.ALPACA_BASE_URL}")
     return True
-    MINUTE_CACHE_TTL: int = 60
-    EQUITY_EXPOSURE_CAP: float = 2.5
-    PORTFOLIO_EXPOSURE_CAP: float = 2.5
-    SEED: int = 42
-    RATE_LIMIT_BUDGET: int = 190
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",  # allow unknown env vars (e.g. SLACK_WEBHOOK)
-    )
-
-
-settings = Settings()
 
 
 def generate_schema() -> dict:
