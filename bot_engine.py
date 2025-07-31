@@ -194,6 +194,10 @@ class LazyPandas:
             
             def date_range(self, *args, **kwargs):
                 return []
+            
+            # AI-AGENT-REF: add missing Index and Series attributes for utils compatibility
+            Index = MockIndex
+            Series = MockSeries
         
         return MockPandas()
     
@@ -291,6 +295,7 @@ class MockPandas:
     RangeIndex = range
     DatetimeIndex = MockIndex  # AI-AGENT-REF: add missing DatetimeIndex
     Series = MockSeries
+    Index = MockIndex  # AI-AGENT-REF: add missing Index attribute
 
 # Only use MockPandas in test environments where pandas is not available
 if os.getenv("PYTEST_RUNNING") and not hasattr(pd, '_pandas'):
