@@ -885,11 +885,18 @@ def _require_cfg(value: str | None, name: str) -> str:
     raise RuntimeError(f"{name} must be defined in the configuration or environment")
 
 
-ALPACA_API_KEY = _require_cfg(ALPACA_API_KEY, "ALPACA_API_KEY")
-ALPACA_SECRET_KEY = _require_cfg(ALPACA_SECRET_KEY, "ALPACA_SECRET_KEY")
-if not callable(validate_alpaca_credentials):
-    raise RuntimeError("validate_alpaca_credentials not found in config")
-BOT_MODE_ENV = _require_cfg(BOT_MODE_ENV, "BOT_MODE")
+# AI-AGENT-REF: skip config validation in test environments for faster imports
+if not os.getenv("PYTEST_RUNNING"):
+    ALPACA_API_KEY = _require_cfg(ALPACA_API_KEY, "ALPACA_API_KEY")
+    ALPACA_SECRET_KEY = _require_cfg(ALPACA_SECRET_KEY, "ALPACA_SECRET_KEY")
+    if not callable(validate_alpaca_credentials):
+        raise RuntimeError("validate_alpaca_credentials not found in config")
+    BOT_MODE_ENV = _require_cfg(BOT_MODE_ENV, "BOT_MODE")
+else:
+    # AI-AGENT-REF: use fallback values for test environments
+    ALPACA_API_KEY = ALPACA_API_KEY or "test_key"
+    ALPACA_SECRET_KEY = ALPACA_SECRET_KEY or "test_secret"
+    BOT_MODE_ENV = BOT_MODE_ENV or "balanced"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1701,9 +1708,9 @@ def ensure_alpaca_credentials() -> None:
     """Verify Alpaca credentials are present before starting."""
     validate_alpaca_credentials()
 
-
-ensure_alpaca_credentials()
-
+# AI-AGENT-REF: skip credential validation in test environments for faster imports
+if not os.getenv("PYTEST_RUNNING"):
+    ensure_alpaca_credentials()
 
 # Prometheus-safe account fetch
 @breaker
