@@ -324,8 +324,8 @@ except Exception:
 
 # AI-AGENT-REF: Set test environment variables early to avoid config import errors
 os.environ.update({
-    "ALPACA_API_KEY": "testkey",
-    "ALPACA_SECRET_KEY": "testsecret", 
+    "ALPACA_API_KEY": "PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",  # Valid format
+    "ALPACA_SECRET_KEY": "SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD",  # Valid format
     "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
     "ALPACA_DATA_FEED": "iex",
     "WEBHOOK_SECRET": "test-webhook-secret",
@@ -793,8 +793,8 @@ except Exception:  # pragma: no cover - optional dependency
         def __init__(self, **kwargs):
             # Read from environment variables
             import os
-            self.ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "testkey")
-            self.ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "testsecret")
+            self.ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+            self.ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD")
             self.ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
             self.ALPACA_DATA_FEED = os.getenv("ALPACA_DATA_FEED", "iex")  # Missing attribute added
             self.FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", None)
@@ -1257,8 +1257,8 @@ def pytest_configure() -> None:
 @pytest.fixture(autouse=True)
 def default_env(monkeypatch):
     """Provide standard environment variables for tests."""
-    monkeypatch.setenv("ALPACA_API_KEY", "testkey")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "testsecret")
+    monkeypatch.setenv("ALPACA_API_KEY", "PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ")  # Valid format
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD")  # Valid format
     monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
     monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     monkeypatch.setenv("FLASK_PORT", "9000")
