@@ -56,7 +56,8 @@ class StrategyAllocator:
                 if len(self.signal_history[key]) >= self.config.signal_confirmation_bars:
                     avg_conf = sum(self.signal_history[key]) / len(self.signal_history[key])
                     # AI-AGENT-REF: use configurable min_confidence instead of hardcoded 0.6
-                    if avg_conf > self.config.min_confidence:
+                    min_conf_threshold = getattr(self.config, 'min_confidence', 0.6)
+                    if avg_conf > min_conf_threshold:
                         s.confidence = avg_conf
                         confirmed[strategy].append(s)
                         logger.debug(f"Signal approved: {s.symbol}")
