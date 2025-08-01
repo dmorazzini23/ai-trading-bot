@@ -240,6 +240,12 @@ def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, fee
     data = resp.json()
     bars = data.get("bars") or []
     if not bars:
+        # AI-AGENT-REF: Enhanced data quality check for missing bars
+        logger.warning(
+            "No bars returned for %s between %s and %s. "
+            "This could indicate market holiday, API outage, or delisted symbol",
+            symbol, start.date(), end.date()
+        )
         # no new bars yet (e.g. today's bar before market close)
         # fallback: use yesterday's last bar or skip this symbol
         return get_last_available_bar(symbol)

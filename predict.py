@@ -51,11 +51,48 @@ INACTIVE_FEATURES_FILE = os.path.join(BASE_DIR, "inactive_features.json")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 
+import time
+import threading
+from datetime import datetime, timedelta
+
+# AI-AGENT-REF: Sentiment caching and rate limiting
+_sentiment_cache = {}
+_sentiment_lock = threading.Lock()
+_last_request_time = {}
+_min_request_interval = 1.0  # Minimum 1 second between requests per symbol
+_cache_ttl = 300  # 5 minutes cache TTL
+
 def fetch_sentiment(symbol: str) -> float:
-    """Return a naive sentiment score for ``symbol`` using NewsAPI."""
+    """Return a sentiment score for ``symbol`` using NewsAPI with rate limiting and caching."""
 
     if not config.NEWS_API_KEY:
         return 0.0
+    
+    current_time = time.time()
+    
+    with _sentiment_lock:
+        # Check cache first
+        if symbol in _sentiment_cache:
+            cached_score, cached_time = _sentiment_cache[symbol]
+            if current_time - cached_time < _cache_ttl:
+                logger.debug("Using cached sentiment for %s: %.2f", symbol, cached_score)
+                return cached_score
+        
+        # Check rate limiting
+        if symbol in _last_request_time:
+            time_since_last = current_time - _last_request_time[symbol]
+            if time_since_last < _min_request_interval:
+                logger.warning(
+                    "fetch_sentiment(%s) rate-limited → returning cached/neutral 0.0", 
+                    symbol
+                )
+                # Return cached value if available, otherwise neutral
+                if symbol in _sentiment_cache:
+                    return _sentiment_cache[symbol][0]
+                return 0.0
+        
+        _last_request_time[symbol] = current_time
+
     try:
         url = (
             "https://newsapi.org/v2/everything?q="
@@ -65,13 +102,27 @@ def fetch_sentiment(symbol: str) -> float:
         resp.raise_for_status()
         arts = resp.json().get("articles", [])
         if not arts:
-            return 0.0
-        score = sum(
-            1 for a in arts if "positive" in (a.get("title") or "").lower()
-        ) / len(arts)
-        return float(score)
+            score = 0.0
+        else:
+            score = sum(
+                1 for a in arts if "positive" in (a.get("title") or "").lower()
+            ) / len(arts)
+        
+        score = float(score)
+        
+        # Cache the result
+        with _sentiment_lock:
+            _sentiment_cache[symbol] = (score, current_time)
+        
+        logger.debug("Fetched fresh sentiment for %s: %.2f", symbol, score)
+        return score
+        
     except (requests.RequestException, ValueError) as exc:
         logger.error("fetch_sentiment failed for %s: %s", symbol, exc)
+        # Return cached value if available during error, otherwise neutral
+        with _sentiment_lock:
+            if symbol in _sentiment_cache:
+                return _sentiment_cache[symbol][0]
         return 0.0
 
 

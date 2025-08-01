@@ -381,6 +381,12 @@ def calculate_adv(df: pd.DataFrame, symbol: str, window: int = 30) -> Optional[f
 
 def handle_partial_fill(order_id: str, symbol: str, qty: int, price: float) -> None:
     """Accumulate partial fill data for later aggregation."""
+    # AI-AGENT-REF: Enhanced partial fill monitoring
+    logger.info(
+        "PARTIAL_FILL_DETECTED | order_id=%s symbol=%s qty=%d price=%.2f", 
+        order_id, symbol, qty, price
+    )
+    
     # Aggregate partial fills in a thread-safe manner.
     with _partial_fills_lock:
         if order_id not in _partial_fills:
@@ -389,11 +395,19 @@ def handle_partial_fill(order_id: str, symbol: str, qty: int, price: float) -> N
                 "qty": 0,
                 "price_sum": 0.0,
                 "fills": 0,
+                "first_fill_time": datetime.now(timezone.utc),
             }
         data = _partial_fills[order_id]
         data["qty"] += qty
         data["price_sum"] += price * qty
         data["fills"] += 1
+        
+        # Log progress for tracking
+        avg_price = data["price_sum"] / data["qty"]
+        logger.info(
+            "PARTIAL_FILL_PROGRESS | order_id=%s total_qty=%d fills=%d avg_price=%.2f", 
+            order_id, data["qty"], data["fills"], avg_price
+        )
     logging.getLogger(__name__).debug(
         "Partial fill accumulating: %s total_qty=%s", symbol, data["qty"]
     )
