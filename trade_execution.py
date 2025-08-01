@@ -187,6 +187,9 @@ import config
 from collections import deque
 from indicators import cached_atr_trailing_stop
 
+# Module-level logger for order execution functions
+logger = logging.getLogger(__name__)
+
 
 class OrderClass(str, Enum):
     """Execution order classification."""
