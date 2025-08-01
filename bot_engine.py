@@ -6865,30 +6865,57 @@ def screen_universe(
     top_n: int = 20,
 ) -> list[str]:
     cand_set = set(candidates)
+    logger.info(f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}")
 
     for sym in list(_SCREEN_CACHE):
         if sym not in cand_set:
             _SCREEN_CACHE.pop(sym, None)
 
     new_syms = cand_set - _SCREEN_CACHE.keys()
+    filtered_out = {}  # Track reasons for filtering
+    
     for sym in new_syms:
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
-        if df is None or len(df) < ATR_LENGTH:
+        if df is None:
+            filtered_out[sym] = "no_data"
+            logger.debug(f"[SCREEN_UNIVERSE] {sym}: No data available")
             continue
+        if len(df) < ATR_LENGTH:
+            filtered_out[sym] = f"insufficient_data_{len(df)}_rows"
+            logger.debug(f"[SCREEN_UNIVERSE] {sym}: Insufficient data ({len(df)} rows, need {ATR_LENGTH})")
+            continue
+        
+        original_len = len(df)
         df = df[df["volume"] > 100_000]
         if df.empty:
+            filtered_out[sym] = "low_volume"
+            logger.debug(f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)")
             continue
+        
         series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH)
         if series is None or not hasattr(series, "empty") or series.empty:
-            logger.warning(f"ATR returned None or empty for {sym}; skipping screening.")
+            filtered_out[sym] = "atr_calculation_failed"
+            logger.warning(f"[SCREEN_UNIVERSE] {sym}: ATR calculation failed")
             continue
         atr_val = series.iloc[-1]
         if not pd.isna(atr_val):
             _SCREEN_CACHE[sym] = float(atr_val)
+            logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
+        else:
+            filtered_out[sym] = "atr_nan"
+            logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
 
     atrs = {sym: _SCREEN_CACHE[sym] for sym in cand_set if sym in _SCREEN_CACHE}
     ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
-    return [sym for sym, _ in ranked[:top_n]]
+    selected = [sym for sym, _ in ranked[:top_n]]
+    
+    logger.info(
+        f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates. "
+        f"Selected: {selected}. "
+        f"Filtered out: {len(filtered_out)} symbols: {filtered_out}"
+    )
+    
+    return selected
 
 
 def screen_candidates() -> list[str]:
