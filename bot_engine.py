@@ -4212,7 +4212,14 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
         total = float(ctx.api.get_account().portfolio_value)
     except Exception:
         total = 0.0
-    projected = exposures.get(sec, 0.0) + ((qty * price) / total if total > 0 else 0.0)
+    
+    # AI-AGENT-REF: Fix sector cap logic to allow initial position entry when portfolio is empty
+    if total <= 0:
+        # For empty portfolios, allow initial positions as they can't exceed sector caps
+        logger.debug(f"Empty portfolio, allowing initial position for {symbol}")
+        return True
+    
+    projected = exposures.get(sec, 0.0) + ((qty * price) / total)
     cap = getattr(ctx, "sector_cap", SECTOR_EXPOSURE_CAP)
     return projected <= cap
 
