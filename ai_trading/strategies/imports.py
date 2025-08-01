@@ -169,9 +169,14 @@ except ImportError:
 try:
     import talib
     TALIB_AVAILABLE = True
+    logger.info("TA-Lib loaded successfully for optimized technical analysis")
 except ImportError:
     TALIB_AVAILABLE = False
-    logger.warning("TA-Lib not available - using fallback implementation")
+    logger.warning(
+        "TA-Lib not available - using fallback implementation. "
+        "For better accuracy, install TA-Lib: pip install TA-Lib "
+        "(requires ta-lib C library: see README for installation instructions)"
+    )
     
     class MockTalib:
         @staticmethod

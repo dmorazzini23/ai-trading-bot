@@ -49,6 +49,21 @@ This update introduces several critical enhancements:
 3. **📏 ATR-Based Sizing**: Improved position sizing using Average True Range
 4. **✅ Signal Confirmation**: Multi-bar signal validation for higher accuracy
 5. **🎛️ Dynamic Risk Management**: Adaptive exposure limits based on performance
+6. **🌐 Expanded Trading Universe**: Portfolio expanded from 5 to 24+ high-quality stocks
+7. **🔧 Enhanced TA-Lib Integration**: Improved fallback handling and installation guidance
+
+### 📊 Trading Universe
+
+The bot now monitors a diversified portfolio of 24+ symbols across multiple sectors:
+
+- **Technology Leaders**: AAPL, MSFT, GOOGL, AMZN, TSLA, NVDA, AMD, META, NFLX, CRM
+- **Growth Stocks**: UBER, SHOP, SQ, PLTR  
+- **Market ETFs**: SPY, QQQ, IWM
+- **Blue Chip**: JPM, JNJ, PG, KO
+- **Energy**: XOM, CVX
+- **International**: BABA
+
+Symbols are automatically screened based on volume (>100K daily) and volatility (ATR) ranking to ensure optimal trading opportunities.
 
 ## 📚 Documentation
 
@@ -107,6 +122,51 @@ pip install -r requirements-dev.txt
 pip list | grep -E "(pandas|numpy|alpaca|scikit-learn)"
 ```
 
+### TA-Lib Installation (For Enhanced Technical Analysis)
+
+TA-Lib provides optimized technical analysis functions. While the bot includes fallback implementations, installing TA-Lib significantly improves calculation accuracy and performance.
+
+#### Ubuntu/Debian
+```bash
+# Install TA-Lib C library
+sudo apt-get update
+sudo apt-get install build-essential wget
+wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
+tar -xzf ta-lib-0.4.0-src.tar.gz
+cd ta-lib/
+./configure --prefix=/usr
+make
+sudo make install
+
+# Install Python wrapper
+pip install TA-Lib
+```
+
+#### macOS
+```bash
+# Using Homebrew
+brew install ta-lib
+
+# Install Python wrapper
+pip install TA-Lib
+```
+
+#### Windows
+```bash
+# Download pre-compiled wheel from:
+# https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib
+# Then install appropriate wheel for your Python version
+
+pip install TA_Lib‑0.4.24‑cp312‑cp312‑win_amd64.whl
+```
+
+#### Verification
+```bash
+python -c "import talib; print('TA-Lib installed successfully!')"
+```
+
+**Note**: If TA-Lib installation fails, the bot will automatically use fallback implementations with a warning message. All functionality remains available, though with potentially reduced accuracy for some technical indicators.
+
 ### Docker Installation
 
 For containerized deployment:
@@ -152,6 +212,18 @@ docker logs ai-trading-bot
    
    # macOS
    brew install python@3.12
+   ```
+
+4. **TA-Lib Installation Issues**:
+   ```bash
+   # If you see "TA-Lib not available - using fallback implementation"
+   # First try installing the C library (see TA-Lib Installation section above)
+   
+   # Alternative: Install without TA-Lib (fallback mode)
+   pip install -r requirements.txt --ignore-installed TA-Lib
+   
+   # Verify fallback is working
+   python -c "from ai_trading.strategies.imports import TALIB_AVAILABLE; print(f'TA-Lib available: {TALIB_AVAILABLE}')"
    ```
 
 ### Development Setup
