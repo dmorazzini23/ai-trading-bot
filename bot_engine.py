@@ -4584,7 +4584,21 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[
     if not market_is_open():
         logger.warning("MARKET_CLOSED_ORDER_SKIP", extra={"symbol": symbol})
         return None
-    return exec_engine.execute_order(symbol, qty, side)
+    
+    # AI-AGENT-REF: Add validation for execution engine initialization
+    if _exec_engine is None:
+        logger.error("EXEC_ENGINE_NOT_INITIALIZED", extra={
+            "symbol": symbol, "qty": qty, "side": side
+        })
+        raise RuntimeError("Execution engine not initialized. Cannot execute orders.")
+    
+    try:
+        return _exec_engine.execute_order(symbol, qty, side)
+    except Exception as e:
+        logger.error("ORDER_EXECUTION_FAILED", extra={
+            "symbol": symbol, "qty": qty, "side": side, "error": str(e)
+        })
+        raise
 
 
 def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
