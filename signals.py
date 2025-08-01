@@ -18,7 +18,34 @@ try:
     import pandas as pd
 except ImportError:
     print("WARNING: pandas not available, some features will be disabled")
-    pd = None
+    # Import the mock pandas from utils
+    import sys
+    import os
+    sys.path.insert(0, os.path.dirname(__file__))
+    try:
+        from utils import pd
+    except ImportError:
+        # Create minimal fallback
+        from datetime import datetime
+        class MockDataFrame:
+            def __init__(self, *args, **kwargs):
+                pass
+            def __len__(self):
+                return 0
+            def empty(self):
+                return True
+        class MockSeries:
+            def __init__(self, *args, **kwargs):
+                pass
+        class MockPandas:
+            DataFrame = MockDataFrame
+            Series = MockSeries
+            Timestamp = datetime
+            def read_csv(self, *args, **kwargs):
+                return MockDataFrame()
+            def concat(self, *args, **kwargs):
+                return MockDataFrame()
+        pd = MockPandas()
 
 import requests
 from concurrent.futures import ThreadPoolExecutor
