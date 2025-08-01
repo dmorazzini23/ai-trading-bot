@@ -4212,7 +4212,14 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
         total = float(ctx.api.get_account().portfolio_value)
     except Exception:
         total = 0.0
-    projected = exposures.get(sec, 0.0) + ((qty * price) / total if total > 0 else 0.0)
+    
+    # AI-AGENT-REF: Fix sector cap logic to allow initial position entry when portfolio is empty
+    if total <= 0:
+        # For empty portfolios, allow initial positions as they can't exceed sector caps
+        logger.debug(f"Empty portfolio, allowing initial position for {symbol}")
+        return True
+    
+    projected = exposures.get(sec, 0.0) + ((qty * price) / total)
     cap = getattr(ctx, "sector_cap", SECTOR_EXPOSURE_CAP)
     return projected <= cap
 
@@ -7461,10 +7468,55 @@ def run_multi_strategy(ctx: BotContext) -> None:
         if sig.side == "buy" and ctx.risk_engine.position_exists(ctx.api, sig.symbol):
             logger.info("SKIP_DUPLICATE_LONG", extra={"symbol": sig.symbol})
             continue
+        
+        # AI-AGENT-REF: Add validation and logging for signal processing
+        logger.debug(
+            "PROCESSING_SIGNAL",
+            extra={
+                "symbol": sig.symbol, 
+                "side": sig.side, 
+                "confidence": sig.confidence,
+                "strategy": getattr(sig, 'strategy', 'unknown'),
+                "weight": getattr(sig, 'weight', 0.0)
+            }
+        )
+        
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty is None or not np.isfinite(qty) or qty <= 0:
-            logger.warning("Skipping %s: computed qty <= 0", sig.symbol)
+            logger.warning(
+                "SKIP_INVALID_QTY",
+                extra={
+                    "symbol": sig.symbol,
+                    "side": sig.side, 
+                    "qty": qty,
+                    "cash": cash,
+                    "price": price
+                }
+            )
             continue
+        
+        # AI-AGENT-REF: Validate signal side before execution to catch any corruption
+        if sig.side not in ["buy", "sell"]:
+            logger.error(
+                "INVALID_SIGNAL_SIDE",
+                extra={
+                    "symbol": sig.symbol,
+                    "side": sig.side,
+                    "expected": "buy or sell"
+                }
+            )
+            continue
+            
+        logger.info(
+            "EXECUTING_ORDER",
+            extra={
+                "symbol": sig.symbol,
+                "side": sig.side,
+                "qty": qty,
+                "price": price
+            }
+        )
+        
         ctx.execution_engine.execute_order(
             sig.symbol, qty, sig.side, asset_class=sig.asset_class
         )

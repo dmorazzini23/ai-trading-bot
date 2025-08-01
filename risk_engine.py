@@ -341,7 +341,27 @@ class RiskEngine:
 
         prev = self.exposure.get(signal.asset_class, 0.0)
         delta = signal.weight if signal.side.lower() == "buy" else -signal.weight
-        self.exposure[signal.asset_class] = prev + delta
+        
+        # AI-AGENT-REF: Fix exposure calculation to prevent negative values with zero positions
+        new_exposure = prev + delta
+        
+        # Ensure exposure doesn't go negative due to selling non-existent positions
+        if new_exposure < 0 and signal.side.lower() == "sell":
+            logger.warning(
+                "EXPOSURE_NEGATIVE_PREVENTED",
+                extra={
+                    "asset": signal.asset_class,
+                    "symbol": getattr(signal, 'symbol', 'UNKNOWN'),
+                    "prev": prev,
+                    "delta": delta,
+                    "would_be": new_exposure
+                }
+            )
+            # Set exposure to zero instead of negative when selling non-existent positions
+            new_exposure = 0.0
+            delta = -prev  # Adjust delta to bring exposure to exactly zero
+        
+        self.exposure[signal.asset_class] = new_exposure
         s_prev = self.strategy_exposure.get(signal.strategy, 0.0)
         self.strategy_exposure[signal.strategy] = s_prev + delta
         logger.info(
@@ -350,6 +370,8 @@ class RiskEngine:
                 "asset": signal.asset_class,
                 "prev": prev,
                 "new": self.exposure[signal.asset_class],
+                "side": signal.side,
+                "symbol": getattr(signal, 'symbol', 'UNKNOWN')
             },
         )
         import time
@@ -564,8 +586,9 @@ class RiskEngine:
                 is_raw_qty_finite = isinstance(raw_qty, (int, float)) and raw_qty == raw_qty and abs(raw_qty) != float('inf')
                 is_min_qty_finite = isinstance(min_qty, (int, float)) and min_qty == min_qty and abs(min_qty) != float('inf')
                 
-            if not is_raw_qty_finite:
-                logger.warning("Invalid raw_qty %s, returning 0", raw_qty)
+            # AI-AGENT-REF: Ensure raw_qty is positive to prevent negative position sizes
+            if not is_raw_qty_finite or raw_qty <= 0:
+                logger.warning("Invalid or negative raw_qty %s for %s, returning 0", raw_qty, getattr(signal, 'symbol', 'UNKNOWN'))
                 return 0
             if not is_min_qty_finite:
                 logger.warning("Invalid min_qty %s, using raw_qty only", min_qty)

@@ -851,9 +851,13 @@ def get_minute_df(
             if first_idx is not None and isinstance(first_idx, pd.Timestamp):
                 if start_dt < first_idx:
                     cached = None
-                elif ts >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=1):
-                    logger.debug("Minute cache hit for %s", symbol)
-                    return df_cached.copy()
+                else:
+                    # AI-AGENT-REF: Extend cache validity for same trading cycle to reduce redundant calls
+                    cache_validity_minutes = 2  # Allow 2-minute cache for reducing redundant MINUTE_FETCHED calls
+                    if ts >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=cache_validity_minutes):
+                        logger.debug("Minute cache hit for %s (age: %.1f min)", symbol, 
+                                   (pd.Timestamp.now(tz="UTC") - ts).total_seconds() / 60)
+                        return df_cached.copy()
 
     alpaca_exc = finnhub_exc = yexc = None
     try:
