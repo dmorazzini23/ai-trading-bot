@@ -112,7 +112,10 @@ All Python packages are specified in `requirements.txt`, including:
 git clone https://github.com/dmorazzini23/ai-trading-bot.git
 cd ai-trading-bot
 
-# Automated setup (recommended)
+# Automated system setup (installs TA-Lib and other dependencies)
+./scripts/setup_dependencies.sh
+
+# Alternative manual setup
 make install-dev
 make validate-env
 
