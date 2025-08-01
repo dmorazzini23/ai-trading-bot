@@ -4019,12 +4019,31 @@ def check_pdt_rule(ctx: BotContext) -> bool:
         logger.warning("PDT_CHECK_FAILED - Invalid equity value, assuming no PDT restrictions")
         return False
 
-    api_day_trades = getattr(acct, "pattern_day_trades", None) or getattr(
-        acct, "pattern_day_trades_count", None
+    # AI-AGENT-REF: Improve API null value handling for PDT checks
+    api_day_trades = (
+        getattr(acct, "pattern_day_trades", None) 
+        or getattr(acct, "pattern_day_trades_count", None) 
+        or 0  # Default to 0 if API returns null
     )
-    api_buying_pw = getattr(acct, "daytrade_buying_power", None) or getattr(
-        acct, "day_trade_buying_power", None
+    api_buying_pw = (
+        getattr(acct, "daytrade_buying_power", None) 
+        or getattr(acct, "day_trade_buying_power", None)
+        or getattr(acct, "buying_power", None)  # Fallback to regular buying power
+        or 0  # Default to 0 if API returns null
     )
+    
+    # Convert to proper types and handle potential string values
+    try:
+        api_day_trades = int(api_day_trades) if api_day_trades is not None else 0
+    except (ValueError, TypeError):
+        logger.warning("Invalid day_trades value from API: %s, defaulting to 0", api_day_trades)
+        api_day_trades = 0
+        
+    try:
+        api_buying_pw = float(api_buying_pw) if api_buying_pw is not None else 0.0
+    except (ValueError, TypeError):
+        logger.warning("Invalid buying_power value from API: %s, defaulting to 0", api_buying_pw)
+        api_buying_pw = 0.0
 
     logger.info(
         "PDT_CHECK",
