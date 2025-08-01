@@ -63,20 +63,35 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
     )
 
     # AI-AGENT-REF: ensure trade log directory and file creation with proper permissions
-    os.makedirs(os.path.dirname(TRADE_LOG_FILE) or ".", exist_ok=True)
+    log_dir = os.path.dirname(TRADE_LOG_FILE) or "."
+    try:
+        os.makedirs(log_dir, mode=0o755, exist_ok=True)
+        # Try to ensure directory is writable
+        if not os.access(log_dir, os.W_OK):
+            logger.warning("Trade log directory %s is not writable", log_dir)
+    except OSError as e:
+        logger.error("Failed to create trade log directory %s: %s", log_dir, e)
+        if not _disable_trade_log:
+            _disable_trade_log = True
+            logger.warning("Trade log disabled due to directory creation failure")
+        return
     
     # Check if file exists before any operations
     file_existed = os.path.exists(TRADE_LOG_FILE)
     
     # Ensure the trade log file exists with proper permissions
     if not file_existed:
-        # Touch the file to create it
-        with open(TRADE_LOG_FILE, "a", newline=""):
-            pass
         try:
+            # Touch the file to create it
+            with open(TRADE_LOG_FILE, "a", newline=""):
+                pass
             os.chmod(TRADE_LOG_FILE, 0o664)
-        except OSError:
-            pass  # Permission setting is best-effort
+        except (OSError, PermissionError) as e:
+            logger.error("Failed to create trade log file %s: %s", TRADE_LOG_FILE, e)
+            if not _disable_trade_log:
+                _disable_trade_log = True
+                logger.warning("Trade log disabled due to file creation failure")
+            return
     
     try:
         with open(TRADE_LOG_FILE, "a", newline="") as f:
