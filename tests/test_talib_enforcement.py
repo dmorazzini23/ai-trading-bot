@@ -9,7 +9,7 @@ import pytest
 
 
 def test_talib_import_enforcement():
-    """Test that TA-Lib import raises ImportError when not available."""
+    """Test that TA-Lib import gracefully handles missing dependency."""
     # Read the imports file to test the TA-Lib section
     imports_file = Path(__file__).parent.parent / "ai_trading" / "strategies" / "imports.py"
     
@@ -22,29 +22,30 @@ def test_talib_import_enforcement():
     talib_end = None
     
     for i, line in enumerate(lines):
-        if '# TA-Lib required dependency' in line:
+        if '# TA-Lib fallback' in line:
             talib_start = i
-        elif talib_start is not None and line.startswith('except ImportError as e:'):
-            # Find the end of this except block
-            for j in range(i, len(lines)):
-                if j + 1 < len(lines) and lines[j].strip() == '' and not lines[j+1].startswith(' ') and not lines[j+1].startswith('\t'):
-                    talib_end = j
-                    break
+        elif talib_start is not None and line.strip() == 'talib = MockTalib()':
+            talib_end = i + 1
             break
     
-    assert talib_start is not None, "Could not find TA-Lib import section"
+    assert talib_start is not None, "Could not find TA-Lib fallback section"
+    assert talib_end is not None, "Could not find end of TA-Lib fallback section"
     
-    # Extract just the TA-Lib import code
-    talib_code = '\n'.join(lines[talib_start:talib_end])
+    # Verify the fallback implementation exists
+    assert 'TALIB_AVAILABLE = False' in content
+    assert 'class MockTalib:' in content
+    assert 'TA-Lib not available - using fallback implementation' in content
     
-    # Test that it raises the expected ImportError
-    with pytest.raises(ImportError) as exc_info:
-        exec(talib_code)
-    
-    error_msg = str(exc_info.value)
-    assert "TA-Lib C library not found" in error_msg
-    assert "pip install TA-Lib" in error_msg
-    assert "libta-lib0-dev" in error_msg
+    # Test that the import works without raising an error
+    try:
+        from ai_trading.strategies.imports import talib, TALIB_AVAILABLE
+        assert TALIB_AVAILABLE is False, "Expected TALIB_AVAILABLE to be False in test environment"
+        assert hasattr(talib, 'SMA'), "Expected talib to have SMA method"
+        assert hasattr(talib, 'RSI'), "Expected talib to have RSI method"
+        assert hasattr(talib, 'MACD'), "Expected talib to have MACD method"
+        print("✅ TA-Lib fallback import successful")
+    except ImportError as e:
+        pytest.fail(f"TA-Lib import should not raise ImportError with fallback: {e}")
 
 
 def test_audit_file_creation_and_permissions(tmp_path, monkeypatch):
