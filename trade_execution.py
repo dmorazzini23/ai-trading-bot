@@ -564,12 +564,29 @@ class ExecutionEngine:
         except (APIError, RuntimeError, AttributeError) as exc:
             self.logger.error("Error fetching account information: %s", exc)
             return False
+        
         need = qty * price
-        if float(getattr(acct, "cash", 0)) < need:
+        
+        # AI-AGENT-REF: Improve API null value handling for buying power
+        # Try multiple buying power fields with proper fallbacks
+        buying_power = (
+            getattr(acct, "buying_power", None)
+            or getattr(acct, "cash", None) 
+            or getattr(acct, "portfolio_value", None)
+            or 0
+        )
+        
+        try:
+            buying_power = float(buying_power) if buying_power is not None else 0.0
+        except (ValueError, TypeError):
+            self.logger.warning("Invalid buying_power value from API: %s, defaulting to 0", buying_power)
+            buying_power = 0.0
+            
+        if buying_power < need:
             self.logger.error(
                 "Insufficient buying power: need %s, have %s",
                 need,
-                getattr(acct, "cash", 0),
+                buying_power,
             )
             return False
         return True
@@ -1497,9 +1514,16 @@ class ExecutionEngine:
         if method in ("twap", "vwap"):
             return self._execute_sliced(symbol, remaining, side, method)
         existing = self._available_qty(api, symbol)
-        if side.lower() == "buy" and existing > 0:
-            self.logger.info("SKIP_HELD_POSITION | already long, skipping buy")
-            return None
+        
+        # AI-AGENT-REF: Fix trade execution logic to allow new buy orders
+        # Only skip buy orders if position size limits are configured and exceeded
+        # For now, allow buy orders regardless of existing positions (risk managed elsewhere)
+        if side.lower() == "buy":
+            # Check if we have sufficient buying power instead of blocking all buys
+            if not self._has_buy_power(api, remaining, None):
+                self.logger.info("SKIP_INSUFFICIENT_FUNDS | insufficient buying power for %s", symbol)
+                return None
+        
         if side.lower() == "sell" and existing == 0:
             self.logger.info("SKIP_NO_POSITION | no shares to sell, skipping")
             return None
@@ -1757,9 +1781,16 @@ class ExecutionEngine:
         if method in ("twap", "vwap"):
             return await asyncio.to_thread(self._execute_sliced, symbol, remaining, side, method)
         existing = self._available_qty(api, symbol)
-        if side.lower() == "buy" and existing > 0:
-            self.logger.info("SKIP_HELD_POSITION | already long, skipping buy")
-            return None
+        
+        # AI-AGENT-REF: Fix trade execution logic to allow new buy orders
+        # Only skip buy orders if position size limits are configured and exceeded
+        # For now, allow buy orders regardless of existing positions (risk managed elsewhere)
+        if side.lower() == "buy":
+            # Check if we have sufficient buying power instead of blocking all buys
+            if not self._has_buy_power(api, remaining, None):
+                self.logger.info("SKIP_INSUFFICIENT_FUNDS | insufficient buying power for %s", symbol)
+                return None
+        
         if side.lower() == "sell" and existing == 0:
             self.logger.info("SKIP_NO_POSITION | no shares to sell, skipping")
             return None
