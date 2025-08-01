@@ -86,6 +86,25 @@ Symbols are automatically screened based on volume (>100K daily) and volatility 
 - **4GB+ RAM** (8GB+ recommended for production)
 - **Stable internet connection** for market data
 
+### Dependencies
+
+This trading bot requires both **Python packages** and **system libraries** for optimal performance:
+
+#### Required System Dependencies
+- **TA-Lib C Library**: Required for optimized technical analysis calculations
+  - Ubuntu/Debian: `sudo apt-get install libta-lib0-dev`
+  - macOS: `brew install ta-lib`
+  - Windows: Download from [TA-Lib website](https://ta-lib.org/)
+
+#### Python Dependencies
+All Python packages are specified in `requirements.txt`, including:
+- **TA-Lib>=0.4.24**: Python wrapper for TA-Lib (requires C library above)
+- **pandas**, **numpy**: Data processing and numerical computations
+- **scikit-learn**: Machine learning algorithms
+- **alpaca-trade-api**: Broker integration
+
+**Note**: The bot enforces TA-Lib installation and will not start without it. Install both the C library and Python package for full functionality.
+
 ### Quick Start
 
 ```bash
@@ -774,6 +793,14 @@ WEBHOOK_ON_SYSTEM_EVENTS=true
 ---
 
 ## 🔥 Production Deployment
+
+### Pre-Deployment Setup
+
+The bot automatically initializes required files and directories on first run:
+
+- **Trade Log**: Creates `data/trades.csv` with proper permissions (0o664) for trade auditing
+- **Data Directory**: Auto-creates the `data/` directory if it doesn't exist
+- **Permissions**: Ensures the bot user can read/write trade logs for audit compliance
 
 ### Systemd Service
 

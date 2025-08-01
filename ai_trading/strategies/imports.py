@@ -165,48 +165,16 @@ except ImportError:
     RandomForestClassifier = sklearn_mock.ensemble.RandomForestClassifier
     train_test_split = sklearn_mock.model_selection.train_test_split
 
-# TA-Lib fallback
+# TA-Lib required dependency
 try:
     import talib
     TALIB_AVAILABLE = True
     logger.info("TA-Lib loaded successfully for optimized technical analysis")
-except ImportError:
-    TALIB_AVAILABLE = False
-    logger.warning(
-        "TA-Lib not available - using fallback implementation. "
-        "For better accuracy, install TA-Lib: pip install TA-Lib "
-        "(requires ta-lib C library: see README for installation instructions)"
-    )
-    
-    class MockTalib:
-        @staticmethod
-        def SMA(arr, timeperiod=20):
-            if len(arr) < timeperiod:
-                return [np.nan] * len(arr)
-            result = []
-            for i in range(len(arr)):
-                if i < timeperiod - 1:
-                    result.append(np.nan)
-                else:
-                    result.append(sum(arr[i-timeperiod+1:i+1]) / timeperiod)
-            return result
-            
-        @staticmethod
-        def EMA(arr, timeperiod=20):
-            return MockTalib.SMA(arr, timeperiod)  # Simplified fallback
-            
-        @staticmethod
-        def RSI(arr, timeperiod=14):
-            return [50.0] * len(arr)  # Mock RSI at neutral
-            
-        @staticmethod
-        def MACD(arr, fastperiod=12, slowperiod=26, signalperiod=9):
-            mock_line = [0.0] * len(arr)
-            mock_signal = [0.0] * len(arr)
-            mock_hist = [0.0] * len(arr)
-            return mock_line, mock_signal, mock_hist
-    
-    talib = MockTalib()
+except ImportError as e:
+    raise ImportError(
+        "TA-Lib C library not found. Install with `pip install TA-Lib` "
+        "(and system package `libta-lib0-dev`)."
+    ) from e
 
 # Export commonly used items
 __all__ = [

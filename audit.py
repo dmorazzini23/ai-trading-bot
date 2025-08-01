@@ -62,21 +62,30 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
         timestamp,
     )
 
+    # AI-AGENT-REF: ensure trade log directory and file creation with proper permissions
     os.makedirs(os.path.dirname(TRADE_LOG_FILE) or ".", exist_ok=True)
-    exists = os.path.exists(TRADE_LOG_FILE)
+    
+    # Check if file exists before any operations
+    file_existed = os.path.exists(TRADE_LOG_FILE)
+    
+    # Ensure the trade log file exists with proper permissions
+    if not file_existed:
+        # Touch the file to create it
+        with open(TRADE_LOG_FILE, "a", newline=""):
+            pass
+        try:
+            os.chmod(TRADE_LOG_FILE, 0o664)
+        except OSError:
+            pass  # Permission setting is best-effort
+    
     try:
         with open(TRADE_LOG_FILE, "a", newline="") as f:
-            if not exists:
-                try:
-                    os.chmod(TRADE_LOG_FILE, 0o664)
-                except OSError:
-                    pass
             writer = csv.DictWriter(
                 f,
                 fieldnames=_fields,
                 quoting=csv.QUOTE_MINIMAL,
             )
-            if not exists:
+            if not file_existed:
                 writer.writeheader()
             writer.writerow(
                 {
