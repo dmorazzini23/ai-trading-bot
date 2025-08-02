@@ -75,5 +75,5 @@ prometheus-client>=0.17.0
 # Additional institutional-grade dependencies
 typing-extensions>=4.0.0  # Enhanced type hints
 dataclasses-json>=0.5.7   # JSON serialization
-cachetools>=5.0.0         # Advanced caching
+cachetools>=5.0.0         # Advanced caching and TTLCache for memory leak prevention
 cryptography>=3.4.8      # Security enhancements

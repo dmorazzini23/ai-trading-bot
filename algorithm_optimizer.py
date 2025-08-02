@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 import statistics
 import time
+import threading  # AI-AGENT-REF: Thread safety for algorithm optimizer
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
@@ -94,18 +95,23 @@ class OptimizedParameters:
 
 
 class AlgorithmOptimizer:
-    """Advanced trading algorithm optimizer."""
+    """Advanced trading algorithm optimizer with thread safety."""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
         
-        # Historical performance tracking
+        # AI-AGENT-REF: Thread safety for shared state access
+        self._lock = threading.RLock()
+        
+        # Historical performance tracking with bounded growth
         self.performance_history: deque = deque(maxlen=10000)
         self.parameter_history: deque = deque(maxlen=1000)
         
-        # Market regime detection
+        # Market regime detection with bounded growth prevention
         self.market_regimes: deque = deque(maxlen=100)
-        self.regime_performance: Dict[MarketRegime, List[float]] = defaultdict(list)
+        self.regime_performance: Dict[MarketRegime, deque] = {
+            regime: deque(maxlen=1000) for regime in MarketRegime  # Bounded growth
+        }
         
         # Optimization settings
         self.optimization_enabled = True
@@ -447,51 +453,115 @@ class AlgorithmOptimizer:
                                       account_value: float,
                                       volatility: float,
                                       market_conditions: MarketConditions) -> float:
-        """Calculate optimal position size using Kelly criterion and risk management."""
+        """Calculate optimal position size using Kelly criterion and risk management with thread safety."""
+        with self._lock:  # AI-AGENT-REF: Thread-safe position size calculation
+            try:
+                # AI-AGENT-REF: Division by zero protection
+                if price <= 0 or account_value <= 0:
+                    self.logger.warning(f"Invalid inputs: price={price}, account_value={account_value}")
+                    return 0
+                
+                # Kelly criterion calculation with historical performance
+                kelly_fraction = self._calculate_kelly_fraction(symbol)
+                
+                # Base position size (percentage of account)
+                base_position_pct = 0.02  # 2% base position
+                
+                # Apply Kelly criterion with safety caps
+                kelly_adjusted_pct = min(kelly_fraction, 0.25) if kelly_fraction > 0 else base_position_pct
+                
+                # Adjust for market conditions
+                regime_multiplier = self._get_regime_multiplier(market_conditions.regime)
+                
+                # AI-AGENT-REF: Safe volatility adjustment with epsilon
+                epsilon = 1e-8  # Numerical stability
+                volatility_adjustment = 1.0 / (1.0 + max(volatility, epsilon) * 5)
+                
+                # Time-based adjustment
+                time_multiplier = self._get_time_multiplier(market_conditions.time_of_day)
+                
+                # Apply current parameters
+                param_multiplier = self.current_parameters.position_size_multiplier
+                
+                # Calculate final position size
+                position_pct = (kelly_adjusted_pct * 
+                              regime_multiplier * 
+                              volatility_adjustment * 
+                              time_multiplier * 
+                              param_multiplier)
+                
+                # Convert to dollar amount
+                position_value = account_value * position_pct
+                
+                # Convert to shares (rounded down)
+                shares = int(position_value / price)
+                
+                # Minimum position size
+                min_shares = max(1, int(account_value * 0.001 / price))  # 0.1% minimum
+                
+                # Maximum position size (risk management)
+                max_shares = int(account_value * 0.1 / price)  # 10% maximum
+                
+                final_shares = max(min_shares, min(max_shares, shares))
+                
+                self.logger.debug(
+                    f"Position size calculated for {symbol}: {final_shares} shares "
+                    f"(${final_shares * price:.2f}, {final_shares * price / account_value * 100:.2f}% of account) "
+                    f"Kelly fraction: {kelly_fraction:.4f}"
+                )
+                
+                return final_shares
+                
+            except Exception as e:
+                self.logger.error(f"Error calculating position size: {e}")
+                return 0
+    
+    def _calculate_kelly_fraction(self, symbol: str) -> float:
+        """Calculate Kelly fraction from historical performance with division by zero protection."""
         try:
-            # Base position size (percentage of account)
-            base_position_pct = 0.02  # 2% base position
+            # Get symbol-specific performance history
+            symbol_performance = []
+            for record in self.performance_history:
+                if isinstance(record, dict) and record.get('symbol') == symbol:
+                    symbol_performance.append(record.get('return', 0.0))
             
-            # Adjust for market conditions
-            regime_multiplier = self._get_regime_multiplier(market_conditions.regime)
-            volatility_adjustment = 1.0 / (1.0 + volatility * 5)  # Reduce size with volatility
+            if len(symbol_performance) < 10:  # Need minimum sample size
+                return 0.02  # Default conservative fraction
             
-            # Time-based adjustment
-            time_multiplier = self._get_time_multiplier(market_conditions.time_of_day)
+            # Calculate win rate and average win/loss
+            wins = [p for p in symbol_performance if p > 0]
+            losses = [abs(p) for p in symbol_performance if p < 0]
             
-            # Apply current parameters
-            param_multiplier = self.current_parameters.position_size_multiplier
+            # AI-AGENT-REF: Division by zero protection for Kelly criterion
+            total_trades = len(symbol_performance)
+            if total_trades == 0:
+                return 0.02
+                
+            win_rate = len(wins) / total_trades
             
-            # Calculate final position size
-            position_pct = (base_position_pct * 
-                          regime_multiplier * 
-                          volatility_adjustment * 
-                          time_multiplier * 
-                          param_multiplier)
+            # Safe average calculations with epsilon
+            epsilon = 1e-8
+            avg_win = sum(wins) / max(len(wins), 1) if wins else epsilon
+            avg_loss = sum(losses) / max(len(losses), 1) if losses else epsilon
             
-            # Convert to dollar amount
-            position_value = account_value * position_pct
+            # Kelly formula: f = (bp - q) / b where b = avg_win/avg_loss, p = win_rate, q = 1-win_rate
+            if avg_loss <= epsilon:  # Avoid division by zero
+                return min(0.25, win_rate * 0.5)  # Conservative fallback
+                
+            b = avg_win / avg_loss  # Win/loss ratio
+            p = win_rate
+            q = 1 - p
             
-            # Convert to shares (rounded down)
-            shares = int(position_value / price)
+            kelly_fraction = (b * p - q) / b
             
-            # Minimum position size
-            min_shares = max(1, int(account_value * 0.001 / price))  # 0.1% minimum
+            # Cap Kelly fraction for safety (institutional limit)
+            kelly_fraction = max(0, min(kelly_fraction, 0.25))
             
-            # Maximum position size (risk management)
-            max_shares = int(account_value * 0.1 / price)  # 10% maximum
-            
-            final_shares = max(min_shares, min(max_shares, shares))
-            
-            self.logger.debug(
-                f"Position size calculated for {symbol}: {final_shares} shares "
-                f"(${final_shares * price:.2f}, {final_shares * price / account_value * 100:.2f}% of account)"
-            )
-            
-            return final_shares
+            return kelly_fraction
             
         except Exception as e:
-            self.logger.error(f"Error calculating position size: {e}")
+            self.logger.error(f"Error calculating Kelly fraction: {e}")
+            return 0.02  # Conservative default
             # Default to minimum position
             return max(1, int(account_value * 0.001 / price))
     
