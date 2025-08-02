@@ -769,6 +769,137 @@ else:
                 slowd_list = slowd.tolist() if hasattr(slowd, 'tolist') else slowd
                 
                 return slowk_list, slowd_list
+            
+            # Enhanced indicators from ta library
+            @staticmethod
+            def ADX(high, low, close, timeperiod=14):
+                """Average Directional Index - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                    low = pd.Series(low)
+                    close = pd.Series(close)
+                
+                result = ta.trend.adx(high, low, close, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def WILLR(high, low, close, timeperiod=14):
+                """Williams %R - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                    low = pd.Series(low)
+                    close = pd.Series(close)
+                
+                result = ta.momentum.williams_r(high, low, close, lbp=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def CCI(high, low, close, timeperiod=20):
+                """Commodity Channel Index - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                    low = pd.Series(low)
+                    close = pd.Series(close)
+                
+                result = ta.trend.cci(high, low, close, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def OBV(close, volume):
+                """On-Balance Volume - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    close = pd.Series(close)
+                    volume = pd.Series(volume)
+                
+                result = ta.volume.on_balance_volume(close, volume, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def VWAP(high, low, close, volume, timeperiod=14):
+                """Volume Weighted Average Price - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                    low = pd.Series(low)
+                    close = pd.Series(close)
+                    volume = pd.Series(volume)
+                
+                result = ta.volume.volume_weighted_average_price(high, low, close, volume, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def AD(high, low, close, volume):
+                """Accumulation/Distribution Line - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                    low = pd.Series(low)
+                    close = pd.Series(close)
+                    volume = pd.Series(volume)
+                
+                result = ta.volume.acc_dist_index(high, low, close, volume, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def BBANDWIDTH(close, timeperiod=20, nbdev=2):
+                """Bollinger Band Width - Enhanced indicator."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    close = pd.Series(close)
+                
+                result = ta.volatility.bollinger_wband(close, window=timeperiod, window_dev=nbdev, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def DONCHIAN_HIGH(high, timeperiod=20):
+                """Donchian Channel Upper Band - Enhanced indicator."""
+                if not hasattr(high, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(high, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                
+                result = ta.volatility.donchian_channel_hband(high, high, high, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def DONCHIAN_LOW(low, timeperiod=20):
+                """Donchian Channel Lower Band - Enhanced indicator."""
+                if not hasattr(low, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(low, 'rolling'):
+                    import pandas as pd
+                    low = pd.Series(low)
+                
+                result = ta.volatility.donchian_channel_lband(low, low, low, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
         
         # Use the compatibility layer
         talib = TalibCompatLayer()
