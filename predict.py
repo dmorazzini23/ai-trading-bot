@@ -55,15 +55,24 @@ import time
 import threading
 from datetime import datetime, timedelta
 
-# AI-AGENT-REF: Sentiment caching and rate limiting
-_sentiment_cache = {}
+# AI-AGENT-REF: Memory leak prevention with TTLCache
+try:
+    from cachetools import TTLCache
+    # TTLCache with 5 min TTL and 1000 items max to prevent memory leaks
+    _sentiment_cache = TTLCache(maxsize=1000, ttl=300)
+    _CACHETOOLS_AVAILABLE = True
+except ImportError:
+    # Fallback to bounded dict cache if cachetools not available
+    _sentiment_cache = {}
+    _CACHETOOLS_AVAILABLE = False
+
 _sentiment_lock = threading.Lock()
 _last_request_time = {}
 _min_request_interval = 1.0  # Minimum 1 second between requests per symbol
 _cache_ttl = 300  # 5 minutes cache TTL
 
 def fetch_sentiment(symbol: str) -> float:
-    """Return a sentiment score for ``symbol`` using NewsAPI with rate limiting and caching."""
+    """Return a sentiment score for ``symbol`` using NewsAPI with rate limiting and TTL cache."""
 
     if not config.NEWS_API_KEY:
         return 0.0
@@ -71,12 +80,22 @@ def fetch_sentiment(symbol: str) -> float:
     current_time = time.time()
     
     with _sentiment_lock:
-        # Check cache first
-        if symbol in _sentiment_cache:
-            cached_score, cached_time = _sentiment_cache[symbol]
-            if current_time - cached_time < _cache_ttl:
-                logger.debug("Using cached sentiment for %s: %.2f", symbol, cached_score)
+        # Check cache first (TTLCache handles expiration automatically)
+        if _CACHETOOLS_AVAILABLE:
+            if symbol in _sentiment_cache:
+                cached_score = _sentiment_cache[symbol]
+                logger.debug("Using TTL cached sentiment for %s: %.2f", symbol, cached_score)
                 return cached_score
+        else:
+            # Fallback manual cache management
+            if symbol in _sentiment_cache:
+                cached_score, cached_time = _sentiment_cache[symbol]
+                if current_time - cached_time < _cache_ttl:
+                    logger.debug("Using manual cached sentiment for %s: %.2f", symbol, cached_score)
+                    return cached_score
+                else:
+                    # Remove expired entry
+                    del _sentiment_cache[symbol]
         
         # Check rate limiting
         if symbol in _last_request_time:
@@ -87,7 +106,9 @@ def fetch_sentiment(symbol: str) -> float:
                     symbol
                 )
                 # Return cached value if available, otherwise neutral
-                if symbol in _sentiment_cache:
+                if _CACHETOOLS_AVAILABLE and symbol in _sentiment_cache:
+                    return _sentiment_cache[symbol]
+                elif not _CACHETOOLS_AVAILABLE and symbol in _sentiment_cache:
                     return _sentiment_cache[symbol][0]
                 return 0.0
         
@@ -110,9 +131,18 @@ def fetch_sentiment(symbol: str) -> float:
         
         score = float(score)
         
-        # Cache the result
+        # Cache the result with memory leak prevention
         with _sentiment_lock:
-            _sentiment_cache[symbol] = (score, current_time)
+            if _CACHETOOLS_AVAILABLE:
+                _sentiment_cache[symbol] = score  # TTLCache handles expiration
+            else:
+                # Manual cache with size limit to prevent memory leaks
+                if len(_sentiment_cache) >= 1000:
+                    # Remove oldest entry
+                    oldest_key = min(_sentiment_cache.keys(), 
+                                   key=lambda k: _sentiment_cache[k][1])
+                    del _sentiment_cache[oldest_key]
+                _sentiment_cache[symbol] = (score, current_time)
         
         logger.debug("Fetched fresh sentiment for %s: %.2f", symbol, score)
         return score
@@ -121,7 +151,9 @@ def fetch_sentiment(symbol: str) -> float:
         logger.error("fetch_sentiment failed for %s: %s", symbol, exc)
         # Return cached value if available during error, otherwise neutral
         with _sentiment_lock:
-            if symbol in _sentiment_cache:
+            if _CACHETOOLS_AVAILABLE and symbol in _sentiment_cache:
+                return _sentiment_cache[symbol]
+            elif not _CACHETOOLS_AVAILABLE and symbol in _sentiment_cache:
                 return _sentiment_cache[symbol][0]
         return 0.0
 
