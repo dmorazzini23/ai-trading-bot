@@ -165,219 +165,400 @@ except ImportError:
     RandomForestClassifier = sklearn_mock.ensemble.RandomForestClassifier
     train_test_split = sklearn_mock.model_selection.train_test_split
 
-# TA-Lib fallback
+# TA library for optimized technical analysis
 try:
-    import talib
-    TALIB_AVAILABLE = True
-    logger.info("TA-Lib loaded successfully for optimized technical analysis")
+    import ta
+    import pandas as pd
+    import numpy as np
+    TA_AVAILABLE = True
+    logger.info("TA library loaded successfully for enhanced technical analysis")
 except ImportError:
-    TALIB_AVAILABLE = False
+    TA_AVAILABLE = False
     logger.warning(
-        "TA-Lib not available - using fallback implementation. "
-        "For enhanced technical analysis, install with `pip install TA-Lib` "
-        "(and system package `libta-lib0-dev`)."
+        "TA library not available - using fallback implementation. "
+        "For enhanced technical analysis, install with `pip install ta==0.11.0`."
     )
     
-    class MockTalib:
-        """Mock TA-Lib implementation providing basic technical indicators."""
+    class MockTa:
+        """Mock TA library implementation providing basic technical indicators."""
         
-        @staticmethod
-        def SMA(prices, timeperiod=30):
-            """Simple Moving Average fallback implementation."""
-            if not prices or len(prices) < timeperiod:
-                return [float('nan')] * len(prices) if prices else []
-            
-            result = [float('nan')] * (timeperiod - 1)
-            for i in range(timeperiod - 1, len(prices)):
-                window = prices[i - timeperiod + 1:i + 1]
-                result.append(sum(window) / len(window))
-            return result
-        
-        @staticmethod
-        def EMA(prices, timeperiod=30):
-            """Exponential Moving Average fallback implementation."""
-            if not prices:
-                return []
-            
-            result = [float('nan')] * len(prices)
-            if len(prices) >= timeperiod:
-                # Start with SMA for first value
-                first_sma = sum(prices[:timeperiod]) / timeperiod
-                result[timeperiod - 1] = first_sma
+        class trend:
+            @staticmethod
+            def sma_indicator(close, window=30, fillna=False):
+                """Simple Moving Average using ta library interface."""
+                if not hasattr(close, '__iter__'):
+                    return float('nan')
                 
-                # Calculate EMA for remaining values
-                multiplier = 2.0 / (timeperiod + 1)
-                for i in range(timeperiod, len(prices)):
-                    result[i] = (prices[i] * multiplier) + (result[i - 1] * (1 - multiplier))
-            
-            return result
-        
-        @staticmethod
-        def RSI(prices, timeperiod=14):
-            """Relative Strength Index fallback implementation."""
-            if not prices or len(prices) < timeperiod + 1:
-                return [float('nan')] * len(prices) if prices else []
-            
-            result = [float('nan')] * timeperiod
-            gains = []
-            losses = []
-            
-            # Calculate initial gains and losses
-            for i in range(1, timeperiod + 1):
-                change = prices[i] - prices[i - 1]
-                gains.append(max(change, 0))
-                losses.append(max(-change, 0))
-            
-            avg_gain = sum(gains) / timeperiod
-            avg_loss = sum(losses) / timeperiod
-            
-            # Calculate RSI values
-            for i in range(timeperiod, len(prices)):
-                if i > timeperiod:
-                    change = prices[i] - prices[i - 1]
-                    gain = max(change, 0)
-                    loss = max(-change, 0)
-                    avg_gain = (avg_gain * (timeperiod - 1) + gain) / timeperiod
-                    avg_loss = (avg_loss * (timeperiod - 1) + loss) / timeperiod
+                if hasattr(close, 'rolling'):  # pandas Series
+                    return close.rolling(window=window).mean()
                 
-                if avg_loss == 0:
-                    result.append(100)
-                else:
-                    rs = avg_gain / avg_loss
-                    result.append(100 - (100 / (1 + rs)))
+                # List/array fallback
+                result = [float('nan')] * len(close)
+                for i in range(window - 1, len(close)):
+                    window_data = close[i - window + 1:i + 1]
+                    result[i] = sum(window_data) / len(window_data)
+                return result
             
-            return result
-        
-        @staticmethod
-        def MACD(prices, fastperiod=12, slowperiod=26, signalperiod=9):
-            """MACD fallback implementation."""
-            if not prices or len(prices) < slowperiod:
-                empty = [float('nan')] * len(prices) if prices else []
-                return empty, empty, empty
-            
-            # Calculate EMAs
-            ema_fast = MockTalib.EMA(prices, fastperiod)
-            ema_slow = MockTalib.EMA(prices, slowperiod)
-            
-            # Calculate MACD line
-            macd_line = []
-            for i in range(len(prices)):
-                if i < slowperiod - 1:
-                    macd_line.append(float('nan'))
-                else:
-                    macd_line.append(ema_fast[i] - ema_slow[i])
-            
-            # Calculate signal line (EMA of MACD)
-            # Create a clean macd series for signal calculation
-            clean_macd = []
-            for x in macd_line:
-                if isinstance(x, float) and x != x:  # NaN check
-                    clean_macd.append(0.0)  # Use 0 for NaN values temporarily
-                else:
-                    clean_macd.append(x)
-            
-            signal_line = MockTalib.EMA(clean_macd, signalperiod)
-            
-            # Restore NaN values where MACD was NaN
-            for i in range(len(macd_line)):
-                if isinstance(macd_line[i], float) and macd_line[i] != macd_line[i]:  # NaN check
-                    signal_line[i] = float('nan')
-            
-            # Calculate histogram
-            histogram = []
-            for i in range(len(macd_line)):
-                if isinstance(macd_line[i], float) and macd_line[i] != macd_line[i]:  # NaN check
-                    histogram.append(float('nan'))
-                elif isinstance(signal_line[i], float) and signal_line[i] != signal_line[i]:  # NaN check
-                    histogram.append(float('nan'))
-                else:
-                    histogram.append(macd_line[i] - signal_line[i])
-            
-            return macd_line, signal_line, histogram
-        
-        @staticmethod
-        def BBANDS(prices, timeperiod=20, nbdevup=2, nbdevdn=2, matype=0):
-            """Bollinger Bands fallback implementation."""
-            if not prices or len(prices) < timeperiod:
-                empty = [float('nan')] * len(prices) if prices else []
-                return empty, empty, empty
-            
-            # Calculate SMA (middle band)
-            sma = MockTalib.SMA(prices, timeperiod)
-            
-            # Calculate standard deviation and bands
-            upper_band = []
-            lower_band = []
-            
-            for i in range(len(prices)):
-                if i < timeperiod - 1:
-                    upper_band.append(float('nan'))
-                    lower_band.append(float('nan'))
-                else:
-                    window = prices[i - timeperiod + 1:i + 1]
-                    mean_val = sma[i]
-                    variance = sum((x - mean_val) ** 2 for x in window) / timeperiod
-                    std_dev = variance ** 0.5
+            @staticmethod
+            def ema_indicator(close, window=30, fillna=False):
+                """Exponential Moving Average using ta library interface."""
+                if not hasattr(close, '__iter__'):
+                    return float('nan')
+                
+                if hasattr(close, 'ewm'):  # pandas Series
+                    return close.ewm(span=window).mean()
+                
+                # List/array fallback - same logic as MockTalib.EMA
+                result = [float('nan')] * len(close)
+                if len(close) >= window:
+                    first_sma = sum(close[:window]) / window
+                    result[window - 1] = first_sma
                     
-                    upper_band.append(mean_val + (nbdevup * std_dev))
-                    lower_band.append(mean_val - (nbdevdn * std_dev))
+                    multiplier = 2.0 / (window + 1)
+                    for i in range(window, len(close)):
+                        result[i] = (close[i] * multiplier) + (result[i - 1] * (1 - multiplier))
+                
+                return result
             
-            return upper_band, sma, lower_band
-        
-        @staticmethod
-        def ATR(high, low, close, timeperiod=14):
-            """Average True Range fallback implementation."""
-            if not high or not low or not close or len(high) < 2:
-                return [float('nan')] * len(high) if high else []
+            @staticmethod
+            def macd(close, window_slow=26, window_fast=12, fillna=False):
+                """MACD line using ta library interface."""
+                ema_fast = MockTa.trend.ema_indicator(close, window_fast)
+                ema_slow = MockTa.trend.ema_indicator(close, window_slow)
+                
+                if hasattr(close, 'index'):  # pandas Series
+                    import pandas as pd
+                    ema_fast_series = pd.Series(ema_fast, index=close.index)
+                    ema_slow_series = pd.Series(ema_slow, index=close.index)
+                    return ema_fast_series - ema_slow_series
+                
+                # List fallback
+                return [f - s if not (isinstance(f, float) and f != f) and not (isinstance(s, float) and s != s) 
+                       else float('nan') for f, s in zip(ema_fast, ema_slow)]
             
-            # Calculate True Range
-            true_ranges = [float('nan')]  # First value is NaN
-            for i in range(1, len(high)):
-                tr1 = high[i] - low[i]
-                tr2 = abs(high[i] - close[i - 1])
-                tr3 = abs(low[i] - close[i - 1])
-                true_ranges.append(max(tr1, tr2, tr3))
+            @staticmethod
+            def macd_signal(close, window_slow=26, window_fast=12, window_sign=9, fillna=False):
+                """MACD signal line using ta library interface."""
+                macd_line = MockTa.trend.macd(close, window_slow, window_fast)
+                return MockTa.trend.ema_indicator(macd_line, window_sign)
             
-            # Calculate ATR (SMA of True Range)
-            atr_values = []
-            for i in range(len(true_ranges)):
-                if i < timeperiod:
-                    atr_values.append(float('nan'))
-                else:
-                    window = true_ranges[i - timeperiod + 1:i + 1]
-                    atr_values.append(sum(window) / len(window))
+            @staticmethod
+            def macd_diff(close, window_slow=26, window_fast=12, window_sign=9, fillna=False):
+                """MACD histogram using ta library interface."""
+                macd_line = MockTa.trend.macd(close, window_slow, window_fast)
+                signal_line = MockTa.trend.macd_signal(close, window_slow, window_fast, window_sign)
+                
+                if hasattr(close, 'index'):  # pandas Series
+                    import pandas as pd
+                    macd_series = pd.Series(macd_line, index=close.index) if not hasattr(macd_line, 'index') else macd_line
+                    signal_series = pd.Series(signal_line, index=close.index) if not hasattr(signal_line, 'index') else signal_line
+                    return macd_series - signal_series
+                
+                # List fallback
+                return [m - s if not (isinstance(m, float) and m != m) and not (isinstance(s, float) and s != s) 
+                       else float('nan') for m, s in zip(macd_line, signal_line)]
             
-            return atr_values
-        
-        @staticmethod
-        def STOCH(high, low, close, fastk_period=5, slowk_period=3, slowk_matype=0, slowd_period=3, slowd_matype=0):
-            """Stochastic Oscillator fallback implementation."""
-            if not high or not low or not close or len(high) < fastk_period:
-                empty = [float('nan')] * len(high) if high else []
-                return empty, empty
+            @staticmethod
+            def adx(high, low, close, window=14, fillna=False):
+                """Average Directional Index fallback implementation."""
+                # Simplified ADX calculation
+                if hasattr(close, 'rolling'):  # pandas Series
+                    return close.rolling(window=window).std() * 100 / close.rolling(window=window).mean()
+                
+                # Simple volatility-based proxy for ADX
+                result = [float('nan')] * len(close)
+                for i in range(window - 1, len(close)):
+                    window_data = close[i - window + 1:i + 1]
+                    mean_val = sum(window_data) / len(window_data)
+                    std_val = (sum((x - mean_val) ** 2 for x in window_data) / len(window_data)) ** 0.5
+                    result[i] = min(100, (std_val * 100 / mean_val)) if mean_val != 0 else 50
+                return result
             
-            # Calculate %K
-            k_values = []
-            for i in range(len(high)):
-                if i < fastk_period - 1:
-                    k_values.append(float('nan'))
-                else:
-                    window_high = max(high[i - fastk_period + 1:i + 1])
-                    window_low = min(low[i - fastk_period + 1:i + 1])
-                    if window_high == window_low:
-                        k_values.append(50.0)  # Avoid division by zero
+            @staticmethod
+            def cci(high, low, close, window=20, constant=0.015, fillna=False):
+                """Commodity Channel Index fallback implementation."""
+                # Simplified CCI calculation
+                if hasattr(close, 'rolling'):  # pandas Series
+                    typical_price = (high + low + close) / 3
+                    sma = typical_price.rolling(window=window).mean()
+                    mad = typical_price.rolling(window=window).apply(lambda x: abs(x - x.mean()).mean())
+                    return (typical_price - sma) / (constant * mad)
+                
+                # List fallback
+                result = [float('nan')] * len(close)
+                for i in range(window - 1, len(close)):
+                    typical_prices = [(high[j] + low[j] + close[j]) / 3 for j in range(i - window + 1, i + 1)]
+                    sma = sum(typical_prices) / len(typical_prices)
+                    mad = sum(abs(tp - sma) for tp in typical_prices) / len(typical_prices)
+                    if mad != 0:
+                        result[i] = (typical_prices[-1] - sma) / (constant * mad)
                     else:
-                        k_values.append(100 * (close[i] - window_low) / (window_high - window_low))
+                        result[i] = 0
+                return result
+        
+        class momentum:
+            @staticmethod
+            def rsi(close, window=14, fillna=False):
+                """Relative Strength Index using ta library interface."""
+                if not hasattr(close, '__iter__'):
+                    return float('nan')
+                
+                if hasattr(close, 'diff'):  # pandas Series
+                    delta = close.diff()
+                    gain = delta.where(delta > 0, 0).rolling(window=window).mean()
+                    loss = (-delta).where(delta < 0, 0).rolling(window=window).mean()
+                    rs = gain / loss
+                    return 100 - (100 / (1 + rs))
+                
+                # List/array fallback - same logic as MockTalib.RSI
+                if len(close) < window + 1:
+                    return [float('nan')] * len(close)
+                
+                result = [float('nan')] * window
+                gains = []
+                losses = []
+                
+                for i in range(1, window + 1):
+                    change = close[i] - close[i - 1]
+                    gains.append(max(change, 0))
+                    losses.append(max(-change, 0))
+                
+                avg_gain = sum(gains) / window
+                avg_loss = sum(losses) / window
+                
+                for i in range(window, len(close)):
+                    if i > window:
+                        change = close[i] - close[i - 1]
+                        gain = max(change, 0)
+                        loss = max(-change, 0)
+                        avg_gain = (avg_gain * (window - 1) + gain) / window
+                        avg_loss = (avg_loss * (window - 1) + loss) / window
+                    
+                    if avg_loss == 0:
+                        result.append(100)
+                    else:
+                        rs = avg_gain / avg_loss
+                        result.append(100 - (100 / (1 + rs)))
+                
+                return result
             
-            # Calculate %D (SMA of %K)
-            d_values = MockTalib.SMA(k_values, slowd_period)
+            @staticmethod
+            def stoch(high, low, close, k=14, d=3, smooth_k=3, fillna=False):
+                """Stochastic Oscillator %K using ta library interface."""
+                if hasattr(close, 'rolling'):  # pandas Series
+                    lowest_low = low.rolling(window=k).min()
+                    highest_high = high.rolling(window=k).max()
+                    k_percent = 100 * (close - lowest_low) / (highest_high - lowest_low)
+                    return k_percent.rolling(window=smooth_k).mean()
+                
+                # List fallback
+                result = [float('nan')] * len(close)
+                for i in range(k - 1, len(close)):
+                    window_high = max(high[i - k + 1:i + 1])
+                    window_low = min(low[i - k + 1:i + 1])
+                    if window_high == window_low:
+                        result[i] = 50.0
+                    else:
+                        result[i] = 100 * (close[i] - window_low) / (window_high - window_low)
+                return result
             
-            return k_values, d_values
+            @staticmethod
+            def stoch_signal(high, low, close, k=14, d=3, smooth_k=3, fillna=False):
+                """Stochastic Oscillator %D using ta library interface."""
+                k_values = MockTa.momentum.stoch(high, low, close, k, d, smooth_k)
+                return MockTa.trend.sma_indicator(k_values, d)
+            
+            @staticmethod
+            def williams_r(high, low, close, lbp=14, fillna=False):
+                """Williams %R using ta library interface."""
+                if hasattr(close, 'rolling'):  # pandas Series
+                    highest_high = high.rolling(window=lbp).max()
+                    lowest_low = low.rolling(window=lbp).min()
+                    return -100 * (highest_high - close) / (highest_high - lowest_low)
+                
+                # List fallback
+                result = [float('nan')] * len(close)
+                for i in range(lbp - 1, len(close)):
+                    window_high = max(high[i - lbp + 1:i + 1])
+                    window_low = min(low[i - lbp + 1:i + 1])
+                    if window_high == window_low:
+                        result[i] = -50.0
+                    else:
+                        result[i] = -100 * (window_high - close[i]) / (window_high - window_low)
+                return result
+        
+        class volatility:
+            @staticmethod
+            def average_true_range(high, low, close, window=14, fillna=False):
+                """Average True Range using ta library interface."""
+                if hasattr(close, 'shift'):  # pandas Series
+                    tr1 = high - low
+                    tr2 = abs(high - close.shift())
+                    tr3 = abs(low - close.shift())
+                    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+                    return true_range.rolling(window=window).mean()
+                
+                # List fallback - same logic as MockTalib.ATR
+                if len(high) < 2:
+                    return [float('nan')] * len(high)
+                
+                true_ranges = [float('nan')]
+                for i in range(1, len(high)):
+                    tr1 = high[i] - low[i]
+                    tr2 = abs(high[i] - close[i - 1])
+                    tr3 = abs(low[i] - close[i - 1])
+                    true_ranges.append(max(tr1, tr2, tr3))
+                
+                atr_values = []
+                for i in range(len(true_ranges)):
+                    if i < window:
+                        atr_values.append(float('nan'))
+                    else:
+                        window_data = true_ranges[i - window + 1:i + 1]
+                        atr_values.append(sum(window_data) / len(window_data))
+                
+                return atr_values
+            
+            @staticmethod
+            def bollinger_hband(close, window=20, window_dev=2, fillna=False):
+                """Bollinger Bands upper band using ta library interface."""
+                if hasattr(close, 'rolling'):  # pandas Series
+                    sma = close.rolling(window=window).mean()
+                    std = close.rolling(window=window).std()
+                    return sma + (std * window_dev)
+                
+                # List fallback
+                result = [float('nan')] * len(close)
+                for i in range(window - 1, len(close)):
+                    window_data = close[i - window + 1:i + 1]
+                    mean_val = sum(window_data) / len(window_data)
+                    variance = sum((x - mean_val) ** 2 for x in window_data) / len(window_data)
+                    std_dev = variance ** 0.5
+                    result[i] = mean_val + (window_dev * std_dev)
+                return result
+            
+            @staticmethod
+            def bollinger_lband(close, window=20, window_dev=2, fillna=False):
+                """Bollinger Bands lower band using ta library interface."""
+                if hasattr(close, 'rolling'):  # pandas Series
+                    sma = close.rolling(window=window).mean()
+                    std = close.rolling(window=window).std()
+                    return sma - (std * window_dev)
+                
+                # List fallback
+                result = [float('nan')] * len(close)
+                for i in range(window - 1, len(close)):
+                    window_data = close[i - window + 1:i + 1]
+                    mean_val = sum(window_data) / len(window_data)
+                    variance = sum((x - mean_val) ** 2 for x in window_data) / len(window_data)
+                    std_dev = variance ** 0.5
+                    result[i] = mean_val - (window_dev * std_dev)
+                return result
+            
+            @staticmethod
+            def bollinger_wband(close, window=20, window_dev=2, fillna=False):
+                """Bollinger Band Width using ta library interface."""
+                upper = MockTa.volatility.bollinger_hband(close, window, window_dev)
+                lower = MockTa.volatility.bollinger_lband(close, window, window_dev)
+                
+                if hasattr(close, 'index'):  # pandas Series
+                    import pandas as pd
+                    upper_series = pd.Series(upper, index=close.index) if not hasattr(upper, 'index') else upper
+                    lower_series = pd.Series(lower, index=close.index) if not hasattr(lower, 'index') else lower
+                    return (upper_series - lower_series) / MockTa.trend.sma_indicator(close, window)
+                
+                # List fallback
+                sma = MockTa.trend.sma_indicator(close, window)
+                return [(u - l) / s if s != 0 and not (isinstance(u, float) and u != u) 
+                       else float('nan') for u, l, s in zip(upper, lower, sma)]
+            
+            @staticmethod
+            def donchian_channel_hband(high, window=20, offset=0, fillna=False):
+                """Donchian Channel upper band using ta library interface."""
+                if hasattr(high, 'rolling'):  # pandas Series
+                    return high.rolling(window=window).max()
+                
+                # List fallback
+                result = [float('nan')] * len(high)
+                for i in range(window - 1, len(high)):
+                    result[i] = max(high[i - window + 1:i + 1])
+                return result
+            
+            @staticmethod
+            def donchian_channel_lband(low, window=20, offset=0, fillna=False):
+                """Donchian Channel lower band using ta library interface."""
+                if hasattr(low, 'rolling'):  # pandas Series
+                    return low.rolling(window=window).min()
+                
+                # List fallback
+                result = [float('nan')] * len(low)
+                for i in range(window - 1, len(low)):
+                    result[i] = min(low[i - window + 1:i + 1])
+                return result
+        
+        class volume:
+            @staticmethod
+            def on_balance_volume(close, volume, fillna=False):
+                """On-Balance Volume using ta library interface."""
+                if hasattr(close, 'shift'):  # pandas Series
+                    price_change = close.diff()
+                    obv = (volume * ((price_change > 0).astype(int) - (price_change < 0).astype(int))).cumsum()
+                    return obv
+                
+                # List fallback
+                result = [0]  # Start with 0
+                for i in range(1, len(close)):
+                    if close[i] > close[i - 1]:
+                        result.append(result[-1] + volume[i])
+                    elif close[i] < close[i - 1]:
+                        result.append(result[-1] - volume[i])
+                    else:
+                        result.append(result[-1])
+                return result
+            
+            @staticmethod
+            def volume_weighted_average_price(high, low, close, volume, window=14, fillna=False):
+                """Volume Weighted Average Price using ta library interface."""
+                if hasattr(close, 'rolling'):  # pandas Series
+                    typical_price = (high + low + close) / 3
+                    return (typical_price * volume).rolling(window=window).sum() / volume.rolling(window=window).sum()
+                
+                # List fallback
+                result = [float('nan')] * len(close)
+                for i in range(window - 1, len(close)):
+                    window_tp = [(high[j] + low[j] + close[j]) / 3 for j in range(i - window + 1, i + 1)]
+                    window_vol = volume[i - window + 1:i + 1]
+                    total_tpv = sum(tp * vol for tp, vol in zip(window_tp, window_vol))
+                    total_vol = sum(window_vol)
+                    result[i] = total_tpv / total_vol if total_vol != 0 else float('nan')
+                return result
+            
+            @staticmethod
+            def acc_dist_index(high, low, close, volume, fillna=False):
+                """Accumulation/Distribution Index using ta library interface."""
+                if hasattr(close, 'shift'):  # pandas Series
+                    money_flow_multiplier = ((close - low) - (high - close)) / (high - low)
+                    money_flow_volume = money_flow_multiplier * volume
+                    return money_flow_volume.cumsum()
+                
+                # List fallback
+                result = [0]  # Start with 0
+                for i in range(len(close)):
+                    if high[i] == low[i]:
+                        mfm = 0
+                    else:
+                        mfm = ((close[i] - low[i]) - (high[i] - close[i])) / (high[i] - low[i])
+                    mfv = mfm * volume[i]
+                    if i == 0:
+                        result[0] = mfv
+                    else:
+                        result.append(result[-1] + mfv)
+                return result
     
-    talib = MockTalib()
+    ta = MockTa()
 
 # Export commonly used items
 __all__ = [
-    'np', 'pd', 'metrics', 'RandomForestClassifier', 'train_test_split', 'talib',
-    'NUMPY_AVAILABLE', 'PANDAS_AVAILABLE', 'SKLEARN_AVAILABLE', 'TALIB_AVAILABLE'
+    'np', 'pd', 'metrics', 'RandomForestClassifier', 'train_test_split', 'ta',
+    'NUMPY_AVAILABLE', 'PANDAS_AVAILABLE', 'SKLEARN_AVAILABLE', 'TA_AVAILABLE'
 ]
