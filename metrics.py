@@ -101,9 +101,9 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     epsilon = 1e-8
     
     # True Range calculation with epsilon protection
-    high = df['high'].fillna(method='ffill')
-    low = df['low'].fillna(method='ffill') 
-    close = df['close'].fillna(method='ffill')
+    high = df['high'].ffill()
+    low = df['low'].ffill() 
+    close = df['close'].ffill()
     
     # Ensure no negative or zero values that could cause numerical instability
     high = np.maximum(high, epsilon)
