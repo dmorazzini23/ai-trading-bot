@@ -13,7 +13,8 @@ The `ai_trading/imports.py` module handles imports for all AI trading dependenci
 - **NumPy**: Mathematical operations with MockNumpy fallback
 - **Pandas**: DataFrame/Series operations with MockPandas fallback  
 - **Scikit-learn**: Machine learning utilities with MockSklearn fallback
-- **TA-Lib/pandas-ta**: Technical analysis indicators with MockTalib fallback
+- **ta library**: Professional technical analysis indicators with MockTa fallback
+- **TA-Lib/pandas-ta**: Legacy compatibility with fallback implementations
 
 ### 2. Availability Flags
 
@@ -22,6 +23,7 @@ from ai_trading.imports import (
     NUMPY_AVAILABLE,
     PANDAS_AVAILABLE, 
     SKLEARN_AVAILABLE,
+    TA_AVAILABLE,
     TALIB_AVAILABLE,
     PANDAS_TA_AVAILABLE
 )
