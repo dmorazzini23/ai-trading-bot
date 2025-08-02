@@ -56,33 +56,35 @@ def test_talib_imports():
         os.environ.setdefault('WEBHOOK_SECRET', 'dummy')
         os.environ.setdefault('FLASK_PORT', '5000')
         
-        from ai_trading.strategies.imports import TALIB_AVAILABLE, talib
-        print(f"📦 TA-Lib available: {TALIB_AVAILABLE}")
+        from ai_trading.strategies.imports import TA_AVAILABLE, ta
+        print(f"📦 TA library available: {TA_AVAILABLE}")
         
-        # Test that talib object is always available (real or mock)
-        if hasattr(talib, 'SMA'):
-            print("✅ SMA function available")
+        # Test that ta object is always available (real or mock)
+        if hasattr(ta, 'trend'):
+            print("✅ TA trend indicators available")
         else:
-            print("❌ SMA function not available")
+            print("❌ TA trend indicators not available")
             return False
         
-        if hasattr(talib, 'RSI'):
-            print("✅ RSI function available") 
+        if hasattr(ta, 'momentum'):
+            print("✅ TA momentum indicators available") 
         else:
-            print("❌ RSI function not available")
+            print("❌ TA momentum indicators not available")
             return False
         
-        if hasattr(talib, 'MACD'):
-            print("✅ MACD function available")
+        if hasattr(ta, 'volatility'):
+            print("✅ TA volatility indicators available")
         else:
-            print("❌ MACD function not available")
+            print("❌ TA volatility indicators not available")
             return False
         
         # Test basic functionality with small dataset
         test_data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] * 3  # 30 data points
         try:
-            sma_result = talib.SMA(test_data, timeperiod=10)
-            if sma_result and len(sma_result) == len(test_data):
+            import pandas as pd
+            test_series = pd.Series(test_data)
+            sma_result = ta.trend.sma_indicator(test_series, window=10)
+            if sma_result is not None and len(sma_result) == len(test_data):
                 print("✅ SMA calculation working")
             else:
                 print("✅ SMA calculation working (fallback mode)")

@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 NUMPY_AVAILABLE = False
 PANDAS_AVAILABLE = False
 SKLEARN_AVAILABLE = False
+TA_AVAILABLE = False
 TALIB_AVAILABLE = False
 PANDAS_TA_AVAILABLE = False
 
@@ -509,27 +510,38 @@ except ImportError:
 # Technical Analysis Libraries Import and Mock Implementation
 # ============================================================================
 
-# Try pandas-ta first (preferred)
+# Try ta library first (preferred for compatibility)
+TA_AVAILABLE = False
 try:
-    import pandas_ta as ta
-    PANDAS_TA_AVAILABLE = True
-    logger.debug("pandas-ta imported successfully")
+    import ta
+    TA_AVAILABLE = True
+    logger.debug("TA library imported successfully")
 except ImportError:
-    logger.warning("pandas-ta not available, will try TA-Lib fallback")
+    logger.warning("TA library not available, will try pandas-ta fallback")
     ta = None
 
-# Try TA-Lib as fallback
-if not PANDAS_TA_AVAILABLE:
+# Try pandas-ta as fallback
+if not TA_AVAILABLE:
+    try:
+        import pandas_ta as ta
+        PANDAS_TA_AVAILABLE = True
+        logger.debug("pandas-ta imported successfully as fallback")
+    except ImportError:
+        logger.warning("pandas-ta not available, will try TA-Lib fallback")
+        ta = None
+
+# Try TA-Lib as final fallback
+if not TA_AVAILABLE and not PANDAS_TA_AVAILABLE:
     try:
         import talib
         TALIB_AVAILABLE = True
-        logger.debug("TA-Lib imported successfully as fallback")
+        logger.debug("TA-Lib imported successfully as final fallback")
     except ImportError:
         logger.warning("TA-Lib not available, using MockTalib fallback")
         talib = None
 
 # Create unified TA interface with mocks if needed
-if not PANDAS_TA_AVAILABLE and not TALIB_AVAILABLE:
+if not TA_AVAILABLE and not PANDAS_TA_AVAILABLE and not TALIB_AVAILABLE:
     class MockTalib:
         """Mock Technical Analysis library implementation."""
         
@@ -630,11 +642,274 @@ if not PANDAS_TA_AVAILABLE and not TALIB_AVAILABLE:
     # Set the mock as our TA library
     talib = MockTalib()
     ta = MockTalib()  # Also available as 'ta' for pandas-ta compatibility
+else:
+    # Create a compatibility layer for the ta library to provide TA-Lib interface
+    if TA_AVAILABLE:
+        class TalibCompatLayer:
+            """Compatibility layer to provide TA-Lib interface using ta library."""
+            
+            @staticmethod
+            def SMA(close, timeperiod=30):
+                """Simple Moving Average - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return float('nan')
+                
+                # Convert to pandas Series if needed
+                if not hasattr(close, 'rolling'):  # Check for pandas Series methods
+                    import pandas as pd
+                    close = pd.Series(close)
+                
+                result = ta.trend.sma_indicator(close, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def EMA(close, timeperiod=30):
+                """Exponential Moving Average - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return float('nan')
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    close = pd.Series(close)
+                
+                result = ta.trend.ema_indicator(close, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def RSI(close, timeperiod=14):
+                """Relative Strength Index - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return float('nan')
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    close = pd.Series(close)
+                
+                result = ta.momentum.rsi(close, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def MACD(close, fastperiod=12, slowperiod=26, signalperiod=9):
+                """MACD - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    empty = [float('nan')]
+                    return empty, empty, empty
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    close = pd.Series(close)
+                
+                macd_line = ta.trend.macd(close, window_slow=slowperiod, window_fast=fastperiod, fillna=False)
+                signal_line = ta.trend.macd_signal(close, window_slow=slowperiod, window_fast=fastperiod, window_sign=signalperiod, fillna=False)
+                histogram = ta.trend.macd_diff(close, window_slow=slowperiod, window_fast=fastperiod, window_sign=signalperiod, fillna=False)
+                
+                macd_list = macd_line.tolist() if hasattr(macd_line, 'tolist') else macd_line
+                signal_list = signal_line.tolist() if hasattr(signal_line, 'tolist') else signal_line
+                hist_list = histogram.tolist() if hasattr(histogram, 'tolist') else histogram
+                
+                return macd_list, signal_list, hist_list
+            
+            @staticmethod
+            def BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2, matype=0):
+                """Bollinger Bands - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    empty = [float('nan')]
+                    return empty, empty, empty
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    close = pd.Series(close)
+                
+                upper = ta.volatility.bollinger_hband(close, window=timeperiod, window_dev=nbdevup, fillna=False)
+                middle = ta.trend.sma_indicator(close, window=timeperiod, fillna=False)
+                lower = ta.volatility.bollinger_lband(close, window=timeperiod, window_dev=nbdevdn, fillna=False)
+                
+                upper_list = upper.tolist() if hasattr(upper, 'tolist') else upper
+                middle_list = middle.tolist() if hasattr(middle, 'tolist') else middle
+                lower_list = lower.tolist() if hasattr(lower, 'tolist') else lower
+                
+                return upper_list, middle_list, lower_list
+            
+            @staticmethod
+            def ATR(high, low, close, timeperiod=14):
+                """Average True Range - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                    low = pd.Series(low) 
+                    close = pd.Series(close)
+                
+                result = ta.volatility.average_true_range(high, low, close, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def STOCH(high, low, close, fastk_period=5, slowk_period=3, slowk_matype=0, slowd_period=3, slowd_matype=0):
+                """Stochastic Oscillator - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    empty = [float('nan')]
+                    return empty, empty
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                    low = pd.Series(low)
+                    close = pd.Series(close)
+                
+                # Map TA-Lib parameters to ta library parameters
+                window = fastk_period
+                smooth_window = slowk_period
+                
+                slowk = ta.momentum.stoch(high, low, close, window=window, smooth_window=smooth_window, fillna=False)
+                slowd = ta.momentum.stoch_signal(high, low, close, window=window, smooth_window=smooth_window, fillna=False)
+                
+                slowk_list = slowk.tolist() if hasattr(slowk, 'tolist') else slowk
+                slowd_list = slowd.tolist() if hasattr(slowd, 'tolist') else slowd
+                
+                return slowk_list, slowd_list
+            
+            # Enhanced indicators from ta library
+            @staticmethod
+            def ADX(high, low, close, timeperiod=14):
+                """Average Directional Index - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                    low = pd.Series(low)
+                    close = pd.Series(close)
+                
+                result = ta.trend.adx(high, low, close, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def WILLR(high, low, close, timeperiod=14):
+                """Williams %R - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                    low = pd.Series(low)
+                    close = pd.Series(close)
+                
+                result = ta.momentum.williams_r(high, low, close, lbp=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def CCI(high, low, close, timeperiod=20):
+                """Commodity Channel Index - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                    low = pd.Series(low)
+                    close = pd.Series(close)
+                
+                result = ta.trend.cci(high, low, close, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def OBV(close, volume):
+                """On-Balance Volume - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    close = pd.Series(close)
+                    volume = pd.Series(volume)
+                
+                result = ta.volume.on_balance_volume(close, volume, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def VWAP(high, low, close, volume, timeperiod=14):
+                """Volume Weighted Average Price - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                    low = pd.Series(low)
+                    close = pd.Series(close)
+                    volume = pd.Series(volume)
+                
+                result = ta.volume.volume_weighted_average_price(high, low, close, volume, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def AD(high, low, close, volume):
+                """Accumulation/Distribution Line - TA-Lib compatible interface."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                    low = pd.Series(low)
+                    close = pd.Series(close)
+                    volume = pd.Series(volume)
+                
+                result = ta.volume.acc_dist_index(high, low, close, volume, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def BBANDWIDTH(close, timeperiod=20, nbdev=2):
+                """Bollinger Band Width - Enhanced indicator."""
+                if not hasattr(close, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(close, 'rolling'):
+                    import pandas as pd
+                    close = pd.Series(close)
+                
+                result = ta.volatility.bollinger_wband(close, window=timeperiod, window_dev=nbdev, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def DONCHIAN_HIGH(high, timeperiod=20):
+                """Donchian Channel Upper Band - Enhanced indicator."""
+                if not hasattr(high, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(high, 'rolling'):
+                    import pandas as pd
+                    high = pd.Series(high)
+                
+                result = ta.volatility.donchian_channel_hband(high, high, high, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+            
+            @staticmethod
+            def DONCHIAN_LOW(low, timeperiod=20):
+                """Donchian Channel Lower Band - Enhanced indicator."""
+                if not hasattr(low, '__iter__'):
+                    return [float('nan')]
+                
+                if not hasattr(low, 'rolling'):
+                    import pandas as pd
+                    low = pd.Series(low)
+                
+                result = ta.volatility.donchian_channel_lband(low, low, low, window=timeperiod, fillna=False)
+                return result.tolist() if hasattr(result, 'tolist') else result
+        
+        # Use the compatibility layer
+        talib = TalibCompatLayer()
 
 # Create unified interface
 def get_ta_lib():
     """Get the available technical analysis library."""
-    if PANDAS_TA_AVAILABLE:
+    if TA_AVAILABLE:
+        return talib  # Return the compatibility layer
+    elif PANDAS_TA_AVAILABLE:
         return ta
     elif TALIB_AVAILABLE:
         return talib
@@ -642,7 +917,7 @@ def get_ta_lib():
         return talib  # MockTalib
 
 # Ensure talib is always available as a module-level variable
-if not PANDAS_TA_AVAILABLE and not TALIB_AVAILABLE:
+if not TA_AVAILABLE and not PANDAS_TA_AVAILABLE and not TALIB_AVAILABLE:
     # Using MockTalib - make sure it's accessible
     pass
 
@@ -661,6 +936,7 @@ __all__ = [
     'NUMPY_AVAILABLE',
     'PANDAS_AVAILABLE', 
     'SKLEARN_AVAILABLE',
+    'TA_AVAILABLE',
     'TALIB_AVAILABLE',
     'PANDAS_TA_AVAILABLE',
     
@@ -696,12 +972,14 @@ def _log_import_summary():
     else:
         mocked.append("Scikit-learn")
         
-    if PANDAS_TA_AVAILABLE:
+    if TA_AVAILABLE:
+        available.append("TA")
+    elif PANDAS_TA_AVAILABLE:
         available.append("pandas-ta")
     elif TALIB_AVAILABLE:
         available.append("TA-Lib")
     else:
-        mocked.append("TA-Lib/pandas-ta")
+        mocked.append("Technical Analysis libraries")
     
     if available:
         logger.info(f"Successfully imported: {', '.join(available)}")

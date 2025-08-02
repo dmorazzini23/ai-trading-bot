@@ -50,7 +50,7 @@ This update introduces several critical enhancements:
 4. **✅ Signal Confirmation**: Multi-bar signal validation for higher accuracy
 5. **🎛️ Dynamic Risk Management**: Adaptive exposure limits based on performance
 6. **🌐 Expanded Trading Universe**: Portfolio expanded from 5 to 24+ high-quality stocks
-7. **🔧 Enhanced TA-Lib Integration**: Improved fallback handling and installation guidance
+7. **🔧 Enhanced Technical Analysis**: Integrated ta library v0.11.0 for reliable cross-platform indicators
 
 ### 📊 Trading Universe
 
@@ -91,19 +91,17 @@ Symbols are automatically screened based on volume (>100K daily) and volatility 
 This trading bot requires both **Python packages** and **system libraries** for optimal performance:
 
 #### Required System Dependencies
-- **TA-Lib C Library**: Required for optimized technical analysis calculations
-  - Ubuntu/Debian: `sudo apt-get install libta-lib0-dev`
-  - macOS: `brew install ta-lib`
-  - Windows: Download from [TA-Lib website](https://ta-lib.org/)
+- **Python 3.8+**: Core runtime environment
+- **Git**: For repository management and updates
 
 #### Python Dependencies
 All Python packages are specified in `requirements.txt`, including:
-- **TA-Lib>=0.4.24**: Python wrapper for TA-Lib (requires C library above)
+- **ta==0.11.0**: Professional technical analysis library with 150+ indicators
 - **pandas**, **numpy**: Data processing and numerical computations
 - **scikit-learn**: Machine learning algorithms
 - **alpaca-trade-api**: Broker integration
 
-**Note**: The bot enforces TA-Lib installation and will not start without it. Install both the C library and Python package for full functionality.
+**Note**: The ta library provides cross-platform compatibility without requiring system-level C library installations.
 
 ### Quick Start
 
@@ -112,10 +110,10 @@ All Python packages are specified in `requirements.txt`, including:
 git clone https://github.com/dmorazzini23/ai-trading-bot.git
 cd ai-trading-bot
 
-# Automated system setup (installs TA-Lib and other dependencies)
-./scripts/setup_dependencies.sh
+# Install Python dependencies (ta library included)
+pip install -r requirements.txt
 
-# Alternative manual setup
+# Alternative automated setup
 make install-dev
 make validate-env
 
@@ -144,50 +142,44 @@ pip install -r requirements-dev.txt
 pip list | grep -E "(pandas|numpy|alpaca|scikit-learn)"
 ```
 
-### TA-Lib Installation (For Enhanced Technical Analysis)
+### Technical Analysis Library
 
-TA-Lib provides optimized technical analysis functions. While the bot includes fallback implementations, installing TA-Lib significantly improves calculation accuracy and performance.
+The bot uses the `ta` library v0.11.0 for professional-grade technical analysis, providing 150+ indicators with excellent cross-platform compatibility.
 
-#### Ubuntu/Debian
-```bash
-# Install TA-Lib C library
-sudo apt-get update
-sudo apt-get install build-essential wget
-wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
-tar -xzf ta-lib-0.4.0-src.tar.gz
-cd ta-lib/
-./configure --prefix=/usr
-make
-sudo make install
+#### Features
+- **150+ Technical Indicators**: Complete coverage of trend, momentum, volatility, and volume indicators
+- **Cross-Platform**: Works on Windows, macOS, and Linux without C library dependencies
+- **High Performance**: Optimized pandas-native operations
+- **Professional Grade**: Used in production trading systems worldwide
 
-# Install Python wrapper
-pip install TA-Lib
+#### Available Indicators
+- **Trend**: SMA, EMA, MACD, ADX, Bollinger Bands
+- **Momentum**: RSI, Stochastic, Williams %R, CCI
+- **Volatility**: ATR, Bollinger Band Width, Donchian Channel
+- **Volume**: OBV, VWAP, Accumulation/Distribution Line
+
+#### Usage Examples
+```python
+from ai_trading.imports import get_ta_lib
+
+ta_lib = get_ta_lib()
+
+# Traditional TA-Lib compatible interface
+sma = ta_lib.SMA(close_prices, timeperiod=20)
+rsi = ta_lib.RSI(close_prices, timeperiod=14)
+
+# Direct ta library interface for advanced usage
+from ai_trading.strategies.imports import ta
+sma_direct = ta.trend.sma_indicator(close_series, window=20)
 ```
 
-#### macOS
+#### Installation
+The ta library is automatically installed with the bot dependencies:
 ```bash
-# Using Homebrew
-brew install ta-lib
-
-# Install Python wrapper
-pip install TA-Lib
+pip install -r requirements.txt
 ```
 
-#### Windows
-```bash
-# Download pre-compiled wheel from:
-# https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib
-# Then install appropriate wheel for your Python version
-
-pip install TA_Lib‑0.4.24‑cp312‑cp312‑win_amd64.whl
-```
-
-#### Verification
-```bash
-python -c "import talib; print('TA-Lib installed successfully!')"
-```
-
-**Note**: If TA-Lib installation fails, the bot will automatically use fallback implementations with a warning message. All functionality remains available, though with potentially reduced accuracy for some technical indicators.
+**Note**: No additional system dependencies or C libraries required. The ta library provides reliable cross-platform technical analysis out of the box.
 
 ### Docker Installation
 
@@ -236,16 +228,16 @@ docker logs ai-trading-bot
    brew install python@3.12
    ```
 
-4. **TA-Lib Installation Issues**:
+4. **Technical Analysis Library Issues**:
    ```bash
-   # If you see "TA-Lib not available - using fallback implementation"
-   # First try installing the C library (see TA-Lib Installation section above)
+   # Verify ta library installation
+   python -c "import ta; print('ta library version:', ta.__version__ if hasattr(ta, '__version__') else 'installed')"
    
-   # Alternative: Install without TA-Lib (fallback mode)
-   pip install -r requirements.txt --ignore-installed TA-Lib
+   # Check bot's technical analysis status
+   python -c "from ai_trading.strategies.imports import TA_AVAILABLE; print(f'TA available: {TA_AVAILABLE}')"
    
-   # Verify fallback is working
-   python -c "from ai_trading.strategies.imports import TALIB_AVAILABLE; print(f'TA-Lib available: {TALIB_AVAILABLE}')"
+   # Reinstall if needed
+   pip install --upgrade ta==0.11.0
    ```
 
 ### Development Setup

@@ -9,43 +9,43 @@ import pytest
 
 
 def test_talib_import_enforcement():
-    """Test that TA-Lib import gracefully handles missing dependency."""
-    # Read the imports file to test the TA-Lib section
+    """Test that TA library import gracefully handles missing dependency."""
+    # Read the imports file to test the TA library section
     imports_file = Path(__file__).parent.parent / "ai_trading" / "strategies" / "imports.py"
     
     with open(imports_file, 'r') as f:
         content = f.read()
     
-    # Find the TA-Lib section
+    # Find the TA library section
     lines = content.split('\n')
-    talib_start = None
-    talib_end = None
+    ta_start = None
+    ta_end = None
     
     for i, line in enumerate(lines):
-        if '# TA-Lib fallback' in line:
-            talib_start = i
-        elif talib_start is not None and line.strip() == 'talib = MockTalib()':
-            talib_end = i + 1
+        if '# TA library for optimized technical analysis' in line:
+            ta_start = i
+        elif ta_start is not None and 'ta = MockTa()' in line:
+            ta_end = i + 1
             break
     
-    assert talib_start is not None, "Could not find TA-Lib fallback section"
-    assert talib_end is not None, "Could not find end of TA-Lib fallback section"
+    assert ta_start is not None, "Could not find TA library section"
+    assert ta_end is not None, "Could not find end of TA library section"
     
     # Verify the fallback implementation exists
-    assert 'TALIB_AVAILABLE = False' in content
-    assert 'class MockTalib:' in content
-    assert 'TA-Lib not available - using fallback implementation' in content
+    assert 'TA_AVAILABLE = False' in content
+    assert 'class MockTa:' in content
+    assert 'TA library not available - using fallback implementation' in content
     
     # Test that the import works without raising an error
     try:
-        from ai_trading.strategies.imports import talib, TALIB_AVAILABLE
-        assert TALIB_AVAILABLE is False, "Expected TALIB_AVAILABLE to be False in test environment"
-        assert hasattr(talib, 'SMA'), "Expected talib to have SMA method"
-        assert hasattr(talib, 'RSI'), "Expected talib to have RSI method"
-        assert hasattr(talib, 'MACD'), "Expected talib to have MACD method"
-        print("✅ TA-Lib fallback import successful")
+        from ai_trading.strategies.imports import ta, TA_AVAILABLE
+        assert TA_AVAILABLE is True, "Expected TA_AVAILABLE to be True since ta library is installed"
+        assert hasattr(ta, 'trend'), "Expected ta to have trend module"
+        assert hasattr(ta, 'momentum'), "Expected ta to have momentum module"
+        assert hasattr(ta, 'volatility'), "Expected ta to have volatility module"
+        print("✅ TA library import successful")
     except ImportError as e:
-        pytest.fail(f"TA-Lib import should not raise ImportError with fallback: {e}")
+        pytest.fail(f"TA library import should not raise ImportError with fallback: {e}")
 
 
 def test_audit_file_creation_and_permissions(tmp_path, monkeypatch):
