@@ -19,6 +19,20 @@ from datetime import date
 from typing import Optional, Union
 from pathlib import Path
 
+# AI-AGENT-REF: Import memory optimization for performance
+try:
+    from memory_optimizer import memory_profile, optimize_memory, emergency_memory_cleanup
+    MEMORY_OPTIMIZATION_AVAILABLE = True
+except ImportError:
+    # Fallback decorators if memory optimization not available
+    MEMORY_OPTIMIZATION_AVAILABLE = False
+    def memory_profile(func):
+        return func
+    def optimize_memory():
+        return {}
+    def emergency_memory_cleanup():
+        return {}
+
 # AI-AGENT-REF: replace utcnow with timezone-aware now
 old_generate = datetime.now(timezone.utc)  # replaced utcnow for tz-aware
 new_generate = datetime.now(timezone.utc)
@@ -3417,6 +3431,7 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
 data_source_health_check(ctx, REGIME_SYMBOLS)
 
 
+@memory_profile  # AI-AGENT-REF: Monitor memory usage during health checks
 def pre_trade_health_check(
     ctx: BotContext, symbols: Sequence[str], min_rows: int = 30
 ) -> dict:
@@ -7799,6 +7814,7 @@ def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
     logger.info("REDUCE_POSITION", extra={"symbol": symbol, "qty": reduce_qty})
 
 
+@memory_profile  # AI-AGENT-REF: Monitor memory usage of main trading function
 def run_all_trades_worker(state: BotState, model) -> None:
     """
     Execute the complete trading cycle for all candidate symbols.
@@ -8200,6 +8216,15 @@ def run_all_trades_worker(state: BotState, model) -> None:
             state.running = False
             state.last_loop_duration = time.monotonic() - loop_start
             _log_loop_heartbeat(loop_id, loop_start)
+            
+            # AI-AGENT-REF: Perform memory cleanup after trading cycle
+            if MEMORY_OPTIMIZATION_AVAILABLE:
+                try:
+                    gc_result = optimize_memory()
+                    if gc_result.get('objects_collected', 0) > 50:
+                        logger.info(f"Post-cycle GC: {gc_result['objects_collected']} objects collected")
+                except Exception as e:
+                    logger.warning(f"Memory optimization failed: {e}")
     finally:
         if acquired:
             run_lock.release()

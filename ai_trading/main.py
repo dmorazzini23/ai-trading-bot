@@ -13,6 +13,23 @@ import ai_trading.app as app
 from ai_trading.runner import run_cycle
 import utils
 
+# AI-AGENT-REF: Import memory optimization and performance monitoring
+try:
+    from memory_optimizer import get_memory_optimizer, optimize_memory
+    from performance_monitor import get_performance_monitor, start_performance_monitoring
+    PERFORMANCE_MONITORING_AVAILABLE = True
+except ImportError:
+    # Fallback if modules not available
+    PERFORMANCE_MONITORING_AVAILABLE = False
+    def get_memory_optimizer():
+        return None
+    def optimize_memory():
+        return {}
+    def get_performance_monitor():
+        return None
+    def start_performance_monitoring():
+        pass
+
 config = Settings()
 
 logger = logging.getLogger(__name__)
@@ -64,6 +81,16 @@ def main() -> None:
     load_dotenv()
     validate_environment()
 
+    # AI-AGENT-REF: Initialize performance monitoring
+    if PERFORMANCE_MONITORING_AVAILABLE:
+        logger.info("Starting performance monitoring...")
+        start_performance_monitoring()
+        
+        # Configure memory optimizer for better performance
+        memory_optimizer = get_memory_optimizer()
+        if memory_optimizer:
+            logger.info("Memory optimizer initialized")
+
     # Ensure API is ready before starting trading cycles
     api_ready = threading.Event()
 
@@ -80,8 +107,18 @@ def main() -> None:
     interval = int(os.getenv("SCHEDULER_SLEEP_SECONDS", 30))
     iterations = int(os.getenv("SCHEDULER_ITERATIONS", 0))  # AI-AGENT-REF: test hook
     count = 0
+    
+    # AI-AGENT-REF: Track memory optimization cycles
+    memory_check_interval = 10  # Check every 10 cycles
+    
     while iterations <= 0 or count < iterations:
         try:
+            # AI-AGENT-REF: Periodic memory optimization
+            if PERFORMANCE_MONITORING_AVAILABLE and count % memory_check_interval == 0:
+                gc_result = optimize_memory()
+                if gc_result.get('objects_collected', 0) > 100:
+                    logger.info(f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects")
+            
             run_cycle()
         except Exception:  # pragma: no cover - log unexpected errors
             logger.exception("run_cycle failed")

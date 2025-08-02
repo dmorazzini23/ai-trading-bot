@@ -1,0 +1,41 @@
+{
+  "timestamp": "2025-08-02T19:09:21.817245+00:00",
+  "process_summary": {
+    "total_python_processes": 0,
+    "trading_processes": 0,
+    "total_memory_mb": 0,
+    "duplicate_processes": 0
+  },
+  "processes": [],
+  "duplicates": [],
+  "service_status": {
+    "ai-trading-bot.service": {
+      "status": "inactive",
+      "active": false,
+      "return_code": 4,
+      "details": ""
+    },
+    "ai-trading-scheduler.service": {
+      "status": "inactive",
+      "active": false,
+      "return_code": 4,
+      "details": ""
+    },
+    "ai-trading-server.service": {
+      "status": "inactive",
+      "active": false,
+      "return_code": 4,
+      "details": ""
+    },
+    "dashboard.service": {
+      "status": "inactive",
+      "active": false,
+      "return_code": 4,
+      "details": ""
+    }
+  },
+  "highest_memory_process": null,
+  "recommendations": [
+    "MEDIUM PRIORITY: 4 failed services: ai-trading-bot.service, ai-trading-scheduler.service, ai-trading-server.service, dashboard.service. Check service configuration and restart."
+  ]
+}
