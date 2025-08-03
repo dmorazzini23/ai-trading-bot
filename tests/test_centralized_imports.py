@@ -225,8 +225,21 @@ class TestMockImplementations:
     
     def test_mock_sklearn_models(self):
         """Test MockSklearn model functionality."""
+        # AI-AGENT-REF: Use more targeted sklearn import mocking instead of blocking all imports
+        original_import = __builtins__.__import__
+        
+        def mock_import(name, *args, **kwargs):
+            if name.startswith('sklearn'):
+                raise ImportError(f"No module named '{name}'")
+            return original_import(name, *args, **kwargs)
+        
         with patch.dict('sys.modules', {'sklearn': None}):
-            with patch('builtins.__import__', side_effect=ImportError):
+            with patch('builtins.__import__', side_effect=mock_import):
+                # Reload the imports module to trigger fallback
+                import importlib
+                import ai_trading.imports
+                importlib.reload(ai_trading.imports)
+                
                 from ai_trading.imports import LinearRegression, RandomForestRegressor, StandardScaler
                 
                 # Test LinearRegression
