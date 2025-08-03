@@ -176,8 +176,22 @@ class TestMockImplementations:
     
     def test_mock_pandas_dataframe(self):
         """Test MockDataFrame functionality."""
+        # AI-AGENT-REF: Use more targeted import mocking to only block pandas specifically
+        import builtins
+        original_import = builtins.__import__
+        
+        def mock_import(name, *args, **kwargs):
+            if name == 'pandas':
+                raise ImportError(f"No module named '{name}'")
+            return original_import(name, *args, **kwargs)
+        
         with patch.dict('sys.modules', {'pandas': None}):
-            with patch('builtins.__import__', side_effect=ImportError):
+            with patch('builtins.__import__', side_effect=mock_import):
+                # Reload the imports module to trigger fallback
+                import importlib
+                import ai_trading.imports
+                importlib.reload(ai_trading.imports)
+                
                 from ai_trading.imports import pd
                 
                 # Test DataFrame creation with dict
@@ -200,8 +214,22 @@ class TestMockImplementations:
     
     def test_mock_pandas_series(self):
         """Test MockSeries functionality."""
+        # AI-AGENT-REF: Use more targeted import mocking to only block pandas specifically
+        import builtins
+        original_import = builtins.__import__
+        
+        def mock_import(name, *args, **kwargs):
+            if name == 'pandas':
+                raise ImportError(f"No module named '{name}'")
+            return original_import(name, *args, **kwargs)
+        
         with patch.dict('sys.modules', {'pandas': None}):
-            with patch('builtins.__import__', side_effect=ImportError):
+            with patch('builtins.__import__', side_effect=mock_import):
+                # Reload the imports module to trigger fallback
+                import importlib
+                import ai_trading.imports
+                importlib.reload(ai_trading.imports)
+                
                 from ai_trading.imports import pd
                 
                 # Test Series creation
