@@ -93,16 +93,28 @@ def main() -> None:
 
     # Ensure API is ready before starting trading cycles
     api_ready = threading.Event()
+    api_error = threading.Event()
+    api_exception = None
 
     def start_api_with_signal():
-        start_api()
-        api_ready.set()
+        try:
+            start_api()
+            api_ready.set()
+        except Exception as e:
+            # AI-AGENT-REF: Add proper timeout error handling for API startup synchronization
+            nonlocal api_exception
+            api_exception = e
+            logger.error("Failed to start API: %s", e)
+            api_error.set()
 
     t = Thread(target=start_api_with_signal, daemon=True)
     t.start()
 
-    # Wait for API to be ready
-    api_ready.wait(timeout=10)
+    # Wait for API to be ready with proper error handling
+    if api_error.wait(timeout=10):
+        raise RuntimeError(f"API failed to start: {api_exception}")
+    elif not api_ready.wait(timeout=10):
+        raise RuntimeError("API startup timeout - trading cannot proceed without API ready")
 
     interval = int(os.getenv("SCHEDULER_SLEEP_SECONDS", 30))
     iterations = int(os.getenv("SCHEDULER_ITERATIONS", 0))  # AI-AGENT-REF: test hook

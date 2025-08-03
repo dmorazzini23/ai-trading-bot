@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 from pathlib import Path
 
 # Optional import: avoid import error when dotenv is missing.
@@ -16,6 +17,9 @@ except ImportError:  # pragma: no cover - when python-dotenv is not installed
         """
         return False
 logger = logging.getLogger(__name__)
+
+# AI-AGENT-REF: Add thread-safe configuration validation locking
+_CONFIG_VALIDATION_LOCK = threading.Lock()
 
 # AI-AGENT-REF: robust import handling for pydantic-settings to prevent hangs
 try:
@@ -185,20 +189,22 @@ def _require_env_vars(*keys: str) -> None:
 
 def validate_environment() -> None:
     """Validate that mandatory environment variables are present."""
-    # AI-AGENT-REF: handle missing pydantic gracefully
-    if not _PYDANTIC_AVAILABLE:
-        logger.warning("Pydantic unavailable, performing basic validation only")
-        # Basic validation without pydantic
-        for var in ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]:
-            if not os.getenv(var):
-                raise RuntimeError(f"Missing required environment variable: {var}")
-        return
-        
-    missing = [v for v in REQUIRED_ENV_VARS if not os.environ.get(v)]
-    if missing:
-        raise RuntimeError(
-            "Missing required environment variables: " + ", ".join(missing)
-        )
+    # AI-AGENT-REF: Add thread-safe configuration validation locking
+    with _CONFIG_VALIDATION_LOCK:
+        # AI-AGENT-REF: handle missing pydantic gracefully
+        if not _PYDANTIC_AVAILABLE:
+            logger.warning("Pydantic unavailable, performing basic validation only")
+            # Basic validation without pydantic
+            for var in ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]:
+                if not os.getenv(var):
+                    raise RuntimeError(f"Missing required environment variable: {var}")
+            return
+            
+        missing = [v for v in REQUIRED_ENV_VARS if not os.environ.get(v)]
+        if missing:
+            raise RuntimeError(
+                "Missing required environment variables: " + ", ".join(missing)
+            )
 
     # Validate API key formats
     api_key = os.getenv("ALPACA_API_KEY", "")
@@ -313,23 +319,25 @@ def validate_alpaca_credentials() -> None:
 
 def validate_env_vars() -> None:
     """Comprehensive environment variable validation."""
-    try:
-        load_dotenv()
-        validate_environment()
-
-        # Additional runtime validations
-        scheduler_sleep = os.getenv("SCHEDULER_SLEEP_SECONDS", "30")
+    # AI-AGENT-REF: Add thread-safe configuration validation locking
+    with _CONFIG_VALIDATION_LOCK:
         try:
-            sleep_val = int(scheduler_sleep)
-            if not (1 <= sleep_val <= 3600):
-                raise ValueError("SCHEDULER_SLEEP_SECONDS must be between 1 and 3600")
-        except ValueError as e:
-            raise RuntimeError(f"Invalid SCHEDULER_SLEEP_SECONDS: {e}")
+            load_dotenv()
+            validate_environment()
 
-        logger.info("Environment validation completed successfully")
-    except Exception as e:
-        logger.error("Environment validation failed: %s", e)
-        raise
+            # Additional runtime validations
+            scheduler_sleep = os.getenv("SCHEDULER_SLEEP_SECONDS", "30")
+            try:
+                sleep_val = int(scheduler_sleep)
+                if not (1 <= sleep_val <= 3600):
+                    raise ValueError("SCHEDULER_SLEEP_SECONDS must be between 1 and 3600")
+            except ValueError as e:
+                raise RuntimeError(f"Invalid SCHEDULER_SLEEP_SECONDS: {e}")
+
+            logger.info("Environment validation completed successfully")
+        except Exception as e:
+            logger.error("Environment validation failed: %s", e)
+            raise
 
 
 __all__ = [

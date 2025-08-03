@@ -4,6 +4,7 @@ from __future__ import annotations
 # (any existing comments or module docstring go below the future import)
 __all__ = ["pre_trade_health_check", "run_all_trades_worker", "BotState"]
 import asyncio
+import atexit
 import logging
 import io
 import os
@@ -1766,6 +1767,8 @@ sentiment_lock = Lock()
 slippage_lock = Lock()
 meta_lock = Lock()
 run_lock = Lock()
+# AI-AGENT-REF: Add thread-safe locking for trade cooldown state
+trade_cooldowns_lock = Lock()
 
 breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
 executor = ThreadPoolExecutor(
@@ -1773,6 +1776,25 @@ executor = ThreadPoolExecutor(
 )  # AI-AGENT-REF: limit workers for single CPU
 # Separate executor for ML predictions and trade execution
 prediction_executor = ThreadPoolExecutor(max_workers=1)
+
+# AI-AGENT-REF: Add proper cleanup with atexit handlers for ThreadPoolExecutor resource leak
+def cleanup_executors():
+    """Cleanup ThreadPoolExecutor resources to prevent resource leaks."""
+    try:
+        if executor:
+            executor.shutdown(wait=True, cancel_futures=True)
+            logger.debug("Main executor shutdown successfully")
+    except Exception as e:
+        logger.warning("Error shutting down main executor: %s", e)
+    
+    try:
+        if prediction_executor:
+            prediction_executor.shutdown(wait=True, cancel_futures=True)
+            logger.debug("Prediction executor shutdown successfully")
+    except Exception as e:
+        logger.warning("Error shutting down prediction executor: %s", e)
+
+atexit.register(cleanup_executors)
 
 # EVENT cooldown
 _LAST_EVENT_TS = {}
@@ -4492,8 +4514,14 @@ def fractional_kelly_size(
         cap_scale = frac / base_frac if base_frac > 0 else 1.0
 
         # Calculate Kelly edge with validation
-        edge = win_prob - (1 - win_prob) / payoff_ratio if payoff_ratio > 0 else 0
-        kelly = max(edge / payoff_ratio, 0) * frac if payoff_ratio > 0 else 0
+        # AI-AGENT-REF: Fix division by zero in Kelly criterion calculation
+        if payoff_ratio <= 0:
+            logger.warning("Invalid payoff_ratio %s for Kelly calculation, using zero position", payoff_ratio)
+            edge = 0
+            kelly = 0
+        else:
+            edge = win_prob - (1 - win_prob) / payoff_ratio
+            kelly = max(edge / payoff_ratio, 0) * frac
         
         # Validate Kelly fraction is reasonable
         if kelly < 0 or kelly > 1:
@@ -5682,7 +5710,9 @@ def _enter_long(
         with targets_lock:
             ctx.stop_targets[symbol] = stop
             ctx.take_profit_targets[symbol] = take
-        state.trade_cooldowns[symbol] = datetime.now(timezone.utc)
+        # AI-AGENT-REF: Add thread-safe locking for trade cooldown modifications
+        with trade_cooldowns_lock:
+            state.trade_cooldowns[symbol] = datetime.now(timezone.utc)
         state.last_trade_direction[symbol] = "buy"
     return True
 
@@ -5757,7 +5787,9 @@ def _enter_short(
         with targets_lock:
             ctx.stop_targets[symbol] = stop
             ctx.take_profit_targets[symbol] = take
-        state.trade_cooldowns[symbol] = datetime.now(timezone.utc)
+        # AI-AGENT-REF: Add thread-safe locking for trade cooldown modifications
+        with trade_cooldowns_lock:
+            state.trade_cooldowns[symbol] = datetime.now(timezone.utc)
         state.last_trade_direction[symbol] = "sell"
     return True
 
@@ -5785,7 +5817,9 @@ def _manage_existing_position(
         )
         send_exit_order(ctx, symbol, exit_qty, price, reason)
         if reason == "stop_loss":
-            state.trade_cooldowns[symbol] = datetime.now(timezone.utc)
+            # AI-AGENT-REF: Add thread-safe locking for trade cooldown modifications
+            with trade_cooldowns_lock:
+                state.trade_cooldowns[symbol] = datetime.now(timezone.utc)
             state.last_trade_direction[symbol] = "sell"
         ctx.trade_logger.log_exit(state, symbol, price)
         try:
@@ -5902,7 +5936,9 @@ def trade_logic(
     ):
         return True
 
-    cd_ts = state.trade_cooldowns.get(symbol)
+    # AI-AGENT-REF: Add thread-safe locking for trade cooldown access
+    with trade_cooldowns_lock:
+        cd_ts = state.trade_cooldowns.get(symbol)
     if cd_ts and (now - cd_ts).total_seconds() < TRADE_COOLDOWN_MIN * 60:
         prev = state.last_trade_direction.get(symbol)
         if prev and (
@@ -7681,7 +7717,9 @@ def _process_symbols(
             except Exception as exc:
                 logger.warning("SHORT_CLOSE_FAIL | %s %s", symbol, exc)
             continue
-        ts = state.trade_cooldowns.get(symbol)
+        # AI-AGENT-REF: Add thread-safe locking for trade cooldown access
+        with trade_cooldowns_lock:
+            ts = state.trade_cooldowns.get(symbol)
         if ts and (now - ts).total_seconds() < 60:
             cd_skipped.append(symbol)
             skipped_cooldown.inc()
