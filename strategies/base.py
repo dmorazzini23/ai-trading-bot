@@ -17,8 +17,8 @@ class TradeSignal:
     side: str  # 'buy' or 'sell'
     confidence: float
     strategy: str
-    asset_class: str = "equity"
-    weight: float = 0.0  # AI-AGENT-REF: Default to 0.0, will be set by portfolio management
+    weight: float = 0.0  # AI-AGENT-REF: Default to 0.0, will be set by portfolio management  
+    asset_class: str = "equity"  # AI-AGENT-REF: Moved after weight to fix parameter order
     price: float = 0.0
 
 

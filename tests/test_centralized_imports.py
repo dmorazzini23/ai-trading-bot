@@ -225,8 +225,9 @@ class TestMockImplementations:
     
     def test_mock_sklearn_models(self):
         """Test MockSklearn model functionality."""
-        # AI-AGENT-REF: Use more targeted sklearn import mocking instead of blocking all imports
-        original_import = __builtins__.__import__
+        # AI-AGENT-REF: Use more targeted sklearn import mocking with proper __builtins__ handling
+        import builtins
+        original_import = builtins.__import__
         
         def mock_import(name, *args, **kwargs):
             if name.startswith('sklearn'):

@@ -649,15 +649,15 @@ def get_historical_data(
             return None
         df.index = idx
 
+    # AI-AGENT-REF: Check for empty DataFrame BEFORE column validation to prevent KeyError
+    if df is None or df.empty:
+        logger.error("_fetch_minute_data produced empty result for %s", symbol)
+        raise DataFetchError(f"no data for {symbol}")
+
     for col in ["open", "high", "low", "close", "volume"]:
         if col not in df.columns:
             raise KeyError(f"Missing '{col}' column for {symbol}")
         df[col] = df[col].astype(float)
-
-    if df is None or df.empty:
-        # AI-AGENT-REF: escalate when all fallbacks return no data
-        logger.error("_fetch_minute_data produced empty result for %s", symbol)
-        raise DataFetchError(f"no data for {symbol}")
 
     # ensure there's a timestamp column for the tests
     df = df.reset_index()
