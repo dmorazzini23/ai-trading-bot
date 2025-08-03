@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 
 # Optional import: avoid import error when dotenv is missing.
@@ -18,8 +19,20 @@ except ImportError:  # pragma: no cover - when python-dotenv is not installed
         return False
 logger = logging.getLogger(__name__)
 
-# AI-AGENT-REF: Add thread-safe configuration validation locking
+# AI-AGENT-REF: Add thread-safe configuration validation locking with timeout support
 _CONFIG_VALIDATION_LOCK = threading.Lock()
+_LOCK_TIMEOUT = 30  # seconds
+_validation_in_progress = threading.local()
+
+
+def _is_lock_held_by_current_thread():
+    """Check if the current thread already holds the validation lock."""
+    return getattr(_validation_in_progress, 'has_lock', False)
+
+
+def _set_lock_held_by_current_thread(held):
+    """Mark that the current thread holds/releases the validation lock."""
+    _validation_in_progress.has_lock = held
 
 # AI-AGENT-REF: robust import handling for pydantic-settings to prevent hangs
 try:
@@ -189,41 +202,104 @@ def _require_env_vars(*keys: str) -> None:
 
 def validate_environment() -> None:
     """Validate that mandatory environment variables are present."""
-    # AI-AGENT-REF: Add thread-safe configuration validation locking
-    with _CONFIG_VALIDATION_LOCK:
-        # AI-AGENT-REF: handle missing pydantic gracefully
-        if not _PYDANTIC_AVAILABLE:
-            logger.warning("Pydantic unavailable, performing basic validation only")
-            # Basic validation without pydantic
-            for var in ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]:
-                if not os.getenv(var):
-                    raise RuntimeError(f"Missing required environment variable: {var}")
-            return
-            
-        missing = [v for v in REQUIRED_ENV_VARS if not os.environ.get(v)]
-        if missing:
-            raise RuntimeError(
-                "Missing required environment variables: " + ", ".join(missing)
-            )
+    start_time = time.time()
+    logger.info("Starting environment validation")
+    
+    # Check if we already hold the lock to prevent deadlock
+    if _is_lock_held_by_current_thread():
+        logger.debug("Validation lock already held by current thread, proceeding without re-acquiring")
+        _validate_environment_core()
+        return
+    
+    # Attempt to acquire lock with timeout
+    logger.debug("Attempting to acquire configuration validation lock (timeout: %d seconds)", _LOCK_TIMEOUT)
+    lock_acquired = False
+    
+    try:
+        lock_acquired = _CONFIG_VALIDATION_LOCK.acquire(timeout=_LOCK_TIMEOUT)
+        if not lock_acquired:
+            error_msg = f"Failed to acquire configuration validation lock within {_LOCK_TIMEOUT} seconds"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        
+        logger.debug("Configuration validation lock acquired successfully")
+        _set_lock_held_by_current_thread(True)
+        
+        # Perform the actual validation
+        _validate_environment_core()
+        
+        elapsed = time.time() - start_time
+        logger.info("Environment validation completed successfully in %.2f seconds", elapsed)
+        
+    except Exception as e:
+        elapsed = time.time() - start_time
+        logger.error("Environment validation failed after %.2f seconds: %s", elapsed, e)
+        raise
+    finally:
+        if lock_acquired:
+            _set_lock_held_by_current_thread(False)
+            _CONFIG_VALIDATION_LOCK.release()
+            logger.debug("Configuration validation lock released")
 
+
+def _validate_environment_core() -> None:
+    """Core environment validation logic without lock handling."""
+    logger.debug("Starting core environment validation")
+    
+    # AI-AGENT-REF: handle missing pydantic gracefully
+    if not _PYDANTIC_AVAILABLE:
+        logger.warning("Pydantic unavailable, performing basic validation only")
+        # Basic validation without pydantic
+        basic_vars = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY"]
+        logger.debug("Validating basic environment variables: %s", basic_vars)
+        for var in basic_vars:
+            if not os.getenv(var):
+                error_msg = f"Missing required environment variable: {var}"
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+        logger.info("Basic environment validation completed (pydantic unavailable)")
+        return
+        
+    logger.debug("Validating required environment variables: %s", REQUIRED_ENV_VARS)
+    missing = [v for v in REQUIRED_ENV_VARS if not os.environ.get(v)]
+    if missing:
+        error_msg = f"Missing required environment variables: {', '.join(missing)}"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
+    
+    logger.debug("All required environment variables are present")
+    
     # Validate API key formats
+    logger.debug("Validating API key formats")
     api_key = os.getenv("ALPACA_API_KEY", "")
     if api_key and len(api_key) < 10:
-        raise RuntimeError("ALPACA_API_KEY appears to be invalid (too short)")
+        error_msg = "ALPACA_API_KEY appears to be invalid (too short)"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
 
     secret_key = os.getenv("ALPACA_SECRET_KEY", "")
     if secret_key and len(secret_key) < 10:
-        raise RuntimeError("ALPACA_SECRET_KEY appears to be invalid (too short)")
+        error_msg = "ALPACA_SECRET_KEY appears to be invalid (too short)"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
 
     # Validate base URL format
+    logger.debug("Validating base URL format")
     base_url = os.getenv("ALPACA_BASE_URL", "")
     if base_url and not base_url.startswith(("http://", "https://")):
-        raise RuntimeError("ALPACA_BASE_URL must start with http:// or https://")
+        error_msg = "ALPACA_BASE_URL must start with http:// or https://"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
 
     # Validate webhook secret
+    logger.debug("Validating webhook secret")
     webhook_secret = os.getenv("WEBHOOK_SECRET", "")
     if webhook_secret and len(webhook_secret) < 8:
-        raise RuntimeError("WEBHOOK_SECRET must be at least 8 characters")
+        error_msg = "WEBHOOK_SECRET must be at least 8 characters"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
+    
+    logger.debug("Core environment validation completed successfully")
 
 
 # AI-AGENT-REF: robust environment variable access
@@ -319,25 +395,73 @@ def validate_alpaca_credentials() -> None:
 
 def validate_env_vars() -> None:
     """Comprehensive environment variable validation."""
-    # AI-AGENT-REF: Add thread-safe configuration validation locking
-    with _CONFIG_VALIDATION_LOCK:
-        try:
-            load_dotenv()
-            validate_environment()
+    start_time = time.time()
+    logger.info("Starting comprehensive environment variable validation")
+    
+    # Check if we already hold the lock to prevent deadlock
+    if _is_lock_held_by_current_thread():
+        logger.debug("Validation lock already held by current thread, proceeding without re-acquiring")
+        _validate_env_vars_core()
+        return
+    
+    # Attempt to acquire lock with timeout
+    logger.debug("Attempting to acquire configuration validation lock (timeout: %d seconds)", _LOCK_TIMEOUT)
+    lock_acquired = False
+    
+    try:
+        lock_acquired = _CONFIG_VALIDATION_LOCK.acquire(timeout=_LOCK_TIMEOUT)
+        if not lock_acquired:
+            error_msg = f"Failed to acquire configuration validation lock within {_LOCK_TIMEOUT} seconds"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        
+        logger.debug("Configuration validation lock acquired successfully")
+        _set_lock_held_by_current_thread(True)
+        
+        # Perform the actual validation
+        _validate_env_vars_core()
+        
+        elapsed = time.time() - start_time
+        logger.info("Comprehensive environment validation completed successfully in %.2f seconds", elapsed)
+        
+    except Exception as e:
+        elapsed = time.time() - start_time
+        logger.error("Comprehensive environment validation failed after %.2f seconds: %s", elapsed, e)
+        raise
+    finally:
+        if lock_acquired:
+            _set_lock_held_by_current_thread(False)
+            _CONFIG_VALIDATION_LOCK.release()
+            logger.debug("Configuration validation lock released")
 
-            # Additional runtime validations
-            scheduler_sleep = os.getenv("SCHEDULER_SLEEP_SECONDS", "30")
-            try:
-                sleep_val = int(scheduler_sleep)
-                if not (1 <= sleep_val <= 3600):
-                    raise ValueError("SCHEDULER_SLEEP_SECONDS must be between 1 and 3600")
-            except ValueError as e:
-                raise RuntimeError(f"Invalid SCHEDULER_SLEEP_SECONDS: {e}")
 
-            logger.info("Environment validation completed successfully")
-        except Exception as e:
-            logger.error("Environment validation failed: %s", e)
-            raise
+def _validate_env_vars_core() -> None:
+    """Core environment variable validation logic without lock handling."""
+    logger.debug("Loading environment from .env file")
+    try:
+        load_dotenv()
+        logger.debug("Environment loaded successfully")
+    except Exception as e:
+        logger.warning("Failed to load environment from .env file: %s", e)
+    
+    logger.debug("Calling core environment validation")
+    # Call the core validation function directly to avoid lock re-acquisition
+    _validate_environment_core()
+
+    # Additional runtime validations
+    logger.debug("Performing additional runtime validations")
+    scheduler_sleep = os.getenv("SCHEDULER_SLEEP_SECONDS", "30")
+    try:
+        sleep_val = int(scheduler_sleep)
+        if not (1 <= sleep_val <= 3600):
+            raise ValueError("SCHEDULER_SLEEP_SECONDS must be between 1 and 3600")
+        logger.debug("SCHEDULER_SLEEP_SECONDS validation passed: %d", sleep_val)
+    except ValueError as e:
+        error_msg = f"Invalid SCHEDULER_SLEEP_SECONDS: {e}"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
+
+    logger.debug("All runtime validations completed successfully")
 
 
 __all__ = [
