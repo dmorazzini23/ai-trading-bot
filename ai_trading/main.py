@@ -50,7 +50,7 @@ def run_bot(*_a, **_k) -> int:
     return 0
 
 
-def run_flask_app(port: int = 5000) -> None:
+def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> None:
     """Launch Flask API on an available port."""
     # AI-AGENT-REF: simplified port fallback logic with get_free_port fallback
     max_attempts = 10
@@ -68,12 +68,17 @@ def run_flask_app(port: int = 5000) -> None:
         port = free_port
 
     application = app.create_app()
+    
+    # AI-AGENT-REF: Signal ready after Flask app creation and port validation, before blocking run
+    if ready_signal is not None:
+        ready_signal.set()
+    
     application.run(host="0.0.0.0", port=port)
 
 
-def start_api() -> None:
+def start_api(ready_signal: threading.Event = None) -> None:
     """Spin up the Flask API server."""
-    run_flask_app(int(os.getenv("API_PORT", 9001)))
+    run_flask_app(int(os.getenv("API_PORT", 9001)), ready_signal)
 
 
 def main() -> None:
@@ -98,8 +103,7 @@ def main() -> None:
 
     def start_api_with_signal():
         try:
-            start_api()
-            api_ready.set()
+            start_api(api_ready)  # Pass the ready signal to be set before blocking run
         except Exception as e:
             # AI-AGENT-REF: Add proper timeout error handling for API startup synchronization
             nonlocal api_exception
