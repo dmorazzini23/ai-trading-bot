@@ -72,10 +72,21 @@ def get_session():
     """Get or create HTTP session with proper cleanup."""
     global _session
     if _session is None:
-        _session = requests.Session()
-        _session.headers.update({'User-Agent': 'AI-Trading-Bot/1.0'})
-        # AI-AGENT-REF: Set reasonable timeouts to prevent hanging
-        _session.timeout = (10, 30)  # (connect_timeout, read_timeout)
+        try:
+            _session = requests.Session()
+            _session.headers.update({'User-Agent': 'AI-Trading-Bot/1.0'})
+            # AI-AGENT-REF: Set reasonable timeouts to prevent hanging
+            _session.timeout = (10, 30)  # (connect_timeout, read_timeout)
+        except Exception as e:
+            # AI-AGENT-REF: Ensure proper session cleanup on initialization failure
+            logger.error("Failed to create HTTP session: %s", e)
+            if _session is not None:
+                try:
+                    _session.close()
+                except Exception:
+                    pass
+                _session = None
+            raise
     return _session
 
 
@@ -1013,14 +1024,19 @@ class FinnhubFetcher:
     def _throttle(self) -> None:
         while True:
             now_ts = pytime.time()
+            wait_secs = None
+            # AI-AGENT-REF: Ensure consistent lock usage in throttle logic
             with _rate_limit_lock:
                 while self._timestamps and now_ts - self._timestamps[0] > 60:
                     self._timestamps.popleft()
                 if len(self._timestamps) < self.max_calls:
                     self._timestamps.append(now_ts)
                     return
+                # Calculate wait time within the lock to prevent race conditions
                 wait_secs = 60 - (now_ts - self._timestamps[0]) + random.uniform(0.1, 0.5)
-            pytime.sleep(wait_secs)
+            # Sleep outside the lock to avoid blocking other threads
+            if wait_secs is not None:
+                pytime.sleep(wait_secs)
 
     def _parse_period(self, period: str) -> int:
         if period.endswith("mo"):

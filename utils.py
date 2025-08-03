@@ -124,6 +124,8 @@ def log_warning(
 
 # Cache of last logged stale timestamp per symbol
 _STALE_CACHE: dict[str, tuple[pd.Timestamp, float]] = {}
+# AI-AGENT-REF: Add thread-safe locking for cache operations
+_STALE_CACHE_LOCK = threading.Lock()
 
 
 def should_log_stale(symbol: str, last_ts: pd.Timestamp, *, ttl: int = 300) -> bool:
@@ -131,13 +133,15 @@ def should_log_stale(symbol: str, last_ts: pd.Timestamp, *, ttl: int = 300) -> b
     import time
     current_time = time.time()
 
-    if symbol in _STALE_CACHE:
-        cached_ts, cached_time = _STALE_CACHE[symbol]
-        if cached_ts == last_ts and (current_time - cached_time) < ttl:
-            return False
+    # AI-AGENT-REF: Add thread-safe locking for cache operations
+    with _STALE_CACHE_LOCK:
+        if symbol in _STALE_CACHE:
+            cached_ts, cached_time = _STALE_CACHE[symbol]
+            if cached_ts == last_ts and (current_time - cached_time) < ttl:
+                return False
 
-    _STALE_CACHE[symbol] = (last_ts, current_time)
-    return True
+        _STALE_CACHE[symbol] = (last_ts, current_time)
+        return True
 
 def backoff_delay(attempt: int, base: float = 1.0, cap: float = 30.0, jitter: float = 0.1) -> float:
     """Return exponential backoff delay with jitter."""
