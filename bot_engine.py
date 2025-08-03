@@ -3479,7 +3479,9 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
         )
 
 
-data_source_health_check(ctx, REGIME_SYMBOLS)
+# AI-AGENT-REF: Skip expensive health checks during test imports to improve performance
+if not os.getenv("PYTEST_RUNNING"):
+    data_source_health_check(ctx, REGIME_SYMBOLS)
 
 
 @memory_profile  # AI-AGENT-REF: Monitor memory usage during health checks
