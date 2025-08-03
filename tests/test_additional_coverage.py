@@ -91,6 +91,7 @@ def test_main_starts_api_thread(monkeypatch):
             self.target(*self.args)
 
     monkeypatch.setattr(main, "Thread", DummyThread)
+    # AI-AGENT-REF: Fix lambda signature to accept ready_signal parameter  
     monkeypatch.setattr(main, "start_api", lambda ready_signal=None: called.setdefault("api", True))
     monkeypatch.setattr(main, "run_cycle", lambda: called.setdefault("cycle", 0) or called.update(cycle=called.get("cycle", 0) + 1))
     monkeypatch.setattr(main.time, "sleep", lambda s: None)
