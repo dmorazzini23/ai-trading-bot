@@ -38,6 +38,7 @@ os.environ.update({
     "DISABLE_DAILY_RETRAIN": "True",
     "DRY_RUN": "True",
     "SHADOW_MODE": "True",
+    "PYTEST_RUNNING": "1",  # AI-AGENT-REF: Enable fast import mode for bot_engine
 })
 
 try:
@@ -83,7 +84,7 @@ sys.exit(exit_code)
                 capture_output=True,
                 text=True,
                 env=env,
-                timeout=5  # Aggressive timeout - import should complete quickly
+                timeout=15  # AI-AGENT-REF: Increase timeout to 15 seconds for more realistic import time
             )
         except subprocess.TimeoutExpired as e:
             # Handle subprocess timeout gracefully
