@@ -632,7 +632,9 @@ def get_historical_data(
         df.columns = df.columns.get_level_values(-1)
     df = df.drop(columns=["symbol"], errors="ignore")
 
-    df.columns = df.columns.str.lower()
+    # AI-AGENT-REF: Add null/empty check before applying string operations to avoid AttributeError
+    if not df.empty and len(df.columns) > 0:
+        df.columns = df.columns.str.lower()
 
     if not df.empty:
         try:

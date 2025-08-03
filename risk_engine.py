@@ -308,13 +308,15 @@ class RiskEngine:
         )  # slight relaxation to reduce unnecessary skips
         # apply risk scaling to the signal based on volatility and returns
         signal = self.apply_risk_scaling(signal, volatility=volatility, returns=returns)
-        if asset_exp + signal.weight > asset_cap:
+        # AI-AGENT-REF: Ensure proper type conversion for signal.weight arithmetic
+        signal_weight = float(signal.weight)
+        if asset_exp + signal_weight > asset_cap:
             logger.warning(
                 "Exposure cap breach: symbol=%s qty=%s alloc=%.3f exposure=%.2f vs cap=%.2f",
                 signal.symbol,
                 getattr(signal, "qty", "n/a"),
-                signal.weight,
-                asset_exp + signal.weight,
+                signal_weight,
+                asset_exp + signal_weight,
                 asset_cap,
             )
             if os.getenv("FORCE_CONTINUE_ON_EXPOSURE", "false").lower() != "true":
@@ -463,7 +465,8 @@ class RiskEngine:
                     # when metric exceeds unity.
                     if cvar_metric > 1.0:
                         scale *= 1.0 / (1.0 + cvar_metric)
-            signal.weight = max(0.0, signal.weight * scale)
+            # AI-AGENT-REF: Ensure signal.weight is float before arithmetic operations
+            signal.weight = max(0.0, float(signal.weight) * scale)
             return signal
         except Exception as exc:
             logger.error("Risk scaling failed: %s", exc)
