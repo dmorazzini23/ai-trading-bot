@@ -764,6 +764,14 @@ except Exception:  # pragma: no cover - optional dependency
     ta_mod = types.ModuleType("pandas_ta")
     ta_mod.rsi = lambda *a, **k: [50] * 14  # Return dummy RSI values
     ta_mod.atr = lambda *a, **k: [1.0] * 14  # Return dummy ATR values
+    # AI-AGENT-REF: Add missing TA-Lib compatible methods for test compatibility
+    ta_mod.SMA = lambda data, timeperiod=20: [sum(data[max(0, i-timeperiod+1):i+1])/min(timeperiod, i+1) for i in range(len(data))]
+    ta_mod.EMA = lambda data, timeperiod=20: data  # Simplified for testing
+    ta_mod.RSI = lambda data, timeperiod=14: [50.0] * len(data)  # Simplified for testing
+    ta_mod.MACD = lambda data, fastperiod=12, slowperiod=26, signalperiod=9: ([0.0] * len(data), [0.0] * len(data), [0.0] * len(data))
+    ta_mod.BBANDS = lambda data, timeperiod=20, nbdevup=2, nbdevdn=2: ([x+2 for x in data], data, [x-2 for x in data])
+    ta_mod.ATR = lambda high, low, close, timeperiod=14: [1.0] * len(close)
+    ta_mod.STOCH = lambda high, low, close, fastk_period=14, slowk_period=3, slowd_period=3: ([50.0] * len(close), [50.0] * len(close))
     ta_mod.__file__ = "stub"
     sys.modules["pandas_ta"] = ta_mod
 
