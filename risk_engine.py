@@ -644,7 +644,13 @@ class RiskEngine:
         
         # AI-AGENT-REF: Use signal weight directly (confidence already factored into weight by allocator)
         # The strategy allocator already assigns weights based on confidence and portfolio constraints
-        requested_weight = sig.weight
+        # Ensure weight is numeric to prevent type errors in arithmetic operations
+        try:
+            requested_weight = float(sig.weight)
+        except (ValueError, TypeError) as e:
+            logger.warning("Invalid signal.weight value '%s' for %s in _apply_weight_limits, defaulting to 0.0: %s", 
+                         sig.weight, sig.symbol, e)
+            requested_weight = 0.0
         base_weight = min(requested_weight, max_allowed)
         return base_weight
 
