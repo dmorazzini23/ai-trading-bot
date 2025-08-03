@@ -147,22 +147,31 @@ class TestMockImplementations:
     
     def test_mock_numpy_operations(self):
         """Test MockNumpy mathematical operations."""
-        # AI-AGENT-REF: Fix mock numpy test by using more specific patching
-        # First, ensure numpy import fails only for the specific import in ai_trading.imports
-        original_numpy = sys.modules.get('numpy')
+        # AI-AGENT-REF: Fix mock numpy test by directly testing the MockNumpy class
+        # Instead of trying to force the import logic, directly test the mock implementation
         
-        # Temporarily remove numpy from sys.modules to trigger the mock implementation
-        if 'numpy' in sys.modules:
-            sys.modules.pop('numpy')
+        # Import the MockNumpy class directly from imports module
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("imports", "ai_trading/imports.py")
+        imports_module = importlib.util.module_from_spec(spec)
         
-        # Also need to clear the imports module from cache to force re-import
-        imports_module = 'ai_trading.imports'
-        if imports_module in sys.modules:
-            sys.modules.pop(imports_module)
+        # Temporarily disable numpy import by adding an ImportError
+        original_builtins_import = __builtins__['__import__']
+        
+        def mock_import(name, *args, **kwargs):
+            if name == 'numpy':
+                raise ImportError("Mocked numpy import failure")
+            return original_builtins_import(name, *args, **kwargs)
         
         try:
-            # Now import the module, which should use MockNumpy
-            from ai_trading.imports import np
+            # Patch the import function
+            __builtins__['__import__'] = mock_import
+            
+            # Execute the module, which should now use MockNumpy
+            spec.loader.exec_module(imports_module)
+            
+            # Get the numpy object (should be MockNumpy)
+            np = imports_module.np
             
             # Verify we got the mock implementation
             assert hasattr(np, 'array'), "Should have array method"
@@ -191,12 +200,8 @@ class TestMockImplementations:
             assert np.isfinite(5.0)
             
         finally:
-            # Restore original numpy if it was there
-            if original_numpy is not None:
-                sys.modules['numpy'] = original_numpy
-            # Clear the imports module again to reset state
-            if imports_module in sys.modules:
-                sys.modules.pop(imports_module)
+            # Restore original import function
+            __builtins__['__import__'] = original_builtins_import
     
     def test_mock_pandas_dataframe(self):
         """Test MockDataFrame functionality."""
