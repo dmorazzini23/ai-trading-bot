@@ -91,7 +91,7 @@ def test_main_starts_api_thread(monkeypatch):
             self.target(*self.args)
 
     monkeypatch.setattr(main, "Thread", DummyThread)
-    monkeypatch.setattr(main, "start_api", lambda: called.setdefault("api", True))
+    monkeypatch.setattr(main, "start_api", lambda ready_signal=None: called.setdefault("api", True))
     monkeypatch.setattr(main, "run_cycle", lambda: called.setdefault("cycle", 0) or called.update(cycle=called.get("cycle", 0) + 1))
     monkeypatch.setattr(main.time, "sleep", lambda s: None)
 
@@ -236,8 +236,11 @@ def test_mean_reversion_nan_and_short(monkeypatch):
     assert signals and signals[0].side == "buy"
 
 
-def test_utils_edge_cases(tmp_path):
+def test_utils_edge_cases(tmp_path, monkeypatch):
     """Cover utility helper edge cases."""
+    # AI-AGENT-REF: Ensure FORCE_MARKET_OPEN doesn't interfere with market hours test
+    monkeypatch.setenv("FORCE_MARKET_OPEN", "false")
+    
     assert utils.get_latest_close(pd.DataFrame()) == 0.0
     df = pd.DataFrame({"close":[np.nan]})
     assert utils.get_latest_close(df) == 0.0
