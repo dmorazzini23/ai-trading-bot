@@ -78,6 +78,19 @@ def test_create_flask_routes():
 def test_main_starts_api_thread(monkeypatch):
     """main launches the API thread and runs a cycle."""
     monkeypatch.setenv("SCHEDULER_ITERATIONS", "1")
+    # AI-AGENT-REF: Mock required environment variables for validation
+    monkeypatch.setenv("WEBHOOK_SECRET", "test_secret")
+    monkeypatch.setenv("ALPACA_API_KEY", "test_key")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret_key")
+    
+    # AI-AGENT-REF: Mock the config object directly to ensure environment validation passes
+    class MockConfig:
+        WEBHOOK_SECRET = "test_secret"
+        ALPACA_API_KEY = "test_key"
+        ALPACA_SECRET_KEY = "test_secret_key"
+    
+    monkeypatch.setattr(main, "config", MockConfig())
+    
     called = {}
 
     class DummyThread:
@@ -89,6 +102,10 @@ def test_main_starts_api_thread(monkeypatch):
         def start(self):
             called["started"] = True
             self.target(*self.args)
+
+        def is_alive(self):
+            # AI-AGENT-REF: Add missing is_alive method to prevent AttributeError
+            return True
 
     monkeypatch.setattr(main, "Thread", DummyThread)
     # AI-AGENT-REF: Fix lambda signature to accept ready_signal parameter  

@@ -920,6 +920,9 @@ def get_ta_lib():
 if not TA_AVAILABLE and not PANDAS_TA_AVAILABLE and not TALIB_AVAILABLE:
     # Using MockTalib - make sure it's accessible
     pass
+elif PANDAS_TA_AVAILABLE and not TA_AVAILABLE and not TALIB_AVAILABLE:
+    # AI-AGENT-REF: Ensure talib is available when using pandas-ta fallback
+    talib = ta  # Use pandas-ta as talib for compatibility
 
 # ============================================================================
 # Exports and Public Interface
