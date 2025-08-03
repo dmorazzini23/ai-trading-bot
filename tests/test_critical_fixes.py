@@ -15,7 +15,7 @@ def test_production_scenario_fix():
     - With $89,363 cash and $357,455 buying power 
     - Should NOT result in "0 buys (total weight: 0.000), 3 sells"
     """
-    from strategies import TradeSignal
+    from strategies.base import TradeSignal
     from strategy_allocator import StrategyAllocator
     
     # Create the exact signals mentioned in the problem statement

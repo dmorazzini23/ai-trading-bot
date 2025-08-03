@@ -5,13 +5,8 @@ try:
     import torch
     import torch.nn as nn
     import torch.optim as optim
-    try:
-        torch.SymInt
-    except AttributeError:
-        import logging
-        logging.getLogger(__name__).warning("PyTorch version < 2.0 detected, using fallback implementation")
-        # AI-AGENT-REF: Don't set torch to None, keep fallback objects for type annotations
-        pass
+    # AI-AGENT-REF: Remove SymInt check which doesn't exist in newer PyTorch versions
+    # Successful import means PyTorch is available
 except Exception:  # pragma: no cover - optional dependency
     # AI-AGENT-REF: Create comprehensive torch fallback that supports type annotations
     torch = types.ModuleType("torch")
