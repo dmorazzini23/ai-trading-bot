@@ -18,12 +18,15 @@ except (ImportError, RuntimeError, TypeError, AttributeError):
     
     CONFIG = FallbackConfig()
 
+import copy
+
 logger = logging.getLogger(__name__)
 
 
 class StrategyAllocator:
     def __init__(self, config=None):
-        self.config = config or CONFIG
+        # AI-AGENT-REF: Create a copy of config to prevent shared state issues between instances
+        self.config = copy.deepcopy(config or CONFIG)
         self.signal_history: Dict[str, List[float]] = {}
         self.last_direction: Dict[str, str] = {}
         self.last_confidence: Dict[str, float] = {}
