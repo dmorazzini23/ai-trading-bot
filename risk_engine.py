@@ -308,8 +308,13 @@ class RiskEngine:
         )  # slight relaxation to reduce unnecessary skips
         # apply risk scaling to the signal based on volatility and returns
         signal = self.apply_risk_scaling(signal, volatility=volatility, returns=returns)
-        # AI-AGENT-REF: Ensure proper type conversion for signal.weight arithmetic
-        signal_weight = float(signal.weight)
+        # AI-AGENT-REF: Ensure proper type conversion for signal.weight arithmetic with fallback
+        try:
+            signal_weight = float(signal.weight)
+        except (ValueError, TypeError) as e:
+            logger.warning("Invalid signal.weight value '%s' for %s, defaulting to 0.0: %s", 
+                         signal.weight, signal.symbol, e)
+            signal_weight = 0.0
         if asset_exp + signal_weight > asset_cap:
             logger.warning(
                 "Exposure cap breach: symbol=%s qty=%s alloc=%.3f exposure=%.2f vs cap=%.2f",
@@ -324,11 +329,12 @@ class RiskEngine:
             logger.warning("FORCE_CONTINUE_ON_EXPOSURE enabled; overriding cap")
 
         strat_cap = self.strategy_limits.get(signal.strategy, self.global_limit)
-        if signal.weight > strat_cap:
+        # AI-AGENT-REF: Use converted signal_weight for strategy cap comparison
+        if signal_weight > strat_cap:
             logger.warning(
                 "Strategy %s weight %.2f exceeds cap %.2f",
                 signal.strategy,
-                signal.weight,
+                signal_weight,
                 strat_cap,
             )
             if os.getenv("FORCE_CONTINUE_ON_EXPOSURE", "false").lower() != "true":
@@ -342,7 +348,15 @@ class RiskEngine:
             return
 
         prev = self.exposure.get(signal.asset_class, 0.0)
-        delta = signal.weight if signal.side.lower() == "buy" else -signal.weight
+        # AI-AGENT-REF: Ensure proper type conversion for signal.weight arithmetic
+        try:
+            signal_weight = float(signal.weight)
+        except (ValueError, TypeError) as e:
+            logger.warning("Invalid signal.weight value '%s' for %s in register_fill, defaulting to 0.0: %s", 
+                         signal.weight, signal.symbol, e)
+            signal_weight = 0.0
+            
+        delta = signal_weight if signal.side.lower() == "buy" else -signal_weight
         
         # AI-AGENT-REF: Fix exposure calculation to prevent negative values with zero positions
         new_exposure = prev + delta

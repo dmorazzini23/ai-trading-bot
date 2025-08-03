@@ -41,6 +41,9 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
     if not symbol or not isinstance(symbol, str):
         logger.error("Invalid symbol provided: %s", symbol)
         return
+    if not side or not isinstance(side, str):
+        logger.error("Invalid side provided: %s", side)
+        return
     if not isinstance(qty, (int, float)) or qty == 0:
         logger.error("Invalid quantity: %s", qty)
         return

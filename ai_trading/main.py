@@ -69,10 +69,12 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
 
     application = app.create_app()
     
-    # AI-AGENT-REF: Signal ready after Flask app creation and port validation, before blocking run
+    # AI-AGENT-REF: Signal ready immediately after Flask app creation for faster startup
     if ready_signal is not None:
+        logger.info(f"Flask app created successfully, signaling ready on port {port}")
         ready_signal.set()
     
+    logger.info(f"Starting Flask app on 0.0.0.0:{port}")
     application.run(host="0.0.0.0", port=port)
 
 
@@ -115,9 +117,10 @@ def main() -> None:
     t.start()
 
     # Wait for API to be ready with proper error handling
-    if api_error.wait(timeout=10):
+    # AI-AGENT-REF: Use shorter timeout and better error detection for API startup
+    if api_error.wait(timeout=5):  # Check for errors first with shorter timeout
         raise RuntimeError(f"API failed to start: {api_exception}")
-    elif not api_ready.wait(timeout=10):
+    elif not api_ready.wait(timeout=15):  # Longer timeout for normal startup
         raise RuntimeError("API startup timeout - trading cannot proceed without API ready")
 
     interval = int(os.getenv("SCHEDULER_SLEEP_SECONDS", 30))

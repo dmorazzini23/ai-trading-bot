@@ -72,7 +72,8 @@ def test_main_runs_once(monkeypatch):
     monkeypatch.setenv("SCHEDULER_ITERATIONS", "1")
     called = {}
 
-    monkeypatch.setattr(main, "start_api", lambda: called.setdefault("api", True))
+    # AI-AGENT-REF: Fix lambda signature to accept ready_signal parameter
+    monkeypatch.setattr(main, "start_api", lambda ready_signal=None: called.setdefault("api", True))
     def _cycle():
         called["cycle"] = called.get("cycle", 0) + 1
     monkeypatch.setattr(main, "run_cycle", _cycle)
