@@ -3226,6 +3226,12 @@ class BotContext:
     strategies: List[Any] = field(default_factory=list)
     execution_engine: ExecutionEngine | None = None
     logger: logging.Logger = logger
+    
+    # AI-AGENT-REF: Add backward compatibility property for alpaca_client
+    @property
+    def alpaca_client(self):
+        """Backward compatibility property for accessing the trading API client."""
+        return self.api
 
 
 data_fetcher = DataFetcher()

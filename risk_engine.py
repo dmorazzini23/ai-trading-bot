@@ -732,6 +732,55 @@ class RiskEngine:
             "garch_vol": garch_vol,
         }
 
+    # AI-AGENT-REF: Add missing critical risk management methods
+    def get_current_exposure(self) -> Dict[str, float]:
+        """
+        Get current portfolio exposure by asset class.
+        
+        Returns
+        -------
+        Dict[str, float]
+            Dictionary mapping asset classes to exposure percentages.
+            Values represent the portion of total equity allocated to each asset class.
+        """
+        return self.exposure.copy()
+
+    def max_concurrent_orders(self) -> int:
+        """
+        Get maximum number of concurrent orders allowed.
+        
+        Returns
+        -------
+        int
+            Maximum number of orders that can be active simultaneously.
+            Prevents overwhelming the broker with too many pending orders.
+        """
+        return getattr(self.config, 'max_concurrent_orders', 50)
+
+    def max_exposure(self) -> float:
+        """
+        Get maximum total portfolio exposure limit.
+        
+        Returns
+        -------
+        float
+            Maximum portfolio exposure as a fraction (0.0 to 1.0).
+            Represents the maximum percentage of equity that can be at risk.
+        """
+        return self.global_limit
+
+    def order_spacing(self) -> float:
+        """
+        Get minimum time spacing between orders in seconds.
+        
+        Returns
+        -------
+        float
+            Minimum seconds to wait between submitting orders.
+            Prevents rapid-fire order submission that could trigger rate limits.
+        """
+        return getattr(self.config, 'order_spacing_seconds', 1.0)
+
 
 def dynamic_position_size(capital: float, volatility: float, drawdown: float) -> float:
     """Return position size using volatility and drawdown aware Kelly fraction.

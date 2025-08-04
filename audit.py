@@ -129,6 +129,48 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
         logger.error(
             "ERROR [audit] permission denied writing %s: %s", TRADE_LOG_FILE, exc
         )
+        
+        # AI-AGENT-REF: Attempt automatic permission repair
+        try:
+            from process_manager import ProcessManager
+            pm = ProcessManager()
+            repair_result = pm.fix_file_permissions([TRADE_LOG_FILE])
+            
+            if repair_result['paths_fixed']:
+                logger.info("Successfully repaired file permissions, retrying trade log")
+                # Retry writing the trade log
+                try:
+                    with open(TRADE_LOG_FILE, "a", newline="") as f:
+                        writer = csv.DictWriter(
+                            f,
+                            fieldnames=_fields,
+                            quoting=csv.QUOTE_MINIMAL,
+                        )
+                        if not file_existed:
+                            writer.writeheader()
+                        writer.writerow(
+                            {
+                                "id": str(uuid.uuid4()),
+                                "timestamp": timestamp,
+                                "symbol": symbol,
+                                "side": side,
+                                "qty": qty,
+                                "price": fill_price,
+                                "exposure": exposure if exposure is not None else "",
+                                "mode": (extra_info or ""),
+                                "result": "",
+                            }
+                        )
+                    logger.info("Trade log successfully written after permission repair")
+                    return  # Success, don't disable logging
+                except Exception as retry_exc:
+                    logger.error("Trade log retry failed after permission repair: %s", retry_exc)
+            else:
+                logger.warning("Failed to repair file permissions automatically")
+                
+        except Exception as repair_exc:
+            logger.warning("Permission repair attempt failed: %s", repair_exc)
+        
         if not _disable_trade_log:
             _disable_trade_log = True
             logger.warning("Trade log disabled due to permission error")
