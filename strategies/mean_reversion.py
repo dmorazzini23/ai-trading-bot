@@ -56,22 +56,28 @@ class MeanReversionStrategy(Strategy):
             scores[sym] = float(z)
             # AI-AGENT-REF: Fix mean reversion logic to match expected behavior - only check current z-score
             if z > self.z:
+                # Calculate weight based on z-score strength, capped at reasonable allocation
+                weight = min(0.05, max(0.01, abs(z) * 0.02))  # 1-5% allocation based on z-score
                 signals.append(
                     TradeSignal(
                         symbol=sym,
                         side="sell",
                         confidence=abs(z),
                         strategy=self.name,
+                        weight=weight,
                         asset_class=asset_class_for(sym),
                     )
                 )
             elif z < -self.z:
+                # Calculate weight based on z-score strength, capped at reasonable allocation
+                weight = min(0.05, max(0.01, abs(z) * 0.02))  # 1-5% allocation based on z-score
                 signals.append(
                     TradeSignal(
                         symbol=sym,
                         side="buy",
                         confidence=abs(z),
                         strategy=self.name,
+                        weight=weight,
                         asset_class=asset_class_for(sym),
                     )
                 )
