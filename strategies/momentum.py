@@ -41,12 +41,15 @@ class MomentumStrategy(Strategy):
                 logger.debug("%s momentum below threshold", sym)
                 continue
             side = "buy" if ret > 0 else "sell"
+            # Calculate weight based on momentum strength, capped at reasonable allocation
+            weight = min(0.05, max(0.01, abs(ret) * 0.5))  # 1-5% allocation based on momentum
             signals.append(
                 TradeSignal(
                     symbol=sym,
                     side=side,
                     confidence=abs(ret),
                     strategy=self.name,
+                    weight=weight,
                     asset_class=asset_class_for(sym),
                 )
             )
