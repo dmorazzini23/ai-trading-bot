@@ -186,7 +186,7 @@ except ImportError:
         def read_parquet(self, *args, **kwargs):
             return MockDataFrame()
         def to_datetime(self, *args, **kwargs):
-            return datetime.now()
+            return datetime.now(timezone.utc)  # AI-AGENT-REF: timezone-aware for API compatibility
     pd = MockPandas()
 
 try:
@@ -278,12 +278,14 @@ def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, fee
 
 # Helper to coerce dates into datetimes
 def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime:
-    """Coerce ``dt`` into a ``datetime`` instance.
+    """Coerce ``dt`` into a timezone-aware ``datetime`` instance.
 
     Accepts ``datetime`` objects, ``pandas.Timestamp`` objects, ``date`` objects,
     or strings in several supported formats. Strings may be ISO 8601
     (with optional timezone), ``"%Y-%m-%d"``, ``"%Y-%m-%d %H:%M:%S"`` or
     ``"%Y%m%d"``.
+
+    Returns a timezone-aware datetime in UTC for Alpaca API compatibility.
 
     Raises
     ------
@@ -300,21 +302,36 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
         logger.error("ensure_datetime received None", stack_info=True)
         raise ValueError("datetime value cannot be None")
 
-    if dt is pd.NaT or (isinstance(dt, pd.Timestamp) and pd.isna(dt)):
-        logger.error("ensure_datetime received NaT", stack_info=True)
-        raise ValueError("datetime value cannot be NaT")
-
-    if isinstance(dt, pd.Timestamp):
-        logger.debug("ensure_datetime using pandas.Timestamp %r", dt)
-        return dt.to_pydatetime()
+    # Handle pandas availability check
+    try:
+        import pandas as pd_real
+        if dt is pd_real.NaT or (isinstance(dt, pd_real.Timestamp) and pd_real.isna(dt)):
+            logger.error("ensure_datetime received NaT", stack_info=True)
+            raise ValueError("datetime value cannot be NaT")
+        
+        if isinstance(dt, pd_real.Timestamp):
+            logger.debug("ensure_datetime using pandas.Timestamp %r", dt)
+            result = dt.to_pydatetime()
+            # Ensure timezone-aware
+            if result.tzinfo is None:
+                result = result.replace(tzinfo=timezone.utc)
+            return result
+    except ImportError:
+        # Handle mock pandas case
+        pass
 
     if isinstance(dt, datetime):
         logger.debug("ensure_datetime received datetime %r", dt)
+        # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
+        if dt.tzinfo is None:
+            logger.debug("ensure_datetime converting naive datetime to UTC")
+            return dt.replace(tzinfo=timezone.utc)
         return dt
 
     if isinstance(dt, date):
         logger.debug("ensure_datetime converting date %r", dt)
-        return datetime.combine(dt, datetime.min.time())
+        # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
+        return datetime.combine(dt, datetime.min.time()).replace(tzinfo=timezone.utc)
 
     if isinstance(dt, str):
         value = dt.strip()
@@ -332,6 +349,9 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
             logger.debug("ensure_datetime parsed %r via ISO", value)
+            # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
             return parsed
         except ValueError:
             pass
@@ -340,7 +360,8 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
             try:
                 parsed = datetime.strptime(value, fmt)
                 logger.debug("ensure_datetime parsed %r with %s", value, fmt)
-                return parsed
+                # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
+                return parsed.replace(tzinfo=timezone.utc)
             except ValueError:
                 continue
 
@@ -489,7 +510,7 @@ def get_historical_data(
     >>> from datetime import datetime, timedelta
     >>> 
     >>> # Get 30 days of hourly data
-    >>> end_date = datetime.now()
+    >>> end_date = datetime.now(timezone.utc)  # AI-AGENT-REF: timezone-aware for API compatibility
     >>> start_date = end_date - timedelta(days=30)
     >>> data = get_historical_data('AAPL', start_date, end_date, '1HOUR')
     >>> print(f"Retrieved {len(data)} bars")
