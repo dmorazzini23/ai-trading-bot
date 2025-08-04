@@ -6,13 +6,33 @@ and generate trading signals with confidence scoring and risk assessment.
 """
 
 import pickle
-import numpy as np
-import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
+
+# AI-AGENT-REF: Use centralized logger as per AGENTS.md
+try:
+    from logger import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+
+# AI-AGENT-REF: Import dependencies with fallbacks
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ImportError:
+    NUMPY_AVAILABLE = False
+    logger.warning("NumPy not available, using fallback implementations")
+
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    logger.warning("Pandas not available, using fallback implementations")
 
 # AI-AGENT-REF: Use centralized logger as per AGENTS.md
 try:
@@ -43,6 +63,15 @@ try:
 except ImportError:
     logger.warning("scikit-learn not available, MetaLearning strategy will use fallback")
     ML_AVAILABLE = False
+    # Create fallback classes
+    class StandardScaler:
+        def fit_transform(self, X): return X
+        def transform(self, X): return X
+    
+    class MockClassifier:
+        def fit(self, X, y, sample_weight=None): pass
+        def predict(self, X): return [0] * len(X)
+        def predict_proba(self, X): return [[0.5, 0.5]] * len(X)
 
 
 class MetaLearning(BaseStrategy):
@@ -92,16 +121,28 @@ class MetaLearning(BaseStrategy):
         
         logger.info(f"MetaLearning strategy initialized with risk level {risk_level}")
     
-    def execute_strategy(self, symbol: str) -> Dict:
+    def execute_strategy(self, data=None, symbol: str = None) -> Dict:
         """
         Main execution method called by bot_engine.
         
         Args:
+            data: Optional market data (for compatibility with bot_engine calling patterns)
             symbol: Trading symbol to analyze
             
         Returns:
             Dictionary with signal information or empty dict if no signal
         """
+        # AI-AGENT-REF: Handle both calling patterns for compatibility
+        # If called with positional args: execute_strategy(data, symbol)
+        if data is not None and symbol is None:
+            # Check if first argument is actually the symbol (string)
+            if isinstance(data, str):
+                symbol = data
+                data = None
+        
+        if symbol is None:
+            logger.error("execute_strategy called without symbol")
+            return self._neutral_signal()
         try:
             # Check cache first
             if self._is_cached_prediction_valid(symbol):
@@ -109,14 +150,20 @@ class MetaLearning(BaseStrategy):
                 logger.debug(f"Using cached prediction for {symbol}")
                 return cached_result
             
-            # Get historical data
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=self.parameters['lookback_period'])
-            
-            data = get_minute_df(symbol, start_date, end_date)
-            if data is None or len(data) < self.parameters['min_data_points']:
-                logger.warning(f"Insufficient data for {symbol}, returning neutral signal")
-                return self._neutral_signal()
+            # Get historical data if not provided
+            if data is None:
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=self.parameters['lookback_period'])
+                
+                data = get_minute_df(symbol, start_date, end_date)
+                if data is None or len(data) < self.parameters['min_data_points']:
+                    logger.warning(f"Insufficient data for {symbol}, returning neutral signal")
+                    return self._neutral_signal()
+            else:
+                # Use provided data but validate it
+                if len(data) < self.parameters['min_data_points']:
+                    logger.warning(f"Provided data insufficient for {symbol}, returning neutral signal")
+                    return self._neutral_signal()
             
             # Check if model needs retraining
             if self._should_retrain():
@@ -233,7 +280,7 @@ class MetaLearning(BaseStrategy):
             logger.error(f"Error calculating position size: {e}")
             return 0
     
-    def train_model(self, data: pd.DataFrame) -> bool:
+    def train_model(self, data) -> bool:
         """
         Train ML models on historical data.
         
@@ -247,6 +294,11 @@ class MetaLearning(BaseStrategy):
             if not ML_AVAILABLE:
                 logger.warning("ML libraries not available, using fallback prediction")
                 self.is_trained = True  # Set to True for fallback mode
+                return True
+            
+            if not PANDAS_AVAILABLE:
+                logger.warning("Pandas not available, using fallback mode")
+                self.is_trained = True
                 return True
             
             logger.info("Training MetaLearning models...")
@@ -360,7 +412,7 @@ class MetaLearning(BaseStrategy):
             self.prediction_accuracy = 0.6  # Assumed fallback accuracy
             return True  # Return True to allow fallback operation
     
-    def predict_price_movement(self, data: pd.DataFrame) -> Optional[Dict]:
+    def predict_price_movement(self, data) -> Optional[Dict]:
         """
         Generate ML-based price movement predictions.
         
@@ -374,6 +426,10 @@ class MetaLearning(BaseStrategy):
             if not self.is_trained:
                 logger.warning("Model not trained, cannot make predictions")
                 return None
+            
+            if not PANDAS_AVAILABLE:
+                logger.debug("Pandas not available, using fallback prediction") 
+                return self._fallback_prediction(data)
             
             # Extract features for latest data point
             features_df = self.extract_features(data)
@@ -413,8 +469,13 @@ class MetaLearning(BaseStrategy):
             )
             
             # Get predicted class and confidence
-            predicted_class = np.argmax(ensemble_proba)
-            confidence = np.max(ensemble_proba)
+            if not NUMPY_AVAILABLE:
+                # Fallback for when numpy is not available
+                predicted_class = 0 if ensemble_proba[0] > 0.5 else 1
+                confidence = max(ensemble_proba)
+            else:
+                predicted_class = np.argmax(ensemble_proba)
+                confidence = np.max(ensemble_proba)
             
             # Map prediction to direction - handle variable number of classes
             if n_classes == 2:
@@ -442,14 +503,24 @@ class MetaLearning(BaseStrategy):
             
             # Calculate additional metrics
             current_price = data['close'].iloc[-1]
-            volatility = data['close'].pct_change().rolling(20).std().iloc[-1]
+            
+            # Handle volatility calculation with fallbacks
+            if PANDAS_AVAILABLE:
+                volatility = data['close'].pct_change().rolling(20).std().iloc[-1]
+                if NUMPY_AVAILABLE:
+                    volatility = float(volatility) if not np.isnan(volatility) else 0.05
+                else:
+                    # Simple fallback volatility calculation
+                    volatility = 0.05 if str(volatility) == 'nan' else float(volatility)
+            else:
+                volatility = 0.05  # Default fallback
             
             result = {
                 'direction': predicted_direction,
                 'confidence': float(confidence),
                 'probability_distribution': prob_dist,
                 'current_price': float(current_price),
-                'volatility': float(volatility) if not np.isnan(volatility) else 0.05,
+                'volatility': volatility,
                 'model_accuracy': self.prediction_accuracy,
                 'prediction_timestamp': datetime.now(),
                 'source': 'ml_ensemble'
@@ -461,7 +532,7 @@ class MetaLearning(BaseStrategy):
             logger.error(f"Error in predict_price_movement: {e}")
             return None
     
-    def extract_features(self, data: pd.DataFrame) -> Optional[pd.DataFrame]:
+    def extract_features(self, data) -> Optional[Any]:
         """
         Engineer features for ML model from price data.
         
@@ -469,11 +540,19 @@ class MetaLearning(BaseStrategy):
             data: Historical price data with OHLCV columns
             
         Returns:
-            DataFrame with engineered features
+            DataFrame with engineered features or fallback data
         """
         try:
+            if not PANDAS_AVAILABLE:
+                logger.debug("Pandas not available for feature extraction")
+                return None
+                
             if data is None or len(data) < self.parameters['feature_window']:
                 return None
+            
+            # Import pandas locally if available
+            import pandas as pd
+            import numpy as np
             
             features = pd.DataFrame(index=data.index)
             
@@ -587,9 +666,15 @@ class MetaLearning(BaseStrategy):
             logger.error(f"Error extracting features: {e}")
             return None
     
-    def _create_target_labels(self, data: pd.DataFrame, feature_index: pd.Index) -> pd.Series:
+    def _create_target_labels(self, data, feature_index) -> Any:
         """Create target labels for ML training using dynamic thresholds."""
         try:
+            if not PANDAS_AVAILABLE:
+                logger.debug("Pandas not available for target label creation")
+                return []  # Return empty list as fallback
+                
+            # Import pandas locally 
+            import pandas as pd
             horizon = self.parameters['prediction_horizon']
             
             # Calculate future returns
@@ -681,7 +766,7 @@ class MetaLearning(BaseStrategy):
         # Cache expires in 1 hour
         self.cache_expiry[symbol] = datetime.now() + timedelta(hours=1)
     
-    def _convert_prediction_to_signal(self, symbol: str, prediction: Dict, data: pd.DataFrame) -> Dict:
+    def _convert_prediction_to_signal(self, symbol: str, prediction: Dict, data) -> Dict:
         """Convert ML prediction to trading signal format."""
         try:
             direction = prediction['direction']
@@ -752,10 +837,13 @@ class MetaLearning(BaseStrategy):
             'reasoning': 'Insufficient data or low confidence for prediction'
         }
     
-    def _fallback_prediction(self, data: pd.DataFrame) -> Dict:
+    def _fallback_prediction(self, data) -> Dict:
         """Enhanced fallback prediction when ML models are not available."""
         try:
             # AI-AGENT-REF: Enhanced fallback using multiple technical indicators
+            
+            if not PANDAS_AVAILABLE:
+                return self._simple_momentum_fallback(data)
             
             # Extract features for technical analysis
             features = self.extract_features(data)
@@ -871,9 +959,26 @@ class MetaLearning(BaseStrategy):
             logger.error(f"Error in enhanced fallback prediction: {e}")
             return self._simple_momentum_fallback(data)
     
-    def _simple_momentum_fallback(self, data: pd.DataFrame) -> Dict:
+    def _simple_momentum_fallback(self, data) -> Dict:
         """Simple momentum-based fallback prediction."""
         try:
+            if not PANDAS_AVAILABLE:
+                # Very basic fallback when pandas is not available
+                return {
+                    'direction': 'hold',
+                    'confidence': 0.3,
+                    'probability_distribution': {
+                        'sell': 0.3,
+                        'hold': 0.4,
+                        'buy': 0.3
+                    },
+                    'current_price': 100.0,  # Default price
+                    'volatility': 0.05,
+                    'model_accuracy': 0.6,
+                    'prediction_timestamp': datetime.now(),
+                    'source': 'basic_fallback'
+                }
+            
             # Simple momentum-based prediction
             returns = data['close'].pct_change().dropna()
             recent_returns = returns.tail(5).mean()
@@ -901,7 +1006,7 @@ class MetaLearning(BaseStrategy):
                     'buy': 0.5 - confidence/2 if direction != 'buy' else confidence
                 },
                 'current_price': current_price,
-                'volatility': volatility if not np.isnan(volatility) else 0.05,
+                'volatility': volatility if not (str(volatility) == 'nan' or str(volatility) == 'NaN') else 0.05,
                 'model_accuracy': 0.6,  # Assumed fallback accuracy
                 'prediction_timestamp': datetime.now(),
                 'source': 'momentum_fallback'
