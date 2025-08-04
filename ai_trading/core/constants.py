@@ -17,33 +17,33 @@ MARKET_HOURS = {
     "AFTER_HOURS_END": time(1, 0),     # 1:00 AM UTC (8:00 PM EST)
 }
 
-# Risk management parameters
+# Risk management parameters - Optimized for higher profit potential
 RISK_PARAMETERS = {
-    "MAX_PORTFOLIO_RISK": 0.02,        # 2% max portfolio risk per trade
-    "MAX_CORRELATION_EXPOSURE": 0.20,   # 20% max exposure to correlated assets
+    "MAX_PORTFOLIO_RISK": 0.025,        # 2.5% max portfolio risk per trade (increased for higher profit potential)
+    "MAX_CORRELATION_EXPOSURE": 0.15,   # 15% max exposure to correlated assets (reduced for better diversification)
     "MAX_SECTOR_CONCENTRATION": 0.15,   # 15% max exposure to single sector
     "MIN_LIQUIDITY_THRESHOLD": 1000000, # $1M minimum daily volume
-    "MAX_POSITION_SIZE": 0.10,          # 10% max position size
-    "STOP_LOSS_MULTIPLIER": 2.0,        # 2x ATR for stop loss
-    "TAKE_PROFIT_MULTIPLIER": 3.0,      # 3x ATR for take profit
+    "MAX_POSITION_SIZE": 0.08,          # 8% max position size (reduced for better diversification)
+    "STOP_LOSS_MULTIPLIER": 1.8,        # 1.8x ATR for stop loss (tightened for capital preservation)
+    "TAKE_PROFIT_MULTIPLIER": 2.5,      # 2.5x ATR for take profit (reduced for more frequent profit taking)
 }
 
-# Kelly Criterion parameters
+# Kelly Criterion parameters - Optimized for better risk-adjusted returns
 KELLY_PARAMETERS = {
-    "MIN_SAMPLE_SIZE": 30,              # Minimum trades for Kelly calculation
-    "MAX_KELLY_FRACTION": 0.25,         # Maximum Kelly fraction (25%)
-    "CONFIDENCE_LEVEL": 0.95,           # Statistical confidence level
+    "MIN_SAMPLE_SIZE": 20,              # Minimum trades for Kelly calculation (reduced for faster adaptation)
+    "MAX_KELLY_FRACTION": 0.15,         # Maximum Kelly fraction (15% - reduced for better risk-adjusted returns)
+    "CONFIDENCE_LEVEL": 0.90,           # Statistical confidence level (reduced for less conservative sizing)
     "LOOKBACK_PERIODS": 252,            # Trading days for analysis
     "REBALANCE_FREQUENCY": 21,          # Rebalance every 21 days
 }
 
-# Execution parameters
+# Execution parameters - Optimized for better execution quality
 EXECUTION_PARAMETERS = {
-    "MAX_SLIPPAGE_BPS": 20,             # 20 basis points max slippage
-    "PARTICIPATION_RATE": 0.10,         # 10% of volume participation
+    "MAX_SLIPPAGE_BPS": 15,             # 15 basis points max slippage (tightened for better execution quality)
+    "PARTICIPATION_RATE": 0.15,         # 15% of volume participation (increased for faster fills)
     "MIN_ORDER_SIZE": 100,              # Minimum order size (shares)
     "MAX_ORDER_SIZE": 10000,            # Maximum order size (shares)
-    "ORDER_TIMEOUT_SECONDS": 300,       # 5 minute order timeout
+    "ORDER_TIMEOUT_SECONDS": 180,       # 3 minute order timeout (reduced for faster adaptation)
     "RETRY_ATTEMPTS": 3,                # Number of retry attempts
     "CANCEL_THRESHOLD_SECONDS": 60,     # Cancel orders after 60 seconds
 }
@@ -66,11 +66,11 @@ DATABASE_PARAMETERS = {
     "QUERY_TIMEOUT_SECONDS": 30,        # Query timeout
 }
 
-# Performance thresholds
+# Performance thresholds - Optimized for higher quality strategies
 PERFORMANCE_THRESHOLDS = {
-    "MIN_SHARPE_RATIO": 1.0,            # Minimum acceptable Sharpe ratio
-    "MAX_DRAWDOWN": 0.20,               # Maximum acceptable drawdown
-    "MIN_WIN_RATE": 0.45,               # Minimum win rate threshold
+    "MIN_SHARPE_RATIO": 1.2,            # Minimum acceptable Sharpe ratio (increased for higher quality strategies)
+    "MAX_DRAWDOWN": 0.15,               # Maximum acceptable drawdown (reduced for better capital preservation)
+    "MIN_WIN_RATE": 0.48,               # Minimum win rate threshold (increased for quality trade filtering)
     "MIN_PROFIT_FACTOR": 1.2,           # Minimum profit factor
     "MAX_VAR_95": 0.05,                 # Maximum 95% VaR
 }

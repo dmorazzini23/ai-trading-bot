@@ -60,12 +60,12 @@ class MarketConditionAnalyzer:
         self.volatility_window = 20
         self.correlation_window = 30
         
-        # Volatility percentile thresholds
+        # Volatility percentile thresholds - optimized for better regime detection
         self.vol_thresholds = {
-            "extremely_low": 0.10,
-            "low": 0.25,
-            "high": 0.75,
-            "extremely_high": 0.90
+            "extremely_low": 0.12,    # Slightly increased from 0.10 for better sensitivity
+            "low": 0.28,              # Slightly increased from 0.25 for better detection
+            "high": 0.72,             # Slightly decreased from 0.75 for earlier detection
+            "extremely_high": 0.88    # Slightly decreased from 0.90 for earlier detection
         }
         
         logger.info(f"MarketConditionAnalyzer initialized with lookback_days={lookback_days}")
@@ -337,24 +337,24 @@ class AdaptivePositionSizer:
         self.dynamic_sizer = DynamicPositionSizer(risk_level)
         self.kelly_calculator = KellyCalculator()
         
-        # Regime-based sizing multipliers
+        # Regime-based sizing multipliers - optimized for more aggressive profitable opportunities
         self.regime_multipliers = {
-            MarketRegime.BULL_TRENDING: 1.2,
-            MarketRegime.BEAR_TRENDING: 0.6,
+            MarketRegime.BULL_TRENDING: 1.3,     # Increased from 1.2 for more aggressive positioning
+            MarketRegime.BEAR_TRENDING: 0.5,     # Reduced from 0.6 for more conservative defensive positioning  
             MarketRegime.SIDEWAYS_RANGE: 0.9,
-            MarketRegime.HIGH_VOLATILITY: 0.5,
-            MarketRegime.LOW_VOLATILITY: 1.1,
-            MarketRegime.CRISIS: 0.2,
+            MarketRegime.HIGH_VOLATILITY: 0.4,   # Reduced from 0.5 for better risk management
+            MarketRegime.LOW_VOLATILITY: 1.2,    # Increased from 1.1 for more aggressive positioning in stable markets
+            MarketRegime.CRISIS: 0.15,           # Reduced from 0.2 for maximum capital preservation
             MarketRegime.NORMAL: 1.0
         }
         
-        # Volatility regime adjustments
+        # Volatility regime adjustments - optimized for better risk-adjusted returns
         self.volatility_adjustments = {
-            VolatilityRegime.EXTREMELY_LOW: 1.3,
-            VolatilityRegime.LOW: 1.1,
+            VolatilityRegime.EXTREMELY_LOW: 1.4,    # Increased from 1.3 for more aggressive positioning in low vol
+            VolatilityRegime.LOW: 1.15,             # Slightly increased from 1.1
             VolatilityRegime.NORMAL: 1.0,
-            VolatilityRegime.HIGH: 0.7,
-            VolatilityRegime.EXTREMELY_HIGH: 0.4
+            VolatilityRegime.HIGH: 0.65,            # Slightly reduced from 0.7 for better risk management
+            VolatilityRegime.EXTREMELY_HIGH: 0.3    # Reduced from 0.4 for better capital preservation
         }
         
         logger.info(f"AdaptivePositionSizer initialized with risk_level={risk_level}")

@@ -33,11 +33,11 @@ class VWAPExecutor:
     
     def __init__(self, order_manager: OrderManager):
         """Initialize VWAP executor."""
-        # AI-AGENT-REF: VWAP execution algorithm
+        # AI-AGENT-REF: VWAP execution algorithm with optimized participation rate
         self.order_manager = order_manager
-        self.participation_rate = 0.10  # 10% of market volume
+        self.participation_rate = 0.15  # Optimized 15% of market volume (increased from 10%)
         self.min_slice_size = 100
-        logger.info("VWAPExecutor initialized")
+        logger.info("VWAPExecutor initialized with optimized participation rate")
     
     def execute_vwap_order(self, symbol: str, side: OrderSide, total_quantity: int, 
                           duration_minutes: int = 60, **kwargs) -> List[str]:
@@ -54,8 +54,9 @@ class VWAPExecutor:
             List of child order IDs
         """
         try:
-            # Calculate number of slices based on duration
-            num_slices = max(1, duration_minutes // 5)  # 5-minute slices
+            # Calculate number of slices based on duration - optimized to 8 slices instead of 10
+            slice_interval_minutes = max(5, duration_minutes // 8)  # Optimize to 8 slices for better execution
+            num_slices = max(1, duration_minutes // slice_interval_minutes)
             slice_quantity = max(self.min_slice_size, total_quantity // num_slices)
             
             child_orders = []
@@ -129,8 +130,8 @@ class TWAPExecutor:
             List of child order IDs
         """
         try:
-            # Calculate equal time slices
-            slice_interval = max(1, duration_minutes // 10)  # Max 10 slices
+            # Calculate equal time slices - optimized to 8 slices for better execution
+            slice_interval = max(1, duration_minutes // 8)  # Optimize to 8 slices instead of 10
             num_slices = duration_minutes // slice_interval
             slice_quantity = max(self.min_slice_size, total_quantity // num_slices)
             
