@@ -3017,7 +3017,11 @@ class SignalManager:
                 if df["close"].iloc[-1] > df["open"].iloc[-1]
                 else -1 if df["close"].iloc[-1] < df["open"].iloc[-1] else -1
             )
-            w = min(score / avg, 1.0)
+            # AI-AGENT-REF: Fix division by zero in VSA signal calculation
+            if avg > 0:
+                w = min(score / avg, 1.0)
+            else:
+                w = 0.0  # Safe fallback when average is zero
             return s, w, "vsa"
         except Exception:
             logger.exception("Error in signal_vsa")
