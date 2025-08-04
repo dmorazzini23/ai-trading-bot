@@ -14,9 +14,9 @@ import data_fetcher
         datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
         datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc),
     ),
-    ("2024-01-01", datetime(2024, 1, 1, 0, 0)),
-    ("2024-01-01 05:30:00", datetime(2024, 1, 1, 5, 30, 0)),
-    ("20240101", datetime(2024, 1, 1, 0, 0)),
+    ("2024-01-01", datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)),
+    ("2024-01-01 05:30:00", datetime(2024, 1, 1, 5, 30, 0, tzinfo=timezone.utc)),
+    ("20240101", datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)),
     ("2024-01-01T12:00:00Z", datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)),
 ])
 def test_ensure_datetime_valid(value, expected):

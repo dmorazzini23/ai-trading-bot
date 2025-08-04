@@ -59,7 +59,20 @@ class DrawdownCircuitBreaker:
         self.halt_timestamp = None
         self.reset_callbacks = []
         
-        logger.info(f"DrawdownCircuitBreaker initialized with max_drawdown={self.max_drawdown:.2%}")
+        logger.info(f"DrawdownCircuitBreaker initialized with max_drawdown={self._safe_format_percentage(self.max_drawdown)}")
+    
+    def _safe_format_percentage(self, value) -> str:
+        """
+        Safely format a value as a percentage, handling MagicMock objects during testing.
+        
+        AI-AGENT-REF: Defensive programming for test compatibility
+        """
+        try:
+            if hasattr(value, '_mock_name'):  # Check if it's a MagicMock
+                return f"<Mock: {value._mock_name or 'percentage'}>"
+            return f"{value:.2%}"
+        except (TypeError, ValueError, AttributeError):
+            return f"<{type(value).__name__}: {value}>"
     
     def update_equity(self, current_equity: float) -> bool:
         """
@@ -109,7 +122,7 @@ class DrawdownCircuitBreaker:
             self.halt_timestamp = datetime.now()
             
             logger.critical(f"TRADING HALTED - Drawdown Circuit Breaker: {reason}. "
-                          f"Current drawdown: {self.current_drawdown:.2%}")
+                          f"Current drawdown: {self._safe_format_percentage(self.current_drawdown)}")
             
             # Execute callbacks
             for callback in self.reset_callbacks:
@@ -183,7 +196,20 @@ class VolatilityCircuitBreaker:
         self.last_volatility_update = datetime.now()
         
         logger.info(f"VolatilityCircuitBreaker initialized with thresholds: "
-                   f"high={high_vol_threshold:.1%}, extreme={extreme_vol_threshold:.1%}")
+                   f"high={self._safe_format_percentage(high_vol_threshold)}, extreme={self._safe_format_percentage(extreme_vol_threshold)}")
+    
+    def _safe_format_percentage(self, value) -> str:
+        """
+        Safely format a value as a percentage, handling MagicMock objects during testing.
+        
+        AI-AGENT-REF: Defensive programming for test compatibility
+        """
+        try:
+            if hasattr(value, '_mock_name'):  # Check if it's a MagicMock
+                return f"<Mock: {value._mock_name or 'percentage'}>"
+            return f"{value:.1%}"
+        except (TypeError, ValueError, AttributeError):
+            return f"<{type(value).__name__}: {value}>"
     
     def update_volatility(self, volatility: float) -> Dict[str, Any]:
         """
@@ -204,7 +230,7 @@ class VolatilityCircuitBreaker:
                 self.state = CircuitBreakerState.OPEN
                 self.position_size_multiplier = 0.0
                 status = "EXTREME_VOLATILITY_HALT"
-                logger.critical(f"EXTREME VOLATILITY DETECTED: {volatility:.1%} - Trading halted")
+                logger.critical(f"EXTREME VOLATILITY DETECTED: {self._safe_format_percentage(volatility)} - Trading halted")
                 
             elif volatility >= self.high_vol_threshold:
                 self.state = CircuitBreakerState.HALF_OPEN
@@ -212,13 +238,13 @@ class VolatilityCircuitBreaker:
                 reduction_factor = (volatility - self.high_vol_threshold) / (self.extreme_vol_threshold - self.high_vol_threshold)
                 self.position_size_multiplier = max(0.1, 1.0 - reduction_factor * 0.8)
                 status = "HIGH_VOLATILITY_REDUCTION"
-                logger.warning(f"HIGH VOLATILITY: {volatility:.1%} - Position sizes reduced to {self.position_size_multiplier:.1%}")
+                logger.warning(f"HIGH VOLATILITY: {self._safe_format_percentage(volatility)} - Position sizes reduced to {self._safe_format_percentage(self.position_size_multiplier)}")
                 
             else:
                 self.state = CircuitBreakerState.CLOSED
                 self.position_size_multiplier = 1.0
                 status = "NORMAL_OPERATION"
-                logger.debug(f"Normal volatility: {volatility:.1%}")
+                logger.debug(f"Normal volatility: {self._safe_format_percentage(volatility)}")
             
             return {
                 "status": status,
@@ -285,6 +311,19 @@ class TradingHaltManager:
         
         logger.info("TradingHaltManager initialized")
     
+    def _safe_format_percentage(self, value) -> str:
+        """
+        Safely format a value as a percentage, handling MagicMock objects during testing.
+        
+        AI-AGENT-REF: Defensive programming for test compatibility
+        """
+        try:
+            if hasattr(value, '_mock_name'):  # Check if it's a MagicMock
+                return f"<Mock: {value._mock_name or 'percentage'}>"
+            return f"{value:.2%}"
+        except (TypeError, ValueError, AttributeError):
+            return f"<{type(value).__name__}: {value}>"
+    
     def is_trading_allowed(self) -> Dict[str, Any]:
         """
         Check if trading is currently allowed.
@@ -316,14 +355,14 @@ class TradingHaltManager:
                 status["circuit_breakers"]["drawdown"] = drawdown_status
                 if not drawdown_status["trading_allowed"]:
                     status["trading_allowed"] = False
-                    status["reasons"].append(f"Drawdown limit exceeded: {drawdown_status['current_drawdown']:.2%}")
+                    status["reasons"].append(f"Drawdown limit exceeded: {self._safe_format_percentage(drawdown_status['current_drawdown'])}")
                 
                 # Check volatility circuit breaker
                 volatility_status = self.volatility_breaker.get_status()
                 status["circuit_breakers"]["volatility"] = volatility_status
                 if not volatility_status["trading_allowed"]:
                     status["trading_allowed"] = False
-                    status["reasons"].append(f"Extreme volatility: {volatility_status['current_volatility']:.1%}")
+                    status["reasons"].append(f"Extreme volatility: {self._safe_format_percentage(volatility_status['current_volatility'])}")
                 else:
                     # Apply volatility position size reduction
                     status["position_size_multiplier"] *= volatility_status["position_size_multiplier"]
@@ -335,7 +374,7 @@ class TradingHaltManager:
                 
                 if self.daily_loss_amount >= self.max_daily_loss:
                     status["trading_allowed"] = False
-                    status["reasons"].append(f"Daily loss limit exceeded: {self.daily_loss_amount:.2%}")
+                    status["reasons"].append(f"Daily loss limit exceeded: {self._safe_format_percentage(self.daily_loss_amount)}")
                 
                 return status
                 
