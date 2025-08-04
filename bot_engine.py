@@ -3112,15 +3112,38 @@ class SignalManager:
     def load_signal_weights(self) -> dict[str, float]:
         if not os.path.exists(SIGNAL_WEIGHTS_FILE):
             return {}
-        df = pd.read_csv(
-            SIGNAL_WEIGHTS_FILE,
-            on_bad_lines="skip",
-            engine="python",
-            usecols=["signal", "weight"],
-        )
-        if df.empty:
-            logger.warning("Loaded DataFrame is empty after parsing/fallback")
-        return {row["signal"]: row["weight"] for _, row in df.iterrows()}
+        try:
+            df = pd.read_csv(
+                SIGNAL_WEIGHTS_FILE,
+                on_bad_lines="skip",
+                engine="python",
+                usecols=["signal_name", "weight"],
+            )
+            if df.empty:
+                logger.warning("Loaded DataFrame is empty after parsing/fallback")
+                return {}
+            return {row["signal_name"]: row["weight"] for _, row in df.iterrows()}
+        except ValueError as e:
+            if "usecols" in str(e).lower():
+                logger.warning("Signal weights CSV missing expected columns, trying fallback read")
+                try:
+                    # Fallback: read all columns and try to map
+                    df = pd.read_csv(SIGNAL_WEIGHTS_FILE, on_bad_lines="skip", engine="python")
+                    if "signal" in df.columns:
+                        # Old format with 'signal' column
+                        return {row["signal"]: row["weight"] for _, row in df.iterrows()}
+                    elif "signal_name" in df.columns:
+                        # New format with 'signal_name' column
+                        return {row["signal_name"]: row["weight"] for _, row in df.iterrows()}
+                    else:
+                        logger.error("Signal weights CSV has unexpected format: %s", df.columns.tolist())
+                        return {}
+                except Exception as fallback_e:
+                    logger.error("Failed to load signal weights with fallback: %s", fallback_e)
+                    return {}
+            else:
+                logger.error("Failed to load signal weights: %s", e)
+                return {}
 
     def evaluate(
         self,
@@ -6288,15 +6311,39 @@ def update_signal_weights() -> None:
 
         ALPHA = 0.2
         if os.path.exists(SIGNAL_WEIGHTS_FILE):
-            old_df = pd.read_csv(
-                SIGNAL_WEIGHTS_FILE,
-                on_bad_lines="skip",
-                engine="python",
-                usecols=["signal", "weight"],
-            )
-            if old_df.empty:
-                logger.warning("Loaded DataFrame is empty after parsing/fallback")
-            old = old_df.set_index("signal")["weight"].to_dict()
+            try:
+                old_df = pd.read_csv(
+                    SIGNAL_WEIGHTS_FILE,
+                    on_bad_lines="skip",
+                    engine="python",
+                    usecols=["signal_name", "weight"],
+                )
+                if old_df.empty:
+                    logger.warning("Loaded DataFrame is empty after parsing/fallback")
+                    old = {}
+                else:
+                    old = old_df.set_index("signal_name")["weight"].to_dict()
+            except ValueError as e:
+                if "usecols" in str(e).lower():
+                    logger.warning("Signal weights CSV missing expected columns, trying fallback read")
+                    try:
+                        # Fallback: read all columns and try to map
+                        old_df = pd.read_csv(SIGNAL_WEIGHTS_FILE, on_bad_lines="skip", engine="python")
+                        if "signal" in old_df.columns:
+                            # Old format with 'signal' column
+                            old = old_df.set_index("signal")["weight"].to_dict()
+                        elif "signal_name" in old_df.columns:
+                            # New format with 'signal_name' column
+                            old = old_df.set_index("signal_name")["weight"].to_dict()
+                        else:
+                            logger.error("Signal weights CSV has unexpected format: %s", old_df.columns.tolist())
+                            old = {}
+                    except Exception as fallback_e:
+                        logger.error("Failed to load signal weights with fallback: %s", fallback_e)
+                        old = {}
+                else:
+                    logger.error("Failed to load signal weights: %s", e)
+                    old = {}
         else:
             old = {}
         merged = {
@@ -6306,7 +6353,7 @@ def update_signal_weights() -> None:
         out_df = pd.DataFrame.from_dict(
             merged, orient="index", columns=["weight"]
         ).reset_index()
-        out_df.columns = ["signal", "weight"]
+        out_df.columns = ["signal_name", "weight"]
         out_df.to_csv(SIGNAL_WEIGHTS_FILE, index=False)
         logger.info("SIGNAL_WEIGHTS_UPDATED", extra={"count": len(merged)})
     except Exception as e:
@@ -6376,7 +6423,7 @@ def run_meta_learning_weight_optimizer(
         weights = {
             tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)
         }
-        out_df = pd.DataFrame(list(weights.items()), columns=["signal", "weight"])
+        out_df = pd.DataFrame(list(weights.items()), columns=["signal_name", "weight"])
         out_df.to_csv(output_path, index=False)
         logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
     finally:
@@ -6440,7 +6487,7 @@ def run_bayesian_meta_learning_optimizer(
         weights = {
             tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)
         }
-        out_df = pd.DataFrame(list(weights.items()), columns=["signal", "weight"])
+        out_df = pd.DataFrame(list(weights.items()), columns=["signal_name", "weight"])
         out_df.to_csv(output_path, index=False)
         logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
     finally:
