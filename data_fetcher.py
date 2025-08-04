@@ -213,8 +213,8 @@ def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, fee
     """Fetch raw bars from Alpaca with detailed logging."""
     url = f"https://data.alpaca.markets/v2/stocks/{symbol}/bars"
     params = {
-        "start": ensure_utc(start).isoformat(),
-        "end": ensure_utc(end).isoformat(),
+        "start": ensure_utc(start).isoformat().replace('+00:00', 'Z'),
+        "end": ensure_utc(end).isoformat().replace('+00:00', 'Z'),
         "timeframe": timeframe,
         "feed": feed,
     }
