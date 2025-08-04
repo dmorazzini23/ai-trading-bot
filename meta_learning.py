@@ -158,17 +158,40 @@ def load_weights(path: str, default: "np.ndarray | None" = None) -> "np.ndarray"
         if p.exists():
             # Try CSV format first (matches update_weights format)
             try:
+                # AI-AGENT-REF: Enhanced CSV reading with better error handling
+                if path.endswith('.csv'):
+                    # For CSV files, try pandas-style reading first
+                    try:
+                        import pandas as pd
+                        df = pd.read_csv(p, usecols=["signal_name", "weight"])
+                        if not df.empty:
+                            weights = df["weight"].values
+                            if isinstance(weights, np.ndarray):
+                                logger.info("Successfully loaded weights from CSV: %s", path)
+                                return weights
+                    except (ImportError, ValueError) as e:
+                        logger.debug("Pandas CSV read failed, trying numpy: %s", e)
+                        # Fallback to numpy loadtxt
+                        pass
+                
+                # Standard numpy reading for both CSV and other formats
                 weights = np.loadtxt(p, delimiter=",")
                 if isinstance(weights, np.ndarray):
+                    logger.debug("Loaded weights using numpy from: %s", path)
                     return weights
-            except (ValueError, OSError):
+            except (ValueError, OSError) as e:
+                logger.debug("CSV/numpy loading failed, trying pickle: %s", e)
                 # Fallback to pickle format for backward compatibility
-                with open(p, "rb") as f:
-                    weights = pickle.load(f)
-                    if isinstance(weights, np.ndarray):
-                        return weights
-                    else:
-                        logger.warning("Invalid weights format in %s, using default", path)
+                try:
+                    with open(p, "rb") as f:
+                        weights = pickle.load(f)
+                        if isinstance(weights, np.ndarray):
+                            logger.debug("Loaded weights from pickle: %s", path)
+                            return weights
+                        else:
+                            logger.warning("Invalid weights format in %s, using default", path)
+                except (pickle.PickleError, EOFError) as pickle_e:
+                    logger.warning("Pickle loading also failed for %s: %s", path, pickle_e)
         else:
             logger.debug("Weights file %s not found, creating with default", path)
             # Create the default weights file when it doesn't exist
@@ -390,26 +413,60 @@ def retrain_meta_learner(
 
 def optimize_signals(signal_data: Any, cfg: Any, model: Any | None = None, *, volatility: float = 1.0) -> Any:
     """Optimize trading signals using ``model`` if provided."""
+    # AI-AGENT-REF: Enhanced error handling for empty or invalid signal data
+    if signal_data is None:
+        logger.warning("optimize_signals received None signal_data, returning empty list")
+        return []
+    
+    # Handle empty signal data gracefully
+    if hasattr(signal_data, '__len__') and len(signal_data) == 0:
+        logger.warning("optimize_signals received empty signal_data, returning empty list")
+        return []
+    
     if model is not None:
         try:
             # when a model instance is provided, return its raw predictions exactly
-            return list(model.predict(signal_data))
-        except (ValueError, RuntimeError) as exc:
-            logger.exception("optimize_signals failed: %s", exc)
-            return signal_data
+            predictions = model.predict(signal_data)
+            if predictions is None:
+                logger.warning("Model prediction returned None, falling back to original signal_data")
+                return signal_data if signal_data is not None else []
+            return list(predictions)
+        except (ValueError, RuntimeError, AttributeError) as exc:
+            logger.exception("optimize_signals model prediction failed: %s", exc)
+            return signal_data if signal_data is not None else []
+    
     if model is None:
-        model = load_model_checkpoint(cfg.MODEL_PATH)
+        try:
+            model = load_model_checkpoint(cfg.MODEL_PATH)
+        except AttributeError:
+            logger.warning("cfg object missing MODEL_PATH attribute")
+            return signal_data if signal_data is not None else []
+    
     if model is None:
-        return signal_data
+        logger.debug("No model available for signal optimization, returning original data")
+        return signal_data if signal_data is not None else []
+    
     try:
         preds = model.predict(signal_data)
-        preds = np.clip(preds, -1.2, 1.2)
-        factor = 1.0 if volatility <= 1.0 else 1.0 / max(volatility, 1e-3)
-        preds = preds * factor
-        return list(preds)  # AI-AGENT-REF: return list to avoid bool ambiguity
-    except (ValueError, RuntimeError) as exc:  # pragma: no cover - model may fail
-        logger.exception("optimize_signals failed: %s", exc)
-        return signal_data
+        if preds is None:
+            logger.warning("Model predict returned None")
+            return signal_data if signal_data is not None else []
+        
+        # Enhanced clipping with validation
+        if np is not None:
+            preds = np.clip(preds, -1.2, 1.2)
+            factor = 1.0 if volatility <= 1.0 else 1.0 / max(volatility, 1e-3)
+            preds = preds * factor
+            return list(preds)  # AI-AGENT-REF: return list to avoid bool ambiguity
+        else:
+            # Fallback when numpy is not available
+            preds = [max(-1.2, min(1.2, p)) for p in preds]
+            factor = 1.0 if volatility <= 1.0 else 1.0 / max(volatility, 1e-3)
+            preds = [p * factor for p in preds]
+            return preds
+    except (ValueError, RuntimeError, TypeError) as exc:  # pragma: no cover - model may fail
+        logger.exception("optimize_signals prediction processing failed: %s", exc)
+        return signal_data if signal_data is not None else []
 
 
 try:

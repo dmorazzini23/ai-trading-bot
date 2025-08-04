@@ -490,37 +490,92 @@ def compute_signal_matrix(df) -> Optional[Any]:
     """Return a matrix of z-scored indicator signals."""
 
     if df is None or df.empty:
+        logger.warning("compute_signal_matrix received empty dataframe")
         return pd.DataFrame()
+    
     global _LAST_SIGNAL_BAR, _LAST_SIGNAL_MATRIX
     last_bar = df.index[-1] if not df.empty else None
     if last_bar is not None and last_bar == _LAST_SIGNAL_BAR:
         # AI-AGENT-REF: reuse previously computed indicators for same bar
+        logger.debug("Reusing cached signal matrix for bar: %s", last_bar)
         return _LAST_SIGNAL_MATRIX.copy() if _LAST_SIGNAL_MATRIX is not None else pd.DataFrame()
+    
     required = {"close", "high", "low"}
     if not required.issubset(df.columns):
+        logger.warning("compute_signal_matrix missing required columns: %s", required - set(df.columns))
         return pd.DataFrame()
 
-    macd_df = calculate_macd(df["close"])
-    rsi_series = rsi(tuple(df["close"].fillna(method="ffill").astype(float)), 14)
-    sma_diff = df["close"] - df["close"].rolling(20).mean()
-    atr_series = atr(df["high"], df["low"], df["close"], 14)
-    atr_move = df["close"].diff() / atr_series.replace(0, np.nan)
-    mean_rev = mean_reversion_zscore(df["close"], 20)
+    try:
+        # AI-AGENT-REF: Enhanced signal computation with error handling
+        logger.debug("Computing signal matrix for %d rows", len(df))
+        
+        macd_df = calculate_macd(df["close"])
+        if rsi is not None:
+            rsi_series = rsi(tuple(df["close"].fillna(method="ffill").astype(float)), 14)
+        else:
+            # Fallback RSI calculation
+            rsi_series = pd.Series(50.0, index=df.index)  # Neutral RSI
+            
+        sma_diff = df["close"] - df["close"].rolling(20).mean()
+        
+        if atr is not None:
+            atr_series = atr(df["high"], df["low"], df["close"], 14)
+        else:
+            # Fallback ATR calculation
+            high_low = df["high"] - df["low"]
+            atr_series = high_low.rolling(14).mean()
+            
+        atr_move = df["close"].diff() / atr_series.replace(0, np.nan)
+        
+        if mean_reversion_zscore is not None:
+            mean_rev = mean_reversion_zscore(df["close"], 20)
+        else:
+            # Fallback mean reversion calculation
+            rolling_mean = df["close"].rolling(20).mean()
+            rolling_std = df["close"].rolling(20).std()
+            mean_rev = (df["close"] - rolling_mean) / rolling_std.replace(0, np.nan)
 
-    def _z(series) -> Any:
-        return (series - series.rolling(20).mean()) / series.rolling(20).std(ddof=0)
+        def _z(series) -> Any:
+            """Z-score normalization with enhanced error handling."""
+            try:
+                if series is None or series.empty:
+                    return pd.Series(0.0, index=df.index)
+                mean_val = series.rolling(20).mean()
+                std_val = series.rolling(20).std(ddof=0)
+                # AI-AGENT-REF: avoid division by zero
+                std_val = std_val.replace(0, np.nan)
+                return (series - mean_val) / std_val
+            except Exception as e:
+                logger.warning("Z-score calculation failed: %s", e)
+                return pd.Series(0.0, index=df.index)
 
-    matrix = pd.DataFrame(index=df.index)
-    if macd_df is not None and not macd_df.empty:
-        matrix["macd"] = _z(macd_df["macd"])
-    matrix["rsi"] = _z(rsi_series)
-    matrix["sma_diff"] = _z(sma_diff)
-    matrix["atr_move"] = _z(atr_move)
-    matrix["mean_rev_z"] = mean_rev
-    matrix = matrix.dropna(how="all")
-    _LAST_SIGNAL_BAR = last_bar
-    _LAST_SIGNAL_MATRIX = matrix.copy()
-    return matrix
+        matrix = pd.DataFrame(index=df.index)
+        if macd_df is not None and not macd_df.empty and "macd" in macd_df.columns:
+            matrix["macd"] = _z(macd_df["macd"])
+        else:
+            logger.warning("MACD calculation failed or missing, using neutral values")
+            matrix["macd"] = pd.Series(0.0, index=df.index)
+            
+        matrix["rsi"] = _z(rsi_series)
+        matrix["sma_diff"] = _z(sma_diff)
+        matrix["atr_move"] = _z(atr_move)
+        matrix["mean_rev_z"] = mean_rev
+        
+        # AI-AGENT-REF: Clean up infinite values and excessive NaNs
+        matrix = matrix.replace([np.inf, -np.inf], np.nan)
+        matrix = matrix.dropna(how="all")
+        
+        # Cache the results
+        _LAST_SIGNAL_BAR = last_bar
+        _LAST_SIGNAL_MATRIX = matrix.copy()
+        
+        logger.debug("Successfully computed signal matrix with %d rows, %d columns", 
+                    len(matrix), len(matrix.columns))
+        return matrix
+        
+    except Exception as e:
+        logger.error("compute_signal_matrix failed: %s", e, exc_info=True)
+        return pd.DataFrame()
 
 
 def ensemble_vote_signals(signal_matrix) -> Any:
