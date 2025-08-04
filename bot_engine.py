@@ -2936,6 +2936,11 @@ _LAST_PRICE: Dict[str, float] = {}
 _SENTIMENT_CACHE: Dict[str, Tuple[float, float]] = {}  # {ticker: (timestamp, score)}
 PRICE_TTL_PCT = 0.005  # only fetch sentiment if price moved > 0.5%
 SENTIMENT_TTL_SEC = 600  # 10 minutes
+# AI-AGENT-REF: Enhanced sentiment caching for rate limiting
+SENTIMENT_RATE_LIMITED_TTL_SEC = 3600  # 1 hour cache when rate limited
+_SENTIMENT_CIRCUIT_BREAKER = {"failures": 0, "last_failure": 0, "state": "closed"}  # closed, open, half-open
+SENTIMENT_FAILURE_THRESHOLD = 3  # Open circuit after 3 consecutive failures
+SENTIMENT_RECOVERY_TIMEOUT = 300  # 5 minutes before trying half-open
 
 
 class SignalManager:
@@ -3741,23 +3746,86 @@ def pre_trade_health_check(
                 else:
                     df.index = df.index.tz_convert("UTC")
 
-        # Require data to be recent
+        # AI-AGENT-REF: Improved data staleness detection with market hours awareness
         if not orig_range:
             last_ts = df.index[-1]
-            if last_ts < pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=2):
-                if utils.should_log_stale(sym, last_ts):
-                    log_warning(
-                        "HEALTH_STALE_DATA",
-                        extra={
-                            "symbol": sym,
-                            "last_row_time": last_ts.isoformat(),
-                            "current_utc": pd.Timestamp.now(tz="UTC").isoformat(),
-                            "diff_seconds": (
-                                pd.Timestamp.now(tz="UTC") - last_ts
-                            ).total_seconds(),
-                        },
-                    )
-                summary.setdefault("stale_data", []).append(sym)
+            now_utc = pd.Timestamp.now(tz="UTC")
+            
+            # Calculate staleness threshold based on market context
+            staleness_threshold_days = 2  # Default threshold
+            
+            # Check if it's currently a weekend or market holiday
+            from utils import is_market_open, is_weekend, is_market_holiday
+            
+            try:
+                current_is_weekend = is_weekend(now_utc)
+                current_is_holiday = is_market_holiday(now_utc.date())
+                market_currently_open = is_market_open(now_utc)
+                
+                # Adjust staleness expectations based on market state
+                if current_is_weekend:
+                    # If it's weekend, data from Friday should be acceptable
+                    staleness_threshold_days = 4  # Allow data up to 4 days old on weekends
+                elif current_is_holiday:
+                    # On holidays, allow older data
+                    staleness_threshold_days = 5
+                elif not market_currently_open:
+                    # Outside market hours, be more lenient
+                    staleness_threshold_days = 3
+                    
+                # Check if the last data timestamp is outside reasonable staleness
+                staleness_cutoff = now_utc - pd.Timedelta(days=staleness_threshold_days)
+                
+                if last_ts < staleness_cutoff:
+                    # Additional check: if last data is from a trading day, it might be acceptable
+                    last_ts_date = last_ts.date()
+                    days_since_last = (now_utc.date() - last_ts_date).days
+                    
+                    # Only flag as stale if it's been more than reasonable time considering market schedule
+                    should_flag_stale = True
+                    
+                    if days_since_last <= 1:
+                        # Data from yesterday or today - not stale
+                        should_flag_stale = False
+                    elif days_since_last == 2 and current_is_weekend:
+                        # Friday data on weekend - acceptable
+                        should_flag_stale = False
+                    elif days_since_last <= 3 and (current_is_weekend or current_is_holiday):
+                        # Recent data during non-trading periods - acceptable  
+                        should_flag_stale = False
+                        
+                    if should_flag_stale and utils.should_log_stale(sym, last_ts):
+                        log_warning(
+                            "HEALTH_STALE_DATA",
+                            extra={
+                                "symbol": sym,
+                                "last_row_time": last_ts.isoformat(),
+                                "current_utc": now_utc.isoformat(),
+                                "diff_seconds": (now_utc - last_ts).total_seconds(),
+                                "days_since_last": days_since_last,
+                                "market_open": market_currently_open,
+                                "is_weekend": current_is_weekend,
+                                "is_holiday": current_is_holiday,
+                                "staleness_threshold_days": staleness_threshold_days,
+                            },
+                        )
+                        summary.setdefault("stale_data", []).append(sym)
+                        
+            except Exception as e:
+                # Fallback to original logic if market schedule checking fails
+                logger.debug(f"Market schedule check failed for {sym}, using basic staleness: {e}")
+                if last_ts < now_utc - pd.Timedelta(days=2):
+                    if utils.should_log_stale(sym, last_ts):
+                        log_warning(
+                            "HEALTH_STALE_DATA",
+                            extra={
+                                "symbol": sym,
+                                "last_row_time": last_ts.isoformat(),
+                                "current_utc": now_utc.isoformat(),
+                                "diff_seconds": (now_utc - last_ts).total_seconds(),
+                            },
+                        )
+                    summary.setdefault("stale_data", []).append(sym)
 
     failures = (
         set(summary["failures"])
@@ -3817,12 +3885,43 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
         return ""
 
 
-@sleep_and_retry
-@limits(calls=60, period=60)
+def _check_sentiment_circuit_breaker() -> bool:
+    """Check if sentiment circuit breaker allows requests."""
+    global _SENTIMENT_CIRCUIT_BREAKER
+    now = pytime.time()
+    cb = _SENTIMENT_CIRCUIT_BREAKER
+    
+    if cb["state"] == "open":
+        if now - cb["last_failure"] > SENTIMENT_RECOVERY_TIMEOUT:
+            cb["state"] = "half-open"
+            logger.info("Sentiment circuit breaker moved to half-open state")
+            return True
+        return False
+    return True
+
+def _record_sentiment_success():
+    """Record successful sentiment API call."""
+    global _SENTIMENT_CIRCUIT_BREAKER
+    _SENTIMENT_CIRCUIT_BREAKER["failures"] = 0
+    if _SENTIMENT_CIRCUIT_BREAKER["state"] == "half-open":
+        _SENTIMENT_CIRCUIT_BREAKER["state"] = "closed"
+        logger.info("Sentiment circuit breaker closed - service recovered")
+
+def _record_sentiment_failure():
+    """Record failed sentiment API call and update circuit breaker."""
+    global _SENTIMENT_CIRCUIT_BREAKER
+    cb = _SENTIMENT_CIRCUIT_BREAKER
+    cb["failures"] += 1
+    cb["last_failure"] = pytime.time()
+    
+    if cb["failures"] >= SENTIMENT_FAILURE_THRESHOLD:
+        cb["state"] = "open"
+        logger.warning(f"Sentiment circuit breaker opened after {cb['failures']} failures")
+
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
-    retry=retry_if_exception_type((requests.RequestException, DataFetchError)),
+    stop=stop_after_attempt(2),  # Reduced from 3 to avoid hitting rate limits too quickly
+    wait=wait_exponential(multiplier=1, min=2, max=10),  # Increased delays
+    retry=retry_if_exception_type((requests.RequestException,)),
 )
 def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     """
@@ -3837,59 +3936,103 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
         return 0.0
 
     now_ts = pytime.time()
+    
+    # AI-AGENT-REF: Enhanced caching with longer TTL during rate limiting
     with sentiment_lock:
         cached = _SENTIMENT_CACHE.get(ticker)
         if cached:
             last_ts, last_score = cached
-            if now_ts - last_ts < SENTIMENT_TTL_SEC:
+            # Use longer cache during circuit breaker open state
+            cache_ttl = SENTIMENT_RATE_LIMITED_TTL_SEC if _SENTIMENT_CIRCUIT_BREAKER["state"] == "open" else SENTIMENT_TTL_SEC
+            if now_ts - last_ts < cache_ttl:
+                logger.debug(f"Sentiment cache hit for {ticker} (age: {(now_ts - last_ts)/60:.1f}m)")
                 return last_score
 
     # Cache miss or stale → fetch fresh
-    # 1) Fetch NewsAPI articles using configurable URL
-    url = (
-        f"{SENTIMENT_API_URL}?"
-        f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
-        f"&apiKey={api_key}"
-    )
-    resp = requests.get(url, timeout=10)
+    # AI-AGENT-REF: Circuit breaker pattern for graceful degradation
+    if not _check_sentiment_circuit_breaker():
+        logger.info(f"Sentiment circuit breaker open, returning cached/neutral for {ticker}")
+        with sentiment_lock:
+            # Try to use any existing cache, even if stale
+            cached = _SENTIMENT_CACHE.get(ticker)
+            if cached:
+                _, last_score = cached
+                logger.debug(f"Using stale cached sentiment {last_score} for {ticker}")
+                return last_score
+            # No cache available, store and return neutral
+            _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
+            return 0.0
+
     try:
-        resp.raise_for_status()
-    except HTTPError:
+        # 1) Fetch NewsAPI articles using configurable URL
+        url = (
+            f"{SENTIMENT_API_URL}?"
+            f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
+            f"&apiKey={api_key}"
+        )
+        resp = requests.get(url, timeout=10)
+        
         if resp.status_code == 429:
-            logger.warning(
-                f"fetch_sentiment({ticker}) rate-limited → returning neutral 0.0"
-            )
+            # AI-AGENT-REF: Enhanced rate limiting handling
+            logger.warning(f"fetch_sentiment({ticker}) rate-limited → caching neutral with extended TTL")
+            _record_sentiment_failure()
             with sentiment_lock:
+                # Cache neutral score with extended TTL during rate limiting
                 _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
             return 0.0
-        raise
+            
+        resp.raise_for_status()
+        
+        payload = resp.json()
+        articles = payload.get("articles", [])
+        scores = []
+        if articles:
+            for art in articles:
+                text = (art.get("title") or "") + ". " + (art.get("description") or "")
+                if text.strip():
+                    scores.append(predict_text_sentiment(text))
+        news_score = float(sum(scores) / len(scores)) if scores else 0.0
 
-    payload = resp.json()
-    articles = payload.get("articles", [])
-    scores = []
-    if articles:
-        for art in articles:
-            text = (art.get("title") or "") + ". " + (art.get("description") or "")
-            if text.strip():
-                scores.append(predict_text_sentiment(text))
-    news_score = float(sum(scores) / len(scores)) if scores else 0.0
+        # 2) Fetch Form 4 data (insider trades) - with error handling
+        form4_score = 0.0
+        try:
+            form4 = fetch_form4_filings(ticker)
+            # If any insider buy in last 7 days > $50k, boost sentiment
+            for filing in form4:
+                if filing["type"] == "buy" and filing["dollar_amount"] > 50_000:
+                    form4_score += 0.1
+        except Exception as e:
+            logger.debug(f"Form4 fetch failed for {ticker}: {e}")  # Reduced to debug level
 
-    # 2) Fetch Form 4 data (insider trades)
-    form4_score = 0.0
-    try:
-        form4 = fetch_form4_filings(ticker)
-        # If any insider buy in last 7 days > $50k, boost sentiment
-        for filing in form4:
-            if filing["type"] == "buy" and filing["dollar_amount"] > 50_000:
-                form4_score += 0.1
+        final_score = 0.8 * news_score + 0.2 * form4_score
+        final_score = max(-1.0, min(1.0, final_score))
+        
+        # AI-AGENT-REF: Record success and update cache
+        _record_sentiment_success()
+        with sentiment_lock:
+            _SENTIMENT_CACHE[ticker] = (now_ts, final_score)
+        return final_score
+        
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"Sentiment API request failed for {ticker}: {e}")
+        _record_sentiment_failure()
+        
+        # AI-AGENT-REF: Fallback to cached data or neutral if no cache
+        with sentiment_lock:
+            cached = _SENTIMENT_CACHE.get(ticker)
+            if cached:
+                _, last_score = cached
+                logger.debug(f"Using cached sentiment fallback {last_score} for {ticker}")
+                return last_score
+            # No cache available, return neutral
+            _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
+            return 0.0
     except Exception as e:
-        logger.warning(f"[fetch_sentiment] Form4 fetch failed for {ticker}: {e}")
-
-    final_score = 0.8 * news_score + 0.2 * form4_score
-    final_score = max(-1.0, min(1.0, final_score))
-    with sentiment_lock:
-        _SENTIMENT_CACHE[ticker] = (now_ts, final_score)
-    return final_score
+        logger.error(f"Unexpected error fetching sentiment for {ticker}: {e}")
+        _record_sentiment_failure()
+        with sentiment_lock:
+            _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
+        return 0.0
 
 
 def predict_text_sentiment(text: str) -> float:
