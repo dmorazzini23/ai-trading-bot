@@ -49,6 +49,16 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     logging.getLogger(__name__).warning("Running under unsupported Python version")
 
 import config
+# AI-AGENT-REF: Import circuit breaker for external service resilience
+try:
+    from circuit_breaker import circuit_breaker, CircuitBreakerConfig, CircuitBreakerOpenError
+except ImportError:
+    # Fallback if circuit_breaker module not available
+    def circuit_breaker(name, config=None):
+        def decorator(func):
+            return func
+        return decorator
+    CircuitBreakerOpenError = Exception
 # AI-AGENT-REF: lazy import expensive modules to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
     from ai_trading.model_loader import ML_MODELS  # AI-AGENT-REF: preloaded models
@@ -1804,7 +1814,27 @@ run_lock = Lock()
 # AI-AGENT-REF: Add thread-safe locking for trade cooldown state
 trade_cooldowns_lock = Lock()
 
+# AI-AGENT-REF: Enhanced circuit breaker configuration for external services
 breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
+
+# AI-AGENT-REF: Specific circuit breakers for different external services
+alpaca_breaker = pybreaker.CircuitBreaker(
+    fail_max=3,          # Alpaca should be more reliable, fail after 3 attempts
+    reset_timeout=30,    # Shorter reset timeout for trading API
+    name="alpaca_api"
+)
+
+data_breaker = pybreaker.CircuitBreaker(
+    fail_max=5,          # Data services can be less reliable
+    reset_timeout=120,   # Longer timeout for data recovery
+    name="data_services"
+)
+
+finnhub_breaker = pybreaker.CircuitBreaker(
+    fail_max=3,          # External data API
+    reset_timeout=300,   # 5 minutes for external services
+    name="finnhub_api"
+)
 executor = ThreadPoolExecutor(
     max_workers=1
 )  # AI-AGENT-REF: limit workers for single CPU
@@ -1912,11 +1942,63 @@ def ensure_alpaca_credentials() -> None:
     validate_alpaca_credentials()
 
 
+def log_circuit_breaker_status():
+    """Log the status of all circuit breakers for monitoring."""
+    try:
+        breakers = {
+            'main': breaker,
+            'alpaca': alpaca_breaker, 
+            'data': data_breaker,
+            'finnhub': finnhub_breaker
+        }
+        
+        for name, cb in breakers.items():
+            if hasattr(cb, 'state') and hasattr(cb, 'fail_counter'):
+                logger.info(
+                    f"CIRCUIT_BREAKER_STATUS",
+                    extra={
+                        "breaker": name,
+                        "state": cb.state,
+                        "failures": cb.fail_counter,
+                        "last_failure": getattr(cb, 'last_failure', None)
+                    }
+                )
+    except Exception as e:
+        logger.debug(f"Circuit breaker status logging failed: {e}")
+
+
+def get_circuit_breaker_health() -> dict:
+    """Get health status of all circuit breakers."""
+    try:
+        breakers = {
+            'main': breaker,
+            'alpaca': alpaca_breaker,
+            'data': data_breaker, 
+            'finnhub': finnhub_breaker
+        }
+        
+        health = {}
+        for name, cb in breakers.items():
+            if hasattr(cb, 'state'):
+                health[name] = {
+                    'state': str(cb.state),
+                    'healthy': cb.state != 'open',
+                    'failures': getattr(cb, 'fail_counter', 0)
+                }
+            else:
+                health[name] = {'state': 'unknown', 'healthy': True, 'failures': 0}
+                
+        return health
+    except Exception as e:
+        logger.error(f"Failed to get circuit breaker health: {e}")
+        return {}
+
+
 ensure_alpaca_credentials()
 
 
-# Prometheus-safe account fetch
-@breaker
+# Prometheus-safe account fetch with circuit breaker protection
+@alpaca_breaker
 def safe_alpaca_get_account(ctx: "BotContext"):
     """Safely get account information."""
     if ctx.api is None:
