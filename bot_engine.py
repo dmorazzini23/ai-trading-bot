@@ -6497,34 +6497,88 @@ def run_bayesian_meta_learning_optimizer(
 def load_global_signal_performance(
     min_trades: int = 10, threshold: float = 0.4
 ) -> Optional[Dict[str, float]]:
+    """Load global signal performance with enhanced error handling."""
     if not os.path.exists(TRADE_LOG_FILE):
         logger.info("METALEARN_NO_HISTORY")
         return None
-    df = pd.read_csv(
-        TRADE_LOG_FILE,
-        on_bad_lines="skip",
-        engine="python",
-        usecols=["exit_price", "entry_price", "signal_tags", "side"],
-    ).dropna(subset=["exit_price", "entry_price", "signal_tags"])
-    if df.empty:
-        logger.warning("Loaded DataFrame is empty after parsing/fallback")
-    df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
-    df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
-    df["signal_tags"] = df["signal_tags"].astype(str)
-    direction = np.where(df.side == "buy", 1, -1)
-    df["pnl"] = (df.exit_price - df.entry_price) * direction
-    df_tags = df.assign(tag=df.signal_tags.str.split("+")).explode("tag")
-    win_rates = (df_tags["pnl"] > 0).groupby(df_tags["tag"]).mean().to_dict()
-    win_rates = {
-        tag: round(wr, 3)
-        for tag, wr in win_rates.items()
-        if len(df_tags[df_tags["tag"] == tag]) >= min_trades
-    }
-    filtered = {tag: wr for tag, wr in win_rates.items() if wr >= threshold}
-    logger.info(
-        "METALEARN_FILTERED_SIGNALS", extra={"signals": list(filtered.keys()) or []}
-    )
-    return filtered
+    
+    try:
+        df = pd.read_csv(
+            TRADE_LOG_FILE,
+            on_bad_lines="skip",
+            engine="python",
+            usecols=["exit_price", "entry_price", "signal_tags", "side"],
+        ).dropna(subset=["exit_price", "entry_price", "signal_tags"])
+        
+        if df.empty:
+            logger.warning("METALEARN_EMPTY_TRADE_LOG - No valid trades found")
+            return {}
+        
+        # Enhanced data validation and cleaning
+        df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
+        df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
+        df["signal_tags"] = df["signal_tags"].astype(str)
+        
+        # Remove rows with invalid price data
+        df = df.dropna(subset=["exit_price", "entry_price"])
+        if df.empty:
+            logger.warning("METALEARN_INVALID_PRICES - No trades with valid prices")
+            return {}
+        
+        # Calculate PnL with validation
+        direction = np.where(df.side == "buy", 1, -1)
+        df["pnl"] = (df.exit_price - df.entry_price) * direction
+        
+        # Enhanced signal tag processing
+        df_tags = df.assign(tag=df.signal_tags.str.split("+")).explode("tag")
+        df_tags = df_tags[df_tags["tag"].notna() & (df_tags["tag"] != "")]  # Remove empty tags
+        
+        if df_tags.empty:
+            logger.warning("METALEARN_NO_SIGNAL_TAGS - No valid signal tags found")
+            return {}
+        
+        # Calculate win rates with minimum trade validation
+        win_rates = {}
+        tag_groups = df_tags.groupby("tag")
+        
+        for tag, group in tag_groups:
+            if len(group) >= min_trades:
+                win_rate = (group["pnl"] > 0).mean()
+                win_rates[tag] = round(win_rate, 3)
+        
+        if not win_rates:
+            logger.warning("METALEARN_INSUFFICIENT_TRADES - No signals meet minimum trade requirement (%d)", min_trades)
+            return {}
+        
+        # Filter by performance threshold
+        filtered = {tag: wr for tag, wr in win_rates.items() if wr >= threshold}
+        
+        # Enhanced logging with more details
+        logger.info(
+            "METALEARN_FILTERED_SIGNALS", 
+            extra={
+                "signals": list(filtered.keys()) or [],
+                "total_signals_analyzed": len(win_rates),
+                "signals_above_threshold": len(filtered),
+                "threshold": threshold,
+                "min_trades": min_trades,
+                "total_trades": len(df)
+            }
+        )
+        
+        if not filtered:
+            logger.warning("METALEARN_NO_SIGNALS_ABOVE_THRESHOLD - No signals above threshold %.3f", threshold)
+            # Return best performing signals even if below threshold, with reduced weight
+            if win_rates:
+                best_signal = max(win_rates.items(), key=lambda x: x[1])
+                logger.info("METALEARN_FALLBACK_SIGNAL - Using best signal: %s (%.3f)", best_signal[0], best_signal[1])
+                return {best_signal[0]: best_signal[1] * 0.5}  # Reduced confidence
+        
+        return filtered
+        
+    except Exception as e:
+        logger.error("METALEARN_PROCESSING_ERROR - Failed to process signal performance: %s", e, exc_info=True)
+        return {}
 
 
 def _normalize_index(data: pd.DataFrame) -> pd.DataFrame:
