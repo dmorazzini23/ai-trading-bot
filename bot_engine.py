@@ -3112,15 +3112,38 @@ class SignalManager:
     def load_signal_weights(self) -> dict[str, float]:
         if not os.path.exists(SIGNAL_WEIGHTS_FILE):
             return {}
-        df = pd.read_csv(
-            SIGNAL_WEIGHTS_FILE,
-            on_bad_lines="skip",
-            engine="python",
-            usecols=["signal", "weight"],
-        )
-        if df.empty:
-            logger.warning("Loaded DataFrame is empty after parsing/fallback")
-        return {row["signal"]: row["weight"] for _, row in df.iterrows()}
+        try:
+            df = pd.read_csv(
+                SIGNAL_WEIGHTS_FILE,
+                on_bad_lines="skip",
+                engine="python",
+                usecols=["signal_name", "weight"],
+            )
+            if df.empty:
+                logger.warning("Loaded DataFrame is empty after parsing/fallback")
+                return {}
+            return {row["signal_name"]: row["weight"] for _, row in df.iterrows()}
+        except ValueError as e:
+            if "usecols" in str(e).lower():
+                logger.warning("Signal weights CSV missing expected columns, trying fallback read")
+                try:
+                    # Fallback: read all columns and try to map
+                    df = pd.read_csv(SIGNAL_WEIGHTS_FILE, on_bad_lines="skip", engine="python")
+                    if "signal" in df.columns:
+                        # Old format with 'signal' column
+                        return {row["signal"]: row["weight"] for _, row in df.iterrows()}
+                    elif "signal_name" in df.columns:
+                        # New format with 'signal_name' column
+                        return {row["signal_name"]: row["weight"] for _, row in df.iterrows()}
+                    else:
+                        logger.error("Signal weights CSV has unexpected format: %s", df.columns.tolist())
+                        return {}
+                except Exception as fallback_e:
+                    logger.error("Failed to load signal weights with fallback: %s", fallback_e)
+                    return {}
+            else:
+                logger.error("Failed to load signal weights: %s", e)
+                return {}
 
     def evaluate(
         self,
@@ -6288,15 +6311,39 @@ def update_signal_weights() -> None:
 
         ALPHA = 0.2
         if os.path.exists(SIGNAL_WEIGHTS_FILE):
-            old_df = pd.read_csv(
-                SIGNAL_WEIGHTS_FILE,
-                on_bad_lines="skip",
-                engine="python",
-                usecols=["signal", "weight"],
-            )
-            if old_df.empty:
-                logger.warning("Loaded DataFrame is empty after parsing/fallback")
-            old = old_df.set_index("signal")["weight"].to_dict()
+            try:
+                old_df = pd.read_csv(
+                    SIGNAL_WEIGHTS_FILE,
+                    on_bad_lines="skip",
+                    engine="python",
+                    usecols=["signal_name", "weight"],
+                )
+                if old_df.empty:
+                    logger.warning("Loaded DataFrame is empty after parsing/fallback")
+                    old = {}
+                else:
+                    old = old_df.set_index("signal_name")["weight"].to_dict()
+            except ValueError as e:
+                if "usecols" in str(e).lower():
+                    logger.warning("Signal weights CSV missing expected columns, trying fallback read")
+                    try:
+                        # Fallback: read all columns and try to map
+                        old_df = pd.read_csv(SIGNAL_WEIGHTS_FILE, on_bad_lines="skip", engine="python")
+                        if "signal" in old_df.columns:
+                            # Old format with 'signal' column
+                            old = old_df.set_index("signal")["weight"].to_dict()
+                        elif "signal_name" in old_df.columns:
+                            # New format with 'signal_name' column
+                            old = old_df.set_index("signal_name")["weight"].to_dict()
+                        else:
+                            logger.error("Signal weights CSV has unexpected format: %s", old_df.columns.tolist())
+                            old = {}
+                    except Exception as fallback_e:
+                        logger.error("Failed to load signal weights with fallback: %s", fallback_e)
+                        old = {}
+                else:
+                    logger.error("Failed to load signal weights: %s", e)
+                    old = {}
         else:
             old = {}
         merged = {
@@ -6306,7 +6353,7 @@ def update_signal_weights() -> None:
         out_df = pd.DataFrame.from_dict(
             merged, orient="index", columns=["weight"]
         ).reset_index()
-        out_df.columns = ["signal", "weight"]
+        out_df.columns = ["signal_name", "weight"]
         out_df.to_csv(SIGNAL_WEIGHTS_FILE, index=False)
         logger.info("SIGNAL_WEIGHTS_UPDATED", extra={"count": len(merged)})
     except Exception as e:
@@ -6376,7 +6423,7 @@ def run_meta_learning_weight_optimizer(
         weights = {
             tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)
         }
-        out_df = pd.DataFrame(list(weights.items()), columns=["signal", "weight"])
+        out_df = pd.DataFrame(list(weights.items()), columns=["signal_name", "weight"])
         out_df.to_csv(output_path, index=False)
         logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
     finally:
@@ -6440,7 +6487,7 @@ def run_bayesian_meta_learning_optimizer(
         weights = {
             tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)
         }
-        out_df = pd.DataFrame(list(weights.items()), columns=["signal", "weight"])
+        out_df = pd.DataFrame(list(weights.items()), columns=["signal_name", "weight"])
         out_df.to_csv(output_path, index=False)
         logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
     finally:
@@ -6450,34 +6497,88 @@ def run_bayesian_meta_learning_optimizer(
 def load_global_signal_performance(
     min_trades: int = 10, threshold: float = 0.4
 ) -> Optional[Dict[str, float]]:
+    """Load global signal performance with enhanced error handling."""
     if not os.path.exists(TRADE_LOG_FILE):
         logger.info("METALEARN_NO_HISTORY")
         return None
-    df = pd.read_csv(
-        TRADE_LOG_FILE,
-        on_bad_lines="skip",
-        engine="python",
-        usecols=["exit_price", "entry_price", "signal_tags", "side"],
-    ).dropna(subset=["exit_price", "entry_price", "signal_tags"])
-    if df.empty:
-        logger.warning("Loaded DataFrame is empty after parsing/fallback")
-    df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
-    df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
-    df["signal_tags"] = df["signal_tags"].astype(str)
-    direction = np.where(df.side == "buy", 1, -1)
-    df["pnl"] = (df.exit_price - df.entry_price) * direction
-    df_tags = df.assign(tag=df.signal_tags.str.split("+")).explode("tag")
-    win_rates = (df_tags["pnl"] > 0).groupby(df_tags["tag"]).mean().to_dict()
-    win_rates = {
-        tag: round(wr, 3)
-        for tag, wr in win_rates.items()
-        if len(df_tags[df_tags["tag"] == tag]) >= min_trades
-    }
-    filtered = {tag: wr for tag, wr in win_rates.items() if wr >= threshold}
-    logger.info(
-        "METALEARN_FILTERED_SIGNALS", extra={"signals": list(filtered.keys()) or []}
-    )
-    return filtered
+    
+    try:
+        df = pd.read_csv(
+            TRADE_LOG_FILE,
+            on_bad_lines="skip",
+            engine="python",
+            usecols=["exit_price", "entry_price", "signal_tags", "side"],
+        ).dropna(subset=["exit_price", "entry_price", "signal_tags"])
+        
+        if df.empty:
+            logger.warning("METALEARN_EMPTY_TRADE_LOG - No valid trades found")
+            return {}
+        
+        # Enhanced data validation and cleaning
+        df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
+        df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
+        df["signal_tags"] = df["signal_tags"].astype(str)
+        
+        # Remove rows with invalid price data
+        df = df.dropna(subset=["exit_price", "entry_price"])
+        if df.empty:
+            logger.warning("METALEARN_INVALID_PRICES - No trades with valid prices")
+            return {}
+        
+        # Calculate PnL with validation
+        direction = np.where(df.side == "buy", 1, -1)
+        df["pnl"] = (df.exit_price - df.entry_price) * direction
+        
+        # Enhanced signal tag processing
+        df_tags = df.assign(tag=df.signal_tags.str.split("+")).explode("tag")
+        df_tags = df_tags[df_tags["tag"].notna() & (df_tags["tag"] != "")]  # Remove empty tags
+        
+        if df_tags.empty:
+            logger.warning("METALEARN_NO_SIGNAL_TAGS - No valid signal tags found")
+            return {}
+        
+        # Calculate win rates with minimum trade validation
+        win_rates = {}
+        tag_groups = df_tags.groupby("tag")
+        
+        for tag, group in tag_groups:
+            if len(group) >= min_trades:
+                win_rate = (group["pnl"] > 0).mean()
+                win_rates[tag] = round(win_rate, 3)
+        
+        if not win_rates:
+            logger.warning("METALEARN_INSUFFICIENT_TRADES - No signals meet minimum trade requirement (%d)", min_trades)
+            return {}
+        
+        # Filter by performance threshold
+        filtered = {tag: wr for tag, wr in win_rates.items() if wr >= threshold}
+        
+        # Enhanced logging with more details
+        logger.info(
+            "METALEARN_FILTERED_SIGNALS", 
+            extra={
+                "signals": list(filtered.keys()) or [],
+                "total_signals_analyzed": len(win_rates),
+                "signals_above_threshold": len(filtered),
+                "threshold": threshold,
+                "min_trades": min_trades,
+                "total_trades": len(df)
+            }
+        )
+        
+        if not filtered:
+            logger.warning("METALEARN_NO_SIGNALS_ABOVE_THRESHOLD - No signals above threshold %.3f", threshold)
+            # Return best performing signals even if below threshold, with reduced weight
+            if win_rates:
+                best_signal = max(win_rates.items(), key=lambda x: x[1])
+                logger.info("METALEARN_FALLBACK_SIGNAL - Using best signal: %s (%.3f)", best_signal[0], best_signal[1])
+                return {best_signal[0]: best_signal[1] * 0.5}  # Reduced confidence
+        
+        return filtered
+        
+    except Exception as e:
+        logger.error("METALEARN_PROCESSING_ERROR - Failed to process signal performance: %s", e, exc_info=True)
+        return {}
 
 
 def _normalize_index(data: pd.DataFrame) -> pd.DataFrame:
