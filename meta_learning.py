@@ -357,25 +357,89 @@ def retrain_meta_learner(
 
     df = df.dropna(subset=["entry_price", "exit_price", "signal_tags", "side"])
     
-    # AI-AGENT-REF: Fix meta learning data types - ensure numeric conversion for prices
+    # AI-AGENT-REF: Enhanced meta learning data validation with better error handling
     try:
+        # Convert price columns to numeric, handling various input formats
         df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
         df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
+        
+        # Log initial data quality metrics
+        initial_rows = len(df)
+        logger.debug(f"META_LEARNING_INITIAL_DATA: {initial_rows} rows before validation")
+        
         # Remove rows where price conversion failed
         df = df.dropna(subset=["entry_price", "exit_price"])
+        after_numeric = len(df)
+        if after_numeric < initial_rows:
+            logger.info(f"META_LEARNING_PRICE_CONVERSION: Removed {initial_rows - after_numeric} rows with invalid price formats")
         
-        # Validate that we have reasonable price data
-        if df["entry_price"].min() <= 0 or df["exit_price"].min() <= 0:
-            logger.warning("META_LEARNING_INVALID_PRICES - Found non-positive prices after conversion")
-            # Filter out non-positive prices
-            df = df[(df["entry_price"] > 0) & (df["exit_price"] > 0)]
+        # Validate price ranges - detect unrealistic values
+        if len(df) > 0:
+            # Check for extremely high/low prices that might indicate data corruption
+            max_reasonable_price = 50000  # $50k per share
+            min_reasonable_price = 0.01   # 1 cent
             
+            price_issues = (
+                (df["entry_price"] > max_reasonable_price) | 
+                (df["entry_price"] < min_reasonable_price) |
+                (df["exit_price"] > max_reasonable_price) | 
+                (df["exit_price"] < min_reasonable_price)
+            )
+            
+            if price_issues.any():
+                problematic_rows = df[price_issues]
+                logger.warning(f"META_LEARNING_PRICE_OUTLIERS: Found {len(problematic_rows)} rows with unrealistic prices")
+                logger.debug(f"Price outliers range: entry({problematic_rows['entry_price'].min():.2f}-{problematic_rows['entry_price'].max():.2f}), exit({problematic_rows['exit_price'].min():.2f}-{problematic_rows['exit_price'].max():.2f})")
+                
+                # Filter out unrealistic prices
+                df = df[~price_issues]
+        
+        # Check for reasonable price relationships
+        if len(df) > 0:
+            # Flag trades with extreme price movements (>1000% change) as potentially corrupted
+            price_change_pct = abs((df["exit_price"] - df["entry_price"]) / df["entry_price"])
+            extreme_moves = price_change_pct > 10.0  # 1000% change
+            
+            if extreme_moves.any():
+                extreme_count = extreme_moves.sum()
+                logger.warning(f"META_LEARNING_EXTREME_MOVES: Found {extreme_count} trades with >1000% price moves")
+                # Keep extreme moves but flag them for review
+                df.loc[extreme_moves, 'extreme_move'] = True
+        
+        # Final validation - ensure we have positive prices
+        if len(df) > 0:
+            positive_prices = (df["entry_price"] > 0) & (df["exit_price"] > 0)
+            df = df[positive_prices]
+            
+            if not positive_prices.all():
+                logger.info(f"META_LEARNING_NEGATIVE_PRICES: Filtered out {(~positive_prices).sum()} trades with non-positive prices")
+        
         if len(df) == 0:
-            logger.error("METALEARN_INVALID_PRICES - No trades with valid prices after data type conversion")
+            logger.error("METALEARN_INVALID_PRICES - No trades with valid prices after comprehensive validation")
             return False
             
+        # Test that final data quality summary is logged
+        final_rows = len(df)
+        retention_rate = (final_rows / initial_rows) * 100 if initial_rows > 0 else 0
+        logger.info(f"META_LEARNING_DATA_QUALITY: Retained {final_rows}/{initial_rows} trades ({retention_rate:.1f}%)")
+        
+        # Validate price data statistics for reasonableness
+        if final_rows > 0:
+            entry_stats = {
+                'min': float(df["entry_price"].min()),
+                'max': float(df["exit_price"].max()), 
+                'mean': float(df["entry_price"].mean())
+            }
+            exit_stats = {
+                'min': float(df["exit_price"].min()),
+                'max': float(df["exit_price"].max()),
+                'mean': float(df["exit_price"].mean())
+            }
+            logger.debug(f"META_LEARNING_PRICE_STATS: Entry prices ${entry_stats['min']:.2f}-${entry_stats['max']:.2f} (avg: ${entry_stats['mean']:.2f})")
+            logger.debug(f"META_LEARNING_PRICE_STATS: Exit prices ${exit_stats['min']:.2f}-${exit_stats['max']:.2f} (avg: ${exit_stats['mean']:.2f})")
+            
     except Exception as e:
-        logger.error("META_LEARNING_PRICE_CONVERSION_ERROR: %s", e)
+        logger.error("META_LEARNING_PRICE_VALIDATION_ERROR: %s", e, exc_info=True)
         return False
     
     if len(df) < min_samples:

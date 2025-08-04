@@ -363,6 +363,80 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         return MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME
 
 
+def is_weekend(timestamp: dt.datetime | pd.Timestamp | None = None) -> bool:
+    """Check if the given timestamp (or current time) falls on a weekend."""
+    if timestamp is None:
+        timestamp = dt.datetime.now(timezone.utc)
+    elif hasattr(timestamp, 'to_pydatetime'):
+        timestamp = timestamp.to_pydatetime()
+    
+    # Convert to Eastern Time for market context
+    try:
+        et_time = timestamp.astimezone(ZoneInfo("America/New_York"))
+        return et_time.weekday() >= 5  # Saturday=5, Sunday=6
+    except Exception:
+        # Fallback to UTC weekday
+        return timestamp.weekday() >= 5
+
+
+def is_market_holiday(date_to_check: date | dt.datetime | None = None) -> bool:
+    """Check if the given date is a US market holiday."""
+    if date_to_check is None:
+        date_to_check = dt.datetime.now(timezone.utc).date()
+    elif isinstance(date_to_check, dt.datetime):
+        date_to_check = date_to_check.date()
+    
+    try:
+        # Try to use pandas_market_calendars if available
+        import pandas_market_calendars as mcal
+        nyse = mcal.get_calendar('NYSE')
+        
+        # Check if the date is a trading day
+        schedule = nyse.schedule(start_date=date_to_check, end_date=date_to_check)
+        return schedule.empty
+        
+    except ImportError:
+        # Fallback to basic holiday detection without pandas_market_calendars
+        year = date_to_check.year
+        
+        # Basic US market holidays (static dates and simple rules)
+        holidays = [
+            date(year, 1, 1),   # New Year's Day
+            date(year, 7, 4),   # Independence Day
+            date(year, 12, 25), # Christmas Day
+        ]
+        
+        # Memorial Day (last Monday in May)
+        may_last_monday = date(year, 5, 31)
+        while may_last_monday.weekday() != 0:  # Monday = 0
+            may_last_monday = date(year, may_last_monday.month, may_last_monday.day - 1)
+        holidays.append(may_last_monday)
+        
+        # Labor Day (first Monday in September)
+        sept_first_monday = date(year, 9, 1)
+        while sept_first_monday.weekday() != 0:
+            sept_first_monday = date(year, sept_first_monday.month, sept_first_monday.day + 1)
+        holidays.append(sept_first_monday)
+        
+        # Thanksgiving (fourth Thursday in November)
+        nov_fourth_thursday = date(year, 11, 1)
+        thursdays = 0
+        while thursdays < 4:
+            if nov_fourth_thursday.weekday() == 3:  # Thursday = 3
+                thursdays += 1
+                if thursdays < 4:
+                    nov_fourth_thursday = date(year, nov_fourth_thursday.month, nov_fourth_thursday.day + 7)
+            else:
+                nov_fourth_thursday = date(year, nov_fourth_thursday.month, nov_fourth_thursday.day + 1)
+        holidays.append(nov_fourth_thursday)
+        
+        return date_to_check in holidays
+    
+    except Exception as e:
+        logger.debug(f"Holiday check failed for {date_to_check}: {e}")
+        return False  # Conservative fallback
+
+
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 
 
