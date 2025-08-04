@@ -57,6 +57,9 @@ except Exception as e:
         FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
         FUNDAMENTAL_API_KEY = os.getenv("FUNDAMENTAL_API_KEY")
         NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+        # Sentiment API Configuration (with fallback to NEWS_API_KEY for backwards compatibility)
+        SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY") or os.getenv("NEWS_API_KEY")
+        SENTIMENT_API_URL = os.getenv("SENTIMENT_API_URL", "https://newsapi.org/v2/everything")
         IEX_API_TOKEN = os.getenv("IEX_API_TOKEN")
         BOT_MODE = os.getenv("BOT_MODE", "balanced")
         DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
@@ -311,6 +314,9 @@ ALPACA_DATA_FEED = getattr(env_settings, 'ALPACA_DATA_FEED', os.getenv("ALPACA_D
 FINNHUB_API_KEY = getattr(env_settings, 'FINNHUB_API_KEY', os.getenv("FINNHUB_API_KEY"))
 FUNDAMENTAL_API_KEY = getattr(env_settings, 'FUNDAMENTAL_API_KEY', os.getenv("FUNDAMENTAL_API_KEY"))
 NEWS_API_KEY = env_settings.NEWS_API_KEY
+# Sentiment API Configuration with fallback support
+SENTIMENT_API_KEY = getattr(env_settings, 'SENTIMENT_API_KEY', None) or NEWS_API_KEY
+SENTIMENT_API_URL = getattr(env_settings, 'SENTIMENT_API_URL', "https://newsapi.org/v2/everything")
 IEX_API_TOKEN = env_settings.IEX_API_TOKEN
 BOT_MODE = env_settings.BOT_MODE
 MODEL_PATH = env_settings.MODEL_PATH
@@ -479,6 +485,8 @@ __all__ = [
     "ALPACA_DATA_FEED",
     "FINNHUB_API_KEY",
     "NEWS_API_KEY",
+    "SENTIMENT_API_KEY",
+    "SENTIMENT_API_URL",
     "WEBHOOK_SECRET",
     "WEBHOOK_PORT",
     "MIN_HEALTH_ROWS",

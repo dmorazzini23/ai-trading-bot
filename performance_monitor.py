@@ -228,19 +228,123 @@ class ResourceMonitor:
             import threading
             process_metrics['thread_count'] = threading.active_count()
             
-            # Python processes count
+            # Trading-bot specific process count (improved logic)
             try:
-                result = subprocess.run(['pgrep', '-f', 'python'], 
-                                      capture_output=True, text=True)
-                python_pids = result.stdout.strip().split('\n') if result.stdout.strip() else []
-                process_metrics['python_processes'] = len([p for p in python_pids if p])
-            except subprocess.SubprocessError:
+                process_metrics['python_processes'] = self._count_trading_bot_processes()
+            except Exception as e:
+                logger.warning(f"Error counting trading bot processes: {e}")
                 process_metrics['python_processes'] = 1
             
         except Exception as e:
             process_metrics['error'] = str(e)
         
         return process_metrics
+    
+    def _count_trading_bot_processes(self) -> int:
+        """
+        Count trading-bot specific processes, filtering out temporary/diagnostic processes.
+        
+        This method addresses false positive alerts from temporary Python processes
+        by focusing on long-running trading-related processes only.
+        """
+        trading_bot_count = 0
+        
+        try:
+            # Get all Python processes with full command line details
+            result = subprocess.run(
+                ['ps', 'aux'], 
+                capture_output=True, 
+                text=True, 
+                timeout=10
+            )
+            
+            if result.returncode != 0:
+                # Fallback to simpler approach if ps fails
+                return self._count_python_processes_fallback()
+            
+            lines = result.stdout.strip().split('\n')[1:]  # Skip header
+            
+            for line in lines:
+                if not line.strip():
+                    continue
+                    
+                parts = line.split(None, 10)  # Split into at most 11 parts
+                if len(parts) < 11:
+                    continue
+                    
+                # Extract process info
+                user, pid, cpu, mem, vsz, rss, tty, stat, start, time, command = parts
+                
+                # Only count Python processes
+                if 'python' not in command.lower():
+                    continue
+                
+                # Filter criteria for trading bot processes
+                is_trading_bot = False
+                
+                # Check for trading bot specific indicators
+                trading_indicators = [
+                    'bot_engine.py', 'runner.py', 'run.py', 'trade_execution.py',
+                    'ai-trading-bot', 'trading_bot', 'alpaca', 'predict.py',
+                    'performance_monitor.py', 'retrain.py'
+                ]
+                
+                for indicator in trading_indicators:
+                    if indicator in command:
+                        is_trading_bot = True
+                        break
+                
+                # Skip temporary/diagnostic processes
+                temp_indicators = [
+                    'pgrep', 'ps aux', 'grep', '/tmp/', 'diagnostic',
+                    'test_', 'pytest', 'coverage', 'pip install'
+                ]
+                
+                is_temporary = any(temp in command for temp in temp_indicators)
+                
+                if is_trading_bot and not is_temporary:
+                    # Additional check: process should be running for some time
+                    # Skip very new processes (likely diagnostics)
+                    try:
+                        pid_int = int(pid)
+                        # Check process start time via /proc if available
+                        proc_stat_path = f'/proc/{pid_int}/stat'
+                        if os.path.exists(proc_stat_path):
+                            with open(proc_stat_path, 'r') as f:
+                                stat_data = f.read().strip().split()
+                                # starttime is the 22nd field (index 21)
+                                if len(stat_data) > 21:
+                                    # For now, just count it as valid if we can read the stat
+                                    trading_bot_count += 1
+                                    self.logger.debug(f"Counted trading bot process: PID {pid}, command: {command[:80]}...")
+                        else:
+                            # If we can't check /proc, but other criteria match, count it
+                            trading_bot_count += 1
+                            
+                    except (ValueError, OSError, IOError):
+                        # If we can't validate the process, but it matches criteria, count it
+                        if is_trading_bot and not is_temporary:
+                            trading_bot_count += 1
+                            
+        except (subprocess.SubprocessError, subprocess.TimeoutExpired) as e:
+            self.logger.warning(f"Error getting process list: {e}")
+            return self._count_python_processes_fallback()
+        except Exception as e:
+            self.logger.error(f"Unexpected error counting trading bot processes: {e}")
+            return self._count_python_processes_fallback()
+        
+        # Ensure we return at least 1 if we're running (this process)
+        return max(trading_bot_count, 1)
+    
+    def _count_python_processes_fallback(self) -> int:
+        """Fallback method for counting Python processes using simple pgrep."""
+        try:
+            result = subprocess.run(['pgrep', '-f', 'python'], 
+                                  capture_output=True, text=True, timeout=5)
+            python_pids = result.stdout.strip().split('\n') if result.stdout.strip() else []
+            return len([p for p in python_pids if p])
+        except (subprocess.SubprocessError, subprocess.TimeoutExpired):
+            return 1  # Assume at least this process is running
     
     def _get_network_metrics(self) -> Dict:
         """Get basic network metrics."""
@@ -346,18 +450,20 @@ class ResourceMonitor:
                     'threshold': self.alert_thresholds['thread_count']
                 })
             
-            if 'python_processes' in proc and proc['python_processes'] > 1:
+            # Alert only if we have significantly more trading bot processes than expected
+            # Allow for up to 2 legitimate trading bot processes (main + potential backup/monitor)
+            if 'python_processes' in proc and proc['python_processes'] > 2:
                 alerts.append({
-                    'type': 'multiple_python_processes',
+                    'type': 'multiple_trading_bot_processes',
                     'severity': 'medium',
-                    'message': f"Multiple Python processes: {proc['python_processes']}",
+                    'message': f"Multiple trading bot processes detected: {proc['python_processes']} (filtered for trading-specific processes only)",
                     'value': proc['python_processes'],
-                    'threshold': 1
+                    'threshold': 2
                 })
         
         # Add timestamp to alerts
         for alert in alerts:
-            alert['timestamp'] = metrics['timestamp']
+            alert['timestamp'] = metrics.get('timestamp', datetime.now(timezone.utc).isoformat())
         
         return alerts
     

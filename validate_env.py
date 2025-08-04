@@ -438,8 +438,244 @@ def generate_schema() -> dict:
     return Settings.model_json_schema()
 
 
-def _main() -> None:  # pragma: no cover - simple CLI helper
-    logger.info("Environment variables successfully validated")
+def debug_environment() -> Dict[str, Any]:
+    """
+    Generate comprehensive environment debug report.
+    
+    Returns
+    -------
+    Dict[str, Any]
+        Debug report with environment status, issues, and recommendations
+    """
+    debug_report = {
+        'timestamp': datetime.now().isoformat(),
+        'validation_status': 'unknown',
+        'critical_issues': [],
+        'warnings': [],
+        'environment_vars': {},
+        'recommendations': []
+    }
+    
+    try:
+        # Run full validation
+        is_valid, errors, settings_obj = validate_environment()
+        
+        debug_report['validation_status'] = 'valid' if is_valid else 'invalid'
+        debug_report['critical_issues'] = errors
+        
+        # Check specific environment variables
+        env_vars_to_check = [
+            'ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'ALPACA_BASE_URL',
+            'NEWS_API_KEY', 'SENTIMENT_API_KEY', 'SENTIMENT_API_URL',
+            'FINNHUB_API_KEY', 'BOT_MODE', 'TRADING_MODE'
+        ]
+        
+        for var in env_vars_to_check:
+            value = os.getenv(var)
+            if value:
+                # Mask sensitive values
+                if 'KEY' in var.upper() or 'SECRET' in var.upper():
+                    masked_value = f"{value[:4]}...{value[-4:]}" if len(value) > 8 else "***"
+                    debug_report['environment_vars'][var] = {
+                        'status': 'set',
+                        'value': masked_value,
+                        'length': len(value)
+                    }
+                else:
+                    debug_report['environment_vars'][var] = {
+                        'status': 'set',
+                        'value': value
+                    }
+            else:
+                debug_report['environment_vars'][var] = {
+                    'status': 'not_set',
+                    'value': None
+                }
+        
+        # Generate recommendations
+        if not debug_report['environment_vars']['SENTIMENT_API_KEY']['value']:
+            if debug_report['environment_vars']['NEWS_API_KEY']['value']:
+                debug_report['recommendations'].append(
+                    "Consider setting SENTIMENT_API_KEY to improve sentiment analysis performance"
+                )
+            else:
+                debug_report['recommendations'].append(
+                    "Set NEWS_API_KEY or SENTIMENT_API_KEY to enable sentiment analysis"
+                )
+        
+        if debug_report['environment_vars']['TRADING_MODE']['value'] == 'live':
+            debug_report['warnings'].append(
+                "LIVE TRADING MODE - Real money at risk!"
+            )
+        
+        # Check .env file accessibility
+        env_file_path = '.env'
+        if os.path.exists(env_file_path):
+            debug_report['env_file'] = {
+                'exists': True,
+                'readable': os.access(env_file_path, os.R_OK),
+                'size_bytes': os.path.getsize(env_file_path)
+            }
+        else:
+            debug_report['env_file'] = {
+                'exists': False,
+                'readable': False,
+                'size_bytes': 0
+            }
+            debug_report['recommendations'].append(
+                "Create .env file with required environment variables"
+            )
+            
+    except Exception as e:
+        debug_report['validation_status'] = 'error'
+        debug_report['critical_issues'].append(f"Debug environment failed: {e}")
+        logger.error(f"Environment debug failed: {e}")
+    
+    return debug_report
+
+
+def print_environment_debug() -> None:
+    """Print formatted environment debug information to console."""
+    debug_report = debug_environment()
+    
+    print("\n" + "="*60)
+    print("AI TRADING BOT - ENVIRONMENT DEBUG REPORT")
+    print("="*60)
+    print(f"Timestamp: {debug_report['timestamp']}")
+    print(f"Validation Status: {debug_report['validation_status'].upper()}")
+    
+    if debug_report['critical_issues']:
+        print(f"\n🚨 CRITICAL ISSUES ({len(debug_report['critical_issues'])}):")
+        for issue in debug_report['critical_issues']:
+            print(f"  - {issue}")
+    
+    if debug_report['warnings']:
+        print(f"\n⚠️  WARNINGS ({len(debug_report['warnings'])}):")
+        for warning in debug_report['warnings']:
+            print(f"  - {warning}")
+    
+    print(f"\n📋 ENVIRONMENT VARIABLES:")
+    for var, info in debug_report['environment_vars'].items():
+        status_emoji = "✅" if info['status'] == 'set' else "❌"
+        print(f"  {status_emoji} {var}: {info.get('value', 'NOT SET')}")
+    
+    if debug_report['recommendations']:
+        print(f"\n💡 RECOMMENDATIONS ({len(debug_report['recommendations'])}):")
+        for rec in debug_report['recommendations']:
+            print(f"  - {rec}")
+    
+    print(f"\n📁 .ENV FILE:")
+    env_info = debug_report.get('env_file', {})
+    print(f"  Exists: {'✅' if env_info.get('exists') else '❌'}")
+    print(f"  Readable: {'✅' if env_info.get('readable') else '❌'}")
+    print(f"  Size: {env_info.get('size_bytes', 0)} bytes")
+    
+    print("\n" + "="*60)
+
+
+def validate_specific_env_var(var_name: str) -> Dict[str, Any]:
+    """
+    Validate a specific environment variable.
+    
+    Parameters
+    ----------
+    var_name : str
+        Name of environment variable to validate
+        
+    Returns
+    -------
+    Dict[str, Any]
+        Validation result with status and details
+    """
+    result = {
+        'variable': var_name,
+        'status': 'unknown',
+        'value': None,
+        'issues': [],
+        'recommendations': []
+    }
+    
+    value = os.getenv(var_name)
+    if not value:
+        result['status'] = 'missing'
+        result['issues'].append(f"{var_name} is not set")
+        return result
+    
+    result['value'] = value
+    result['status'] = 'set'
+    
+    # Specific validations based on variable name
+    if var_name in ['ALPACA_API_KEY', 'ALPACA_SECRET_KEY']:
+        if len(value) < 10:
+            result['issues'].append(f"{var_name} appears too short")
+        if value.lower() in ['your_api_key', 'test', 'placeholder']:
+            result['issues'].append(f"{var_name} appears to be a placeholder value")
+    
+    elif var_name == 'ALPACA_BASE_URL':
+        if not value.startswith('https://'):
+            result['issues'].append("ALPACA_BASE_URL should use HTTPS")
+        if 'paper' in value and var_name == 'live':
+            result['issues'].append("Paper URL with live trading mode")
+    
+    elif var_name == 'BOT_MODE':
+        valid_modes = ['conservative', 'balanced', 'aggressive', 'paper', 'testing']
+        if value.lower() not in valid_modes:
+            result['issues'].append(f"Invalid BOT_MODE. Valid options: {valid_modes}")
+    
+    return result
+
+
+def _main() -> None:  # pragma: no cover - enhanced CLI helper
+    """Enhanced CLI for environment validation and debugging."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="AI Trading Bot Environment Validator")
+    parser.add_argument('--debug', action='store_true', 
+                       help='Show detailed environment debug information')
+    parser.add_argument('--check', type=str, metavar='VAR_NAME',
+                       help='Check a specific environment variable')
+    parser.add_argument('--quiet', action='store_true',
+                       help='Suppress non-error output')
+    
+    args = parser.parse_args()
+    
+    if args.debug:
+        print_environment_debug()
+        return
+    
+    if args.check:
+        result = validate_specific_env_var(args.check)
+        print(f"\nVariable: {result['variable']}")
+        print(f"Status: {result['status']}")
+        if result['value'] and 'KEY' not in result['variable'].upper():
+            print(f"Value: {result['value']}")
+        elif result['value']:
+            print(f"Value: [MASKED - {len(result['value'])} characters]")
+        
+        if result['issues']:
+            print("Issues:")
+            for issue in result['issues']:
+                print(f"  - {issue}")
+        
+        if result['recommendations']:
+            print("Recommendations:")
+            for rec in result['recommendations']:
+                print(f"  - {rec}")
+        return
+    
+    # Default behavior - basic validation
+    is_valid, errors, _ = validate_environment()
+    
+    if not args.quiet:
+        if is_valid:
+            print("✅ Environment validation passed")
+        else:
+            print("❌ Environment validation failed")
+            for error in errors:
+                print(f"  - {error}")
+            print("\nUse --debug for detailed information")
+    
+    exit(0 if is_valid else 1)
 
 
 if __name__ == "__main__":
