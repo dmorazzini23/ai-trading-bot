@@ -979,6 +979,9 @@ ALPACA_SECRET_KEY = getattr(config, "ALPACA_SECRET_KEY", None)
 ALPACA_PAPER = getattr(config, "ALPACA_PAPER", None)
 validate_alpaca_credentials = getattr(config, "validate_alpaca_credentials", None)
 CONFIG_NEWS_API_KEY = getattr(config, "NEWS_API_KEY", None)
+# Support new sentiment API configuration with backwards compatibility
+CONFIG_SENTIMENT_API_KEY = getattr(config, "SENTIMENT_API_KEY", None) or CONFIG_NEWS_API_KEY
+CONFIG_SENTIMENT_API_URL = getattr(config, "SENTIMENT_API_URL", "https://newsapi.org/v2/everything")
 FINNHUB_API_KEY = getattr(config, "FINNHUB_API_KEY", None)
 BOT_MODE_ENV = getattr(config, "BOT_MODE", BOT_MODE)
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
@@ -1707,7 +1710,9 @@ params = state.mode_obj.get_config()
 params.update(load_hyperparams())
 
 # Other constants
-NEWS_API_KEY = CONFIG_NEWS_API_KEY
+NEWS_API_KEY = CONFIG_NEWS_API_KEY  # Keep for backwards compatibility
+SENTIMENT_API_KEY = CONFIG_SENTIMENT_API_KEY  # New preferred API key
+SENTIMENT_API_URL = CONFIG_SENTIMENT_API_URL  # Configurable API URL
 TRAILING_FACTOR = params.get("TRAILING_FACTOR", 1.2)
 SECONDARY_TRAIL_FACTOR = 1.0
 TAKE_PROFIT_FACTOR = params.get("TAKE_PROFIT_FACTOR", 1.8)
@@ -3825,7 +3830,10 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     Uses a simple in-memory TTL cache to avoid hitting NewsAPI too often.
     If FinBERT isn’t available, return neutral 0.0.
     """
-    if not NEWS_API_KEY:
+    # Use new SENTIMENT_API_KEY or fallback to NEWS_API_KEY for backwards compatibility
+    api_key = SENTIMENT_API_KEY or NEWS_API_KEY
+    if not api_key:
+        logger.debug("No sentiment API key configured (checked SENTIMENT_API_KEY and NEWS_API_KEY)")
         return 0.0
 
     now_ts = pytime.time()
@@ -3837,11 +3845,11 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
                 return last_score
 
     # Cache miss or stale → fetch fresh
-    # 1) Fetch NewsAPI articles
+    # 1) Fetch NewsAPI articles using configurable URL
     url = (
-        f"https://newsapi.org/v2/everything?"
+        f"{SENTIMENT_API_URL}?"
         f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
-        f"&apiKey={NEWS_API_KEY}"
+        f"&apiKey={api_key}"
     )
     resp = requests.get(url, timeout=10)
     try:

@@ -74,7 +74,10 @@ _cache_ttl = 300  # 5 minutes cache TTL
 def fetch_sentiment(symbol: str) -> float:
     """Return a sentiment score for ``symbol`` using NewsAPI with rate limiting and TTL cache."""
 
-    if not config.NEWS_API_KEY:
+    # Support both SENTIMENT_API_KEY and NEWS_API_KEY for backwards compatibility
+    api_key = getattr(config, 'SENTIMENT_API_KEY', None) or config.NEWS_API_KEY
+    if not api_key:
+        logger.debug("No sentiment API key configured (checked SENTIMENT_API_KEY and NEWS_API_KEY)")
         return 0.0
     
     current_time = time.time()
@@ -115,9 +118,11 @@ def fetch_sentiment(symbol: str) -> float:
         _last_request_time[symbol] = current_time
 
     try:
+        # Support configurable sentiment API URL, with fallback to NewsAPI
+        base_url = getattr(config, 'SENTIMENT_API_URL', 'https://newsapi.org/v2/everything')
         url = (
-            "https://newsapi.org/v2/everything?q="
-            f"{symbol}&pageSize=5&sortBy=publishedAt&apiKey={config.NEWS_API_KEY}"
+            f"{base_url}?q="
+            f"{symbol}&pageSize=5&sortBy=publishedAt&apiKey={api_key}"
         )
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
