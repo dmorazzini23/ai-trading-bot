@@ -107,6 +107,33 @@ def _run_forever() -> NoReturn:
 
 
 def start_runner(*, once: bool = False) -> None:
+    # AI-AGENT-REF: Add process management to prevent multiple instances
+    try:
+        from process_manager import ProcessManager
+        from data_validation import validate_trading_data, should_halt_trading, log_data_validation_summary
+        
+        pm = ProcessManager()
+        
+        # Check for multiple instances first
+        instance_check = pm.check_multiple_instances()
+        if instance_check['multiple_instances']:
+            logger.error("Multiple trading bot instances detected!")
+            for rec in instance_check['recommendations']:
+                logger.error(rec)
+            logger.error("Exiting to prevent trading conflicts")
+            return
+        
+        # Acquire process lock to prevent new instances
+        if not pm.acquire_process_lock():
+            logger.error("Failed to acquire process lock - another instance may be running")
+            return
+            
+        logger.info("Process lock acquired successfully")
+        
+    except Exception as e:
+        logger.warning("Process management initialization failed: %s", e)
+        logger.warning("Continuing without process lock (not recommended for production)")
+    
     logger.info("Runner starting")
     if once:
         main()

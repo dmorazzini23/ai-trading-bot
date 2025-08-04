@@ -352,6 +352,110 @@ class ProcessManager:
         
         return recommendations
 
+    # AI-AGENT-REF: Add process lock mechanism to prevent multiple instances
+    def acquire_process_lock(self, lock_file: str = "/tmp/ai_trading_bot.lock") -> bool:
+        """
+        Acquire a process lock to prevent multiple instances.
+        
+        Parameters
+        ----------
+        lock_file : str
+            Path to the lock file
+            
+        Returns
+        -------
+        bool
+            True if lock acquired successfully, False if another instance is running
+        """
+        try:
+            import fcntl
+            import atexit
+            
+            # Check if lock file exists and contains a valid PID
+            if os.path.exists(lock_file):
+                try:
+                    with open(lock_file, 'r') as f:
+                        existing_pid = int(f.read().strip())
+                    
+                    # Check if process with this PID is still running
+                    try:
+                        os.kill(existing_pid, 0)
+                        # Process is still running
+                        self.logger.warning(f"Another trading bot instance is running (PID: {existing_pid})")
+                        return False
+                    except OSError:
+                        # Process is dead, remove stale lock file
+                        os.remove(lock_file)
+                        self.logger.info(f"Removed stale lock file for PID {existing_pid}")
+                except (ValueError, OSError) as e:
+                    # Invalid lock file, remove it
+                    self.logger.warning(f"Invalid lock file {lock_file}: {e}, removing")
+                    try:
+                        os.remove(lock_file)
+                    except OSError:
+                        pass
+            
+            # Create new lock file
+            with open(lock_file, 'w') as f:
+                f.write(str(os.getpid()))
+            
+            # Register cleanup function
+            def cleanup_lock():
+                try:
+                    if os.path.exists(lock_file):
+                        with open(lock_file, 'r') as f:
+                            if int(f.read().strip()) == os.getpid():
+                                os.remove(lock_file)
+                                self.logger.info("Process lock released")
+                except (OSError, ValueError):
+                    pass
+            
+            atexit.register(cleanup_lock)
+            self.logger.info(f"Process lock acquired (PID: {os.getpid()})")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to acquire process lock: {e}")
+            return False
+
+    def check_multiple_instances(self) -> Dict:
+        """
+        Check for multiple trading bot instances and provide recommendations.
+        
+        Returns
+        -------
+        Dict
+            Report with instance count and recommendations
+        """
+        processes = self.find_python_processes()
+        trading_processes = [p for p in processes if self._is_trading_process(p['command'])]
+        
+        report = {
+            'total_instances': len(trading_processes),
+            'processes': trading_processes,
+            'multiple_instances': len(trading_processes) > 1,
+            'recommendations': []
+        }
+        
+        if len(trading_processes) > 1:
+            report['recommendations'].append(
+                f"CRITICAL: {len(trading_processes)} trading bot instances detected. "
+                "This can cause race conditions and duplicate orders."
+            )
+            report['recommendations'].append(
+                "Kill all but one instance immediately to prevent trading conflicts."
+            )
+        elif len(trading_processes) == 0:
+            report['recommendations'].append(
+                "No trading bot instances detected. System is ready to start."
+            )
+        else:
+            report['recommendations'].append(
+                "Single trading bot instance detected. Normal operation."
+            )
+        
+        return report
+
 
 def main():
     """Main process management function."""
