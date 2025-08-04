@@ -6,13 +6,33 @@ and generate trading signals with confidence scoring and risk assessment.
 """
 
 import pickle
-import numpy as np
-import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 import warnings
 warnings.filterwarnings('ignore')
+
+# AI-AGENT-REF: Use centralized logger as per AGENTS.md
+try:
+    from logger import logger
+except ImportError:
+    import logging
+    logger = logging.getLogger(__name__)
+
+# AI-AGENT-REF: Import dependencies with fallbacks
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ImportError:
+    NUMPY_AVAILABLE = False
+    logger.warning("NumPy not available, using fallback implementations")
+
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+    logger.warning("Pandas not available, using fallback implementations")
 
 # AI-AGENT-REF: Use centralized logger as per AGENTS.md
 try:
@@ -92,16 +112,28 @@ class MetaLearning(BaseStrategy):
         
         logger.info(f"MetaLearning strategy initialized with risk level {risk_level}")
     
-    def execute_strategy(self, symbol: str) -> Dict:
+    def execute_strategy(self, data=None, symbol: str = None) -> Dict:
         """
         Main execution method called by bot_engine.
         
         Args:
+            data: Optional market data (for compatibility with bot_engine calling patterns)
             symbol: Trading symbol to analyze
             
         Returns:
             Dictionary with signal information or empty dict if no signal
         """
+        # AI-AGENT-REF: Handle both calling patterns for compatibility
+        # If called with positional args: execute_strategy(data, symbol)
+        if data is not None and symbol is None:
+            # Check if first argument is actually the symbol (string)
+            if isinstance(data, str):
+                symbol = data
+                data = None
+        
+        if symbol is None:
+            logger.error("execute_strategy called without symbol")
+            return self._neutral_signal()
         try:
             # Check cache first
             if self._is_cached_prediction_valid(symbol):
@@ -109,14 +141,20 @@ class MetaLearning(BaseStrategy):
                 logger.debug(f"Using cached prediction for {symbol}")
                 return cached_result
             
-            # Get historical data
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=self.parameters['lookback_period'])
-            
-            data = get_minute_df(symbol, start_date, end_date)
-            if data is None or len(data) < self.parameters['min_data_points']:
-                logger.warning(f"Insufficient data for {symbol}, returning neutral signal")
-                return self._neutral_signal()
+            # Get historical data if not provided
+            if data is None:
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=self.parameters['lookback_period'])
+                
+                data = get_minute_df(symbol, start_date, end_date)
+                if data is None or len(data) < self.parameters['min_data_points']:
+                    logger.warning(f"Insufficient data for {symbol}, returning neutral signal")
+                    return self._neutral_signal()
+            else:
+                # Use provided data but validate it
+                if len(data) < self.parameters['min_data_points']:
+                    logger.warning(f"Provided data insufficient for {symbol}, returning neutral signal")
+                    return self._neutral_signal()
             
             # Check if model needs retraining
             if self._should_retrain():
