@@ -1,0 +1,10 @@
+signal_name,weight
+momentum,0.15
+mean_reversion,0.25
+macd,0.10
+rsi,0.10
+stochrsi,0.08
+bollinger,0.07
+obv,0.05
+vsa,0.10
+ml,0.10

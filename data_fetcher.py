@@ -775,6 +775,7 @@ def get_minute_df(
     symbol: str,
     start_date: date | datetime | pd.Timestamp | str,
     end_date: date | datetime | pd.Timestamp | str,
+    limit: Optional[int] = None,  # AI-AGENT-REF: Add missing limit parameter
 ) -> Optional[pd.DataFrame]:
     """Return minute-level OHLCV DataFrame for ``symbol``.
 
@@ -788,6 +789,8 @@ def get_minute_df(
         Start date of the range.
     end_date : datetime-like or str
         End date of the range.
+    limit : int, optional
+        Maximum number of rows to return. If None, returns all available data.
 
     Returns
     -------
@@ -1008,6 +1011,10 @@ def get_minute_df(
         "MINUTE_FETCHED",
         extra={"symbol": symbol, "rows": len(df), "cols": df.shape[1]},
     )
+    # AI-AGENT-REF: Apply limit parameter if specified
+    if limit is not None and len(df) > limit:
+        df = df.tail(limit)  # Return the most recent 'limit' rows
+        logger.debug("Applied limit %d to %s data, returning %d rows", limit, symbol, len(df))
     return df
 
 

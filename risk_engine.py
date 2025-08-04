@@ -781,6 +781,110 @@ class RiskEngine:
         """
         return getattr(self.config, 'order_spacing_seconds', 1.0)
 
+    # AI-AGENT-REF: Add missing critical risk management methods for trading operations
+    def check_position_limits(self, symbol: str, quantity: float) -> bool:
+        """
+        Check if a proposed position would exceed risk limits.
+        
+        Parameters
+        ----------
+        symbol : str
+            Trading symbol to check limits for.
+        quantity : float
+            Proposed position size (positive for long, negative for short).
+            
+        Returns
+        -------
+        bool
+            True if position is within limits, False if it would exceed limits.
+        """
+        try:
+            # Get current exposure for this symbol
+            current_exposure = self.exposure.get(symbol, 0.0)
+            
+            # Calculate new exposure if this position were added
+            # For simplicity, assume equal weight exposure calculation
+            new_exposure = current_exposure + abs(quantity) * 0.001  # rough estimate
+            
+            # Check against maximum exposure per symbol (default 10%)
+            max_symbol_exposure = getattr(self.config, 'max_symbol_exposure', 0.1)
+            if new_exposure > max_symbol_exposure:
+                logger.warning(
+                    "Position for %s would exceed symbol exposure limit: %.3f > %.3f",
+                    symbol, new_exposure, max_symbol_exposure
+                )
+                return False
+                
+            # Check against total portfolio exposure
+            total_exposure = sum(self.exposure.values()) + abs(quantity) * 0.001
+            if total_exposure > self.global_limit:
+                logger.warning(
+                    "Position for %s would exceed total exposure limit: %.3f > %.3f", 
+                    symbol, total_exposure, self.global_limit
+                )
+                return False
+                
+            return True
+            
+        except Exception as e:
+            logger.error("Error checking position limits for %s: %s", symbol, e)
+            return False  # Fail safe - reject if we can't validate
+
+    def validate_order_size(self, symbol: str, quantity: float, price: float) -> bool:
+        """
+        Validate that an order size is appropriate for risk management.
+        
+        Parameters
+        ----------
+        symbol : str
+            Trading symbol for the order.
+        quantity : float
+            Order quantity (shares).
+        price : float
+            Order price per share.
+            
+        Returns
+        -------
+        bool
+            True if order size is valid, False if it should be rejected.
+        """
+        try:
+            # Calculate order value
+            order_value = abs(quantity) * price
+            
+            # Check minimum order size (default $100)
+            min_order_value = getattr(self.config, 'min_order_value', 100.0)
+            if order_value < min_order_value:
+                logger.warning(
+                    "Order for %s below minimum value: $%.2f < $%.2f",
+                    symbol, order_value, min_order_value
+                )
+                return False
+                
+            # Check maximum order size (default $50,000)
+            max_order_value = getattr(self.config, 'max_order_value', 50000.0)
+            if order_value > max_order_value:
+                logger.warning(
+                    "Order for %s exceeds maximum value: $%.2f > $%.2f", 
+                    symbol, order_value, max_order_value
+                )
+                return False
+                
+            # Check reasonable quantity bounds
+            if abs(quantity) < 1:
+                logger.warning("Order quantity too small: %s shares", quantity)
+                return False
+                
+            if abs(quantity) > 10000:  # Sanity check for very large orders
+                logger.warning("Order quantity unusually large: %s shares", quantity)
+                # Don't reject, but log for review
+                
+            return True
+            
+        except Exception as e:
+            logger.error("Error validating order size for %s: %s", symbol, e)
+            return False  # Fail safe - reject if we can't validate
+
 
 def dynamic_position_size(capital: float, volatility: float, drawdown: float) -> float:
     """Return position size using volatility and drawdown aware Kelly fraction.
