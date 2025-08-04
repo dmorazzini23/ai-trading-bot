@@ -49,6 +49,13 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     logging.getLogger(__name__).warning("Running under unsupported Python version")
 
 import config
+# AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
+try:
+    from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
+except ImportError:
+    # Fallback if circuit breaker module not available
+    DrawdownCircuitBreaker = None
+    logger.warning("DrawdownCircuitBreaker not available - drawdown protection disabled")
 # AI-AGENT-REF: Import circuit breaker for external service resilience
 try:
     from circuit_breaker import circuit_breaker, CircuitBreakerConfig, CircuitBreakerOpenError
@@ -3344,6 +3351,8 @@ class BotContext:
     allocator: "StrategyAllocator | None" = None
     strategies: List[Any] = field(default_factory=list)
     execution_engine: ExecutionEngine | None = None
+    # AI-AGENT-REF: Add drawdown circuit breaker for real-time protection
+    drawdown_circuit_breaker: "DrawdownCircuitBreaker | None" = None
     logger: logging.Logger = logger
     
     # AI-AGENT-REF: Add backward compatibility property for alpaca_client
@@ -3525,6 +3534,11 @@ class LazyBotContext:
             risk_engine=get_risk_engine(),
             allocator=get_allocator(),
             strategies=get_strategies(),
+            # AI-AGENT-REF: Initialize drawdown circuit breaker for real-time protection
+            drawdown_circuit_breaker=DrawdownCircuitBreaker(
+                max_drawdown=config.MAX_DRAWDOWN_THRESHOLD,
+                recovery_threshold=0.8
+            ) if DrawdownCircuitBreaker else None,
         )
         _exec_engine = ExecutionEngine(
             self._context,
@@ -8426,6 +8440,46 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 )
 
             current_cash, regime_ok, symbols = _prepare_run(ctx, state)
+
+            # AI-AGENT-REF: Update drawdown circuit breaker with current equity
+            if ctx.drawdown_circuit_breaker:
+                try:
+                    acct = ctx.api.get_account()
+                    current_equity = float(acct.equity) if acct else 0.0
+                    trading_allowed = ctx.drawdown_circuit_breaker.update_equity(current_equity)
+                    
+                    if not trading_allowed:
+                        status = ctx.drawdown_circuit_breaker.get_status()
+                        logger.critical(
+                            "TRADING_HALTED_DRAWDOWN_PROTECTION",
+                            extra={
+                                "current_drawdown": status["current_drawdown"],
+                                "max_drawdown": status["max_drawdown"],
+                                "peak_equity": status["peak_equity"],
+                                "current_equity": current_equity
+                            }
+                        )
+                        # Manage existing positions but skip new trades
+                        try:
+                            portfolio = ctx.api.get_all_positions()
+                            for pos in portfolio:
+                                manage_position_risk(ctx, pos)
+                        except Exception as exc:
+                            logger.warning(f"HALT_MANAGE_FAIL: {exc}")
+                        return
+                    else:
+                        # Log drawdown status for monitoring
+                        logger.debug(
+                            "DRAWDOWN_STATUS_OK",
+                            extra={
+                                "current_drawdown": status["current_drawdown"],
+                                "max_drawdown": status["max_drawdown"],
+                                "trading_allowed": status["trading_allowed"]
+                            }
+                        )
+                except Exception as exc:
+                    logger.error(f"Drawdown circuit breaker update failed: {exc}")
+                    # Continue trading but log the error for investigation
 
             # AI-AGENT-REF: honor global halt flag before processing symbols
             if check_halt_flag(ctx):

@@ -355,6 +355,10 @@ PYRAMID_LEVELS = {
     "medium": float(os.getenv("PYRAMID_MEDIUM", 0.25)),
     "low": float(os.getenv("PYRAMID_LOW", 0.15)),
 }
+
+# AI-AGENT-REF: Add drawdown circuit breaker configuration
+MAX_DRAWDOWN_THRESHOLD = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.08"))
+DAILY_LOSS_LIMIT = float(os.getenv("DAILY_LOSS_LIMIT", "0.03"))
 FORCE_TRADES: bool = False
 """If True, bypasses all pre-trade halts for testing."""
 
@@ -494,6 +498,8 @@ __all__ = [
     "VOLUME_SPIKE_THRESHOLD",
     "ML_CONFIDENCE_THRESHOLD",
     "PYRAMID_LEVELS",
+    "MAX_DRAWDOWN_THRESHOLD",
+    "DAILY_LOSS_LIMIT",
     "FORCE_TRADES",
     "VERBOSE",
     "PARTIAL_FILL_FRAGMENT_THRESHOLD",
@@ -528,6 +534,7 @@ class TradingConfig:
 
     # Risk Management
     max_drawdown_threshold: float = 0.08
+    daily_loss_limit: float = 0.03
     position_size_min_usd: float = 100.0
     kelly_fraction_max: float = 0.25
     max_trades: int = 15
@@ -553,6 +560,7 @@ class TradingConfig:
 
         return cls(
             max_drawdown_threshold=float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.08")),
+            daily_loss_limit=float(os.getenv("DAILY_LOSS_LIMIT", "0.03")),
             position_size_min_usd=float(os.getenv("POSITION_SIZE_MIN_USD", "100.0")),
             kelly_fraction_max=float(os.getenv("KELLY_FRACTION_MAX", "0.25")),
             max_trades=int(os.getenv("MAX_TRADES", "15")),
@@ -570,6 +578,7 @@ class TradingConfig:
         """Convert to dictionary for optimization algorithms."""
         return {
             "max_drawdown_threshold": self.max_drawdown_threshold,
+            "daily_loss_limit": self.daily_loss_limit,
             "kelly_fraction_max": self.kelly_fraction_max,
             "signal_confirmation_bars": self.signal_confirmation_bars,
             "atr_multiplier": self.atr_multiplier,
