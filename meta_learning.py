@@ -356,6 +356,28 @@ def retrain_meta_learner(
         return False
 
     df = df.dropna(subset=["entry_price", "exit_price", "signal_tags", "side"])
+    
+    # AI-AGENT-REF: Fix meta learning data types - ensure numeric conversion for prices
+    try:
+        df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
+        df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
+        # Remove rows where price conversion failed
+        df = df.dropna(subset=["entry_price", "exit_price"])
+        
+        # Validate that we have reasonable price data
+        if df["entry_price"].min() <= 0 or df["exit_price"].min() <= 0:
+            logger.warning("META_LEARNING_INVALID_PRICES - Found non-positive prices after conversion")
+            # Filter out non-positive prices
+            df = df[(df["entry_price"] > 0) & (df["exit_price"] > 0)]
+            
+        if len(df) == 0:
+            logger.error("METALEARN_INVALID_PRICES - No trades with valid prices after data type conversion")
+            return False
+            
+    except Exception as e:
+        logger.error("META_LEARNING_PRICE_CONVERSION_ERROR: %s", e)
+        return False
+    
     if len(df) < min_samples:
         logger.warning("META_RETRAIN_INSUFFICIENT_DATA", extra={"rows": len(df)})
         return False
