@@ -463,7 +463,7 @@ class ResourceMonitor:
         
         # Add timestamp to alerts
         for alert in alerts:
-            alert['timestamp'] = metrics['timestamp']
+            alert['timestamp'] = metrics.get('timestamp', datetime.now(timezone.utc).isoformat())
         
         return alerts
     
