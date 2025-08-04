@@ -19,10 +19,87 @@ except ImportError:
 # AI-AGENT-REF: Data staleness validation to prevent trading on stale data
 
 
+def is_market_hours(current_time: datetime = None) -> bool:
+    """
+    Check if current time is during market trading hours.
+    
+    Parameters
+    ----------
+    current_time : datetime, optional
+        Time to check, defaults to current UTC time
+        
+    Returns
+    -------
+    bool
+        True if during market hours (9:30 AM - 4:00 PM ET, Mon-Fri)
+    """
+    if current_time is None:
+        current_time = datetime.now(timezone.utc)
+    
+    # Convert to ET (Eastern Time)
+    try:
+        import pytz
+        et_tz = pytz.timezone('US/Eastern')
+        et_time = current_time.astimezone(et_tz)
+    except ImportError:
+        # Fallback: approximate ET as UTC-5 (ignoring DST for simplicity)
+        et_time = current_time.replace(tzinfo=timezone.utc) - timedelta(hours=5)
+    
+    # Check if it's a weekday (Monday=0, Sunday=6)
+    if et_time.weekday() >= 5:  # Saturday or Sunday
+        return False
+    
+    # Check if it's during trading hours (9:30 AM - 4:00 PM ET)
+    market_open = et_time.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = et_time.replace(hour=16, minute=0, second=0, microsecond=0)
+    
+    return market_open <= et_time <= market_close
+
+
+def get_staleness_threshold(symbol: str = None, current_time: datetime = None) -> int:
+    """
+    Get appropriate staleness threshold based on market conditions.
+    
+    Parameters
+    ----------
+    symbol : str, optional
+        Symbol being checked (for future symbol-specific logic)
+    current_time : datetime, optional
+        Current time, defaults to now
+        
+    Returns
+    -------
+    int
+        Staleness threshold in minutes
+    """
+    if current_time is None:
+        current_time = datetime.now(timezone.utc)
+    
+    # During market hours: stricter threshold
+    if is_market_hours(current_time):
+        return 15  # 15 minutes during active trading
+    
+    # After hours/weekends: more lenient threshold
+    # Data can be older since markets are closed
+    try:
+        import pytz
+        et_tz = pytz.timezone('US/Eastern')
+        et_time = current_time.astimezone(et_tz)
+    except ImportError:
+        et_time = current_time.replace(tzinfo=timezone.utc) - timedelta(hours=5)
+    
+    # Weekend: very lenient (data from Friday close is acceptable)
+    if et_time.weekday() >= 5:
+        return 4320  # 72 hours (3 days) for weekend
+    
+    # Weekday after hours: moderately lenient
+    return 60  # 1 hour after market close
+
+
 def check_data_freshness(
     df: pd.DataFrame, 
     symbol: str, 
-    max_staleness_minutes: int = 15
+    max_staleness_minutes: int = None
 ) -> Dict[str, Union[bool, str, datetime]]:
     """
     Check if market data is fresh enough for trading.
@@ -33,8 +110,9 @@ def check_data_freshness(
         Market data with timestamp index
     symbol : str
         Symbol being checked
-    max_staleness_minutes : int
-        Maximum allowed staleness in minutes
+    max_staleness_minutes : int, optional
+        Maximum allowed staleness in minutes. If None, uses intelligent 
+        defaults based on market hours and time of day.
         
     Returns
     -------
@@ -43,11 +121,17 @@ def check_data_freshness(
     """
     now = datetime.now(timezone.utc)
     
+    # Use intelligent default if not specified
+    if max_staleness_minutes is None:
+        max_staleness_minutes = get_staleness_threshold(symbol, now)
+    
     report = {
         'symbol': symbol,
         'is_fresh': False,
         'last_data_time': None,
         'minutes_stale': None,
+        'staleness_threshold': max_staleness_minutes,
+        'market_hours': is_market_hours(now),
         'reason': None,
         'current_time': now
     }
@@ -77,9 +161,11 @@ def check_data_freshness(
         
         if minutes_stale <= max_staleness_minutes:
             report['is_fresh'] = True
-            report['reason'] = f'Data is fresh ({minutes_stale:.1f} minutes old)'
+            market_status = "during market hours" if report['market_hours'] else "outside market hours"
+            report['reason'] = f'Data is fresh ({minutes_stale:.1f} minutes old, {market_status})'
         else:
-            report['reason'] = f'Data is stale ({minutes_stale:.1f} minutes old, max {max_staleness_minutes})'
+            market_status = "during market hours" if report['market_hours'] else "outside market hours"
+            report['reason'] = f'Data is stale ({minutes_stale:.1f} minutes old, max {max_staleness_minutes} {market_status})'
             
     except Exception as e:
         report['reason'] = f'Error checking data freshness: {e}'
@@ -90,7 +176,7 @@ def check_data_freshness(
 
 def validate_trading_data(
     data: Dict[str, pd.DataFrame], 
-    max_staleness_minutes: int = 15,
+    max_staleness_minutes: int = None,
     min_data_points: int = 20
 ) -> Dict[str, Dict]:
     """
@@ -100,8 +186,9 @@ def validate_trading_data(
     ----------
     data : Dict[str, pd.DataFrame]
         Dictionary mapping symbols to their market data
-    max_staleness_minutes : int
-        Maximum allowed data staleness in minutes
+    max_staleness_minutes : int, optional
+        Maximum allowed data staleness in minutes. If None, uses intelligent
+        defaults based on market hours and time of day.
     min_data_points : int
         Minimum required data points per symbol
         
@@ -253,8 +340,10 @@ def emergency_data_check(df: pd.DataFrame, symbol: str) -> bool:
             logger.error(f"EMERGENCY: No data for {symbol} - blocking trade")
             return False
             
-        # Check for recent data (last 30 minutes)
-        freshness = check_data_freshness(df, symbol, max_staleness_minutes=30)
+        # Check for recent data with emergency thresholds (more conservative than normal)
+        # Use 2x the normal threshold for emergency checks, but cap at 60 minutes
+        emergency_threshold = min(get_staleness_threshold(symbol) * 2, 60)
+        freshness = check_data_freshness(df, symbol, max_staleness_minutes=emergency_threshold)
         if not freshness['is_fresh']:
             logger.error(f"EMERGENCY: Stale data for {symbol} - {freshness['reason']} - blocking trade")
             return False
