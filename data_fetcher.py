@@ -990,6 +990,8 @@ def get_minute_df(
             if missing:
                 logger.error("get_minute_df missing columns %s", missing)
                 return pd.DataFrame(columns=required)
+            # Successfully fetched data from Finnhub, return it
+            return df
         except FinnhubAPIException as fh_err:
             finnhub_exc = fh_err
             logger.error("[DataFetcher] Finnhub failed: %s", fh_err)
@@ -1011,6 +1013,8 @@ def get_minute_df(
                     if missing:
                         logger.error("get_minute_df missing columns %s", missing)
                         return pd.DataFrame(columns=required)
+                    # Successfully fetched data from yfinance, return it
+                    return df
                 except Exception as exc:
                     yexc = exc
                     logger.error("[DataFetcher] yfinance failed: %s", exc)
@@ -1047,6 +1051,8 @@ def get_minute_df(
                 if missing:
                     logger.error("get_minute_df missing columns %s", missing)
                     return pd.DataFrame(columns=required)
+                # Successfully fetched data from yfinance, return it
+                return df
             except Exception as exc:
                 yexc = exc
                 logger.error("[DataFetcher] yfinance failed: %s", exc)
