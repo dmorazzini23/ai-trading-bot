@@ -85,6 +85,16 @@ class DrawdownCircuitBreaker:
             True if trading is allowed, False if halted
         """
         try:
+            # AI-AGENT-REF: Add input validation for edge cases
+            if current_equity is None or not isinstance(current_equity, (int, float)):
+                logger.warning(f"Invalid equity value: {current_equity} (type: {type(current_equity)})")
+                return False
+            
+            # Handle negative equity (unlikely but possible with margin)
+            if current_equity < 0:
+                logger.warning(f"Negative equity detected: {current_equity}")
+                return False
+            
             # Update peak equity
             if current_equity > self.peak_equity:
                 self.peak_equity = current_equity
@@ -93,6 +103,11 @@ class DrawdownCircuitBreaker:
             if self.peak_equity > 0:
                 self.current_drawdown = (self.peak_equity - current_equity) / self.peak_equity
             else:
+                self.current_drawdown = 0.0
+            
+            # AI-AGENT-REF: Add bounds checking for drawdown calculation
+            if self.current_drawdown < 0:
+                logger.debug(f"Negative drawdown detected: {self.current_drawdown} (equity increased above peak)")
                 self.current_drawdown = 0.0
             
             # Check for circuit breaker trigger
@@ -112,7 +127,8 @@ class DrawdownCircuitBreaker:
             return self.state == CircuitBreakerState.CLOSED
             
         except Exception as e:
-            logger.error(f"Error updating drawdown circuit breaker: {e}")
+            logger.error(f"Error updating drawdown circuit breaker: {e}", exc_info=True)
+            # AI-AGENT-REF: Return False for safety when circuit breaker fails
             return False
     
     def _trigger_halt(self, reason: str):

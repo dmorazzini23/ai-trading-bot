@@ -898,8 +898,15 @@ def get_minute_df(
                     # AI-AGENT-REF: Extend cache validity for same trading cycle to reduce redundant calls
                     cache_validity_minutes = 2  # Allow 2-minute cache for reducing redundant MINUTE_FETCHED calls
                     if ts >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=cache_validity_minutes):
-                        logger.debug("Minute cache hit for %s (age: %.1f min)", symbol, 
-                                   (pd.Timestamp.now(tz="UTC") - ts).total_seconds() / 60)
+                        cache_age_minutes = (pd.Timestamp.now(tz="UTC") - ts).total_seconds() / 60
+                        logger.debug(
+                            "MINUTE_CACHE_HIT",
+                            extra={
+                                "symbol": symbol, 
+                                "cache_age_minutes": round(cache_age_minutes, 1),
+                                "rows": len(df_cached)
+                            }
+                        )
                         return df_cached.copy()
 
     alpaca_exc = finnhub_exc = yexc = None
@@ -1030,7 +1037,12 @@ def get_minute_df(
     _MINUTE_CACHE[symbol] = (df, pd.Timestamp.now(tz="UTC"))
     logger.info(
         "MINUTE_FETCHED",
-        extra={"symbol": symbol, "rows": len(df), "cols": df.shape[1]},
+        extra={
+            "symbol": symbol, 
+            "rows": len(df), 
+            "cols": df.shape[1],
+            "data_source": "fresh_fetch"  # AI-AGENT-REF: Distinguish from cache hits
+        },
     )
     # AI-AGENT-REF: Apply limit parameter if specified
     if limit is not None and len(df) > limit:
