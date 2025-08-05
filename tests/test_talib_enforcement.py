@@ -145,10 +145,10 @@ def test_audit_file_multiple_trades(tmp_path, monkeypatch):
         import audit
         
         # Log first trade
-        audit.log_trade("AAPL", 5, "buy", 150.0, "2024-01-01T10:00:00Z")
+        audit.log_trade("AAPL", 5, "buy", 150.0, "2024-01-01T10:00:00Z", "TEST_MODE")
         
         # Log second trade  
-        audit.log_trade("MSFT", 3, "sell", 250.0, "2024-01-01T11:00:00Z")
+        audit.log_trade("MSFT", 3, "sell", 250.0, "2024-01-01T11:00:00Z", "TEST_MODE")
         
         # Verify both trades are in file
         with open(trade_log_path, 'r') as f:
