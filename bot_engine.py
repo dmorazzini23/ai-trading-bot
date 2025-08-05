@@ -4728,8 +4728,17 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     except Exception:
         spread = 0.0
     vol_score = min(1.0, avg_vol / ctx.volume_threshold) if avg_vol else 0.0
-    spread_score = max(0.0, 1 - spread / 0.05)
-    return max(0.0, min(1.0, vol_score * spread_score))
+    
+    # AI-AGENT-REF: More reasonable spread scoring to reduce excessive retries
+    # Dynamic spread threshold based on volume - high volume stocks can handle wider spreads
+    base_spread_threshold = 0.05
+    volume_adjusted_threshold = base_spread_threshold * (1 + min(1.0, avg_vol / 1000000))
+    spread_score = max(0.2, 1 - spread / volume_adjusted_threshold)  # Min 0.2 instead of 0.0
+    
+    # Combine scores with less aggressive penalization
+    final_score = (vol_score * 0.7) + (spread_score * 0.3)  # Weight volume more than spread
+    
+    return max(0.1, min(1.0, final_score))  # Min 0.1 to avoid complete blocking
 
 
 def fractional_kelly_size(
@@ -5432,8 +5441,23 @@ def pov_submit(
             spread = 0.0
 
         vol = df["volume"].iloc[-1]
-        if spread > 0.05:
-            slice_qty = min(int(vol * cfg.pct * 0.5), total_qty - placed)
+        
+        # AI-AGENT-REF: Dynamic spread threshold based on market conditions
+        # Instead of fixed 0.05, use dynamic threshold based on symbol characteristics
+        dynamic_spread_threshold = min(0.10, max(0.02, vol / 1000000 * 0.05))  
+        
+        if spread > dynamic_spread_threshold:
+            # Less aggressive reduction - only 25% instead of 50%
+            slice_qty = min(int(vol * cfg.pct * 0.75), total_qty - placed)
+            logger.debug(
+                f"[pov_submit] High spread detected, reducing slice by 25%",
+                extra={
+                    "symbol": symbol, 
+                    "spread": spread, 
+                    "threshold": dynamic_spread_threshold,
+                    "reduced_slice_qty": slice_qty
+                },
+            )
         else:
             slice_qty = min(int(vol * cfg.pct), total_qty - placed)
 
@@ -5445,17 +5469,48 @@ def pov_submit(
             pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
             continue
         try:
-            submit_order(ctx, symbol, slice_qty, side)
+            # AI-AGENT-REF: Fix order slicing to track actual filled quantities
+            order = submit_order(ctx, symbol, slice_qty, side)
+            if order is None:
+                logger.warning(
+                    f"[pov_submit] submit_order returned None for slice, skipping",
+                    extra={"symbol": symbol, "slice_qty": slice_qty},
+                )
+                continue
+            
+            # Track actual filled quantity, not intended quantity
+            actual_filled = int(getattr(order, "filled_qty", "0") or "0")
+            
+            # For partially filled orders, the filled_qty might be less than slice_qty
+            if actual_filled < slice_qty:
+                logger.warning(
+                    "POV_SLICE_PARTIAL_FILL",
+                    extra={
+                        "symbol": symbol, 
+                        "intended_qty": slice_qty, 
+                        "actual_filled": actual_filled,
+                        "order_id": getattr(order, "id", ""),
+                        "status": getattr(order, "status", "")
+                    },
+                )
+            
+            placed += actual_filled  # Use actual filled, not intended
+            
         except Exception as e:
             logger.exception(
                 f"[pov_submit] submit_order failed on slice, aborting: {e}",
                 extra={"symbol": symbol},
             )
             return False
-        placed += slice_qty
+        
         logger.info(
             "POV_SLICE_PLACED",
-            extra={"symbol": symbol, "slice_qty": slice_qty, "placed": placed},
+            extra={
+                "symbol": symbol, 
+                "slice_qty": slice_qty, 
+                "actual_filled": actual_filled if 'actual_filled' in locals() else slice_qty,
+                "total_placed": placed
+            },
         )
         pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
     logger.info("POV_SUBMIT_COMPLETE", extra={"symbol": symbol, "placed": placed})
@@ -8108,8 +8163,39 @@ def _process_symbols(
 
     filtered: list[str] = []
     cd_skipped: list[str] = []
+    
+    # AI-AGENT-REF: Add circuit breaker for symbol processing to prevent resource exhaustion
+    max_symbols_per_cycle = min(50, len(symbols))  # Limit to 50 symbols per cycle
+    processed_symbols = 0
+    processing_start_time = time.monotonic()
 
     for symbol in symbols:
+        # Circuit breaker: limit processing time and symbol count
+        if processed_symbols >= max_symbols_per_cycle:
+            logger.warning(
+                "SYMBOL_PROCESSING_CIRCUIT_BREAKER",
+                extra={
+                    "processed_count": processed_symbols,
+                    "remaining_count": len(symbols) - processed_symbols,
+                    "reason": "max_symbols_reached"
+                }
+            )
+            break
+        
+        # Check processing time limit (max 5 minutes per cycle)
+        if time.monotonic() - processing_start_time > 300:
+            logger.warning(
+                "SYMBOL_PROCESSING_CIRCUIT_BREAKER",
+                extra={
+                    "processed_count": processed_symbols,
+                    "elapsed_seconds": time.monotonic() - processing_start_time,
+                    "reason": "time_limit_reached"
+                }
+            )
+            break
+        
+        processed_symbols += 1
+        
         pos = state.position_cache.get(symbol, 0)
         if pos < 0 and close_shorts:
             logger.info(
@@ -8460,6 +8546,25 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 )
 
             current_cash, regime_ok, symbols = _prepare_run(ctx, state)
+
+            # AI-AGENT-REF: Add memory monitoring and cleanup to prevent resource issues
+            if MEMORY_OPTIMIZATION_AVAILABLE:
+                try:
+                    memory_stats = optimize_memory()
+                    if memory_stats.get('memory_usage_mb', 0) > 512:  # If using more than 512MB
+                        logger.warning(
+                            "HIGH_MEMORY_USAGE_DETECTED",
+                            extra={
+                                "memory_usage_mb": memory_stats.get('memory_usage_mb', 0),
+                                "symbols_count": len(symbols)
+                            }
+                        )
+                        # Emergency cleanup if memory is too high
+                        if memory_stats.get('memory_usage_mb', 0) > 1024:  # 1GB threshold
+                            logger.critical("EMERGENCY_MEMORY_CLEANUP_TRIGGERED")
+                            emergency_memory_cleanup()
+                except Exception as exc:
+                    logger.debug(f"Memory optimization check failed: {exc}")
 
             # AI-AGENT-REF: Update drawdown circuit breaker with current equity
             if ctx.drawdown_circuit_breaker:
