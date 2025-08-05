@@ -209,6 +209,22 @@ config.reload_env()
 _MINUTE_CACHE: dict[str, tuple[pd.DataFrame, pd.Timestamp]] = {}
 
 
+def get_cache_stats() -> dict:
+    """Get current cache statistics for monitoring and debugging."""
+    return {
+        "cache_size": len(_MINUTE_CACHE),
+        "cached_symbols": list(_MINUTE_CACHE.keys()),
+        "cache_entries": [
+            {
+                "symbol": symbol,
+                "rows": len(df),
+                "last_updated": ts.isoformat() if ts else None
+            }
+            for symbol, (df, ts) in _MINUTE_CACHE.items()
+        ]
+    }
+
+
 def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, feed: str = _DEFAULT_FEED) -> pd.DataFrame:
     """Fetch raw bars from Alpaca with detailed logging."""
     url = f"https://data.alpaca.markets/v2/stocks/{symbol}/bars"
@@ -904,7 +920,8 @@ def get_minute_df(
                             extra={
                                 "symbol": symbol, 
                                 "cache_age_minutes": round(cache_age_minutes, 1),
-                                "rows": len(df_cached)
+                                "rows": len(df_cached),
+                                "cache_size": len(_MINUTE_CACHE)  # AI-AGENT-REF: Monitor cache performance
                             }
                         )
                         return df_cached.copy()
@@ -1041,7 +1058,8 @@ def get_minute_df(
             "symbol": symbol, 
             "rows": len(df), 
             "cols": df.shape[1],
-            "data_source": "fresh_fetch"  # AI-AGENT-REF: Distinguish from cache hits
+            "data_source": "fresh_fetch",  # AI-AGENT-REF: Distinguish from cache hits
+            "cache_size": len(_MINUTE_CACHE)  # AI-AGENT-REF: Monitor cache performance
         },
     )
     # AI-AGENT-REF: Apply limit parameter if specified
