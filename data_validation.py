@@ -361,3 +361,285 @@ def emergency_data_check(df: pd.DataFrame, symbol: str) -> bool:
     except Exception as e:
         logger.error(f"EMERGENCY: Data validation error for {symbol}: {e} - blocking trade")
         return False
+
+
+# AI-AGENT-REF: Enhanced data integrity monitoring system
+def validate_trade_log_integrity(trade_log_path: str) -> Dict[str, Union[bool, List, str]]:
+    """
+    Comprehensive trade log integrity validation.
+    
+    Validates trade log file format, data consistency, and detects corruption.
+    
+    Parameters
+    ----------
+    trade_log_path : str
+        Path to the trade log CSV file
+        
+    Returns
+    -------
+    Dict
+        Comprehensive integrity report with validation results
+    """
+    integrity_report = {
+        'file_exists': False,
+        'file_readable': False,
+        'valid_format': False,
+        'data_consistent': False,
+        'total_trades': 0,
+        'corrupted_rows': [],
+        'missing_columns': [],
+        'data_quality_issues': [],
+        'recommendations': [],
+        'integrity_score': 0.0,
+        'validation_timestamp': datetime.now(timezone.utc).isoformat()
+    }
+    
+    try:
+        from pathlib import Path
+        
+        # Check file existence
+        if not Path(trade_log_path).exists():
+            integrity_report['recommendations'].append(f"Create trade log file: {trade_log_path}")
+            return integrity_report
+        
+        integrity_report['file_exists'] = True
+        
+        # Check file readability
+        try:
+            df = pd.read_csv(trade_log_path)
+            integrity_report['file_readable'] = True
+            integrity_report['total_trades'] = len(df)
+        except Exception as e:
+            integrity_report['data_quality_issues'].append(f"File read error: {e}")
+            integrity_report['recommendations'].append("Check file format and encoding")
+            return integrity_report
+        
+        # Validate CSV structure and required columns
+        required_columns = ['timestamp', 'symbol', 'side', 'entry_price', 'exit_price', 'quantity', 'pnl']
+        missing_cols = [col for col in required_columns if col not in df.columns]
+        integrity_report['missing_columns'] = missing_cols
+        
+        if not missing_cols:
+            integrity_report['valid_format'] = True
+        else:
+            integrity_report['data_quality_issues'].append(f"Missing columns: {missing_cols}")
+            integrity_report['recommendations'].append("Update trade logging to include all required columns")
+        
+        # Data consistency validation
+        if integrity_report['valid_format'] and len(df) > 0:
+            corrupted_rows = []
+            data_issues = []
+            
+            for idx, row in df.iterrows():
+                issues = []
+                
+                # Validate prices
+                try:
+                    entry_price = float(row['entry_price'])
+                    exit_price = float(row['exit_price'])
+                    
+                    if entry_price <= 0:
+                        issues.append("invalid_entry_price")
+                    if exit_price <= 0:
+                        issues.append("invalid_exit_price")
+                    if entry_price > 50000 or exit_price > 50000:
+                        issues.append("extreme_high_price")
+                        
+                except (ValueError, TypeError):
+                    issues.append("non_numeric_prices")
+                
+                # Validate quantities
+                try:
+                    qty = float(row['quantity'])
+                    if qty <= 0:
+                        issues.append("invalid_quantity")
+                except (ValueError, TypeError):
+                    issues.append("non_numeric_quantity")
+                
+                # Validate side
+                if row['side'] not in ['buy', 'sell']:
+                    issues.append("invalid_side")
+                
+                # Validate timestamp
+                try:
+                    pd.to_datetime(row['timestamp'])
+                except:
+                    issues.append("invalid_timestamp")
+                
+                if issues:
+                    corrupted_rows.append({'row': idx, 'issues': issues})
+            
+            integrity_report['corrupted_rows'] = corrupted_rows
+            
+            if len(corrupted_rows) == 0:
+                integrity_report['data_consistent'] = True
+            else:
+                corruption_rate = len(corrupted_rows) / len(df)
+                data_issues.append(f"Data corruption in {len(corrupted_rows)} rows ({corruption_rate:.1%})")
+                
+                if corruption_rate > 0.1:  # More than 10% corrupted
+                    integrity_report['recommendations'].append("Investigate data logging system for corruption source")
+                
+            integrity_report['data_quality_issues'].extend(data_issues)
+        
+        # Calculate integrity score
+        score = 0.0
+        if integrity_report['file_exists']:
+            score += 0.2
+        if integrity_report['file_readable']:
+            score += 0.2
+        if integrity_report['valid_format']:
+            score += 0.3
+        if integrity_report['data_consistent']:
+            score += 0.3
+        
+        integrity_report['integrity_score'] = score
+        
+        # Add recommendations based on score
+        if score < 0.7:
+            integrity_report['recommendations'].append("Trade log integrity is compromised - manual review required")
+        elif score < 0.9:
+            integrity_report['recommendations'].append("Trade log has minor issues - monitor closely")
+        
+    except Exception as e:
+        integrity_report['data_quality_issues'].append(f"Validation error: {e}")
+        integrity_report['recommendations'].append("Check trade log file system and permissions")
+    
+    return integrity_report
+
+
+def monitor_real_time_data_quality(price_data: Dict[str, float], volume_data: Dict[str, float] = None) -> Dict[str, Union[bool, List]]:
+    """
+    Real-time data quality monitoring for live trading.
+    
+    Performs rapid validation of incoming price and volume data to detect
+    anomalies that could indicate data feed issues or corruption.
+    
+    Parameters
+    ----------
+    price_data : Dict[str, float]
+        Current price data by symbol
+    volume_data : Dict[str, float], optional
+        Current volume data by symbol
+        
+    Returns
+    -------
+    Dict
+        Real-time quality assessment
+    """
+    quality_report = {
+        'data_quality_ok': True,
+        'anomalies_detected': [],
+        'warning_symbols': [],
+        'critical_symbols': [],
+        'recommendations': []
+    }
+    
+    try:
+        for symbol, price in price_data.items():
+            symbol_issues = []
+            
+            # Price validation
+            if pd.isna(price) or price <= 0:
+                symbol_issues.append("invalid_price")
+                quality_report['critical_symbols'].append(symbol)
+                
+            elif price > 50000:  # Extremely high price
+                symbol_issues.append("extreme_high_price")
+                quality_report['warning_symbols'].append(symbol)
+                
+            elif price < 0.01:  # Extremely low price
+                symbol_issues.append("extreme_low_price")
+                quality_report['warning_symbols'].append(symbol)
+            
+            # Volume validation (if provided)
+            if volume_data and symbol in volume_data:
+                volume = volume_data[symbol]
+                if pd.isna(volume) or volume < 0:
+                    symbol_issues.append("invalid_volume")
+                    quality_report['warning_symbols'].append(symbol)
+            
+            if symbol_issues:
+                quality_report['anomalies_detected'].append({
+                    'symbol': symbol,
+                    'issues': symbol_issues,
+                    'price': price,
+                    'volume': volume_data.get(symbol) if volume_data else None
+                })
+        
+        # Set overall quality status
+        if quality_report['critical_symbols']:
+            quality_report['data_quality_ok'] = False
+            quality_report['recommendations'].append("Critical data issues detected - halt trading for affected symbols")
+        
+        elif len(quality_report['warning_symbols']) > len(price_data) * 0.2:  # More than 20% have warnings
+            quality_report['data_quality_ok'] = False
+            quality_report['recommendations'].append("Widespread data quality issues - review data feed")
+        
+        elif quality_report['warning_symbols']:
+            quality_report['recommendations'].append("Monitor data quality closely for warning symbols")
+        
+    except Exception as e:
+        quality_report['data_quality_ok'] = False
+        quality_report['anomalies_detected'].append({
+            'symbol': 'SYSTEM',
+            'issues': ['validation_error'],
+            'error': str(e)
+        })
+        quality_report['recommendations'].append("Data quality monitoring system error - manual review required")
+    
+    return quality_report
+
+
+def create_data_recovery_procedures(issues: List[str]) -> List[str]:
+    """
+    Generate specific data recovery procedures based on detected issues.
+    
+    Parameters
+    ----------
+    issues : List[str]
+        List of data quality issues detected
+        
+    Returns
+    -------
+    List[str]
+        Ordered list of recovery procedures to execute
+    """
+    procedures = []
+    
+    if "missing_file" in issues or "file_not_readable" in issues:
+        procedures.extend([
+            "1. Check file system permissions and disk space",
+            "2. Verify trade logging service is running",
+            "3. Restore from backup if available",
+            "4. Initialize new trade log with proper format"
+        ])
+    
+    if "missing_columns" in issues or "invalid_format" in issues:
+        procedures.extend([
+            "1. Backup current trade log file",
+            "2. Update trade logging code to include required columns",
+            "3. Migrate existing data to new format",
+            "4. Validate new format before resuming trading"
+        ])
+    
+    if "data_corruption" in issues:
+        procedures.extend([
+            "1. Identify corruption source (data feed, storage, logging code)",
+            "2. Clean corrupted records or restore from clean backup",
+            "3. Implement additional data validation in logging pipeline",
+            "4. Monitor for recurring corruption patterns"
+        ])
+    
+    if "stale_data" in issues:
+        procedures.extend([
+            "1. Check data feed connection and latency",
+            "2. Verify system clock synchronization",
+            "3. Restart data collection services if needed",
+            "4. Implement data freshness alerts"
+        ])
+    
+    if not procedures:
+        procedures.append("No specific issues detected - continue monitoring")
+    
+    return procedures

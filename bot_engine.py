@@ -4536,18 +4536,50 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
     exposures = sector_exposure(ctx)
     try:
         total = float(ctx.api.get_account().portfolio_value)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"SECTOR_EXPOSURE_PORTFOLIO_ERROR: Failed to get portfolio value for {symbol}: {e}")
         total = 0.0
     
-    # AI-AGENT-REF: Fix sector cap logic to allow initial position entry when portfolio is empty
+    # Calculate trade value and exposure metrics
+    trade_value = qty * price
+    current_sector_exposure = exposures.get(sec, 0.0)
+    projected_exposure = current_sector_exposure + (trade_value / total) if total > 0 else 0.0
+    cap = getattr(ctx, "sector_cap", SECTOR_EXPOSURE_CAP)
+    
+    # AI-AGENT-REF: Enhanced sector cap logic with clear reasoning
     if total <= 0:
         # For empty portfolios, allow initial positions as they can't exceed sector caps
-        logger.debug(f"Empty portfolio, allowing initial position for {symbol}")
+        logger.info(f"SECTOR_EXPOSURE_EMPTY_PORTFOLIO: Allowing initial position for {symbol} (sector: {sec})")
         return True
     
-    projected = exposures.get(sec, 0.0) + ((qty * price) / total)
-    cap = getattr(ctx, "sector_cap", SECTOR_EXPOSURE_CAP)
-    return projected <= cap
+    # Log detailed exposure analysis
+    exposure_pct = current_sector_exposure * 100
+    projected_pct = projected_exposure * 100
+    cap_pct = cap * 100
+    
+    logger.debug(f"SECTOR_EXPOSURE_ANALYSIS: {symbol} (sector: {sec}) - "
+                f"Current: {exposure_pct:.1f}%, Projected: {projected_pct:.1f}%, Cap: {cap_pct:.1f}%")
+    
+    if projected_exposure <= cap:
+        logger.debug(f"SECTOR_EXPOSURE_OK: {symbol} trade approved - projected exposure {projected_pct:.1f}% within {cap_pct:.1f}% cap")
+        return True
+    else:
+        # Provide clear reasoning for sector cap rejection
+        excess_pct = (projected_exposure - cap) * 100
+        logger.warning(f"SECTOR_EXPOSURE_EXCEEDED: {symbol} trade rejected - "
+                      f"projected exposure {projected_pct:.1f}% exceeds {cap_pct:.1f}% cap by {excess_pct:.1f}%", 
+                      extra={
+                          "symbol": symbol,
+                          "sector": sec,
+                          "current_exposure_pct": exposure_pct,
+                          "projected_exposure_pct": projected_pct,
+                          "cap_pct": cap_pct,
+                          "excess_pct": excess_pct,
+                          "trade_value": trade_value,
+                          "portfolio_value": total,
+                          "reason": "sector_concentration_risk"
+                      })
+        return False
 
 
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
@@ -5977,7 +6009,8 @@ def _enter_long(
         f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={raw_qty}"
     )
     if not sector_exposure_ok(ctx, symbol, raw_qty, current_price):
-        logger.info("SKIP_SECTOR_CAP", extra={"symbol": symbol})
+        logger.info("SKIP_SECTOR_CAP | Buy order skipped due to sector exposure limits", 
+                   extra={"symbol": symbol, "side": "buy", "qty": raw_qty, "price": current_price})
         return True
     order = submit_order(ctx, symbol, raw_qty, "buy")
     if order is None:
@@ -6053,7 +6086,8 @@ def _enter_short(
         f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={qty}"
     )
     if not sector_exposure_ok(ctx, symbol, qty, current_price):
-        logger.info("SKIP_SECTOR_CAP", extra={"symbol": symbol})
+        logger.info("SKIP_SECTOR_CAP | Short order skipped due to sector exposure limits", 
+                   extra={"symbol": symbol, "side": "sell", "qty": qty, "price": current_price})
         return True
     order = submit_order(ctx, symbol, qty, "sell")
     if order is None:

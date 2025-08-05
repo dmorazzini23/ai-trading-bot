@@ -821,6 +821,68 @@ class ExecutionEngine:
         monitor_slippage(expected, actual, symbol)
 
     # --- adaptive helpers -------------------------------------------------
+    
+    def _reconcile_partial_fills(self, symbol: str, requested_qty: int, remaining_qty: int, side: str, last_order: Optional[Order]) -> None:
+        """Enhanced partial fill reconciliation and tracking."""
+        filled_qty = requested_qty - remaining_qty
+        
+        if filled_qty != requested_qty:
+            # Partial fill occurred
+            fill_rate = (filled_qty / requested_qty) * 100 if requested_qty > 0 else 0
+            
+            self.logger.warning("PARTIAL_FILL_DETECTED", extra={
+                "symbol": symbol,
+                "side": side,
+                "requested_qty": requested_qty,
+                "filled_qty": filled_qty,
+                "remaining_qty": remaining_qty,
+                "fill_rate_pct": fill_rate,
+                "order_id": getattr(last_order, "id", None) if last_order else None
+            })
+            
+            # Track partial fill metrics for risk management
+            if hasattr(self.ctx, 'partial_fill_tracker'):
+                if not hasattr(self.ctx.partial_fill_tracker, symbol):
+                    self.ctx.partial_fill_tracker[symbol] = {
+                        'total_partial_fills': 0,
+                        'total_unfilled_qty': 0,
+                        'last_partial_fill_time': None
+                    }
+                
+                self.ctx.partial_fill_tracker[symbol]['total_partial_fills'] += 1
+                self.ctx.partial_fill_tracker[symbol]['total_unfilled_qty'] += remaining_qty
+                self.ctx.partial_fill_tracker[symbol]['last_partial_fill_time'] = datetime.now(timezone.utc)
+            
+            # Alert if fill rate is very low
+            if fill_rate < 50:  # Less than 50% filled
+                self.logger.error("LOW_FILL_RATE_ALERT", extra={
+                    "symbol": symbol,
+                    "fill_rate_pct": fill_rate,
+                    "suggestion": "Review liquidity and order sizing strategy"
+                })
+            
+            # Consider retry logic for remaining quantity if significant
+            if remaining_qty > 0 and fill_rate > 25:  # At least 25% filled, retry reasonable
+                self._schedule_retry_for_remaining(symbol, remaining_qty, side)
+        else:
+            # Full fill
+            self.logger.info("FULL_FILL_SUCCESS", extra={
+                "symbol": symbol,
+                "side": side,
+                "filled_qty": filled_qty,
+                "order_id": getattr(last_order, "id", None) if last_order else None
+            })
+    
+    def _schedule_retry_for_remaining(self, symbol: str, remaining_qty: int, side: str) -> None:
+        """Schedule a retry for remaining unfilled quantity."""
+        # For now, just log the retry requirement
+        # In a full implementation, this could queue the remaining order for later execution
+        self.logger.info("RETRY_SCHEDULED", extra={
+            "symbol": symbol,
+            "remaining_qty": remaining_qty,
+            "side": side,
+            "suggestion": "Manual review recommended for remaining quantity"
+        })
 
     def _record_fill_steps(self, steps: int) -> None:
         self.fill_history.append(steps)
@@ -1634,6 +1696,10 @@ class ExecutionEngine:
                 extra={"symbol": symbol, "remaining": remaining},
             )
         self._record_fill_steps(max(1, steps))
+        
+        # AI-AGENT-REF: Enhanced partial fill reconciliation and tracking
+        self._reconcile_partial_fills(symbol, qty, remaining, side, last_order)
+        
         if last_order:
             oid = getattr(last_order, "id", None)
             if oid:
@@ -1901,6 +1967,10 @@ class ExecutionEngine:
                 extra={"symbol": symbol, "remaining": remaining},
             )
         self._record_fill_steps(max(1, steps))
+        
+        # AI-AGENT-REF: Enhanced partial fill reconciliation and tracking  
+        self._reconcile_partial_fills(symbol, qty, remaining, side, last_order)
+        
         if last_order:
             oid = getattr(last_order, "id", None)
             if oid:
