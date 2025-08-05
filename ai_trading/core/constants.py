@@ -23,7 +23,7 @@ RISK_PARAMETERS = {
     "MAX_CORRELATION_EXPOSURE": 0.15,   # 15% max exposure to correlated assets (reduced for better diversification)
     "MAX_SECTOR_CONCENTRATION": 0.15,   # 15% max exposure to single sector
     "MIN_LIQUIDITY_THRESHOLD": 1000000, # $1M minimum daily volume
-    "MAX_POSITION_SIZE": 0.25,          # 25% max position size (increased for larger positions)
+    "MAX_POSITION_SIZE": 0.25,              # 25% max position size
     "STOP_LOSS_MULTIPLIER": 1.8,        # 1.8x ATR for stop loss (tightened for capital preservation)
     "TAKE_PROFIT_MULTIPLIER": 2.5,      # 2.5x ATR for take profit (reduced for more frequent profit taking)
 }
