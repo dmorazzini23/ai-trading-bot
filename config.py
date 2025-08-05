@@ -530,62 +530,292 @@ from typing import Dict, Any
 
 @dataclass
 class TradingConfig:
-    """Centralized configuration for trading parameters."""
+    """Centralized configuration for all trading parameters.
+    
+    Single source of truth for trading parameters with support for
+    mode-specific configurations and environment variable overrides.
+    """
 
-    # Risk Management
+    # Risk Management Parameters
     max_drawdown_threshold: float = 0.15
     daily_loss_limit: float = 0.03
+    dollar_risk_limit: float = 0.05
+    max_portfolio_risk: float = 0.025
+    max_correlation_exposure: float = 0.15
+    max_sector_concentration: float = 0.15
+    min_liquidity_threshold: int = 1000000
     position_size_min_usd: float = 100.0
-    kelly_fraction_max: float = 0.25
-    max_trades: int = 15
+    max_position_size: int = 8000
+    max_position_size_pct: float = 0.25
 
-    # Signal Processing
+    # Kelly Criterion Parameters
+    kelly_fraction: float = 0.6
+    kelly_fraction_max: float = 0.25
+    min_sample_size: int = 20
+    confidence_level: float = 0.90
+    lookback_periods: int = 252
+    rebalance_frequency: int = 21
+
+    # Trading Mode Parameters
+    conf_threshold: float = 0.75
+    buy_threshold: float = 0.1
+    min_confidence: float = 0.6
+    confirmation_count: int = 2
+    take_profit_factor: float = 1.8
+    trailing_factor: float = 1.2
+    scaling_factor: float = 0.3
+
+    # Signal Processing Parameters
     signal_confirmation_bars: int = 2
+    signal_period: int = 9
+    fast_period: int = 5
+    slow_period: int = 20
     trade_cooldown_min: float = 5.0
     delta_threshold: float = 0.02
-    min_confidence: float = 0.6  # AI-AGENT-REF: add missing min_confidence attribute
+    entry_start_offset_min: int = 30
+    entry_end_offset_min: int = 15
 
-    # Volatility & ATR
+    # Volatility & ATR Parameters
     volatility_lookback_days: int = 20
     atr_multiplier: float = 2.0
+    stop_loss_multiplier: float = 1.8
+    take_profit_multiplier: float = 2.5
+
+    # Execution Parameters
+    limit_order_slippage: float = 0.005
+    max_slippage_bps: int = 15
+    participation_rate: float = 0.15
+    pov_slice_pct: float = 0.05
+    min_order_size: int = 100
+    max_order_size: int = 10000
+    order_timeout_seconds: int = 180
+    retry_attempts: int = 3
+    cancel_threshold_seconds: int = 60
+
+    # Capital Allocation Parameters
+    capital_cap: float = 0.25
+    max_trades: int = 15
 
     # Exposure Management
     exposure_cap_aggressive: float = 0.8
     exposure_cap_conservative: float = 0.4
 
+    # Performance Thresholds
+    min_sharpe_ratio: float = 1.2
+    max_drawdown: float = 0.15
+    min_win_rate: float = 0.48
+    min_profit_factor: float = 1.2
+    max_var_95: float = 0.05
+
     @classmethod
-    def from_env(cls) -> "TradingConfig":
-        """Load configuration from environment variables."""
+    def from_env(cls, mode: str = "balanced") -> "TradingConfig":
+        """Load configuration from environment variables with mode-specific defaults."""
         import os
 
-        return cls(
+        # Get base configuration
+        config = cls(
             max_drawdown_threshold=float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.15")),
             daily_loss_limit=float(os.getenv("DAILY_LOSS_LIMIT", "0.03")),
+            dollar_risk_limit=float(os.getenv("DOLLAR_RISK_LIMIT", "0.05")),
+            max_portfolio_risk=float(os.getenv("MAX_PORTFOLIO_RISK", "0.025")),
+            max_correlation_exposure=float(os.getenv("MAX_CORRELATION_EXPOSURE", "0.15")),
+            max_sector_concentration=float(os.getenv("MAX_SECTOR_CONCENTRATION", "0.15")),
+            min_liquidity_threshold=int(os.getenv("MIN_LIQUIDITY_THRESHOLD", "1000000")),
             position_size_min_usd=float(os.getenv("POSITION_SIZE_MIN_USD", "100.0")),
+            max_position_size=int(os.getenv("MAX_POSITION_SIZE", "8000")),
+            max_position_size_pct=float(os.getenv("MAX_POSITION_SIZE_PCT", "0.25")),
+            
+            kelly_fraction=float(os.getenv("KELLY_FRACTION", "0.6")),
             kelly_fraction_max=float(os.getenv("KELLY_FRACTION_MAX", "0.25")),
-            max_trades=int(os.getenv("MAX_TRADES", "15")),
+            min_sample_size=int(os.getenv("MIN_SAMPLE_SIZE", "20")),
+            confidence_level=float(os.getenv("CONFIDENCE_LEVEL", "0.90")),
+            lookback_periods=int(os.getenv("LOOKBACK_PERIODS", "252")),
+            rebalance_frequency=int(os.getenv("REBALANCE_FREQUENCY", "21")),
+            
+            conf_threshold=float(os.getenv("CONF_THRESHOLD", "0.75")),
+            buy_threshold=float(os.getenv("BUY_THRESHOLD", "0.1")),
+            min_confidence=float(os.getenv("MIN_CONFIDENCE", "0.6")),
+            confirmation_count=int(os.getenv("CONFIRMATION_COUNT", "2")),
+            take_profit_factor=float(os.getenv("TAKE_PROFIT_FACTOR", "1.8")),
+            trailing_factor=float(os.getenv("TRAILING_FACTOR", "1.2")),
+            scaling_factor=float(os.getenv("SCALING_FACTOR", "0.3")),
+            
             signal_confirmation_bars=int(os.getenv("SIGNAL_CONFIRMATION_BARS", "2")),
+            signal_period=int(os.getenv("SIGNAL_PERIOD", "9")),
+            fast_period=int(os.getenv("FAST_PERIOD", "5")),
+            slow_period=int(os.getenv("SLOW_PERIOD", "20")),
             trade_cooldown_min=float(os.getenv("TRADE_COOLDOWN_MIN", "5.0")),
             delta_threshold=float(os.getenv("DELTA_THRESHOLD", "0.02")),
-            min_confidence=float(os.getenv("MIN_CONFIDENCE", "0.6")),  # AI-AGENT-REF: add min_confidence env var
+            entry_start_offset_min=int(os.getenv("ENTRY_START_OFFSET_MIN", "30")),
+            entry_end_offset_min=int(os.getenv("ENTRY_END_OFFSET_MIN", "15")),
+            
             volatility_lookback_days=int(os.getenv("VOLATILITY_LOOKBACK_DAYS", "20")),
             atr_multiplier=float(os.getenv("ATR_MULTIPLIER", "2.0")),
+            stop_loss_multiplier=float(os.getenv("STOP_LOSS_MULTIPLIER", "1.8")),
+            take_profit_multiplier=float(os.getenv("TAKE_PROFIT_MULTIPLIER", "2.5")),
+            
+            limit_order_slippage=float(os.getenv("LIMIT_ORDER_SLIPPAGE", "0.005")),
+            max_slippage_bps=int(os.getenv("MAX_SLIPPAGE_BPS", "15")),
+            participation_rate=float(os.getenv("PARTICIPATION_RATE", "0.15")),
+            pov_slice_pct=float(os.getenv("POV_SLICE_PCT", "0.05")),
+            min_order_size=int(os.getenv("MIN_ORDER_SIZE", "100")),
+            max_order_size=int(os.getenv("MAX_ORDER_SIZE", "10000")),
+            order_timeout_seconds=int(os.getenv("ORDER_TIMEOUT_SECONDS", "180")),
+            retry_attempts=int(os.getenv("RETRY_ATTEMPTS", "3")),
+            cancel_threshold_seconds=int(os.getenv("CANCEL_THRESHOLD_SECONDS", "60")),
+            
+            capital_cap=float(os.getenv("CAPITAL_CAP", "0.25")),
+            max_trades=int(os.getenv("MAX_TRADES", "15")),
+            
             exposure_cap_aggressive=float(os.getenv("EXPOSURE_CAP_AGGRESSIVE", "0.8")),
             exposure_cap_conservative=float(os.getenv("EXPOSURE_CAP_CONSERVATIVE", "0.4")),
+            
+            min_sharpe_ratio=float(os.getenv("MIN_SHARPE_RATIO", "1.2")),
+            max_drawdown=float(os.getenv("MAX_DRAWDOWN", "0.15")),
+            min_win_rate=float(os.getenv("MIN_WIN_RATE", "0.48")),
+            min_profit_factor=float(os.getenv("MIN_PROFIT_FACTOR", "1.2")),
+            max_var_95=float(os.getenv("MAX_VAR_95", "0.05")),
         )
+        
+        # Apply mode-specific adjustments
+        return config.with_mode(mode)
+
+    def with_mode(self, mode: str) -> "TradingConfig":
+        """Apply mode-specific parameter adjustments."""
+        if mode == "conservative":
+            return self._apply_conservative_mode()
+        elif mode == "aggressive":
+            return self._apply_aggressive_mode()
+        else:  # balanced (default)
+            return self._apply_balanced_mode()
+
+    def _apply_conservative_mode(self) -> "TradingConfig":
+        """Apply conservative mode parameters."""
+        # Create a copy and modify conservative parameters
+        import copy
+        config = copy.deepcopy(self)
+        
+        # Risk Management - Lower risk tolerance
+        config.kelly_fraction = 0.25
+        config.daily_loss_limit = 0.03
+        config.capital_cap = 0.20
+        config.max_position_size = 5000
+        
+        # Signal Processing - Higher confirmation requirements
+        config.conf_threshold = 0.85
+        config.min_confidence = 0.75
+        config.confirmation_count = 3
+        
+        # Profit/Loss - Tighter targets
+        config.take_profit_factor = 1.5
+        config.trailing_factor = 1.5
+        
+        return config
+
+    def _apply_balanced_mode(self) -> "TradingConfig":
+        """Apply balanced mode parameters (default values with some adjustments)."""
+        # Create a copy and set balanced-specific parameters
+        import copy
+        config = copy.deepcopy(self)
+        
+        # Balanced mode has moderate settings
+        config.daily_loss_limit = 0.05  # 5% daily loss limit for balanced mode
+        
+        return config
+
+    def _apply_aggressive_mode(self) -> "TradingConfig":
+        """Apply aggressive mode parameters."""
+        # Create a copy and modify aggressive parameters
+        import copy
+        config = copy.deepcopy(self)
+        
+        # Risk Management - Higher risk tolerance
+        config.kelly_fraction = 0.75
+        config.daily_loss_limit = 0.08
+        config.capital_cap = 0.30
+        config.max_position_size = 12000
+        
+        # Signal Processing - Faster execution
+        config.conf_threshold = 0.65
+        config.min_confidence = 0.50
+        config.confirmation_count = 1
+        
+        # Profit/Loss - Extended targets
+        config.take_profit_factor = 2.5
+        config.trailing_factor = 2.0
+        
+        return config
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for optimization algorithms."""
         return {
+            # Risk Management
             "max_drawdown_threshold": self.max_drawdown_threshold,
             "daily_loss_limit": self.daily_loss_limit,
+            "dollar_risk_limit": self.dollar_risk_limit,
+            "max_portfolio_risk": self.max_portfolio_risk,
+            "max_correlation_exposure": self.max_correlation_exposure,
+            "max_position_size": self.max_position_size,
+            "max_position_size_pct": self.max_position_size_pct,
+            
+            # Kelly Criterion
+            "kelly_fraction": self.kelly_fraction,
             "kelly_fraction_max": self.kelly_fraction_max,
+            "min_sample_size": self.min_sample_size,
+            "confidence_level": self.confidence_level,
+            
+            # Trading Mode
+            "conf_threshold": self.conf_threshold,
+            "buy_threshold": self.buy_threshold,
+            "min_confidence": self.min_confidence,
+            "confirmation_count": self.confirmation_count,
+            "take_profit_factor": self.take_profit_factor,
+            "trailing_factor": self.trailing_factor,
+            
+            # Signal Processing
             "signal_confirmation_bars": self.signal_confirmation_bars,
-            "atr_multiplier": self.atr_multiplier,
+            "signal_period": self.signal_period,
+            "fast_period": self.fast_period,
+            "slow_period": self.slow_period,
             "delta_threshold": self.delta_threshold,
-            "min_confidence": self.min_confidence,  # AI-AGENT-REF: add min_confidence to dict conversion
+            
+            # Volatility & ATR
+            "atr_multiplier": self.atr_multiplier,
+            "stop_loss_multiplier": self.stop_loss_multiplier,
+            "take_profit_multiplier": self.take_profit_multiplier,
+            
+            # Execution
+            "limit_order_slippage": self.limit_order_slippage,
+            "max_slippage_bps": self.max_slippage_bps,
+            "participation_rate": self.participation_rate,
+            "pov_slice_pct": self.pov_slice_pct,
+            "order_timeout_seconds": self.order_timeout_seconds,
+            
+            # Capital
+            "capital_cap": self.capital_cap,
+            "max_trades": self.max_trades,
+            
+            # Exposure
             "exposure_cap_aggressive": self.exposure_cap_aggressive,
             "exposure_cap_conservative": self.exposure_cap_conservative,
+        }
+
+    def get_legacy_params(self) -> Dict[str, float]:
+        """Get parameters in legacy format for backward compatibility."""
+        return {
+            "KELLY_FRACTION": self.kelly_fraction,
+            "CONF_THRESHOLD": self.conf_threshold,
+            "CONFIRMATION_COUNT": self.confirmation_count,
+            "TAKE_PROFIT_FACTOR": self.take_profit_factor,
+            "DAILY_LOSS_LIMIT": self.daily_loss_limit,
+            "CAPITAL_CAP": self.capital_cap,
+            "TRAILING_FACTOR": self.trailing_factor,
+            "BUY_THRESHOLD": self.buy_threshold,
+            "SCALING_FACTOR": self.scaling_factor,
+            "POV_SLICE_PCT": self.pov_slice_pct,
+            "ENTRY_START_OFFSET_MIN": self.entry_start_offset_min,
+            "ENTRY_END_OFFSET_MIN": self.entry_end_offset_min,
+            "LIMIT_ORDER_SLIPPAGE": self.limit_order_slippage,
         }
 
     @classmethod
@@ -599,4 +829,6 @@ class TradingConfig:
 
 
 # default trading configuration used across modules
-CONFIG = TradingConfig.from_env()
+# Load mode from environment variable or use balanced as default
+_BOT_MODE = os.getenv("BOT_MODE", "balanced")
+CONFIG = TradingConfig.from_env(mode=_BOT_MODE)

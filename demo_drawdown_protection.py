@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Demonstration of DrawdownCircuitBreaker in a realistic trading scenario.
+Demonstration of DrawdownCircuitBreaker with centralized configuration.
 
 This script simulates how the circuit breaker would protect a portfolio
-during a volatile trading session with multiple equity updates.
+during a volatile trading session using parameters from the centralized
+TradingConfig system.
 """
 
 import os
@@ -15,14 +16,32 @@ import config
 def simulate_trading_session():
     """Simulate a volatile trading session with drawdown protection."""
     
-    print("🤖 AI Trading Bot - Drawdown Protection Demo")
+    print("🤖 AI Trading Bot - Centralized Configuration Demo")
     print("=" * 60)
-    print(f"Configuration: Max Drawdown = {config.MAX_DRAWDOWN_THRESHOLD:.1%}")
-    print(f"Configuration: Daily Loss Limit = {config.DAILY_LOSS_LIMIT:.1%}")
+    
+    # Get configuration for different modes
+    conservative_config = config.TradingConfig.from_env("conservative")
+    balanced_config = config.TradingConfig.from_env("balanced") 
+    aggressive_config = config.TradingConfig.from_env("aggressive")
+    
+    print("📊 Configuration Comparison:")
+    print("-" * 60)
+    print(f"Conservative: Max Drawdown = {conservative_config.max_drawdown_threshold:.1%}, Daily Loss = {conservative_config.daily_loss_limit:.1%}")
+    print(f"Balanced:     Max Drawdown = {balanced_config.max_drawdown_threshold:.1%}, Daily Loss = {balanced_config.daily_loss_limit:.1%}")
+    print(f"Aggressive:   Max Drawdown = {aggressive_config.max_drawdown_threshold:.1%}, Daily Loss = {aggressive_config.daily_loss_limit:.1%}")
     print()
     
-    # Initialize circuit breaker (this happens in bot_engine.py LazyBotContext)
-    breaker = DrawdownCircuitBreaker(max_drawdown=config.MAX_DRAWDOWN_THRESHOLD)
+    # Use balanced mode for the simulation
+    current_config = balanced_config
+    print(f"Using BALANCED mode configuration:")
+    print(f"  • Max Drawdown Threshold: {current_config.max_drawdown_threshold:.1%}")
+    print(f"  • Daily Loss Limit: {current_config.daily_loss_limit:.1%}")
+    print(f"  • Kelly Fraction: {current_config.kelly_fraction}")
+    print(f"  • Confidence Threshold: {current_config.conf_threshold}")
+    print()
+    
+    # Initialize circuit breaker with centralized config
+    breaker = DrawdownCircuitBreaker(max_drawdown=current_config.max_drawdown_threshold)
     
     # Simulate trading session with equity updates
     trading_session = [
