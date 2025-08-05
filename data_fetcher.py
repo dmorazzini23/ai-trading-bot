@@ -915,9 +915,9 @@ def get_minute_df(
             # AI-AGENT-REF: Simplified cache validity logic - extend cache for better performance
             cache_validity_minutes = 5  # Increase cache validity to 5 minutes for better hit ratio
             cache_age = pd.Timestamp.now(tz="UTC") - ts
+            cache_age_minutes = cache_age.total_seconds() / 60
             
-            if cache_age.total_seconds() / 60 <= cache_validity_minutes:
-                cache_age_minutes = cache_age.total_seconds() / 60
+            if cache_age_minutes <= cache_validity_minutes:
                 _CACHE_STATS["hits"] += 1
                 logger.debug(
                     "MINUTE_CACHE_HIT",
