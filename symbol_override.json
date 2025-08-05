@@ -1,0 +1,29 @@
+{
+  "universe": [
+    "AMD",
+    "AMZN",
+    "BABA",
+    "CRM",
+    "CVX",
+    "GOOGL",
+    "IWM",
+    "JNJ",
+    "JPM",
+    "KO",
+    "META",
+    "MSFT",
+    "NFLX",
+    "NVDA",
+    "PG",
+    "PLTR",
+    "QQQ",
+    "SHOP",
+    "SPY",
+    "PYPL",
+    "TSLA",
+    "UBER",
+    "XOM"
+  ],
+  "replaced": "SQ -> PYPL",
+  "reason": "SQ delisted/renamed, causing data fetch errors"
+}

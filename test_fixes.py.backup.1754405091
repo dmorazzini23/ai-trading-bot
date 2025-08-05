@@ -24,7 +24,7 @@ def test_tickers_csv():
     
     expected_tickers = [
         'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'AMD', 'META', 
-        'NFLX', 'CRM', 'UBER', 'SHOP', 'PYPL', 'PLTR', 'SPY', 'QQQ', 
+        'NFLX', 'CRM', 'UBER', 'SHOP', 'SQ', 'PLTR', 'SPY', 'QQQ', 
         'IWM', 'JPM', 'JNJ', 'PG', 'KO', 'XOM', 'CVX', 'BABA'
     ]
     
