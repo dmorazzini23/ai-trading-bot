@@ -11,7 +11,7 @@
   "KELLY_FRACTION": 0.6,
   "CONFIRMATION_COUNT": 2,
   "DAILY_LOSS_LIMIT": 0.07,
-  "CAPITAL_CAP": 0.08,
+  "CAPITAL_CAP": 0.25,
   "fast_period": 5,
   "slow_period": 20,
   "signal_period": 9,

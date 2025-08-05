@@ -60,7 +60,7 @@ def demonstrate_parameter_optimizations():
         print("Balanced for higher profit potential with better risk control:")
         print(f"  • MAX_PORTFOLIO_RISK: 2.0% → {RISK_PARAMETERS['MAX_PORTFOLIO_RISK']*100:.1f}% (+25% increase)")
         print(f"    → Higher profit potential with controlled portfolio exposure")
-        print(f"  • MAX_POSITION_SIZE: 10.0% → {RISK_PARAMETERS['MAX_POSITION_SIZE']*100:.1f}% (-20% reduction)")
+        print(f"  • MAX_POSITION_SIZE: 10.0% → {RISK_PARAMETERS['MAX_POSITION_SIZE']*100:.1f}% (+150% increase)")
         print(f"    → Better diversification with smaller individual positions")
         print(f"  • STOP_LOSS_MULTIPLIER: 2.0x → {RISK_PARAMETERS['STOP_LOSS_MULTIPLIER']}x (-10% reduction)")
         print(f"    → Tighter stops for better capital preservation")

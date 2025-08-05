@@ -838,7 +838,7 @@ except Exception:  # pragma: no cover - optional dependency
             self.MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "10"))
             self.WEEKLY_DRAWDOWN_LIMIT = float(os.getenv("WEEKLY_DRAWDOWN_LIMIT", "0.15"))
             self.VOLUME_THRESHOLD = int(os.getenv("VOLUME_THRESHOLD", "50000"))
-            self.DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
+            self.DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.05"))
             self.FINNHUB_RPM = int(os.getenv("FINNHUB_RPM", "60"))
             self.MINUTE_CACHE_TTL = int(os.getenv("MINUTE_CACHE_TTL", "60"))
             self.EQUITY_EXPOSURE_CAP = float(os.getenv("EQUITY_EXPOSURE_CAP", "2.5"))
