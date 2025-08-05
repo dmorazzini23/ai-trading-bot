@@ -52,6 +52,15 @@ open = open  # allow monkeypatching built-in open
 logger = logging.getLogger(__name__)
 
 
+class MetaLearning:
+    """Meta-learning class for trading strategy optimization."""
+    
+    def __init__(self):
+        """Initialize the MetaLearning instance."""
+        self.logger = logging.getLogger(__name__ + ".MetaLearning")
+        self.logger.debug("MetaLearning instance initialized")
+
+
 def validate_trade_data_quality(trade_log_path: str) -> dict:
     """Perform comprehensive data quality checks on trade log before meta-learning."""
     quality_report = {

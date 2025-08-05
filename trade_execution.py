@@ -1514,6 +1514,7 @@ class ExecutionEngine:
                 fill_price,
                 datetime.now(timezone.utc).isoformat(),
                 {"status": status, "mode": "SHADOW" if SHADOW_MODE else "LIVE"},
+            )
 
             # AI-AGENT-REF: Trigger meta-learning conversion after trade execution (async)
             try:
@@ -1531,7 +1532,6 @@ class ExecutionEngine:
                 self.logger.info("META_LEARNING_TRIGGERED_ASYNC | symbol=%s", symbol)
             except Exception as meta_exc:
                 self.logger.warning("Meta-learning trigger failed (async) for %s: %s", symbol, meta_exc)
-            )
             log_json_audit(
                 {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
