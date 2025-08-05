@@ -659,7 +659,7 @@ def retrain_meta_learner(
         model = Ridge(alpha=1.0, fit_intercept=True)
     except ImportError:
         logger.warning("sklearn not available, meta-learning disabled")
-        return {}
+        return False
 
     try:
         model.fit(X, y, sample_weight=sample_w)

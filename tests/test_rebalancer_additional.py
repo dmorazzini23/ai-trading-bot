@@ -25,9 +25,27 @@ def test_start_rebalancer(monkeypatch):
         class T:
             def start(self):
                 called.append("start-called")
+                # Execute the target once instead of starting infinite loop
+                try:
+                    target()
+                except Exception:
+                    # Catch any exceptions from the loop to prevent infinite execution
+                    pass
         return T()
+    
+    # Mock the infinite loop to exit after one iteration
+    original_maybe_rebalance = rebalancer.maybe_rebalance
+    call_count = [0]
+    
+    def mock_maybe_rebalance(ctx):
+        call_count[0] += 1
+        called.append("maybe-rebalance")
+        # Exit after first call to prevent infinite loop
+        if call_count[0] >= 1:
+            raise StopIteration("Test complete")
 
     monkeypatch.setattr(rebalancer.threading, "Thread", fake_thread)
-    monkeypatch.setattr(rebalancer, "maybe_rebalance", lambda ctx: called.append("maybe-rebalance"))
+    monkeypatch.setattr(rebalancer, "maybe_rebalance", mock_maybe_rebalance)
+    
     t = rebalancer.start_rebalancer("ctx")
     assert "start-called" in called
