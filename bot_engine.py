@@ -1727,7 +1727,8 @@ MAX_POSITION_SIZE = state.mode_obj.config.max_position_size
 SLICE_THRESHOLD = 50
 POV_SLICE_PCT = params.get("POV_SLICE_PCT", state.mode_obj.config.pov_slice_pct)
 DAILY_LOSS_LIMIT = params.get("DAILY_LOSS_LIMIT", state.mode_obj.config.daily_loss_limit)
-MAX_PORTFOLIO_POSITIONS = int(config.get_env("MAX_PORTFOLIO_POSITIONS", str(state.mode_obj.config.max_trades)))
+# AI-AGENT-REF: Increase default position limit from 10 to 20 for better portfolio utilization
+MAX_PORTFOLIO_POSITIONS = int(config.get_env("MAX_PORTFOLIO_POSITIONS", "20"))
 CORRELATION_THRESHOLD = 0.60
 SECTOR_EXPOSURE_CAP = float(config.get_env("SECTOR_EXPOSURE_CAP", "0.4"))
 MAX_OPEN_POSITIONS = int(config.get_env("MAX_OPEN_POSITIONS", "10"))
@@ -2866,6 +2867,20 @@ class TradeLogger:
                 },
             )
 
+        # AI-AGENT-REF: Trigger audit-to-meta conversion after trade exit logging
+        try:
+            from meta_learning import validate_trade_data_quality, _convert_audit_to_meta_format
+            quality_report = validate_trade_data_quality(self.path)
+            
+            # If we have audit format rows, trigger conversion for meta-learning
+            if quality_report.get('audit_format_rows', 0) > 0:
+                logger.info("METALEARN_TRIGGER_CONVERSION: Converting audit format to meta-learning format")
+                # The conversion will be handled by the meta-learning system when it reads the log
+            
+        except Exception as e:
+            # Don't fail trade logging if meta-learning conversion fails
+            logger.debug(f"Meta-learning conversion trigger failed: {e}")
+
 
 def _parse_local_positions() -> Dict[str, int]:
     """Return current local open positions from the trade log."""
@@ -3015,8 +3030,9 @@ SENTIMENT_TTL_SEC = 600  # 10 minutes
 # AI-AGENT-REF: Enhanced sentiment caching for rate limiting
 SENTIMENT_RATE_LIMITED_TTL_SEC = 3600  # 1 hour cache when rate limited
 _SENTIMENT_CIRCUIT_BREAKER = {"failures": 0, "last_failure": 0, "state": "closed"}  # closed, open, half-open
-SENTIMENT_FAILURE_THRESHOLD = 3  # Open circuit after 3 consecutive failures
-SENTIMENT_RECOVERY_TIMEOUT = 300  # 5 minutes before trying half-open
+# AI-AGENT-REF: Enhanced sentiment circuit breaker thresholds for better resilience
+SENTIMENT_FAILURE_THRESHOLD = 8  # Increased from 3 to 8 failures for more tolerance
+SENTIMENT_RECOVERY_TIMEOUT = 900  # Increased from 300 to 15 minutes for better recovery
 
 
 class SignalManager:

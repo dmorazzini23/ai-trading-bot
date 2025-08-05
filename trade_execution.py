@@ -869,6 +869,7 @@ class ExecutionEngine:
             self.logger.info("FULL_FILL_SUCCESS", extra={
                 "symbol": symbol,
                 "side": side,
+                "requested_qty": requested_qty,  # AI-AGENT-REF: Add requested quantity for tracking accuracy
                 "filled_qty": filled_qty,
                 "order_id": getattr(last_order, "id", None) if last_order else None
             })
@@ -1019,7 +1020,7 @@ class ExecutionEngine:
                 extra={
                     "symbol": buf["symbol"],
                     "order_id": oid,
-                    "total": buf["qty"],
+                    "total_filled_qty": buf["qty"],  # AI-AGENT-REF: Clarify this is the total filled quantity
                     "fragments": buf["count"],
                     "avg_price": round(avg, 2),
                 },

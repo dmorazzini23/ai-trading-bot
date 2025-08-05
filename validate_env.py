@@ -229,7 +229,8 @@ else:
             self.FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
             self.TRADE_AUDIT_DIR = os.getenv("TRADE_AUDIT_DIR", "logs/audit")
             self.FLASK_PORT = int(os.getenv("FLASK_PORT", "9001"))
-            self.MAX_PORTFOLIO_POSITIONS = int(os.getenv("MAX_PORTFOLIO_POSITIONS", "10"))
+            # AI-AGENT-REF: Increase default position limit for better portfolio utilization
+            self.MAX_PORTFOLIO_POSITIONS = int(os.getenv("MAX_PORTFOLIO_POSITIONS", "20"))
             
         def __getattr__(self, name):
             # AI-AGENT-REF: Dynamic fallback for any missing attributes
