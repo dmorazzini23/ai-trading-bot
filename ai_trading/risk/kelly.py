@@ -29,6 +29,8 @@ except ImportError:
         min_sample_size = 20
         kelly_fraction_max = 0.25
         confidence_level = 0.90
+        lookback_periods = 252
+        rebalance_frequency = 21
     _DEFAULT_CONFIG = _DefaultConfig()
 
 
@@ -44,14 +46,30 @@ class KellyCriterion:
     - q = probability of losing (1-p)
     """
     
-    def __init__(self, config: Optional[TradingConfig] = None):
-        """Initialize Kelly Criterion calculator with centralized configuration."""
+    def __init__(self, config: Optional[TradingConfig] = None, min_sample_size: Optional[int] = None, max_fraction: Optional[float] = None, **kwargs):
+        """Initialize Kelly Criterion calculator with centralized configuration.
+        
+        Args:
+            config: TradingConfig instance (optional, uses default if not provided)
+            min_sample_size: Minimum sample size for calculations (for backward compatibility)
+            max_fraction: Maximum Kelly fraction allowed (for backward compatibility)
+            **kwargs: Additional parameters for backward compatibility
+        """
         # Use provided config or default
         self.config = config or _DEFAULT_CONFIG
         
-        self.min_sample_size = self.config.min_sample_size
-        self.max_fraction = self.config.kelly_fraction_max
-        self.confidence_level = self.config.confidence_level
+        # Support backward compatibility: use passed parameters if provided, otherwise use config
+        self.min_sample_size = min_sample_size if min_sample_size is not None else self.config.min_sample_size
+        self.max_fraction = max_fraction if max_fraction is not None else self.config.kelly_fraction_max
+        # For backward compatibility, if no confidence_level in kwargs but we have explicit params, use 0.95 (old default)
+        if 'confidence_level' in kwargs:
+            self.confidence_level = kwargs['confidence_level']
+        elif min_sample_size is not None or max_fraction is not None:
+            # If using legacy API with explicit params, use legacy default
+            self.confidence_level = 0.95
+        else:
+            # If using new API, use config value
+            self.confidence_level = self.config.confidence_level
         
         logger.info(f"KellyCriterion initialized with min_sample_size={self.min_sample_size}, "
                    f"max_fraction={self.max_fraction}, confidence_level={self.confidence_level}")
@@ -212,8 +230,9 @@ class KellyCalculator:
         """Initialize Kelly calculator."""
         # AI-AGENT-REF: Advanced Kelly portfolio optimization
         self.kelly_criterion = KellyCriterion()
-        self.lookback_periods = KELLY_PARAMETERS["LOOKBACK_PERIODS"]
-        self.rebalance_frequency = KELLY_PARAMETERS["REBALANCE_FREQUENCY"]
+        # Use centralized config values instead of undefined KELLY_PARAMETERS
+        self.lookback_periods = _DEFAULT_CONFIG.lookback_periods
+        self.rebalance_frequency = _DEFAULT_CONFIG.rebalance_frequency
         
         # Store historical calculations
         self.calculation_history = []
