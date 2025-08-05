@@ -1613,7 +1613,7 @@ class BotMode:
                 "CONFIRMATION_COUNT": 3,
                 "TAKE_PROFIT_FACTOR": 1.2,
                 "DAILY_LOSS_LIMIT": 0.05,
-                "CAPITAL_CAP": 0.05,
+                "CAPITAL_CAP": 0.25,
                 "TRAILING_FACTOR": 1.5,
             }
         elif self.mode == "aggressive":
@@ -1623,7 +1623,7 @@ class BotMode:
                 "CONFIRMATION_COUNT": 1,
                 "TAKE_PROFIT_FACTOR": 2.2,
                 "DAILY_LOSS_LIMIT": 0.1,
-                "CAPITAL_CAP": 0.1,
+                "CAPITAL_CAP": 0.25,
                 "TRAILING_FACTOR": 2.0,
             }
         else:  # balanced

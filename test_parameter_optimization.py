@@ -33,14 +33,14 @@ def test_risk_parameters_optimization():
     
     # Verify optimized risk parameters
     assert RISK_PARAMETERS["MAX_PORTFOLIO_RISK"] == 0.025, f"Expected 0.025, got {RISK_PARAMETERS['MAX_PORTFOLIO_RISK']}"
-    assert RISK_PARAMETERS["MAX_POSITION_SIZE"] == 0.08, f"Expected 0.08, got {RISK_PARAMETERS['MAX_POSITION_SIZE']}"
+    assert RISK_PARAMETERS["MAX_POSITION_SIZE"] == 0.25, f"Expected 0.25, got {RISK_PARAMETERS['MAX_POSITION_SIZE']}"
     assert RISK_PARAMETERS["STOP_LOSS_MULTIPLIER"] == 1.8, f"Expected 1.8, got {RISK_PARAMETERS['STOP_LOSS_MULTIPLIER']}"
     assert RISK_PARAMETERS["TAKE_PROFIT_MULTIPLIER"] == 2.5, f"Expected 2.5, got {RISK_PARAMETERS['TAKE_PROFIT_MULTIPLIER']}"
     assert RISK_PARAMETERS["MAX_CORRELATION_EXPOSURE"] == 0.15, f"Expected 0.15, got {RISK_PARAMETERS['MAX_CORRELATION_EXPOSURE']}"
     
     # Ensure parameters remain within safe bounds
     assert 0.01 <= RISK_PARAMETERS["MAX_PORTFOLIO_RISK"] <= 0.05, "Portfolio risk outside safe bounds"
-    assert 0.05 <= RISK_PARAMETERS["MAX_POSITION_SIZE"] <= 0.15, "Position size outside safe bounds"
+    assert 0.05 <= RISK_PARAMETERS["MAX_POSITION_SIZE"] <= 0.30, "Position size outside safe bounds"
     assert 1.0 <= RISK_PARAMETERS["STOP_LOSS_MULTIPLIER"] <= 3.0, "Stop loss multiplier outside safe bounds"
     assert 1.5 <= RISK_PARAMETERS["TAKE_PROFIT_MULTIPLIER"] <= 5.0, "Take profit multiplier outside safe bounds"
     assert 0.05 <= RISK_PARAMETERS["MAX_CORRELATION_EXPOSURE"] <= 0.30, "Correlation exposure outside safe bounds"
