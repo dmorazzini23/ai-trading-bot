@@ -204,16 +204,29 @@ from tenacity import (RetryError, retry, retry_if_exception_type,
 config.reload_env()
 
 # In-memory minute bar cache to avoid unnecessary API calls
-
-# In-memory minute bar cache to avoid unnecessary API calls
 _MINUTE_CACHE: dict[str, tuple[pd.DataFrame, pd.Timestamp]] = {}
+
+# AI-AGENT-REF: Cache performance monitoring
+_CACHE_STATS = {
+    "hits": 0,
+    "misses": 0,
+    "invalidations": 0
+}
 
 
 def get_cache_stats() -> dict:
     """Get current cache statistics for monitoring and debugging."""
+    total_requests = _CACHE_STATS["hits"] + _CACHE_STATS["misses"]
+    hit_ratio = (_CACHE_STATS["hits"] / total_requests * 100) if total_requests > 0 else 0
+    
     return {
         "cache_size": len(_MINUTE_CACHE),
         "cached_symbols": list(_MINUTE_CACHE.keys()),
+        "hits": _CACHE_STATS["hits"],
+        "misses": _CACHE_STATS["misses"],
+        "invalidations": _CACHE_STATS["invalidations"],
+        "hit_ratio_pct": round(hit_ratio, 1),
+        "total_requests": total_requests,
         "cache_entries": [
             {
                 "symbol": symbol,
@@ -895,36 +908,43 @@ def get_minute_df(
     end_dt = ensure_utc(end_date)
 
     cached = _MINUTE_CACHE.get(symbol)
-    # AI-AGENT-REF: Improve caching to reduce redundant API calls
+    # AI-AGENT-REF: Improved caching to reduce redundant API calls with better hit ratio
     if cached is not None:
         df_cached, ts = cached
         if not df_cached.empty:
-            first_idx = df_cached.index[0]
-            # Normalize naive timestamps to UTC so offset-aware comparisons succeed
-            if isinstance(first_idx, pd.Timestamp):
-                if first_idx.tzinfo is None or first_idx.tzinfo.utcoffset(first_idx) is None:
-                    first_idx = first_idx.tz_localize("UTC")
+            # AI-AGENT-REF: Simplified cache validity logic - extend cache for better performance
+            cache_validity_minutes = 5  # Increase cache validity to 5 minutes for better hit ratio
+            cache_age = pd.Timestamp.now(tz="UTC") - ts
+            
+            if cache_age.total_seconds() / 60 <= cache_validity_minutes:
+                cache_age_minutes = cache_age.total_seconds() / 60
+                _CACHE_STATS["hits"] += 1
+                logger.debug(
+                    "MINUTE_CACHE_HIT",
+                    extra={
+                        "symbol": symbol, 
+                        "cache_age_minutes": round(cache_age_minutes, 1),
+                        "rows": len(df_cached),
+                        "cache_size": len(_MINUTE_CACHE),
+                        "hit_ratio_pct": round((_CACHE_STATS["hits"] / (_CACHE_STATS["hits"] + _CACHE_STATS["misses"]) * 100), 1) if (_CACHE_STATS["hits"] + _CACHE_STATS["misses"]) > 0 else 0
+                    }
+                )
+                return df_cached.copy()
             else:
-                cached = None
-                first_idx = None  # type: ignore
-            if first_idx is not None and isinstance(first_idx, pd.Timestamp):
-                if start_dt < first_idx:
-                    cached = None
-                else:
-                    # AI-AGENT-REF: Extend cache validity for same trading cycle to reduce redundant calls
-                    cache_validity_minutes = 2  # Allow 2-minute cache for reducing redundant MINUTE_FETCHED calls
-                    if ts >= pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=cache_validity_minutes):
-                        cache_age_minutes = (pd.Timestamp.now(tz="UTC") - ts).total_seconds() / 60
-                        logger.debug(
-                            "MINUTE_CACHE_HIT",
-                            extra={
-                                "symbol": symbol, 
-                                "cache_age_minutes": round(cache_age_minutes, 1),
-                                "rows": len(df_cached),
-                                "cache_size": len(_MINUTE_CACHE)  # AI-AGENT-REF: Monitor cache performance
-                            }
-                        )
-                        return df_cached.copy()
+                # Cache expired, remove it
+                _MINUTE_CACHE.pop(symbol, None)
+                _CACHE_STATS["invalidations"] += 1
+                logger.debug(
+                    "MINUTE_CACHE_EXPIRED",
+                    extra={
+                        "symbol": symbol,
+                        "cache_age_minutes": round(cache_age_minutes, 1),
+                        "validity_minutes": cache_validity_minutes
+                    }
+                )
+    
+    # Cache miss - will fetch new data
+    _CACHE_STATS["misses"] += 1
 
     alpaca_exc = finnhub_exc = yexc = None
     try:
@@ -1051,15 +1071,23 @@ def get_minute_df(
         logger.critical(
             "INCOMPLETE_DATA", extra={"symbol": symbol, "rows": len(df)}
         )
+    # AI-AGENT-REF: Update cache with fresh data and log performance metrics
     _MINUTE_CACHE[symbol] = (df, pd.Timestamp.now(tz="UTC"))
+    
+    # Calculate current cache performance
+    total_requests = _CACHE_STATS["hits"] + _CACHE_STATS["misses"]
+    hit_ratio = (_CACHE_STATS["hits"] / total_requests * 100) if total_requests > 0 else 0
+    
     logger.info(
         "MINUTE_FETCHED",
         extra={
             "symbol": symbol, 
             "rows": len(df), 
             "cols": df.shape[1],
-            "data_source": "fresh_fetch",  # AI-AGENT-REF: Distinguish from cache hits
-            "cache_size": len(_MINUTE_CACHE)  # AI-AGENT-REF: Monitor cache performance
+            "data_source": "fresh_fetch",
+            "cache_size": len(_MINUTE_CACHE),
+            "cache_hit_ratio_pct": round(hit_ratio, 1),
+            "total_cache_requests": total_requests
         },
     )
     # AI-AGENT-REF: Apply limit parameter if specified
