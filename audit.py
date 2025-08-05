@@ -21,15 +21,18 @@ TRADE_LOG_FILE = config.TRADE_LOG_FILE
 logger = logging.getLogger(__name__)
 _disable_trade_log = False
 _fields = [
-    "id",
-    "timestamp",
     "symbol",
-    "side",
+    "entry_time", 
+    "entry_price",
+    "exit_time",
+    "exit_price",
     "qty",
-    "price",
-    "exposure",
-    "mode",
-    "result",
+    "side",
+    "strategy",
+    "classification",
+    "signal_tags",
+    "confidence",
+    "reward",
 ]
 
 
@@ -114,15 +117,18 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
                 writer.writeheader()
             writer.writerow(
                 {
-                    "id": str(uuid.uuid4()),
-                    "timestamp": timestamp,
                     "symbol": symbol,
-                    "side": side,
+                    "entry_time": timestamp,
+                    "entry_price": fill_price,
+                    "exit_time": "",
+                    "exit_price": "",
                     "qty": qty,
-                    "price": fill_price,
-                    "exposure": exposure if exposure is not None else "",
-                    "mode": (extra_info or ""),
-                    "result": "",
+                    "side": side,
+                    "strategy": (extra_info or ""),
+                    "classification": "",
+                    "signal_tags": "",
+                    "confidence": "",
+                    "reward": "",
                 }
             )
     except PermissionError as exc:  # pragma: no cover - permission errors
@@ -150,15 +156,18 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
                             writer.writeheader()
                         writer.writerow(
                             {
-                                "id": str(uuid.uuid4()),
-                                "timestamp": timestamp,
                                 "symbol": symbol,
-                                "side": side,
+                                "entry_time": timestamp,
+                                "entry_price": fill_price,
+                                "exit_time": "",
+                                "exit_price": "",
                                 "qty": qty,
-                                "price": fill_price,
-                                "exposure": exposure if exposure is not None else "",
-                                "mode": (extra_info or ""),
-                                "result": "",
+                                "side": side,
+                                "strategy": (extra_info or ""),
+                                "classification": "",
+                                "signal_tags": "",
+                                "confidence": "",
+                                "reward": "",
                             }
                         )
                     logger.info("Trade log successfully written after permission repair")
