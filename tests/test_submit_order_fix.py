@@ -13,7 +13,7 @@ os.environ.update({
     "WEBHOOK_SECRET": "test-webhook-secret",
     "FLASK_PORT": "9000",
     "BOT_MODE": "balanced",
-    "DOLLAR_RISK_LIMIT": "0.02",
+    "DOLLAR_RISK_LIMIT": "0.05",
     "TESTING": "1",
     "TRADE_LOG_FILE": "test_trades.csv",
     "SEED": "42",

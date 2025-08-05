@@ -23,7 +23,7 @@ RISK_PARAMETERS = {
     "MAX_CORRELATION_EXPOSURE": 0.15,   # 15% max exposure to correlated assets (reduced for better diversification)
     "MAX_SECTOR_CONCENTRATION": 0.15,   # 15% max exposure to single sector
     "MIN_LIQUIDITY_THRESHOLD": 1000000, # $1M minimum daily volume
-    "MAX_POSITION_SIZE": 0.08,          # 8% max position size (reduced for better diversification)
+    "MAX_POSITION_SIZE": 0.25,          # 25% max position size (increased for larger positions)
     "STOP_LOSS_MULTIPLIER": 1.8,        # 1.8x ATR for stop loss (tightened for capital preservation)
     "TAKE_PROFIT_MULTIPLIER": 2.5,      # 2.5x ATR for take profit (reduced for more frequent profit taking)
 }
@@ -69,7 +69,7 @@ DATABASE_PARAMETERS = {
 # Performance thresholds - Optimized for higher quality strategies
 PERFORMANCE_THRESHOLDS = {
     "MIN_SHARPE_RATIO": 1.2,            # Minimum acceptable Sharpe ratio (increased for higher quality strategies)
-    "MAX_DRAWDOWN": 0.15,               # Maximum acceptable drawdown (reduced for better capital preservation)
+    "MAX_DRAWDOWN": 0.15,               # Maximum acceptable drawdown (15% for conservative risk management)
     "MIN_WIN_RATE": 0.48,               # Minimum win rate threshold (increased for quality trade filtering)
     "MIN_PROFIT_FACTOR": 1.2,           # Minimum profit factor
     "MAX_VAR_95": 0.05,                 # Maximum 95% VaR

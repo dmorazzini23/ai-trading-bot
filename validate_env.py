@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     SLIPPAGE_THRESHOLD: float = Field(default=0.003, ge=0.0, le=0.05, description="Slippage warning threshold")
     DISASTER_DD_LIMIT: float = Field(default=0.2, ge=0.05, le=0.5, description="Emergency drawdown limit")
     WEEKLY_DRAWDOWN_LIMIT: float = Field(default=0.15, ge=0.01, le=0.5, description="Weekly drawdown limit")
-    DOLLAR_RISK_LIMIT: float = Field(default=0.02, ge=0.001, le=0.1, description="Dollar risk per trade")
+    DOLLAR_RISK_LIMIT: float = Field(default=0.05, ge=0.001, le=0.1, description="Dollar risk per trade")
     
     # Signal and Entry Thresholds
     BUY_THRESHOLD: float = Field(default=0.5, ge=0.0, le=1.0, description="Signal strength threshold for buys")
