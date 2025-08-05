@@ -28,7 +28,7 @@ class TestDrawdownIntegration(unittest.TestCase):
 
     def setUp(self):
         """Set up test fixtures."""
-        self.max_drawdown = 0.08  # 8%
+        self.max_drawdown = 0.15  # 15%
         self.initial_equity = 10000.0
         
     def test_drawdown_circuit_breaker_initialization(self):
@@ -93,12 +93,12 @@ class TestDrawdownIntegration(unittest.TestCase):
         
     def test_configuration_values(self):
         """Test that configuration values are correctly set."""
-        self.assertEqual(config.MAX_DRAWDOWN_THRESHOLD, 0.08)
+        self.assertEqual(config.MAX_DRAWDOWN_THRESHOLD, 0.15)
         self.assertEqual(config.DAILY_LOSS_LIMIT, 0.03)
         
         # Test TradingConfig
         tc = config.TradingConfig.from_env()
-        self.assertEqual(tc.max_drawdown_threshold, 0.08)
+        self.assertEqual(tc.max_drawdown_threshold, 0.15)
         self.assertEqual(tc.daily_loss_limit, 0.03)
 
     @patch('bot_engine.ctx')
@@ -110,7 +110,7 @@ class TestDrawdownIntegration(unittest.TestCase):
         mock_circuit_breaker.get_status.return_value = {
             "trading_allowed": True,
             "current_drawdown": 0.02,
-            "max_drawdown": 0.08
+            "max_drawdown": 0.15
         }
         
         mock_ctx.drawdown_circuit_breaker = mock_circuit_breaker
@@ -148,7 +148,7 @@ class TestDrawdownIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     # Set up minimal environment for testing
-    os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.08")
+    os.environ.setdefault("MAX_DRAWDOWN_THRESHOLD", "0.15")
     os.environ.setdefault("DAILY_LOSS_LIMIT", "0.03")
     
     unittest.main(verbosity=2)
