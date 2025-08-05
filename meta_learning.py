@@ -478,41 +478,46 @@ def retrain_meta_learner(
     original_rows = len(df)
     logger.debug(f"META_LEARNING_RAW_DATA: {original_rows} total rows loaded from {trade_log_path}")
     
-    # Filter to only meta-learning format rows (symbol in first column, not UUID)
-    if len(df) > 0:
-        meta_learning_rows = []
-        audit_format_rows = 0
+    # Check if this is the common mixed format: meta-learning headers with audit data
+    if len(df) > 0 and len(df.columns) >= 3:
+        # Check if we have meta-learning headers but audit data
+        columns = df.columns.tolist()
+        has_meta_headers = any(col in ['symbol', 'entry_price', 'exit_price', 'signal_tags'] for col in columns)
         
-        for idx, row in df.iterrows():
-            first_col = str(row.iloc[0]).strip()
-            # Meta-learning format: first column should be a symbol (short alphabetic string)
-            if len(first_col) <= 10 and first_col.isalpha() and len(first_col) >= 2:
-                meta_learning_rows.append(row)
-            else:
-                audit_format_rows += 1
-        
-        if meta_learning_rows:
-            df = pd.DataFrame(meta_learning_rows)
-            logger.info(f"META_LEARNING_FORMAT_FILTER: Kept {len(df)} meta-learning rows, filtered {audit_format_rows} audit rows")
-        else:
-            logger.warning(f"METALEARN_EMPTY_TRADE_LOG - No valid trades found: No meta-learning format rows in {original_rows} total rows")
-            # Check if all rows are audit format and try to convert them
-            if audit_format_rows > 0:
-                logger.info("META_LEARNING_AUDIT_CONVERSION: Attempting to convert audit format rows to meta-learning format")
+        if has_meta_headers:
+            # Check if first few data rows are UUIDs (audit format)
+            sample_size = min(5, len(df))
+            audit_format_detected = False
+            for i in range(sample_size):
+                first_col = str(df.iloc[i, 0]).strip()
+                # UUID pattern: long string with hyphens
+                if len(first_col) > 20 and '-' in first_col:
+                    audit_format_detected = True
+                    break
+            
+            if audit_format_detected:
+                logger.info("META_LEARNING_MIXED_FORMAT: Detected meta-learning headers with audit data, attempting conversion")
                 try:
-                    df = _convert_audit_to_meta_format(df)
-                    if not df.empty:
-                        logger.info(f"META_LEARNING_AUDIT_CONVERSION: Successfully converted {len(df)} rows from audit format")
-                    else:
-                        logger.error("METALEARN_EMPTY_TRADE_LOG - No valid trades found: Failed to convert audit rows")
-                        # Implement fallback data recovery
-                        _implement_fallback_data_recovery(trade_log_path, 10)  # Need at least 10 samples
-                        return False
+                    df = _convert_mixed_format_to_meta(df)
+                    logger.info(f"META_LEARNING_MIXED_FORMAT: Successfully converted {len(df)} rows")
                 except Exception as e:
-                    logger.error(f"META_LEARNING_AUDIT_CONVERSION: Conversion failed: {e}")
+                    logger.error(f"META_LEARNING_MIXED_FORMAT: Conversion failed: {e}")
+                    # Try fallback data recovery
+                    _implement_fallback_data_recovery(trade_log_path, 10)
                     return False
             else:
-                logger.error("METALEARN_EMPTY_TRADE_LOG - No valid trades found: No recognizable format in trade log")
+                logger.debug("META_LEARNING_PURE_FORMAT: Detected pure meta-learning format")
+        else:
+            # Pure audit format, try conversion
+            logger.info("META_LEARNING_AUDIT_CONVERSION: Attempting to convert pure audit format")
+            try:
+                df = _convert_audit_to_meta_format(df)
+                if df.empty:
+                    logger.error("METALEARN_EMPTY_TRADE_LOG - No valid trades found: Failed to convert audit rows")
+                    _implement_fallback_data_recovery(trade_log_path, 10)
+                    return False
+            except Exception as e:
+                logger.error(f"META_LEARNING_AUDIT_CONVERSION: Conversion failed: {e}")
                 return False
 
     # AI-AGENT-REF: Only require essential columns, allow missing exit_price for open positions
@@ -780,6 +785,110 @@ def _backup_and_fix_trade_log(trade_log_path: str, current_cols: list, required_
     except Exception as e:
         logger.error(f"META_LEARNING_BACKUP: Failed to backup/fix trade log: {e}")
         _create_emergency_trade_log(trade_log_path)
+
+
+def _convert_mixed_format_to_meta(df: "pd.DataFrame") -> "pd.DataFrame":
+    """Convert mixed format trade logs (meta headers with audit data) to pure meta-learning format.
+    
+    Input: Meta headers but audit data rows like UUID,timestamp,symbol,side,qty,price,mode,status
+    Output: symbol,entry_time,entry_price,exit_time,exit_price,qty,side,strategy,classification,signal_tags,confidence,reward
+    """
+    try:
+        if df.empty:
+            return df
+            
+        meta_rows = []
+        position_tracker = {}  # Track open positions for exit price matching
+        
+        logger.debug(f"META_LEARNING_MIXED_CONVERSION: Processing {len(df)} rows with mixed format")
+        
+        # Process each row as audit format data
+        for idx, row in df.iterrows():
+            try:
+                # Expected data format: UUID,timestamp,symbol,side,qty,price,mode,status
+                if len(row) >= 6:
+                    order_id = str(row.iloc[0]).strip()
+                    timestamp = str(row.iloc[1]).strip()
+                    symbol = str(row.iloc[2]).strip()
+                    side = str(row.iloc[3]).strip().lower()
+                    qty = str(row.iloc[4]).strip()
+                    price = str(row.iloc[5]).strip()
+                    mode = str(row.iloc[6]).strip() if len(row) >= 7 else "live"
+                    status = str(row.iloc[7]).strip().lower() if len(row) >= 8 else "filled"
+                    
+                    # Skip invalid or unfilled orders
+                    if status not in ["filled", "partially_filled"] or symbol in ["", "symbol"]:
+                        continue
+                    
+                    # Parse numeric values safely
+                    try:
+                        qty_val = abs(float(qty))
+                        price_val = float(price)
+                        if qty_val <= 0 or price_val <= 0:
+                            continue
+                    except (ValueError, TypeError):
+                        continue
+                    
+                    # Create meta-learning format entry
+                    if side == "buy":
+                        # For buy orders, this is an entry
+                        meta_row = {
+                            "symbol": symbol,
+                            "entry_time": timestamp,
+                            "entry_price": price_val,
+                            "exit_time": "",  # Will be filled when we see a sell
+                            "exit_price": price_val,  # Default to entry price
+                            "qty": qty_val,
+                            "side": side,
+                            "strategy": "live_trading",  # Default strategy
+                            "classification": "mixed_format_conversion",
+                            "signal_tags": f"order_id:{order_id[:8]}",  # Truncated order ID
+                            "confidence": 0.5,  # Default confidence
+                            "reward": 0.0  # Will be calculated later
+                        }
+                        
+                        # Track this position for potential exit matching
+                        if symbol not in position_tracker:
+                            position_tracker[symbol] = []
+                        position_tracker[symbol].append({
+                            "entry_price": price_val,
+                            "entry_time": timestamp,
+                            "qty": qty_val,
+                            "meta_row": meta_row
+                        })
+                        
+                        meta_rows.append(meta_row)
+                        
+                    elif side == "sell" and symbol in position_tracker and position_tracker[symbol]:
+                        # For sell orders, try to match with existing position
+                        position = position_tracker[symbol].pop(0)  # FIFO matching
+                        
+                        # Update the matched position with exit information
+                        position["meta_row"]["exit_time"] = timestamp
+                        position["meta_row"]["exit_price"] = price_val
+                        
+                        # Calculate reward (simple return)
+                        entry_price = position["entry_price"]
+                        if entry_price > 0:
+                            return_pct = (price_val - entry_price) / entry_price
+                            position["meta_row"]["reward"] = return_pct
+                            
+            except Exception as e:
+                logger.debug(f"META_LEARNING_MIXED_CONVERSION: Error processing row {idx}: {e}")
+                continue
+        
+        # Create DataFrame from converted rows
+        if meta_rows:
+            result_df = pd.DataFrame(meta_rows)
+            logger.info(f"META_LEARNING_MIXED_CONVERSION: Successfully converted {len(result_df)} trades from mixed format")
+            return result_df
+        else:
+            logger.warning("META_LEARNING_MIXED_CONVERSION: No valid trades found after conversion")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        logger.error(f"META_LEARNING_MIXED_CONVERSION: Conversion failed: {e}")
+        return pd.DataFrame()
 
 
 def _convert_audit_to_meta_format(df: "pd.DataFrame") -> "pd.DataFrame":

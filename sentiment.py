@@ -87,8 +87,8 @@ except ImportError:
 # Sentiment caching and circuit breaker
 SENTIMENT_TTL_SEC = 600  # 10 minutes
 SENTIMENT_RATE_LIMITED_TTL_SEC = 3600  # 1 hour cache when rate limited
-SENTIMENT_FAILURE_THRESHOLD = 3  # Open circuit after 3 consecutive failures
-SENTIMENT_RECOVERY_TIMEOUT = 300  # 5 minutes before trying half-open
+SENTIMENT_FAILURE_THRESHOLD = 5  # AI-AGENT-REF: Increased from 3 to 5 for more resilience
+SENTIMENT_RECOVERY_TIMEOUT = 600  # AI-AGENT-REF: Increased from 5 to 10 minutes for better recovery
 
 _SENTIMENT_CACHE: Dict[str, Tuple[float, float]] = {}  # {ticker: (timestamp, score)}
 _SENTIMENT_CIRCUIT_BREAKER = {"failures": 0, "last_failure": 0, "state": "closed"}  # closed, open, half-open
@@ -135,8 +135,8 @@ def _record_sentiment_failure():
 
 
 @retry(
-    stop=stop_after_attempt(2),  # Reduced from 3 to avoid hitting rate limits too quickly
-    wait=wait_exponential(multiplier=1, min=2, max=10),  # Increased delays
+    stop=stop_after_attempt(3),  # Allow 3 attempts total
+    wait=wait_exponential(multiplier=2, min=5, max=60),  # AI-AGENT-REF: Better backoff: 5s, 10s, 20s, up to 60s max
     retry=retry_if_exception_type((requests.RequestException,)),
 )
 def fetch_sentiment(ctx, ticker: str) -> float:
@@ -195,12 +195,24 @@ def fetch_sentiment(ctx, ticker: str) -> float:
         )
         resp = requests.get(url, timeout=10)
         
+        # AI-AGENT-REF: Enhanced rate limiting detection and handling
         if resp.status_code == 429:
-            # AI-AGENT-REF: Enhanced rate limiting handling
-            logger.warning(f"fetch_sentiment({ticker}) rate-limited → caching neutral with extended TTL")
+            logger.warning(f"fetch_sentiment({ticker}) rate-limited (429) → caching neutral with extended TTL")
             _record_sentiment_failure()
             with sentiment_lock:
                 # Cache neutral score with extended TTL during rate limiting
+                _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
+            return 0.0
+        elif resp.status_code == 403:
+            logger.warning(f"fetch_sentiment({ticker}) forbidden (403) - possible API key issue → caching neutral")
+            _record_sentiment_failure()
+            with sentiment_lock:
+                _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
+            return 0.0
+        elif resp.status_code >= 500:
+            logger.warning(f"fetch_sentiment({ticker}) server error ({resp.status_code}) → caching neutral")
+            _record_sentiment_failure()
+            with sentiment_lock:
                 _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
             return 0.0
             

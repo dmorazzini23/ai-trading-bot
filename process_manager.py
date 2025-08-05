@@ -197,6 +197,80 @@ class ProcessManager:
         
         return cleanup_report
     
+    def ensure_single_instance(self, pidfile_path: str = "/tmp/ai_trading_bot.pid") -> bool:
+        """
+        Ensure only one instance of the trading bot is running.
+        
+        Args:
+            pidfile_path: Path to the PID file for instance tracking
+            
+        Returns:
+            True if this instance can proceed, False if another instance is running
+        """
+        import fcntl
+        import atexit
+        
+        try:
+            # Try to open the PID file exclusively
+            self.pidfile = open(pidfile_path, 'w')
+            
+            # Try to acquire an exclusive lock
+            fcntl.flock(self.pidfile.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            # Write our PID to the file
+            self.pidfile.write(str(os.getpid()))
+            self.pidfile.flush()
+            
+            # Register cleanup function
+            atexit.register(self._cleanup_pidfile)
+            
+            self.logger.info(f"Successfully acquired single instance lock (PID: {os.getpid()})")
+            return True
+            
+        except (IOError, OSError) as e:
+            if hasattr(self, 'pidfile'):
+                self.pidfile.close()
+            
+            # Check if there's actually a running process
+            if os.path.exists(pidfile_path):
+                try:
+                    with open(pidfile_path, 'r') as f:
+                        existing_pid = int(f.read().strip())
+                    
+                    # Check if the process is still running
+                    try:
+                        os.kill(existing_pid, 0)  # Signal 0 just checks if process exists
+                        self.logger.error(f"Another trading bot instance is already running (PID: {existing_pid})")
+                        return False
+                    except OSError:
+                        # Process doesn't exist, remove stale PID file
+                        self.logger.info(f"Removing stale PID file for non-existent process {existing_pid}")
+                        os.unlink(pidfile_path)
+                        # Try again
+                        return self.ensure_single_instance(pidfile_path)
+                        
+                except (ValueError, IOError):
+                    # Corrupted PID file, remove it and try again
+                    self.logger.warning(f"Removing corrupted PID file: {pidfile_path}")
+                    try:
+                        os.unlink(pidfile_path)
+                    except OSError:
+                        pass
+                    return self.ensure_single_instance(pidfile_path)
+            
+            self.logger.error(f"Failed to acquire single instance lock: {e}")
+            return False
+    
+    def _cleanup_pidfile(self):
+        """Clean up PID file on exit."""
+        try:
+            if hasattr(self, 'pidfile'):
+                self.pidfile.close()
+                # Note: PID file will be automatically removed when process exits
+                # since we hold an exclusive lock on it
+        except Exception as e:
+            self.logger.debug(f"Error cleaning up PID file: {e}")
+    
     def check_service_status(self) -> Dict:
         """Check status of trading-related systemd services."""
         services = [
