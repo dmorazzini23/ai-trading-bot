@@ -748,12 +748,21 @@ except ImportError:
 # AI-AGENT-REF: guard yfinance import for test environments  
 try:
     import yfinance as yf
+    YFINANCE_AVAILABLE = True
 except ImportError:
     # AI-AGENT-REF: yfinance not available, create minimal fallback
+    class MockTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+            self.info = {"sector": "Unknown"}
+    
     class MockYfinance:
         def download(self, *args, **kwargs):
             return pd.DataFrame()
+        def Ticker(self, symbol):
+            return MockTicker(symbol)
     yf = MockYfinance()
+    YFINANCE_AVAILABLE = False
 
 # AI-AGENT-REF: Clean separation of production and test Alpaca imports
 if os.environ.get('PYTEST_RUNNING') or os.environ.get('TESTING'):
@@ -4496,13 +4505,92 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
 
 
 def get_sector(symbol: str) -> str:
+    """
+    Get sector classification for a stock symbol.
+    Uses yfinance API with fallback to hardcoded mappings for common stocks.
+    """
     if symbol in _SECTOR_CACHE:
         return _SECTOR_CACHE[symbol]
-    try:
-        sector = yf.Ticker(symbol).info.get("sector", "Unknown")
-    except Exception:
-        sector = "Unknown"
+    
+    # AI-AGENT-REF: Fallback sector mappings for common stocks when yfinance fails
+    SECTOR_MAPPINGS = {
+        # Technology 
+        "AAPL": "Technology", "MSFT": "Technology", "GOOGL": "Technology", "GOOG": "Technology",
+        "AMZN": "Technology", "TSLA": "Technology", "META": "Technology", "NVDA": "Technology",
+        "NFLX": "Technology", "AMD": "Technology", "INTC": "Technology", "ORCL": "Technology",
+        "CRM": "Technology", "ADBE": "Technology", "PYPL": "Technology", "UBER": "Technology",
+        "SQ": "Technology", "SHOP": "Technology", "TWLO": "Technology", "ZM": "Technology",
+        
+        # Financial Services
+        "JPM": "Financial Services", "BAC": "Financial Services", "WFC": "Financial Services",
+        "GS": "Financial Services", "MS": "Financial Services", "C": "Financial Services",
+        "V": "Financial Services", "MA": "Financial Services", "BRK.B": "Financial Services",
+        "AXP": "Financial Services",
+        
+        # Healthcare
+        "JNJ": "Healthcare", "PFE": "Healthcare", "ABBV": "Healthcare", "MRK": "Healthcare", 
+        "UNH": "Healthcare", "TMO": "Healthcare", "MDT": "Healthcare", "ABT": "Healthcare",
+        "LLY": "Healthcare", "BMY": "Healthcare", "AMGN": "Healthcare", "GILD": "Healthcare",
+        
+        # Consumer Cyclical
+        "AMZN": "Consumer Cyclical", "HD": "Consumer Cyclical", "NKE": "Consumer Cyclical",
+        "MCD": "Consumer Cyclical", "SBUX": "Consumer Cyclical", "DIS": "Consumer Cyclical",
+        "LOW": "Consumer Cyclical", "TGT": "Consumer Cyclical",
+        
+        # Consumer Defensive 
+        "PG": "Consumer Defensive", "KO": "Consumer Defensive", "PEP": "Consumer Defensive",
+        "WMT": "Consumer Defensive", "COST": "Consumer Defensive", "CL": "Consumer Defensive",
+        
+        # Communication Services
+        "GOOGL": "Communication Services", "GOOG": "Communication Services", "META": "Communication Services",
+        "NFLX": "Communication Services", "DIS": "Communication Services", "VZ": "Communication Services",
+        "T": "Communication Services", "CMCSA": "Communication Services",
+        
+        # Energy
+        "XOM": "Energy", "CVX": "Energy", "COP": "Energy", "EOG": "Energy", "SLB": "Energy",
+        
+        # Industrials  
+        "BA": "Industrials", "CAT": "Industrials", "GE": "Industrials", "MMM": "Industrials",
+        "UPS": "Industrials", "HON": "Industrials", "LMT": "Industrials", "RTX": "Industrials",
+        
+        # Utilities
+        "NEE": "Utilities", "DUK": "Utilities", "SO": "Utilities", "D": "Utilities",
+        
+        # Real Estate
+        "AMT": "Real Estate", "CCI": "Real Estate", "EQIX": "Real Estate", "PSA": "Real Estate",
+        
+        # Materials
+        "LIN": "Basic Materials", "APD": "Basic Materials", "ECL": "Basic Materials", "DD": "Basic Materials",
+        
+        # ETFs - treat as diversified
+        "SPY": "Diversified", "QQQ": "Technology", "IWM": "Diversified", "VTI": "Diversified",
+        "VOO": "Diversified", "VEA": "Diversified", "VWO": "Diversified", "BND": "Fixed Income",
+        "TLT": "Fixed Income", "GLD": "Commodities", "SLV": "Commodities"
+    }
+    
+    # First try fallback mapping
+    if symbol in SECTOR_MAPPINGS:
+        sector = SECTOR_MAPPINGS[symbol]
+        _SECTOR_CACHE[symbol] = sector
+        logger.debug(f"Using fallback sector mapping for {symbol}: {sector}")
+        return sector
+    
+    # Then try yfinance if available
+    if YFINANCE_AVAILABLE:
+        try:
+            ticker_info = yf.Ticker(symbol).info
+            sector = ticker_info.get("sector", "Unknown")
+            if sector and sector != "Unknown":
+                _SECTOR_CACHE[symbol] = sector
+                logger.debug(f"Retrieved sector from yfinance for {symbol}: {sector}")
+                return sector
+        except Exception as e:
+            logger.debug(f"yfinance sector lookup failed for {symbol}: {e}")
+    
+    # Default to Unknown if all methods fail
+    sector = "Unknown"
     _SECTOR_CACHE[symbol] = sector
+    logger.warning(f"Could not determine sector for {symbol}, using Unknown")
     return sector
 
 
@@ -4552,10 +4640,26 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
         logger.info(f"SECTOR_EXPOSURE_EMPTY_PORTFOLIO: Allowing initial position for {symbol} (sector: {sec})")
         return True
     
+    # AI-AGENT-REF: Special handling for "Unknown" sector to prevent false concentration
+    if sec == "Unknown":
+        # Use a higher cap for Unknown sector since it's a catch-all category
+        # and may contain diversified stocks that couldn't be classified
+        unknown_cap = min(cap * 2.0, 0.8)  # Allow up to 2x normal cap or 80%, whichever is lower
+        logger.debug(f"SECTOR_EXPOSURE_UNKNOWN: Using relaxed cap {unknown_cap:.1%} for Unknown sector")
+        cap = unknown_cap
+    
     # Log detailed exposure analysis
     exposure_pct = current_sector_exposure * 100
     projected_pct = projected_exposure * 100
     cap_pct = cap * 100
+    
+    # AI-AGENT-REF: Enhanced debugging for sector exposure analysis
+    logger.info(f"SECTOR_EXPOSURE_DEBUG: {symbol} analysis - "
+               f"Sector: {sec}, Trade Value: ${trade_value:,.2f}, "
+               f"Portfolio Value: ${total:,.2f}, "
+               f"Current Sector Exposure: {exposure_pct:.1f}%, "
+               f"Projected Exposure: {projected_pct:.1f}%, "
+               f"Sector Cap: {cap_pct:.1f}%")
     
     logger.debug(f"SECTOR_EXPOSURE_ANALYSIS: {symbol} (sector: {sec}) - "
                 f"Current: {exposure_pct:.1f}%, Projected: {projected_pct:.1f}%, Cap: {cap_pct:.1f}%")
@@ -8968,6 +9072,18 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
 def main() -> None:
     logger.info("Main trading bot starting...")
     config.reload_env()
+    
+    # AI-AGENT-REF: Ensure only one bot instance is running
+    try:
+        from process_manager import ProcessManager
+        pm = ProcessManager()
+        if not pm.ensure_single_instance():
+            logger.error("Another trading bot instance is already running. Exiting.")
+            sys.exit(1)
+        logger.info("Single instance lock acquired successfully")
+    except Exception as e:
+        logger.error("Failed to acquire single instance lock: %s", e)
+        sys.exit(1)
     
     # AI-AGENT-REF: Add comprehensive health check on startup
     try:
