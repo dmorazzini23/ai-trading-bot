@@ -1633,7 +1633,7 @@ class BotMode:
                 "CONFIRMATION_COUNT": 2,
                 "TAKE_PROFIT_FACTOR": 1.8,
                 "DAILY_LOSS_LIMIT": 0.07,
-                "CAPITAL_CAP": 0.08,
+                "CAPITAL_CAP": 0.25,
                 "TRAILING_FACTOR": 1.2,
             }
 
@@ -1736,7 +1736,7 @@ TAKE_PROFIT_FACTOR = params.get("TAKE_PROFIT_FACTOR", 1.8)
 SCALING_FACTOR = params.get("SCALING_FACTOR", 0.3)
 ORDER_TYPE = "market"
 LIMIT_ORDER_SLIPPAGE = params.get("LIMIT_ORDER_SLIPPAGE", 0.005)
-MAX_POSITION_SIZE = 1000
+MAX_POSITION_SIZE = 8000
 SLICE_THRESHOLD = 50
 POV_SLICE_PCT = params.get("POV_SLICE_PCT", 0.05)
 DAILY_LOSS_LIMIT = params.get("DAILY_LOSS_LIMIT", 0.07)
@@ -1760,8 +1760,8 @@ RF_MIN_SAMPLES_LEAF = 5
 ATR_LENGTH = 10
 CONF_THRESHOLD = params.get("CONF_THRESHOLD", 0.75)
 CONFIRMATION_COUNT = params.get("CONFIRMATION_COUNT", 2)
-CAPITAL_CAP = params.get("CAPITAL_CAP", 0.08)
-DOLLAR_RISK_LIMIT = float(config.get_env("DOLLAR_RISK_LIMIT", "0.02"))
+CAPITAL_CAP = params.get("CAPITAL_CAP", 0.25)
+DOLLAR_RISK_LIMIT = float(config.get_env("DOLLAR_RISK_LIMIT", "0.05"))
 BUY_THRESHOLD = params.get("BUY_THRESHOLD", 0.2)
 
 # AI-AGENT-REF: Add comprehensive validation for critical trading parameters
@@ -1771,18 +1771,18 @@ def validate_trading_parameters():
     
     # Validate CAPITAL_CAP (should be between 0.01 and 0.5)
     if not isinstance(CAPITAL_CAP, (int, float)) or not (0.01 <= CAPITAL_CAP <= 0.5):
-        logger.error("Invalid CAPITAL_CAP %s, using default 0.08", CAPITAL_CAP)
-        CAPITAL_CAP = 0.08
+        logger.error("Invalid CAPITAL_CAP %s, using default 0.25", CAPITAL_CAP)
+        CAPITAL_CAP = 0.25
     
     # Validate DOLLAR_RISK_LIMIT (should be between 0.005 and 0.1)
     if not isinstance(DOLLAR_RISK_LIMIT, (int, float)) or not (0.005 <= DOLLAR_RISK_LIMIT <= 0.1):
-        logger.error("Invalid DOLLAR_RISK_LIMIT %s, using default 0.02", DOLLAR_RISK_LIMIT)
-        DOLLAR_RISK_LIMIT = 0.02
+        logger.error("Invalid DOLLAR_RISK_LIMIT %s, using default 0.05", DOLLAR_RISK_LIMIT)
+        DOLLAR_RISK_LIMIT = 0.05
     
     # Validate MAX_POSITION_SIZE (should be between 1 and 10000)
     if not isinstance(MAX_POSITION_SIZE, int) or not (1 <= MAX_POSITION_SIZE <= 10000):
-        logger.error("Invalid MAX_POSITION_SIZE %s, using default 1000", MAX_POSITION_SIZE)
-        MAX_POSITION_SIZE = 1000
+        logger.error("Invalid MAX_POSITION_SIZE %s, using default 8000", MAX_POSITION_SIZE)
+        MAX_POSITION_SIZE = 8000
     
     # Validate CONF_THRESHOLD (should be between 0.5 and 0.95)
     if not isinstance(CONF_THRESHOLD, (int, float)) or not (0.5 <= CONF_THRESHOLD <= 0.95):
@@ -7581,7 +7581,7 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
             frac *= 0.5
         ctx.kelly_fraction = round(max(0.2, min(frac, 1.0)), 2)
         params["CAPITAL_CAP"] = round(
-            max(0.02, min(0.1, params.get("CAPITAL_CAP", 0.08) * (1 - dd))), 3
+            max(0.02, min(0.1, params.get("CAPITAL_CAP", 0.25) * (1 - dd))), 3
         )
         logger.info(
             "RISK_SCALED",

@@ -93,7 +93,7 @@ class ConfigValidator:
                 "type": float,
                 "min_value": 0.001,
                 "max_value": 0.1,
-                "default": 0.02
+                "default": 0.05
             },
             
             # System configuration
@@ -443,7 +443,7 @@ class ConfigManager:
             "LIMIT_ORDER_SLIPPAGE": 0.005,
             "DISASTER_DD_LIMIT": 0.2,
             "VOLUME_THRESHOLD": 50000,
-            "DOLLAR_RISK_LIMIT": 0.02,
+            "DOLLAR_RISK_LIMIT": 0.05,
             "FLASK_PORT": 9000,
             "HEALTHCHECK_PORT": 8081
         }

@@ -62,7 +62,7 @@ except Exception as e:
         SENTIMENT_API_URL = os.getenv("SENTIMENT_API_URL", "https://newsapi.org/v2/everything")
         IEX_API_TOKEN = os.getenv("IEX_API_TOKEN")
         BOT_MODE = os.getenv("BOT_MODE", "balanced")
-        DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.02"))
+        DOLLAR_RISK_LIMIT = float(os.getenv("DOLLAR_RISK_LIMIT", "0.05"))
         BUY_THRESHOLD = float(os.getenv("BUY_THRESHOLD", "0.5"))
         WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
         TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", "test_trades.csv")  # AI-AGENT-REF: add missing TRADE_LOG_FILE
@@ -357,7 +357,7 @@ PYRAMID_LEVELS = {
 }
 
 # AI-AGENT-REF: Add drawdown circuit breaker configuration
-MAX_DRAWDOWN_THRESHOLD = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.08"))
+MAX_DRAWDOWN_THRESHOLD = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.15"))
 DAILY_LOSS_LIMIT = float(os.getenv("DAILY_LOSS_LIMIT", "0.03"))
 FORCE_TRADES: bool = False
 """If True, bypasses all pre-trade halts for testing."""
@@ -533,7 +533,7 @@ class TradingConfig:
     """Centralized configuration for trading parameters."""
 
     # Risk Management
-    max_drawdown_threshold: float = 0.08
+    max_drawdown_threshold: float = 0.15
     daily_loss_limit: float = 0.03
     position_size_min_usd: float = 100.0
     kelly_fraction_max: float = 0.25
@@ -559,7 +559,7 @@ class TradingConfig:
         import os
 
         return cls(
-            max_drawdown_threshold=float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.08")),
+            max_drawdown_threshold=float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.15")),
             daily_loss_limit=float(os.getenv("DAILY_LOSS_LIMIT", "0.03")),
             position_size_min_usd=float(os.getenv("POSITION_SIZE_MIN_USD", "100.0")),
             kelly_fraction_max=float(os.getenv("KELLY_FRACTION_MAX", "0.25")),
