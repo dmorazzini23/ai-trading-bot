@@ -126,14 +126,14 @@ class RiskEngine:
         
         # Validate maximum acceptable drawdown (fraction between 0 and 1)
         try:
-            max_drawdown = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.1"))
+            max_drawdown = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.15"))
             if not (0 < max_drawdown <= 1.0):
-                logger.warning("Invalid MAX_DRAWDOWN_THRESHOLD %s, using default 0.1", max_drawdown)
-                max_drawdown = 0.1
+                logger.warning("Invalid MAX_DRAWDOWN_THRESHOLD %s, using default 0.15", max_drawdown)
+                max_drawdown = 0.15
             self.max_drawdown_threshold = max_drawdown
         except (ValueError, TypeError) as e:
-            logger.error("Error parsing MAX_DRAWDOWN_THRESHOLD: %s, using default 0.1", e)
-            self.max_drawdown_threshold = 0.1
+            logger.error("Error parsing MAX_DRAWDOWN_THRESHOLD: %s, using default 0.15", e)
+            self.max_drawdown_threshold = 0.15
             
         # Validate cooldown period (in minutes) before trading resumes after a hard stop
         try:
