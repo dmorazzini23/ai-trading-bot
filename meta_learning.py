@@ -52,6 +52,110 @@ open = open  # allow monkeypatching built-in open
 logger = logging.getLogger(__name__)
 
 
+def validate_trade_data_quality(trade_log_path: str) -> dict:
+    """Perform comprehensive data quality checks on trade log before meta-learning."""
+    quality_report = {
+        'file_exists': False,
+        'file_readable': False,
+        'has_valid_format': False,
+        'row_count': 0,
+        'valid_price_rows': 0,
+        'data_quality_score': 0.0,
+        'issues': [],
+        'recommendations': []
+    }
+    
+    try:
+        # Check file existence
+        if not Path(trade_log_path).exists():
+            quality_report['issues'].append(f"Trade log file does not exist: {trade_log_path}")
+            quality_report['recommendations'].append("Initialize trade logging system")
+            return quality_report
+        
+        quality_report['file_exists'] = True
+        
+        # Check file readability and size
+        try:
+            file_size = Path(trade_log_path).stat().st_size
+            if file_size == 0:
+                quality_report['issues'].append("Trade log file is empty")
+                quality_report['recommendations'].append("Ensure trade logging is actively writing data")
+                return quality_report
+        except Exception as e:
+            quality_report['issues'].append(f"Cannot access file stats: {e}")
+            return quality_report
+            
+        quality_report['file_readable'] = True
+        
+        # Attempt to read and validate CSV format
+        if pd is None:
+            quality_report['issues'].append("pandas not available for data validation")
+            return quality_report
+            
+        try:
+            df = pd.read_csv(trade_log_path)
+            quality_report['row_count'] = len(df)
+            
+            # Check for required columns
+            required_columns = ['entry_price', 'exit_price', 'signal_tags', 'side']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            
+            if missing_columns:
+                quality_report['issues'].append(f"Missing required columns: {missing_columns}")
+                quality_report['recommendations'].append("Update trade logging format to include all required fields")
+                return quality_report
+                
+            quality_report['has_valid_format'] = True
+            
+            # Validate price data quality
+            if len(df) > 0:
+                # Convert prices to numeric
+                df['entry_price'] = pd.to_numeric(df['entry_price'], errors='coerce')
+                df['exit_price'] = pd.to_numeric(df['exit_price'], errors='coerce')
+                
+                # Count valid price rows
+                valid_prices = (df['entry_price'] > 0) & (df['exit_price'] > 0) & \
+                              pd.notna(df['entry_price']) & pd.notna(df['exit_price'])
+                quality_report['valid_price_rows'] = valid_prices.sum()
+                
+                if quality_report['valid_price_rows'] == 0:
+                    quality_report['issues'].append("No rows with valid positive prices found")
+                    quality_report['recommendations'].append("Check price data source and trade execution logging")
+                
+                # Check for extreme price outliers
+                if quality_report['valid_price_rows'] > 0:
+                    valid_df = df[valid_prices]
+                    max_price = max(valid_df['entry_price'].max(), valid_df['exit_price'].max())
+                    min_price = min(valid_df['entry_price'].min(), valid_df['exit_price'].min())
+                    
+                    if max_price > 50000:  # $50k per share seems extreme
+                        quality_report['issues'].append(f"Detected extreme high prices up to ${max_price:.2f}")
+                        quality_report['recommendations'].append("Review price data for potential corruption")
+                        
+                    if min_price < 0.01:  # Less than 1 cent seems suspicious
+                        quality_report['issues'].append(f"Detected extreme low prices down to ${min_price:.2f}")
+                        quality_report['recommendations'].append("Review price data for potential corruption")
+                
+                # Calculate data quality score
+                if quality_report['row_count'] > 0:
+                    quality_score = quality_report['valid_price_rows'] / quality_report['row_count']
+                    quality_report['data_quality_score'] = quality_score
+                    
+                    if quality_score < 0.5:
+                        quality_report['issues'].append(f"Low data quality score: {quality_score:.2%}")
+                        quality_report['recommendations'].append("Investigate and fix data quality issues")
+                    
+        except Exception as e:
+            quality_report['issues'].append(f"Error reading CSV data: {e}")
+            quality_report['recommendations'].append("Check CSV format and encoding")
+            return quality_report
+            
+    except Exception as e:
+        quality_report['issues'].append(f"Unexpected error during validation: {e}")
+        
+    return quality_report
+
+
 class MetaLearning:
     """Meta-learning wrapper using a simple linear model."""
 
@@ -343,6 +447,39 @@ def retrain_meta_learner(
         extra={"trade_log": trade_log_path, "model_path": model_path},
     )
 
+    # AI-AGENT-REF: Perform comprehensive data quality validation before training
+    quality_report = validate_trade_data_quality(trade_log_path)
+    logger.info("META_LEARNING_QUALITY_CHECK", extra={
+        "file_exists": quality_report['file_exists'],
+        "valid_format": quality_report['has_valid_format'],
+        "total_rows": quality_report['row_count'],
+        "valid_price_rows": quality_report['valid_price_rows'],
+        "quality_score": quality_report['data_quality_score']
+    })
+    
+    # Log any data quality issues
+    if quality_report['issues']:
+        for issue in quality_report['issues']:
+            logger.warning(f"META_LEARNING_DATA_ISSUE: {issue}")
+    
+    # Log recommendations
+    if quality_report['recommendations']:
+        for rec in quality_report['recommendations']:
+            logger.info(f"META_LEARNING_RECOMMENDATION: {rec}")
+    
+    # Early exit if fundamental issues exist
+    if not quality_report['file_exists'] or not quality_report['has_valid_format']:
+        logger.error("META_LEARNING_CRITICAL_ISSUES: Cannot proceed with training due to data quality issues")
+        return False
+    
+    # Check if we have sufficient quality data
+    if quality_report['valid_price_rows'] < min_samples:
+        logger.warning(f"META_LEARNING_INSUFFICIENT_DATA: Only {quality_report['valid_price_rows']} valid rows, need {min_samples}")
+        if quality_report['valid_price_rows'] == 0:
+            # No valid data at all, trigger fallback
+            _implement_fallback_data_recovery(trade_log_path, min_samples)
+            return False
+    
     if not Path(trade_log_path).exists():
         logger.error("Training data not found: %s", trade_log_path)
         return False
@@ -426,7 +563,8 @@ def retrain_meta_learner(
                     "suggestion": "Check trade logging and price data integrity"
                 }
             )
-            # AI-AGENT-REF: Return False but log as warning instead of error to prevent system halt
+            # AI-AGENT-REF: Implement fallback mechanism for insufficient data
+            _implement_fallback_data_recovery(trade_log_path, min_samples)
             return False
             
         # Test that final data quality summary is logged
@@ -506,6 +644,108 @@ def retrain_meta_learner(
         extra={"samples": len(y), "model": model_path},
     )
     return True
+
+
+def _implement_fallback_data_recovery(trade_log_path: str, min_samples: int) -> None:
+    """Implement fallback mechanisms when historical data is insufficient."""
+    logger.info("META_LEARNING_FALLBACK: Implementing data recovery procedures")
+    
+    # Check if trade log file exists and is readable
+    try:
+        if not Path(trade_log_path).exists():
+            logger.error(f"META_LEARNING_FALLBACK: Trade log file does not exist: {trade_log_path}")
+            _create_emergency_trade_log(trade_log_path)
+            return
+            
+        # Check file size and basic format
+        file_size = Path(trade_log_path).stat().st_size
+        if file_size == 0:
+            logger.error(f"META_LEARNING_FALLBACK: Trade log file is empty: {trade_log_path}")
+            _create_emergency_trade_log(trade_log_path)
+            return
+            
+        # Attempt to read first few lines to check format
+        with open(trade_log_path, 'r') as f:
+            header_line = f.readline().strip()
+            if not header_line:
+                logger.error(f"META_LEARNING_FALLBACK: Trade log file has no header: {trade_log_path}")
+                _create_emergency_trade_log(trade_log_path)
+                return
+                
+            # Check for required columns
+            required_cols = ['entry_price', 'exit_price', 'signal_tags', 'side']
+            header_cols = [col.strip() for col in header_line.split(',')]
+            missing_cols = [col for col in required_cols if col not in header_cols]
+            
+            if missing_cols:
+                logger.error(f"META_LEARNING_FALLBACK: Missing required columns {missing_cols} in {trade_log_path}")
+                _backup_and_fix_trade_log(trade_log_path, header_cols, required_cols)
+                return
+                
+        logger.info(f"META_LEARNING_FALLBACK: Trade log format appears valid, insufficient data for min_samples={min_samples}")
+        
+    except Exception as e:
+        logger.error(f"META_LEARNING_FALLBACK: Error during data recovery: {e}")
+        _create_emergency_trade_log(trade_log_path)
+
+
+def _create_emergency_trade_log(trade_log_path: str) -> None:
+    """Create an emergency trade log with proper format."""
+    try:
+        # Ensure directory exists
+        Path(trade_log_path).parent.mkdir(parents=True, exist_ok=True)
+        
+        # Create CSV with proper headers
+        headers = ['timestamp', 'symbol', 'side', 'entry_price', 'exit_price', 'quantity', 'pnl', 'signal_tags']
+        with open(trade_log_path, 'w') as f:
+            f.write(','.join(headers) + '\n')
+            
+        logger.info(f"META_LEARNING_EMERGENCY: Created new trade log with proper format: {trade_log_path}")
+        
+    except Exception as e:
+        logger.error(f"META_LEARNING_EMERGENCY: Failed to create emergency trade log: {e}")
+
+
+def _backup_and_fix_trade_log(trade_log_path: str, current_cols: list, required_cols: list) -> None:
+    """Backup existing log and attempt to fix format issues."""
+    try:
+        # Create backup
+        backup_path = f"{trade_log_path}.backup.{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        import shutil
+        shutil.copy2(trade_log_path, backup_path)
+        logger.info(f"META_LEARNING_BACKUP: Backed up corrupted trade log to {backup_path}")
+        
+        # Attempt to fix by adding missing columns
+        missing_cols = [col for col in required_cols if col not in current_cols]
+        fixed_headers = current_cols + missing_cols
+        
+        # Read existing data and add missing columns with default values
+        if pd is not None:
+            try:
+                df = pd.read_csv(trade_log_path)
+                for col in missing_cols:
+                    if col in ['entry_price', 'exit_price']:
+                        df[col] = 0.0  # Will be filtered out in validation
+                    elif col == 'signal_tags':
+                        df[col] = 'unknown'
+                    elif col == 'side':
+                        df[col] = 'buy'
+                    else:
+                        df[col] = ''
+                        
+                df.to_csv(trade_log_path, index=False)
+                logger.info(f"META_LEARNING_FIX: Added missing columns {missing_cols} to trade log")
+                
+            except Exception as e:
+                logger.error(f"META_LEARNING_FIX: Failed to fix trade log format: {e}")
+                _create_emergency_trade_log(trade_log_path)
+        else:
+            # Fallback without pandas
+            _create_emergency_trade_log(trade_log_path)
+            
+    except Exception as e:
+        logger.error(f"META_LEARNING_BACKUP: Failed to backup/fix trade log: {e}")
+        _create_emergency_trade_log(trade_log_path)
 
 
 def optimize_signals(signal_data: Any, cfg: Any, model: Any | None = None, *, volatility: float = 1.0) -> Any:
