@@ -1332,6 +1332,23 @@ class ExecutionEngine:
                 datetime.now(timezone.utc).isoformat(),
                 {"status": status, "mode": "SHADOW" if SHADOW_MODE else "LIVE"},
             )
+
+            # AI-AGENT-REF: Trigger meta-learning conversion after trade execution
+            try:
+                from meta_learning import trigger_meta_learning_conversion
+                trade_data = {
+                    'symbol': symbol,
+                    'qty': int(getattr(order, "filled_qty", slice_qty)),
+                    'side': side,
+                    'price': fill_price,
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'order_id': order_id,
+                    'status': status
+                }
+                trigger_meta_learning_conversion(trade_data)
+                self.logger.info("META_LEARNING_TRIGGERED | symbol=%s", symbol)
+            except Exception as meta_exc:
+                self.logger.warning("Meta-learning trigger failed for %s: %s", symbol, meta_exc)
             log_json_audit(
                 {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1497,6 +1514,23 @@ class ExecutionEngine:
                 fill_price,
                 datetime.now(timezone.utc).isoformat(),
                 {"status": status, "mode": "SHADOW" if SHADOW_MODE else "LIVE"},
+
+            # AI-AGENT-REF: Trigger meta-learning conversion after trade execution (async)
+            try:
+                from meta_learning import trigger_meta_learning_conversion
+                trade_data = {
+                    'symbol': symbol,
+                    'qty': int(getattr(order, "filled_qty", slice_qty)),
+                    'side': side,
+                    'price': fill_price,
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'order_id': order_id,
+                    'status': status
+                }
+                trigger_meta_learning_conversion(trade_data)
+                self.logger.info("META_LEARNING_TRIGGERED_ASYNC | symbol=%s", symbol)
+            except Exception as meta_exc:
+                self.logger.warning("Meta-learning trigger failed (async) for %s: %s", symbol, meta_exc)
             )
             log_json_audit(
                 {

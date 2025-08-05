@@ -1083,3 +1083,135 @@ def trigger_rebalance_on_regime(df: "pd.DataFrame") -> None:
         if df["Regime"].iloc[-1] != df["Regime"].iloc[-2]:
             state_data = df.tail(10).dropna().values.flatten()
             rl.rebalance_portfolio(state_data)
+
+
+def trigger_meta_learning_conversion(trade_data: dict) -> bool:
+    """Automatically convert audit logs to meta-learning format after trade execution."""
+    try:
+        symbol = trade_data.get('symbol', 'UNKNOWN')
+        logger.info("META_LEARNING_TRIGGER | symbol=%s", symbol)
+        
+        # Get config for trade log file path
+        if config is None:
+            logger.warning("Config not available for meta-learning conversion")
+            return False
+            
+        trade_log_path = getattr(config, 'TRADE_LOG_FILE', 'logs/trades.csv')
+        
+        # Check if trade log exists and has data
+        if not Path(trade_log_path).exists():
+            logger.warning("METALEARN_NO_TRADE_LOG | %s does not exist", trade_log_path)
+            return False
+            
+        # Perform conversion using existing validation function
+        quality_report = validate_trade_data_quality(trade_log_path)
+        
+        if not quality_report.get('file_exists', False):
+            logger.warning("METALEARN_FILE_NOT_EXIST | trade log not accessible")
+            return False
+            
+        if quality_report.get('row_count', 0) == 0:
+            logger.warning("METALEARN_EMPTY_TRADE_LOG | no rows found in trade log")
+            return False
+            
+        # If we have mixed format data (audit + meta), trigger conversion
+        if quality_report.get('mixed_format_detected', False):
+            logger.info("METALEARN_MIXED_FORMAT_DETECTED | triggering conversion")
+            
+            # Read and convert trade data
+            if pd is not None:
+                try:
+                    df = pd.read_csv(trade_log_path, header=None)
+                    converted_df = _convert_audit_to_meta_format(df)
+                    
+                    if not converted_df.empty:
+                        # Save converted data back to trade log
+                        # This overwrites the original with the converted format
+                        converted_df.to_csv(trade_log_path, index=False)
+                        
+                        logger.info("METALEARN_CONVERSION_SUCCESS | symbol=%s converted_rows=%d", 
+                                   symbol, len(converted_df))
+                        return True
+                    else:
+                        logger.warning("METALEARN_CONVERSION_EMPTY | no valid conversion result")
+                        return False
+                        
+                except Exception as e:
+                    logger.error("METALEARN_CONVERSION_ERROR | symbol=%s error=%s", symbol, e)
+                    return False
+            else:
+                logger.warning("METALEARN_NO_PANDAS | pandas not available for conversion")
+                return False
+        else:
+            logger.debug("METALEARN_NO_CONVERSION_NEEDED | trade log format is already correct")
+            return True
+            
+    except Exception as exc:
+        logger.error("METALEARN_TRIGGER_ERROR | symbol=%s error=%s", 
+                    trade_data.get('symbol', 'UNKNOWN'), exc)
+        return False
+
+
+def convert_audit_to_meta(trade_data: dict) -> Optional[dict]:
+    """Convert audit trade data to meta-learning format."""
+    try:
+        # This is a simplified conversion for individual trade records
+        # For batch conversion, use trigger_meta_learning_conversion
+        
+        converted_data = {
+            'symbol': trade_data.get('symbol', ''),
+            'entry_time': trade_data.get('timestamp', ''),
+            'entry_price': trade_data.get('price', 0.0),
+            'exit_time': '',  # Will be populated when position is closed
+            'exit_price': '',  # Will be populated when position is closed
+            'qty': trade_data.get('qty', 0),
+            'side': trade_data.get('side', ''),
+            'strategy': trade_data.get('strategy', 'auto_converted'),
+            'classification': 'converted',
+            'signal_tags': f"order_{trade_data.get('order_id', '')[:8]}",
+            'confidence': trade_data.get('confidence', 0.5),
+            'reward': ''  # Will be calculated when position is closed
+        }
+        
+        logger.info("METALEARN_SINGLE_CONVERSION | symbol=%s", converted_data['symbol'])
+        return converted_data
+        
+    except Exception as exc:
+        logger.error("METALEARN_SINGLE_CONVERSION_ERROR | error=%s", exc)
+        return None
+
+
+def store_meta_learning_data(converted_data: dict) -> bool:
+    """Store converted meta-learning data."""
+    try:
+        if config is None:
+            logger.warning("Config not available for storing meta-learning data")
+            return False
+            
+        # Get meta-learning storage path
+        meta_log_path = getattr(config, 'META_LEARNING_LOG_FILE', 'logs/meta_trades.csv')
+        
+        # Ensure directory exists
+        meta_log_dir = Path(meta_log_path).parent
+        meta_log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Store data as CSV
+        if pd is not None:
+            df = pd.DataFrame([converted_data])
+            
+            # Append to existing file or create new
+            if Path(meta_log_path).exists():
+                df.to_csv(meta_log_path, mode='a', header=False, index=False)
+            else:
+                df.to_csv(meta_log_path, index=False)
+                
+            logger.info("METALEARN_DATA_STORED | symbol=%s path=%s", 
+                       converted_data.get('symbol', 'UNKNOWN'), meta_log_path)
+            return True
+        else:
+            logger.warning("METALEARN_STORE_NO_PANDAS | pandas not available")
+            return False
+            
+    except Exception as exc:
+        logger.error("METALEARN_STORE_ERROR | error=%s", exc)
+        return False
