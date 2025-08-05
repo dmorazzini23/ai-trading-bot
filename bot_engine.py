@@ -8093,6 +8093,40 @@ def run_multi_strategy(ctx: BotContext) -> None:
                         signals_by_strategy["rl"] = rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
         except Exception as exc:
             logger.error("RL_AGENT_ERROR", extra={"exc": str(exc)})
+    
+    # AI-AGENT-REF: Add position holding logic to reduce churn
+    try:
+        # Get current positions
+        current_positions = ctx.api.get_all_positions()
+        
+        # Generate hold signals for existing positions
+        from signals import generate_position_hold_signals, enhance_signals_with_position_logic
+        hold_signals = generate_position_hold_signals(ctx, current_positions)
+        
+        # Apply position holding logic to all strategy signals
+        enhanced_signals_by_strategy = {}
+        for strategy_name, strategy_signals in signals_by_strategy.items():
+            enhanced_signals = enhance_signals_with_position_logic(
+                strategy_signals, ctx, hold_signals
+            )
+            enhanced_signals_by_strategy[strategy_name] = enhanced_signals
+            
+        # Log the effect of position holding
+        original_count = sum(len(sigs) for sigs in signals_by_strategy.values())
+        enhanced_count = sum(len(sigs) for sigs in enhanced_signals_by_strategy.values())
+        logger.info("POSITION_HOLD_FILTER", extra={
+            "original_signals": original_count,
+            "enhanced_signals": enhanced_count,
+            "filtered_out": original_count - enhanced_count,
+            "hold_signals_count": len(hold_signals)
+        })
+        
+        # Use enhanced signals for allocation
+        signals_by_strategy = enhanced_signals_by_strategy
+        
+    except Exception as exc:
+        logger.warning("Position holding logic failed, using original signals: %s", exc)
+    
     final = ctx.allocator.allocate(signals_by_strategy)
     acct = ctx.api.get_account()
     cash = float(getattr(acct, "cash", 0))

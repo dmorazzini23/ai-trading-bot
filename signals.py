@@ -98,6 +98,13 @@ def rolling_mean(arr, window: int):
 
 logger = logging.getLogger(__name__)
 
+# AI-AGENT-REF: Import position management for hold signals
+try:
+    from position_manager import PositionManager
+except ImportError:
+    # Fallback if position_manager not available
+    PositionManager = None
+
 
 def load_module(name):
     if not isinstance(name, str):
@@ -623,3 +630,98 @@ def generate_ensemble_signal(df) -> int:
     if avg_signal < -0.5:
         return -1
     return 0
+
+
+# AI-AGENT-REF: Position holding signal generation functions
+def generate_position_hold_signals(ctx, current_positions: list) -> dict:
+    """Generate hold signals for existing positions to reduce churn."""
+    try:
+        if PositionManager is None:
+            logger.warning("PositionManager not available - no hold signals generated")
+            return {}
+            
+        # Initialize position manager if not exists
+        if not hasattr(ctx, 'position_manager'):
+            ctx.position_manager = PositionManager(ctx)
+            
+        # Generate hold signals
+        hold_signals = ctx.position_manager.get_hold_signals(current_positions)
+        
+        logger.info("POSITION_HOLD_SIGNALS_GENERATED", extra={
+            "signals_count": len(hold_signals),
+            "hold_count": sum(1 for s in hold_signals.values() if s == "hold"),
+            "sell_count": sum(1 for s in hold_signals.values() if s == "sell"),
+            "neutral_count": sum(1 for s in hold_signals.values() if s == "neutral")
+        })
+        
+        return hold_signals
+        
+    except Exception as exc:
+        logger.error("generate_position_hold_signals failed: %s", exc)
+        return {}
+
+
+def should_generate_new_signal(symbol: str, hold_signals: dict, existing_positions: dict) -> bool:
+    """Determine if new buy/sell signals should be generated for a symbol."""
+    try:
+        # If we have a hold signal for this symbol, don't generate new signals
+        if symbol in hold_signals and hold_signals[symbol] == "hold":
+            logger.info("SKIP_NEW_SIGNAL_HOLD | %s has hold signal", symbol)
+            return False
+            
+        # If we have an existing position and no explicit sell signal, be conservative
+        if symbol in existing_positions and existing_positions[symbol] != 0:
+            if symbol not in hold_signals or hold_signals[symbol] == "neutral":
+                logger.info("SKIP_NEW_SIGNAL_EXISTING | %s has existing position, no clear signal", symbol)
+                return False
+                
+        return True
+        
+    except Exception as exc:
+        logger.warning("should_generate_new_signal failed for %s: %s", symbol, exc)
+        return True  # Default to allowing signal generation
+
+
+def enhance_signals_with_position_logic(signals: list, ctx, hold_signals: dict = None) -> list:
+    """Enhance trading signals with position holding logic."""
+    try:
+        if hold_signals is None:
+            hold_signals = {}
+            
+        enhanced_signals = []
+        
+        for signal in signals:
+            symbol = getattr(signal, 'symbol', '')
+            side = getattr(signal, 'side', '')
+            
+            if not symbol:
+                enhanced_signals.append(signal)
+                continue
+                
+            # Check if we should respect hold signal
+            if symbol in hold_signals:
+                hold_action = hold_signals[symbol]
+                
+                if hold_action == "hold" and side == "sell":
+                    # Convert sell signal to hold (skip the signal)
+                    logger.info("SIGNAL_CONVERTED_HOLD | %s sell->hold", symbol)
+                    continue
+                    
+                elif hold_action == "sell" and side == "buy":
+                    # Don't add new buy signals for symbols marked for selling
+                    logger.info("SIGNAL_SKIP_BUY_SELL_PENDING | %s buy skipped, sell pending", symbol)
+                    continue
+                    
+            enhanced_signals.append(signal)
+            
+        logger.info("SIGNALS_ENHANCED", extra={
+            "original_count": len(signals),
+            "enhanced_count": len(enhanced_signals),
+            "filtered_count": len(signals) - len(enhanced_signals)
+        })
+        
+        return enhanced_signals
+        
+    except Exception as exc:
+        logger.error("enhance_signals_with_position_logic failed: %s", exc)
+        return signals  # Return original signals on error
