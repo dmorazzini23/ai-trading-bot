@@ -31,7 +31,7 @@ RISK_PARAMETERS = {
 # Kelly Criterion parameters - Optimized for better risk-adjusted returns
 KELLY_PARAMETERS = {
     "MIN_SAMPLE_SIZE": 20,              # Minimum trades for Kelly calculation (reduced for faster adaptation)
-    "MAX_KELLY_FRACTION": 0.15,         # Maximum Kelly fraction (15% - reduced for better risk-adjusted returns)
+    "MAX_KELLY_FRACTION": 0.30,         # Maximum Kelly fraction (30% - must be >= MAX_POSITION_SIZE for institutional requirements)
     "CONFIDENCE_LEVEL": 0.90,           # Statistical confidence level (reduced for less conservative sizing)
     "LOOKBACK_PERIODS": 252,            # Trading days for analysis
     "REBALANCE_FREQUENCY": 21,          # Rebalance every 21 days
