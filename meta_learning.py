@@ -95,174 +95,107 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
             quality_report['issues'].append("pandas not available for data validation")
             return quality_report
             
+        # AI-AGENT-REF: Enhanced mixed format handling - read line by line for robust parsing
         try:
-            df = pd.read_csv(trade_log_path)
-            quality_report['row_count'] = len(df)
+            with open(trade_log_path, 'r') as f:
+                lines = f.readlines()
             
-            # AI-AGENT-REF: Enhanced format detection for mixed audit/meta-learning formats
-            # Detect which format each row uses by analyzing the first column
-            if len(df) > 0:
-                audit_format_rows = 0
-                meta_format_rows = 0
-                
-                # Check first column to identify format
-                # Audit format: first column is UUID/order_id (longer strings with hyphens)
-                # Meta format: first column is symbol (short strings like AAPL, MSFT)
-                for idx, value in df.iloc[:, 0].items():
-                    str_val = str(value).strip()
-                    if len(str_val) > 20 and '-' in str_val:  # Likely UUID/order_id 
+            if not lines:
+                quality_report['issues'].append("Trade log file is empty")
+                quality_report['recommendations'].append("Ensure trade logging is actively writing data")
+                return quality_report
+            
+            audit_format_rows = 0
+            meta_format_rows = 0
+            valid_price_rows = 0
+            
+            # Parse each line manually to handle mixed column formats
+            for line_num, line in enumerate(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                    
+                try:
+                    # Split CSV line manually
+                    import csv
+                    import io
+                    csv_reader = csv.reader(io.StringIO(line))
+                    row = next(csv_reader)
+                    
+                    if len(row) == 0:
+                        continue
+                    
+                    first_col = str(row[0]).strip()
+                    
+                    # Detect format based on first column
+                    if len(first_col) > 20 and '-' in first_col:  # Likely UUID/order_id 
                         audit_format_rows += 1
-                    elif len(str_val) <= 10 and str_val.isalpha():  # Likely symbol
-                        meta_format_rows += 1
-                
-                quality_report['audit_format_rows'] = audit_format_rows
-                quality_report['meta_format_rows'] = meta_format_rows
-                
-                if audit_format_rows > 0 and meta_format_rows > 0:
-                    quality_report['mixed_format_detected'] = True
-                    quality_report['issues'].append(f"Mixed log formats detected: {audit_format_rows} audit rows, {meta_format_rows} meta rows")
-                    quality_report['recommendations'].append("Separate audit and meta-learning logs or implement unified parsing")
-            
-            # Check for required meta-learning columns
-            required_columns = ['entry_price', 'exit_price', 'signal_tags', 'side']
-            missing_columns = [col for col in required_columns if col not in df.columns]
-            
-            if missing_columns:
-                # For mixed format files, this is expected, so adjust validation
-                if quality_report['mixed_format_detected']:
-                    quality_report['issues'].append(f"Meta-learning columns missing (expected for mixed format): {missing_columns}")
-                    quality_report['recommendations'].append("Parse valid meta-learning rows only")
-                    # Set as valid format since we can still process some rows
-                    quality_report['has_valid_format'] = True
-                else:
-                    quality_report['issues'].append(f"Missing required columns: {missing_columns}")
-                    quality_report['recommendations'].append("Update trade logging format to include all required fields")
-                    return quality_report
-            else:
-                quality_report['has_valid_format'] = True
-            
-            # Validate price data quality - now handle mixed formats
-            if len(df) > 0:
-                # AI-AGENT-REF: Enhanced price validation for mixed formats
-                valid_price_rows = 0
-                
-                if quality_report['mixed_format_detected']:
-                    # For mixed format, only validate meta-learning rows
-                    for idx, row in df.iterrows():
-                        first_col = str(row.iloc[0]).strip()
-                        # Only process rows that appear to be meta-learning format (symbol in first column)
-                        if len(first_col) <= 10 and first_col.isalpha():
+                        # Validate audit format price (column 5)
+                        if len(row) >= 6:
                             try:
-                                # For meta-learning format, entry_price is in column 2 (0-indexed)
-                                # exit_price is in column 4, but may be empty for active positions
-                                entry_price = pd.to_numeric(row.iloc[2] if len(row) > 2 else 0, errors='coerce')
-                                exit_price = pd.to_numeric(row.iloc[4] if len(row) > 4 and str(row.iloc[4]).strip() else entry_price, errors='coerce')
-                                
-                                # For active positions without exit_price, use entry_price as valid data point
-                                if entry_price > 0:
+                                price = float(row[5])
+                                if price > 0:
                                     valid_price_rows += 1
-                            except Exception as e:
-                                continue
-                else:
-                    # Standard validation for pure meta-learning format
-                    df['entry_price'] = pd.to_numeric(df['entry_price'], errors='coerce')
-                    df['exit_price'] = pd.to_numeric(df['exit_price'], errors='coerce')
+                            except (ValueError, IndexError):
+                                pass
+                    elif len(first_col) <= 10 and first_col.isalpha() and len(first_col) >= 2:  # Likely symbol
+                        meta_format_rows += 1
+                        # Validate meta format price (column 2)
+                        if len(row) >= 3:
+                            try:
+                                price = float(row[2])
+                                if price > 0:
+                                    valid_price_rows += 1
+                            except (ValueError, IndexError):
+                                pass
                     
-                    # Count valid price rows
-                    valid_prices = (df['entry_price'] > 0) & (df['exit_price'] > 0) & \
-                                  pd.notna(df['entry_price']) & pd.notna(df['exit_price'])
-                    valid_price_rows = valid_prices.sum()
-                
-                quality_report['valid_price_rows'] = valid_price_rows
-                
-                if quality_report['valid_price_rows'] == 0:
-                    quality_report['issues'].append("No rows with valid positive prices found")
-                    quality_report['recommendations'].append("Check price data source and trade execution logging")
-                
-                # Check for extreme price outliers - handle mixed format case
-                if quality_report['valid_price_rows'] > 0:
-                    # For mixed formats, we can't use the standard DataFrame operations
-                    # Just report that we have valid data
-                    logger.debug(f"Found {quality_report['valid_price_rows']} valid price rows in mixed format data")
-                
-                # Calculate data quality score
-                if quality_report['row_count'] > 0:
-                    quality_score = quality_report['valid_price_rows'] / quality_report['row_count']
-                    quality_report['data_quality_score'] = quality_score
-                    
-                    if quality_score < 0.5:
-                        quality_report['issues'].append(f"Low data quality score: {quality_score:.2%}")
-                        quality_report['recommendations'].append("Investigate and fix data quality issues")
-                    
-        except Exception as e:
-            quality_report['issues'].append(f"Error reading CSV data: {e}")
-            quality_report['recommendations'].append("Check CSV format and encoding")
-            return quality_report
+                except Exception as e:
+                    logger.debug(f"Failed to parse line {line_num}: {e}")
+                    continue
             
+            quality_report['row_count'] = len([l for l in lines if l.strip()])
+            quality_report['audit_format_rows'] = audit_format_rows
+            quality_report['meta_format_rows'] = meta_format_rows
+            quality_report['valid_price_rows'] = valid_price_rows
+            
+            if audit_format_rows > 0 and meta_format_rows > 0:
+                quality_report['mixed_format_detected'] = True
+                quality_report['issues'].append(f"Mixed log formats detected: {audit_format_rows} audit rows, {meta_format_rows} meta rows")
+                quality_report['recommendations'].append("Separate audit and meta-learning logs or implement unified parsing")
+                # For mixed format, we can still work with it
+                quality_report['has_valid_format'] = True
+            elif audit_format_rows > 0:
+                quality_report['issues'].append("Only audit format detected - conversion needed for meta-learning")
+                quality_report['recommendations'].append("Convert audit format to meta-learning format")
+                quality_report['has_valid_format'] = True  # Can convert
+            elif meta_format_rows > 0:
+                quality_report['has_valid_format'] = True
+            else:
+                quality_report['issues'].append("No recognizable format found")
+                quality_report['recommendations'].append("Check log format and data integrity")
+            
+        except Exception as e:
+            quality_report['issues'].append(f"Failed to read file: {e}")
+            return quality_report
+        
+        # Calculate data quality score
+        if quality_report['row_count'] > 0:
+            quality_score = quality_report['valid_price_rows'] / quality_report['row_count']
+            quality_report['data_quality_score'] = quality_score
+            
+            if quality_score < 0.5:
+                quality_report['issues'].append(f"Low data quality score: {quality_score:.2%}")
+                quality_report['recommendations'].append("Investigate and fix data quality issues")
+        
+        if quality_report['valid_price_rows'] == 0:
+            quality_report['issues'].append("No rows with valid positive prices found")
+            quality_report['recommendations'].append("Check price data source and trade execution logging")
+        
     except Exception as e:
-        quality_report['issues'].append(f"Unexpected error during validation: {e}")
+        logger.error("Failed reading trade log: %s", e, exc_info=True)
+        quality_report['issues'].append(f"Error accessing file: {e}")
         
     return quality_report
-
-
-class MetaLearning:
-    """Meta-learning wrapper using a simple linear model."""
-
-    def __init__(self, model: Optional[Any] = None) -> None:
-        try:
-            from sklearn.linear_model import Ridge
-            self.model = model or Ridge(alpha=1.0)
-        except ImportError:
-            print("WARNING: sklearn not available, using dummy model")
-            # Create a dummy model that does nothing
-            self.model = type('DummyModel', (), {
-                'fit': lambda *a, **k: None,
-                'predict': lambda *a, **k: [0] * len(a[0]) if a else [0]
-            })()
-
-    def train(self, df: "pd.DataFrame", target: str = "target") -> None:
-        """Fit the meta learner using ``df`` columns except ``target``."""
-        if pd is None:
-            raise ImportError("pandas not available for training")
-        if target not in df:
-            raise ValueError(f"target column '{target}' missing")
-        X = df.drop(columns=[target]).values
-        y = df[target].values
-        self.model.fit(X, y)
-
-    def predict(self, features: Any) -> "np.ndarray":
-        """Predict ensemble weights from ``features``."""
-        if np is None:
-            raise ImportError("numpy not available for prediction")
-        if hasattr(self.model, "predict"):
-            return np.asarray(self.model.predict(features))
-        raise ValueError("Model not trained")
-
-    def save_checkpoint(self, path: str = "models/meta_learner.pkl") -> None:
-        """Save model checkpoint with error handling."""
-        try:
-            Path(path).parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "wb") as f:
-                pickle.dump(self.model, f)
-            logger.info("Model checkpoint saved to %s", path)
-        except (OSError, IOError, pickle.PickleError) as e:
-            logger.error("Failed to save model checkpoint to %s: %s", path, e)
-            raise
-
-    def load_checkpoint(self, path: str = "models/meta_learner.pkl") -> None:
-        """Load model checkpoint with error handling."""
-        if Path(path).exists():
-            try:
-                with open(path, "rb") as f:
-                    self.model = pickle.load(f)
-                logger.info("Model checkpoint loaded from %s", path)
-            except (OSError, IOError, pickle.PickleError, EOFError) as e:
-                logger.error("Failed to load model checkpoint from %s: %s", path, e)
-                raise
-        else:
-            logger.warning("Model checkpoint file does not exist: %s", path)
-
-
 def normalize_score(score: float, cap: float = 1.2) -> float:
     """Clip ``score`` to ``cap`` preserving sign."""
     try:
@@ -562,15 +495,24 @@ def retrain_meta_learner(
             df = pd.DataFrame(meta_learning_rows)
             logger.info(f"META_LEARNING_FORMAT_FILTER: Kept {len(df)} meta-learning rows, filtered {audit_format_rows} audit rows")
         else:
-            logger.warning(f"META_LEARNING_FORMAT_FILTER: No meta-learning format rows found in {original_rows} total rows")
+            logger.warning(f"METALEARN_EMPTY_TRADE_LOG - No valid trades found: No meta-learning format rows in {original_rows} total rows")
             # Check if all rows are audit format and try to convert them
             if audit_format_rows > 0:
                 logger.info("META_LEARNING_AUDIT_CONVERSION: Attempting to convert audit format rows to meta-learning format")
-                df = _convert_audit_to_meta_format(df)
-                if df.empty:
-                    logger.error("META_LEARNING_AUDIT_CONVERSION: Failed to convert audit rows")
+                try:
+                    df = _convert_audit_to_meta_format(df)
+                    if not df.empty:
+                        logger.info(f"META_LEARNING_AUDIT_CONVERSION: Successfully converted {len(df)} rows from audit format")
+                    else:
+                        logger.error("METALEARN_EMPTY_TRADE_LOG - No valid trades found: Failed to convert audit rows")
+                        # Implement fallback data recovery
+                        _implement_fallback_data_recovery(trade_log_path, 10)  # Need at least 10 samples
+                        return False
+                except Exception as e:
+                    logger.error(f"META_LEARNING_AUDIT_CONVERSION: Conversion failed: {e}")
                     return False
             else:
+                logger.error("METALEARN_EMPTY_TRADE_LOG - No valid trades found: No recognizable format in trade log")
                 return False
 
     # AI-AGENT-REF: Only require essential columns, allow missing exit_price for open positions
@@ -848,42 +790,101 @@ def _convert_audit_to_meta_format(df: "pd.DataFrame") -> "pd.DataFrame":
     """
     try:
         meta_rows = []
+        position_tracker = {}  # Track open positions for exit price matching
         
+        # First pass: process all audit rows and group by symbol
+        audit_rows = []
         for idx, row in df.iterrows():
-            # Skip if this doesn't look like audit format
             first_col = str(row.iloc[0]).strip()
-            if not (len(first_col) > 20 and '-' in first_col):  # Not a UUID
-                continue
-                
-            # Try to parse as audit format
+            # Check if this looks like audit format (UUID in first column)
+            if len(first_col) > 20 and '-' in first_col:
+                audit_rows.append(row)
+        
+        logger.debug(f"META_LEARNING_AUDIT_CONVERSION: Found {len(audit_rows)} audit format rows to convert")
+        
+        for row in audit_rows:
             try:
                 # Expected audit format: order_id,timestamp,symbol,side,qty,price,mode,status
                 if len(row) >= 6:
-                    order_id = row.iloc[0]
-                    timestamp = row.iloc[1]
-                    symbol = row.iloc[2]
-                    side = row.iloc[3]
-                    qty = row.iloc[4]
-                    price = row.iloc[5]
+                    order_id = str(row.iloc[0]).strip()
+                    timestamp = str(row.iloc[1]).strip()
+                    symbol = str(row.iloc[2]).strip()
+                    side = str(row.iloc[3]).strip().lower()
+                    qty = str(row.iloc[4]).strip()
+                    price = str(row.iloc[5]).strip()
+                    status = str(row.iloc[7]).strip().lower() if len(row) >= 8 else "unknown"
                     
-                    # Convert to meta-learning format
+                    # Only process filled orders
+                    if status != "filled":
+                        continue
+                    
+                    # Parse numeric values safely
+                    try:
+                        qty_val = float(qty)
+                        price_val = float(price)
+                    except (ValueError, TypeError):
+                        logger.debug(f"Invalid numeric values in audit row: qty={qty}, price={price}")
+                        continue
+                    
+                    # Track positions for exit matching
+                    if symbol not in position_tracker:
+                        position_tracker[symbol] = []
+                    
+                    # Create meta-learning entry
                     meta_row = {
                         'symbol': symbol,
                         'entry_time': timestamp,
-                        'entry_price': price,
-                        'exit_time': '',  # Not available in audit format
-                        'exit_price': '',  # Not available in audit format
-                        'qty': qty,
+                        'entry_price': price_val,
+                        'exit_time': '',  # Will be populated if we find matching exit
+                        'exit_price': '',  # Will be populated if we find matching exit
+                        'qty': qty_val,
                         'side': side,
-                        'strategy': 'unknown',  # Default value
-                        'classification': '',
-                        'signal_tags': 'unknown',  # Default value
-                        'confidence': '',
-                        'reward': ''
+                        'strategy': 'audit_converted',  # Mark as converted from audit
+                        'classification': 'converted',  # Mark for identification
+                        'signal_tags': f'audit_order_{order_id[:8]}',  # Use order ID prefix as tag
+                        'confidence': '0.5',  # Default moderate confidence
+                        'reward': ''  # Will be calculated if exit found
                     }
+                    
+                    # Try to match with existing opposite position for exit price
+                    opposite_side = 'sell' if side == 'buy' else 'buy'
+                    matching_positions = [p for p in position_tracker[symbol] if p['side'] == opposite_side and not p.get('matched', False)]
+                    
+                    if matching_positions:
+                        # Match with first available opposite position
+                        match = matching_positions[0]
+                        match['matched'] = True
+                        
+                        # Set exit information
+                        meta_row['exit_time'] = timestamp
+                        meta_row['exit_price'] = price_val
+                        
+                        # Calculate reward (simple P&L)
+                        if side == 'buy':
+                            pnl = (price_val - match['entry_price']) * qty_val
+                        else:
+                            pnl = (match['entry_price'] - price_val) * qty_val
+                        meta_row['reward'] = pnl
+                        
+                        # Also update the matched position
+                        for existing_row in meta_rows:
+                            if (existing_row['symbol'] == symbol and 
+                                existing_row['entry_price'] == match['entry_price'] and
+                                existing_row['side'] == opposite_side and
+                                not existing_row['exit_price']):
+                                existing_row['exit_time'] = timestamp
+                                existing_row['exit_price'] = price_val
+                                if side == 'sell':
+                                    existing_row['reward'] = (price_val - existing_row['entry_price']) * existing_row['qty']
+                                else:
+                                    existing_row['reward'] = (existing_row['entry_price'] - price_val) * existing_row['qty']
+                                break
+                    
+                    position_tracker[symbol].append(meta_row.copy())
                     meta_rows.append(meta_row)
+                    
             except Exception as e:
-                logger.debug(f"Failed to convert audit row {idx}: {e}")
+                logger.debug(f"Failed to convert audit row {row.iloc[0] if len(row) > 0 else 'unknown'}: {e}")
                 continue
         
         if meta_rows:
