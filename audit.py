@@ -126,13 +126,16 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
     try:
         fields_to_use = _simple_fields if use_simple_format else _fields
         
+        # AI-AGENT-REF: Check if file is empty to determine if header is needed
+        file_is_empty = not file_existed or os.path.getsize(TRADE_LOG_FILE) == 0
+        
         with open(TRADE_LOG_FILE, "a", newline="") as f:
             writer = csv.DictWriter(
                 f,
                 fieldnames=fields_to_use,
                 quoting=csv.QUOTE_MINIMAL,
             )
-            if not file_existed:
+            if file_is_empty:
                 writer.writeheader()
                 
             if use_simple_format:
