@@ -1237,9 +1237,19 @@ def trigger_meta_learning_conversion(trade_data: dict) -> bool:
             logger.warning("METALEARN_EMPTY_TRADE_LOG | no rows found in trade log")
             return False
             
-        # If we have mixed format data (audit + meta), trigger conversion
-        if quality_report.get('mixed_format_detected', False):
-            logger.info("METALEARN_MIXED_FORMAT_DETECTED | triggering conversion")
+        # Check if conversion is needed based on format analysis
+        mixed_format = quality_report.get('mixed_format_detected', False)
+        audit_rows = quality_report.get('audit_format_rows', 0)
+        meta_rows = quality_report.get('meta_format_rows', 0)
+        
+        # Determine if conversion is needed
+        conversion_needed = mixed_format or (audit_rows > 0 and meta_rows == 0)
+        
+        if conversion_needed:
+            if mixed_format:
+                logger.info("METALEARN_MIXED_FORMAT_DETECTED | triggering conversion")
+            else:
+                logger.info("METALEARN_AUDIT_FORMAT_DETECTED | triggering conversion")
             
             # Read and convert trade data
             if pd is not None:
