@@ -415,7 +415,18 @@ def retrain_meta_learner(
                 logger.info(f"META_LEARNING_NEGATIVE_PRICES: Filtered out {(~positive_prices).sum()} trades with non-positive prices")
         
         if len(df) == 0:
-            logger.error("METALEARN_INVALID_PRICES - No trades with valid prices after comprehensive validation")
+            logger.warning(
+                "METALEARN_INVALID_PRICES - No trades with valid prices after comprehensive validation. "
+                "This may indicate data quality issues or insufficient trading history. "
+                "Meta-learning will continue with default weights.",
+                extra={
+                    "initial_rows": initial_rows,
+                    "trade_log_path": trade_log_path,
+                    "min_samples": min_samples,
+                    "suggestion": "Check trade logging and price data integrity"
+                }
+            )
+            # AI-AGENT-REF: Return False but log as warning instead of error to prevent system halt
             return False
             
         # Test that final data quality summary is logged

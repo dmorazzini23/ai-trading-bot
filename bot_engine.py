@@ -6759,7 +6759,15 @@ def load_global_signal_performance(
         # Remove rows with invalid price data
         df = df.dropna(subset=["exit_price", "entry_price"])
         if df.empty:
-            logger.warning("METALEARN_INVALID_PRICES - No trades with valid prices")
+            logger.warning(
+                "METALEARN_INVALID_PRICES - No trades with valid prices. "
+                "This suggests price data corruption or insufficient trading history. "
+                "Using default signal weights.",
+                extra={
+                    "trade_log": TRADE_LOG_FILE,
+                    "suggestion": "Check price data format and trade logging"
+                }
+            )
             return {}
         
         # Calculate PnL with validation
@@ -8426,8 +8434,10 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     current_equity = float(acct.equity) if acct else 0.0
                     trading_allowed = ctx.drawdown_circuit_breaker.update_equity(current_equity)
                     
+                    # AI-AGENT-REF: Get status once to avoid UnboundLocalError in else block
+                    status = ctx.drawdown_circuit_breaker.get_status()
+                    
                     if not trading_allowed:
-                        status = ctx.drawdown_circuit_breaker.get_status()
                         logger.critical(
                             "TRADING_HALTED_DRAWDOWN_PROTECTION",
                             extra={
