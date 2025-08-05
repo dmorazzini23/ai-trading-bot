@@ -713,9 +713,15 @@ class TradingConfig:
         return config
 
     def _apply_balanced_mode(self) -> "TradingConfig":
-        """Apply balanced mode parameters (default values)."""
-        # Return self as balanced mode uses default values
-        return self
+        """Apply balanced mode parameters (default values with some adjustments)."""
+        # Create a copy and set balanced-specific parameters
+        import copy
+        config = copy.deepcopy(self)
+        
+        # Balanced mode has moderate settings
+        config.daily_loss_limit = 0.05  # 5% daily loss limit for balanced mode
+        
+        return config
 
     def _apply_aggressive_mode(self) -> "TradingConfig":
         """Apply aggressive mode parameters."""

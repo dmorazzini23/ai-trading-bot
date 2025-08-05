@@ -18,7 +18,18 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-from ..core.constants import KELLY_PARAMETERS
+# Import centralized configuration
+try:
+    from config import TradingConfig
+    _DEFAULT_CONFIG = TradingConfig.from_env()
+except ImportError:
+    # Fallback if config import fails
+    logger.warning("Could not import centralized config, using defaults")
+    class _DefaultConfig:
+        min_sample_size = 20
+        kelly_fraction_max = 0.25
+        confidence_level = 0.90
+    _DEFAULT_CONFIG = _DefaultConfig()
 
 
 class KellyCriterion:
@@ -33,15 +44,17 @@ class KellyCriterion:
     - q = probability of losing (1-p)
     """
     
-    def __init__(self, min_sample_size: int = None, max_fraction: float = None):
-        """Initialize Kelly Criterion calculator."""
-        # AI-AGENT-REF: Kelly Criterion position sizing implementation
-        self.min_sample_size = min_sample_size or KELLY_PARAMETERS["MIN_SAMPLE_SIZE"]
-        self.max_fraction = max_fraction or KELLY_PARAMETERS["MAX_KELLY_FRACTION"]
-        self.confidence_level = KELLY_PARAMETERS["CONFIDENCE_LEVEL"]
+    def __init__(self, config: Optional[TradingConfig] = None):
+        """Initialize Kelly Criterion calculator with centralized configuration."""
+        # Use provided config or default
+        self.config = config or _DEFAULT_CONFIG
+        
+        self.min_sample_size = self.config.min_sample_size
+        self.max_fraction = self.config.kelly_fraction_max
+        self.confidence_level = self.config.confidence_level
         
         logger.info(f"KellyCriterion initialized with min_sample_size={self.min_sample_size}, "
-                   f"max_fraction={self.max_fraction}")
+                   f"max_fraction={self.max_fraction}, confidence_level={self.confidence_level}")
     
     def calculate_kelly_fraction(self, win_rate: float, avg_win: float, avg_loss: float) -> float:
         """
