@@ -41,7 +41,7 @@ class ParameterValidator:
             
             # Risk management bounds
             "MAX_PORTFOLIO_RISK": (0.01, 0.05),
-            "MAX_POSITION_SIZE": (0.05, 0.15),
+            "MAX_POSITION_SIZE": (0.10, 0.35),  # Updated to allow 25% position size
             "STOP_LOSS_MULTIPLIER": (1.0, 3.0),
             "TAKE_PROFIT_MULTIPLIER": (1.5, 5.0),
             "MAX_CORRELATION_EXPOSURE": (0.05, 0.30),

@@ -1603,39 +1603,17 @@ META_MODEL_PATH = abspath("meta_model.pkl")
 class BotMode:
     def __init__(self, mode: str = "balanced") -> None:
         self.mode = mode.lower()
-        self.params = self.set_parameters()
+        # Use centralized configuration instead of hardcoded parameters
+        self.config = config.TradingConfig.from_env(mode=self.mode)
+        self.params = self.config.get_legacy_params()
 
     def set_parameters(self) -> dict[str, float]:
-        if self.mode == "conservative":
-            return {
-                "KELLY_FRACTION": 0.3,
-                "CONF_THRESHOLD": 0.8,
-                "CONFIRMATION_COUNT": 3,
-                "TAKE_PROFIT_FACTOR": 1.2,
-                "DAILY_LOSS_LIMIT": 0.05,
-                "CAPITAL_CAP": 0.25,
-                "TRAILING_FACTOR": 1.5,
-            }
-        elif self.mode == "aggressive":
-            return {
-                "KELLY_FRACTION": 0.75,
-                "CONF_THRESHOLD": 0.6,
-                "CONFIRMATION_COUNT": 1,
-                "TAKE_PROFIT_FACTOR": 2.2,
-                "DAILY_LOSS_LIMIT": 0.1,
-                "CAPITAL_CAP": 0.25,
-                "TRAILING_FACTOR": 2.0,
-            }
-        else:  # balanced
-            return {
-                "KELLY_FRACTION": 0.6,
-                "CONF_THRESHOLD": 0.75,
-                "CONFIRMATION_COUNT": 2,
-                "TAKE_PROFIT_FACTOR": 1.8,
-                "DAILY_LOSS_LIMIT": 0.07,
-                "CAPITAL_CAP": 0.25,
-                "TRAILING_FACTOR": 1.2,
-            }
+        """Return trading parameters for the current mode.
+        
+        This method now delegates to the centralized configuration system
+        for consistency and maintainability.
+        """
+        return self.params
 
     def get_config(self) -> dict[str, float]:
         return self.params
@@ -1730,17 +1708,17 @@ params.update(load_hyperparams())
 NEWS_API_KEY = CONFIG_NEWS_API_KEY  # Keep for backwards compatibility
 SENTIMENT_API_KEY = CONFIG_SENTIMENT_API_KEY  # New preferred API key
 SENTIMENT_API_URL = CONFIG_SENTIMENT_API_URL  # Configurable API URL
-TRAILING_FACTOR = params.get("TRAILING_FACTOR", 1.2)
+TRAILING_FACTOR = params.get("TRAILING_FACTOR", state.mode_obj.config.trailing_factor)
 SECONDARY_TRAIL_FACTOR = 1.0
-TAKE_PROFIT_FACTOR = params.get("TAKE_PROFIT_FACTOR", 1.8)
-SCALING_FACTOR = params.get("SCALING_FACTOR", 0.3)
+TAKE_PROFIT_FACTOR = params.get("TAKE_PROFIT_FACTOR", state.mode_obj.config.take_profit_factor)
+SCALING_FACTOR = params.get("SCALING_FACTOR", state.mode_obj.config.scaling_factor)
 ORDER_TYPE = "market"
-LIMIT_ORDER_SLIPPAGE = params.get("LIMIT_ORDER_SLIPPAGE", 0.005)
-MAX_POSITION_SIZE = 8000
+LIMIT_ORDER_SLIPPAGE = params.get("LIMIT_ORDER_SLIPPAGE", state.mode_obj.config.limit_order_slippage)
+MAX_POSITION_SIZE = state.mode_obj.config.max_position_size
 SLICE_THRESHOLD = 50
-POV_SLICE_PCT = params.get("POV_SLICE_PCT", 0.05)
-DAILY_LOSS_LIMIT = params.get("DAILY_LOSS_LIMIT", 0.07)
-MAX_PORTFOLIO_POSITIONS = int(config.get_env("MAX_PORTFOLIO_POSITIONS", 15))
+POV_SLICE_PCT = params.get("POV_SLICE_PCT", state.mode_obj.config.pov_slice_pct)
+DAILY_LOSS_LIMIT = params.get("DAILY_LOSS_LIMIT", state.mode_obj.config.daily_loss_limit)
+MAX_PORTFOLIO_POSITIONS = int(config.get_env("MAX_PORTFOLIO_POSITIONS", str(state.mode_obj.config.max_trades)))
 CORRELATION_THRESHOLD = 0.60
 SECTOR_EXPOSURE_CAP = float(config.get_env("SECTOR_EXPOSURE_CAP", "0.4"))
 MAX_OPEN_POSITIONS = int(config.get_env("MAX_OPEN_POSITIONS", "10"))
@@ -1748,21 +1726,21 @@ WEEKLY_DRAWDOWN_LIMIT = float(config.get_env("WEEKLY_DRAWDOWN_LIMIT", "0.15"))
 MARKET_OPEN = dt_time(6, 30)
 MARKET_CLOSE = dt_time(13, 0)
 VOLUME_THRESHOLD = int(config.get_env("VOLUME_THRESHOLD", "50000"))
-ENTRY_START_OFFSET = timedelta(minutes=params.get("ENTRY_START_OFFSET_MIN", 30))
-ENTRY_END_OFFSET = timedelta(minutes=params.get("ENTRY_END_OFFSET_MIN", 15))
+ENTRY_START_OFFSET = timedelta(minutes=params.get("ENTRY_START_OFFSET_MIN", state.mode_obj.config.entry_start_offset_min))
+ENTRY_END_OFFSET = timedelta(minutes=params.get("ENTRY_END_OFFSET_MIN", state.mode_obj.config.entry_end_offset_min))
 REGIME_LOOKBACK = 14
 REGIME_ATR_THRESHOLD = 20.0
 RF_ESTIMATORS = 300
 
-# AI-AGENT-REF: Initialize trading parameters before validation to prevent NameError
+# AI-AGENT-REF: Initialize trading parameters from centralized configuration
 RF_MAX_DEPTH = 3
 RF_MIN_SAMPLES_LEAF = 5
 ATR_LENGTH = 10
-CONF_THRESHOLD = params.get("CONF_THRESHOLD", 0.75)
-CONFIRMATION_COUNT = params.get("CONFIRMATION_COUNT", 2)
-CAPITAL_CAP = params.get("CAPITAL_CAP", 0.25)
-DOLLAR_RISK_LIMIT = float(config.get_env("DOLLAR_RISK_LIMIT", "0.05"))
-BUY_THRESHOLD = params.get("BUY_THRESHOLD", 0.2)
+CONF_THRESHOLD = params.get("CONF_THRESHOLD", state.mode_obj.config.conf_threshold)
+CONFIRMATION_COUNT = params.get("CONFIRMATION_COUNT", state.mode_obj.config.confirmation_count)
+CAPITAL_CAP = params.get("CAPITAL_CAP", state.mode_obj.config.capital_cap)
+DOLLAR_RISK_LIMIT = float(config.get_env("DOLLAR_RISK_LIMIT", str(state.mode_obj.config.dollar_risk_limit)))
+BUY_THRESHOLD = params.get("BUY_THRESHOLD", state.mode_obj.config.buy_threshold)
 
 # AI-AGENT-REF: Add comprehensive validation for critical trading parameters
 def validate_trading_parameters():
