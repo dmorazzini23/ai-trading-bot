@@ -33,8 +33,18 @@ class StrategyAllocator:
         self.hold_protect: Dict[str, int] = {}
 
     def allocate(self, signals_by_strategy: Dict[str, List[Any]]) -> List[Any]:
-        # Add debug logging
-        logger.debug(f"Allocate called with {len(signals_by_strategy)} strategies")
+        # Add debug logging and input validation
+        if not signals_by_strategy:
+            logger.debug("Allocate called with empty signals_by_strategy")
+            return []
+            
+        if not isinstance(signals_by_strategy, dict):
+            logger.warning("Allocate called with non-dict signals_by_strategy: %s", type(signals_by_strategy))
+            return []
+            
+        # Count total signals for logging
+        total_signals = sum(len(signals) for signals in signals_by_strategy.values())
+        logger.debug(f"Allocate called with {len(signals_by_strategy)} strategies, {total_signals} total signals")
         
         confirmed_signals = self._confirm_signals(signals_by_strategy)
         result = self._allocate_confirmed(confirmed_signals)
@@ -44,10 +54,42 @@ class StrategyAllocator:
 
     def _confirm_signals(self, signals_by_strategy: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
         confirmed: Dict[str, List[Any]] = {}
+        
         for strategy, signals in signals_by_strategy.items():
+            if not isinstance(signals, list):
+                logger.warning(f"Strategy {strategy} has non-list signals: {type(signals)}")
+                confirmed[strategy] = []
+                continue
+                
             logger.debug(f"Processing strategy {strategy} with {len(signals)} signals")
             confirmed[strategy] = []
+            
             for s in signals:
+                # Validate signal object has required attributes
+                if not hasattr(s, 'symbol') or not hasattr(s, 'side') or not hasattr(s, 'confidence'):
+                    logger.warning(f"Invalid signal object missing required attributes: {s}")
+                    continue
+                    
+                # Validate signal values
+                if not s.symbol or not isinstance(s.symbol, str):
+                    logger.warning(f"Invalid signal symbol: {s.symbol}")
+                    continue
+                    
+                if s.side not in ['buy', 'sell']:
+                    logger.warning(f"Invalid signal side: {s.side}")
+                    continue
+                    
+                try:
+                    confidence = float(s.confidence)
+                    if confidence < 0 or confidence > 1:
+                        logger.warning(f"Signal confidence out of range [0,1]: {confidence}")
+                        # Clamp confidence to valid range
+                        confidence = max(0, min(1, confidence))
+                        s.confidence = confidence
+                except (TypeError, ValueError):
+                    logger.warning(f"Invalid signal confidence (not numeric): {s.confidence}")
+                    continue
+                
                 logger.debug(f"Signal: {s.symbol}, confidence: {s.confidence}")
                 key = f"{s.symbol}_{s.side}"
                 if key not in self.signal_history:
