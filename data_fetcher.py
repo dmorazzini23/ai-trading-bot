@@ -902,7 +902,8 @@ def get_minute_df(
     if not is_market_open():
         logger.info("MARKET_CLOSED_MINUTE_FETCH", extra={"symbol": symbol})
         _MINUTE_CACHE.pop(symbol, None)
-        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        # AI-AGENT-REF: Return only required columns to prevent shape mismatch
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
     start_dt = ensure_utc(start_date) - timedelta(minutes=1)
     end_dt = ensure_utc(end_date)
@@ -929,7 +930,9 @@ def get_minute_df(
                         "hit_ratio_pct": round((_CACHE_STATS["hits"] / (_CACHE_STATS["hits"] + _CACHE_STATS["misses"]) * 100), 1) if (_CACHE_STATS["hits"] + _CACHE_STATS["misses"]) > 0 else 0
                     }
                 )
-                return df_cached.copy()
+                # AI-AGENT-REF: Filter to only return required columns to prevent shape mismatch
+                required = ["open", "high", "low", "close", "volume"]
+                return df_cached[required].copy()
             else:
                 # Cache expired, remove it
                 _MINUTE_CACHE.pop(symbol, None)
@@ -991,7 +994,8 @@ def get_minute_df(
                 logger.error("get_minute_df missing columns %s", missing)
                 return pd.DataFrame(columns=required)
             # Successfully fetched data from Finnhub, return it
-            return df
+            # AI-AGENT-REF: Filter to only return required columns to prevent shape mismatch
+            return df[required]
         except FinnhubAPIException as fh_err:
             finnhub_exc = fh_err
             logger.error("[DataFetcher] Finnhub failed: %s", fh_err)
@@ -1014,7 +1018,8 @@ def get_minute_df(
                         logger.error("get_minute_df missing columns %s", missing)
                         return pd.DataFrame(columns=required)
                     # Successfully fetched data from yfinance, return it
-                    return df
+                    # AI-AGENT-REF: Filter to only return required columns to prevent shape mismatch
+                    return df[required]
                 except Exception as exc:
                     yexc = exc
                     logger.error("[DataFetcher] yfinance failed: %s", exc)
@@ -1052,7 +1057,8 @@ def get_minute_df(
                     logger.error("get_minute_df missing columns %s", missing)
                     return pd.DataFrame(columns=required)
                 # Successfully fetched data from yfinance, return it
-                return df
+                # AI-AGENT-REF: Filter to only return required columns to prevent shape mismatch
+                return df[required]
             except Exception as exc:
                 yexc = exc
                 logger.error("[DataFetcher] yfinance failed: %s", exc)
@@ -1100,7 +1106,10 @@ def get_minute_df(
     if limit is not None and len(df) > limit:
         df = df.tail(limit)  # Return the most recent 'limit' rows
         logger.debug("Applied limit %d to %s data, returning %d rows", limit, symbol, len(df))
-    return df
+    
+    # AI-AGENT-REF: Filter to only return required columns to prevent shape mismatch
+    required = ["open", "high", "low", "close", "volume"]
+    return df[required]
 
 
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
