@@ -1046,8 +1046,11 @@ def _convert_audit_to_meta_format(df: "pd.DataFrame") -> "pd.DataFrame":
                     price = str(row.iloc[5]).strip()
                     status = str(row.iloc[7]).strip().lower() if len(row) >= 8 else "unknown"
                     
-                    # Only process filled orders (including partially filled)
-                    if status not in ["filled", "partially_filled"]:
+                    # Only process successful orders (various success status values)
+                    # AI-AGENT-REF: Enhanced status validation to handle various trading platforms
+                    invalid_statuses = ["pending", "cancelled", "canceled", "rejected", "failed", "error", "unknown"]
+                    if status in invalid_statuses:
+                        logger.debug(f"Skipping audit row with invalid status: {status}")
                         continue
                     
                     # Parse numeric values safely
