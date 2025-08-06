@@ -942,14 +942,24 @@ class ExecutionEngine:
     def _reconcile_partial_fills(self, symbol: str, requested_qty: int, remaining_qty: int, side: str, last_order: Optional[Order]) -> None:
         """Enhanced partial fill reconciliation and tracking."""
         # AI-AGENT-REF: Fix quantity calculation bug - use actual filled quantity from order, not calculated difference
-        if last_order:
-            # Get actual filled quantity from the order object
-            actual_filled_qty = int(getattr(last_order, "filled_qty", 0) or 0)
-        else:
-            # Fallback to calculation if no order object available
-            actual_filled_qty = requested_qty - remaining_qty
         
-        filled_qty = actual_filled_qty
+        # Calculate filled quantity based on the most reliable source available
+        calculated_filled_qty = requested_qty - remaining_qty
+        
+        if last_order:
+            # Try to get actual filled quantity from the order object
+            order_filled_qty = getattr(last_order, "filled_qty", None)
+            if order_filled_qty is not None and order_filled_qty > 0:
+                # Use order object's filled_qty if it's valid and non-zero
+                filled_qty = int(order_filled_qty)
+            else:
+                # Order object doesn't have valid filled_qty, use calculation
+                filled_qty = calculated_filled_qty
+                self.logger.debug("ORDER_FILLED_QTY_FALLBACK | symbol=%s order_filled_qty=%s using_calculated=%d", 
+                                symbol, order_filled_qty, filled_qty)
+        else:
+            # No order object available, use calculation
+            filled_qty = calculated_filled_qty
         
         if filled_qty != requested_qty:
             # Partial fill occurred
@@ -978,12 +988,18 @@ class ExecutionEngine:
                 self.ctx.partial_fill_tracker[symbol]['total_unfilled_qty'] += remaining_qty
                 self.ctx.partial_fill_tracker[symbol]['last_partial_fill_time'] = datetime.now(timezone.utc)
             
-            # Alert if fill rate is very low
-            if fill_rate < 50:  # Less than 50% filled
+            # Alert if fill rate is very low (increased threshold for realistic market conditions)
+            if fill_rate < 25:  # Less than 25% filled (was 50%, now more realistic)
                 self.logger.error("LOW_FILL_RATE_ALERT", extra={
                     "symbol": symbol,
                     "fill_rate_pct": fill_rate,
-                    "suggestion": "Review liquidity and order sizing strategy"
+                    "suggestion": "Review liquidity and order sizing strategy - very low fill rate"
+                })
+            elif fill_rate < 50:  # 25-49% filled - warning level
+                self.logger.warning("MODERATE_FILL_RATE_ALERT", extra={
+                    "symbol": symbol,
+                    "fill_rate_pct": fill_rate,
+                    "suggestion": "Monitor liquidity - below average fill rate"
                 })
             
             # Consider retry logic for remaining quantity if significant
@@ -1041,18 +1057,14 @@ class ExecutionEngine:
             reason = "spread" if spread >= config.LIQUIDITY_SPREAD_THRESHOLD * 2 else "volatility"
             if attempted:
                 self.logger.info(
-                    "LIQUIDITY_SKIP",
-                    extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason},
+                    "LIQUIDITY_SKIP_FINAL",
+                    extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason, "action": "skipping_order"},
                 )
                 time.sleep(random.uniform(0.1, 0.3))
-                self.logger.info(
-                    "LIQUIDITY_SKIP_FINAL",
-                    extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason},
-                )
                 return 0, True
             self.logger.info(
                 "LIQUIDITY_RETRY",
-                extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason},
+                extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason, "action": "halving_quantity"},
             )
             time.sleep(random.uniform(0.1, 0.3))
             return max(1, int(qty * 0.5)), False
