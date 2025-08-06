@@ -81,11 +81,25 @@ class StrategyAllocator:
                     
                 try:
                     confidence = float(s.confidence)
+                    # AI-AGENT-REF: Enhanced confidence normalization with better validation
                     if confidence < 0 or confidence > 1:
-                        logger.warning(f"Signal confidence out of range [0,1]: {confidence}")
-                        # Clamp confidence to valid range
+                        logger.warning(f"Signal confidence out of range [0,1]: {confidence} for {s.symbol}")
+                        # Apply proper normalization for out-of-range values
+                        if confidence > 1:
+                            # For values > 1, apply sigmoid-like normalization
+                            normalized_confidence = 1 / (1 + abs(confidence - 1))
+                            logger.info(f"Normalized confidence {confidence} -> {normalized_confidence:.4f} for {s.symbol}")
+                            confidence = normalized_confidence
+                        else:
+                            # For negative values, clamp to 0
+                            confidence = max(0, confidence)
+                        
+                        # Final safety clamp to ensure [0,1] range
                         confidence = max(0, min(1, confidence))
                         s.confidence = confidence
+                        
+                        # Add validation warning for algorithm integrity monitoring
+                        logger.warning(f"CONFIDENCE_RANGE_VIOLATION | symbol={s.symbol} original={s.confidence} normalized={confidence}")
                 except (TypeError, ValueError):
                     logger.warning(f"Invalid signal confidence (not numeric): {s.confidence}")
                     continue

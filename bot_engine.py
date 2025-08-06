@@ -4537,6 +4537,8 @@ def get_sector(symbol: str) -> str:
         "CRM": "Technology", "ADBE": "Technology", "PYPL": "Technology", "UBER": "Technology",
         "SQ": "Technology", "SHOP": "Technology", "TWLO": "Technology", "ZM": "Technology",
         "PLTR": "Technology",  # AI-AGENT-REF: Added PLTR to Technology sector per problem statement
+        "BABA": "Technology",  # AI-AGENT-REF: Added BABA to Technology sector per problem statement
+        "JD": "Technology", "PDD": "Technology", "TCEHY": "Technology",  # Additional Chinese tech stocks
         
         # Financial Services
         "JPM": "Financial Services", "BAC": "Financial Services", "WFC": "Financial Services",

@@ -717,6 +717,45 @@ class ExecutionEngine:
             return 0.0
         return 0.0
 
+    def _validate_short_selling(self, api: TradingClient, symbol: str, qty: int) -> bool:
+        """
+        Validate if short selling is allowed and feasible for the given symbol and quantity.
+        
+        Returns True if short selling is permitted, False otherwise.
+        """
+        try:
+            # Check if asset is shortable through broker
+            asset = api.get_asset(symbol)
+            if hasattr(asset, "shortable") and not asset.shortable:
+                self.logger.info("SHORT_VALIDATION_FAILED | symbol=%s reason=not_shortable", symbol)
+                return False
+            
+            # Check available shares for shorting
+            shortable_shares = getattr(asset, "shortable_shares", None)
+            if shortable_shares is not None and shortable_shares < qty:
+                self.logger.warning("SHORT_VALIDATION_LIMITED | symbol=%s requested=%d available=%d", 
+                                  symbol, qty, shortable_shares)
+                return False
+            
+            # Check account margin requirements (simplified validation)
+            account = api.get_account()
+            buying_power = float(getattr(account, "buying_power", 0) or 0)
+            # Estimate margin requirement (typically 150% of position value for short sales)
+            # This is a simplified check - real margin requirements are more complex
+            estimated_margin_req = qty * 100 * 1.5  # Assuming $100 avg stock price
+            
+            if buying_power < estimated_margin_req:
+                self.logger.warning("SHORT_VALIDATION_MARGIN | symbol=%s margin_req=%.2f buying_power=%.2f", 
+                                  symbol, estimated_margin_req, buying_power)
+                return False
+            
+            self.logger.info("SHORT_VALIDATION_PASSED | symbol=%s qty=%d", symbol, qty)
+            return True
+            
+        except Exception as exc:
+            self.logger.error("SHORT_VALIDATION_ERROR | symbol=%s error=%s", symbol, exc)
+            return False
+
     def _can_sell(self, api: TradingClient, symbol: str, qty: int) -> bool:
         avail = self._available_qty(api, symbol)
         if avail < qty:
@@ -902,7 +941,15 @@ class ExecutionEngine:
     
     def _reconcile_partial_fills(self, symbol: str, requested_qty: int, remaining_qty: int, side: str, last_order: Optional[Order]) -> None:
         """Enhanced partial fill reconciliation and tracking."""
-        filled_qty = requested_qty - remaining_qty
+        # AI-AGENT-REF: Fix quantity calculation bug - use actual filled quantity from order, not calculated difference
+        if last_order:
+            # Get actual filled quantity from the order object
+            actual_filled_qty = int(getattr(last_order, "filled_qty", 0) or 0)
+        else:
+            # Fallback to calculation if no order object available
+            actual_filled_qty = requested_qty - remaining_qty
+        
+        filled_qty = actual_filled_qty
         
         if filled_qty != requested_qty:
             # Partial fill occurred
@@ -947,8 +994,8 @@ class ExecutionEngine:
             self.logger.info("FULL_FILL_SUCCESS", extra={
                 "symbol": symbol,
                 "side": side,
-                "requested_qty": requested_qty,  # AI-AGENT-REF: Add requested quantity for tracking accuracy
-                "filled_qty": filled_qty,
+                "requested_qty": requested_qty,
+                "filled_qty": filled_qty,  # AI-AGENT-REF: Now uses actual filled quantity from order object
                 "order_id": getattr(last_order, "id", None) if last_order else None
             })
     
