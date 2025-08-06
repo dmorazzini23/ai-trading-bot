@@ -17,7 +17,7 @@ class TestCriticalFixes(unittest.TestCase):
         """Set up test environment."""
         # Mock config to avoid import errors
         class MockConfig:
-            pass
+            NEWS_API_KEY = "test_news_api_key"
         sys.modules['config'] = MockConfig()
     
     def test_sentiment_circuit_breaker_constants(self):
