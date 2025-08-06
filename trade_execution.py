@@ -941,36 +941,45 @@ class ExecutionEngine:
     
     def _reconcile_partial_fills(self, symbol: str, requested_qty: int, remaining_qty: int, side: str, last_order: Optional[Order]) -> None:
         """Enhanced partial fill reconciliation and tracking."""
-        # AI-AGENT-REF: Fix quantity calculation bug - use actual filled quantity from order, not calculated difference
+        # AI-AGENT-REF: Fix quantity calculation bug - use calculated filled quantity as primary source
         
-        # Calculate filled quantity based on the most reliable source available
+        # Calculate filled quantity based on the most reliable source: request - remaining
         calculated_filled_qty = requested_qty - remaining_qty
         
+        # AI-AGENT-REF: Critical fix - always use calculated quantity as primary source
+        # The order.filled_qty from Alpaca API can contain incorrect cumulative values
+        filled_qty = calculated_filled_qty
+        
+        # Get order filled quantity for validation and logging only
+        order_filled_qty_raw = None
+        order_filled_qty_int = None
         if last_order:
-            # Try to get actual filled quantity from the order object
-            order_filled_qty = getattr(last_order, "filled_qty", None)
+            order_filled_qty_raw = getattr(last_order, "filled_qty", None)
             try:
-                # AI-AGENT-REF: critical fix for string-to-int conversion in Alpaca API filled_qty
-                order_filled_qty_int = int(float(order_filled_qty)) if order_filled_qty is not None else 0
-                if order_filled_qty_int > 0:
-                    filled_qty = order_filled_qty_int
-                else:
-                    filled_qty = calculated_filled_qty
+                order_filled_qty_int = int(float(order_filled_qty_raw)) if order_filled_qty_raw is not None else None
             except (ValueError, TypeError):
-                # Fallback to calculated quantity if conversion fails
-                filled_qty = calculated_filled_qty
                 self.logger.warning("ORDER_FILLED_QTY_CONVERSION_FAILED", extra={
                     "symbol": symbol,
-                    "order_filled_qty": order_filled_qty,
-                    "order_filled_qty_type": type(order_filled_qty).__name__,
+                    "order_filled_qty_raw": order_filled_qty_raw,
+                    "order_filled_qty_type": type(order_filled_qty_raw).__name__,
                     "using_calculated": calculated_filled_qty
                 })
-        else:
-            # No order object available, use calculation
-            filled_qty = calculated_filled_qty
         
-        if filled_qty != requested_qty:
-            # Partial fill occurred
+        # Log quantity comparison for debugging when values differ significantly
+        if order_filled_qty_int is not None and abs(order_filled_qty_int - calculated_filled_qty) > 0:
+            self.logger.warning("QUANTITY_MISMATCH_DETECTED", extra={
+                "symbol": symbol,
+                "calculated_filled_qty": calculated_filled_qty,
+                "order_filled_qty": order_filled_qty_int,
+                "requested_qty": requested_qty,
+                "remaining_qty": remaining_qty,
+                "difference": abs(order_filled_qty_int - calculated_filled_qty),
+                "order_id": getattr(last_order, "id", None) if last_order else None
+            })
+        
+        # AI-AGENT-REF: Critical fix - determine if this is a partial or full fill based on remaining quantity
+        if remaining_qty > 0:
+            # Partial fill occurred - there's still quantity remaining
             fill_rate = (filled_qty / requested_qty) * 100 if requested_qty > 0 else 0
             
             self.logger.warning("PARTIAL_FILL_DETECTED", extra={
@@ -979,7 +988,7 @@ class ExecutionEngine:
                 "requested_qty": requested_qty,
                 "filled_qty": filled_qty,
                 "remaining_qty": remaining_qty,
-                "fill_rate_pct": fill_rate,
+                "fill_rate_pct": round(fill_rate, 2),
                 "order_id": getattr(last_order, "id", None) if last_order else None
             })
             
@@ -1000,13 +1009,13 @@ class ExecutionEngine:
             if fill_rate < 25:  # Less than 25% filled (was 50%, now more realistic)
                 self.logger.error("LOW_FILL_RATE_ALERT", extra={
                     "symbol": symbol,
-                    "fill_rate_pct": fill_rate,
+                    "fill_rate_pct": round(fill_rate, 2),
                     "suggestion": "Review liquidity and order sizing strategy - very low fill rate"
                 })
             elif fill_rate < 50:  # 25-49% filled - warning level
                 self.logger.warning("MODERATE_FILL_RATE_ALERT", extra={
                     "symbol": symbol,
-                    "fill_rate_pct": fill_rate,
+                    "fill_rate_pct": round(fill_rate, 2),
                     "suggestion": "Monitor liquidity - below average fill rate"
                 })
             
@@ -1014,12 +1023,15 @@ class ExecutionEngine:
             if remaining_qty > 0 and fill_rate > 25:  # At least 25% filled, retry reasonable
                 self._schedule_retry_for_remaining(symbol, remaining_qty, side)
         else:
-            # Full fill
+            # Full fill - no quantity remaining (remaining_qty == 0)
+            fill_rate = 100.0
             self.logger.info("FULL_FILL_SUCCESS", extra={
                 "symbol": symbol,
                 "side": side,
                 "requested_qty": requested_qty,
-                "filled_qty": filled_qty,  # AI-AGENT-REF: Now uses actual filled quantity from order object
+                "filled_qty": filled_qty,  # AI-AGENT-REF: Now uses reliable calculated quantity
+                "remaining_qty": remaining_qty,  # Should be 0 for full fill
+                "fill_rate_pct": fill_rate,
                 "order_id": getattr(last_order, "id", None) if last_order else None
             })
     

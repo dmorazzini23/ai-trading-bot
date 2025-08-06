@@ -115,6 +115,99 @@ def test_order_execution_partial_fill_tracking():
     assert hasattr(engine, '_reconcile_partial_fills')
 
 
+def test_quantity_tracking_fix():
+    """Test the critical quantity tracking bug fix for accurate filled quantity reporting."""
+    from unittest.mock import Mock, patch
+    import logging
+    import io
+    
+    # Import trade execution module
+    from trade_execution import ExecutionEngine
+    
+    # Create mock context
+    mock_ctx = Mock()
+    mock_ctx.api = Mock()
+    mock_ctx.data_fetcher = Mock()
+    mock_ctx.partial_fill_tracker = {}
+    
+    # Create execution engine
+    engine = ExecutionEngine(mock_ctx)
+    
+    # Set up logging capture to verify correct behavior
+    log_stream = io.StringIO()
+    handler = logging.StreamHandler(log_stream)
+    engine.logger.addHandler(handler)
+    engine.logger.setLevel(logging.INFO)
+    
+    # Test Case 1: Partial fill scenario (like TSLA case - requested 32, submitted 16, filled 11)
+    mock_order_partial = Mock()
+    mock_order_partial.id = "order_123"
+    mock_order_partial.filled_qty = "32"  # Alpaca API incorrectly reports original quantity
+    
+    # Call _reconcile_partial_fills with parameters matching production logs
+    # requested_qty=32 (original), remaining_qty=21 (32-11), so filled should be 11
+    engine._reconcile_partial_fills(
+        symbol="TSLA",
+        requested_qty=32,
+        remaining_qty=21,  # 32 - 11 = 21 remaining
+        side="buy",
+        last_order=mock_order_partial
+    )
+    
+    # Verify it correctly identified as partial fill (not full)
+    log_output = log_stream.getvalue()
+    assert "PARTIAL_FILL_DETECTED" in log_output
+    assert "FULL_FILL_SUCCESS" not in log_output
+    
+    # Test Case 2: Actual full fill scenario  
+    log_stream.truncate(0)
+    log_stream.seek(0)
+    
+    mock_order_full = Mock()
+    mock_order_full.id = "order_456"
+    mock_order_full.filled_qty = "16"  # Could be correct or incorrect - should not matter
+    
+    # Full fill: requested 16, remaining 0, so filled = 16
+    engine._reconcile_partial_fills(
+        symbol="MSFT",
+        requested_qty=16,
+        remaining_qty=0,  # No quantity remaining = full fill
+        side="buy", 
+        last_order=mock_order_full
+    )
+    
+    # Verify it correctly identified as full fill
+    log_output = log_stream.getvalue()
+    assert "FULL_FILL_SUCCESS" in log_output
+    assert "PARTIAL_FILL_DETECTED" not in log_output
+    
+    # Test Case 3: Quantity mismatch detection
+    log_stream.truncate(0)
+    log_stream.seek(0)
+    
+    mock_order_mismatch = Mock()
+    mock_order_mismatch.id = "order_789"  
+    mock_order_mismatch.filled_qty = "50"  # Wrong - API reports 50 but calculated should be 10
+    
+    # Partial fill with quantity mismatch: requested 20, remaining 10, so filled = 10
+    # But order.filled_qty reports 50 (wrong)
+    engine._reconcile_partial_fills(
+        symbol="AMZN",
+        requested_qty=20,
+        remaining_qty=10,  # 20 - 10 = 10 filled
+        side="buy",
+        last_order=mock_order_mismatch
+    )
+    
+    # Verify mismatch was detected and logged
+    log_output = log_stream.getvalue()
+    assert "QUANTITY_MISMATCH_DETECTED" in log_output
+    assert "calculated_filled_qty" in log_output
+    
+    # Clean up
+    engine.logger.removeHandler(handler)
+
+
 def test_risk_management_sector_exposure_logging():
     """Test that sector exposure rejections include clear reasoning."""
     # This is a minimal test - full test would require bot_engine context
