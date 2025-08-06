@@ -87,8 +87,8 @@ except ImportError:
 # Sentiment caching and circuit breaker
 SENTIMENT_TTL_SEC = 600  # 10 minutes
 SENTIMENT_RATE_LIMITED_TTL_SEC = 3600  # 1 hour cache when rate limited
-SENTIMENT_FAILURE_THRESHOLD = 5  # AI-AGENT-REF: Increased from 3 to 5 for more resilience
-SENTIMENT_RECOVERY_TIMEOUT = 600  # AI-AGENT-REF: Increased from 5 to 10 minutes for better recovery
+SENTIMENT_FAILURE_THRESHOLD = 15  # AI-AGENT-REF: Increased to 15 failures for more tolerance per problem statement
+SENTIMENT_RECOVERY_TIMEOUT = 1800  # AI-AGENT-REF: Extended to 30 minutes (1800s) for better recovery per problem statement
 
 _SENTIMENT_CACHE: Dict[str, Tuple[float, float]] = {}  # {ticker: (timestamp, score)}
 _SENTIMENT_CIRCUIT_BREAKER = {"failures": 0, "last_failure": 0, "state": "closed"}  # closed, open, half-open
