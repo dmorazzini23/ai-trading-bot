@@ -3031,8 +3031,8 @@ SENTIMENT_TTL_SEC = 600  # 10 minutes
 SENTIMENT_RATE_LIMITED_TTL_SEC = 3600  # 1 hour cache when rate limited
 _SENTIMENT_CIRCUIT_BREAKER = {"failures": 0, "last_failure": 0, "state": "closed"}  # closed, open, half-open
 # AI-AGENT-REF: Enhanced sentiment circuit breaker thresholds for better resilience
-SENTIMENT_FAILURE_THRESHOLD = 8  # Increased from 3 to 8 failures for more tolerance
-SENTIMENT_RECOVERY_TIMEOUT = 900  # Increased from 300 to 15 minutes for better recovery
+SENTIMENT_FAILURE_THRESHOLD = 15  # Increased to 15 failures for more tolerance per problem statement
+SENTIMENT_RECOVERY_TIMEOUT = 1800  # Extended to 30 minutes (1800s) for better recovery per problem statement
 
 
 class SignalManager:
@@ -4536,6 +4536,7 @@ def get_sector(symbol: str) -> str:
         "NFLX": "Technology", "AMD": "Technology", "INTC": "Technology", "ORCL": "Technology",
         "CRM": "Technology", "ADBE": "Technology", "PYPL": "Technology", "UBER": "Technology",
         "SQ": "Technology", "SHOP": "Technology", "TWLO": "Technology", "ZM": "Technology",
+        "PLTR": "Technology",  # AI-AGENT-REF: Added PLTR to Technology sector per problem statement
         
         # Financial Services
         "JPM": "Financial Services", "BAC": "Financial Services", "WFC": "Financial Services",
@@ -6941,7 +6942,7 @@ def run_bayesian_meta_learning_optimizer(
 
 
 def load_global_signal_performance(
-    min_trades: int = 10, threshold: float = 0.4
+    min_trades: int = 3, threshold: float = 0.4
 ) -> Optional[Dict[str, float]]:
     """Load global signal performance with enhanced error handling."""
     if not os.path.exists(TRADE_LOG_FILE):

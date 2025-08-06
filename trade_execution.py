@@ -77,6 +77,84 @@ _RECENT_BUYS_MAX_SIZE = 1000  # Prevent memory growth
 # be guarded by ``_recent_buys_lock``.
 recent_buys: dict[str, float] = {}
 
+# AI-AGENT-REF: Order execution optimizations to reduce latency
+# Cache for pre-validation results to avoid repeated API calls
+_VALIDATION_CACHE = {}
+_VALIDATION_CACHE_TTL = 30  # seconds
+_MARKET_STATUS_CACHE = None
+_MARKET_STATUS_CACHE_TIME = 0
+
+def _is_market_open() -> bool:
+    """Check if market is open with caching to reduce API calls."""
+    global _MARKET_STATUS_CACHE, _MARKET_STATUS_CACHE_TIME
+    now = time.time()
+    
+    # Use cached result if less than 30 seconds old
+    if _MARKET_STATUS_CACHE is not None and (now - _MARKET_STATUS_CACHE_TIME) < 30:
+        return _MARKET_STATUS_CACHE
+    
+    try:
+        # Simple heuristic: assume market is open during weekdays 9:30-16:00 ET
+        import datetime
+        et_now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - datetime.timedelta(hours=5)  # Approximate ET
+        is_weekday = et_now.weekday() < 5  # Monday=0, Friday=4
+        is_market_hours = 9.5 <= et_now.hour + et_now.minute/60 <= 16
+        
+        _MARKET_STATUS_CACHE = is_weekday and is_market_hours
+        _MARKET_STATUS_CACHE_TIME = now
+        return _MARKET_STATUS_CACHE
+    except Exception:
+        # Fallback: assume market is open to avoid blocking trades
+        _MARKET_STATUS_CACHE = True
+        _MARKET_STATUS_CACHE_TIME = now
+        return True
+
+def _pre_validate_order(symbol: str, qty: int, side: str) -> dict:
+    """Pre-validate order parameters to catch issues early and reduce execution latency."""
+    cache_key = f"{symbol}_{side}_{qty}"
+    now = time.time()
+    
+    # Check cache first
+    if cache_key in _VALIDATION_CACHE:
+        cached_result, cache_time = _VALIDATION_CACHE[cache_key]
+        if (now - cache_time) < _VALIDATION_CACHE_TTL:
+            return cached_result
+    
+    validation_result = {
+        "valid": True,
+        "errors": [],
+        "warnings": []
+    }
+    
+    # Basic validations
+    if qty <= 0:
+        validation_result["valid"] = False
+        validation_result["errors"].append("Invalid quantity")
+    
+    if side.lower() not in ["buy", "sell"]:
+        validation_result["valid"] = False
+        validation_result["errors"].append("Invalid side")
+    
+    if not symbol or len(symbol) > 10:
+        validation_result["valid"] = False
+        validation_result["errors"].append("Invalid symbol")
+    
+    # Market hours check
+    if not _is_market_open():
+        validation_result["warnings"].append("Market may be closed")
+    
+    # Cache result
+    _VALIDATION_CACHE[cache_key] = (validation_result, now)
+    
+    # Clean old cache entries periodically
+    if len(_VALIDATION_CACHE) > 1000:
+        cutoff_time = now - _VALIDATION_CACHE_TTL * 2
+        expired_keys = [k for k, (_, t) in _VALIDATION_CACHE.items() if t < cutoff_time]
+        for k in expired_keys[:500]:  # Remove up to 500 old entries
+            _VALIDATION_CACHE.pop(k, None)
+    
+    return validation_result
+
 # Order submission safety
 _order_submission_lock: RLock = RLock()
 _pending_orders: set[str] = set()
@@ -1638,6 +1716,23 @@ class ExecutionEngine:
         self, symbol: str, qty: int, side: str, asset_class: str = "equity", method: str = "market"
     ) -> Optional[Order]:
         """Execute an order for the given asset class."""
+        # AI-AGENT-REF: Pre-validate order to reduce execution latency
+        validation_result = _pre_validate_order(symbol, qty, side)
+        if not validation_result["valid"]:
+            self.logger.error("ORDER_VALIDATION_FAILED", extra={
+                "symbol": symbol,
+                "qty": qty,
+                "side": side,
+                "errors": validation_result["errors"]
+            })
+            return None
+        
+        if validation_result["warnings"]:
+            self.logger.warning("ORDER_VALIDATION_WARNINGS", extra={
+                "symbol": symbol,
+                "warnings": validation_result["warnings"]
+            })
+        
         remaining = int(round(qty))
         last_order = None
         api = self._select_api(asset_class)
@@ -1909,6 +2004,23 @@ class ExecutionEngine:
         _submit_with_retry_async : Order submission with retry logic
         validate_order : Order validation utilities
         """
+        # AI-AGENT-REF: Pre-validate order to reduce execution latency (async version)
+        validation_result = _pre_validate_order(symbol, qty, side)
+        if not validation_result["valid"]:
+            self.logger.error("ORDER_VALIDATION_FAILED", extra={
+                "symbol": symbol,
+                "qty": qty,
+                "side": side,
+                "errors": validation_result["errors"]
+            })
+            return None
+        
+        if validation_result["warnings"]:
+            self.logger.warning("ORDER_VALIDATION_WARNINGS", extra={
+                "symbol": symbol,
+                "warnings": validation_result["warnings"]
+            })
+        
         remaining = int(round(qty))
         last_order = None
         api = self._select_api(asset_class)
