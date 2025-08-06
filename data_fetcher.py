@@ -994,8 +994,9 @@ def get_minute_df(
                 logger.error("get_minute_df missing columns %s", missing)
                 return pd.DataFrame(columns=required)
             # Successfully fetched data from Finnhub, return it
-            # AI-AGENT-REF: Filter to only return required columns to prevent shape mismatch
-            return df[required]
+            # AI-AGENT-REF: Filter to only return required columns while preserving index
+            result = df[required].copy()
+            return result
         except FinnhubAPIException as fh_err:
             finnhub_exc = fh_err
             logger.error("[DataFetcher] Finnhub failed: %s", fh_err)
@@ -1018,8 +1019,8 @@ def get_minute_df(
                         logger.error("get_minute_df missing columns %s", missing)
                         return pd.DataFrame(columns=required)
                     # Successfully fetched data from yfinance, return it
-                    # AI-AGENT-REF: Filter to only return required columns to prevent shape mismatch
-                    return df[required]
+                    # AI-AGENT-REF: Filter to only return required columns while preserving index
+                    return df[required].copy()
                 except Exception as exc:
                     yexc = exc
                     logger.error("[DataFetcher] yfinance failed: %s", exc)
@@ -1057,8 +1058,8 @@ def get_minute_df(
                     logger.error("get_minute_df missing columns %s", missing)
                     return pd.DataFrame(columns=required)
                 # Successfully fetched data from yfinance, return it
-                # AI-AGENT-REF: Filter to only return required columns to prevent shape mismatch
-                return df[required]
+                # AI-AGENT-REF: Filter to only return required columns while preserving index
+                return df[required].copy()
             except Exception as exc:
                 yexc = exc
                 logger.error("[DataFetcher] yfinance failed: %s", exc)
@@ -1107,9 +1108,9 @@ def get_minute_df(
         df = df.tail(limit)  # Return the most recent 'limit' rows
         logger.debug("Applied limit %d to %s data, returning %d rows", limit, symbol, len(df))
     
-    # AI-AGENT-REF: Filter to only return required columns to prevent shape mismatch
+    # AI-AGENT-REF: Filter to only return required columns while preserving index
     required = ["open", "high", "low", "close", "volume"]
-    return df[required]
+    return df[required].copy()
 
 
 finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)

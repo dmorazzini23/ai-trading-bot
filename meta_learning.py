@@ -1279,6 +1279,10 @@ def trigger_meta_learning_conversion(trade_data: dict) -> bool:
                 logger.warning("METALEARN_NO_PANDAS | pandas not available for conversion")
                 return False
         else:
+            # AI-AGENT-REF: Additional safety check to ensure file exists before declaring no conversion needed
+            if not Path(trade_log_path).exists():
+                logger.warning("METALEARN_FILE_DISAPPEARED | trade log file no longer exists")
+                return False
             logger.debug("METALEARN_NO_CONVERSION_NEEDED | trade log format is already correct")
             return True
             
