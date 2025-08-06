@@ -15,6 +15,41 @@ from enum import Enum
 from uuid import uuid4
 from threading import Lock, RLock
 
+# AI-AGENT-REF: Import enhanced debugging and tracking modules
+try:
+    from ai_trading.execution.debug_tracker import (
+        get_debug_tracker, log_signal_to_execution, log_execution_phase, 
+        log_order_outcome, ExecutionPhase
+    )
+    from ai_trading.execution.position_reconciler import (
+        get_position_reconciler, update_bot_position, adjust_bot_position
+    )
+    from ai_trading.execution.pnl_attributor import (
+        get_pnl_attributor, record_trade_pnl, update_position_for_pnl
+    )
+    ENHANCED_DEBUGGING_AVAILABLE = True
+except ImportError:
+    # Fallback when enhanced debugging is not available
+    ENHANCED_DEBUGGING_AVAILABLE = False
+    def get_debug_tracker(): return None
+    def log_signal_to_execution(*args, **kwargs): return None
+    def log_execution_phase(*args, **kwargs): return None  
+    def log_order_outcome(*args, **kwargs): return None
+    def get_position_reconciler(*args, **kwargs): return None
+    def update_bot_position(*args, **kwargs): return None
+    def adjust_bot_position(*args, **kwargs): return None
+    def get_pnl_attributor(): return None
+    def record_trade_pnl(*args, **kwargs): return None
+    def update_position_for_pnl(*args, **kwargs): return None
+    
+    class ExecutionPhase:
+        SIGNAL_GENERATED = "signal_generated"
+        RISK_CHECK = "risk_check"
+        ORDER_PREPARED = "order_prepared"
+        ORDER_SUBMITTED = "order_submitted"
+        ORDER_FILLED = "order_filled"
+        ORDER_REJECTED = "order_rejected"
+
 # AI-AGENT-REF: graceful fallbacks for testing mode
 try:
     import numpy as np
@@ -1794,7 +1829,19 @@ class ExecutionEngine:
     def execute_order(
         self, symbol: str, qty: int, side: str, asset_class: str = "equity", method: str = "market"
     ) -> Optional[Order]:
-        """Execute an order for the given asset class."""
+        """Execute an order for the given asset class with enhanced debugging."""
+        
+        # AI-AGENT-REF: Start enhanced execution tracking
+        correlation_id = None
+        if ENHANCED_DEBUGGING_AVAILABLE:
+            correlation_id = log_signal_to_execution(
+                symbol=symbol, 
+                side=side, 
+                qty=qty,
+                signal_data={'asset_class': asset_class, 'method': method}
+            )
+            log_execution_phase(correlation_id, ExecutionPhase.RISK_CHECK)
+        
         # AI-AGENT-REF: Pre-validate order to reduce execution latency
         validation_result = _pre_validate_order(symbol, qty, side)
         if not validation_result["valid"]:
@@ -1802,14 +1849,27 @@ class ExecutionEngine:
                 "symbol": symbol,
                 "qty": qty,
                 "side": side,
-                "errors": validation_result["errors"]
+                "errors": validation_result["errors"],
+                "correlation_id": correlation_id
             })
+            
+            if ENHANCED_DEBUGGING_AVAILABLE:
+                log_order_outcome(correlation_id, False, error=f"Validation failed: {validation_result['errors']}")
+            
             return None
         
         if validation_result["warnings"]:
             self.logger.warning("ORDER_VALIDATION_WARNINGS", extra={
                 "symbol": symbol,
-                "warnings": validation_result["warnings"]
+                "warnings": validation_result["warnings"],
+                "correlation_id": correlation_id
+            })
+        
+        if ENHANCED_DEBUGGING_AVAILABLE:
+            log_execution_phase(correlation_id, ExecutionPhase.ORDER_PREPARED, {
+                'validation_result': validation_result,
+                'method': method,
+                'asset_class': asset_class
             })
         
         remaining = int(round(qty))
