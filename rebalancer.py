@@ -17,11 +17,30 @@ try:
 except ImportError:
     ENHANCED_FEATURES_AVAILABLE = False
 
+# AI-AGENT-REF: Portfolio-first trading integration
+try:
+    from portfolio_optimizer import PortfolioOptimizer, create_portfolio_optimizer
+    from transaction_cost_calculator import TransactionCostCalculator, create_transaction_cost_calculator
+    from regime_detector import RegimeDetector, create_regime_detector
+    PORTFOLIO_FIRST_AVAILABLE = True
+except ImportError:
+    PORTFOLIO_FIRST_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+# Log availability after logger is defined
+if PORTFOLIO_FIRST_AVAILABLE:
+    logger.info("Portfolio-first trading capabilities loaded")
+else:
+    logger.warning("Portfolio-first trading capabilities not available")
 
 REBALANCE_INTERVAL_MIN = int(config.get_env("REBALANCE_INTERVAL_MIN", "10"))
 
 _last_rebalance = datetime.now(timezone.utc)
+
+# Global portfolio-first components
+_portfolio_optimizer = None
+_regime_detector = None
 
 class TaxAwareRebalancer:
     """
@@ -463,7 +482,7 @@ def enhanced_maybe_rebalance(ctx) -> None:
             
             # Always trigger at least one rebalance if no existing weights
             if not portfolio:
-                rebalance_portfolio(ctx)
+                portfolio_first_rebalance(ctx)
                 _last_rebalance = now
                 return
             
@@ -478,25 +497,276 @@ def enhanced_maybe_rebalance(ctx) -> None:
             # Dynamic threshold based on market volatility if available
             drift_threshold = config.PORTFOLIO_DRIFT_THRESHOLD
             
-            if ENHANCED_FEATURES_AVAILABLE:
-                # Adjust threshold based on market conditions
-                market_volatility = getattr(ctx, "market_volatility", 0.2)
-                if market_volatility > 0.3:  # High volatility
-                    drift_threshold *= 1.5  # Allow more drift in volatile markets
-                elif market_volatility < 0.1:  # Low volatility
-                    drift_threshold *= 0.7  # Tighter control in stable markets
-            
-            if drift > drift_threshold:
-                logger.info(f"Portfolio drift {drift:.3f} exceeds threshold {drift_threshold:.3f}")
+            # Use portfolio-first rebalancing if available
+            if PORTFOLIO_FIRST_AVAILABLE:
+                should_rebalance, reason = _check_portfolio_first_rebalancing(ctx, drift, drift_threshold)
+                if should_rebalance:
+                    portfolio_first_rebalance(ctx)
+                    _last_rebalance = now
+                    logger.info(f"PORTFOLIO_FIRST_REBALANCING_EXECUTED | {reason}")
+            else:
+                # Fallback to original logic
+                if drift > drift_threshold:
+                    rebalance_portfolio(ctx)
+                    _last_rebalance = now
+                    
+        except Exception as e:
+            logger.error(f"Error in enhanced rebalancing: {e}")
+            # Fallback to basic rebalancing
+            try:
                 rebalance_portfolio(ctx)
                 _last_rebalance = now
-            else:
-                logger.debug(f"Portfolio drift {drift:.3f} within threshold {drift_threshold:.3f}")
+            except Exception as fallback_error:
+                logger.error(f"Fallback rebalancing also failed: {fallback_error}")
+
+
+def portfolio_first_rebalance(ctx) -> None:
+    """
+    Portfolio-first rebalancing that integrates with portfolio optimization.
+    
+    This function serves as the primary trading mechanism, implementing
+    quarterly tax-optimized rebalancing with intelligent decision making.
+    """
+    global _portfolio_optimizer, _regime_detector
+    
+    try:
+        if not PORTFOLIO_FIRST_AVAILABLE:
+            logger.info("Portfolio-first not available, using standard rebalancing")
+            rebalance_portfolio(ctx)
+            return
+        
+        # Initialize portfolio-first components
+        if _portfolio_optimizer is None:
+            _portfolio_optimizer = create_portfolio_optimizer()
+            _regime_detector = create_regime_detector()
+            logger.info("Portfolio-first rebalancing components initialized")
+        
+        # Prepare portfolio data
+        current_positions = _get_current_positions_for_rebalancing(ctx)
+        target_weights = _get_target_weights_for_rebalancing(ctx)
+        market_data = _prepare_rebalancing_market_data(ctx)
+        
+        if not current_positions or not target_weights or not market_data:
+            logger.warning("Insufficient data for portfolio-first rebalancing, using fallback")
+            rebalance_portfolio(ctx)
+            return
+        
+        # Detect market regime for dynamic rebalancing
+        regime, regime_metrics = _regime_detector.detect_current_regime(market_data)
+        
+        # Calculate dynamic thresholds
+        dynamic_thresholds = _regime_detector.calculate_dynamic_thresholds(regime, regime_metrics)
+        
+        # Update optimizer with dynamic thresholds
+        _portfolio_optimizer.improvement_threshold = dynamic_thresholds.minimum_improvement_threshold
+        _portfolio_optimizer.rebalance_drift_threshold = dynamic_thresholds.rebalance_drift_threshold
+        
+        # Check if rebalancing is needed with portfolio-level analysis
+        current_prices = market_data.get('prices', {})
+        should_rebalance, rebalance_reason = _portfolio_optimizer.should_trigger_rebalance(
+            current_positions,
+            target_weights,
+            current_prices
+        )
+        
+        if should_rebalance:
+            # Execute tax-aware rebalancing
+            if ENHANCED_FEATURES_AVAILABLE:
+                tax_rebalancer = TaxAwareRebalancer()
                 
-        except Exception as e:
-            logger.error(f"Enhanced rebalancing check failed: {e}")
-            # Fallback to basic rebalancing
-            maybe_rebalance(ctx)
+                # Calculate account equity
+                account_equity = sum(
+                    abs(pos) * current_prices.get(symbol, 100.0)
+                    for symbol, pos in current_positions.items()
+                )
+                
+                # Convert positions to proper format for tax rebalancer
+                formatted_positions = {}
+                for symbol, quantity in current_positions.items():
+                    if quantity != 0:
+                        formatted_positions[symbol] = {
+                            'quantity': abs(quantity),
+                            'purchase_price': current_prices.get(symbol, 100.0),  # Simplified
+                            'purchase_date': datetime.now(timezone.utc) - timedelta(days=100)  # Simplified
+                        }
+                
+                rebalance_plan = tax_rebalancer.calculate_optimal_rebalance(
+                    formatted_positions,
+                    target_weights,
+                    current_prices,
+                    account_equity
+                )
+                
+                # Log detailed rebalancing information
+                logger.info("PORTFOLIO_FIRST_REBALANCING_COMPLETE", extra={
+                    "reason": rebalance_reason,
+                    "market_regime": regime.value,
+                    "portfolio_drift": rebalance_plan.get('portfolio_drift', 0),
+                    "total_tax_impact": rebalance_plan.get('total_tax_impact', 0),
+                    "rebalance_trades": len(rebalance_plan.get('rebalance_trades', [])),
+                    "tax_efficiency": rebalance_plan.get('tax_efficiency', 0)
+                })
+                
+                # Store rebalancing plan for execution
+                ctx.rebalance_plan = rebalance_plan
+                ctx.last_portfolio_rebalance = datetime.now(timezone.utc)
+                
+            else:
+                # Fallback to basic rebalancing
+                logger.info("Using basic rebalancing due to limited features")
+                rebalance_portfolio(ctx)
+                
+        else:
+            logger.info(f"PORTFOLIO_FIRST_REBALANCING_SKIPPED | {rebalance_reason}")
+            
+    except Exception as e:
+        logger.error(f"Error in portfolio-first rebalancing: {e}")
+        # Fallback to original rebalancing
+        try:
+            rebalance_portfolio(ctx)
+        except Exception as fallback_error:
+            logger.error(f"Fallback rebalancing failed: {fallback_error}")
+
+
+def _check_portfolio_first_rebalancing(ctx, current_drift: float, drift_threshold: float) -> tuple:
+    """Check if portfolio-first rebalancing should be triggered."""
+    try:
+        # Basic drift check
+        if current_drift > drift_threshold:
+            return True, f"Drift {current_drift:.3f} exceeds threshold {drift_threshold:.3f}"
+        
+        # Time-based quarterly rebalancing check
+        last_rebalance = getattr(ctx, 'last_portfolio_rebalance', None)
+        if last_rebalance is None:
+            return True, "No previous rebalancing recorded"
+        
+        days_since_rebalance = (datetime.now(timezone.utc) - last_rebalance).days
+        if days_since_rebalance >= 90:  # Quarterly rebalancing
+            return True, f"Quarterly rebalance due ({days_since_rebalance} days since last)"
+        
+        # Market regime-based rebalancing
+        if _regime_detector is not None:
+            try:
+                market_data = _prepare_rebalancing_market_data(ctx)
+                if market_data:
+                    regime, metrics = _regime_detector.detect_current_regime(market_data)
+                    
+                    # Force rebalancing in crisis conditions
+                    if regime.value == "crisis":
+                        return True, "Crisis regime detected - protective rebalancing"
+                    
+                    # Rebalance on significant volatility changes
+                    if (metrics.volatility_regime.value in ["extremely_high", "extremely_low"] and
+                        metrics.regime_confidence > 0.8):
+                        return True, f"Extreme volatility regime: {metrics.volatility_regime.value}"
+                        
+            except Exception as e:
+                logger.debug(f"Error in regime-based rebalancing check: {e}")
+        
+        return False, f"No rebalancing needed (drift={current_drift:.3f}, days={days_since_rebalance})"
+        
+    except Exception as e:
+        logger.error(f"Error checking portfolio-first rebalancing: {e}")
+        return current_drift > drift_threshold, "Error in analysis, using basic drift check"
+
+
+def _get_current_positions_for_rebalancing(ctx) -> dict:
+    """Get current positions formatted for portfolio rebalancing."""
+    try:
+        positions = {}
+        
+        # Try multiple sources for position data
+        if hasattr(ctx, 'portfolio_positions'):
+            positions = ctx.portfolio_positions.copy()
+        elif hasattr(ctx, 'current_positions'):
+            positions = ctx.current_positions.copy()
+        elif hasattr(ctx, 'positions'):
+            positions = ctx.positions.copy()
+        
+        # Convert to float and filter out zero positions
+        filtered_positions = {}
+        for symbol, quantity in positions.items():
+            try:
+                qty = float(quantity)
+                if abs(qty) > 0.001:  # Filter out very small positions
+                    filtered_positions[symbol] = qty
+            except (ValueError, TypeError):
+                continue
+        
+        return filtered_positions
+        
+    except Exception as e:
+        logger.error(f"Error getting current positions: {e}")
+        return {}
+
+
+def _get_target_weights_for_rebalancing(ctx) -> dict:
+    """Get target portfolio weights for rebalancing."""
+    try:
+        # Try to get target weights from context
+        if hasattr(ctx, 'target_weights'):
+            return ctx.target_weights.copy()
+        
+        # Fallback: compute equal weights for current positions
+        current_positions = _get_current_positions_for_rebalancing(ctx)
+        if current_positions:
+            num_positions = len(current_positions)
+            equal_weight = 1.0 / num_positions
+            return {symbol: equal_weight for symbol in current_positions.keys()}
+        
+        return {}
+        
+    except Exception as e:
+        logger.error(f"Error getting target weights: {e}")
+        return {}
+
+
+def _prepare_rebalancing_market_data(ctx) -> dict:
+    """Prepare market data for rebalancing analysis."""
+    try:
+        market_data = {
+            'prices': {},
+            'returns': {},
+            'volumes': {},
+            'correlations': {},
+            'volatility': {}
+        }
+        
+        # Get symbols from current positions
+        current_positions = _get_current_positions_for_rebalancing(ctx)
+        symbols = set(current_positions.keys())
+        symbols.add('SPY')  # Add index for regime detection
+        
+        # Fetch market data
+        for symbol in symbols:
+            try:
+                if hasattr(ctx, 'data_fetcher'):
+                    df = ctx.data_fetcher.get_daily_df(ctx, symbol)
+                    if df is not None and len(df) > 0:
+                        # Current price
+                        market_data['prices'][symbol] = df['close'].iloc[-1] if 'close' in df.columns else 100.0
+                        
+                        # Returns for regime detection
+                        if 'close' in df.columns and len(df) > 1:
+                            prices = df['close'].values[-100:]  # Last 100 days
+                            returns = []
+                            for i in range(1, len(prices)):
+                                if prices[i-1] > 0:
+                                    returns.append((prices[i] - prices[i-1]) / prices[i-1])
+                            market_data['returns'][symbol] = returns
+                        
+                        # Volume data
+                        if 'volume' in df.columns:
+                            market_data['volumes'][symbol] = df['volume'].tail(20).mean()
+                            
+            except Exception as e:
+                logger.debug(f"Could not fetch rebalancing data for {symbol}: {e}")
+        
+        return market_data
+        
+    except Exception as e:
+        logger.error(f"Error preparing rebalancing market data: {e}")
+        return {}
 
 
 def maybe_rebalance(ctx) -> None:
