@@ -949,14 +949,22 @@ class ExecutionEngine:
         if last_order:
             # Try to get actual filled quantity from the order object
             order_filled_qty = getattr(last_order, "filled_qty", None)
-            if order_filled_qty is not None and order_filled_qty > 0:
-                # Use order object's filled_qty if it's valid and non-zero
-                filled_qty = int(order_filled_qty)
-            else:
-                # Order object doesn't have valid filled_qty, use calculation
+            try:
+                # AI-AGENT-REF: critical fix for string-to-int conversion in Alpaca API filled_qty
+                order_filled_qty_int = int(float(order_filled_qty)) if order_filled_qty is not None else 0
+                if order_filled_qty_int > 0:
+                    filled_qty = order_filled_qty_int
+                else:
+                    filled_qty = calculated_filled_qty
+            except (ValueError, TypeError):
+                # Fallback to calculated quantity if conversion fails
                 filled_qty = calculated_filled_qty
-                self.logger.debug("ORDER_FILLED_QTY_FALLBACK | symbol=%s order_filled_qty=%s using_calculated=%d", 
-                                symbol, order_filled_qty, filled_qty)
+                self.logger.warning("ORDER_FILLED_QTY_CONVERSION_FAILED", extra={
+                    "symbol": symbol,
+                    "order_filled_qty": order_filled_qty,
+                    "order_filled_qty_type": type(order_filled_qty).__name__,
+                    "using_calculated": calculated_filled_qty
+                })
         else:
             # No order object available, use calculation
             filled_qty = calculated_filled_qty
