@@ -91,31 +91,43 @@ class ExecutionDebugTracker:
     def start_execution_tracking(self, correlation_id: str, symbol: str, 
                                 qty: int, side: str, signal_data: Optional[Dict] = None) -> None:
         """Start tracking a new order execution."""
-        with self._lock:
-            execution_start = {
+        execution_start = {
+            'correlation_id': correlation_id,
+            'symbol': symbol,
+            'qty': qty,
+            'side': side,
+            'start_time': datetime.now(timezone.utc).isoformat(),
+            'signal_data': signal_data or {},
+            'status': OrderStatus.PENDING.value,
+            'phases': []
+        }
+        
+        # AI-AGENT-REF: Use timeout-based lock to prevent deadlock
+        lock_acquired = False
+        try:
+            lock_acquired = self._lock.acquire(timeout=5.0)
+            if lock_acquired:
+                self._active_orders[correlation_id] = execution_start
+        except Exception as e:
+            self.logger.error("START_TRACKING_ERROR", extra={
                 'correlation_id': correlation_id,
+                'error': str(e)
+            })
+        finally:
+            if lock_acquired:
+                self._lock.release()
+        
+        # AI-AGENT-REF: Call log_execution_event outside of lock to prevent recursive deadlock
+        self.log_execution_event(
+            correlation_id, 
+            ExecutionPhase.SIGNAL_GENERATED,
+            {
                 'symbol': symbol,
                 'qty': qty,
                 'side': side,
-                'start_time': datetime.now(timezone.utc).isoformat(),
-                'signal_data': signal_data or {},
-                'status': OrderStatus.PENDING.value,
-                'phases': []
+                'signal_data': signal_data
             }
-            
-            self._active_orders[correlation_id] = execution_start
-            
-            # Log execution start
-            self.log_execution_event(
-                correlation_id, 
-                ExecutionPhase.SIGNAL_GENERATED,
-                {
-                    'symbol': symbol,
-                    'qty': qty,
-                    'side': side,
-                    'signal_data': signal_data
-                }
-            )
+        )
     
     def log_execution_event(self, correlation_id: str, phase: ExecutionPhase, 
                            data: Optional[Dict[str, Any]] = None) -> None:
@@ -129,7 +141,19 @@ class ExecutionDebugTracker:
             'data': data or {}
         }
         
-        with self._lock:
+        # AI-AGENT-REF: Use timeout-based lock acquisition to prevent deadlock
+        lock_acquired = False
+        try:
+            lock_acquired = self._lock.acquire(timeout=5.0)  # 5 second timeout
+            if not lock_acquired:
+                # Fallback: log without state update to prevent blocking
+                self.logger.warning("LOCK_TIMEOUT_EXECUTION_EVENT", extra={
+                    'correlation_id': correlation_id,
+                    'phase': phase.value,
+                    'message': 'Failed to acquire lock within timeout, logging without state update'
+                })
+                return
+                
             self._execution_timelines[correlation_id].append(event)
             
             # Update active order status if relevant
@@ -149,8 +173,19 @@ class ExecutionDebugTracker:
                     self._active_orders[correlation_id]['status'] = OrderStatus.REJECTED.value
                 elif phase == ExecutionPhase.ORDER_CANCELLED:
                     self._active_orders[correlation_id]['status'] = OrderStatus.CANCELLED.value
+        except Exception as e:
+            # AI-AGENT-REF: Graceful error handling for lock operations
+            self.logger.error("EXECUTION_EVENT_ERROR", extra={
+                'correlation_id': correlation_id,
+                'phase': phase.value,
+                'error': str(e),
+                'message': 'Error updating execution event state'
+            })
+        finally:
+            if lock_acquired:
+                self._lock.release()
         
-        # Log the event
+        # Log the event (moved outside lock to prevent circular logging)
         log_data = {
             'correlation_id': correlation_id,
             'phase': phase.value,
@@ -158,13 +193,17 @@ class ExecutionDebugTracker:
         }
         log_data.update(data or {})
         
-        if self.verbose_logging or self.trace_mode:
-            self.logger.info(f"EXEC_EVENT_{phase.value.upper()}", extra=log_data)
-        else:
-            # Log only key phases in normal mode
-            if phase in [ExecutionPhase.SIGNAL_GENERATED, ExecutionPhase.ORDER_SUBMITTED, 
-                        ExecutionPhase.ORDER_FILLED, ExecutionPhase.ORDER_REJECTED]:
+        try:
+            if self.verbose_logging or self.trace_mode:
                 self.logger.info(f"EXEC_EVENT_{phase.value.upper()}", extra=log_data)
+            else:
+                # Log only key phases in normal mode
+                if phase in [ExecutionPhase.SIGNAL_GENERATED, ExecutionPhase.ORDER_SUBMITTED, 
+                            ExecutionPhase.ORDER_FILLED, ExecutionPhase.ORDER_REJECTED]:
+                    self.logger.info(f"EXEC_EVENT_{phase.value.upper()}", extra=log_data)
+        except Exception as log_e:
+            # AI-AGENT-REF: Prevent logging errors from cascading
+            pass  # Silently ignore logging errors to prevent deadlock
     
     def log_order_result(self, correlation_id: str, success: bool, 
                         order_data: Optional[Dict] = None, error: Optional[str] = None) -> None:
@@ -179,25 +218,50 @@ class ExecutionDebugTracker:
             'error': error
         }
         
-        with self._lock:
-            if correlation_id in self._active_orders:
-                order_info = self._active_orders[correlation_id].copy()
-                order_info.update(result_data)
-                
+        # AI-AGENT-REF: Use timeout-based lock to prevent deadlock
+        lock_acquired = False
+        order_info = None
+        found_order = False
+        
+        try:
+            lock_acquired = self._lock.acquire(timeout=5.0)
+            if lock_acquired:
+                if correlation_id in self._active_orders:
+                    order_info = self._active_orders[correlation_id].copy()
+                    order_info.update(result_data)
+                    found_order = True
+                    
+                    if success:
+                        self._recent_executions.append(order_info)
+                    else:
+                        self._failed_executions.append(order_info)
+                    
+                    # Remove from active orders
+                    del self._active_orders[correlation_id]
+        except Exception as e:
+            self.logger.error("ORDER_RESULT_ERROR", extra={
+                'correlation_id': correlation_id,
+                'error': str(e)
+            })
+        finally:
+            if lock_acquired:
+                self._lock.release()
+        
+        # AI-AGENT-REF: Log outside of lock to prevent circular logging deadlock
+        try:
+            if found_order:
                 if success:
-                    self._recent_executions.append(order_info)
                     self.logger.info("ORDER_EXECUTION_SUCCESS", extra=result_data)
                 else:
-                    self._failed_executions.append(order_info)
                     self.logger.error("ORDER_EXECUTION_FAILED", extra=result_data)
-                
-                # Remove from active orders
-                del self._active_orders[correlation_id]
             else:
                 self.logger.warning("UNKNOWN_CORRELATION_ID", extra={
                     'correlation_id': correlation_id,
                     'message': 'Attempted to log result for unknown correlation ID'
                 })
+        except Exception:
+            # AI-AGENT-REF: Prevent logging errors from cascading
+            pass
     
     def log_position_update(self, symbol: str, old_qty: float, new_qty: float, 
                            correlation_id: Optional[str] = None) -> None:
