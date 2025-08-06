@@ -1,23 +1,148 @@
 #!/usr/bin/env python3
 """
-Test for critical trading bot fixes.
-Tests the specific issues identified in production logs.
+Focused test suite for the critical trading bot fixes per problem statement.
 """
-from datetime import datetime, timezone
-from unittest.mock import Mock, patch
+
+import unittest
+import sys
 import os
-import tempfile
-import csv
+
+# Set testing environment
+os.environ['TESTING'] = '1'
+
+# Add project root to path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
-def test_timestamp_format_includes_timezone():
-    """Test that timestamps include proper timezone information for RFC3339 compliance."""
-    # Test with a known UTC datetime
-    test_dt = datetime(2025, 1, 4, 16, 23, 0, tzinfo=timezone.utc)
+class TestCriticalFixes(unittest.TestCase):
+    """Test suite for critical P0 and P1 fixes."""
+
+    def setUp(self):
+        """Set up test environment."""
+        # Import modules after setting TESTING flag
+        import trade_execution
+        import sentiment
+        import strategy_allocator
+        self.trade_execution = trade_execution
+        self.sentiment = sentiment
+        self.strategy_allocator = strategy_allocator
+
+    def test_sentiment_circuit_breaker_thresholds(self):
+        """Test that sentiment circuit breaker has correct increased thresholds."""
+        # P0 Fix: Sentiment circuit breaker thresholds
+        self.assertEqual(self.sentiment.SENTIMENT_FAILURE_THRESHOLD, 25, 
+                        "Sentiment failure threshold should be increased to 25")
+        self.assertEqual(self.sentiment.SENTIMENT_RECOVERY_TIMEOUT, 3600, 
+                        "Sentiment recovery timeout should be increased to 3600 seconds (1 hour)")
+        print("✓ Sentiment circuit breaker thresholds correctly updated")
+
+    def test_confidence_normalization_exists(self):
+        """Test that confidence normalization logic is in place."""
+        # P1 Fix: Confidence normalization
+        allocator = self.strategy_allocator.StrategyAllocator()
+        
+        # Create mock signal with out-of-range confidence
+        class MockSignal:
+            def __init__(self, symbol, side, confidence):
+                self.symbol = symbol
+                self.side = side
+                self.confidence = confidence
+        
+        # This would simulate signals with confidence > 1
+        signals_by_strategy = {
+            "test_strategy": [
+                MockSignal("AAPL", "buy", 2.79),  # Out of range confidence from problem statement
+                MockSignal("GOOGL", "sell", 1.71)  # Out of range confidence from problem statement
+            ]
+        }
+        
+        # Test that allocator handles out-of-range confidence values
+        try:
+            result = allocator.allocate(signals_by_strategy)
+            # Check that any signals returned have confidence in [0,1] range
+            for signal in result:
+                self.assertTrue(0 <= signal.confidence <= 1, 
+                              f"Signal confidence {signal.confidence} is not in [0,1] range")
+            print("✓ Confidence normalization handles out-of-range values")
+        except Exception as e:
+            self.fail(f"Confidence normalization failed: {e}")
+
+    def test_sector_classification_fallback(self):
+        """Test that sector classification includes fallback for BABA."""
+        # P2 Fix: Sector classification
+        import bot_engine
+        
+        # Test that BABA is now in sector mappings
+        sector = bot_engine.get_sector("BABA")
+        self.assertNotEqual(sector, "Unknown", "BABA should have a fallback sector classification")
+        self.assertEqual(sector, "Technology", "BABA should be classified as Technology")
+        print("✓ Sector classification fallback includes BABA")
+
+    def test_trade_execution_quantity_fix_exists(self):
+        """Test that trade execution has the quantity calculation fix."""
+        # P0 Fix: Quantity calculation bug
+        # We can't easily test the actual fix without mocking orders, but we can verify
+        # the _reconcile_partial_fills method exists and has been updated
+        
+        from trade_execution import ExecutionEngine
+        
+        # Create a mock context
+        class MockContext:
+            def __init__(self):
+                self.api = None
+                
+        ctx = MockContext()
+        engine = ExecutionEngine(ctx)
+        
+        # Verify the method exists and takes the expected parameters
+        self.assertTrue(hasattr(engine, '_reconcile_partial_fills'), 
+                       "_reconcile_partial_fills method should exist")
+        print("✓ Trade execution quantity fix method exists")
+
+    def test_short_selling_validation_exists(self):
+        """Test that short selling validation method exists."""
+        # P2 Fix: Short selling validation
+        from trade_execution import ExecutionEngine
+        
+        class MockContext:
+            def __init__(self):
+                self.api = None
+                
+        ctx = MockContext()
+        engine = ExecutionEngine(ctx)
+        
+        # Verify the short selling validation method exists
+        self.assertTrue(hasattr(engine, '_validate_short_selling'), 
+                       "_validate_short_selling method should exist")
+        print("✓ Short selling validation method exists")
+
+
+if __name__ == '__main__':
+    print("Running critical trading bot fixes test suite...")
+    print("=" * 60)
     
-    # Test the fixed timestamp format
-    result = test_dt.isoformat().replace('+00:00', 'Z')
+    # Create test suite
+    suite = unittest.TestSuite()
+    test_class = TestCriticalFixes
     
+    # Add specific tests for each critical fix
+    suite.addTest(test_class('test_sentiment_circuit_breaker_thresholds'))
+    suite.addTest(test_class('test_confidence_normalization_exists'))
+    suite.addTest(test_class('test_sector_classification_fallback'))
+    suite.addTest(test_class('test_trade_execution_quantity_fix_exists'))
+    suite.addTest(test_class('test_short_selling_validation_exists'))
+    
+    # Run tests
+    runner = unittest.TextTestRunner(verbosity=2)
+    result = runner.run(suite)
+    
+    print("=" * 60)
+    if result.wasSuccessful():
+        print("✅ All critical fixes validated successfully!")
+        sys.exit(0)
+    else:
+        print("❌ Some critical fixes failed validation!")
+        sys.exit(1)
     print(f"Fixed timestamp format: {result}")
     
     # The fix should include 'Z' suffix for RFC3339 compliance

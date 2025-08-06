@@ -27,7 +27,7 @@ except ImportError:
 
 # Retry mechanism
 try:
-    from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+    from tenacity import retry, stop_after_attempt, wait_exponential, wait_random, retry_if_exception_type
 except ImportError:
     # Fallback decorator if tenacity not available
     def retry(*args, **kwargs):
@@ -36,6 +36,7 @@ except ImportError:
         return decorator
     stop_after_attempt = lambda x: None
     wait_exponential = lambda **kwargs: None
+    wait_random = lambda *args, **kwargs: None
     retry_if_exception_type = lambda x: None
 
 # AI-AGENT-REF: Import config with fallback
@@ -87,8 +88,8 @@ except ImportError:
 # Sentiment caching and circuit breaker
 SENTIMENT_TTL_SEC = 600  # 10 minutes
 SENTIMENT_RATE_LIMITED_TTL_SEC = 3600  # 1 hour cache when rate limited
-SENTIMENT_FAILURE_THRESHOLD = 15  # AI-AGENT-REF: Increased to 15 failures for more tolerance per problem statement
-SENTIMENT_RECOVERY_TIMEOUT = 1800  # AI-AGENT-REF: Extended to 30 minutes (1800s) for better recovery per problem statement
+SENTIMENT_FAILURE_THRESHOLD = 25  # AI-AGENT-REF: Increased from 15 to 25 for more tolerance per problem statement
+SENTIMENT_RECOVERY_TIMEOUT = 3600  # AI-AGENT-REF: Increased from 1800s to 3600s (1 hour) per problem statement
 
 _SENTIMENT_CACHE: Dict[str, Tuple[float, float]] = {}  # {ticker: (timestamp, score)}
 _SENTIMENT_CIRCUIT_BREAKER = {"failures": 0, "last_failure": 0, "state": "closed"}  # closed, open, half-open
@@ -136,7 +137,7 @@ def _record_sentiment_failure():
 
 @retry(
     stop=stop_after_attempt(3),  # Allow 3 attempts total
-    wait=wait_exponential(multiplier=2, min=5, max=60),  # AI-AGENT-REF: Better backoff: 5s, 10s, 20s, up to 60s max
+    wait=wait_exponential(multiplier=2, min=5, max=60) + wait_random(0, 2),  # AI-AGENT-REF: Add jitter to prevent thundering herd
     retry=retry_if_exception_type((requests.RequestException,)),
 )
 def fetch_sentiment(ctx, ticker: str) -> float:
