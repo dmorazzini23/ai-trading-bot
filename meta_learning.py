@@ -1217,26 +1217,58 @@ def trigger_meta_learning_conversion(trade_data: dict) -> bool:
         symbol = trade_data.get('symbol', 'UNKNOWN')
         logger.info("META_LEARNING_TRIGGER | symbol=%s", symbol)
         
-        # Get config for trade log file path
-        if config is None:
+        # Get config for trade log file path - handle import timing issues
+        current_config = None
+        
+        # First try the module-level config
+        if config is not None:
+            current_config = config
+        
+        # If config is None or we need to handle late mocking, check sys.modules
+        if current_config is None:
+            import sys
+            if 'config' in sys.modules:
+                current_config = sys.modules['config']
+        
+        # Always check sys.modules for updated config (handles test mocking)
+        import sys
+        if 'config' in sys.modules and hasattr(sys.modules['config'], 'TRADE_LOG_FILE'):
+            current_config = sys.modules['config']
+            
+        if current_config is None:
             logger.warning("Config not available for meta-learning conversion")
             return False
             
-        trade_log_path = getattr(config, 'TRADE_LOG_FILE', 'logs/trades.csv')
+        trade_log_path = getattr(current_config, 'TRADE_LOG_FILE', 'logs/trades.csv')
         
-        # Check if trade log exists and has data
-        trade_log_path_obj = Path(trade_log_path)
-        if not trade_log_path_obj.exists() or not trade_log_path_obj.is_file():
+        # Robust file existence and accessibility checking
+        try:
+            trade_log_path_obj = Path(trade_log_path)
+        except (TypeError, ValueError) as e:
+            logger.warning("METALEARN_INVALID_PATH | invalid path format: %s, error: %s", trade_log_path, e)
+            return False
+            
+        # Primary file existence check
+        if not trade_log_path_obj.exists():
             logger.warning("METALEARN_NO_TRADE_LOG | %s does not exist", trade_log_path)
             return False
             
-        # Double-check file exists before proceeding with validation
+        # Verify it's actually a file (not a directory)
+        if not trade_log_path_obj.is_file():
+            logger.warning("METALEARN_NOT_A_FILE | %s is not a regular file", trade_log_path)
+            return False
+            
+        # Double-check file accessibility and size with comprehensive error handling
         try:
-            if not trade_log_path_obj.stat().st_size:
+            file_stat = trade_log_path_obj.stat()
+            if file_stat.st_size == 0:
                 logger.warning("METALEARN_EMPTY_FILE | %s is empty", trade_log_path)
                 return False
-        except (OSError, FileNotFoundError):
-            logger.warning("METALEARN_FILE_ACCESS_ERROR | cannot access %s", trade_log_path)
+        except (OSError, FileNotFoundError, PermissionError) as e:
+            logger.warning("METALEARN_FILE_ACCESS_ERROR | cannot access %s: %s", trade_log_path, e)
+            return False
+        except Exception as e:
+            logger.warning("METALEARN_UNEXPECTED_FILE_ERROR | unexpected error accessing %s: %s", trade_log_path, e)
             return False
             
         # Perform conversion using existing validation function
