@@ -1046,8 +1046,8 @@ def _convert_audit_to_meta_format(df: "pd.DataFrame") -> "pd.DataFrame":
                     price = str(row.iloc[5]).strip()
                     status = str(row.iloc[7]).strip().lower() if len(row) >= 8 else "unknown"
                     
-                    # Only process filled orders
-                    if status != "filled":
+                    # Only process filled orders (including partially filled)
+                    if status not in ["filled", "partially_filled"]:
                         continue
                     
                     # Parse numeric values safely

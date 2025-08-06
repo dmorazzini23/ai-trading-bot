@@ -60,6 +60,7 @@ class MockConfig:
     TRADE_LOG_FILE = 'logs/trades.csv'
     VERBOSE_LOGGING = True
     SCHEDULER_SLEEP_SECONDS = 30.0
+    NEWS_API_KEY = "test_news_api_key"
     TESTING = True
     REQUIRED_ENV_VARS = []
     SEED = 42

@@ -88,6 +88,7 @@ def test_main_starts_api_thread(monkeypatch):
         WEBHOOK_SECRET = "test_secret"
         ALPACA_API_KEY = "test_key"
         ALPACA_SECRET_KEY = "test_secret_key"
+        NEWS_API_KEY = "test_news_api_key"
     
     monkeypatch.setattr(main, "config", MockConfig())
     
