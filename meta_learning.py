@@ -1225,7 +1225,8 @@ def trigger_meta_learning_conversion(trade_data: dict) -> bool:
         trade_log_path = getattr(config, 'TRADE_LOG_FILE', 'logs/trades.csv')
         
         # Check if trade log exists and has data
-        if not Path(trade_log_path).exists():
+        trade_log_path_obj = Path(trade_log_path)
+        if not trade_log_path_obj.exists() or not trade_log_path_obj.is_file():
             logger.warning("METALEARN_NO_TRADE_LOG | %s does not exist", trade_log_path)
             return False
             
@@ -1280,7 +1281,8 @@ def trigger_meta_learning_conversion(trade_data: dict) -> bool:
                 return False
         else:
             # AI-AGENT-REF: Additional safety check to ensure file exists before declaring no conversion needed
-            if not Path(trade_log_path).exists():
+            trade_log_path_obj = Path(trade_log_path)
+            if not trade_log_path_obj.exists() or not trade_log_path_obj.is_file():
                 logger.warning("METALEARN_FILE_DISAPPEARED | trade log file no longer exists")
                 return False
             logger.debug("METALEARN_NO_CONVERSION_NEEDED | trade log format is already correct")
