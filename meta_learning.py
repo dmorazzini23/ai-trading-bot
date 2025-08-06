@@ -1230,6 +1230,15 @@ def trigger_meta_learning_conversion(trade_data: dict) -> bool:
             logger.warning("METALEARN_NO_TRADE_LOG | %s does not exist", trade_log_path)
             return False
             
+        # Double-check file exists before proceeding with validation
+        try:
+            if not trade_log_path_obj.stat().st_size:
+                logger.warning("METALEARN_EMPTY_FILE | %s is empty", trade_log_path)
+                return False
+        except (OSError, FileNotFoundError):
+            logger.warning("METALEARN_FILE_ACCESS_ERROR | cannot access %s", trade_log_path)
+            return False
+            
         # Perform conversion using existing validation function
         quality_report = validate_trade_data_quality(trade_log_path)
         
