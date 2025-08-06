@@ -98,6 +98,22 @@ def rolling_mean(arr, window: int):
 
 logger = logging.getLogger(__name__)
 
+# AI-AGENT-REF: Portfolio-level optimization integration
+try:
+    from portfolio_optimizer import PortfolioOptimizer, PortfolioDecision, create_portfolio_optimizer
+    from transaction_cost_calculator import TransactionCostCalculator, TradeType, create_transaction_cost_calculator
+    from regime_detector import RegimeDetector, create_regime_detector
+    PORTFOLIO_OPTIMIZATION_AVAILABLE = True
+    logger.info("Portfolio optimization modules loaded successfully")
+except ImportError:
+    logger.warning("Portfolio optimization modules not available, using fallback signal processing")
+    PORTFOLIO_OPTIMIZATION_AVAILABLE = False
+
+# Global portfolio optimizer instance (initialized when first used)
+_portfolio_optimizer = None
+_transaction_cost_calculator = None
+_regime_detector = None
+
 # AI-AGENT-REF: Import position management for hold signals
 try:
     from position_manager import PositionManager
@@ -725,3 +741,363 @@ def enhance_signals_with_position_logic(signals: list, ctx, hold_signals: dict =
     except Exception as exc:
         logger.error("enhance_signals_with_position_logic failed: %s", exc)
         return signals  # Return original signals on error
+
+
+# AI-AGENT-REF: Portfolio-level signal filtering for churn reduction
+def filter_signals_with_portfolio_optimization(signals: list, ctx, current_positions: dict = None) -> list:
+    """
+    Filter trading signals based on portfolio-level optimization criteria.
+    
+    This is the core churn reduction mechanism that evaluates each signal
+    at the portfolio level rather than individually, dramatically reducing
+    trading frequency while improving overall performance.
+    
+    Args:
+        signals: List of trading signals to filter
+        ctx: Trading context with market data
+        current_positions: Current portfolio positions
+        
+    Returns:
+        Filtered list of signals that pass portfolio-level validation
+    """
+    try:
+        if not PORTFOLIO_OPTIMIZATION_AVAILABLE:
+            logger.debug("Portfolio optimization not available, skipping filtering")
+            return signals
+            
+        if not signals:
+            return signals
+            
+        # Initialize portfolio optimization components
+        global _portfolio_optimizer, _transaction_cost_calculator, _regime_detector
+        
+        if _portfolio_optimizer is None:
+            _portfolio_optimizer = create_portfolio_optimizer()
+            _transaction_cost_calculator = create_transaction_cost_calculator()
+            _regime_detector = create_regime_detector()
+            logger.info("Portfolio optimization components initialized")
+        
+        # Prepare market data for analysis
+        market_data = _prepare_market_data_for_portfolio_analysis(ctx, signals)
+        if not market_data:
+            logger.warning("Insufficient market data for portfolio analysis, skipping filtering")
+            return signals
+        
+        # Detect current market regime for dynamic thresholds
+        regime, regime_metrics = _regime_detector.detect_current_regime(market_data)
+        
+        # Calculate dynamic thresholds based on market regime
+        dynamic_thresholds = _regime_detector.calculate_dynamic_thresholds(regime, regime_metrics)
+        
+        # Update optimizer with dynamic thresholds
+        _portfolio_optimizer.improvement_threshold = dynamic_thresholds.minimum_improvement_threshold
+        _portfolio_optimizer.rebalance_drift_threshold = dynamic_thresholds.rebalance_drift_threshold
+        _portfolio_optimizer.max_correlation_penalty = dynamic_thresholds.correlation_penalty_adjustment * 0.15
+        
+        # Get current portfolio positions
+        if current_positions is None:
+            current_positions = _get_current_portfolio_positions(ctx)
+        
+        # Filter signals through portfolio optimization
+        filtered_signals = []
+        portfolio_decisions = []
+        
+        for signal in signals:
+            try:
+                symbol = getattr(signal, 'symbol', '')
+                side = getattr(signal, 'side', '')
+                quantity = getattr(signal, 'quantity', 0)
+                
+                if not symbol or not side:
+                    filtered_signals.append(signal)
+                    continue
+                
+                # Calculate proposed position change
+                current_position = current_positions.get(symbol, 0.0)
+                if side.lower() == 'buy':
+                    proposed_position = current_position + abs(quantity)
+                elif side.lower() == 'sell':
+                    proposed_position = max(0.0, current_position - abs(quantity))
+                else:
+                    # Unknown side, keep signal as-is
+                    filtered_signals.append(signal)
+                    continue
+                
+                # Portfolio-level decision making
+                decision, reasoning = _portfolio_optimizer.make_portfolio_decision(
+                    symbol,
+                    proposed_position,
+                    current_positions,
+                    market_data
+                )
+                
+                portfolio_decisions.append({
+                    'symbol': symbol,
+                    'side': side,
+                    'decision': decision.value,
+                    'reasoning': reasoning
+                })
+                
+                # Apply decision logic
+                if decision == PortfolioDecision.APPROVE:
+                    # Validate transaction costs with safety margin
+                    expected_profit = _estimate_signal_profit(signal, market_data)
+                    position_change = abs(proposed_position - current_position)
+                    
+                    profitability = _transaction_cost_calculator.validate_trade_profitability(
+                        symbol,
+                        position_change,
+                        expected_profit,
+                        market_data,
+                        TradeType.LIMIT_ORDER
+                    )
+                    
+                    if profitability.is_profitable:
+                        filtered_signals.append(signal)
+                        logger.info(f"SIGNAL_APPROVED_PORTFOLIO | {symbol} {side} - {reasoning}")
+                    else:
+                        logger.info(f"SIGNAL_REJECTED_COSTS | {symbol} {side} - "
+                                  f"profit={expected_profit:.2f}, cost={profitability.transaction_cost:.2f}")
+                        
+                elif decision == PortfolioDecision.BATCH:
+                    # For now, treat batching as deferral
+                    # In future, implement actual batching logic
+                    logger.info(f"SIGNAL_DEFERRED_BATCH | {symbol} {side} - {reasoning}")
+                    
+                else:  # REJECT or DEFER
+                    logger.info(f"SIGNAL_REJECTED_PORTFOLIO | {symbol} {side} - {reasoning}")
+                    
+            except Exception as e:
+                logger.error(f"Error evaluating signal for {symbol}: {e}")
+                # On error, keep the signal to avoid blocking trades
+                filtered_signals.append(signal)
+        
+        # Log portfolio-level filtering results
+        original_count = len(signals)
+        filtered_count = len(filtered_signals)
+        reduction_percentage = ((original_count - filtered_count) / max(original_count, 1)) * 100
+        
+        logger.info("PORTFOLIO_SIGNAL_FILTERING_COMPLETE", extra={
+            "original_signals": original_count,
+            "filtered_signals": filtered_count,
+            "reduction_percentage": reduction_percentage,
+            "market_regime": regime.value,
+            "portfolio_decisions": portfolio_decisions
+        })
+        
+        # Check if we should trigger portfolio rebalancing instead
+        if filtered_count == 0 and original_count > 0:
+            should_rebalance, rebalance_reason = _check_portfolio_rebalancing(
+                ctx, current_positions, market_data
+            )
+            if should_rebalance:
+                logger.info(f"PORTFOLIO_REBALANCING_TRIGGERED | {rebalance_reason}")
+                # Note: Actual rebalancing would be handled by the rebalancer module
+        
+        return filtered_signals
+        
+    except Exception as e:
+        logger.error("Error in portfolio-level signal filtering: %s", e)
+        # On error, return original signals to avoid blocking trading
+        return signals
+
+
+def _prepare_market_data_for_portfolio_analysis(ctx, signals: list) -> dict:
+    """Prepare market data structure for portfolio analysis."""
+    try:
+        market_data = {
+            'prices': {},
+            'returns': {},
+            'volumes': {},
+            'correlations': {},
+            'volatility': {}
+        }
+        
+        # Get unique symbols from signals
+        symbols = set()
+        for signal in signals:
+            symbol = getattr(signal, 'symbol', '')
+            if symbol:
+                symbols.add(symbol)
+        
+        # Add index symbol for regime detection
+        symbols.add('SPY')
+        
+        # Fetch market data for each symbol
+        for symbol in symbols:
+            try:
+                # Get daily data if available
+                if hasattr(ctx, 'data_fetcher'):
+                    df = ctx.data_fetcher.get_daily_df(ctx, symbol)
+                    if df is not None and len(df) > 0:
+                        # Current price
+                        market_data['prices'][symbol] = robust_signal_price(df)
+                        
+                        # Returns (last 100 periods)
+                        if 'close' in df.columns and len(df) > 1:
+                            prices = df['close'].values[-100:]  # Last 100 days
+                            returns = []
+                            for i in range(1, len(prices)):
+                                if prices[i-1] > 0:
+                                    returns.append((prices[i] - prices[i-1]) / prices[i-1])
+                            market_data['returns'][symbol] = returns
+                        
+                        # Volume
+                        if 'volume' in df.columns and len(df) > 0:
+                            avg_volume = df['volume'].tail(20).mean()  # 20-day average
+                            market_data['volumes'][symbol] = avg_volume
+                        
+                        # Volatility
+                        if len(market_data['returns'][symbol]) > 10:
+                            returns_std = statistics.stdev(market_data['returns'][symbol][-21:])  # 21-day vol
+                            market_data['volatility'][symbol] = returns_std
+                            
+            except Exception as e:
+                logger.debug(f"Could not fetch data for {symbol}: {e}")
+                continue
+        
+        # Calculate correlations between symbols
+        _calculate_correlation_matrix(market_data)
+        
+        return market_data
+        
+    except Exception as e:
+        logger.error(f"Error preparing market data: {e}")
+        return {}
+
+
+def _calculate_correlation_matrix(market_data: dict):
+    """Calculate correlation matrix between symbols."""
+    try:
+        returns_data = market_data.get('returns', {})
+        symbols = list(returns_data.keys())
+        
+        if len(symbols) < 2:
+            return
+        
+        correlations = {}
+        
+        for symbol1 in symbols:
+            correlations[symbol1] = {}
+            returns1 = returns_data[symbol1]
+            
+            for symbol2 in symbols:
+                if symbol1 == symbol2:
+                    correlations[symbol1][symbol2] = 1.0
+                    continue
+                    
+                returns2 = returns_data[symbol2]
+                
+                # Calculate correlation for overlapping periods
+                min_length = min(len(returns1), len(returns2))
+                if min_length < 10:  # Need at least 10 observations
+                    correlations[symbol1][symbol2] = 0.0
+                    continue
+                
+                r1 = returns1[-min_length:]
+                r2 = returns2[-min_length:]
+                
+                try:
+                    if statistics.stdev(r1) == 0 or statistics.stdev(r2) == 0:
+                        correlation = 0.0
+                    else:
+                        # Simple correlation calculation
+                        mean1, mean2 = statistics.mean(r1), statistics.mean(r2)
+                        num = sum((x - mean1) * (y - mean2) for x, y in zip(r1, r2))
+                        den = math.sqrt(sum((x - mean1)**2 for x in r1) * sum((y - mean2)**2 for y in r2))
+                        correlation = num / den if den > 0 else 0.0
+                        
+                    correlations[symbol1][symbol2] = correlation
+                    
+                except Exception:
+                    correlations[symbol1][symbol2] = 0.0
+        
+        market_data['correlations'] = correlations
+        
+    except Exception as e:
+        logger.error(f"Error calculating correlation matrix: {e}")
+
+
+def _get_current_portfolio_positions(ctx) -> dict:
+    """Get current portfolio positions."""
+    try:
+        positions = {}
+        
+        # Try to get positions from context
+        if hasattr(ctx, 'portfolio_positions'):
+            positions = ctx.portfolio_positions.copy()
+        elif hasattr(ctx, 'positions'):
+            positions = ctx.positions.copy()
+        
+        # Convert to float values
+        for symbol in positions:
+            try:
+                positions[symbol] = float(positions[symbol])
+            except (ValueError, TypeError):
+                positions[symbol] = 0.0
+        
+        return positions
+        
+    except Exception as e:
+        logger.error(f"Error getting current positions: {e}")
+        return {}
+
+
+def _estimate_signal_profit(signal, market_data: dict) -> float:
+    """Estimate expected profit from a trading signal."""
+    try:
+        symbol = getattr(signal, 'symbol', '')
+        side = getattr(signal, 'side', '')
+        quantity = getattr(signal, 'quantity', 0)
+        
+        if not symbol or symbol not in market_data['prices']:
+            return 0.0
+        
+        price = market_data['prices'][symbol]
+        trade_value = abs(quantity) * price
+        
+        # Simple profit estimation based on recent returns
+        returns = market_data.get('returns', {}).get(symbol, [])
+        if len(returns) > 5:
+            # Use average of recent positive returns as profit estimate
+            positive_returns = [r for r in returns[-10:] if r > 0]
+            if positive_returns:
+                avg_positive_return = statistics.mean(positive_returns)
+                expected_profit = trade_value * avg_positive_return
+                return max(0.0, expected_profit)
+        
+        # Fallback: assume 1% profit potential
+        return trade_value * 0.01
+        
+    except Exception as e:
+        logger.debug(f"Error estimating signal profit: {e}")
+        return 0.0
+
+
+def _check_portfolio_rebalancing(ctx, current_positions: dict, market_data: dict) -> tuple:
+    """Check if portfolio should be rebalanced instead of individual trades."""
+    try:
+        if not PORTFOLIO_OPTIMIZATION_AVAILABLE or not _portfolio_optimizer:
+            return False, "Portfolio optimization not available"
+        
+        # Get target weights (simplified equal weight for now)
+        symbols = list(current_positions.keys())
+        if len(symbols) == 0:
+            return False, "No positions to rebalance"
+        
+        target_weight = 1.0 / len(symbols)
+        target_weights = {symbol: target_weight for symbol in symbols}
+        
+        # Check if rebalancing is needed
+        prices = market_data.get('prices', {})
+        should_rebalance, reason = _portfolio_optimizer.should_trigger_rebalance(
+            current_positions,
+            target_weights,
+            prices
+        )
+        
+        return should_rebalance, reason
+        
+    except Exception as e:
+        logger.error(f"Error checking portfolio rebalancing: {e}")
+        return False, f"Error: {str(e)}"
