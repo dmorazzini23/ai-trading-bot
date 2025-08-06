@@ -5,12 +5,7 @@ import os
 import random
 import warnings
 
-warnings.filterwarnings(
-    "ignore",
-    message=".*invalid escape sequence.*",
-    category=SyntaxWarning,
-    module="pandas_ta.*",
-)
+# pandas_ta SyntaxWarning now filtered globally in pytest.ini
 
 # AI-AGENT-REF: graceful joblib fallback for testing
 try:
@@ -144,7 +139,7 @@ NEWS_API_KEY = config.NEWS_API_KEY
 
 if not NEWS_API_KEY:
     logger.warning("NEWS_API_KEY is not set; sentiment features will be zero")
-warnings.filterwarnings("ignore", category=FutureWarning)
+# FutureWarning now filtered globally in pytest.ini
 
 MINUTES_REQUIRED = 31
 MFI_PERIOD = 14

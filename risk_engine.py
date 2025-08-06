@@ -53,12 +53,7 @@ except ImportError:
 import metrics_logger
 import config
 
-warnings.filterwarnings(
-    "ignore",
-    message=".*invalid escape sequence.*",
-    category=SyntaxWarning,
-    module="pandas_ta.*",
-)
+# pandas_ta SyntaxWarning now filtered globally in pytest.ini
 
 from strategies import TradeSignal
 from utils import get_phase_logger

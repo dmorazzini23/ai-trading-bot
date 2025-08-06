@@ -132,7 +132,7 @@ HISTORICAL_START = "2025-06-01"
 HISTORICAL_END = "2025-06-06"
 import logging
 
-warnings.filterwarnings("ignore", category=FutureWarning)
+# FutureWarning now filtered globally in pytest.ini
 
 try:
     import finnhub
