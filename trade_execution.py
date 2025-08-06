@@ -950,6 +950,7 @@ class ExecutionEngine:
             # Try to get actual filled quantity from the order object
             order_filled_qty = getattr(last_order, "filled_qty", None)
             try:
+                # AI-AGENT-REF: critical fix for string-to-int conversion in Alpaca API filled_qty
                 order_filled_qty_int = int(float(order_filled_qty)) if order_filled_qty is not None else 0
                 if order_filled_qty_int > 0:
                     filled_qty = order_filled_qty_int
