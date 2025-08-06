@@ -693,7 +693,7 @@ else:
     def signals_calculate_macd(*args, **kwargs):
         return [0.0] * 20  # Mock MACD signal values
 
-warnings.filterwarnings("ignore", category=FutureWarning)
+# FutureWarning now filtered globally in pytest.ini
 
 # AI-AGENT-REF: guard portalocker import for test environments
 try:

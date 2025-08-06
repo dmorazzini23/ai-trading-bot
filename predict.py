@@ -44,7 +44,7 @@ from retrain import prepare_indicators
 logger = logging.getLogger(__name__)
 
 config.reload_env()
-warnings.filterwarnings("ignore", category=FutureWarning)
+# FutureWarning now filtered globally in pytest.ini
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INACTIVE_FEATURES_FILE = os.path.join(BASE_DIR, "inactive_features.json")
