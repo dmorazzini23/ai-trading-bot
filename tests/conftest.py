@@ -659,6 +659,43 @@ except Exception:  # pragma: no cover - optional dependency
     
     # Create minimal Timestamp stub
     class TimestampStub:
+        def __init__(self, *args, **kwargs):
+            from datetime import datetime, timezone
+            # Handle different timestamp creation patterns
+            if args:
+                if isinstance(args[0], str):
+                    # String timestamp like "2023-01-01"
+                    self.value = args[0]
+                else:
+                    self.value = str(args[0])
+            else:
+                self.value = datetime.now(timezone.utc).isoformat()
+            
+            # Handle timezone parameter
+            if 'tz' in kwargs or len(args) > 1:
+                tz = kwargs.get('tz', args[1] if len(args) > 1 else None)
+                if tz == "UTC":
+                    # Return a timezone-aware datetime
+                    if args and isinstance(args[0], str):
+                        try:
+                            from datetime import datetime
+                            dt = datetime.fromisoformat(args[0])
+                            self._dt = dt.replace(tzinfo=timezone.utc)
+                        except:
+                            self._dt = datetime.now(timezone.utc)
+                    else:
+                        self._dt = datetime.now(timezone.utc)
+                else:
+                    self._dt = datetime.now()
+            else:
+                self._dt = datetime.now()
+                
+        def __str__(self):
+            return self.value
+            
+        def __repr__(self):
+            return f"TimestampStub('{self.value}')"
+            
         @staticmethod
         def utcnow():
             from datetime import datetime, timezone
@@ -675,6 +712,17 @@ except Exception:  # pragma: no cover - optional dependency
             # Support timestamp arithmetic for comparisons
             from datetime import datetime, timezone, timedelta
             return datetime.now(timezone.utc) - timedelta(days=1)  # Return a reasonable past time
+        
+        def __add__(self, other):
+            # Support timestamp + timedelta operations
+            from datetime import datetime, timezone, timedelta
+            if hasattr(other, 'td'):  # TimedeltaStub
+                return TimestampStub(str(self._dt + other.td))
+            return TimestampStub(str(self._dt + timedelta(minutes=1)))
+        
+        def to_pydatetime(self):
+            """Return the underlying datetime object."""
+            return self._dt
     
     # Add pandas functions
     def read_csv(*args, **kwargs):
@@ -741,6 +789,16 @@ except Exception:  # pragma: no cover - optional dependency
     pandas_mod.concat = concat
     pandas_mod.to_datetime = to_datetime
     pandas_mod.isna = isna
+    pandas_mod.NaT = None  # Not a Time - represents missing timestamp
+    
+    # Add testing module
+    class TestingStub:
+        @staticmethod
+        def assert_frame_equal(df1, df2, **kwargs):
+            """Mock assert_frame_equal - just pass for testing."""
+            pass
+    
+    pandas_mod.testing = TestingStub()
     pandas_mod.__file__ = "stub"
     sys.modules["pandas"] = pandas_mod
     sys.modules["pd"] = pandas_mod

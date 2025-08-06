@@ -5,102 +5,86 @@ from pathlib import Path
 import pytest
 
 # Mock the config module to avoid environment variable requirements
-class MockConfigClass:
-    _instance = None
+# Create a simple class-based approach that avoids singleton complexity
+
+class TradingConfig:
+    """Mock TradingConfig class for testing."""
+    # Risk Management Parameters
+    max_drawdown_threshold = 0.15
+    daily_loss_limit = 0.03
+    dollar_risk_limit = 0.05
+    max_portfolio_risk = 0.025
+    max_correlation_exposure = 0.15
+    max_sector_concentration = 0.15
+    min_liquidity_threshold = 1000000
+    position_size_min_usd = 100.0
+    max_position_size = 8000
+    max_position_size_pct = 0.25
     
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
+    # Kelly Criterion Parameters
+    kelly_fraction = 0.6
+    kelly_fraction_max = 0.25
+    min_sample_size = 20
+    confidence_level = 0.90
+    lookback_periods = 252
+    rebalance_frequency = 21
     
-    def __init__(self):
-        if hasattr(self, '_initialized'):
-            return
-        self._initialized = True
-        
-        # Core attributes needed by tests
-        self.TRADE_LOG_FILE = 'logs/trades.csv'
-        self.VERBOSE_LOGGING = True
-        self.SCHEDULER_SLEEP_SECONDS = 30.0
-        self.TESTING = True
-        self.REQUIRED_ENV_VARS = []
-        self.SEED = 42
-        self.ALPACA_DATA_FEED = "iex"
-        self.ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
-        self.RATE_LIMIT_BUDGET = 190
-        
-        # SGD Parameters from config.py
-        self.SGD_PARAMS = {
-            "loss": "squared_error",
-            "learning_rate": "constant",
-            "eta0": 0.01,
-            "penalty": "l2",
-            "alpha": 0.0001,
-            "random_state": 42,
-            "max_iter": 1000,
-            "tol": 1e-3
+    # Trading Mode Parameters  
+    conf_threshold = 0.75
+    buy_threshold = 0.1
+    min_confidence = 0.6
+    confirmation_count = 2
+    take_profit_factor = 1.8
+    trailing_factor = 1.2
+    scaling_factor = 0.3
+    
+    @classmethod
+    def from_env(cls, mode="balanced"):
+        return cls()
+    
+    def get_legacy_params(self):
+        """Return legacy parameters for backward compatibility."""
+        return {
+            'conf_threshold': self.conf_threshold,
+            'buy_threshold': self.buy_threshold,
+            'min_confidence': self.min_confidence,
+            'confirmation_count': self.confirmation_count,
+            'take_profit_factor': self.take_profit_factor,
+            'trailing_factor': self.trailing_factor,
+            'scaling_factor': self.scaling_factor,
         }
-        
-        # Add TradingConfig as attribute BEFORE calling __getattr__ 
-        # This must be defined as a direct instance attribute
-        
-        # First, define the TradingConfig class
-        class TradingConfig:
-            # Risk Management Parameters
-            max_drawdown_threshold = 0.15
-            daily_loss_limit = 0.03
-            dollar_risk_limit = 0.05
-            max_portfolio_risk = 0.025
-            max_correlation_exposure = 0.15
-            max_sector_concentration = 0.15
-            min_liquidity_threshold = 1000000
-            position_size_min_usd = 100.0
-            max_position_size = 8000
-            max_position_size_pct = 0.25
-            
-            # Kelly Criterion Parameters
-            kelly_fraction = 0.6
-            kelly_fraction_max = 0.25
-            min_sample_size = 20
-            confidence_level = 0.90
-            lookback_periods = 252
-            rebalance_frequency = 21
-            
-            # Trading Mode Parameters  
-            conf_threshold = 0.75
-            buy_threshold = 0.1
-            min_confidence = 0.6
-            confirmation_count = 2
-            take_profit_factor = 1.8
-            trailing_factor = 1.2
-            scaling_factor = 0.3
-            
-            @classmethod
-            def from_env(cls, mode="balanced"):
-                return cls()
-            
-            def get_legacy_params(self):
-                """Return legacy parameters for backward compatibility."""
-                return {
-                    'conf_threshold': self.conf_threshold,
-                    'buy_threshold': self.buy_threshold,
-                    'min_confidence': self.min_confidence,
-                    'confirmation_count': self.confirmation_count,
-                    'take_profit_factor': self.take_profit_factor,
-                    'trailing_factor': self.trailing_factor,
-                    'scaling_factor': self.scaling_factor,
-                }
-        
-        # Now explicitly set TradingConfig as an instance attribute using object.__setattr__
-        # to bypass our custom __setattr__ method
-        object.__setattr__(self, 'TradingConfig', TradingConfig)
+
+class MockConfig:
+    """Simple mock config that supports both attribute and import access."""
+    # Class attributes that can be modified by tests
+    TRADE_LOG_FILE = 'logs/trades.csv'
+    VERBOSE_LOGGING = True
+    SCHEDULER_SLEEP_SECONDS = 30.0
+    TESTING = True
+    REQUIRED_ENV_VARS = []
+    SEED = 42
+    ALPACA_DATA_FEED = "iex"
+    ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
+    RATE_LIMIT_BUDGET = 190
     
-    def __getattr__(self, name):
+    # Set TradingConfig as a class attribute for imports
+    TradingConfig = TradingConfig
+    
+    # SGD Parameters from config.py
+    SGD_PARAMS = {
+        "loss": "squared_error",
+        "learning_rate": "constant", 
+        "eta0": 0.01,
+        "penalty": "l2",
+        "alpha": 0.0001,
+        "random_state": 42,
+        "max_iter": 1000,
+        "tol": 1e-3
+    }
+    
+    @classmethod
+    def __getattr__(cls, name):
         """Return a default value for any missing attribute."""
-        # Special case: don't override TradingConfig
-        if name == 'TradingConfig':
-            raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
-        
         # Common default values for config attributes
         defaults = {
             'ALPACA_API_KEY': 'PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ',
@@ -163,7 +147,7 @@ class MockConfigClass:
         """Mock get_env method."""
         import os
         if reload:
-            MockConfigClass.reload_env()
+            MockConfig.reload_env()
         
         # Mock common environment variables used in tests
         defaults = {
@@ -180,49 +164,8 @@ class MockConfigClass:
             raise RuntimeError(f"Required environment variable {key} not set")
         return value
 
-# Create the singleton instance and set up module-style access
-MockConfig = MockConfigClass()
-
-# Create a module-like wrapper that supports both attribute access and imports
-class ConfigModule:
-    def __init__(self, config_instance):
-        self._config = config_instance
-        # Manually copy specific attributes we know about
-        self.TRADE_LOG_FILE = config_instance.TRADE_LOG_FILE
-        self.VERBOSE_LOGGING = config_instance.VERBOSE_LOGGING
-        self.SGD_PARAMS = config_instance.SGD_PARAMS
-        self.TradingConfig = config_instance.TradingConfig
-        self.SCHEDULER_SLEEP_SECONDS = config_instance.SCHEDULER_SLEEP_SECONDS
-        self.TESTING = config_instance.TESTING
-        self.REQUIRED_ENV_VARS = config_instance.REQUIRED_ENV_VARS
-        self.SEED = config_instance.SEED
-        self.ALPACA_DATA_FEED = config_instance.ALPACA_DATA_FEED
-        self.ALPACA_BASE_URL = config_instance.ALPACA_BASE_URL
-        self.RATE_LIMIT_BUDGET = config_instance.RATE_LIMIT_BUDGET
-        
-        # Copy methods
-        self.reload_env = config_instance.reload_env
-        self.validate_env_vars = config_instance.validate_env_vars
-        self.validate_alpaca_credentials = config_instance.validate_alpaca_credentials
-        self.log_config = config_instance.log_config
-        self.mask_secret = config_instance.mask_secret
-        self.get_env = config_instance.get_env
-    
-    def __getattr__(self, name):
-        # Delegate to the config instance for any missing attributes
-        return getattr(self._config, name)
-    
-    def __setattr__(self, name, value):
-        if name == '_config':
-            super().__setattr__(name, value)
-        else:
-            # Set on both the module and the config instance
-            super().__setattr__(name, value)
-            if hasattr(self, '_config'):
-                setattr(self._config, name, value)
-
-config_module = ConfigModule(MockConfig)
-sys.modules['config'] = config_module
+# Replace the config module with our mock
+sys.modules['config'] = MockConfig
 
 import meta_learning
 
