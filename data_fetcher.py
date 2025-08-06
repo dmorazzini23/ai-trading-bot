@@ -1211,7 +1211,9 @@ def fetch_minute_yfinance(symbol: str) -> pd.DataFrame:
     df = df.rename_axis("timestamp").reset_index()
     df = df[["timestamp", "Open", "High", "Low", "Close", "Volume"]]
     df.columns = [c.lower() for c in df.columns]
-    df = df.reset_index(drop=True)
+    # AI-AGENT-REF: Preserve DatetimeIndex when returning data - set timestamp as index to maintain DatetimeIndex
+    if 'timestamp' in df.columns:
+        df = df.set_index('timestamp')
     return df
 
 
