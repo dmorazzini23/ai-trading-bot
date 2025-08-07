@@ -974,6 +974,29 @@ class ExecutionEngine:
 
     # --- adaptive helpers -------------------------------------------------
     
+    def _get_actual_filled_qty(self, order: Order, slice_qty: int, symbol: str, order_id: str, status: str) -> int:
+        """
+        Get the actual filled quantity from an order, handling API timing issues.
+        
+        AI-AGENT-REF: CRITICAL FIX - Handle case where API filled_qty might be 0 due to timing
+        """
+        raw_filled_qty = getattr(order, "filled_qty", None)
+        if raw_filled_qty is None or raw_filled_qty == 0:
+            # If API doesn't report filled quantity but status is "filled", 
+            # assume the full slice_qty was filled (this handles API timing issues)
+            actual_qty = slice_qty
+            self.logger.warning("API_FILLED_QTY_MISSING", extra={
+                "symbol": symbol,
+                "order_id": order_id,
+                "status": status,
+                "raw_filled_qty": raw_filled_qty,
+                "using_slice_qty": slice_qty
+            })
+        else:
+            actual_qty = int(raw_filled_qty)
+        
+        return actual_qty
+    
     def _reconcile_partial_fills(self, symbol: str, submitted_qty: int, remaining_qty: int, side: str, last_order: Optional[Order]) -> None:
         """Enhanced partial fill reconciliation and tracking."""
         # AI-AGENT-REF: CRITICAL FIX - Use submitted quantity instead of original signal quantity
@@ -1001,17 +1024,52 @@ class ExecutionEngine:
                     "using_calculated": calculated_filled_qty
                 })
         
-        # Log quantity comparison for debugging when values differ significantly
-        if order_filled_qty_int is not None and abs(order_filled_qty_int - calculated_filled_qty) > 0:
-            self.logger.warning("QUANTITY_MISMATCH_DETECTED", extra={
-                "symbol": symbol,
-                "calculated_filled_qty": calculated_filled_qty,
-                "order_filled_qty": order_filled_qty_int,
-                "submitted_qty": submitted_qty,  # AI-AGENT-REF: Now correctly shows submitted qty
-                "remaining_qty": remaining_qty,
-                "difference": abs(order_filled_qty_int - calculated_filled_qty),
-                "order_id": getattr(last_order, "id", None) if last_order else None
-            })
+        # AI-AGENT-REF: CRITICAL FIX - Only log quantity mismatch if there's a significant discrepancy
+        # and the calculated quantity suggests a fill occurred. This prevents false alerts when
+        # the API hasn't updated the filled_qty field yet but the order is still being processed.
+        if (order_filled_qty_int is not None and 
+            calculated_filled_qty > 0 and  # Only warn if we think something was filled
+            abs(order_filled_qty_int - calculated_filled_qty) > 0):
+            
+            # Additional check: if API reports 0 but we calculated a fill, 
+            # this might be a timing issue - only warn if significant time has passed
+            should_warn = True
+            if order_filled_qty_int == 0 and last_order:
+                try:
+                    # Check if order was submitted recently (within last 30 seconds)
+                    from datetime import datetime, timezone
+                    order_submitted_time = getattr(last_order, 'submitted_at', None)
+                    if order_submitted_time:
+                        if isinstance(order_submitted_time, str):
+                            # Parse timestamp string
+                            order_time = datetime.fromisoformat(order_submitted_time.replace('Z', '+00:00'))
+                        else:
+                            order_time = order_submitted_time
+                        
+                        time_since_submit = (datetime.now(timezone.utc) - order_time).total_seconds()
+                        if time_since_submit < 30:  # Less than 30 seconds ago
+                            should_warn = False
+                            self.logger.debug("ORDER_FILL_STATUS_PENDING", extra={
+                                "symbol": symbol,
+                                "order_id": getattr(last_order, "id", None),
+                                "time_since_submit_s": round(time_since_submit, 1),
+                                "note": "API filled_qty may not be updated yet"
+                            })
+                except Exception as e:
+                    # If we can't parse timing, proceed with warning
+                    self.logger.debug("Failed to parse order timing: %s", e)
+            
+            if should_warn:
+                self.logger.warning("QUANTITY_MISMATCH_DETECTED", extra={
+                    "symbol": symbol,
+                    "calculated_filled_qty": calculated_filled_qty,
+                    "order_filled_qty": order_filled_qty_int,
+                    "submitted_qty": submitted_qty,
+                    "remaining_qty": remaining_qty,
+                    "difference": abs(order_filled_qty_int - calculated_filled_qty),
+                    "order_id": getattr(last_order, "id", None) if last_order else None,
+                    "note": "Possible API delay or order processing issue"
+                })
         
         # AI-AGENT-REF: Critical fix - determine if this is a partial or full fill based on remaining quantity
         if remaining_qty > 0:
@@ -1554,7 +1612,7 @@ class ExecutionEngine:
                     "partial_fills": getattr(order, "legs", []),
                 }
             )
-            actual_qty = int(getattr(order, "filled_qty", slice_qty))
+            actual_qty = self._get_actual_filled_qty(order, slice_qty, symbol, order_id, status)
             log_trade(
                 symbol,
                 actual_qty,
@@ -1737,7 +1795,7 @@ class ExecutionEngine:
                     "partial_fills": getattr(order, "legs", []),
                 }
             )
-            actual_qty = int(getattr(order, "filled_qty", slice_qty))
+            actual_qty = self._get_actual_filled_qty(order, slice_qty, symbol, order_id, status)
             log_trade(
                 symbol,
                 actual_qty,

@@ -1102,12 +1102,19 @@ def get_minute_df(
     total_requests = _CACHE_STATS["hits"] + _CACHE_STATS["misses"]
     hit_ratio = (_CACHE_STATS["hits"] / total_requests * 100) if total_requests > 0 else 0
     
+    # AI-AGENT-REF: Safe column count calculation to handle edge cases
+    try:
+        cols_count = df.shape[1] if hasattr(df, 'shape') and hasattr(df.shape, '__len__') and len(df.shape) > 1 else 0
+    except (TypeError, AttributeError):
+        # Fallback if df.shape access fails
+        cols_count = len(df.columns) if hasattr(df, 'columns') else 0
+    
     logger.info(
         "MINUTE_FETCHED",
         extra={
             "symbol": symbol, 
             "rows": len(df), 
-            "cols": df.shape[1],
+            "cols": cols_count,
             "data_source": "fresh_fetch",
             "cache_size": len(_MINUTE_CACHE),
             "cache_hit_ratio_pct": round(hit_ratio, 1),
