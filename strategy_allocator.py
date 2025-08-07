@@ -149,7 +149,22 @@ class StrategyAllocator:
                 self.signal_history[key] = self.signal_history[key][-confirmation_bars:]
 
                 if len(self.signal_history[key]) >= confirmation_bars:
-                    avg_conf = sum(self.signal_history[key]) / len(self.signal_history[key])
+                    # AI-AGENT-REF: Enhanced signal confirmation with additional validation
+                    history_values = self.signal_history[key]
+                    if not history_values:  # Defensive check for empty history
+                        logger.warning(f"Empty signal history for {key}, skipping confirmation")
+                        continue
+                        
+                    # Calculate average confidence with additional validation
+                    try:
+                        avg_conf = sum(history_values) / len(history_values)
+                        if not isinstance(avg_conf, (int, float)) or avg_conf < 0:
+                            logger.warning(f"Invalid average confidence {avg_conf} for {s.symbol}, skipping")
+                            continue
+                    except (ZeroDivisionError, TypeError, ValueError) as e:
+                        logger.warning(f"Error calculating average confidence for {s.symbol}: {e}")
+                        continue
+                    
                     # AI-AGENT-REF: use configurable min_confidence with robust fallback
                     min_conf_threshold = getattr(self.config, 'min_confidence', 0.6)
                     
@@ -159,13 +174,16 @@ class StrategyAllocator:
                         min_conf_threshold = 0.6
                     
                     if avg_conf >= min_conf_threshold:
-                        s.confidence = avg_conf
-                        confirmed[strategy].append(s)
-                        logger.debug(f"Signal approved: {s.symbol}")
+                        # AI-AGENT-REF: Create a copy of the signal to avoid mutation issues
+                        import copy
+                        confirmed_signal = copy.deepcopy(s)
+                        confirmed_signal.confidence = avg_conf
+                        confirmed[strategy].append(confirmed_signal)
+                        logger.debug(f"Signal approved: {s.symbol} with avg_conf: {avg_conf:.4f}")
                     else:
-                        logger.debug(f"Signal rejected: {s.symbol}, avg_conf: {avg_conf}")
+                        logger.debug(f"Signal rejected: {s.symbol}, avg_conf: {avg_conf:.4f} < threshold: {min_conf_threshold}")
                 else:
-                    logger.debug(f"Signal not confirmed yet: {s.symbol}, history length: {len(self.signal_history[key])}")
+                    logger.debug(f"Signal not confirmed yet: {s.symbol}, history length: {len(self.signal_history[key])}/{confirmation_bars}")
         return confirmed
 
     def _allocate_confirmed(self, confirmed_signals: Dict[str, List[Any]]) -> List[Any]:
