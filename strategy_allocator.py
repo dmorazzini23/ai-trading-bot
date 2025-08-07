@@ -15,6 +15,16 @@ except (ImportError, RuntimeError, TypeError, AttributeError):
         signal_confirmation_bars: int = 2
         delta_threshold: float = 0.02
         min_confidence: float = 0.6  # AI-AGENT-REF: add missing min_confidence to fallback config
+        
+        def __post_init__(self):
+            """Ensure all attributes are properly initialized."""
+            # Defensive initialization to prevent attribute access issues
+            if not hasattr(self, 'signal_confirmation_bars') or self.signal_confirmation_bars is None:
+                self.signal_confirmation_bars = 2
+            if not hasattr(self, 'delta_threshold') or self.delta_threshold is None:
+                self.delta_threshold = 0.02
+            if not hasattr(self, 'min_confidence') or self.min_confidence is None:
+                self.min_confidence = 0.6
     
     CONFIG = FallbackConfig()
 
@@ -27,10 +37,30 @@ class StrategyAllocator:
     def __init__(self, config=None):
         # AI-AGENT-REF: Create a copy of config to prevent shared state issues between instances
         self.config = copy.deepcopy(config or CONFIG)
+        
+        # AI-AGENT-REF: Defensive initialization to ensure required attributes exist
+        self._ensure_config_attributes()
+        
         self.signal_history: Dict[str, List[float]] = {}
         self.last_direction: Dict[str, str] = {}
         self.last_confidence: Dict[str, float] = {}
         self.hold_protect: Dict[str, int] = {}
+    
+    def _ensure_config_attributes(self):
+        """Ensure all required config attributes exist with proper defaults."""
+        required_attrs = {
+            'signal_confirmation_bars': 2,
+            'delta_threshold': 0.02,
+            'min_confidence': 0.6
+        }
+        
+        for attr, default_value in required_attrs.items():
+            if not hasattr(self.config, attr):
+                logger.warning(f"Config missing attribute {attr}, setting default: {default_value}")
+                setattr(self.config, attr, default_value)
+            elif getattr(self.config, attr, None) is None:
+                logger.warning(f"Config attribute {attr} is None, setting default: {default_value}")
+                setattr(self.config, attr, default_value)
 
     def allocate(self, signals_by_strategy: Dict[str, List[Any]]) -> List[Any]:
         # Add debug logging and input validation
@@ -110,12 +140,24 @@ class StrategyAllocator:
                     self.signal_history[key] = []
 
                 self.signal_history[key].append(s.confidence)
-                self.signal_history[key] = self.signal_history[key][-self.config.signal_confirmation_bars:]
+                # AI-AGENT-REF: Ensure signal_confirmation_bars is valid before using it
+                confirmation_bars = getattr(self.config, 'signal_confirmation_bars', 2)
+                if confirmation_bars is None or not isinstance(confirmation_bars, int) or confirmation_bars < 1:
+                    logger.warning(f"Invalid signal_confirmation_bars: {confirmation_bars}, using default 2")
+                    confirmation_bars = 2
+                
+                self.signal_history[key] = self.signal_history[key][-confirmation_bars:]
 
-                if len(self.signal_history[key]) >= self.config.signal_confirmation_bars:
+                if len(self.signal_history[key]) >= confirmation_bars:
                     avg_conf = sum(self.signal_history[key]) / len(self.signal_history[key])
-                    # AI-AGENT-REF: use configurable min_confidence instead of hardcoded 0.6
+                    # AI-AGENT-REF: use configurable min_confidence with robust fallback
                     min_conf_threshold = getattr(self.config, 'min_confidence', 0.6)
+                    
+                    # AI-AGENT-REF: Additional defensive check for None or invalid threshold
+                    if min_conf_threshold is None or not isinstance(min_conf_threshold, (int, float)):
+                        logger.warning(f"Invalid min_confidence threshold: {min_conf_threshold}, using default 0.6")
+                        min_conf_threshold = 0.6
+                    
                     if avg_conf >= min_conf_threshold:
                         s.confidence = avg_conf
                         confirmed[strategy].append(s)
