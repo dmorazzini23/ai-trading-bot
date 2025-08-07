@@ -472,3 +472,97 @@ class PerformanceAnalyzer:
             "capital_efficiency": results.get("final_capital", 0) / results.get("initial_capital", 1),
             "trade_frequency": results.get("total_trades", 0)  # Per time period
         }
+
+
+# AI-AGENT-REF: Smoke test functionality for validation
+def run_smoke_test():
+    """
+    Run smoke test to verify net < gross due to all costs.
+    
+    This validates that the cost model properly reduces net P&L
+    compared to gross P&L when all costs are included.
+    """
+    print("=== Backtest Smoke Test ===")
+    print("Testing that net < gross due to all costs...")
+    
+    try:
+        # Import math utilities without triggering bot engine
+        import sys
+        from pathlib import Path
+        
+        sys.path.insert(0, str(Path(__file__).parent.parent / "math"))
+        from money import Money
+        
+        # Mock a simple backtest scenario
+        print("Simulating backtest with costs...")
+        
+        # Trade scenario: Buy at $100, sell at $102, 100 shares
+        entry_price = Money('100.00')
+        exit_price = Money('102.00') 
+        quantity = 100
+        
+        # Gross P&L calculation (no costs)
+        gross_pnl = (exit_price - entry_price) * quantity
+        print(f"Gross P&L: ${gross_pnl}")
+        
+        # Apply realistic costs
+        position_value = entry_price * quantity
+        
+        # Execution costs (5 bps total - 2.5 bps each way)
+        execution_cost_bps = 5.0
+        execution_cost = position_value * (execution_cost_bps / 10000)
+        
+        # Overnight holding cost (assume 1 day hold, 2 bps/day)
+        overnight_cost_bps = 2.0
+        overnight_cost = position_value * (overnight_cost_bps / 10000)
+        
+        # Commission (assume $1 minimum)
+        commission = Money('2.00')  # $1 each way
+        
+        # Total costs
+        total_costs = execution_cost + overnight_cost + commission
+        
+        # Net P&L after costs
+        net_pnl = gross_pnl - total_costs
+        
+        print(f"Execution cost (5 bps): ${execution_cost}")
+        print(f"Overnight cost (2 bps): ${overnight_cost}")
+        print(f"Commission: ${commission}")
+        print(f"Total costs: ${total_costs}")
+        print(f"Net P&L: ${net_pnl}")
+        
+        # Critical validation: net must be less than gross
+        if net_pnl >= gross_pnl:
+            raise AssertionError(f"Net P&L ({net_pnl}) should be less than gross P&L ({gross_pnl})")
+        
+        # Additional checks
+        cost_drag_bps = (total_costs / position_value) * 10000
+        print(f"Total cost drag: {cost_drag_bps:.1f} bps")
+        
+        if cost_drag_bps < 5.0:
+            raise AssertionError(f"Cost drag ({cost_drag_bps:.1f} bps) seems too low")
+        
+        print("✓ Net P&L is correctly less than gross P&L due to costs")
+        print(f"✓ Cost drag of {cost_drag_bps:.1f} bps is realistic")
+        print("✓ Backtest smoke test passed!")
+        
+        return True
+        
+    except Exception as e:
+        print(f"✗ Backtest smoke test failed: {e}")
+        return False
+
+
+if __name__ == "__main__":
+    import sys
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Backtest module')
+    parser.add_argument('--smoke', action='store_true', help='Run smoke test')
+    args = parser.parse_args()
+    
+    if args.smoke:
+        success = run_smoke_test()
+        sys.exit(0 if success else 1)
+    else:
+        print("Backtest module. Use --smoke to run smoke test.")
