@@ -366,8 +366,34 @@ FORCE_TRADES: bool = False
 PARTIAL_FILL_FRAGMENT_THRESHOLD = int(os.getenv("PARTIAL_FILL_FRAGMENT_THRESHOLD", "5"))
 PARTIAL_FILL_LOOKBACK = int(os.getenv("PARTIAL_FILL_LOOKBACK", "10"))
 PARTIAL_FILL_REDUCTION_RATIO = float(os.getenv("PARTIAL_FILL_REDUCTION_RATIO", "0.2"))
-LIQUIDITY_SPREAD_THRESHOLD = float(os.getenv("LIQUIDITY_SPREAD_THRESHOLD", "0.15"))  # Increased from 0.05 to 0.15 (15%)
-LIQUIDITY_VOL_THRESHOLD = float(os.getenv("LIQUIDITY_VOL_THRESHOLD", "0.08"))  # Increased from 0.02 to 0.08 (8%)
+# AI-AGENT-REF: Enhanced sentiment analysis configuration
+SENTIMENT_ENHANCED_CACHING = bool(os.getenv("SENTIMENT_ENHANCED_CACHING", "true").lower() == "true")
+SENTIMENT_FALLBACK_SOURCES = bool(os.getenv("SENTIMENT_FALLBACK_SOURCES", "true").lower() == "true")
+SENTIMENT_SUCCESS_RATE_TARGET = float(os.getenv("SENTIMENT_SUCCESS_RATE_TARGET", "0.90"))  # 90% target
+
+# AI-AGENT-REF: Meta-learning bootstrap configuration  
+META_LEARNING_BOOTSTRAP_ENABLED = bool(os.getenv("META_LEARNING_BOOTSTRAP_ENABLED", "true").lower() == "true")
+META_LEARNING_MIN_TRADES_REDUCED = int(os.getenv("META_LEARNING_MIN_TRADES_REDUCED", "10"))  # Reduced from 20
+META_LEARNING_BOOTSTRAP_WIN_RATE = float(os.getenv("META_LEARNING_BOOTSTRAP_WIN_RATE", "0.66"))  # 66% realistic win rate
+
+# AI-AGENT-REF: Enhanced order management configuration
+ORDER_TIMEOUT_SECONDS = int(os.getenv("ORDER_TIMEOUT_SECONDS", "300"))  # 5 minutes default
+ORDER_STALE_CLEANUP_INTERVAL = int(os.getenv("ORDER_STALE_CLEANUP_INTERVAL", "60"))  # 1 minute cleanup interval
+ORDER_FILL_RATE_TARGET = float(os.getenv("ORDER_FILL_RATE_TARGET", "0.80"))  # 80% fill rate target
+ORDER_MAX_RETRY_ATTEMPTS = int(os.getenv("ORDER_MAX_RETRY_ATTEMPTS", "3"))  # Maximum retry attempts for partial fills
+
+# AI-AGENT-REF: System health monitoring configuration
+SYSTEM_HEALTH_CHECK_INTERVAL = int(os.getenv("SYSTEM_HEALTH_CHECK_INTERVAL", "60"))  # 1 minute health checks
+SYSTEM_HEALTH_ALERT_THRESHOLD = float(os.getenv("SYSTEM_HEALTH_ALERT_THRESHOLD", "0.70"))  # Alert if success rate below 70%
+SYSTEM_HEALTH_EXPORT_ENABLED = bool(os.getenv("SYSTEM_HEALTH_EXPORT_ENABLED", "true").lower() == "true")
+SYSTEM_HEALTH_REPORT_PATH = os.getenv("SYSTEM_HEALTH_REPORT_PATH", "logs/system_health.json")
+
+# AI-AGENT-REF: Enhanced liquidity management - more granular controls
+LIQUIDITY_SPREAD_THRESHOLD = float(os.getenv("LIQUIDITY_SPREAD_THRESHOLD", "0.10"))  # More reasonable 10 cent spread threshold
+LIQUIDITY_VOL_THRESHOLD = float(os.getenv("LIQUIDITY_VOL_THRESHOLD", "0.50"))  # 50 cent volatility threshold
+LIQUIDITY_REDUCTION_AGGRESSIVE = float(os.getenv("LIQUIDITY_REDUCTION_AGGRESSIVE", "0.75"))  # 25% reduction for severe issues
+LIQUIDITY_REDUCTION_MODERATE = float(os.getenv("LIQUIDITY_REDUCTION_MODERATE", "0.90"))  # 10% reduction for moderate issues
+LIQUIDITY_SPREAD_PCT_THRESHOLD = float(os.getenv("LIQUIDITY_SPREAD_PCT_THRESHOLD", "0.5"))  # 0.5% spread threshold
 VOL_REGIME_MULTIPLIER = float(os.getenv("VOL_REGIME_MULTIPLIER", "2.0"))
 REBALANCE_DRIFT_THRESHOLD = float(os.getenv("REBALANCE_DRIFT_THRESHOLD", "0.1"))
 PORTFOLIO_DRIFT_THRESHOLD = float(os.getenv("PORTFOLIO_DRIFT_THRESHOLD", "0.10"))
