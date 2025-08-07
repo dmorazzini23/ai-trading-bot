@@ -50,7 +50,7 @@ def test_risk_engine_missing_methods():
 
 def test_bot_context_alpaca_client_compatibility():
     """Test that BotContext has alpaca_client property for backward compatibility."""
-    from bot_engine import BotContext
+    from ai_trading.core.bot_engine import BotContext
     from unittest.mock import Mock
     
     # Create a mock trading client

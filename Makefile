@@ -4,7 +4,11 @@ install:
 	pip install -r requirements.txt
 
 install-dev: install
-	pip install -r requirements-dev.txt
+	@if [ -f requirements-dev.txt ]; then \
+		pip install -r requirements-dev.txt; \
+	else \
+		echo "requirements-dev.txt not found, skipping dev dependencies"; \
+	fi
 
 # Environment validation
 validate-env:

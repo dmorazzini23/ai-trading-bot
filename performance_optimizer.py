@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.12
+#!/usr/bin/env python3
 """Performance optimization and profiling module for AI trading bot.
 
 This module provides comprehensive performance optimization capabilities:

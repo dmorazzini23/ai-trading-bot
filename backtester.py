@@ -19,7 +19,7 @@ try:
     import execution_api as execution_api  # type: ignore
 except Exception:  # pragma: no cover - fallback for older repo layout
     import trade_execution as execution_api  # type: ignore
-import bot_engine
+from ai_trading.core import bot_engine
 
 logger = get_logger(__name__)
 

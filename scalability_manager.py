@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.12
+#!/usr/bin/env python3
 """Scalability and high availability module for AI trading bot.
 
 This module provides enterprise-grade scalability and reliability:

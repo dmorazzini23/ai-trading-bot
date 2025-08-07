@@ -52,10 +52,10 @@ from utils import get_phase_logger, log_cpu_usage
 try:
     import bot
 except ImportError:
-    import bot_engine as bot
+    from ai_trading.core import bot_engine as bot
 else:
     if bot is None or not hasattr(bot, "main"):
-        import bot_engine as bot
+        from ai_trading.core import bot_engine as bot
 
 main = bot.main
 

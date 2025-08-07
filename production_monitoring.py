@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.12
+#!/usr/bin/env python3
 """Production-grade monitoring and performance tracking for AI trading bot.
 
 This module provides comprehensive monitoring capabilities including:

@@ -174,7 +174,7 @@ class TestShortSellingImplementation(unittest.TestCase):
 
     def test_meta_learning_graceful_degradation(self):
         """Test that meta-learning provides graceful degradation when no data exists."""
-        from bot_engine import load_global_signal_performance
+        from ai_trading.core.bot_engine import load_global_signal_performance
         
         # Test when no trade log file exists
         with patch('os.path.exists', return_value=False):

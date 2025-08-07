@@ -30,13 +30,16 @@ class ModelRegistry:
     across different strategies and time periods.
     """
     
-    def __init__(self, base_path: str = "models"):
+    def __init__(self, base_path: Optional[str] = None):
         """
         Initialize model registry.
         
         Args:
-            base_path: Base directory for model storage
+            base_path: Base directory for model storage (overridable via MODEL_REGISTRY_DIR env var)
         """
+        if base_path is None:
+            base_path = os.getenv("MODEL_REGISTRY_DIR", "models")
+        
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
         

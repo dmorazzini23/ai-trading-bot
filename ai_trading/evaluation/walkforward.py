@@ -47,24 +47,30 @@ class WalkForwardEvaluator:
         train_span: Union[int, timedelta] = 252,  # 1 year
         test_span: Union[int, timedelta] = 21,    # 1 month
         embargo_pct: float = 0.01,
-        output_dir: str = "artifacts/walkforward"
+        output_dir: Optional[str] = None
     ):
         """
         Initialize walk-forward evaluator.
         
         Args:
-            mode: 'rolling' or 'anchored' walk-forward
-            train_span: Training period length
-            test_span: Test period length
-            embargo_pct: Embargo period percentage
-            output_dir: Directory to save results
+            mode: 'rolling' or 'anchored'
+            train_span: Training window size
+            test_span: Testing window size  
+            embargo_pct: Percentage embargo between train/test
+            output_dir: Output directory (overridable via ARTIFACTS_DIR env var)
         """
         self.mode = mode
         self.train_span = train_span
         self.test_span = test_span
         self.embargo_pct = embargo_pct
-        self.output_dir = output_dir
         
+        # Support environment variable override for artifacts directory
+        if output_dir is None:
+            base = os.getenv("ARTIFACTS_DIR", "artifacts")
+            self.output_dir = os.path.join(base, "walkforward")
+        else:
+            self.output_dir = output_dir
+            
         # Results storage
         self.fold_results = []
         self.aggregate_results = {}
@@ -540,8 +546,7 @@ def run_walkforward_smoke_test() -> None:
         evaluator = WalkForwardEvaluator(
             mode="rolling",
             train_span=timedelta(days=180),  # 6 months
-            test_span=timedelta(days=30),    # 1 month
-            output_dir="artifacts/walkforward"
+            test_span=timedelta(days=30)     # 1 month
         )
         
         results = evaluator.run_walkforward(

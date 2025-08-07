@@ -72,7 +72,7 @@ def test_prepare_indicators_all_nan_columns():
         'volume': [np.nan] * 30,
     })
 
-    import bot_engine
+    from ai_trading.core import bot_engine
 
     original_rsi = bot_engine.ta.rsi
     bot_engine.ta.rsi = lambda close, length=14: pd.Series([np.nan] * len(close))

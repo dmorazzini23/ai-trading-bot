@@ -56,7 +56,7 @@ def test_bot_context_alpaca_client():
     print("Testing BotContext alpaca_client compatibility...")
     
     try:
-        from bot_engine import BotContext
+        from ai_trading.core.bot_engine import BotContext
         from datetime import timedelta, datetime
         
         # Create minimal BotContext with mocked dependencies

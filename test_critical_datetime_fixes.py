@@ -96,7 +96,7 @@ class TestMetaLearningDataFetching(unittest.TestCase):
         try:
             # Mock the TRADE_LOG_FILE to use our test file
             with patch('bot_engine.TRADE_LOG_FILE', tmp_file_path):
-                from bot_engine import load_global_signal_performance
+                from ai_trading.core.bot_engine import load_global_signal_performance
                 
                 # This should not return None or empty dict due to METALEARN_INVALID_PRICES
                 result = load_global_signal_performance(min_trades=1, threshold=0.1)
@@ -120,7 +120,7 @@ class TestSentimentCaching(unittest.TestCase):
     def test_sentiment_cache_rate_limit_handling(self):
         """Test that sentiment caching properly handles rate limits."""
         try:
-            from bot_engine import fetch_sentiment, _SENTIMENT_CACHE
+            from ai_trading.core.bot_engine import fetch_sentiment, _SENTIMENT_CACHE
             import time
             from requests.exceptions import HTTPError
             

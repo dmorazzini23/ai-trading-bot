@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.12
+#!/usr/bin/env python3
 """Download historical data for backtesting.
 
 This script fetches daily OHLCV bars for a predefined list of tickers and
