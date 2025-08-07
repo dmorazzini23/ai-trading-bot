@@ -20,7 +20,7 @@ import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)

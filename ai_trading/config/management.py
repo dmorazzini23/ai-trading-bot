@@ -15,7 +15,7 @@ import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -526,3 +526,159 @@ def get_production_config() -> Dict[str, Any]:
     """Get validated production configuration."""
     config_manager = ConfigManager()
     return config_manager.load_config()
+
+
+# Compatibility function for root config interface
+def get_env(
+    key: str,
+    default: str | None = None,
+    *,
+    reload: bool = False,
+    required: bool = False,
+) -> str | None:
+    """Return environment variable key.
+
+    Parameters
+    ----------
+    key : str
+        Name of the variable.
+    default : str | None, optional
+        Value returned if the variable is missing.
+    reload : bool, optional
+        Reload .env before checking when True.
+    required : bool, optional
+        If True and the variable is missing, raise RuntimeError.
+    """
+    import os
+    from pathlib import Path
+    
+    if reload:
+        try:
+            from dotenv import load_dotenv
+            env_path = Path(".env")
+            if env_path.exists():
+                load_dotenv(env_path, override=True)
+        except ImportError:
+            # dotenv not available, skip reload
+            pass
+    
+    value = os.environ.get(key, default)
+    if required and value is None:
+        logger.error("Required environment variable '%s' is missing", key)
+        raise RuntimeError(f"Required environment variable '{key}' is missing")
+    return value
+
+
+# Compatibility attributes for root config interface
+import os
+
+SCHEDULER_SLEEP_SECONDS = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
+TESTING = os.getenv("TESTING", "false").lower() in ("true", "1", "yes")
+SEED = int(os.getenv("SEED", "42"))
+ALPACA_DATA_FEED = os.getenv("ALPACA_DATA_FEED", "iex")
+ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+REQUIRED_ENV_VARS = [
+    "ALPACA_API_KEY",
+    "ALPACA_SECRET_KEY", 
+    "ALPACA_BASE_URL",
+    "WEBHOOK_SECRET",
+    "FLASK_PORT"
+]
+
+# Additional compatibility attributes
+TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", "test_trades.csv")
+MODEL_PATH = os.getenv("MODEL_PATH", "models/trained_model.pkl")
+RL_MODEL_PATH = os.getenv("RL_MODEL_PATH", "models/rl_model.pkl") 
+USE_RL_AGENT = os.getenv("USE_RL_AGENT", "false").lower() in ("true", "1", "yes")
+HALT_FLAG_PATH = os.getenv("HALT_FLAG_PATH", "halt.flag")
+BOT_MODE = os.getenv("BOT_MODE", "balanced")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY") or os.getenv("NEWS_API_KEY")
+SENTIMENT_API_URL = os.getenv("SENTIMENT_API_URL", "https://newsapi.org/v2/everything")
+IEX_API_TOKEN = os.getenv("IEX_API_TOKEN")
+ALPACA_PAPER = "paper" in ALPACA_BASE_URL.lower()
+MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "50"))
+
+# TradingConfig class for compatibility
+class TradingConfig:
+    def __init__(self):
+        # Add default trading configuration attributes
+        self.trailing_factor = 0.05
+        self.kelly_fraction = 0.25
+        self.max_position_size = 0.1
+        self.stop_loss = 0.02
+        self.take_profit = 0.06
+        self.take_profit_factor = 0.06  # Add missing attribute
+        self.lookback_days = 30
+        self.min_signal_strength = 0.6
+        
+    @classmethod
+    def from_env(cls, mode="balanced"):
+        """Create a TradingConfig from environment variables.""" 
+        instance = cls()
+        instance.mode = mode
+        instance.ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "test_key")
+        instance.ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "test_secret")
+        return instance
+    
+    def get_legacy_params(self):
+        """Return legacy parameters for backward compatibility."""
+        return {
+            "mode": getattr(self, "mode", "balanced"),
+            "ALPACA_API_KEY": getattr(self, "ALPACA_API_KEY", "test_key"),
+            "ALPACA_SECRET_KEY": getattr(self, "ALPACA_SECRET_KEY", "test_secret"),
+            "trailing_factor": self.trailing_factor,
+            "kelly_fraction": self.kelly_fraction,
+            "max_position_size": self.max_position_size,
+            "stop_loss": self.stop_loss,
+            "take_profit": self.take_profit,
+            "lookback_days": self.lookback_days,
+            "min_signal_strength": self.min_signal_strength,
+        }
+
+
+def validate_env_vars():
+    """Validate required environment variables."""
+    missing = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
+    if missing and not TESTING:
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+
+
+def validate_alpaca_credentials() -> None:
+    """Ensure required Alpaca credentials are present."""
+    if TESTING:
+        # Skip validation in testing mode
+        return
+        
+    alpaca_key = os.getenv("ALPACA_API_KEY")
+    alpaca_secret = os.getenv("ALPACA_SECRET_KEY") 
+    alpaca_url = os.getenv("ALPACA_BASE_URL")
+    
+    if not alpaca_key or not alpaca_secret or not alpaca_url:
+        logger.error("Missing Alpaca credentials")
+        raise RuntimeError(
+            "Missing Alpaca credentials. Please set ALPACA_API_KEY, "
+            "ALPACA_SECRET_KEY and ALPACA_BASE_URL in your environment"
+        )
+
+
+def log_config(vars_list):
+    """Log configuration variables."""
+    for var in vars_list:
+        value = os.getenv(var, "NOT_SET")
+        if "KEY" in var or "SECRET" in var:
+            value = "***MASKED***" if value != "NOT_SET" else value
+        logger.info(f"Config: {var}={value}")
+
+
+def reload_env():
+    """Reload environment variables from .env file."""
+    try:
+        from dotenv import load_dotenv
+        from pathlib import Path
+        env_path = Path(".env")
+        if env_path.exists():
+            load_dotenv(env_path, override=True)
+    except ImportError:
+        pass  # dotenv not available

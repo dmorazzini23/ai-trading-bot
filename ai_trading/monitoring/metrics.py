@@ -15,7 +15,7 @@ import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -511,3 +511,94 @@ class PerformanceMonitor:
         except Exception as e:
             logger.error(f"Error generating performance report: {e}")
             return {"error": str(e)}
+
+
+# Global instances for backward compatibility
+_metrics_collector = None
+_performance_monitor = None
+
+
+def _get_global_collector():
+    """Get or create global metrics collector."""
+    global _metrics_collector
+    if _metrics_collector is None:
+        _metrics_collector = MetricsCollector()
+    return _metrics_collector
+
+
+# Compatibility functions from root metrics_logger.py
+def compute_max_drawdown(equity_curve) -> float:
+    """Return the maximum drawdown for equity_curve."""
+    try:
+        import numpy as np
+    except ImportError:
+        # Fallback calculation without numpy
+        if not equity_curve:
+            return 0.0
+        
+        peak = equity_curve[0]
+        max_dd = 0.0
+        
+        for value in equity_curve:
+            if value > peak:
+                peak = value
+            drawdown = (peak - value) / peak if peak > 0 else 0.0
+            max_dd = max(max_dd, drawdown)
+        
+        return max_dd
+    
+    if not equity_curve:
+        return 0.0
+
+    arr = np.asarray(equity_curve, dtype=float)
+    peak = np.maximum.accumulate(arr)
+    drawdowns = (peak - arr) / peak
+    return float(np.max(drawdowns))
+
+
+def log_metrics(record, filename="metrics/model_performance.csv", equity_curve=None):
+    """Append a metrics record to filename."""
+    import csv
+    import os
+    
+    if equity_curve and "max_drawdown" not in record:
+        record["max_drawdown"] = compute_max_drawdown(equity_curve)
+
+    try:
+        # Ensure artifacts directory structure
+        base = os.getenv("ARTIFACTS_DIR", "artifacts")
+        os.makedirs(base, exist_ok=True)
+        
+        # Update filename to be relative to artifacts dir if it's a relative path
+        if not os.path.isabs(filename):
+            filename = os.path.join(base, filename)
+        
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        file_exists = os.path.isfile(filename)
+        with open(filename, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=record.keys())
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(record)
+    except (OSError, csv.Error) as exc:
+        logger.warning("Failed to update metrics file %s: %s", filename, exc)
+
+
+def log_volatility(value: float) -> None:
+    """Log volatility reading."""
+    logger.info("VOLATILITY_READING", extra={"value": float(value)})
+
+
+def log_atr_stop(symbol: str, stop: float) -> None:
+    """Log ATR stop level."""
+    logger.info("ATR_STOP", extra={"symbol": symbol, "stop": float(stop)})
+
+
+def log_pyramid_add(symbol: str, position: float) -> None:
+    """Log a pyramiding position add."""
+    logger.info("PYRAMID_ADD", extra={"symbol": symbol, "position": position})
+
+
+def log_regime_toggle(symbol: str, regime: str) -> None:
+    """Log regime changes."""
+    logger.info("REGIME_TOGGLE", extra={"symbol": symbol, "regime": regime})

@@ -10,9 +10,8 @@ import json
 import traceback
 from datetime import date, datetime, timezone
 import atexit
-import config
-
-import metrics_logger
+from ai_trading.config import management as config
+from ai_trading.monitoring import metrics as metrics_logger
 
 # Configure root formatting once in UTC
 logging.Formatter.converter = time.gmtime

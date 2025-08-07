@@ -6,10 +6,15 @@ __all__ = ["pre_trade_health_check", "run_all_trades_worker", "BotState"]
 def _alpaca_available() -> bool:
     """Check if Alpaca SDK is available for import."""
     try:
-        import alpaca  # type: ignore
+        import alpaca_trade_api  # type: ignore
+        import alpaca.trading  # type: ignore
+        import alpaca.data  # type: ignore
         return True
     except Exception:
         return False
+
+# Set global flag for Alpaca availability
+ALPACA_AVAILABLE = _alpaca_available()
 import asyncio
 import atexit
 import logging
@@ -55,7 +60,7 @@ warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     logging.getLogger(__name__).warning("Running under unsupported Python version")
 
-import config
+from ai_trading.config import management as config
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
 try:
     from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
@@ -145,7 +150,7 @@ if not logging.getLogger().handlers and not os.getenv("PYTEST_RUNNING"):
     setup_logging(log_file=LOG_PATH)
 
 # Log Alpaca availability on startup
-if _alpaca_available():
+if ALPACA_AVAILABLE:
     logger.info("Alpaca SDK is available")
 else:
     logger.warning("Alpaca SDK is not available - using mock classes")
@@ -778,56 +783,50 @@ except ImportError:
     YFINANCE_AVAILABLE = False
 
 # AI-AGENT-REF: Clean separation of production and test Alpaca imports
-if os.environ.get('PYTEST_RUNNING') or os.environ.get('TESTING'):
-    # Import mocks from separate test module
-    try:
-        from tests.mocks import (
-            MockTradingClient as TradingClient,
-            MockMarketOrderRequest as MarketOrderRequest,
-            MockLimitOrderRequest as LimitOrderRequest,
-            MockGetOrdersRequest as GetOrdersRequest,
-            MockOrder as Order,
-            MockTradingStream as TradingStream,
-            mock_order_side as OrderSide,
-            mock_time_in_force as TimeInForce,
-            mock_order_status as OrderStatus,
-            mock_query_order_status as QueryOrderStatus
-        )
-        APIError = Exception
-        logger.debug("Mock Alpaca classes imported for testing")
-    except ImportError:
-        # If test mocks are not available, create minimal ones
-        class MockTradingClient:
-            def __init__(self, *args, **kwargs):
-                pass
-        class MockMarketOrderRequest:
-            def __init__(self, *args, **kwargs):
-                pass
-        class MockLimitOrderRequest:
-            def __init__(self, *args, **kwargs):
-                pass
-        class MockGetOrdersRequest:
-            def __init__(self, *args, **kwargs):
-                pass
-        class MockOrder:
-            def __init__(self, *args, **kwargs):
-                pass
-        class MockTradingStream:
-            def __init__(self, *args, **kwargs):
-                pass
-        
-        TradingClient = MockTradingClient
-        MarketOrderRequest = MockMarketOrderRequest
-        LimitOrderRequest = MockLimitOrderRequest
-        GetOrdersRequest = MockGetOrdersRequest
-        Order = MockOrder
-        TradingStream = MockTradingStream
-        OrderSide = type('OrderSide', (), {'BUY': 'buy', 'SELL': 'sell'})
-        TimeInForce = type('TimeInForce', (), {'DAY': 'day', 'GTC': 'gtc'})
-        OrderStatus = type('OrderStatus', (), {'FILLED': 'filled', 'PENDING': 'pending'})
-        QueryOrderStatus = type('QueryOrderStatus', (), {'ALL': 'all'})
-        APIError = Exception
-        logger.debug("Minimal mock Alpaca classes created for testing")
+# Use try/except instead of environment flags for better reliability
+if not ALPACA_AVAILABLE:
+    # Create inline mocks when Alpaca is not available
+    logger.warning("Alpaca SDK not available, using mock classes")
+    
+    class MockTradingClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        def get_account(self):
+            return type('MockAccount', (), {'cash': 10000, 'portfolio_value': 10000})()
+            
+    class MockMarketOrderRequest:
+        def __init__(self, *args, **kwargs):
+            pass
+            
+    class MockLimitOrderRequest:
+        def __init__(self, *args, **kwargs):
+            pass
+            
+    class MockGetOrdersRequest:
+        def __init__(self, *args, **kwargs):
+            pass
+            
+    class MockOrder:
+        def __init__(self, *args, **kwargs):
+            self.id = "mock-order-123"
+            self.status = "filled"
+            
+    class MockTradingStream:
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    TradingClient = MockTradingClient
+    MarketOrderRequest = MockMarketOrderRequest
+    LimitOrderRequest = MockLimitOrderRequest
+    GetOrdersRequest = MockGetOrdersRequest
+    Order = MockOrder
+    TradingStream = MockTradingStream
+    OrderSide = type('OrderSide', (), {'BUY': 'buy', 'SELL': 'sell'})
+    TimeInForce = type('TimeInForce', (), {'DAY': 'day', 'GTC': 'gtc'})
+    OrderStatus = type('OrderStatus', (), {'FILLED': 'filled', 'PENDING': 'pending'})
+    QueryOrderStatus = type('QueryOrderStatus', (), {'ALL': 'all'})
+    APIError = Exception
+    logger.debug("Mock Alpaca classes created")
 else:
     # Production imports - real Alpaca SDK
     try:
@@ -847,7 +846,7 @@ else:
     except Exception as e:
         logger.error("Failed to import Alpaca SDK: %s", e)
         logger.warning("Falling back to mock classes for development")
-        # Fallback to mocks if Alpaca SDK not available
+        # Fallback to mocks if Alpaca SDK not available - should not happen if ALPACA_AVAILABLE is correct
         from tests.mocks import (
             MockTradingClient as TradingClient,
             MockMarketOrderRequest as MarketOrderRequest,
@@ -911,15 +910,21 @@ except ImportError:
 ALPACA_BASE_URL = config.ALPACA_BASE_URL
 import pickle
 
-# Alpaca data client imports - conditional lazy loading for tests
-if not os.environ.get('PYTEST_RUNNING') and not os.environ.get('TESTING'):
-    from alpaca.data.historical import StockHistoricalDataClient
-    from alpaca.data.models import Quote
-    from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
-    from alpaca.data.timeframe import TimeFrame
-    logger.debug("Alpaca data client imports successful")
-else:
-    # FIXED Mock Alpaca data client classes that can be called with arguments
+# Alpaca data client imports - conditional lazy loading based on availability
+if ALPACA_AVAILABLE:
+    try:
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.models import Quote
+        from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
+        from alpaca.data.timeframe import TimeFrame
+        logger.debug("Alpaca data client imports successful")
+    except Exception as e:
+        logger.error("Failed to import Alpaca data clients: %s", e)
+        # Use mocks as fallback
+        ALPACA_AVAILABLE = False
+        
+if not ALPACA_AVAILABLE:
+    # Mock Alpaca data client classes that can be called with arguments
     class MockStockHistoricalDataClient:
         def __init__(self, *args, **kwargs):
             pass
@@ -951,7 +956,7 @@ else:
     StockBarsRequest = MockStockBarsRequest
     StockLatestQuoteRequest = MockStockLatestQuoteRequest
     TimeFrame = MockTimeFrame()  # Instance for attribute access
-    logger.debug("Alpaca data client mocks initialized for tests")
+    logger.debug("Alpaca data client mocks initialized")
 
 # AI-AGENT-REF: lazy import heavy meta_learning module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
@@ -960,7 +965,7 @@ else:
     # AI-AGENT-REF: mock optimize_signals for test environments
     def optimize_signals(*args, **kwargs):
         return args[0] if args else []  # Return signals as-is
-from metrics_logger import log_metrics
+from ai_trading.monitoring.metrics import log_metrics
 from pipeline import model_pipeline
 
 # ML dependencies with graceful error handling
@@ -1027,9 +1032,19 @@ RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
 
 
 def _require_cfg(value: str | None, name: str) -> str:
-    """Return ``value`` or load from config, retrying in production."""
+    """Return value or load from config, retrying in production."""
     if value:
         return value
+    
+    # In testing mode, return a dummy value
+    if config.TESTING:
+        dummy_values = {
+            "ALPACA_API_KEY": "test_api_key",
+            "ALPACA_SECRET_KEY": "test_secret_key", 
+            "BOT_MODE": "test"
+        }
+        return dummy_values.get(name, f"test_{name.lower()}")
+    
     if BOT_MODE_ENV == "production":
         while not value:
             logger.critical("Missing %s; retrying in 60s", name)

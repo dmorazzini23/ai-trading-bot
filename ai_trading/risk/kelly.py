@@ -20,7 +20,7 @@ except ImportError:
 
 # Import centralized configuration
 try:
-    from config import TradingConfig
+    from ai_trading.config.management import TradingConfig
     _DEFAULT_CONFIG = TradingConfig.from_env()
 except ImportError:
     # Fallback if config import fails
@@ -32,6 +32,8 @@ except ImportError:
         lookback_periods = 252
         rebalance_frequency = 21
     _DEFAULT_CONFIG = _DefaultConfig()
+    # Create a dummy TradingConfig for type hints
+    TradingConfig = type('TradingConfig', (), {})
 
 
 class KellyCriterion:
