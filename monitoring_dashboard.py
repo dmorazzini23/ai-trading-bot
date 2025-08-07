@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.12
+#!/usr/bin/env python3
 """Real-time monitoring dashboard for AI trading bot.
 
 This module provides comprehensive real-time monitoring and analytics:

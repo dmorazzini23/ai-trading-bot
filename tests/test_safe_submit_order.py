@@ -13,7 +13,7 @@ def test_safe_submit_order_pending_new(monkeypatch):
     """Test safe_submit_order function with mock dependencies."""
     
     # Import only after conftest.py has set up mocks
-    import bot_engine
+    from ai_trading.core import bot_engine
     
     # Mock the required functions
     monkeypatch.setattr(bot_engine, "market_is_open", lambda: True)

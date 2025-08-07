@@ -1407,7 +1407,7 @@ def stub_capital_scaling(monkeypatch):
     
     # Add missing bot_engine functions
     try:
-        import bot_engine
+        from ai_trading.core import bot_engine
         # Add the missing function directly to the module
         bot_engine.check_alpaca_available = lambda x: True
     except ImportError:

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.12
+#!/usr/bin/env python3
 """Advanced trading algorithm optimization and fine-tuning module.
 
 This module provides comprehensive trading algorithm optimization:

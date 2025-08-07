@@ -11,7 +11,7 @@ import pytest
 os.environ["TESTING"] = "1"
 
 from config import TradingConfig
-from bot_engine import BotMode
+from ai_trading.core.bot_engine import BotMode
 
 
 class TestCentralizedConfig:

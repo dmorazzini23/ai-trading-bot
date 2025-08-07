@@ -676,7 +676,7 @@ class ExecutionEngine:
                         # Use last close as approximate exit price
                         last_close = df["close"].iloc[-1]
                         # Import send_exit_order lazily to avoid circular import
-                        from bot_engine import send_exit_order  # type: ignore
+                        from ai_trading.core.bot_engine import send_exit_order  # type: ignore
                         self.logger.info(
                             "Trailing stop triggered for %s: qty=%s price=%.2f",
                             symbol,

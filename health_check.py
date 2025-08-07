@@ -468,7 +468,7 @@ def _check_trading_system(self) -> HealthCheckResult:
         
         # Check if trading modules are importable
         try:
-            import bot_engine
+            from ai_trading.core import bot_engine
             details["bot_engine"] = "OK"
         except ImportError as e:
             issues.append(f"bot_engine import failed: {e}")

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.12
+#!/usr/bin/env python3
 """Advanced security and risk management module for AI trading bot.
 
 This module provides enterprise-grade security and risk management:

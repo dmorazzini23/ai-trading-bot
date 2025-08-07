@@ -1,6 +1,6 @@
 import types
 import pandas as pd
-import bot_engine
+from ai_trading.core import bot_engine
 import pytest
 
 

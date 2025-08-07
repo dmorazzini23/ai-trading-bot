@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.12
+#!/usr/bin/env python3
 """Production validation and testing module for AI trading bot.
 
 This module provides comprehensive production validation:

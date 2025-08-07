@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.12
+#!/usr/bin/env python3
 """Production integration module for AI trading bot.
 
 This module integrates all production-grade systems:
