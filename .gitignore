@@ -28,6 +28,10 @@ reward_log.csv
 .hypothesis/
 .pytest_cache/
 .coverage
+
+# Temporary test files for quantity mismatch fix
+test_quantity_*.py
+test_production_scenarios.py
 htmlcov/
 coverage.xml
 .mypy_cache/
