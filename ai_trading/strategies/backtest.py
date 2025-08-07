@@ -28,12 +28,53 @@ class BacktestEngine:
     realistic execution simulation and performance analysis.
     """
     
-    def __init__(self):
-        """Initialize backtest engine."""
-        # AI-AGENT-REF: Strategy backtesting engine
-        self.initial_capital = 100000  # $100k default
-        self.commission_per_trade = 1.0  # $1 per trade
-        logger.info("BacktestEngine initialized")
+    def __init__(
+        self,
+        initial_capital: float = 100000,
+        commission_bps: float = 5.0,
+        commission_flat: float = 1.0,
+        latency_ms: float = 50.0,
+        enable_slippage: bool = True,
+        enable_partial_fills: bool = False,
+        slippage_model: str = "linear"
+    ):
+        """
+        Initialize backtest engine with realistic execution modeling.
+        
+        Args:
+            initial_capital: Starting capital
+            commission_bps: Commission in basis points
+            commission_flat: Flat commission per trade
+            latency_ms: Execution latency in milliseconds
+            enable_slippage: Whether to model slippage
+            enable_partial_fills: Whether to model partial fills
+            slippage_model: Slippage model ('linear', 'sqrt', 'impact')
+        """
+        # AI-AGENT-REF: Strategy backtesting engine with realistic execution
+        self.initial_capital = initial_capital
+        self.commission_bps = commission_bps
+        self.commission_flat = commission_flat
+        self.latency_ms = latency_ms
+        self.enable_slippage = enable_slippage
+        self.enable_partial_fills = enable_partial_fills
+        self.slippage_model = slippage_model
+        
+        # Import microstructure helpers
+        try:
+            from ..execution.microstructure import (
+                estimate_half_spread, calculate_slippage, 
+                calculate_partial_fill_probability, simulate_execution_with_latency
+            )
+            self.microstructure_available = True
+            self.estimate_half_spread = estimate_half_spread
+            self.calculate_slippage = calculate_slippage
+            self.calculate_partial_fill_probability = calculate_partial_fill_probability
+            self.simulate_execution_with_latency = simulate_execution_with_latency
+        except ImportError:
+            self.microstructure_available = False
+            logger.warning("Microstructure module not available - using simplified execution")
+        
+        logger.info(f"BacktestEngine initialized with realistic execution modeling")
     
     def run_backtest(self, strategy: BaseStrategy, historical_data: Dict, 
                     start_date: datetime, end_date: datetime) -> Dict:
@@ -92,18 +133,24 @@ class BacktestEngine:
                             )
                             
                             if position_size > 0:
-                                # Simulate trade execution
+                                # Simulate trade execution with timestamp
                                 trade_result = self._simulate_trade(
-                                    signal, position_size, data_point
+                                    signal, position_size, data_point, 
+                                    trade_timestamp=data_point.get('timestamp', datetime.now())
                                 )
                                 
-                                current_capital += trade_result["pnl"]
+                                current_capital += trade_result["net_pnl"]
                                 portfolio_values.append(current_capital)
                                 
                                 results["trades"].append(trade_result)
                                 results["total_trades"] += 1
                                 
-                                if trade_result["pnl"] > 0:
+                                # Track gross vs net P&L
+                                if "gross_pnl" in trade_result:
+                                    results.setdefault("gross_pnl_total", 0)
+                                    results["gross_pnl_total"] += trade_result["gross_pnl"]
+                                
+                                if trade_result["net_pnl"] > 0:
                                     results["winning_trades"] += 1
                                 else:
                                     results["losing_trades"] += 1
@@ -111,15 +158,44 @@ class BacktestEngine:
             # Calculate final metrics
             results["final_capital"] = current_capital
             results["total_return"] = (current_capital - self.initial_capital) / self.initial_capital
+            results["net_return"] = results["total_return"]  # Already net of costs
+            
+            # Calculate gross return if available
+            gross_pnl_total = results.get("gross_pnl_total", 0)
+            if gross_pnl_total > 0:
+                gross_capital = self.initial_capital + gross_pnl_total
+                results["gross_return"] = (gross_capital - self.initial_capital) / self.initial_capital
+            else:
+                results["gross_return"] = results["total_return"]
             
             if results["total_trades"] > 0:
                 results["win_rate"] = results["winning_trades"] / results["total_trades"]
                 
-                wins = [t["pnl"] for t in results["trades"] if t["pnl"] > 0]
-                losses = [t["pnl"] for t in results["trades"] if t["pnl"] < 0]
+                # Separate wins and losses
+                wins = [t["net_pnl"] for t in results["trades"] if t.get("net_pnl", 0) > 0]
+                losses = [t["net_pnl"] for t in results["trades"] if t.get("net_pnl", 0) < 0]
                 
                 results["avg_win"] = statistics.mean(wins) if wins else 0
                 results["avg_loss"] = statistics.mean(losses) if losses else 0
+                
+                # Calculate transaction cost metrics
+                total_costs = sum(t.get("total_commission", 0) for t in results["trades"])
+                total_turnover = sum(t.get("turnover", 0) for t in results["trades"])
+                
+                results["total_transaction_costs"] = total_costs
+                results["total_turnover"] = total_turnover
+                results["avg_cost_bps"] = (total_costs / total_turnover * 10000) if total_turnover > 0 else 0
+                
+                # Net vs gross metrics
+                results["cost_drag"] = results["gross_return"] - results["net_return"]
+                
+                # Fill ratio statistics
+                fill_ratios = [t.get("fill_ratio", 1.0) for t in results["trades"]]
+                results["avg_fill_ratio"] = statistics.mean(fill_ratios) if fill_ratios else 1.0
+                
+                # Slippage statistics
+                slippage_costs = [t.get("slippage_cost_bps", 0) for t in results["trades"]]
+                results["avg_slippage_bps"] = statistics.mean(slippage_costs) if slippage_costs else 0.0
             
             # Calculate drawdown
             results["max_drawdown"] = self._calculate_max_drawdown(portfolio_values)
@@ -133,41 +209,169 @@ class BacktestEngine:
             logger.error(f"Error running backtest: {e}")
             return {"error": str(e)}
     
-    def _simulate_trade(self, signal: StrategySignal, position_size: int, 
-                       market_data: Dict) -> Dict:
-        """Simulate trade execution."""
+    def _simulate_trade(
+        self, 
+        signal: StrategySignal, 
+        position_size: int, 
+        market_data: Dict,
+        trade_timestamp: Optional[datetime] = None
+    ) -> Dict:
+        """
+        Simulate realistic trade execution with spreads, slippage, and latency.
+        
+        Args:
+            signal: Trading signal
+            position_size: Position size to trade
+            market_data: Market data at signal time
+            trade_timestamp: Timestamp of trade signal
+            
+        Returns:
+            Trade execution results
+        """
         try:
-            # Simplified trade simulation
-            entry_price = market_data.get("close", 100.0)
+            # Extract market data
+            close_price = market_data.get("close", 100.0)
+            high_price = market_data.get("high", close_price * 1.01)
+            low_price = market_data.get("low", close_price * 0.99)
+            volume = market_data.get("volume", 100000)
             
-            # Simulate some randomness in exit price
-            import random
-            price_change = random.gauss(0, 0.02)  # 2% volatility
-            exit_price = entry_price * (1 + price_change)
+            # Calculate mid-price (signal price)
+            signal_price = close_price
             
-            # Calculate P&L
-            if signal.is_buy:
-                pnl = position_size * (exit_price - entry_price)
+            # Step 1: Estimate half-spread
+            if self.microstructure_available:
+                # Use volatility proxy
+                volatility = abs(high_price - low_price) / close_price
+                liquidity_proxy = volume / 1000  # Simplified liquidity measure
+                half_spread = self.estimate_half_spread(volatility, close_price, liquidity_proxy)
             else:
-                pnl = position_size * (entry_price - exit_price)
+                # Simple spread model: 0.05% to 0.5% based on volatility
+                volatility = abs(high_price - low_price) / close_price
+                half_spread = max(0.0005, min(0.005, volatility * 0.5))
             
-            # Subtract commission
-            pnl -= self.commission_per_trade
+            # Step 2: Calculate execution price with spread
+            if signal.is_buy:
+                execution_price = signal_price * (1 + half_spread)  # Pay ask
+            else:
+                execution_price = signal_price * (1 - half_spread)  # Hit bid
+            
+            # Step 3: Add slippage if enabled
+            slippage_amount = 0.0
+            if self.enable_slippage and self.microstructure_available:
+                # Use realistic slippage model
+                volatility = abs(high_price - low_price) / close_price
+                trade_size_fraction = position_size / max(volume, 1)
+                
+                slippage_amount = self.calculate_slippage(
+                    volatility=volatility,
+                    trade_size=trade_size_fraction,
+                    liquidity=volume / 10000,  # Normalized liquidity
+                    k=1.0
+                )
+                
+                # Apply slippage in trade direction
+                if signal.is_buy:
+                    execution_price *= (1 + slippage_amount)
+                else:
+                    execution_price *= (1 - slippage_amount)
+            elif self.enable_slippage:
+                # Simple slippage model
+                volatility = abs(high_price - low_price) / close_price
+                slippage_pct = volatility * np.sqrt(position_size / max(volume, 1)) * 0.1
+                slippage_amount = min(0.01, slippage_pct)  # Cap at 1%
+                
+                if signal.is_buy:
+                    execution_price *= (1 + slippage_amount)
+                else:
+                    execution_price *= (1 - slippage_amount)
+            
+            # Step 4: Handle partial fills if enabled
+            actual_quantity = position_size
+            if self.enable_partial_fills and self.microstructure_available:
+                # Calculate partial fill probability
+                market_depth = volume / 100  # Simplified depth estimate
+                fill_prob = 1.0 - self.calculate_partial_fill_probability(
+                    trade_size=position_size,
+                    market_depth=market_depth,
+                    urgency="medium"
+                )
+                
+                # Simulate partial fill
+                if np.random.random() > fill_prob:
+                    actual_quantity = int(position_size * np.random.uniform(0.3, 0.9))
+            
+            # Step 5: Calculate latency effects
+            execution_timestamp = trade_timestamp or datetime.now()
+            if self.microstructure_available and trade_timestamp:
+                # Simulate latency impact (simplified)
+                latency_cost = np.random.normal(0, 0.0001)  # Small random cost
+                execution_price *= (1 + latency_cost)
+            
+            # Step 6: Calculate transaction costs
+            # Commission in basis points
+            commission_bps_cost = (self.commission_bps / 10000) * execution_price * actual_quantity
+            
+            # Flat commission
+            commission_flat_cost = self.commission_flat
+            
+            total_commission = commission_bps_cost + commission_flat_cost
+            
+            # Step 7: Calculate P&L
+            if signal.is_buy:
+                # For backtesting, assume we sell at the next period's close
+                # This is simplified - real implementation would track positions
+                exit_price = execution_price * (1 + np.random.normal(0, 0.02))  # Random exit
+                gross_pnl = actual_quantity * (exit_price - execution_price)
+            else:
+                # Short position
+                exit_price = execution_price * (1 + np.random.normal(0, 0.02))
+                gross_pnl = actual_quantity * (execution_price - exit_price)
+            
+            # Net P&L after costs
+            net_pnl = gross_pnl - total_commission
+            
+            # Calculate metrics
+            turnover = actual_quantity * execution_price
+            spread_cost_bps = half_spread * 10000
+            slippage_cost_bps = slippage_amount * 10000
+            total_cost_bps = (total_commission / turnover) * 10000 if turnover > 0 else 0
             
             return {
                 "symbol": signal.symbol,
                 "side": signal.side.value,
-                "quantity": position_size,
-                "entry_price": entry_price,
-                "exit_price": exit_price,
-                "pnl": pnl,
+                "signal_price": signal_price,
+                "execution_price": execution_price,
+                "quantity_requested": position_size,
+                "quantity_filled": actual_quantity,
+                "fill_ratio": actual_quantity / position_size if position_size > 0 else 0,
+                "gross_pnl": gross_pnl,
+                "net_pnl": net_pnl,
+                "commission_bps": commission_bps_cost,
+                "commission_flat": commission_flat_cost,
+                "total_commission": total_commission,
+                "half_spread": half_spread,
+                "spread_cost_bps": spread_cost_bps,
+                "slippage_amount": slippage_amount,
+                "slippage_cost_bps": slippage_cost_bps,
+                "total_cost_bps": total_cost_bps,
+                "turnover": turnover,
                 "signal_strength": signal.strength,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": execution_timestamp.isoformat() if execution_timestamp else datetime.now().isoformat(),
+                "latency_ms": self.latency_ms
             }
             
         except Exception as e:
             logger.error(f"Error simulating trade: {e}")
-            return {"pnl": 0, "error": str(e)}
+            return {
+                "symbol": signal.symbol,
+                "side": signal.side.value,
+                "net_pnl": 0,
+                "gross_pnl": 0,
+                "error": str(e),
+                "quantity_filled": 0,
+                "fill_ratio": 0.0,
+                "total_cost_bps": 0.0
+            }
     
     def _calculate_max_drawdown(self, portfolio_values: List[float]) -> float:
         """Calculate maximum drawdown."""
