@@ -6,7 +6,7 @@ and real-time execution monitoring with institutional controls.
 """
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Callable
 from enum import Enum
 import threading
@@ -15,7 +15,7 @@ import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ class Order:
         self.filled_quantity = 0
         self.average_fill_price = 0.0
         self.fills = []
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
         self.updated_at = self.created_at
         self.executed_at = None
         
@@ -112,7 +112,7 @@ class Order:
     def add_fill(self, quantity: int, price: float, timestamp: datetime = None):
         """Add a fill to the order."""
         if timestamp is None:
-            timestamp = datetime.now()
+            timestamp = datetime.now(timezone.utc)
         
         fill = {
             "quantity": quantity,
@@ -147,7 +147,7 @@ class Order:
             return False
         
         self.status = OrderStatus.CANCELED
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
         self.notes += f" | Cancelled: {reason}"
         
         logger.info(f"Order {self.id} cancelled: {reason}")
@@ -336,7 +336,7 @@ class OrderManager:
         """Monitor active orders for timeouts and updates."""
         while self._monitor_running:
             try:
-                current_time = datetime.now()
+                current_time = datetime.now(timezone.utc)
                 expired_orders = []
                 
                 for order_id, order in list(self.active_orders.items()):

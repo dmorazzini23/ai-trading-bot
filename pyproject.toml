@@ -2,7 +2,7 @@
 name = "ai-trading-bot"
 version = "0.1.0"
 description = "AI trading bot"
-requires-python = "==3.12.3"
+requires-python = ">=3.12,<3.13"
 
 [project.scripts]
 ai-trading-bot = "ai_trading.main:main"
