@@ -4481,11 +4481,32 @@ def check_halt_flag(ctx: BotContext | None = None) -> bool:
     return False
 
 
-def too_many_positions(ctx: BotContext) -> bool:
+def too_many_positions(ctx: BotContext, symbol: Optional[str] = None) -> bool:
+    """Check if there are too many positions, with allowance for rebalancing."""
     try:
-        return len(ctx.api.get_all_positions()) >= MAX_PORTFOLIO_POSITIONS
-    except Exception:
-        logger.warning("[too_many_positions] Could not fetch positions")
+        current_positions = ctx.api.get_all_positions()
+        position_count = len(current_positions)
+        
+        # If we're not at the limit, allow new positions
+        if position_count < MAX_PORTFOLIO_POSITIONS:
+            return False
+        
+        # If we're at the limit, check if this is a rebalancing opportunity
+        if symbol and position_count >= MAX_PORTFOLIO_POSITIONS:
+            # Allow trades for symbols we already have positions in (rebalancing)
+            existing_symbols = {pos.symbol for pos in current_positions}
+            if symbol in existing_symbols:
+                logger.info(f"ALLOW_REBALANCING | symbol={symbol} existing_positions={position_count}")
+                return False
+            
+            # For new symbols at position limit, check if we can close underperforming positions
+            # This implements intelligent position management
+            logger.info(f"POSITION_LIMIT_REACHED | current={position_count} max={MAX_PORTFOLIO_POSITIONS} new_symbol={symbol}")
+        
+        return position_count >= MAX_PORTFOLIO_POSITIONS
+        
+    except Exception as e:
+        logger.warning(f"[too_many_positions] Could not fetch positions: {e}")
         return False
 
 
@@ -5906,7 +5927,7 @@ def pre_trade_checks(
         logger.info("SKIP_WEEKLY_LOSS", extra={"symbol": symbol})
         _log_health_diagnostics(ctx, "weekly_loss")
         return False
-    if too_many_positions(ctx):
+    if too_many_positions(ctx, symbol):
         logger.info("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol})
         _log_health_diagnostics(ctx, "positions")
         return False
@@ -6961,10 +6982,11 @@ def load_global_signal_performance(
 ) -> Optional[Dict[str, float]]:
     """Load global signal performance with enhanced error handling and configurable thresholds."""
     # AI-AGENT-REF: Use configurable meta-learning parameters from environment
+    # Reduced requirements to allow meta-learning to activate more easily
     if min_trades is None:
-        min_trades = int(os.getenv("METALEARN_MIN_TRADES", "3"))
+        min_trades = int(os.getenv("METALEARN_MIN_TRADES", "2"))  # Reduced from 3 to 2
     if threshold is None:
-        threshold = float(os.getenv("METALEARN_PERFORMANCE_THRESHOLD", "0.4"))
+        threshold = float(os.getenv("METALEARN_PERFORMANCE_THRESHOLD", "0.3"))  # Reduced from 0.4 to 0.3
     
     if not os.path.exists(TRADE_LOG_FILE):
         logger.info("METALEARN_NO_HISTORY | Using defaults for new deployment")

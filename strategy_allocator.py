@@ -124,26 +124,29 @@ class StrategyAllocator:
                     continue
                     
                 try:
-                    confidence = float(s.confidence)
+                    original_confidence = float(s.confidence)
+                    confidence = original_confidence
+                    
                     # AI-AGENT-REF: Enhanced confidence normalization with better validation
                     if confidence < 0 or confidence > 1:
-                        logger.warning(f"Signal confidence out of range [0,1]: {confidence} for {s.symbol}")
-                        # Apply proper normalization for out-of-range values
                         if confidence > 1:
-                            # For values > 1, apply sigmoid-like normalization
-                            normalized_confidence = 1 / (1 + abs(confidence - 1))
-                            logger.info(f"Normalized confidence {confidence} -> {normalized_confidence:.4f} for {s.symbol}")
+                            # For values > 1, use improved tanh-based normalization
+                            import math
+                            normalized_confidence = (math.tanh(confidence - 1) + 1) / 2
+                            # Ensure it stays in [0.5, 1] range for values > 1
+                            normalized_confidence = 0.5 + (normalized_confidence * 0.5)
                             confidence = normalized_confidence
                         else:
-                            # For negative values, clamp to 0
-                            confidence = max(0, confidence)
+                            # For negative values, clamp to small positive value
+                            confidence = max(0.01, confidence)
                         
                         # Final safety clamp to ensure [0,1] range
-                        confidence = max(0, min(1, confidence))
+                        confidence = max(0.01, min(1.0, confidence))
                         s.confidence = confidence
                         
-                        # Add validation warning for algorithm integrity monitoring
-                        logger.warning(f"CONFIDENCE_RANGE_VIOLATION | symbol={s.symbol} original={s.confidence} normalized={confidence}")
+                        # Log normalization with original value
+                        logger.info(f"CONFIDENCE_NORMALIZED | symbol={s.symbol} original={original_confidence:.4f} normalized={confidence:.4f}")
+                    
                 except (TypeError, ValueError):
                     logger.warning(f"Invalid signal confidence (not numeric): {s.confidence}")
                     continue

@@ -43,25 +43,25 @@ class TestProblemStatementFixes(unittest.TestCase):
             self.fail(f"Failed to import sentiment module: {e}")
 
     def test_meta_learning_minimum_trades_requirement(self):
-        """Test that meta-learning minimum trade requirement is reduced to 3."""
+        """Test that meta-learning minimum trade requirement is reduced to 2."""
         # Test by reading the source code directly to avoid import issues
         bot_engine_path = "bot_engine.py"
         if os.path.exists(bot_engine_path):
             with open(bot_engine_path, 'r') as f:
                 content = f.read()
             
-            # Look for the function signature
+            # Look for the environment variable default
             import re
-            pattern = r'def load_global_signal_performance\(\s*min_trades: int = (\d+)'
+            pattern = r'METALEARN_MIN_TRADES.*"(\d+)"'
             match = re.search(pattern, content)
             if match:
                 current_value = int(match.group(1))
-                expected_value = 3
+                expected_value = 2  # Updated from 3 to 2
                 self.assertEqual(current_value, expected_value,
-                               f"min_trades default should be {expected_value}, got {current_value}")
+                               f"METALEARN_MIN_TRADES default should be {expected_value}, got {current_value}")
                 print("✓ Meta-learning minimum trades meets problem statement requirements")
             else:
-                self.fail("Could not find min_trades parameter in load_global_signal_performance")
+                self.fail("Could not find METALEARN_MIN_TRADES parameter in load_global_signal_performance")
         else:
             self.fail("bot_engine.py not found")
 
