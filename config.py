@@ -380,6 +380,13 @@ META_LEARNING_BOOTSTRAP_WIN_RATE = float(os.getenv("META_LEARNING_BOOTSTRAP_WIN_
 ORDER_TIMEOUT_SECONDS = int(os.getenv("ORDER_TIMEOUT_SECONDS", "300"))  # 5 minutes default
 ORDER_STALE_CLEANUP_INTERVAL = int(os.getenv("ORDER_STALE_CLEANUP_INTERVAL", "60"))  # 1 minute cleanup interval
 ORDER_FILL_RATE_TARGET = float(os.getenv("ORDER_FILL_RATE_TARGET", "0.80"))  # 80% fill rate target
+ORDER_MAX_RETRY_ATTEMPTS = int(os.getenv("ORDER_MAX_RETRY_ATTEMPTS", "3"))  # Maximum retry attempts for partial fills
+
+# AI-AGENT-REF: System health monitoring configuration
+SYSTEM_HEALTH_CHECK_INTERVAL = int(os.getenv("SYSTEM_HEALTH_CHECK_INTERVAL", "60"))  # 1 minute health checks
+SYSTEM_HEALTH_ALERT_THRESHOLD = float(os.getenv("SYSTEM_HEALTH_ALERT_THRESHOLD", "0.70"))  # Alert if success rate below 70%
+SYSTEM_HEALTH_EXPORT_ENABLED = bool(os.getenv("SYSTEM_HEALTH_EXPORT_ENABLED", "true").lower() == "true")
+SYSTEM_HEALTH_REPORT_PATH = os.getenv("SYSTEM_HEALTH_REPORT_PATH", "logs/system_health.json")
 
 # AI-AGENT-REF: Enhanced liquidity management - more granular controls
 LIQUIDITY_SPREAD_THRESHOLD = float(os.getenv("LIQUIDITY_SPREAD_THRESHOLD", "0.10"))  # More reasonable 10 cent spread threshold
