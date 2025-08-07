@@ -196,11 +196,10 @@ class ExecutionDebugTracker:
         try:
             if self.verbose_logging or self.trace_mode:
                 self.logger.info(f"EXEC_EVENT_{phase.value.upper()}", extra=log_data)
-            else:
-                # Log only key phases in normal mode
-                if phase in [ExecutionPhase.SIGNAL_GENERATED, ExecutionPhase.ORDER_SUBMITTED, 
-                            ExecutionPhase.ORDER_FILLED, ExecutionPhase.ORDER_REJECTED]:
-                    self.logger.info(f"EXEC_EVENT_{phase.value.upper()}", extra=log_data)
+            elif phase in [ExecutionPhase.SIGNAL_GENERATED, ExecutionPhase.ORDER_SUBMITTED, 
+                          ExecutionPhase.ORDER_FILLED, ExecutionPhase.ORDER_REJECTED]:
+                # Log only key phases in normal mode (but not if already logged in verbose mode)
+                self.logger.info(f"EXEC_EVENT_{phase.value.upper()}", extra=log_data)
         except Exception as log_e:
             # AI-AGENT-REF: Prevent logging errors from cascading
             pass  # Silently ignore logging errors to prevent deadlock

@@ -852,23 +852,33 @@ class ExecutionEngine:
             # Missing data means we can't compute stats safely
             self.logger.warning("Minute data unavailable for %s", symbol)
             return 0.0, 0.0, 0.0
-        if len(df) < 5:
-            # Require at least 5 rows for momentum/average calculations
+        if len(df) < 3:
+            # Require at least 3 rows for basic calculations
             self.logger.warning(
-                "Not enough rows for minute stats of %s: got %s",
+                "Insufficient minute data for %s: got %d rows, need minimum 3",
                 symbol,
                 len(df),
             )
             return 0.0, 0.0, 0.0
+        elif len(df) < 5:
+            # For 3-4 rows, use what we have but log debug info
+            self.logger.debug(
+                "Limited minute data for %s: got %d rows, using fallback calculations",
+                symbol,
+                len(df),
+            )
         vol = float(df["volume"].iloc[-1])
-        avg1m = float(df["volume"].tail(5).mean())
+        # Use available data for average calculation
+        avg1m = float(df["volume"].tail(min(5, len(df))).mean())
         last_valid_close = df["close"].dropna()
         if last_valid_close.empty:
             self.logger.critical(f"All NaNs in close column for {symbol}")
             return 0.0, 0.0, 0.0
         last_close = last_valid_close.iloc[-1]
-        prev_idx = -5 if len(last_valid_close) >= 5 else 0
-        momentum = float(last_close - last_valid_close.iloc[prev_idx])
+        # Use available data for momentum calculation
+        available_rows = min(5, len(last_valid_close))
+        prev_idx = -(available_rows) if available_rows > 1 else 0
+        momentum = float(last_close - last_valid_close.iloc[prev_idx]) if available_rows > 1 else 0.0
         return vol, avg1m, momentum
 
     def _prepare_order(self, symbol: str, side: str, qty: int) -> Tuple[object, Optional[float]]:
