@@ -7,11 +7,11 @@ and provides validation for parameter changes.
 
 import logging
 from typing import Dict, Any, List, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class ParameterValidator:
             Dictionary containing validation results
         """
         validation_result = {
-            "timestamp": datetime.now(),
+            "timestamp": datetime.now(timezone.utc),
             "overall_status": "PASS",
             "violations": [],
             "warnings": [],

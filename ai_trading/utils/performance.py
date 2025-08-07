@@ -1,4 +1,3 @@
-#!/usr/bin/env python3.12
 """
 Performance optimizations for AI trading system.
 

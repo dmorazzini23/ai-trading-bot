@@ -8,12 +8,12 @@ with comprehensive risk management, monitoring, and execution capabilities.
 import asyncio
 import time
 from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ class ProductionTradingSystem:
         
         # System state
         self.is_active = False
-        self.last_health_check = datetime.now()
+        self.last_health_check = datetime.now(timezone.utc)
         self.system_errors = []
         
         # Trading session state
@@ -92,7 +92,7 @@ class ProductionTradingSystem:
             self.alert_manager.start_processing()
             
             # Initialize session
-            self.session_start_time = datetime.now()
+            self.session_start_time = datetime.now(timezone.utc)
             self.is_active = True
             
             # Perform initial health check
@@ -158,7 +158,7 @@ class ProductionTradingSystem:
                 "status": "success",
                 "session_summary": session_summary,
                 "shutdown_reason": reason,
-                "shutdown_time": datetime.now()
+                "shutdown_time": datetime.now(timezone.utc)
             }
             
         except Exception as e:
@@ -168,7 +168,7 @@ class ProductionTradingSystem:
     async def analyze_trading_opportunity(self, symbol: str, market_data: Dict) -> Dict[str, Any]:
         """Comprehensive analysis of a trading opportunity."""
         try:
-            analysis_start = datetime.now()
+            analysis_start = datetime.now(timezone.utc)
             
             # Check if trading is allowed
             trading_status = self.halt_manager.is_trading_allowed()
@@ -177,7 +177,7 @@ class ProductionTradingSystem:
                     "symbol": symbol,
                     "recommendation": "NO_TRADE",
                     "reason": f"Trading halted: {', '.join(trading_status['reasons'])}",
-                    "timestamp": datetime.now()
+                    "timestamp": datetime.now(timezone.utc)
                 }
             
             # Perform regime detection
@@ -210,11 +210,11 @@ class ProductionTradingSystem:
                 integrated_recommendation, risk_assessment, liquidity_analysis
             )
             
-            analysis_time = (datetime.now() - analysis_start).total_seconds()
+            analysis_time = (datetime.now(timezone.utc) - analysis_start).total_seconds()
             
             return {
                 "symbol": symbol,
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
                 "analysis_time_seconds": analysis_time,
                 "regime_analysis": regime_analysis,
                 "mtf_analysis": mtf_analysis,
@@ -234,7 +234,7 @@ class ProductionTradingSystem:
                           market_data: Dict = None) -> Dict[str, Any]:
         """Execute a trade with comprehensive safety checks."""
         try:
-            execution_start = datetime.now()
+            execution_start = datetime.now(timezone.utc)
             
             # Perform pre-trade analysis
             if market_data:
@@ -260,7 +260,7 @@ class ProductionTradingSystem:
                 
                 # Record session trade
                 self.session_trades.append({
-                    "timestamp": datetime.now(),
+                    "timestamp": datetime.now(timezone.utc),
                     "symbol": symbol,
                     "side": side.value,
                     "quantity": execution_result.get("quantity", quantity),
@@ -268,7 +268,7 @@ class ProductionTradingSystem:
                     "execution_result": execution_result
                 })
             
-            execution_time = (datetime.now() - execution_start).total_seconds()
+            execution_time = (datetime.now(timezone.utc) - execution_start).total_seconds()
             execution_result["total_execution_time_seconds"] = execution_time
             
             return execution_result
@@ -287,7 +287,7 @@ class ProductionTradingSystem:
         try:
             health_status = {
                 "healthy": True,
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
                 "issues": [],
                 "warnings": [],
                 "component_status": {}
@@ -324,7 +324,7 @@ class ProductionTradingSystem:
                 health_status["healthy"] = False
             
             # Update last health check time
-            self.last_health_check = datetime.now()
+            self.last_health_check = datetime.now(timezone.utc)
             
             return health_status
             
@@ -332,7 +332,7 @@ class ProductionTradingSystem:
             logger.error(f"Error performing health check: {e}")
             return {
                 "healthy": False,
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
                 "issues": [f"Health check error: {e}"],
                 "warnings": [],
                 "component_status": {}
@@ -349,7 +349,7 @@ class ProductionTradingSystem:
             regime_summary = self.regime_detector.get_regime_summary()
             
             # Calculate uptime
-            uptime_seconds = (datetime.now() - self.session_start_time).total_seconds() if self.session_start_time else 0
+            uptime_seconds = (datetime.now(timezone.utc) - self.session_start_time).total_seconds() if self.session_start_time else 0
             
             return {
                 "system_active": self.is_active,
@@ -377,7 +377,7 @@ class ProductionTradingSystem:
             if not self.session_start_time:
                 return {"error": "No active session"}
             
-            session_duration = datetime.now() - self.session_start_time
+            session_duration = datetime.now(timezone.utc) - self.session_start_time
             
             # Calculate session P&L
             total_trades = len(self.session_trades)

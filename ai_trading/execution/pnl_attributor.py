@@ -13,7 +13,7 @@ from enum import Enum
 from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
-from logger import get_logger
+from ai_trading.logging import get_logger
 
 
 def get_phase_logger(name: str, phase: str) -> logging.Logger:

@@ -3,8 +3,8 @@
 import random
 from typing import Any, Sequence
 
-import metrics_logger
-from logger import get_logger
+from ai_trading.monitoring import metrics as metrics_logger
+from ai_trading.logging import get_logger
 
 try:
     from ai_trading.capital_scaling import (

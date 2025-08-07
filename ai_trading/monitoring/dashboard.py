@@ -5,14 +5,14 @@ Provides data aggregation and formatting for institutional
 trading dashboards and real-time monitoring interfaces.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any
 import statistics
 import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -49,7 +49,7 @@ class RealtimeMetrics:
             # Get recent trade metrics
             recent_trades = [
                 m for m in self.metrics_collector.trade_metrics
-                if (datetime.now() - m["timestamp"]).total_seconds() < 3600  # Last hour
+                if (datetime.now(timezone.utc) - m["timestamp"]).total_seconds() < 3600  # Last hour
             ]
             
             if not recent_trades:
@@ -68,7 +68,7 @@ class RealtimeMetrics:
                 }
             
             self._cache[cache_key] = result
-            self._cache_timestamps[cache_key] = datetime.now()
+            self._cache_timestamps[cache_key] = datetime.now(timezone.utc)
             return result
             
         except Exception as e:
@@ -104,7 +104,7 @@ class RealtimeMetrics:
                 }
             
             self._cache[cache_key] = result
-            self._cache_timestamps[cache_key] = datetime.now()
+            self._cache_timestamps[cache_key] = datetime.now(timezone.utc)
             return result
             
         except Exception as e:
@@ -139,7 +139,7 @@ class RealtimeMetrics:
                 }
             
             self._cache[cache_key] = result
-            self._cache_timestamps[cache_key] = datetime.now()
+            self._cache_timestamps[cache_key] = datetime.now(timezone.utc)
             return result
             
         except Exception as e:
@@ -174,7 +174,7 @@ class RealtimeMetrics:
                 }
             
             self._cache[cache_key] = result
-            self._cache_timestamps[cache_key] = datetime.now()
+            self._cache_timestamps[cache_key] = datetime.now(timezone.utc)
             return result
             
         except Exception as e:
@@ -186,7 +186,7 @@ class RealtimeMetrics:
         if cache_key not in self._cache_timestamps:
             return False
         
-        age = (datetime.now() - self._cache_timestamps[cache_key]).total_seconds()
+        age = (datetime.now(timezone.utc) - self._cache_timestamps[cache_key]).total_seconds()
         return age < self.cache_ttl
 
 
@@ -224,7 +224,7 @@ class DashboardDataProvider:
             time_range = time_range or timedelta(hours=24)
             
             dashboard_data = {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "time_range_hours": time_range.total_seconds() / 3600,
                 
                 # Real-time metrics
@@ -253,7 +253,7 @@ class DashboardDataProvider:
         except Exception as e:
             logger.error(f"Error generating dashboard data: {e}")
             return {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "error": str(e),
                 "realtime": {},
                 "performance": {},
@@ -266,7 +266,7 @@ class DashboardDataProvider:
         """Get trading activity summary."""
         try:
             time_range = time_range or timedelta(hours=24)
-            cutoff_time = datetime.now() - time_range
+            cutoff_time = datetime.now(timezone.utc) - time_range
             
             # Filter trade metrics
             recent_trades = [
@@ -323,7 +323,7 @@ class DashboardDataProvider:
                 ])
             
             # Recent alerts (last hour)
-            recent_cutoff = datetime.now() - timedelta(hours=1)
+            recent_cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
             recent_alerts = [
                 a for a in self.alert_manager.alerts
                 if a.timestamp >= recent_cutoff
@@ -384,7 +384,7 @@ class DashboardDataProvider:
     def _get_chart_data(self, time_range: timedelta) -> Dict[str, List]:
         """Get historical data for charts."""
         try:
-            cutoff_time = datetime.now() - time_range
+            cutoff_time = datetime.now(timezone.utc) - time_range
             
             # Portfolio value chart
             portfolio_data = [

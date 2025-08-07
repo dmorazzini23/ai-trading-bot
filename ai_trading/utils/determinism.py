@@ -1,4 +1,3 @@
-#!/usr/bin/env python3.12
 """
 Determinism and model specification locking module.
 

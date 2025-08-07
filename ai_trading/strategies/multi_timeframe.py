@@ -9,13 +9,13 @@ institutional-grade trading strategies.
 # AI-AGENT-REF: use centralized import management
 from .imports import np, pd, NUMPY_AVAILABLE, PANDAS_AVAILABLE
 from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ class MultiTimeframeSignal:
         self.confidence = confidence  # 0.0 to 1.0
         self.indicator = indicator
         self.metadata = metadata or {}
-        self.timestamp = datetime.now()
+        self.timestamp = datetime.now(timezone.utc)
         
         # Calculate composite score
         self.score = self._calculate_score()
@@ -189,7 +189,7 @@ class MultiTimeframeAnalyzer:
             Comprehensive analysis results
         """
         try:
-            analysis_start = datetime.now()
+            analysis_start = datetime.now(timezone.utc)
             
             # Generate signals for each timeframe
             timeframe_signals = {}
@@ -211,11 +211,11 @@ class MultiTimeframeAnalyzer:
             self.current_signals[symbol] = timeframe_signals
             self._update_signal_history(symbol, timeframe_signals)
             
-            analysis_time = (datetime.now() - analysis_start).total_seconds()
+            analysis_time = (datetime.now(timezone.utc) - analysis_start).total_seconds()
             
             return {
                 "symbol": symbol,
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
                 "analysis_time_seconds": analysis_time,
                 "timeframe_signals": timeframe_signals,
                 "combined_analysis": combined_analysis,
@@ -724,7 +724,7 @@ class MultiTimeframeAnalyzer:
             
             # Store current signals with timestamp
             history_entry = {
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
                 "signals": signals
             }
             

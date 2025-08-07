@@ -8,14 +8,14 @@ risk metrics calculation, and anomaly detection for institutional trading.
 import time
 import statistics
 from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import deque, defaultdict
 import threading
 import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class PerformanceMetrics:
         
         # Current metrics
         self.current_metrics = {}
-        self.last_calculation = datetime.now()
+        self.last_calculation = datetime.now(timezone.utc)
         
         # Risk-free rate (annualized)
         self.risk_free_rate = 0.02  # 2% risk-free rate
@@ -56,7 +56,7 @@ class PerformanceMetrics:
         try:
             self.returns.append(return_value)
             self.equity_curve.append(equity_value)
-            self.last_calculation = datetime.now()
+            self.last_calculation = datetime.now(timezone.utc)
             
             # Recalculate metrics if we have enough data
             if len(self.returns) >= 30:
@@ -235,7 +235,7 @@ class PerformanceMetrics:
                 "total_trades": win_stats["total_trades"],
                 "avg_win": win_stats["avg_win"],
                 "avg_loss": win_stats["avg_loss"],
-                "last_updated": datetime.now()
+                "last_updated": datetime.now(timezone.utc)
             }
             
         except Exception as e:
@@ -300,7 +300,7 @@ class RealTimePnLTracker:
                         "cost_basis": cost_basis,
                         "unrealized_pnl": unrealized_pnl,
                         "commission": commission,
-                        "last_updated": datetime.now()
+                        "last_updated": datetime.now(timezone.utc)
                     }
                 
                 # Recalculate total unrealized P&L
@@ -329,7 +329,7 @@ class RealTimePnLTracker:
                 
                 # Record in history
                 trade_record = {
-                    "timestamp": datetime.now(),
+                    "timestamp": datetime.now(timezone.utc),
                     "symbol": symbol,
                     "quantity": quantity,
                     "price": price,
@@ -355,7 +355,7 @@ class RealTimePnLTracker:
                 self.daily_pnl = 0.0
                 
                 # Store previous day's P&L
-                today = datetime.now().date()
+                today = datetime.now(timezone.utc).date()
                 if self.daily_pnl != 0:
                     self.daily_pnl_history[today] = self.daily_pnl
                 
@@ -403,7 +403,7 @@ class RealTimePnLTracker:
                     "session_low": self.session_low_equity,
                     "open_positions": len(self.positions),
                     "total_trades": len(self.pnl_history),
-                    "last_updated": datetime.now()
+                    "last_updated": datetime.now(timezone.utc)
                 }
                 
         except Exception as e:
@@ -514,7 +514,7 @@ class AnomalyDetector:
             
             # Record anomalies
             for anomaly in anomalies:
-                anomaly["timestamp"] = datetime.now()
+                anomaly["timestamp"] = datetime.now(timezone.utc)
                 self.recent_anomalies.append(anomaly)
             
             return anomalies
@@ -541,7 +541,7 @@ class AnomalyDetector:
     def get_recent_anomalies(self, hours: int = 24) -> List[Dict[str, Any]]:
         """Get recent anomalies within specified time window."""
         try:
-            cutoff_time = datetime.now() - timedelta(hours=hours)
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=hours)
             return [
                 anomaly for anomaly in self.recent_anomalies
                 if anomaly["timestamp"] >= cutoff_time
@@ -568,7 +568,7 @@ class PerformanceDashboard:
         self.alert_manager = alert_manager
         
         # Dashboard state
-        self.last_update = datetime.now()
+        self.last_update = datetime.now(timezone.utc)
         self.update_interval = DATA_PARAMETERS["HEALTH_CHECK_INTERVAL"]
         
         # Performance thresholds for alerts
@@ -607,7 +607,7 @@ class PerformanceDashboard:
             # Check performance thresholds
             self._check_performance_thresholds()
             
-            self.last_update = datetime.now()
+            self.last_update = datetime.now(timezone.utc)
             
         except Exception as e:
             logger.error(f"Error updating performance dashboard: {e}")
@@ -656,7 +656,7 @@ class PerformanceDashboard:
             recent_anomalies = self.anomaly_detector.get_recent_anomalies(24)
             
             return {
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
                 "performance_metrics": current_metrics,
                 "pnl_summary": pnl_summary,
                 "position_count": len(position_details),

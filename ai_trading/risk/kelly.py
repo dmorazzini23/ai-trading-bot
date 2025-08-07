@@ -8,7 +8,7 @@ and risk-adjusted capital allocation for institutional trading.
 import math
 import statistics
 from typing import List, Dict, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 # Use the centralized logger as per AGENTS.md
@@ -20,7 +20,7 @@ except ImportError:
 
 # Import centralized configuration
 try:
-    from config import TradingConfig
+    from ai_trading.config.management import TradingConfig
     _DEFAULT_CONFIG = TradingConfig.from_env()
 except ImportError:
     # Fallback if config import fails
@@ -32,6 +32,8 @@ except ImportError:
         lookback_periods = 252
         rebalance_frequency = 21
     _DEFAULT_CONFIG = _DefaultConfig()
+    # Create a dummy TradingConfig for type hints
+    TradingConfig = type('TradingConfig', (), {})
 
 
 class KellyCriterion:
@@ -374,7 +376,7 @@ class KellyCalculator:
         """Record Kelly calculation for historical analysis."""
         try:
             record = {
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
                 "symbol": symbol,
                 "kelly_fraction": kelly_fraction,
                 "metadata": metadata
@@ -383,7 +385,7 @@ class KellyCalculator:
             self.calculation_history.append(record)
             
             # Keep only recent history
-            cutoff_date = datetime.now() - timedelta(days=self.lookback_periods)
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=self.lookback_periods)
             self.calculation_history = [
                 r for r in self.calculation_history 
                 if r["timestamp"] >= cutoff_date

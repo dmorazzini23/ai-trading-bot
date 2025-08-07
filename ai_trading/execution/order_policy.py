@@ -1,4 +1,3 @@
-#!/usr/bin/env python3.12
 """
 Enhanced order policy with marketable limit orders and smart routing.
 

@@ -8,14 +8,14 @@ compliance checks, and market condition assessment for institutional trading.
 import math
 import statistics
 from typing import Dict, List, Optional, Tuple, Any, Union
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 from enum import Enum
 from dataclasses import dataclass
 import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ class MarketHoursValidator:
             ValidationResult for market hours check
         """
         try:
-            check_time = timestamp or datetime.now()
+            check_time = timestamp or datetime.now(timezone.utc)
             current_time = check_time.time()
             
             # Check if within regular trading hours
@@ -687,12 +687,12 @@ class PreTradeValidator:
                 warnings=warnings,
                 recommendations=list(set(recommendations)),  # Remove duplicates
                 metadata={
-                    "validation_timestamp": datetime.now(),
+                    "validation_timestamp": datetime.now(timezone.utc),
                     "validation_version": "1.0",
                     "risk_level": self.risk_level.value,
                     "checks_performed": len(validation_results)
                 },
-                timestamp=datetime.now()
+                timestamp=datetime.now(timezone.utc)
             )
             
             logger.info(f"Pre-trade validation complete for {symbol}: "
@@ -713,7 +713,7 @@ class PreTradeValidator:
                 warnings=[f"Validation system error: {e}"],
                 recommendations=["Manual review required"],
                 metadata={"error": str(e)},
-                timestamp=datetime.now()
+                timestamp=datetime.now(timezone.utc)
             )
     
     def _validate_system_health(self) -> ValidationResult:

@@ -8,14 +8,14 @@ catastrophic losses and system failures.
 
 import time
 from typing import Dict, List, Optional, Any, Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import threading
 import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -135,7 +135,7 @@ class DrawdownCircuitBreaker:
         """Trigger circuit breaker halt."""
         try:
             self.state = CircuitBreakerState.OPEN
-            self.halt_timestamp = datetime.now()
+            self.halt_timestamp = datetime.now(timezone.utc)
             
             logger.critical(f"TRADING HALTED - Drawdown Circuit Breaker: {reason}. "
                           f"Current drawdown: {self._safe_format_percentage(self.current_drawdown)}")
@@ -168,7 +168,7 @@ class DrawdownCircuitBreaker:
                     callback("reset", {
                         "reason": reason,
                         "drawdown": self.current_drawdown,
-                        "timestamp": datetime.now()
+                        "timestamp": datetime.now(timezone.utc)
                     })
                 except Exception as e:
                     logger.error(f"Error in circuit breaker callback: {e}")
@@ -209,7 +209,7 @@ class VolatilityCircuitBreaker:
         self.state = CircuitBreakerState.CLOSED
         self.current_volatility = 0.0
         self.position_size_multiplier = 1.0
-        self.last_volatility_update = datetime.now()
+        self.last_volatility_update = datetime.now(timezone.utc)
         
         logger.info(f"VolatilityCircuitBreaker initialized with thresholds: "
                    f"high={self._safe_format_percentage(high_vol_threshold)}, extreme={self._safe_format_percentage(extreme_vol_threshold)}")
@@ -239,7 +239,7 @@ class VolatilityCircuitBreaker:
         """
         try:
             self.current_volatility = volatility
-            self.last_volatility_update = datetime.now()
+            self.last_volatility_update = datetime.now(timezone.utc)
             
             # Determine state and adjustments based on volatility
             if volatility >= self.extreme_vol_threshold:
@@ -426,7 +426,7 @@ class TradingHaltManager:
             with self._lock:
                 self.manual_halt = True
                 self.manual_halt_reason = reason
-                self.manual_halt_timestamp = datetime.now()
+                self.manual_halt_timestamp = datetime.now(timezone.utc)
                 
                 logger.critical(f"MANUAL TRADING HALT: {reason}")
                 
@@ -512,7 +512,7 @@ class TradingHaltManager:
                 trading_status = self.is_trading_allowed()
                 
                 return {
-                    "timestamp": datetime.now(),
+                    "timestamp": datetime.now(timezone.utc),
                     "trading_status": trading_status,
                     "manual_controls": {
                         "manual_halt": self.manual_halt,
@@ -546,7 +546,7 @@ class DeadMansSwitch:
         """Initialize dead man's switch."""
         # AI-AGENT-REF: Dead man's switch for system monitoring
         self.timeout_seconds = timeout_seconds
-        self.last_heartbeat = datetime.now()
+        self.last_heartbeat = datetime.now(timezone.utc)
         self.is_active = False
         self.emergency_callbacks = []
         self.monitoring_thread = None
@@ -562,7 +562,7 @@ class DeadMansSwitch:
                 return
             
             self.is_active = True
-            self.last_heartbeat = datetime.now()
+            self.last_heartbeat = datetime.now(timezone.utc)
             self._stop_event.clear()
             
             self.monitoring_thread = threading.Thread(
@@ -598,7 +598,7 @@ class DeadMansSwitch:
         """Send heartbeat signal to reset the timer."""
         try:
             if self.is_active:
-                self.last_heartbeat = datetime.now()
+                self.last_heartbeat = datetime.now(timezone.utc)
                 logger.debug("Dead man's switch heartbeat received")
                 
         except Exception as e:
@@ -608,7 +608,7 @@ class DeadMansSwitch:
         """Main monitoring loop running in separate thread."""
         try:
             while self.is_active and not self._stop_event.is_set():
-                current_time = datetime.now()
+                current_time = datetime.now(timezone.utc)
                 time_since_heartbeat = (current_time - self.last_heartbeat).total_seconds()
                 
                 if time_since_heartbeat > self.timeout_seconds:
@@ -645,7 +645,7 @@ class DeadMansSwitch:
     def get_status(self) -> Dict[str, Any]:
         """Get current dead man's switch status."""
         try:
-            current_time = datetime.now()
+            current_time = datetime.now(timezone.utc)
             time_since_heartbeat = (current_time - self.last_heartbeat).total_seconds()
             
             return {

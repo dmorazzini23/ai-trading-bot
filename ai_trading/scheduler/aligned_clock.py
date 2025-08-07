@@ -1,4 +1,3 @@
-#!/usr/bin/env python3.12
 """
 Exchange-aligned clock and scheduling module.
 

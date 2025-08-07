@@ -8,12 +8,12 @@ and other institutional-grade position sizing methodologies.
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional, Union, Tuple, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -802,7 +802,7 @@ class TurnoverPenaltySizer:
         """Update position history for turnover tracking."""
         try:
             self.position_history.append({
-                'timestamp': datetime.now(),
+                'timestamp': datetime.now(timezone.utc),
                 'weights': weights.copy()
             })
             

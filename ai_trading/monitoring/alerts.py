@@ -7,14 +7,14 @@ management for institutional trading operations.
 
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Callable, Any
 from enum import Enum
 import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class Alert:
         self.alert_type = alert_type
         self.severity = severity
         self.message = message
-        self.timestamp = datetime.now()
+        self.timestamp = datetime.now(timezone.utc)
         
         # Additional alert data
         self.symbol = kwargs.get('symbol')
@@ -75,12 +75,12 @@ class Alert:
         """Acknowledge the alert."""
         self.acknowledged = True
         self.acknowledged_by = user
-        self.acknowledged_at = datetime.now()
+        self.acknowledged_at = datetime.now(timezone.utc)
         
     def resolve(self):
         """Mark alert as resolved."""
         self.resolved = True
-        self.resolved_at = datetime.now()
+        self.resolved_at = datetime.now(timezone.utc)
     
     def to_dict(self) -> Dict:
         """Convert alert to dictionary."""
@@ -257,7 +257,7 @@ class AlertManager:
         """Background cleanup of old alerts."""
         while self._cleanup_running:
             try:
-                cutoff_time = datetime.now() - timedelta(hours=self.alert_retention_hours)
+                cutoff_time = datetime.now(timezone.utc) - timedelta(hours=self.alert_retention_hours)
                 
                 with self._lock:
                     # Keep only recent alerts
@@ -300,7 +300,7 @@ class RiskAlertEngine:
             portfolio_metrics: Dictionary of portfolio risk metrics
         """
         try:
-            current_time = datetime.now()
+            current_time = datetime.now(timezone.utc)
             
             # Check drawdown
             max_drawdown = portfolio_metrics.get('max_drawdown', 0)
@@ -412,7 +412,7 @@ class RiskAlertEngine:
                           message: str, **kwargs):
         """Create risk alert with cooldown protection."""
         try:
-            current_time = datetime.now()
+            current_time = datetime.now(timezone.utc)
             
             # Check cooldown
             last_alert_time = self.last_alert_times.get(alert_key)

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3.12
 """
 Adaptive risk controls and exposure management.
 

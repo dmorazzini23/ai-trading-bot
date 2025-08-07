@@ -6,13 +6,13 @@ performance analysis for institutional trading strategies.
 """
 
 from typing import List, Dict, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import statistics
 import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -136,7 +136,7 @@ class BacktestEngine:
                                 # Simulate trade execution with timestamp
                                 trade_result = self._simulate_trade(
                                     signal, position_size, data_point, 
-                                    trade_timestamp=data_point.get('timestamp', datetime.now())
+                                    trade_timestamp=data_point.get('timestamp', datetime.now(timezone.utc))
                                 )
                                 
                                 current_capital += trade_result["net_pnl"]
@@ -301,7 +301,7 @@ class BacktestEngine:
                     actual_quantity = int(position_size * np.random.uniform(0.3, 0.9))
             
             # Step 5: Calculate latency effects
-            execution_timestamp = trade_timestamp or datetime.now()
+            execution_timestamp = trade_timestamp or datetime.now(timezone.utc)
             if self.microstructure_available and trade_timestamp:
                 # Simulate latency impact (simplified)
                 latency_cost = np.random.normal(0, 0.0001)  # Small random cost
@@ -356,7 +356,7 @@ class BacktestEngine:
                 "total_cost_bps": total_cost_bps,
                 "turnover": turnover,
                 "signal_strength": signal.strength,
-                "timestamp": execution_timestamp.isoformat() if execution_timestamp else datetime.now().isoformat(),
+                "timestamp": execution_timestamp.isoformat() if execution_timestamp else datetime.now(timezone.utc).isoformat(),
                 "latency_ms": self.latency_ms
             }
             

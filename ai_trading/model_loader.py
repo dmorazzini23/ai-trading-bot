@@ -4,7 +4,7 @@ from pathlib import Path
 import logging
 import pickle
 
-import config
+from ai_trading.config import management as config
 
 logger = logging.getLogger(__name__)
 

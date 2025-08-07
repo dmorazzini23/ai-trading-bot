@@ -9,12 +9,12 @@ for institutional-grade trading operations.
 import math
 import statistics
 from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 # Use the centralized logger as per AGENTS.md
 try:
-    from logger import logger
+    from ai_trading.logging import logger
 except ImportError:
     import logging
     logger = logging.getLogger(__name__)
@@ -499,7 +499,7 @@ class PortfolioPositionManager:
                     "size": size,
                     "entry_price": entry_price,
                     "notional_value": size * entry_price,
-                    "timestamp": datetime.now()
+                    "timestamp": datetime.now(timezone.utc)
                 }
             else:
                 self.current_positions.pop(symbol, None)
