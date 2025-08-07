@@ -974,12 +974,13 @@ class ExecutionEngine:
 
     # --- adaptive helpers -------------------------------------------------
     
-    def _reconcile_partial_fills(self, symbol: str, requested_qty: int, remaining_qty: int, side: str, last_order: Optional[Order]) -> None:
+    def _reconcile_partial_fills(self, symbol: str, submitted_qty: int, remaining_qty: int, side: str, last_order: Optional[Order]) -> None:
         """Enhanced partial fill reconciliation and tracking."""
-        # AI-AGENT-REF: Fix quantity calculation bug - use calculated filled quantity as primary source
+        # AI-AGENT-REF: CRITICAL FIX - Use submitted quantity instead of original signal quantity
+        # The bug was using requested_qty (original signal) instead of submitted_qty (actual order size)
         
-        # Calculate filled quantity based on the most reliable source: request - remaining
-        calculated_filled_qty = requested_qty - remaining_qty
+        # Calculate filled quantity based on the most reliable source: submitted - remaining  
+        calculated_filled_qty = submitted_qty - remaining_qty
         
         # AI-AGENT-REF: Critical fix - always use calculated quantity as primary source
         # The order.filled_qty from Alpaca API can contain incorrect cumulative values
@@ -1006,7 +1007,7 @@ class ExecutionEngine:
                 "symbol": symbol,
                 "calculated_filled_qty": calculated_filled_qty,
                 "order_filled_qty": order_filled_qty_int,
-                "requested_qty": requested_qty,
+                "submitted_qty": submitted_qty,  # AI-AGENT-REF: Now correctly shows submitted qty
                 "remaining_qty": remaining_qty,
                 "difference": abs(order_filled_qty_int - calculated_filled_qty),
                 "order_id": getattr(last_order, "id", None) if last_order else None
@@ -1015,12 +1016,12 @@ class ExecutionEngine:
         # AI-AGENT-REF: Critical fix - determine if this is a partial or full fill based on remaining quantity
         if remaining_qty > 0:
             # Partial fill occurred - there's still quantity remaining
-            fill_rate = (filled_qty / requested_qty) * 100 if requested_qty > 0 else 0
+            fill_rate = (filled_qty / submitted_qty) * 100 if submitted_qty > 0 else 0
             
             self.logger.warning("PARTIAL_FILL_DETECTED", extra={
                 "symbol": symbol,
                 "side": side,
-                "requested_qty": requested_qty,
+                "submitted_qty": submitted_qty,  # AI-AGENT-REF: Now correctly shows submitted qty
                 "filled_qty": filled_qty,
                 "remaining_qty": remaining_qty,
                 "fill_rate_pct": round(fill_rate, 2),
@@ -1063,7 +1064,7 @@ class ExecutionEngine:
             self.logger.info("FULL_FILL_SUCCESS", extra={
                 "symbol": symbol,
                 "side": side,
-                "requested_qty": requested_qty,
+                "submitted_qty": submitted_qty,  # AI-AGENT-REF: Now correctly shows submitted qty
                 "filled_qty": filled_qty,  # AI-AGENT-REF: Now uses reliable calculated quantity
                 "remaining_qty": remaining_qty,  # Should be 0 for full fill
                 "fill_rate_pct": fill_rate,
@@ -1873,6 +1874,7 @@ class ExecutionEngine:
             })
         
         remaining = int(round(qty))
+        total_submitted_qty = 0  # AI-AGENT-REF: Track total submitted quantity for accurate reconciliation
         last_order = None
         api = self._select_api(asset_class)
         if method in ("twap", "vwap"):
@@ -1961,6 +1963,10 @@ class ExecutionEngine:
             )
             if order is None:
                 break
+            
+            # AI-AGENT-REF: Track submitted quantity for accurate reconciliation
+            total_submitted_qty += slice_qty
+            
             filled = self._handle_order_result(
                 symbol, side, order, expected_price, slice_qty, start, asset_class
             )
@@ -1982,8 +1988,20 @@ class ExecutionEngine:
             )
         self._record_fill_steps(max(1, steps))
         
-        # AI-AGENT-REF: Enhanced partial fill reconciliation and tracking
-        self._reconcile_partial_fills(symbol, qty, remaining, side, last_order)
+        # AI-AGENT-REF: Enhanced execution summary logging
+        self.logger.info("EXECUTION_SUMMARY", extra={
+            "symbol": symbol,
+            "side": side,
+            "original_signal_qty": qty,
+            "total_submitted_qty": total_submitted_qty,
+            "remaining_qty": remaining,
+            "filled_qty": total_submitted_qty - remaining,
+            "steps": steps,
+            "attempted_partial": tried_partial
+        })
+        
+        # AI-AGENT-REF: CRITICAL FIX - Enhanced partial fill reconciliation using submitted quantity
+        self._reconcile_partial_fills(symbol, total_submitted_qty, remaining, side, last_order)
         
         if last_order:
             oid = getattr(last_order, "id", None)
@@ -2161,6 +2179,7 @@ class ExecutionEngine:
             })
         
         remaining = int(round(qty))
+        total_submitted_qty = 0  # AI-AGENT-REF: Track total submitted quantity for accurate reconciliation (async)
         last_order = None
         api = self._select_api(asset_class)
         if method in ("twap", "vwap"):
@@ -2249,6 +2268,10 @@ class ExecutionEngine:
             )
             if order is None:
                 break
+            
+            # AI-AGENT-REF: Track submitted quantity for accurate reconciliation (async)
+            total_submitted_qty += slice_qty
+            
             filled = await self._handle_order_result_async(
                 symbol, side, order, expected_price, slice_qty, start, asset_class
             )
@@ -2270,8 +2293,20 @@ class ExecutionEngine:
             )
         self._record_fill_steps(max(1, steps))
         
-        # AI-AGENT-REF: Enhanced partial fill reconciliation and tracking  
-        self._reconcile_partial_fills(symbol, qty, remaining, side, last_order)
+        # AI-AGENT-REF: Enhanced execution summary logging (async)
+        self.logger.info("EXECUTION_SUMMARY_ASYNC", extra={
+            "symbol": symbol,
+            "side": side,
+            "original_signal_qty": qty,
+            "total_submitted_qty": total_submitted_qty,
+            "remaining_qty": remaining,
+            "filled_qty": total_submitted_qty - remaining,
+            "steps": steps,
+            "attempted_partial": tried_partial
+        })
+        
+        # AI-AGENT-REF: CRITICAL FIX - Enhanced partial fill reconciliation using submitted quantity (async)
+        self._reconcile_partial_fills(symbol, total_submitted_qty, remaining, side, last_order)
         
         if last_order:
             oid = getattr(last_order, "id", None)
