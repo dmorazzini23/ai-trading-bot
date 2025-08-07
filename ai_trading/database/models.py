@@ -5,14 +5,14 @@ Contains models for trades, portfolio positions, risk metrics,
 and performance tracking with proper relationships and constraints.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 import uuid
 
 # Using built-in modules to avoid dependency issues
 import json
-from datetime import datetime as dt_datetime
+from datetime import datetime as dt_datetime, timezone
 
 
 # Minimal SQLAlchemy-like base class for now
@@ -59,7 +59,7 @@ class Trade(Base):
         self.price = kwargs.get('price', 0.0)
         self.executed_price = kwargs.get('executed_price')
         self.status = kwargs.get('status', 'pending')
-        self.created_at = kwargs.get('created_at', datetime.now())
+        self.created_at = kwargs.get('created_at', datetime.now(timezone.utc))
         self.executed_at = kwargs.get('executed_at')
         self.commission = kwargs.get('commission', 0.0)
         self.slippage = kwargs.get('slippage', 0.0)
@@ -112,7 +112,7 @@ class Portfolio(Base):
         self.quantity = kwargs.get('quantity', 0)
         self.average_cost = kwargs.get('average_cost', 0.0)
         self.current_price = kwargs.get('current_price', 0.0)
-        self.last_updated = kwargs.get('last_updated', datetime.now())
+        self.last_updated = kwargs.get('last_updated', datetime.now(timezone.utc))
         self.asset_class = kwargs.get('asset_class', 'equity')
         self.sector = kwargs.get('sector')
         self.market_value = kwargs.get('market_value', 0.0)
@@ -159,7 +159,7 @@ class RiskMetric(Base):
         # AI-AGENT-REF: Risk measurement and tracking
         self.id = kwargs.get('id', str(uuid.uuid4()))
         self.portfolio_id = kwargs.get('portfolio_id')
-        self.calculation_date = kwargs.get('calculation_date', datetime.now())
+        self.calculation_date = kwargs.get('calculation_date', datetime.now(timezone.utc))
         self.var_95 = kwargs.get('var_95', 0.0)
         self.var_99 = kwargs.get('var_99', 0.0)
         self.expected_shortfall = kwargs.get('expected_shortfall', 0.0)

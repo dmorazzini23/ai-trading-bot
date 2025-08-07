@@ -1,4 +1,3 @@
-#!/usr/bin/env python3.12
 """
 Symbol-aware cost model for tracking and applying trading costs.
 

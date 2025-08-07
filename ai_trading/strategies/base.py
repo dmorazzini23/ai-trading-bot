@@ -7,7 +7,7 @@ for implementing and managing institutional trading strategies.
 
 import uuid
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Tuple
 import logging
 
@@ -39,7 +39,7 @@ class StrategySignal:
         self.side = side
         self.strength = max(0.0, min(1.0, strength))  # Clamp to [0, 1]
         self.confidence = max(0.0, min(1.0, confidence))  # Clamp to [0, 1]
-        self.timestamp = datetime.now()
+        self.timestamp = datetime.now(timezone.utc)
         
         # Additional signal metadata
         self.strategy_id = kwargs.get('strategy_id')
@@ -101,7 +101,7 @@ class BaseStrategy(ABC):
         self.strategy_id = strategy_id
         self.name = name
         self.risk_level = risk_level
-        self.created_at = datetime.now()
+        self.created_at = datetime.now(timezone.utc)
         self.is_active = False
         
         # Strategy parameters

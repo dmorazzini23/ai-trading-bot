@@ -4,7 +4,7 @@ import os
 import json
 import pickle
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List, Tuple
 import logging
 
@@ -136,7 +136,7 @@ class DetailedEvalCallback(BaseCallback):
                 'mean_reward': float(mean_reward),
                 'std_reward': float(std_reward),
                 'mean_episode_length': float(mean_length),
-                'timestamp': datetime.now().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 **detailed_metrics
             }
             
@@ -304,13 +304,13 @@ class RLTrainer:
             callbacks = self._setup_callbacks(save_path)
             
             # Train model
-            start_time = datetime.now()
+            start_time = datetime.now(timezone.utc)
             self.model.learn(
                 total_timesteps=self.total_timesteps,
                 callback=callbacks,
                 progress_bar=True
             )
-            end_time = datetime.now()
+            end_time = datetime.now(timezone.utc)
             
             # Collect results
             self.training_results = {
@@ -541,7 +541,7 @@ class RLTrainer:
             # Save metadata
             metadata = {
                 'algorithm': self.algorithm,
-                'training_timestamp': datetime.now().isoformat(),
+                'training_timestamp': datetime.now(timezone.utc).isoformat(),
                 'total_timesteps': self.total_timesteps,
                 'seed': self.seed,
                 'model_file': os.path.basename(model_path)

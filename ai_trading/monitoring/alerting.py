@@ -11,7 +11,7 @@ import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Dict, List, Optional, Any, Callable
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import threading
 import queue
@@ -55,7 +55,7 @@ class Alert:
         self.severity = severity
         self.source = source
         self.metadata = metadata or {}
-        self.timestamp = datetime.now()
+        self.timestamp = datetime.now(timezone.utc)
         self.channels_sent = []
         self.delivery_attempts = 0
         self.max_attempts = 3
@@ -527,7 +527,7 @@ class AlertManager:
                 return False
             
             # Check for recent similar alerts
-            cutoff_time = datetime.now() - rate_limit
+            cutoff_time = datetime.now(timezone.utc) - rate_limit
             recent_alerts = [
                 a for a in self.alert_history
                 if a.timestamp >= cutoff_time and 
@@ -560,7 +560,7 @@ class AlertManager:
     def get_alert_stats(self) -> Dict[str, Any]:
         """Get alert statistics."""
         try:
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             last_hour = now - timedelta(hours=1)
             last_day = now - timedelta(days=1)
             

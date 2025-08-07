@@ -8,7 +8,7 @@ volatility regimes, correlation environments, and risk-adjusted portfolio alloca
 import math
 import statistics
 from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import logging
 
@@ -439,7 +439,7 @@ class AdaptivePositionSizer:
             
             # Step 8: Metadata for analysis
             result["metadata"] = {
-                "calculation_timestamp": datetime.now(),
+                "calculation_timestamp": datetime.now(timezone.utc),
                 "market_conditions": {
                     "market_regime": market_regime.value,
                     "volatility_regime": volatility_regime.value,

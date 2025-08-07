@@ -1,4 +1,3 @@
-#!/usr/bin/env python3.12
 """
 Order idempotency module to prevent duplicate orders on retries.
 

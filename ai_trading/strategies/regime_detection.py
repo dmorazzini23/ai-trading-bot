@@ -8,7 +8,7 @@ using multiple indicators and statistical models for adaptive trading strategies
 # AI-AGENT-REF: use centralized import management
 from .imports import np, pd, NUMPY_AVAILABLE, PANDAS_AVAILABLE
 from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import statistics
 import logging
@@ -111,7 +111,7 @@ class RegimeDetector:
                 logger.warning(f"Insufficient data for regime detection: {len(market_data)} bars")
                 return {"error": "Insufficient data"}
             
-            analysis_start = datetime.now()
+            analysis_start = datetime.now(timezone.utc)
             
             # Calculate key metrics
             trend_analysis = self._analyze_trend(market_data)
@@ -142,7 +142,7 @@ class RegimeDetector:
             
             # Update regime history
             regime_result = {
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
                 "primary_regime": primary_regime,
                 "secondary_characteristics": secondary_characteristics,
                 "confidence_score": confidence_score,
@@ -152,7 +152,7 @@ class RegimeDetector:
                 "volume_analysis": volume_analysis,
                 "sentiment_analysis": sentiment_analysis,
                 "transition_analysis": transition_analysis,
-                "analysis_time_seconds": (datetime.now() - analysis_start).total_seconds()
+                "analysis_time_seconds": (datetime.now(timezone.utc) - analysis_start).total_seconds()
             }
             
             self._update_regime_history(regime_result)
@@ -511,7 +511,7 @@ class RegimeDetector:
                 characteristics.append("distribution")
             
             # Seasonal patterns (simplified)
-            current_month = datetime.now().month
+            current_month = datetime.now(timezone.utc).month
             if current_month in [11, 12, 1]:  # Winter rally season
                 characteristics.append("seasonal_strength")
             elif current_month in [5]:  # Sell in May

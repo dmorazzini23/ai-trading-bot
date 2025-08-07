@@ -9,7 +9,7 @@ import os
 import json
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List, Tuple, Union
 import logging
 
@@ -408,7 +408,7 @@ class WalkForwardEvaluator:
     def _save_results(self) -> None:
         """Save walk-forward results to disk."""
         try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             
             # Save fold results as CSV
             if self.fold_results:

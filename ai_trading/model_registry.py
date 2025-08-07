@@ -9,7 +9,7 @@ import os
 import json
 import pickle
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Union, Tuple
 from pathlib import Path
 import logging
@@ -86,7 +86,7 @@ class ModelRegistry:
                 return model_hash
             
             # Create model directory structure
-            timestamp = datetime.now().strftime("%Y-%m-%d")
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             model_dir = self.base_path / strategy / timestamp / model_hash
             model_dir.mkdir(parents=True, exist_ok=True)
             
@@ -100,7 +100,7 @@ class ModelRegistry:
                 "model_hash": model_hash,
                 "strategy": strategy,
                 "model_type": model_type,
-                "registration_time": datetime.now().isoformat(),
+                "registration_time": datetime.now(timezone.utc).isoformat(),
                 "model_file": "model.pkl",
                 "tags": tags or [],
                 **metadata
@@ -485,7 +485,7 @@ class ModelRegistry:
         except Exception as e:
             logger.error(f"Error generating model hash: {e}")
             # Fallback to timestamp-based hash
-            return hashlib.md5(str(datetime.now()).encode()).hexdigest()[:16]
+            return hashlib.md5(str(datetime.now(timezone.utc)).encode()).hexdigest()[:16]
     
     def _load_index(self) -> Dict[str, Any]:
         """Load registry index."""

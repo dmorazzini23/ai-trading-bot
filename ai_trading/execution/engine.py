@@ -217,6 +217,25 @@ class OrderManager:
             if not self._validate_order(order):
                 return False
             
+            # AI-AGENT-REF: Wire idempotency checking before submission
+            try:
+                from .idempotency import get_idempotency_cache, is_duplicate_order
+                
+                # Generate idempotency key
+                cache = get_idempotency_cache()
+                key = cache.generate_key(order.symbol, order.side, order.quantity, datetime.now(timezone.utc))
+                
+                # Check if this is a duplicate order
+                if is_duplicate_order(key):
+                    logger.warning(f"ORDER_DUPLICATE_SKIPPED: {order.symbol} {order.side} {order.quantity}")
+                    order.status = OrderStatus.REJECTED
+                    order.notes += " | Rejected: Duplicate order detected"
+                    return False
+                    
+            except ImportError:
+                # Idempotency module not available, continue without checking
+                logger.debug("Idempotency module not available, skipping duplicate check")
+            
             # Check capacity
             if len(self.active_orders) >= self.max_concurrent_orders:
                 logger.error(f"Cannot submit order: max concurrent orders reached ({self.max_concurrent_orders})")
@@ -227,6 +246,15 @@ class OrderManager:
             # Add to tracking
             self.orders[order.id] = order
             self.active_orders[order.id] = order
+            
+            # AI-AGENT-REF: Mark order as submitted in idempotency cache
+            try:
+                from .idempotency import get_idempotency_cache
+                cache = get_idempotency_cache()
+                cache.mark_submitted(key, order.id)
+            except (ImportError, NameError):
+                # Idempotency module not available
+                pass
             
             # Start monitoring if not already running
             if not self._monitor_running:
@@ -359,6 +387,16 @@ class OrderManager:
                         self.active_orders.pop(order_id, None)
                         logger.warning(f"Order {order_id} expired after {self.order_timeout} seconds")
                         self._notify_callbacks(order, "expired")
+                
+                # AI-AGENT-REF: Run reconciliation after order processing
+                try:
+                    from .reconcile import reconcile_positions_and_orders
+                    reconcile_positions_and_orders()
+                except ImportError:
+                    # Reconciliation module not available
+                    pass
+                except Exception as e:
+                    logger.error(f"Error during reconciliation: {e}")
                 
                 time.sleep(1)  # Check every second
                 

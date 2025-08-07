@@ -6,7 +6,7 @@ and real-time risk controls for institutional trading operations.
 """
 
 from typing import Dict, List, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import statistics
 import math
 import logging
@@ -235,7 +235,7 @@ class RiskManager:
         """Add a risk alert."""
         try:
             alert = {
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
                 "type": alert_type,
                 "message": message,
                 "severity": severity
@@ -243,7 +243,7 @@ class RiskManager:
             self.risk_alerts.append(alert)
             
             # Keep only recent alerts
-            cutoff_time = datetime.now() - timedelta(hours=24)
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=24)
             self.risk_alerts = [a for a in self.risk_alerts if a["timestamp"] >= cutoff_time]
             
             logger.warning(f"Risk alert added: {alert_type} - {message}")

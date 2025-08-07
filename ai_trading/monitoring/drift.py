@@ -1,4 +1,3 @@
-#!/usr/bin/env python3.12
 """
 Feature drift monitoring and signal attribution module.
 

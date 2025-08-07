@@ -7,7 +7,7 @@ meta-learning, stacking, and turnover management.
 """
 
 from typing import List, Dict, Optional, Tuple, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import statistics
 import logging
 import numpy as np
@@ -290,7 +290,7 @@ class SignalAggregator:
                         "source_signals": len(signals),
                         "meta_prediction": predicted_weight,
                         "aggregation_method": "stacking",
-                        "timestamp": timestamp.isoformat() if timestamp else datetime.now().isoformat()
+                        "timestamp": timestamp.isoformat() if timestamp else datetime.now(timezone.utc).isoformat()
                     }
                 )
                 

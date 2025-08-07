@@ -97,7 +97,7 @@ except ImportError:
         from utils import pd
     except ImportError:
         # Create a minimal fallback if utils is not available
-        from datetime import datetime
+        from datetime import datetime, timezone
         class MockDataFrame:
             def __init__(self, *args, **kwargs):
                 pass

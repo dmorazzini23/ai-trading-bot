@@ -6,7 +6,7 @@ and institutional-grade monitoring capabilities.
 """
 
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict, deque
 import statistics
@@ -63,7 +63,7 @@ class MetricsCollector:
         try:
             with self._lock:
                 metric = {
-                    "timestamp": datetime.now(),
+                    "timestamp": datetime.now(timezone.utc),
                     "type": "trade",
                     "symbol": symbol,
                     "side": side,
@@ -104,7 +104,7 @@ class MetricsCollector:
         try:
             with self._lock:
                 metric = {
-                    "timestamp": datetime.now(),
+                    "timestamp": datetime.now(timezone.utc),
                     "type": "portfolio",
                     "total_value": total_value,
                     "unrealized_pnl": unrealized_pnl,
@@ -135,7 +135,7 @@ class MetricsCollector:
         try:
             with self._lock:
                 metric = {
-                    "timestamp": datetime.now(),
+                    "timestamp": datetime.now(timezone.utc),
                     "type": "risk",
                     "var_95": var_95,
                     "var_99": var_99,
@@ -165,7 +165,7 @@ class MetricsCollector:
         try:
             with self._lock:
                 metric = {
-                    "timestamp": datetime.now(),
+                    "timestamp": datetime.now(timezone.utc),
                     "type": "execution",
                     "orders_submitted": orders_submitted,
                     "orders_filled": orders_filled,
@@ -194,7 +194,7 @@ class MetricsCollector:
         try:
             with self._lock:
                 metric = {
-                    "timestamp": datetime.now(),
+                    "timestamp": datetime.now(timezone.utc),
                     "type": "system",
                     "cpu_usage": cpu_usage,
                     "memory_usage": memory_usage,
@@ -229,7 +229,7 @@ class MetricsCollector:
         """
         try:
             time_range = time_range or timedelta(hours=24)
-            cutoff_time = datetime.now() - time_range
+            cutoff_time = datetime.now(timezone.utc) - time_range
             
             with self._lock:
                 # Select appropriate metric collection
@@ -255,7 +255,7 @@ class MetricsCollector:
                     "time_range_hours": time_range.total_seconds() / 3600,
                     "total_metrics": len(metrics),
                     "start_time": cutoff_time.isoformat(),
-                    "end_time": datetime.now().isoformat(),
+                    "end_time": datetime.now(timezone.utc).isoformat(),
                 }
                 
                 if metrics:
@@ -293,7 +293,7 @@ class MetricsCollector:
         """Background thread to cleanup old metrics."""
         while self._cleanup_running:
             try:
-                cutoff_time = datetime.now() - timedelta(days=self.retention_days)
+                cutoff_time = datetime.now(timezone.utc) - timedelta(days=self.retention_days)
                 
                 with self._lock:
                     # Clean up each metric collection
@@ -417,7 +417,7 @@ class PerformanceMonitor:
         """
         try:
             # Check cache
-            current_time = datetime.now()
+            current_time = datetime.now(timezone.utc)
             if (self._cache_timestamp and 
                 (current_time - self._cache_timestamp).total_seconds() < self._cache_ttl):
                 return self._performance_cache

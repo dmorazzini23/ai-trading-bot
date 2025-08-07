@@ -6,7 +6,7 @@ and generate trading signals with confidence scoring and risk assessment.
 """
 
 import pickle
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any, Tuple
 from pathlib import Path
 import warnings
@@ -152,7 +152,7 @@ class MetaLearning(BaseStrategy):
             
             # Get historical data if not provided
             if data is None:
-                end_date = datetime.now()
+                end_date = datetime.now(timezone.utc)
                 start_date = end_date - timedelta(days=self.parameters['lookback_period'])
                 
                 data = get_minute_df(symbol, start_date, end_date)
@@ -397,7 +397,7 @@ class MetaLearning(BaseStrategy):
             self.feature_columns = X.columns.tolist()
             
             self.is_trained = True
-            self.last_training_date = datetime.now()
+            self.last_training_date = datetime.now(timezone.utc)
             
             logger.info(f"Model training completed - Accuracy: {self.prediction_accuracy:.3f} "
                        f"(RF: {rf_accuracy:.3f}, GB: {gb_accuracy:.3f})")
@@ -522,7 +522,7 @@ class MetaLearning(BaseStrategy):
                 'current_price': float(current_price),
                 'volatility': volatility,
                 'model_accuracy': self.prediction_accuracy,
-                'prediction_timestamp': datetime.now(),
+                'prediction_timestamp': datetime.now(timezone.utc),
                 'source': 'ml_ensemble'
             }
             
@@ -747,7 +747,7 @@ class MetaLearning(BaseStrategy):
         if not self.is_trained or self.last_training_date is None:
             return True
         
-        days_since_training = (datetime.now() - self.last_training_date).days
+        days_since_training = (datetime.now(timezone.utc) - self.last_training_date).days
         return days_since_training >= self.parameters['retrain_frequency']
     
     def _is_cached_prediction_valid(self, symbol: str) -> bool:
@@ -758,13 +758,13 @@ class MetaLearning(BaseStrategy):
         if symbol not in self.cache_expiry:
             return False
         
-        return datetime.now() < self.cache_expiry[symbol]
+        return datetime.now(timezone.utc) < self.cache_expiry[symbol]
     
     def _cache_prediction(self, symbol: str, result: Dict):
         """Cache prediction result."""
         self.prediction_cache[symbol] = result
         # Cache expires in 1 hour
-        self.cache_expiry[symbol] = datetime.now() + timedelta(hours=1)
+        self.cache_expiry[symbol] = datetime.now(timezone.utc) + timedelta(hours=1)
     
     def _convert_prediction_to_signal(self, symbol: str, prediction: Dict, data) -> Dict:
         """Convert ML prediction to trading signal format."""
@@ -951,7 +951,7 @@ class MetaLearning(BaseStrategy):
                 'current_price': float(current_price),
                 'volatility': float(volatility) if not np.isnan(volatility) else 0.05,
                 'model_accuracy': 0.6,  # Assumed fallback accuracy
-                'prediction_timestamp': datetime.now(),
+                'prediction_timestamp': datetime.now(timezone.utc),
                 'source': 'technical_fallback'
             }
             
@@ -975,7 +975,7 @@ class MetaLearning(BaseStrategy):
                     'current_price': 100.0,  # Default price
                     'volatility': 0.05,
                     'model_accuracy': 0.6,
-                    'prediction_timestamp': datetime.now(),
+                    'prediction_timestamp': datetime.now(timezone.utc),
                     'source': 'basic_fallback'
                 }
             
@@ -1008,7 +1008,7 @@ class MetaLearning(BaseStrategy):
                 'current_price': current_price,
                 'volatility': volatility if not (str(volatility) == 'nan' or str(volatility) == 'NaN') else 0.05,
                 'model_accuracy': 0.6,  # Assumed fallback accuracy
-                'prediction_timestamp': datetime.now(),
+                'prediction_timestamp': datetime.now(timezone.utc),
                 'source': 'momentum_fallback'
             }
             

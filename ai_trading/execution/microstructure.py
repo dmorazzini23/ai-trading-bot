@@ -8,7 +8,7 @@ market impact estimation, and liquidity metrics for institutional trading.
 import math
 import statistics
 from typing import Dict, List, Optional, Tuple, Any, Union
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from enum import Enum
 import logging
@@ -585,7 +585,7 @@ class MarketMicrostructureEngine:
             # Create comprehensive microstructure data
             microstructure_data = MarketMicrostructureData(
                 symbol=symbol,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(timezone.utc),
                 
                 # Basic market data
                 bid_price=bid_price,
@@ -820,7 +820,7 @@ class MarketMicrostructureEngine:
         """Create default microstructure data when analysis fails."""
         return MarketMicrostructureData(
             symbol=symbol,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(timezone.utc),
             bid_price=0.0,
             ask_price=0.0,
             last_price=0.0,

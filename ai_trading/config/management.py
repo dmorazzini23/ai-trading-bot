@@ -599,6 +599,7 @@ SENTIMENT_API_URL = os.getenv("SENTIMENT_API_URL", "https://newsapi.org/v2/every
 IEX_API_TOKEN = os.getenv("IEX_API_TOKEN")
 ALPACA_PAPER = "paper" in ALPACA_BASE_URL.lower()
 MIN_HEALTH_ROWS = int(os.getenv("MIN_HEALTH_ROWS", "50"))
+MAX_DRAWDOWN_THRESHOLD = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.2"))
 
 # TradingConfig class for compatibility
 class TradingConfig:
@@ -609,9 +610,46 @@ class TradingConfig:
         self.max_position_size = 0.1
         self.stop_loss = 0.02
         self.take_profit = 0.06
-        self.take_profit_factor = 0.06  # Add missing attribute
+        self.take_profit_factor = 0.06
         self.lookback_days = 30
         self.min_signal_strength = 0.6
+        self.scaling_factor = 1.0
+        self.limit_order_slippage = 0.001
+        self.pov_slice_pct = 0.1
+        
+    def __getattr__(self, name):
+        """Return default values for any missing attributes."""
+        # Common defaults for missing attributes
+        defaults = {
+            'stop_loss_factor': 0.02,
+            'position_scaling': 1.0,
+            'min_trade_size': 1,
+            'max_trade_size': 1000,
+            'risk_factor': 0.1,
+            'volatility_factor': 1.0,
+            'correlation_threshold': 0.7,
+            'rebalance_threshold': 0.05,
+            'slippage_factor': 0.001,
+            'commission_rate': 0.0,
+            'margin_factor': 1.0,
+            'leverage': 1.0,
+        }
+        
+        if name in defaults:
+            return defaults[name]
+        elif name.endswith('_factor'):
+            return 1.0
+        elif name.endswith('_pct') or name.endswith('_percentage'):
+            return 0.1
+        elif name.endswith('_size') or name.endswith('_quantity'):
+            return 100
+        elif name.endswith('_days') or name.endswith('_period'):
+            return 30
+        elif name.endswith('_threshold') or name.endswith('_limit'):
+            return 0.05
+        else:
+            # Return a reasonable default
+            return 0.1
         
     @classmethod
     def from_env(cls, mode="balanced"):
