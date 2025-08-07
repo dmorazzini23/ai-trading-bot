@@ -87,8 +87,9 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
             if hasattr(X, 'index') and not isinstance(indices, pd.DatetimeIndex):
                 try:
                     indices = pd.to_datetime(indices)
-                except:
-                    pass
+                except Exception as e:
+                    from ai_trading.logging import logger
+                    logger.debug("Datetime index cast failed; using positional indices: %s", e)
             
             # Calculate test size
             if self.test_size is None:

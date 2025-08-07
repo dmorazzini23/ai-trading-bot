@@ -87,7 +87,7 @@ class LiquidityAnalyzer:
             Comprehensive liquidity analysis
         """
         try:
-            analysis_start = datetime.now()
+            analysis_start = datetime.now(timezone.utc)
             
             # Extract volume data
             volume_analysis = self._analyze_volume_patterns(market_data)
@@ -114,14 +114,14 @@ class LiquidityAnalyzer:
             # Update liquidity history
             analysis_result = {
                 "symbol": symbol,
-                "timestamp": datetime.now(),
+                "timestamp": datetime.now(timezone.utc),
                 "liquidity_level": liquidity_level,
                 "volume_analysis": volume_analysis,
                 "spread_analysis": spread_analysis,
                 "dollar_volume_analysis": dollar_volume_analysis,
                 "market_hours_analysis": market_hours_analysis,
                 "execution_recommendations": execution_recommendations,
-                "analysis_time_seconds": (datetime.now() - analysis_start).total_seconds()
+                "analysis_time_seconds": (datetime.now(timezone.utc) - analysis_start).total_seconds()
             }
             
             self._update_liquidity_history(symbol, analysis_result)
@@ -301,7 +301,7 @@ class LiquidityAnalyzer:
     def _analyze_market_hours_liquidity(self) -> Dict[str, Any]:
         """Analyze current market hours impact on liquidity."""
         try:
-            current_time = datetime.now()
+            current_time = datetime.now(timezone.utc)
             hour = current_time.hour
             minute = current_time.minute
             weekday = current_time.weekday()
@@ -741,7 +741,7 @@ class LiquidityManager:
                 "portfolio_assessment": portfolio_assessment,
                 "high_liquidity_percentage": high_liquidity_pct,
                 "low_liquidity_percentage": low_liquidity_pct,
-                "last_updated": datetime.now()
+                "last_updated": datetime.now(timezone.utc)
             }
             
         except Exception as e:

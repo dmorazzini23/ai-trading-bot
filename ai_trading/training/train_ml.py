@@ -173,7 +173,7 @@ class MLTrainer:
                 'feature_importance': self.feature_importance,
                 'train_samples': len(X),
                 'feature_count': X_processed.shape[1],
-                'training_time': datetime.now().isoformat()
+                'training_time': datetime.now(timezone.utc).isoformat()
             }
             
             logger.info(f"Training completed. CV score: {self.cv_results.get('mean_score', 'N/A')}")
@@ -441,7 +441,7 @@ class MLTrainer:
                 'best_params': self.best_params,
                 'cv_results': self.cv_results,
                 'feature_importance': self.feature_importance,
-                'training_timestamp': datetime.now().isoformat(),
+                'training_timestamp': datetime.now(timezone.utc).isoformat(),
                 'random_state': self.random_state
             }
             
