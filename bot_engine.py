@@ -3276,7 +3276,20 @@ class SignalManager:
             ``(signal, confidence, label)`` where ``signal`` is -1, 0 or 1.
         """
         signals: List[Tuple[int, float, str]] = []
-        allowed_tags = set(load_global_signal_performance() or [])
+        performance_data = load_global_signal_performance()
+        
+        # AI-AGENT-REF: Graceful degradation when no meta-learning data exists
+        if performance_data is None:
+            # For new deployments, allow all signal types with warning
+            logger.info("METALEARN_FALLBACK | No trade history - allowing all signals for new deployment")
+            allowed_tags = None  # None means allow all tags
+        else:
+            allowed_tags = set(performance_data.keys())
+            if not allowed_tags:
+                logger.warning("METALEARN_NO_QUALIFIED_SIGNALS | No signals meet performance criteria - using basic signals")
+                # Use a basic set of reliable signal types as fallback
+                allowed_tags = {"sma_cross", "bb_squeeze", "rsi_oversold", "momentum"}
+        
         weights = self.load_signal_weights()
 
         # Track total signals evaluated
@@ -6265,9 +6278,9 @@ def _enter_short(
     )
     if not sector_exposure_ok(ctx, symbol, qty, current_price):
         logger.info("SKIP_SECTOR_CAP | Short order skipped due to sector exposure limits", 
-                   extra={"symbol": symbol, "side": "sell", "qty": qty, "price": current_price})
+                   extra={"symbol": symbol, "side": "sell_short", "qty": qty, "price": current_price})
         return True
-    order = submit_order(ctx, symbol, qty, "sell")
+    order = submit_order(ctx, symbol, qty, "sell_short")  # AI-AGENT-REF: Use sell_short for short signals
     if order is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
@@ -6944,11 +6957,17 @@ def run_bayesian_meta_learning_optimizer(
 
 
 def load_global_signal_performance(
-    min_trades: int = 3, threshold: float = 0.4
+    min_trades: Optional[int] = None, threshold: Optional[float] = None
 ) -> Optional[Dict[str, float]]:
-    """Load global signal performance with enhanced error handling."""
+    """Load global signal performance with enhanced error handling and configurable thresholds."""
+    # AI-AGENT-REF: Use configurable meta-learning parameters from environment
+    if min_trades is None:
+        min_trades = int(os.getenv("METALEARN_MIN_TRADES", "3"))
+    if threshold is None:
+        threshold = float(os.getenv("METALEARN_PERFORMANCE_THRESHOLD", "0.4"))
+    
     if not os.path.exists(TRADE_LOG_FILE):
-        logger.info("METALEARN_NO_HISTORY")
+        logger.info("METALEARN_NO_HISTORY | Using defaults for new deployment")
         return None
     
     try:

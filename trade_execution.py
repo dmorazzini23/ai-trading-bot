@@ -166,7 +166,7 @@ def _pre_validate_order(symbol: str, qty: int, side: str) -> dict:
         validation_result["valid"] = False
         validation_result["errors"].append("Invalid quantity")
     
-    if side.lower() not in ["buy", "sell"]:
+    if side.lower() not in ["buy", "sell", "sell_short"]:  # AI-AGENT-REF: Add sell_short as valid side
         validation_result["valid"] = False
         validation_result["errors"].append("Invalid side")
     
@@ -298,6 +298,25 @@ from slippage import monitor_slippage
 from utils import get_phase_logger
 import config
 from collections import deque
+from dataclasses import dataclass
+from threading import Lock, RLock
+
+# AI-AGENT-REF: Order lifecycle management for better order monitoring
+@dataclass
+class OrderInfo:
+    """Track order lifecycle information."""
+    order_id: str
+    symbol: str
+    side: str
+    qty: int
+    submitted_time: float
+    last_status: str = "new"
+    last_checked: float = 0.0
+    cancel_attempted: bool = False
+
+# Global order tracking
+_active_orders: dict[str, OrderInfo] = {}
+_order_tracking_lock = Lock()
 from indicators import cached_atr_trailing_stop
 
 # Module-level logger for order execution functions
@@ -450,7 +469,7 @@ def place_order(symbol: str, qty: int, side: str):
     req = MarketOrderRequest(
         symbol=symbol,
         qty=qty,
-        side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,
+        side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,  # AI-AGENT-REF: sell_short also maps to SELL
         time_in_force=TimeInForce.DAY,
     )
     order = safe_submit_order(None, req)
@@ -874,7 +893,7 @@ class ExecutionEngine:
 
         expected = None
         order_request: object
-        order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
+        order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL  # AI-AGENT-REF: sell_short also maps to SELL
         aggressive = momentum > 0 if side == "buy" else momentum < 0
 
         if spread > 0.05 and mid:
@@ -1490,13 +1509,36 @@ class ExecutionEngine:
                 return None
         return None
 
-    def _wait_for_fill(self, order_id: str) -> None:
-        """Block until the order ``order_id`` is filled or canceled."""
+    def _wait_for_fill(self, order_id: str, timeout_seconds: int = 300) -> None:
+        """Block until the order ``order_id`` is filled, canceled, or times out.
+        
+        Args:
+            order_id: Order ID to monitor
+            timeout_seconds: Maximum time to wait before canceling order (default 5 minutes)
+        """
         backoff = 1
+        start_time = time.time()
+        
         while True:
+            current_time = time.time()
+            elapsed = current_time - start_time
+            
+            # Check for timeout
+            if elapsed > timeout_seconds:
+                self.logger.warning("ORDER_TIMEOUT | order_id=%s elapsed=%.1fs timeout=%ds", 
+                                  order_id, elapsed, timeout_seconds)
+                self._cancel_stale_order(order_id)
+                return
+                
             try:
                 od = self.api.get_order_by_id(order_id)
                 status = getattr(od, "status", "")
+                
+                # Log status for debugging
+                if elapsed > 30:  # Only log if order takes more than 30 seconds
+                    self.logger.info("ORDER_MONITORING | order_id=%s status=%s elapsed=%.1fs", 
+                                   order_id, status, elapsed)
+                
                 if status in {"filled", "canceled", "rejected"}:
                     return
                 backoff = 1
@@ -1505,19 +1547,156 @@ class ExecutionEngine:
             time.sleep(utils.backoff_delay(int(backoff)))
             backoff = min(backoff * 2, 30)
 
-    async def _wait_for_fill_async(self, order_id: str) -> None:
-        """Async variant of :meth:`_wait_for_fill`."""
+    def _cancel_stale_order(self, order_id: str) -> bool:
+        """Cancel a stale order that has been pending too long.
+        
+        Args:
+            order_id: Order ID to cancel
+            
+        Returns:
+            True if cancellation was successful or order was already canceled/filled
+        """
+        try:
+            # Check current status before canceling
+            order = self.api.get_order_by_id(order_id)
+            status = getattr(order, "status", "")
+            
+            if status in {"filled", "canceled", "rejected"}:
+                self.logger.info("ORDER_ALREADY_TERMINAL | order_id=%s status=%s", order_id, status)
+                return True
+                
+            # Attempt to cancel the order
+            self.api.cancel_order_by_id(order_id)
+            self.logger.info("ORDER_CANCELED_STALE | order_id=%s", order_id)
+            
+            # Verify cancellation
+            time.sleep(1)  # Brief wait for cancellation to process
+            refreshed_order = self.api.get_order_by_id(order_id)
+            final_status = getattr(refreshed_order, "status", "")
+            
+            if final_status == "canceled":
+                self.logger.info("ORDER_CANCELLATION_CONFIRMED | order_id=%s", order_id)
+                return True
+            else:
+                self.logger.warning("ORDER_CANCELLATION_UNEXPECTED | order_id=%s final_status=%s", 
+                                  order_id, final_status)
+                return final_status in {"filled", "rejected"}
+                
+        except Exception as exc:
+            self.logger.error("ORDER_CANCELLATION_FAILED | order_id=%s error=%s", order_id, exc)
+            return False
+
+    def _track_order(self, order: Order, symbol: str, side: str, qty: int) -> None:
+        """Add order to tracking system."""
+        order_id = getattr(order, "id", "")
+        if not order_id:
+            return
+            
+        order_info = OrderInfo(
+            order_id=order_id,
+            symbol=symbol,
+            side=side,
+            qty=qty,
+            submitted_time=time.time(),
+            last_status=getattr(order, "status", "new")
+        )
+        
+        with _order_tracking_lock:
+            _active_orders[order_id] = order_info
+            
+        self.logger.info("ORDER_TRACKED | order_id=%s symbol=%s side=%s qty=%d", 
+                        order_id, symbol, side, qty)
+
+    def _update_order_status(self, order_id: str, status: str) -> None:
+        """Update order status in tracking system."""
+        with _order_tracking_lock:
+            if order_id in _active_orders:
+                _active_orders[order_id].last_status = status
+                _active_orders[order_id].last_checked = time.time()
+                
+                # Remove from tracking if terminal status
+                if status in {"filled", "canceled", "rejected"}:
+                    order_info = _active_orders.pop(order_id)
+                    self.logger.info("ORDER_COMPLETED | order_id=%s final_status=%s symbol=%s", 
+                                   order_id, status, order_info.symbol)
+
+    def get_pending_orders(self) -> list[OrderInfo]:
+        """Get list of currently pending orders."""
+        with _order_tracking_lock:
+            return list(_active_orders.values())
+
+    def cleanup_stale_orders(self, max_age_seconds: int = 600) -> int:
+        """Cancel orders that have been pending too long.
+        
+        Args:
+            max_age_seconds: Maximum age in seconds before canceling orders
+            
+        Returns:
+            Number of orders canceled
+        """
+        current_time = time.time()
+        canceled_count = 0
+        
+        # Get list of stale orders
+        stale_orders = []
+        with _order_tracking_lock:
+            for order_info in _active_orders.values():
+                age = current_time - order_info.submitted_time
+                if age > max_age_seconds and not order_info.cancel_attempted:
+                    stale_orders.append(order_info)
+        
+        # Cancel stale orders
+        for order_info in stale_orders:
+            self.logger.warning("STALE_ORDER_DETECTED | order_id=%s symbol=%s age=%.1fs", 
+                              order_info.order_id, order_info.symbol, 
+                              current_time - order_info.submitted_time)
+            
+            if self._cancel_stale_order(order_info.order_id):
+                canceled_count += 1
+                # Mark as cancel attempted
+                with _order_tracking_lock:
+                    if order_info.order_id in _active_orders:
+                        _active_orders[order_info.order_id].cancel_attempted = True
+        
+        return canceled_count
+
+    async def _wait_for_fill_async(self, order_id: str, timeout_seconds: int = 300) -> None:
+        """Async variant of :meth:`_wait_for_fill` with timeout support.
+        
+        Args:
+            order_id: Order ID to monitor
+            timeout_seconds: Maximum time to wait before canceling order (default 5 minutes)
+        """
         backoff = 1
+        start_time = time.time()
+        
         while True:
+            current_time = time.time()
+            elapsed = current_time - start_time
+            
+            # Check for timeout
+            if elapsed > timeout_seconds:
+                self.logger.warning("ORDER_TIMEOUT_ASYNC | order_id=%s elapsed=%.1fs timeout=%ds", 
+                                  order_id, elapsed, timeout_seconds)
+                await asyncio.to_thread(self._cancel_stale_order, order_id)
+                return
+                
             try:
                 od = self.api.get_order_by_id(order_id)
                 status = getattr(od, "status", "")
+                
+                # Log status for debugging
+                if elapsed > 30:  # Only log if order takes more than 30 seconds
+                    self.logger.info("ORDER_MONITORING_ASYNC | order_id=%s status=%s elapsed=%.1fs", 
+                                   order_id, status, elapsed)
+                
                 if status in {"filled", "canceled", "rejected"}:
                     return
                 backoff = 1
             except Exception as exc:  # pragma: no cover - network
-                self.logger.debug("ORDER_POLL_FAIL %s: %s", order_id, exc)
+                self.logger.debug("ORDER_POLL_FAIL_ASYNC %s: %s", order_id, exc)
             await asyncio.sleep(utils.backoff_delay(int(backoff)))
+            backoff = min(backoff * 2, 30)
             backoff = min(backoff * 2, 30)
 
     def _handle_order_result(
@@ -1533,6 +1712,10 @@ class ExecutionEngine:
         self._flush_partial_buffers()
         status = getattr(order, "status", "")
         order_id = getattr(order, "id", "")
+        
+        # AI-AGENT-REF: Update order status in tracking system
+        self._update_order_status(order_id, status)
+        
         if status in ("new", "pending_new"):
             time.sleep(1)
             try:
@@ -1716,6 +1899,10 @@ class ExecutionEngine:
         self._flush_partial_buffers()
         status = getattr(order, "status", "")
         order_id = getattr(order, "id", "")
+        
+        # AI-AGENT-REF: Update order status in tracking system (async)
+        self._update_order_status(order_id, status)
+        
         if status in ("new", "pending_new"):
             await asyncio.sleep(1)
             try:
@@ -1948,9 +2135,17 @@ class ExecutionEngine:
                 self.logger.info("SKIP_INSUFFICIENT_FUNDS | insufficient buying power for %s", symbol)
                 return None
         
+        # AI-AGENT-REF: Distinguish between sell (close long) and sell_short (open short)
         if side.lower() == "sell" and existing == 0:
             self.logger.info("SKIP_NO_POSITION | no shares to sell, skipping")
             return None
+        elif side.lower() == "sell_short":
+            # For short selling, validate short selling requirements instead of checking existing positions
+            if not self._validate_short_selling(api, symbol, remaining):
+                self.logger.info("SKIP_SHORT_VALIDATION_FAILED | short selling validation failed for %s", symbol)
+                return None
+            # Log short selling attempt for debugging
+            self.logger.info("SHORT_SELL_INITIATED | symbol=%s qty=%d", symbol, remaining)
         if side.lower() == "sell":
             avail = self._available_qty(api, symbol)
             if avail <= 0:
@@ -1989,6 +2184,7 @@ class ExecutionEngine:
                 symbol, side, remaining
             )
             slice_qty = getattr(order_req, "qty", remaining)
+            # AI-AGENT-REF: Only adjust quantity for regular sell orders, not sell_short
             if side.lower() == "sell" and slice_qty > self._available_qty(api, symbol):
                 slice_qty = int(round(self._available_qty(api, symbol)))
                 if isinstance(order_req, dict):
@@ -1999,6 +2195,7 @@ class ExecutionEngine:
                 api, slice_qty, expected_price
             ):
                 break
+            # AI-AGENT-REF: Only check can_sell for regular sell orders, not sell_short
             if side.lower() == "sell" and not self._can_sell(
                 api, symbol, slice_qty
             ):
@@ -2021,6 +2218,9 @@ class ExecutionEngine:
             )
             if order is None:
                 break
+            
+            # AI-AGENT-REF: Track order for lifecycle management
+            self._track_order(order, symbol, side, slice_qty)
             
             # AI-AGENT-REF: Track submitted quantity for accurate reconciliation
             total_submitted_qty += slice_qty
@@ -2253,9 +2453,17 @@ class ExecutionEngine:
                 self.logger.info("SKIP_INSUFFICIENT_FUNDS | insufficient buying power for %s", symbol)
                 return None
         
+        # AI-AGENT-REF: Distinguish between sell (close long) and sell_short (open short) - async version
         if side.lower() == "sell" and existing == 0:
             self.logger.info("SKIP_NO_POSITION | no shares to sell, skipping")
             return None
+        elif side.lower() == "sell_short":
+            # For short selling, validate short selling requirements instead of checking existing positions
+            if not self._validate_short_selling(api, symbol, remaining):
+                self.logger.info("SKIP_SHORT_VALIDATION_FAILED | short selling validation failed for %s", symbol)
+                return None
+            # Log short selling attempt for debugging
+            self.logger.info("SHORT_SELL_INITIATED | symbol=%s qty=%d", symbol, remaining)
         if side.lower() == "sell":
             avail = self._available_qty(api, symbol)
             if avail <= 0:
@@ -2294,6 +2502,7 @@ class ExecutionEngine:
                 symbol, side, remaining
             )
             slice_qty = getattr(order_req, "qty", remaining)
+            # AI-AGENT-REF: Only adjust quantity for regular sell orders, not sell_short (async)
             if side.lower() == "sell" and slice_qty > self._available_qty(api, symbol):
                 slice_qty = int(round(self._available_qty(api, symbol)))
                 if isinstance(order_req, dict):
@@ -2304,6 +2513,7 @@ class ExecutionEngine:
                 api, slice_qty, expected_price
             ):
                 break
+            # AI-AGENT-REF: Only check can_sell for regular sell orders, not sell_short (async)
             if side.lower() == "sell" and not self._can_sell(
                 api, symbol, slice_qty
             ):
@@ -2326,6 +2536,9 @@ class ExecutionEngine:
             )
             if order is None:
                 break
+            
+            # AI-AGENT-REF: Track order for lifecycle management (async)
+            self._track_order(order, symbol, side, slice_qty)
             
             # AI-AGENT-REF: Track submitted quantity for accurate reconciliation (async)
             total_submitted_qty += slice_qty
