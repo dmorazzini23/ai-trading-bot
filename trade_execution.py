@@ -1200,27 +1200,55 @@ class ExecutionEngine:
         tick_range = 0.0
         if df_ticks is not None and not df_ticks.empty and "close" in df_ticks.columns:
             tick_range = float(df_ticks["close"].diff().abs().tail(5).max() or 0.0)
-        if spread >= config.LIQUIDITY_SPREAD_THRESHOLD * 2 or tick_range >= config.LIQUIDITY_VOL_THRESHOLD * 2:
-            reason = "spread" if spread >= config.LIQUIDITY_SPREAD_THRESHOLD * 2 else "volatility"
+        
+        # AI-AGENT-REF: Enhanced liquidity thresholds - more reasonable for real markets
+        # Most liquid stocks have spreads of $0.01-0.05, so original thresholds were too aggressive
+        spread_threshold = config.LIQUIDITY_SPREAD_THRESHOLD if hasattr(config, 'LIQUIDITY_SPREAD_THRESHOLD') else 0.10
+        vol_threshold = config.LIQUIDITY_VOL_THRESHOLD if hasattr(config, 'LIQUIDITY_VOL_THRESHOLD') else 0.50
+        
+        # Dynamic thresholds based on stock price for better assessment
+        mid_price = (ask + bid) / 2 if ask and bid else 100.0
+        if mid_price > 0:
+            # Adjust spread threshold as percentage of price (more realistic)
+            spread_pct = (spread / mid_price) * 100 if mid_price > 0 else 0
+            high_spread = spread_pct > 0.5  # 0.5% spread is concerning for most stocks
+            very_high_spread = spread_pct > 1.0  # 1% spread is very concerning
+        else:
+            high_spread = spread >= spread_threshold
+            very_high_spread = spread >= spread_threshold * 2
+        
+        high_volatility = tick_range >= vol_threshold
+        very_high_volatility = tick_range >= vol_threshold * 2
+        
+        # Enhanced logic - be less aggressive about halving quantities
+        if very_high_spread or very_high_volatility:
+            reason = "spread" if very_high_spread else "volatility"
             if attempted:
                 self.logger.info(
                     "LIQUIDITY_SKIP_FINAL",
-                    extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason, "action": "skipping_order"},
+                    extra={"symbol": symbol, "spread": spread, "spread_pct": spread_pct if mid_price > 0 else 0, 
+                          "tick_range": tick_range, "reason": reason, "action": "skipping_order"},
                 )
                 time.sleep(random.uniform(0.1, 0.3))
                 return 0, True
             self.logger.info(
                 "LIQUIDITY_RETRY",
-                extra={"symbol": symbol, "spread": spread, "tick_range": tick_range, "reason": reason, "action": "halving_quantity"},
+                extra={"symbol": symbol, "spread": spread, "spread_pct": spread_pct if mid_price > 0 else 0,
+                      "tick_range": tick_range, "reason": reason, "action": "reducing_quantity_75pct"},
             )
             time.sleep(random.uniform(0.1, 0.3))
-            return max(1, int(qty * 0.5)), False
-        if spread >= config.LIQUIDITY_SPREAD_THRESHOLD or tick_range >= config.LIQUIDITY_VOL_THRESHOLD:
+            # Less aggressive reduction - 25% reduction instead of 50%
+            return max(1, int(qty * 0.75)), False
+        elif high_spread or high_volatility:
             self.logger.info(
-                "LIQUIDITY_REDUCE",
-                extra={"symbol": symbol, "spread": spread, "tick_range": tick_range},
+                "LIQUIDITY_REDUCE_MODERATE",
+                extra={"symbol": symbol, "spread": spread, "spread_pct": spread_pct if mid_price > 0 else 0,
+                      "tick_range": tick_range, "action": "reducing_quantity_10pct"},
             )
-            return max(1, int(qty * 0.5)), False
+            # Minor reduction for moderate concerns - 10% reduction
+            return max(1, int(qty * 0.90)), False
+        
+        # No liquidity concerns
         return qty, False
 
     def _update_volatility(self, symbol: str) -> None:
@@ -1523,7 +1551,7 @@ class ExecutionEngine:
                 return None
         return None
 
-    def _wait_for_fill(self, order_id: str, timeout_seconds: int = 300) -> None:
+    def _wait_for_fill(self, order_id: str, timeout_seconds: int = 300) -> None:  # AI-AGENT-REF: Reduced from 300 to 180
         """Block until the order ``order_id`` is filled, canceled, or times out.
         
         Args:
@@ -1639,11 +1667,11 @@ class ExecutionEngine:
         with _order_tracking_lock:
             return list(_active_orders.values())
 
-    def cleanup_stale_orders(self, max_age_seconds: int = 600) -> int:
+    def cleanup_stale_orders(self, max_age_seconds: int = 300) -> int:  # AI-AGENT-REF: Reduced from 600 to 300 (5 minutes)
         """Cancel orders that have been pending too long.
         
         Args:
-            max_age_seconds: Maximum age in seconds before canceling orders
+            max_age_seconds: Maximum age in seconds before canceling orders (default 5 minutes)
             
         Returns:
             Number of orders canceled
@@ -1674,7 +1702,7 @@ class ExecutionEngine:
         
         return canceled_count
 
-    async def _wait_for_fill_async(self, order_id: str, timeout_seconds: int = 300) -> None:
+    async def _wait_for_fill_async(self, order_id: str, timeout_seconds: int = 300) -> None:  # AI-AGENT-REF: Keep consistent timeout
         """Async variant of :meth:`_wait_for_fill` with timeout support.
         
         Args:

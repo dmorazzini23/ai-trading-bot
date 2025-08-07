@@ -9,7 +9,8 @@ import time as pytime
 import requests
 from datetime import datetime
 from threading import Lock
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
+import os
 
 # AI-AGENT-REF: Use centralized logger as per AGENTS.md
 try:
@@ -85,11 +86,13 @@ except ImportError:
     _HUGGINGFACE_AVAILABLE = True
     logger.info("Using mock FinBERT for testing environment")
 
-# Sentiment caching and circuit breaker
-SENTIMENT_TTL_SEC = 600  # 10 minutes
-SENTIMENT_RATE_LIMITED_TTL_SEC = 3600  # 1 hour cache when rate limited
-SENTIMENT_FAILURE_THRESHOLD = 25  # AI-AGENT-REF: Increased from 15 to 25 for more tolerance per problem statement
-SENTIMENT_RECOVERY_TIMEOUT = 3600  # AI-AGENT-REF: Increased from 1800s to 3600s (1 hour) per problem statement
+# Sentiment caching and circuit breaker - Enhanced for critical rate limiting fix
+SENTIMENT_TTL_SEC = 600  # 10 minutes normal cache
+SENTIMENT_RATE_LIMITED_TTL_SEC = 7200  # 2 hour cache when rate limited (increased)
+SENTIMENT_FAILURE_THRESHOLD = 15  # Reduced back to 15 for more aggressive circuit breaker
+SENTIMENT_RECOVERY_TIMEOUT = 1800  # 30 minutes recovery time (more aggressive)
+SENTIMENT_MAX_RETRIES = 5  # Maximum retry attempts with exponential backoff
+SENTIMENT_BASE_DELAY = 5  # Base delay in seconds for exponential backoff
 
 _SENTIMENT_CACHE: Dict[str, Tuple[float, float]] = {}  # {ticker: (timestamp, score)}
 _SENTIMENT_CIRCUIT_BREAKER = {"failures": 0, "last_failure": 0, "state": "closed"}  # closed, open, half-open
@@ -136,8 +139,8 @@ def _record_sentiment_failure():
 
 
 @retry(
-    stop=stop_after_attempt(3),  # Allow 3 attempts total
-    wait=wait_exponential(multiplier=2, min=5, max=60) + wait_random(0, 2),  # AI-AGENT-REF: Add jitter to prevent thundering herd
+    stop=stop_after_attempt(SENTIMENT_MAX_RETRIES),  # Increased retries for rate limiting
+    wait=wait_exponential(multiplier=SENTIMENT_BASE_DELAY, min=SENTIMENT_BASE_DELAY, max=180) + wait_random(0, 5),  # More aggressive backoff with jitter
     retry=retry_if_exception_type((requests.RequestException,)),
 )
 def fetch_sentiment(ctx, ticker: str) -> float:
@@ -271,14 +274,32 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
     """
     _record_sentiment_failure()
     
+    # Try multiple fallback strategies in order of preference
+    fallback_sources = [
+        _try_alternative_sentiment_sources,
+        _try_cached_similar_symbols,
+        _try_sector_sentiment_proxy,
+        _get_cached_or_neutral_sentiment
+    ]
+    
+    for fallback_func in fallback_sources:
+        try:
+            result = fallback_func(ticker)
+            if result is not None:
+                logger.info(f"SENTIMENT_FALLBACK_SUCCESS | ticker={ticker} source={fallback_func.__name__} value={result}")
+                return result
+        except Exception as e:
+            logger.debug(f"SENTIMENT_FALLBACK_FAILED | ticker={ticker} source={fallback_func.__name__} error={e}")
+            continue
+    
+    # Final fallback: enhanced cached lookup with extended TTL
     with sentiment_lock:
-        # First, try to return recent cached data even if expired
         cached = _SENTIMENT_CACHE.get(ticker)
         if cached:
             cache_ts, sentiment_val = cached
             # Use cached data even if older than normal TTL during rate limiting
             if time.time() - cache_ts < SENTIMENT_RATE_LIMITED_TTL_SEC:
-                logger.info(f"SENTIMENT_RATE_LIMIT_USING_CACHED | ticker={ticker} age_minutes={int((time.time() - cache_ts) / 60)}")
+                logger.info(f"SENTIMENT_RATE_LIMIT_USING_EXTENDED_CACHE | ticker={ticker} age_hours={int((time.time() - cache_ts) / 3600)}")
                 return sentiment_val
         
         # Cache neutral score with extended TTL during rate limiting
@@ -286,14 +307,117 @@ def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
         _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
     
     # Log enhanced rate limiting information for monitoring
-    logger.warning("SENTIMENT_RATE_LIMIT_ENHANCED_FALLBACK", extra={
+    logger.warning("SENTIMENT_RATE_LIMIT_ALL_FALLBACKS_EXHAUSTED", extra={
         "ticker": ticker,
-        "fallback_strategy": "extended_cache_and_neutral",
+        "fallback_strategies_tried": len(fallback_sources),
         "cache_ttl_hours": SENTIMENT_RATE_LIMITED_TTL_SEC / 3600,
-        "recommendation": "Consider upgrading NewsAPI plan or implementing additional sentiment sources"
+        "recommendation": "Consider upgrading NewsAPI plan, adding alternative sentiment sources, or reviewing rate limits"
     })
     
     return 0.0
+
+
+def _try_alternative_sentiment_sources(ticker: str) -> Optional[float]:
+    """Try alternative sentiment data sources when primary is rate limited."""
+    # AI-AGENT-REF: Placeholder for future alternative sentiment sources
+    # This could include sources like:
+    # - Financial news aggregators (e.g., Alpha Vantage, Quandl)
+    # - Social media sentiment (Twitter, Reddit)
+    # - Financial blogs and analysis sites
+    # - SEC filing sentiment analysis
+    
+    alternative_sources = []
+    
+    # Try environment-configured alternative sources
+    alt_api_key = os.getenv("ALTERNATIVE_SENTIMENT_API_KEY")
+    alt_api_url = os.getenv("ALTERNATIVE_SENTIMENT_API_URL")
+    
+    if alt_api_key and alt_api_url:
+        try:
+            # Example implementation for alternative API
+            response = requests.get(
+                f"{alt_api_url}?symbol={ticker}&apikey={alt_api_key}",
+                timeout=10
+            )
+            if response.status_code == 200:
+                data = response.json()
+                sentiment_score = data.get('sentiment_score', 0.0)
+                if -1.0 <= sentiment_score <= 1.0:
+                    logger.info(f"ALTERNATIVE_SENTIMENT_SUCCESS | ticker={ticker} score={sentiment_score}")
+                    return sentiment_score
+        except Exception as e:
+            logger.debug(f"Alternative sentiment source failed for {ticker}: {e}")
+    
+    return None
+
+
+def _try_cached_similar_symbols(ticker: str) -> Optional[float]:
+    """Try to use sentiment from similar symbols (same sector/industry)."""
+    # AI-AGENT-REF: Use sentiment from related symbols as proxy
+    symbol_correlations = {
+        # Tech stocks
+        'AAPL': ['MSFT', 'GOOGL', 'AMZN', 'META'],
+        'MSFT': ['AAPL', 'GOOGL', 'AMZN', 'META'],
+        'GOOGL': ['AAPL', 'MSFT', 'AMZN', 'META'],
+        'META': ['AAPL', 'MSFT', 'GOOGL', 'AMZN'],
+        'AMZN': ['AAPL', 'MSFT', 'GOOGL', 'META'],
+        'NVDA': ['AMD', 'INTC', 'TSM'],
+        'AMD': ['NVDA', 'INTC', 'TSM'],
+        
+        # Financial stocks
+        'JPM': ['BAC', 'WFC', 'C', 'GS'],
+        'BAC': ['JPM', 'WFC', 'C', 'GS'],
+        
+        # ETFs
+        'SPY': ['QQQ', 'IWM', 'VTI'],
+        'QQQ': ['SPY', 'IWM', 'VTI'],
+        'IWM': ['SPY', 'QQQ', 'VTI'],
+    }
+    
+    similar_symbols = symbol_correlations.get(ticker, [])
+    
+    with sentiment_lock:
+        for similar_symbol in similar_symbols:
+            cached = _SENTIMENT_CACHE.get(similar_symbol)
+            if cached:
+                cache_ts, sentiment_val = cached
+                # Use recent sentiment from similar symbols
+                if time.time() - cache_ts < SENTIMENT_TTL_SEC:
+                    logger.info(f"SENTIMENT_SIMILAR_SYMBOL_PROXY | ticker={ticker} proxy={similar_symbol} score={sentiment_val}")
+                    # Apply slight decay factor for proxy sentiment
+                    proxy_sentiment = sentiment_val * 0.8  # 20% discount for proxy
+                    return proxy_sentiment
+    
+    return None
+
+
+def _try_sector_sentiment_proxy(ticker: str) -> Optional[float]:
+    """Try to derive sentiment from sector ETF or major index."""
+    # AI-AGENT-REF: Use sector or market sentiment as proxy
+    sector_proxies = {
+        # Technology sector proxy
+        'XLK': ['AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META', 'AMZN', 'CRM', 'NFLX', 'AMD'],
+        # Financial sector proxy
+        'XLF': ['JPM', 'BAC', 'WFC', 'C', 'GS'],
+        # Consumer discretionary
+        'XLY': ['AMZN', 'TSLA', 'HD', 'MCD'],
+        # Market-wide proxies
+        'SPY': ['*'],  # Fallback for any stock
+    }
+    
+    with sentiment_lock:
+        for sector_etf, symbols in sector_proxies.items():
+            if ticker in symbols or '*' in symbols:
+                cached = _SENTIMENT_CACHE.get(sector_etf)
+                if cached:
+                    cache_ts, sentiment_val = cached
+                    if time.time() - cache_ts < SENTIMENT_TTL_SEC * 2:  # More lenient for sector proxy
+                        logger.info(f"SENTIMENT_SECTOR_PROXY | ticker={ticker} sector_etf={sector_etf} score={sentiment_val}")
+                        # Apply decay factor for sector sentiment
+                        sector_sentiment = sentiment_val * 0.6  # 40% discount for sector proxy
+                        return sector_sentiment
+    
+    return None
 
 
 def _get_cached_or_neutral_sentiment(ticker: str) -> float:
