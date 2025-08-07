@@ -3,8 +3,8 @@ from __future__ import annotations
 from threading import Lock, RLock
 
 import time
-from bot_engine import run_all_trades_worker, BotState
-from logger import get_logger
+from ai_trading.core.bot_engine import run_all_trades_worker, BotState
+from ai_trading.logging import get_logger
 
 log = get_logger(__name__)
 

@@ -108,7 +108,7 @@ class HealthChecker:
                 )
             else:
                 # Run sync function in thread pool
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 result = await asyncio.wait_for(
                     loop.run_in_executor(None, self.check_func),
                     timeout=self.timeout_seconds

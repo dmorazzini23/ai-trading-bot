@@ -14,6 +14,9 @@ Exports:
     - TimeFrame: Market data timeframe definitions
     - AssetClass: Asset classification for portfolio diversification
     - TRADING_CONSTANTS: Consolidated trading configuration parameters
+    - BotState: Core bot state management
+    - pre_trade_health_check: Pre-trade health validation
+    - run_all_trades_worker: Main trading worker function
 """
 
 # Import core enums
@@ -29,6 +32,13 @@ from .enums import (
 # Import trading constants
 from .constants import TRADING_CONSTANTS
 
+# Import bot engine components
+from .bot_engine import (
+    BotState,
+    pre_trade_health_check,
+    run_all_trades_worker
+)
+
 # Define explicit exports
 __all__ = [
     # Order management enums
@@ -43,4 +53,9 @@ __all__ = [
     
     # Configuration constants
     "TRADING_CONSTANTS",
+    
+    # Bot engine components
+    "BotState",
+    "pre_trade_health_check", 
+    "run_all_trades_worker",
 ]
