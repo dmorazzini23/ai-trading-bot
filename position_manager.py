@@ -54,18 +54,74 @@ class PositionInfo:
     
 
 class PositionManager:
-    """Manages position holding decisions to reduce churn."""
+    """Manages position holding decisions to reduce churn - Enhanced with intelligent strategies."""
     
     def __init__(self, ctx):
         self.ctx = ctx
         self.logger = logging.getLogger(__name__ + ".PositionManager")
         self.positions: Dict[str, PositionInfo] = {}
+        
+        # Legacy parameters (maintained for compatibility)
         self.hold_threshold_pct = 5.0  # Hold positions with >5% gains
         self.min_hold_days = 3  # Hold new positions for at least 3 days
         self.momentum_threshold = 0.7  # Hold high momentum positions
         
+        # AI-AGENT-REF: Initialize intelligent position management system
+        self.intelligent_manager = None
+        self.use_intelligent_system = True
+        try:
+            # Import the intelligent manager from the ai_trading package
+            import sys
+            import os
+            
+            # Add ai_trading position module to path
+            position_path = os.path.join(os.path.dirname(__file__), 'ai_trading', 'position')
+            if position_path not in sys.path:
+                sys.path.insert(0, position_path)
+            
+            from intelligent_manager import IntelligentPositionManager
+            self.intelligent_manager = IntelligentPositionManager(ctx)
+            
+            self.logger.info("INTELLIGENT_POSITION_MANAGER | Initialized advanced position management system")
+            
+        except Exception as exc:
+            self.logger.warning("Failed to initialize intelligent position manager: %s", exc)
+            self.use_intelligent_system = False
+            self.logger.info("FALLBACK_MODE | Using legacy position management logic")
+        
     def should_hold_position(self, symbol: str, current_position, unrealized_pnl_pct: float, days_held: int) -> bool:
-        """Determine if position should be held vs sold."""
+        """Determine if position should be held vs sold - Enhanced with intelligent analysis."""
+        try:
+            # Use intelligent system if available
+            if self.use_intelligent_system and self.intelligent_manager:
+                try:
+                    # Get current positions for portfolio context
+                    current_positions = self._get_current_positions()
+                    
+                    # Use intelligent position manager
+                    result = self.intelligent_manager.should_hold_position(
+                        symbol, current_position, unrealized_pnl_pct, days_held, current_positions
+                    )
+                    
+                    self.logger.info(
+                        "INTELLIGENT_HOLD_DECISION | %s hold=%s pnl=%.2f%% days=%d",
+                        symbol, result, unrealized_pnl_pct, days_held
+                    )
+                    return result
+                    
+                except Exception as exc:
+                    self.logger.warning("Intelligent system failed for %s, using fallback: %s", symbol, exc)
+                    # Fall through to legacy logic
+            
+            # Legacy logic (fallback)
+            return self._legacy_should_hold_position(symbol, current_position, unrealized_pnl_pct, days_held)
+            
+        except Exception as exc:
+            self.logger.warning("should_hold_position failed for %s: %s", symbol, exc)
+            return False
+    
+    def _legacy_should_hold_position(self, symbol: str, current_position, unrealized_pnl_pct: float, days_held: int) -> bool:
+        """Legacy position hold logic (original implementation)."""
         try:
             # Hold winners with >5% gain
             if unrealized_pnl_pct > self.hold_threshold_pct:
@@ -86,8 +142,44 @@ class PositionManager:
             return False
             
         except Exception as exc:
-            self.logger.warning("should_hold_position failed for %s: %s", symbol, exc)
+            self.logger.warning("_legacy_should_hold_position failed for %s: %s", symbol, exc)
             return False
+    
+    def get_intelligent_recommendations(self, current_positions: List) -> List:
+        """Get intelligent position recommendations for all positions."""
+        try:
+            if self.use_intelligent_system and self.intelligent_manager:
+                recommendations = self.intelligent_manager.get_portfolio_recommendations(current_positions)
+                self.logger.info(
+                    "INTELLIGENT_RECOMMENDATIONS | Generated %d recommendations",
+                    len(recommendations)
+                )
+                return recommendations
+            else:
+                self.logger.info("INTELLIGENT_RECOMMENDATIONS | Intelligent system not available")
+                return []
+                
+        except Exception as exc:
+            self.logger.warning("get_intelligent_recommendations failed: %s", exc)
+            return []
+    
+    def update_intelligent_tracking(self, symbol: str, position_data) -> None:
+        """Update intelligent position tracking."""
+        try:
+            if self.use_intelligent_system and self.intelligent_manager:
+                self.intelligent_manager.update_position_tracking(symbol, position_data)
+                
+        except Exception as exc:
+            self.logger.warning("update_intelligent_tracking failed for %s: %s", symbol, exc)
+    
+    def _get_current_positions(self) -> List:
+        """Get current positions for portfolio context."""
+        try:
+            if self.ctx and hasattr(self.ctx, 'api') and hasattr(self.ctx.api, 'get_all_positions'):
+                return self.ctx.api.get_all_positions()
+            return []
+        except Exception:
+            return []
     
     def calculate_momentum_score(self, symbol: str) -> float:
         """Calculate momentum score for position hold decision."""
