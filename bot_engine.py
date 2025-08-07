@@ -6265,9 +6265,9 @@ def _enter_short(
     )
     if not sector_exposure_ok(ctx, symbol, qty, current_price):
         logger.info("SKIP_SECTOR_CAP | Short order skipped due to sector exposure limits", 
-                   extra={"symbol": symbol, "side": "sell", "qty": qty, "price": current_price})
+                   extra={"symbol": symbol, "side": "sell_short", "qty": qty, "price": current_price})
         return True
-    order = submit_order(ctx, symbol, qty, "sell")
+    order = submit_order(ctx, symbol, qty, "sell_short")  # AI-AGENT-REF: Use sell_short for short signals
     if order is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:

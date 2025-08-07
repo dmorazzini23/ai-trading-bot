@@ -166,7 +166,7 @@ def _pre_validate_order(symbol: str, qty: int, side: str) -> dict:
         validation_result["valid"] = False
         validation_result["errors"].append("Invalid quantity")
     
-    if side.lower() not in ["buy", "sell"]:
+    if side.lower() not in ["buy", "sell", "sell_short"]:  # AI-AGENT-REF: Add sell_short as valid side
         validation_result["valid"] = False
         validation_result["errors"].append("Invalid side")
     
@@ -450,7 +450,7 @@ def place_order(symbol: str, qty: int, side: str):
     req = MarketOrderRequest(
         symbol=symbol,
         qty=qty,
-        side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,
+        side=OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL,  # AI-AGENT-REF: sell_short also maps to SELL
         time_in_force=TimeInForce.DAY,
     )
     order = safe_submit_order(None, req)
@@ -874,7 +874,7 @@ class ExecutionEngine:
 
         expected = None
         order_request: object
-        order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
+        order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL  # AI-AGENT-REF: sell_short also maps to SELL
         aggressive = momentum > 0 if side == "buy" else momentum < 0
 
         if spread > 0.05 and mid:
@@ -1948,9 +1948,17 @@ class ExecutionEngine:
                 self.logger.info("SKIP_INSUFFICIENT_FUNDS | insufficient buying power for %s", symbol)
                 return None
         
+        # AI-AGENT-REF: Distinguish between sell (close long) and sell_short (open short)
         if side.lower() == "sell" and existing == 0:
             self.logger.info("SKIP_NO_POSITION | no shares to sell, skipping")
             return None
+        elif side.lower() == "sell_short":
+            # For short selling, validate short selling requirements instead of checking existing positions
+            if not self._validate_short_selling(api, symbol, remaining):
+                self.logger.info("SKIP_SHORT_VALIDATION_FAILED | short selling validation failed for %s", symbol)
+                return None
+            # Log short selling attempt for debugging
+            self.logger.info("SHORT_SELL_INITIATED | symbol=%s qty=%d", symbol, remaining)
         if side.lower() == "sell":
             avail = self._available_qty(api, symbol)
             if avail <= 0:
@@ -1989,6 +1997,7 @@ class ExecutionEngine:
                 symbol, side, remaining
             )
             slice_qty = getattr(order_req, "qty", remaining)
+            # AI-AGENT-REF: Only adjust quantity for regular sell orders, not sell_short
             if side.lower() == "sell" and slice_qty > self._available_qty(api, symbol):
                 slice_qty = int(round(self._available_qty(api, symbol)))
                 if isinstance(order_req, dict):
@@ -1999,6 +2008,7 @@ class ExecutionEngine:
                 api, slice_qty, expected_price
             ):
                 break
+            # AI-AGENT-REF: Only check can_sell for regular sell orders, not sell_short
             if side.lower() == "sell" and not self._can_sell(
                 api, symbol, slice_qty
             ):
@@ -2253,9 +2263,17 @@ class ExecutionEngine:
                 self.logger.info("SKIP_INSUFFICIENT_FUNDS | insufficient buying power for %s", symbol)
                 return None
         
+        # AI-AGENT-REF: Distinguish between sell (close long) and sell_short (open short) - async version
         if side.lower() == "sell" and existing == 0:
             self.logger.info("SKIP_NO_POSITION | no shares to sell, skipping")
             return None
+        elif side.lower() == "sell_short":
+            # For short selling, validate short selling requirements instead of checking existing positions
+            if not self._validate_short_selling(api, symbol, remaining):
+                self.logger.info("SKIP_SHORT_VALIDATION_FAILED | short selling validation failed for %s", symbol)
+                return None
+            # Log short selling attempt for debugging
+            self.logger.info("SHORT_SELL_INITIATED | symbol=%s qty=%d", symbol, remaining)
         if side.lower() == "sell":
             avail = self._available_qty(api, symbol)
             if avail <= 0:
@@ -2294,6 +2312,7 @@ class ExecutionEngine:
                 symbol, side, remaining
             )
             slice_qty = getattr(order_req, "qty", remaining)
+            # AI-AGENT-REF: Only adjust quantity for regular sell orders, not sell_short (async)
             if side.lower() == "sell" and slice_qty > self._available_qty(api, symbol):
                 slice_qty = int(round(self._available_qty(api, symbol)))
                 if isinstance(order_req, dict):
@@ -2304,6 +2323,7 @@ class ExecutionEngine:
                 api, slice_qty, expected_price
             ):
                 break
+            # AI-AGENT-REF: Only check can_sell for regular sell orders, not sell_short (async)
             if side.lower() == "sell" and not self._can_sell(
                 api, symbol, slice_qty
             ):
