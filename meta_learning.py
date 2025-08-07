@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import pickle
 import random
 from datetime import datetime, timezone
@@ -76,6 +77,14 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
         'audit_format_rows': 0,
         'meta_format_rows': 0
     }
+    
+    # AI-AGENT-REF: Add input validation with clear error messages
+    if not isinstance(trade_log_path, (str, os.PathLike)):
+        error_msg = f"trade_log_path must be a string or PathLike object, got {type(trade_log_path).__name__}"
+        quality_report['issues'].append(error_msg)
+        quality_report['recommendations'].append("Pass a valid file path string instead of dictionary or other object")
+        logger.error("META_LEARNING_INPUT_VALIDATION_ERROR: %s", error_msg)
+        return quality_report
     
     try:
         # Check file existence
@@ -1398,3 +1407,97 @@ def store_meta_learning_data(converted_data: dict) -> bool:
     except Exception as exc:
         logger.error("METALEARN_STORE_ERROR | error=%s", exc)
         return False
+
+
+def load_global_signal_performance(
+    min_trades: int = 3, threshold: float = 0.4
+) -> Optional[Dict[str, float]]:
+    """Load global signal performance with enhanced error handling.
+    
+    This function is available in both bot_engine.py and meta_learning.py for 
+    improved module integration and testing compatibility.
+    """
+    # AI-AGENT-REF: Import function from bot_engine where it's implemented
+    try:
+        # Try to import from bot_engine where the function is fully implemented
+        import sys
+        if 'bot_engine' not in sys.modules:
+            # If bot_engine is not loaded, provide a fallback implementation
+            logger.info("META_LEARNING_FALLBACK: bot_engine not available, using fallback implementation")
+            
+            # Get trade log path from config
+            trade_log_file = getattr(config, 'TRADE_LOG_FILE', 'trades.csv') if config else 'trades.csv'
+            
+            if not os.path.exists(trade_log_file):
+                logger.info("METALEARN_NO_HISTORY: Trade log file not found")
+                return None
+            
+            if pd is None:
+                logger.warning("METALEARN_NO_PANDAS: pandas not available for signal performance loading")
+                return None
+            
+            try:
+                df = pd.read_csv(
+                    trade_log_file,
+                    on_bad_lines="skip",
+                    engine="python",
+                    usecols=["exit_price", "entry_price", "signal_tags", "side"],
+                ).dropna(subset=["exit_price", "entry_price", "signal_tags"])
+                
+                if df.empty:
+                    logger.warning("METALEARN_EMPTY_TRADE_LOG - No valid trades found")
+                    return {}
+                
+                # Enhanced data validation and cleaning
+                df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
+                df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
+                df["signal_tags"] = df["signal_tags"].astype(str)
+                
+                # Remove rows with invalid prices
+                df = df.dropna(subset=["exit_price", "entry_price"])
+                
+                if df.empty:
+                    logger.warning("METALEARN_NO_VALID_PRICES - No trades with valid prices")
+                    return {}
+                
+                # Calculate performance by signal
+                df["pnl"] = (df["exit_price"] - df["entry_price"]) * df["side"].map({"buy": 1, "sell": -1})
+                
+                # Process signal tags and calculate performance
+                signal_performance = {}
+                for _, row in df.iterrows():
+                    tags = str(row["signal_tags"]).split("+")
+                    for tag in tags:
+                        tag = tag.strip()
+                        if tag:
+                            if tag not in signal_performance:
+                                signal_performance[tag] = {"total_pnl": 0.0, "trades": 0}
+                            signal_performance[tag]["total_pnl"] += row["pnl"]
+                            signal_performance[tag]["trades"] += 1
+                
+                # Filter by minimum trades and calculate final performance
+                result = {}
+                for tag, data in signal_performance.items():
+                    if data["trades"] >= min_trades:
+                        avg_pnl = data["total_pnl"] / data["trades"]
+                        if abs(avg_pnl) >= threshold:
+                            result[tag] = avg_pnl
+                
+                logger.info(f"META_LEARNING_SIGNAL_PERFORMANCE: Loaded {len(result)} signals with {min_trades}+ trades")
+                return result if result else {}
+                
+            except Exception as e:
+                logger.error(f"META_LEARNING_SIGNAL_PERFORMANCE_ERROR: {e}")
+                return None
+        else:
+            # bot_engine is loaded, delegate to it
+            bot_engine = sys.modules['bot_engine']
+            if hasattr(bot_engine, 'load_global_signal_performance'):
+                return bot_engine.load_global_signal_performance(min_trades, threshold)
+            else:
+                logger.warning("META_LEARNING_FUNCTION_MISSING: load_global_signal_performance not found in bot_engine")
+                return None
+                
+    except Exception as exc:
+        logger.error("META_LEARNING_LOAD_PERFORMANCE_ERROR: %s", exc)
+        return None
