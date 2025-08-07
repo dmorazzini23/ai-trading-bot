@@ -10,9 +10,12 @@ from .management import (
     ConfigManager,
     get_production_config
 )
+from .env_settings import Settings, get_alpaca_config  # noqa: F401
 
 __all__ = [
     "ConfigValidator",
     "ConfigManager", 
-    "get_production_config"
+    "get_production_config",
+    "Settings",
+    "get_alpaca_config"
 ]
