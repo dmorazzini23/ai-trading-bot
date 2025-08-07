@@ -122,8 +122,76 @@ class TestShortSellingImplementation(unittest.TestCase):
         
     def test_order_status_monitoring_needed(self):
         """Test framework for order status monitoring."""
-        # This will test the order monitoring functionality once implemented
-        pass  # Implementation placeholder
+        from trade_execution import ExecutionEngine, OrderInfo
+        
+        # Create mock context
+        mock_ctx = Mock()
+        mock_ctx.api = self.mock_api
+        
+        engine = ExecutionEngine(mock_ctx)
+        engine.logger = Mock()
+        
+        # Test order tracking functionality
+        mock_order = Mock()
+        mock_order.id = "test_order_123"
+        mock_order.status = "new"
+        
+        # Test _track_order method
+        engine._track_order(mock_order, "AAPL", "buy", 10)
+        
+        # Verify order is tracked
+        pending_orders = engine.get_pending_orders()
+        self.assertEqual(len(pending_orders), 1)
+        self.assertEqual(pending_orders[0].order_id, "test_order_123")
+        self.assertEqual(pending_orders[0].symbol, "AAPL")
+        self.assertEqual(pending_orders[0].side, "buy")
+        
+        # Test status update
+        engine._update_order_status("test_order_123", "filled")
+        
+        # Verify order is removed from tracking after terminal status
+        pending_orders = engine.get_pending_orders()
+        self.assertEqual(len(pending_orders), 0)
+        
+        # Test stale order cleanup
+        # Add an old order
+        old_order = Mock()
+        old_order.id = "old_order_456"
+        old_order.status = "new"
+        engine._track_order(old_order, "MSFT", "sell", 5)
+        
+        # Mock the order as old by manipulating the tracking directly
+        import time
+        from trade_execution import _active_orders, _order_tracking_lock
+        with _order_tracking_lock:
+            if "old_order_456" in _active_orders:
+                _active_orders["old_order_456"].submitted_time = time.time() - 700  # 700 seconds ago
+        
+        # Mock the cancel method to avoid API calls
+        with patch.object(engine, '_cancel_stale_order', return_value=True):
+            canceled_count = engine.cleanup_stale_orders(max_age_seconds=600)  # 10 minutes
+            self.assertEqual(canceled_count, 1)
+
+    def test_meta_learning_graceful_degradation(self):
+        """Test that meta-learning provides graceful degradation when no data exists."""
+        from bot_engine import load_global_signal_performance
+        
+        # Test when no trade log file exists
+        with patch('os.path.exists', return_value=False):
+            result = load_global_signal_performance()
+            # Should return None gracefully instead of raising an error
+            self.assertIsNone(result)
+        
+        # Test when trade log exists but is empty or has insufficient data
+        with patch('os.path.exists', return_value=True):
+            with patch('pandas.read_csv') as mock_read_csv:
+                # Mock empty dataframe
+                import pandas as pd
+                mock_read_csv.return_value = pd.DataFrame()
+                
+                result = load_global_signal_performance(min_trades=1)  # Lower threshold
+                # Should return empty dict instead of None for empty data
+                self.assertEqual(result, {})
 
 if __name__ == '__main__':
     unittest.main()
