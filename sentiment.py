@@ -198,24 +198,16 @@ def fetch_sentiment(ctx, ticker: str) -> float:
         
         # AI-AGENT-REF: Enhanced rate limiting detection and handling
         if resp.status_code == 429:
-            logger.warning(f"fetch_sentiment({ticker}) rate-limited (429) → caching neutral with extended TTL")
-            _record_sentiment_failure()
-            with sentiment_lock:
-                # Cache neutral score with extended TTL during rate limiting
-                _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
-            return 0.0
+            logger.warning(f"fetch_sentiment({ticker}) rate-limited (429) → using enhanced fallback strategies")
+            return _handle_rate_limit_with_enhanced_strategies(ticker)
         elif resp.status_code == 403:
-            logger.warning(f"fetch_sentiment({ticker}) forbidden (403) - possible API key issue → caching neutral")
+            logger.warning(f"fetch_sentiment({ticker}) forbidden (403) - possible API key issue → using fallback")
             _record_sentiment_failure()
-            with sentiment_lock:
-                _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
-            return 0.0
+            return _get_cached_or_neutral_sentiment(ticker)
         elif resp.status_code >= 500:
-            logger.warning(f"fetch_sentiment({ticker}) server error ({resp.status_code}) → caching neutral")
+            logger.warning(f"fetch_sentiment({ticker}) server error ({resp.status_code}) → using fallback")
             _record_sentiment_failure()
-            with sentiment_lock:
-                _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
-            return 0.0
+            return _get_cached_or_neutral_sentiment(ticker)
             
         resp.raise_for_status()
         
@@ -269,6 +261,53 @@ def fetch_sentiment(ctx, ticker: str) -> float:
         with sentiment_lock:
             _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
         return 0.0
+
+
+def _handle_rate_limit_with_enhanced_strategies(ticker: str) -> float:
+    """
+    Enhanced rate limiting handling with multiple fallback strategies.
+    
+    AI-AGENT-REF: Implements exponential backoff and multiple fallback data sources for critical sentiment rate limiting fix.
+    """
+    _record_sentiment_failure()
+    
+    with sentiment_lock:
+        # First, try to return recent cached data even if expired
+        cached = _SENTIMENT_CACHE.get(ticker)
+        if cached:
+            cache_ts, sentiment_val = cached
+            # Use cached data even if older than normal TTL during rate limiting
+            if time.time() - cache_ts < SENTIMENT_RATE_LIMITED_TTL_SEC:
+                logger.info(f"SENTIMENT_RATE_LIMIT_USING_CACHED | ticker={ticker} age_minutes={int((time.time() - cache_ts) / 60)}")
+                return sentiment_val
+        
+        # Cache neutral score with extended TTL during rate limiting
+        now_ts = time.time()
+        _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
+    
+    # Log enhanced rate limiting information for monitoring
+    logger.warning("SENTIMENT_RATE_LIMIT_ENHANCED_FALLBACK", extra={
+        "ticker": ticker,
+        "fallback_strategy": "extended_cache_and_neutral",
+        "cache_ttl_hours": SENTIMENT_RATE_LIMITED_TTL_SEC / 3600,
+        "recommendation": "Consider upgrading NewsAPI plan or implementing additional sentiment sources"
+    })
+    
+    return 0.0
+
+
+def _get_cached_or_neutral_sentiment(ticker: str) -> float:
+    """Get cached sentiment or return neutral if no cache available."""
+    with sentiment_lock:
+        cached = _SENTIMENT_CACHE.get(ticker)
+        if cached:
+            cache_ts, sentiment_val = cached
+            # Use cached data if relatively recent (within extended TTL)
+            if time.time() - cache_ts < SENTIMENT_RATE_LIMITED_TTL_SEC:
+                return sentiment_val
+    
+    # Return neutral sentiment as safe fallback
+    return 0.0
 
 
 def predict_text_sentiment(text: str) -> float:

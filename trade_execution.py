@@ -598,6 +598,10 @@ class ExecutionEngine:
         # AI-AGENT-REF: track fill fragmentation and volatility regime
         self.fill_history: deque[int] = deque(maxlen=config.PARTIAL_FILL_LOOKBACK)
         self.partial_flags: deque[bool] = deque(maxlen=config.PARTIAL_FILL_LOOKBACK)
+        
+        # AI-AGENT-REF: Position reconciliation tracking for critical fix
+        self.position_reconciliation_enabled = True
+        self.position_mismatch_tolerance = 0.01  # 1% tolerance for floating point precision
         self.adaptive_multiplier = 1.0
         self.vol_history: deque[float] = deque(maxlen=50)
         self.baseline_vol: float | None = None
@@ -2599,6 +2603,90 @@ class ExecutionEngine:
             else:
                 self.logger.info("EXITING %s via order %s", symbol, oid)
         return last_order
+
+    def reconcile_position(self, symbol: str, expected_position: float, api_client=None) -> dict:
+        """
+        Reconcile bot's expected position with actual broker position.
+        
+        AI-AGENT-REF: Critical fix for order fill tracking discrepancies.
+        This addresses the issue where bot thinks it owns different shares than actually filled.
+        
+        Args:
+            symbol: Trading symbol to reconcile
+            expected_position: Bot's expected position quantity
+            api_client: Optional specific API client to use
+            
+        Returns:
+            dict: Reconciliation results with mismatch detection
+        """
+        if not self.position_reconciliation_enabled:
+            return {"status": "disabled", "mismatch": False}
+            
+        try:
+            api = api_client or self.api
+            
+            # Get actual position from broker
+            try:
+                positions = api.get_all_positions()
+                actual_position = 0.0
+                
+                for pos in positions:
+                    if getattr(pos, 'symbol', None) == symbol:
+                        actual_position = float(getattr(pos, 'qty', 0))
+                        break
+                        
+            except Exception as e:
+                self.logger.warning("POSITION_RECONCILIATION_API_ERROR", extra={
+                    "symbol": symbol,
+                    "error": str(e),
+                    "note": "Could not fetch actual position from broker"
+                })
+                return {"status": "api_error", "error": str(e), "mismatch": False}
+            
+            # Calculate position mismatch
+            position_diff = abs(expected_position - actual_position)
+            relative_diff = position_diff / max(abs(expected_position), abs(actual_position), 1.0)
+            
+            # Determine if mismatch is significant
+            has_mismatch = (
+                position_diff > self.position_mismatch_tolerance and 
+                relative_diff > 0.01  # 1% relative difference threshold
+            )
+            
+            reconciliation_result = {
+                "status": "completed",
+                "symbol": symbol,
+                "expected_position": expected_position,
+                "actual_position": actual_position,
+                "position_diff": position_diff,
+                "relative_diff_pct": round(relative_diff * 100, 2),
+                "mismatch": has_mismatch,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            
+            if has_mismatch:
+                self.logger.error("POSITION_MISMATCH_DETECTED", extra=reconciliation_result)
+                
+                # Add recommendations based on the type of mismatch
+                if expected_position > actual_position:
+                    reconciliation_result["issue"] = "bot_thinks_owns_more"
+                    reconciliation_result["recommendation"] = "Review recent order fills and partial executions"
+                else:
+                    reconciliation_result["issue"] = "bot_thinks_owns_less" 
+                    reconciliation_result["recommendation"] = "Check for unreported fills or manual trades"
+                    
+            else:
+                self.logger.info("POSITION_RECONCILIATION_OK", extra=reconciliation_result)
+                
+            return reconciliation_result
+            
+        except Exception as e:
+            self.logger.error("POSITION_RECONCILIATION_FAILED", extra={
+                "symbol": symbol,
+                "expected_position": expected_position,
+                "error": str(e)
+            })
+            return {"status": "error", "error": str(e), "mismatch": False}
 
 
 __all__ = ["ExecutionEngine", "log_order"]

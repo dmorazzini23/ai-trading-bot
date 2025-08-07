@@ -1706,6 +1706,9 @@ class BotState:
     trade_cooldowns: Dict[str, datetime] = field(default_factory=dict)
     last_trade_direction: Dict[str, str] = field(default_factory=dict)
     skipped_cycles: int = 0
+    
+    # AI-AGENT-REF: Trade frequency tracking for overtrading prevention
+    trade_history: List[Tuple[str, datetime]] = field(default_factory=list)  # (symbol, timestamp)
 
 
 state = BotState()
@@ -1862,6 +1865,11 @@ EVENT_COOLDOWN = 15.0  # seconds
 REBALANCE_HOLD_SECONDS = int(os.getenv("REBALANCE_HOLD_SECONDS", "0"))
 RUN_INTERVAL_SECONDS = 60  # don't run trading loop more often than this
 TRADE_COOLDOWN_MIN = int(config.get_env("TRADE_COOLDOWN_MIN", "5"))  # minutes
+
+# AI-AGENT-REF: Enhanced overtrading prevention with frequency limits
+MAX_TRADES_PER_HOUR = int(config.get_env("MAX_TRADES_PER_HOUR", "10"))  # limit high-frequency trading
+MAX_TRADES_PER_DAY = int(config.get_env("MAX_TRADES_PER_DAY", "50"))   # daily limit to prevent excessive trading
+TRADE_FREQUENCY_WINDOW_HOURS = 1  # rolling window for hourly limits
 
 # Loss streak kill-switch (managed via BotState)
 
@@ -6260,6 +6268,9 @@ def _enter_long(
         with trade_cooldowns_lock:
             state.trade_cooldowns[symbol] = datetime.now(timezone.utc)
         state.last_trade_direction[symbol] = "buy"
+        
+        # AI-AGENT-REF: Record trade in frequency tracker for overtrading prevention
+        _record_trade_in_frequency_tracker(state, symbol, datetime.now(timezone.utc))
     return True
 
 
@@ -6338,6 +6349,9 @@ def _enter_short(
         with trade_cooldowns_lock:
             state.trade_cooldowns[symbol] = datetime.now(timezone.utc)
         state.last_trade_direction[symbol] = "sell"
+        
+        # AI-AGENT-REF: Record trade in frequency tracker for overtrading prevention
+        _record_trade_in_frequency_tracker(state, symbol, datetime.now(timezone.utc))
     return True
 
 
@@ -6368,6 +6382,9 @@ def _manage_existing_position(
             with trade_cooldowns_lock:
                 state.trade_cooldowns[symbol] = datetime.now(timezone.utc)
             state.last_trade_direction[symbol] = "sell"
+            
+            # AI-AGENT-REF: Record trade in frequency tracker for overtrading prevention
+            _record_trade_in_frequency_tracker(state, symbol, datetime.now(timezone.utc))
         ctx.trade_logger.log_exit(state, symbol, price)
         try:
             pos_after = ctx.api.get_open_position(symbol)
@@ -6494,6 +6511,11 @@ def trade_logic(
             logger.info("SKIP_REVERSED_SIGNAL", extra={"symbol": symbol})
             return True
         logger.debug("SKIP_COOLDOWN", extra={"symbol": symbol})
+        return True
+
+    # AI-AGENT-REF: Enhanced overtrading prevention - check frequency limits
+    if _check_trade_frequency_limits(state, symbol, now):
+        logger.info("SKIP_FREQUENCY_LIMIT", extra={"symbol": symbol})
         return True
 
     if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
@@ -7562,6 +7584,144 @@ def check_market_regime(state: BotState) -> bool:
 _SCREEN_CACHE: Dict[str, float] = {}
 
 
+def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
+    """
+    Comprehensive market data validation to prevent trading with insufficient or poor quality data.
+    
+    AI-AGENT-REF: Critical fix for market data validation problems from problem statement.
+    Implements circuit breakers for poor data conditions and minimum data requirements.
+    
+    Returns:
+        dict: Validation result with valid flag, reason, and detailed message
+    """
+    try:
+        # Basic existence check
+        if df is None:
+            return {
+                "valid": False,
+                "reason": "no_data",
+                "message": "No data available",
+                "details": {"symbol": symbol, "data_source": "missing"}
+            }
+        
+        # Minimum rows requirement
+        min_rows_required = max(ATR_LENGTH, 20)  # Ensure enough for technical indicators
+        if len(df) < min_rows_required:
+            return {
+                "valid": False,
+                "reason": f"insufficient_data_{len(df)}_rows",
+                "message": f"Insufficient data ({len(df)} rows, need {min_rows_required})",
+                "details": {"symbol": symbol, "rows_available": len(df), "rows_required": min_rows_required}
+            }
+        
+        # Data completeness checks
+        required_columns = ["open", "high", "low", "close", "volume"]
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            return {
+                "valid": False,
+                "reason": "missing_columns",
+                "message": f"Missing required columns: {missing_columns}",
+                "details": {"symbol": symbol, "missing_columns": missing_columns, "available_columns": list(df.columns)}
+            }
+        
+        # Data quality checks
+        recent_data = df.tail(min(50, len(df)))  # Check last 50 rows or all available
+        
+        # Check for excessive NaN values
+        for col in required_columns:
+            nan_count = recent_data[col].isna().sum()
+            nan_percentage = (nan_count / len(recent_data)) * 100
+            if nan_percentage > 10:  # More than 10% NaN values
+                return {
+                    "valid": False,
+                    "reason": f"excessive_nan_{col}",
+                    "message": f"Excessive NaN values in {col} column ({nan_percentage:.1f}%)",
+                    "details": {"symbol": symbol, "column": col, "nan_percentage": nan_percentage}
+                }
+        
+        # Check for price data anomalies
+        close_prices = recent_data["close"].dropna()
+        if len(close_prices) < 5:
+            return {
+                "valid": False,
+                "reason": "insufficient_price_data",
+                "message": "Less than 5 valid close prices in recent data",
+                "details": {"symbol": symbol, "valid_close_prices": len(close_prices)}
+            }
+        
+        # Check for zero or negative prices
+        if (close_prices <= 0).any():
+            return {
+                "valid": False,
+                "reason": "invalid_prices",
+                "message": "Found zero or negative prices",
+                "details": {"symbol": symbol, "min_price": float(close_prices.min())}
+            }
+        
+        # Check for unrealistic price volatility (circuit breaker)
+        price_changes = close_prices.pct_change().dropna()
+        if len(price_changes) > 0:
+            extreme_moves = (abs(price_changes) > 0.5).sum()  # 50%+ single-day moves
+            if extreme_moves > len(price_changes) * 0.1:  # More than 10% of days have extreme moves
+                logger.warning("DATA_QUALITY_EXTREME_VOLATILITY", extra={
+                    "symbol": symbol,
+                    "extreme_moves": extreme_moves,
+                    "total_days": len(price_changes),
+                    "percentage": round((extreme_moves / len(price_changes)) * 100, 1),
+                    "note": "Potential data quality issue - consider excluding from trading"
+                })
+        
+        # Check volume data quality
+        volume_data = recent_data["volume"].dropna()
+        if len(volume_data) > 0:
+            # Check for suspiciously low volume
+            median_volume = volume_data.median()
+            if median_volume < 10000:  # Very low liquidity threshold
+                return {
+                    "valid": False,
+                    "reason": "low_liquidity",
+                    "message": f"Median volume too low ({median_volume:,.0f})",
+                    "details": {"symbol": symbol, "median_volume": median_volume, "threshold": 10000}
+                }
+            
+            # Check for zero volume days
+            zero_volume_days = (volume_data == 0).sum()
+            if zero_volume_days > len(volume_data) * 0.2:  # More than 20% zero volume days
+                return {
+                    "valid": False,
+                    "reason": "excessive_zero_volume",
+                    "message": f"Too many zero volume days ({zero_volume_days}/{len(volume_data)})",
+                    "details": {"symbol": symbol, "zero_volume_days": zero_volume_days, "total_days": len(volume_data)}
+                }
+        
+        # All checks passed
+        return {
+            "valid": True,
+            "reason": "passed_validation",
+            "message": "Data quality validation passed",
+            "details": {
+                "symbol": symbol,
+                "rows_validated": len(df),
+                "recent_rows_checked": len(recent_data),
+                "validation_checks": ["existence", "completeness", "quality", "anomalies", "volume"]
+            }
+        }
+        
+    except Exception as e:
+        logger.error("DATA_VALIDATION_ERROR", extra={
+            "symbol": symbol,
+            "error": str(e),
+            "error_type": type(e).__name__
+        })
+        return {
+            "valid": False,
+            "reason": "validation_error",
+            "message": f"Data validation failed with error: {e}",
+            "details": {"symbol": symbol, "error": str(e)}
+        }
+
+
 def screen_universe(
     candidates: Sequence[str],
     ctx: BotContext,
@@ -7581,13 +7741,12 @@ def screen_universe(
     
     for sym in new_syms:
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
-        if df is None:
-            filtered_out[sym] = "no_data"
-            logger.debug(f"[SCREEN_UNIVERSE] {sym}: No data available")
-            continue
-        if len(df) < ATR_LENGTH:
-            filtered_out[sym] = f"insufficient_data_{len(df)}_rows"
-            logger.debug(f"[SCREEN_UNIVERSE] {sym}: Insufficient data ({len(df)} rows, need {ATR_LENGTH})")
+        
+        # AI-AGENT-REF: Enhanced market data validation for critical trading decisions
+        validation_result = _validate_market_data_quality(df, sym)
+        if not validation_result["valid"]:
+            filtered_out[sym] = validation_result["reason"]
+            logger.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
             continue
         
         original_len = len(df)
@@ -9516,6 +9675,94 @@ def ichimoku_indicator(
         if state:
             state.indicator_failures += 1
         return pd.DataFrame(), None
+
+
+def _check_trade_frequency_limits(state: BotState, symbol: str, current_time: datetime) -> bool:
+    """
+    Check if trading would exceed frequency limits.
+    
+    AI-AGENT-REF: Enhanced overtrading prevention with configurable frequency limits.
+    Returns True if trade should be skipped due to frequency limits.
+    """
+    if not hasattr(state, 'trade_history'):
+        state.trade_history = []
+    
+    # Clean up old entries (older than 1 day)
+    day_ago = current_time - timedelta(days=1)
+    state.trade_history = [(sym, ts) for sym, ts in state.trade_history if ts > day_ago]
+    
+    # Count trades in different time windows
+    hour_ago = current_time - timedelta(hours=TRADE_FREQUENCY_WINDOW_HOURS)
+    
+    # Count symbol-specific trades in last hour
+    symbol_trades_hour = len([
+        (sym, ts) for sym, ts in state.trade_history 
+        if sym == symbol and ts > hour_ago
+    ])
+    
+    # Count total trades in last hour
+    total_trades_hour = len([
+        (sym, ts) for sym, ts in state.trade_history 
+        if ts > hour_ago
+    ])
+    
+    # Count total trades in last day
+    total_trades_day = len(state.trade_history)
+    
+    # Check hourly limits
+    if total_trades_hour >= MAX_TRADES_PER_HOUR:
+        logger.warning("FREQUENCY_LIMIT_HOURLY_EXCEEDED", extra={
+            "symbol": symbol,
+            "trades_last_hour": total_trades_hour,
+            "max_per_hour": MAX_TRADES_PER_HOUR,
+            "recommendation": "Reduce trading frequency to prevent overtrading"
+        })
+        return True
+    
+    # Check daily limits  
+    if total_trades_day >= MAX_TRADES_PER_DAY:
+        logger.warning("FREQUENCY_LIMIT_DAILY_EXCEEDED", extra={
+            "symbol": symbol,
+            "trades_today": total_trades_day,
+            "max_per_day": MAX_TRADES_PER_DAY,
+            "recommendation": "Daily trade limit reached - consider reviewing strategy"
+        })
+        return True
+    
+    # Check symbol-specific hourly limit (prevent rapid ping-pong on same symbol)
+    symbol_hourly_limit = max(1, MAX_TRADES_PER_HOUR // 10)  # 10% of hourly limit per symbol
+    if symbol_trades_hour >= symbol_hourly_limit:
+        logger.info("FREQUENCY_LIMIT_SYMBOL_HOURLY", extra={
+            "symbol": symbol,
+            "symbol_trades_hour": symbol_trades_hour,
+            "symbol_hourly_limit": symbol_hourly_limit,
+            "note": "Preventing rapid trading on single symbol"
+        })
+        return True
+    
+    return False
+
+
+def _record_trade_in_frequency_tracker(state: BotState, symbol: str, timestamp: datetime) -> None:
+    """
+    Record a trade in the frequency tracking system.
+    
+    AI-AGENT-REF: Part of overtrading prevention system.
+    """
+    if not hasattr(state, 'trade_history'):
+        state.trade_history = []
+    
+    state.trade_history.append((symbol, timestamp))
+    
+    # Log frequency stats for monitoring
+    hour_ago = timestamp - timedelta(hours=1)
+    recent_trades = len([ts for _, ts in state.trade_history if ts > hour_ago])
+    
+    logger.debug("TRADE_FREQUENCY_UPDATED", extra={
+        "symbol": symbol,
+        "trades_last_hour": recent_trades,
+        "total_tracked_trades": len(state.trade_history)
+    })
 
 
 def get_latest_price(symbol: str):
