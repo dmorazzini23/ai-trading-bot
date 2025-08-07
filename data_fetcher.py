@@ -902,8 +902,11 @@ def get_minute_df(
     if not is_market_open():
         logger.info("MARKET_CLOSED_MINUTE_FETCH", extra={"symbol": symbol})
         _MINUTE_CACHE.pop(symbol, None)
-        # AI-AGENT-REF: Return only required columns to prevent shape mismatch
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        # AI-AGENT-REF: Return DataFrame with proper DatetimeIndex to prevent index mismatch
+        return pd.DataFrame(
+            columns=["open", "high", "low", "close", "volume"],
+            index=pd.DatetimeIndex([], tz=timezone.utc)
+        )
 
     start_dt = ensure_utc(start_date) - timedelta(minutes=1)
     end_dt = ensure_utc(end_date)
@@ -1017,7 +1020,11 @@ def get_minute_df(
                     missing = set(required) - set(df.columns)
                     if missing:
                         logger.error("get_minute_df missing columns %s", missing)
-                        return pd.DataFrame(columns=required)
+                        # AI-AGENT-REF: Return DataFrame with proper DatetimeIndex to prevent index mismatch
+                        return pd.DataFrame(
+                            columns=required,
+                            index=pd.DatetimeIndex([], tz=timezone.utc)
+                        )
                     # Successfully fetched data from yfinance, return it
                     # AI-AGENT-REF: Filter to only return required columns while preserving index
                     return df[required].copy()
@@ -1056,7 +1063,11 @@ def get_minute_df(
                 missing = set(required) - set(df.columns)
                 if missing:
                     logger.error("get_minute_df missing columns %s", missing)
-                    return pd.DataFrame(columns=required)
+                    # AI-AGENT-REF: Return DataFrame with proper DatetimeIndex to prevent index mismatch
+                    return pd.DataFrame(
+                        columns=required,
+                        index=pd.DatetimeIndex([], tz=timezone.utc)
+                    )
                 # Successfully fetched data from yfinance, return it
                 # AI-AGENT-REF: Filter to only return required columns while preserving index
                 return df[required].copy()
@@ -1168,7 +1179,13 @@ class FinnhubFetcher:
             self._throttle()
             resp = self.client.stock_candles(sym, resolution, _from=start_ts, to=now_ts)
             if resp.get("s") != "ok":
-                frames.append(pd.DataFrame())
+                # AI-AGENT-REF: Create empty DataFrame with proper DatetimeIndex structure to prevent index mismatch
+                logger.debug(f"Finnhub returned no data for {sym}: {resp.get('s')}")
+                empty_df = pd.DataFrame(
+                    columns=["open", "high", "low", "close", "volume"],
+                    index=pd.DatetimeIndex([], tz=timezone.utc)
+                )
+                frames.append(empty_df)
                 continue
             try:
                 idx = safe_to_datetime(resp["t"], context=f"Finnhub {sym}")
