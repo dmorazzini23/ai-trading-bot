@@ -76,10 +76,24 @@ class StrategyAllocator:
         total_signals = sum(len(signals) for signals in signals_by_strategy.values())
         logger.debug(f"Allocate called with {len(signals_by_strategy)} strategies, {total_signals} total signals")
         
+        # AI-AGENT-REF: Enhanced debugging for signal confirmation troubleshooting
+        logger.debug(f"Current config: signal_confirmation_bars={self.config.signal_confirmation_bars}, "
+                    f"min_confidence={self.config.min_confidence}, delta_threshold={self.config.delta_threshold}")
+        logger.debug(f"Current signal_history state: {dict(self.signal_history)}")
+        
         confirmed_signals = self._confirm_signals(signals_by_strategy)
+        
+        # AI-AGENT-REF: Log confirmed signals for debugging
+        confirmed_count = sum(len(signals) for signals in confirmed_signals.values())
+        logger.debug(f"Signal confirmation produced {confirmed_count} confirmed signals from {total_signals} input signals")
+        
         result = self._allocate_confirmed(confirmed_signals)
         
-        logger.debug(f"Returning {len(result)} signals")
+        logger.debug(f"Final allocation returning {len(result)} signals")
+        if result:
+            symbols = [s.symbol for s in result]
+            logger.debug(f"Returned signal symbols: {symbols}")
+        
         return result
 
     def _confirm_signals(self, signals_by_strategy: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
@@ -173,17 +187,24 @@ class StrategyAllocator:
                         logger.warning(f"Invalid min_confidence threshold: {min_conf_threshold}, using default 0.6")
                         min_conf_threshold = 0.6
                     
+                    # AI-AGENT-REF: Enhanced debugging for confirmation decisions
+                    logger.debug(f"Signal confirmation check: {s.symbol}, history={history_values}, "
+                                f"avg_conf={avg_conf:.4f}, threshold={min_conf_threshold:.4f}, "
+                                f"bars_required={confirmation_bars}, bars_available={len(history_values)}")
+                    
                     if avg_conf >= min_conf_threshold:
                         # AI-AGENT-REF: Create a copy of the signal to avoid mutation issues
                         import copy
                         confirmed_signal = copy.deepcopy(s)
                         confirmed_signal.confidence = avg_conf
                         confirmed[strategy].append(confirmed_signal)
-                        logger.debug(f"Signal approved: {s.symbol} with avg_conf: {avg_conf:.4f}")
+                        logger.debug(f"Signal CONFIRMED: {s.symbol} with avg_conf: {avg_conf:.4f} >= threshold: {min_conf_threshold:.4f}")
                     else:
-                        logger.debug(f"Signal rejected: {s.symbol}, avg_conf: {avg_conf:.4f} < threshold: {min_conf_threshold}")
+                        logger.debug(f"Signal REJECTED: {s.symbol}, avg_conf: {avg_conf:.4f} < threshold: {min_conf_threshold:.4f}")
                 else:
-                    logger.debug(f"Signal not confirmed yet: {s.symbol}, history length: {len(self.signal_history[key])}/{confirmation_bars}")
+                    logger.debug(f"Signal NOT READY: {s.symbol}, history length: {len(self.signal_history[key])}/{confirmation_bars} (need {confirmation_bars - len(self.signal_history[key])} more)")
+                    # AI-AGENT-REF: Additional debug info about what's in history
+                    logger.debug(f"  Current history for {key}: {self.signal_history[key]}")
         return confirmed
 
     def _allocate_confirmed(self, confirmed_signals: Dict[str, List[Any]]) -> List[Any]:

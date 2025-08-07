@@ -24,6 +24,11 @@ def test_allocator():
     alloc.config.signal_confirmation_bars = 2  # Require 2 bars for proper confirmation testing
     alloc.config.min_confidence = 0.0         # Ensure confidence threshold is met
     
+    # AI-AGENT-REF: Add defensive verification to ensure config is applied correctly
+    assert alloc.config.signal_confirmation_bars == 2, f"Expected signal_confirmation_bars=2, got {alloc.config.signal_confirmation_bars}"
+    assert alloc.config.min_confidence == 0.0, f"Expected min_confidence=0.0, got {alloc.config.min_confidence}"
+    assert alloc.config.delta_threshold == 0.0, f"Expected delta_threshold=0.0, got {alloc.config.delta_threshold}"
+    
     sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
     
     # First call: Build signal history (returns empty list)
