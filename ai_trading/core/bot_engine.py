@@ -157,16 +157,16 @@ else:
 # Mirror config to maintain historical constant name
 MIN_CYCLE = config.SCHEDULER_SLEEP_SECONDS
 # AI-AGENT-REF: guard environment validation with explicit error logging
+# AI-AGENT-REF: Move config validation to runtime to prevent import crashes
+# Config validation moved to init_runtime_config() 
+# This ensures imports don't fail due to missing environment variables
+
 try:
-    config.validate_env_vars()
+    # Only import config module, don't validate at import time
+    import config
+    logger.info("Config module loaded, validation deferred to runtime")
 except Exception as e:
-    if config.TESTING:
-        # In testing mode, just log the error and continue
-        logger.warning("Environment validation failed in test mode: %s", e)
-    else:
-        logger.critical("Environment validation failed: %s", e)
-        raise SystemExit(1) from e
-config.log_config(config.REQUIRED_ENV_VARS)
+    logger.warning("Config module import failed: %s", e)
 
 # Provide a no-op ``profile`` decorator when line_profiler is not active.
 try:
