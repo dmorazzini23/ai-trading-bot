@@ -152,6 +152,21 @@ if not logging.getLogger().handlers and not os.getenv("PYTEST_RUNNING"):
     from ai_trading.logging import setup_logging  # AI-AGENT-REF: lazy logger import
     setup_logging(log_file=LOG_PATH)
 
+# Handling missing portfolio weights function
+def ensure_portfolio_weights(ctx, symbols):
+    """Ensure portfolio weights are computed with fallback handling."""
+    try:
+        from ai_trading import portfolio
+        if hasattr(portfolio, 'compute_portfolio_weights'):
+            return portfolio.compute_portfolio_weights(ctx, symbols)
+        else:
+            logger.warning("compute_portfolio_weights not found, using fallback method.")
+            # Placeholder fallback: Evenly distribute portfolio weights
+            return {symbol: 1.0 / len(symbols) for symbol in symbols}
+    except Exception as e:
+        logger.error(f"Error computing portfolio weights: {e}, using fallback")
+        return {symbol: 1.0 / len(symbols) for symbol in symbols if symbols}
+
 # Log Alpaca availability on startup
 if ALPACA_AVAILABLE:
     logger.info("Alpaca SDK is available")
@@ -7944,8 +7959,25 @@ def screen_candidates() -> list[str]:
     return screen_universe(candidates, ctx)
 
 
+# Fix for handling missing tickers.csv file
+def get_stock_bars_safe(api, symbol, timeframe):
+    """Safely get stock bars with proper error handling."""
+    try:
+        return api.get_stock_bars(symbol, timeframe)  # Ensure correct API method
+    except AttributeError as e:
+        logger.error(f"Alpaca API Error: {e}")
+        return None
+
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
+    """Load tickers from file with fallback to default tickers."""
     tickers: List[str] = []
+    
+    # Check if file exists and handle gracefully
+    if not os.path.exists(path):
+        logger.warning(f"Tickers file {path} not found. Using default tickers.")
+        # Fallback: define default tickers
+        return ['AAPL', 'GOOG', 'AMZN']
+    
     try:
         with open(path, newline="") as f:
             reader = csv.reader(f)
