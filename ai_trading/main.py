@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # AI-AGENT-REF: Import Settings AFTER .env is loaded to prevent import-time crashes
-from ai_trading.config import Settings
+from ai_trading.config import get_settings, Settings
 import ai_trading.app as app
 from ai_trading.runner import run_cycle
 from ai_trading.utils import set_random_seeds, ensure_deterministic_training, get_pid_on_port, get_free_port
