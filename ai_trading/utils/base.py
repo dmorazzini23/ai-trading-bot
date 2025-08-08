@@ -835,14 +835,22 @@ def validate_ohlcv(df: pd.DataFrame) -> bool:
 
 from typing import Dict, List
 
-try:
-    from alpaca_trade_api.rest import REST
-except Exception as e:  # pragma: no cover - optional dependency
-    logging.getLogger(__name__).error("alpaca_trade_api import failed", exc_info=e)
-    REST = object  # type: ignore
+# Lazy-load Alpaca SDK only when needed
+REST = None
+
+def _get_alpaca_rest():
+    global REST
+    if REST is None:
+        try:
+            from alpaca_trade_api.rest import REST as _REST
+            REST = _REST
+        except Exception as e:
+            logging.getLogger(__name__).error("alpaca_trade_api import failed", exc_info=e)
+            raise
+    return REST
 
 
-def check_symbol(symbol: str, api: REST) -> bool:
+def check_symbol(symbol: str, api: Any) -> bool:
     """Return ``True`` if ``symbol`` has sufficient data via ``api``."""
     try:
         path = os.path.join("data", f"{symbol}.csv")
@@ -853,7 +861,7 @@ def check_symbol(symbol: str, api: REST) -> bool:
     return health_check(df, "daily")
 
 
-def pre_trade_health_check(symbols: List[str], api: REST) -> Dict[str, bool]:
+def pre_trade_health_check(symbols: List[str], api: Any) -> Dict[str, bool]:
     """Check data availability for ``symbols`` prior to trading.
 
     Parameters
