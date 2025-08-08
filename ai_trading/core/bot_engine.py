@@ -61,7 +61,7 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     logging.getLogger(__name__).warning("Running under unsupported Python version")
 
 from ai_trading.config import management as config
-from ai_trading.config.settings_singleton import get_settings
+from ai_trading.config import get_settings
 from ai_trading.market.calendars import ensure_final_bar
 from ai_trading.utils.timefmt import utc_now_iso, format_datetime_utc  # AI-AGENT-REF: Import UTC timestamp utilities
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
@@ -1096,38 +1096,9 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
     return api_key, secret_key, base_url
 
 
-def _ensure_alpaca_env_or_raise() -> tuple[str, str, str]:
-    """
-    Ensure Alpaca credentials are present or raise RuntimeError.
-    
-    This function performs runtime validation of credentials and should be
-    called during initialization, not at import time.
-    
-    Returns:
-        tuple: (api_key, secret_key, base_url) - all guaranteed to be non-empty
-        
-    Raises:
-        RuntimeError: If required credentials are missing
-    """
-    api_key, secret_key, base_url = _resolve_alpaca_env()
-    
-    if not api_key or not secret_key:
-        logger.error("Missing Alpaca credentials for runtime validation")
-        logger.error(
-            "Please set either ALPACA_API_KEY/ALPACA_SECRET_KEY or "
-            "APCA_API_KEY_ID/APCA_API_SECRET_KEY in your environment"
-        )
-        raise RuntimeError(
-            "Missing Alpaca credentials. Please set either "
-            "ALPACA_API_KEY/ALPACA_SECRET_KEY or APCA_API_KEY_ID/APCA_API_SECRET_KEY"
-        )
-    
-    # Log masked credentials for verification (no secrets exposed)
-    logger.info("Alpaca credentials validated successfully")
-    logger.debug("Using API key: %s***", api_key[:8] if len(api_key) > 8 else "***")
-    logger.debug("Using base URL: %s", base_url)
-    
-    return api_key, secret_key, base_url
+def _ensure_alpaca_env_or_raise():
+    settings = get_settings()
+    settings.require_alpaca_or_raise()
 
 
 def init_runtime_config():
@@ -1983,15 +1954,11 @@ finnhub_breaker = pybreaker.CircuitBreaker(
     reset_timeout=300,   # 5 minutes for external services
     name="finnhub_api"
 )
-# Bounded, CPU-aware executors; env overrides allowed
-import os as _os
-_cpu = (_os.cpu_count() or 2)
-_exec_env = int(_os.getenv("EXECUTOR_WORKERS", "0") or "0")
-_pred_env = int(_os.getenv("PREDICTION_WORKERS", "0") or "0")
-_exec_workers = _exec_env or max(2, min(4, _cpu))
-_pred_workers = _pred_env or max(2, min(4, _cpu))
-executor = ThreadPoolExecutor(max_workers=_exec_workers)
-prediction_executor = ThreadPoolExecutor(max_workers=_pred_workers)
+# Bounded, CPU-aware executors sized via Settings
+_cpu = (os.cpu_count() or 2)
+_S = get_settings()
+executor = ThreadPoolExecutor(max_workers=_S.effective_executor_workers(_cpu))
+prediction_executor = ThreadPoolExecutor(max_workers=_S.effective_prediction_workers(_cpu))
 
 # AI-AGENT-REF: Add proper cleanup with atexit handlers for ThreadPoolExecutor resource leak
 def cleanup_executors():

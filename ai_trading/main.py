@@ -34,7 +34,7 @@ except ImportError:
         pass
 
 # AI-AGENT-REF: Create global config AFTER .env loading and Settings import
-config = Settings()
+config: Settings | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -95,29 +95,17 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
 
 def start_api(ready_signal: threading.Event = None) -> None:
     """Spin up the Flask API server."""
-    run_flask_app(int(os.getenv("API_PORT", 9001)), ready_signal)
+    settings = get_settings()
+    run_flask_app(settings.api_port, ready_signal)
 
 
 def main() -> None:
     """Start the API thread and repeatedly run trading cycles."""
-    # AI-AGENT-REF: Ensure .env is loaded before any Settings usage
     load_dotenv()
-    
-    # AI-AGENT-REF: Set up deterministic behavior early
-    set_random_seeds()
-    ensure_deterministic_training()
-    
-    validate_environment()
-
-    # AI-AGENT-REF: Initialize performance monitoring
-    if PERFORMANCE_MONITORING_AVAILABLE:
-        logger.info("Starting performance monitoring...")
-        start_performance_monitoring()
-        
-        # Configure memory optimizer for better performance
-        memory_optimizer = get_memory_optimizer()
-        if memory_optimizer:
-            logger.info("Memory optimizer initialized")
+    global config
+    config = get_settings()
+    from ai_trading.runner import run_cycle
+    run_cycle()
 
     # Ensure API is ready before starting trading cycles
     api_ready = threading.Event()
@@ -153,7 +141,7 @@ def main() -> None:
                 # Thread is alive but not ready - this is a true timeout
                 logger.warning("API startup taking longer than expected, proceeding with degraded functionality")
                 # In test environments, we might want to continue without the API
-                test_mode = os.getenv("SCHEDULER_ITERATIONS", "0") != "0"
+                test_mode = config.scheduler_iterations != 0
                 if not test_mode:
                     raise RuntimeError("API startup timeout - trading cannot proceed without API ready")
     except RuntimeError:
@@ -164,8 +152,8 @@ def main() -> None:
         logger.error("Unexpected error during API startup synchronization: %s", e)
         raise RuntimeError(f"API startup synchronization failed: {e}")
 
-    interval = int(os.getenv("SCHEDULER_SLEEP_SECONDS", 30))
-    iterations = int(os.getenv("SCHEDULER_ITERATIONS", 0))  # AI-AGENT-REF: test hook
+    interval = config.scheduler_sleep_seconds
+    iterations = config.scheduler_iterations  # AI-AGENT-REF: test hook
     count = 0
     
     # AI-AGENT-REF: Track memory optimization cycles
