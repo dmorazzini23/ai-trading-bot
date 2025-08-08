@@ -62,29 +62,10 @@ if "APCA_API_SECRET_KEY" in os.environ and "ALPACA_SECRET_KEY" not in os.environ
 if "APCA_API_BASE_URL" in os.environ and "ALPACA_BASE_URL" not in os.environ:
     os.environ.setdefault("ALPACA_BASE_URL", os.environ["APCA_API_BASE_URL"])
 
+# Ensure settings are available before referencing
+_S = get_settings()
 SHADOW_MODE = _S.shadow_mode
 DRY_RUN = _S.shadow_mode  # Map DRY_RUN to shadow_mode for compatibility
-
-
-_warn_counts = defaultdict(int)
-
-# Track pending orders awaiting fill or rejection
-
-pending_orders: dict[str, dict[str, Any]] = {}
-
-# Protect concurrent access to ``pending_orders``.  Both synchronous
-# functions (e.g. ``submit_order``) and asynchronous workers (e.g.
-# ``check_stuck_orders``) touch this shared registry.  Without a
-# lock, race conditions can corrupt the dictionary or allow duplicate
-# entries, leading to duplicate cancellations/resubmissions.
-_pending_orders_lock: Lock = Lock()
-
-# AI-AGENT-REF: accumulate partial fills for periodic summary
-partial_fills: dict[str, dict[str, float]] = {}
-# AI-AGENT-REF: track first partial fill per order
-partial_fill_tracker: set[str] = set()
-
-_S = get_settings()
 ALPACA_API_KEY = _S.alpaca_api_key
 ALPACA_SECRET_KEY = _S.alpaca_secret_key
 ALPACA_BASE_URL = _S.alpaca_base_url

@@ -21,13 +21,8 @@ class TestCriticalFixesValidation(unittest.TestCase):
     def setUp(self):
         """Set up test environment."""
         # Import modules after setting TESTING flag
-        import trade_execution
-        import sentiment
-        import strategy_allocator
-        import bot_engine
-        self.trade_execution = trade_execution
-        self.sentiment = sentiment
-        self.strategy_allocator = strategy_allocator
+        from ai_trading import trade_execution
+        from ai_trading.trade_execution import ExecutionEngine
         self.bot_engine = bot_engine
 
     def test_p0_quantity_calculation_fix(self):

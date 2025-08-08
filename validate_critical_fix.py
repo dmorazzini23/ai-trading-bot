@@ -26,7 +26,7 @@ os.environ.update({
 
 sys.path.append('.')
 
-from trade_execution import ExecutionEngine
+from ai_trading.trade_execution import ExecutionEngine
 from unittest.mock import MagicMock
 
 class MockOrder:

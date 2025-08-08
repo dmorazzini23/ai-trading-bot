@@ -10,7 +10,7 @@ from typing import Dict, Any
 # Set testing environment
 os.environ['TESTING'] = '1'
 
-from signals import filter_signals_with_portfolio_optimization
+from ai_trading.signals import filter_signals_with_portfolio_optimization
 
 
 class MockSignal:

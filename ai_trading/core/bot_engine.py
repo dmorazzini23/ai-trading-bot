@@ -2869,7 +2869,7 @@ class TradeLogger:
         signal_tags: str = "",
         confidence: float = 0.0,
     ) -> None:
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = utc_now_iso()
         try:
             with open(self.path, "a") as f:
                 portalocker.lock(f, portalocker.LOCK_EX)
@@ -2914,7 +2914,7 @@ class TradeLogger:
                                 else "swing_trade" if days < 5 else "long_trade"
                             )
                             row[3], row[4], row[8] = (
-                                datetime.now(timezone.utc).isoformat(),
+                                utc_now_iso(),
                                 exit_price,
                                 cls,
                             )
@@ -2950,7 +2950,7 @@ class TradeLogger:
             with open(REWARD_LOG_FILE, "a", newline="") as rf:
                 csv.writer(rf).writerow(
                     [
-                        datetime.now(timezone.utc).isoformat(),
+                        utc_now_iso(),
                         symbol,
                         pnl * conf,
                         pnl,
@@ -3772,9 +3772,15 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
     Logs UTC timestamps and fails fast if any symbol is stale.
     """
     try:
-        from ai_trading.data_fetcher import get_cached_minute_timestamp, last_minute_bar_age_seconds  # type: ignore
-    import datetime as _dt
-    now_utc = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        from ai_trading.data_fetcher import (
+            get_cached_minute_timestamp,
+            last_minute_bar_age_seconds,
+        )  # type: ignore
+        import datetime as _dt
+    except Exception as e:
+        logger.warning("Data freshness check unavailable; skipping", exc_info=e)
+        return
+    now_utc = utc_now_iso()
     stale = []
     for sym in symbols:
         age = last_minute_bar_age_seconds(sym)
@@ -5587,7 +5593,7 @@ def vwap_pegged_submit(
                 logger.info(
                     "ORDER_SENT",
                     extra={
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "timestamp": utc_now_iso(),
                         "symbol": symbol,
                         "side": side,
                         "qty": slice_qty,
@@ -5645,7 +5651,7 @@ def vwap_pegged_submit(
                             with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
                                 csv.writer(sf).writerow(
                                     [
-                                        datetime.now(timezone.utc).isoformat(),
+                                        utc_now_iso(),
                                         symbol,
                                         vwap_price,
                                         fill_price,
@@ -6275,10 +6281,13 @@ def _model_feature_names(model) -> list[str]:
 
 
 def _should_hold_position(df: pd.DataFrame) -> bool:
+    """Return True if trend indicators favor staying in the trade."""
     try:
         from ai_trading.indicators import rsi  # type: ignore
-
-    """Return True if trend indicators favor staying in the trade."""
+    except ImportError:
+        # If indicators not available, fallback to simple logic
+        return True
+    
     try:
         close = df["close"].astype(float)
         ema_fast = close.ewm(span=20, adjust=False).mean().iloc[-1]
@@ -6907,7 +6916,7 @@ def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
     online_error = float(np.mean((pred - y_new) ** 2))
     log_metrics(
         {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": utc_now_iso(),
             "type": "online_update",
             "symbol": symbol,
             "error": online_error,
@@ -7069,7 +7078,7 @@ def run_meta_learning_weight_optimizer(
         logger.info("META_MODEL_TRAINED", extra={"samples": len(y)})
         log_metrics(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": utc_now_iso(),
                 "type": "meta_model_train",
                 "samples": len(y),
                 "hyperparams": json.dumps({"alpha": alpha}),
@@ -7134,7 +7143,7 @@ def run_bayesian_meta_learning_optimizer(
         logger.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
         log_metrics(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": utc_now_iso(),
                 "type": "meta_model_bayes_train",
                 "samples": len(y),
                 "seed": SEED,
@@ -7303,10 +7312,13 @@ def _add_basic_indicators(
 
 
 def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
+    """Add MACD indicators using the defensive helper."""
     try:
         from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
-
-    """Add MACD indicators using the defensive helper."""
+    except ImportError:
+        logger.warning("signals module not available for MACD calculation")
+        return
+    
     try:
         if "close" not in df.columns:
             raise KeyError("'close' column missing for MACD calculation")
@@ -7530,15 +7542,21 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     try:
         from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
-
+    except ImportError:
+        logger.warning("signals module not available for regime features")
+        signals_calculate_macd = None
+    
     feat = pd.DataFrame(index=df.index)
     feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
     feat["rsi"] = ta.rsi(df["close"], length=14)
-    macd_df = signals_calculate_macd(df["close"])
-    if macd_df is not None and "macd" in macd_df:
-        feat["macd"] = macd_df["macd"]
+    if signals_calculate_macd:
+        macd_df = signals_calculate_macd(df["close"])
+        if macd_df is not None and "macd" in macd_df:
+            feat["macd"] = macd_df["macd"]
+        else:
+            logger.warning("Regime MACD calculation failed")
+            feat["macd"] = np.nan
     else:
-        logger.warning("Regime MACD calculation failed")
         feat["macd"] = np.nan
     feat["vol"] = df["close"].pct_change(fill_method=None).rolling(14).std()
     return feat.dropna()
@@ -8297,7 +8315,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
         log_metrics(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": utc_now_iso(),
                 "type": "daily_retrain",
                 "batch_mse": batch_mse,
                 "hyperparams": json.dumps(utils.to_serializable(config.SGD_PARAMS)),
@@ -8461,6 +8479,10 @@ def run_multi_strategy(ctx: BotContext) -> None:
         # Generate hold signals for existing positions
         try:
             from ai_trading.signals import generate_position_hold_signals, enhance_signals_with_position_logic  # type: ignore
+        except ImportError:
+            logger.warning("Position signals module not available")
+            return
+        
         hold_signals = generate_position_hold_signals(ctx, current_positions)
         
         # Apply position holding logic to all strategy signals
@@ -9061,7 +9083,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             if config.VERBOSE:
                 logger.info(
                     "RUN_ALL_TRADES_START",
-                    extra={"timestamp": datetime.now(timezone.utc).isoformat()},
+                    extra={"timestamp": utc_now_iso()},
                 )
 
             current_cash, regime_ok, symbols = _prepare_run(ctx, state)
@@ -9268,13 +9290,17 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 try:
                     from ai_trading.utils import portfolio_lock
                     from ai_trading import portfolio
-
-                    with portfolio_lock:
-                        ctx.portfolio_weights = portfolio.compute_portfolio_weights(
-                            ctx, [p.symbol for p in positions]
-                        )
-                except Exception:
-                    logger.warning("weight recompute failed", exc_info=True)
+                except ImportError:
+                    logger.warning("Portfolio modules not available")
+                    pass  # Skip portfolio update if modules unavailable
+                else:
+                    try:
+                        with portfolio_lock:
+                            ctx.portfolio_weights = portfolio.compute_portfolio_weights(
+                                ctx, [p.symbol for p in positions]
+                            )
+                    except Exception:
+                        logger.warning("weight recompute failed", exc_info=True)
                 exposure = (
                     sum(abs(float(p.market_value)) for p in positions) / equity * 100
                     if equity > 0
@@ -9815,10 +9841,16 @@ def compute_ichimoku(
         if ich_func is None:
             try:
                 from ai_trading.indicators import ichimoku_fallback  # type: ignore
+                ich_func = ichimoku_fallback
             except Exception:  # pragma: no cover
-
-            ich_func = ichimoku_fallback
-        ich = ich_func(high=high, low=low, close=close)
+                logger.warning("ichimoku indicators not available")
+                ich_func = None
+        
+        if ich_func:
+            ich = ich_func(high=high, low=low, close=close)
+        else:
+            # Return empty dataframes if no ichimoku function available
+            return pd.DataFrame(index=high.index), pd.DataFrame(index=high.index)
         if isinstance(ich, tuple):
             ich_df = ich[0]
             signal_df = ich[1] if len(ich) > 1 else pd.DataFrame(index=ich_df.index)
@@ -9847,10 +9879,13 @@ def ichimoku_indicator(
         if ich_func is None:
             try:
                 from ai_trading.indicators import ichimoku_fallback  # type: ignore
+                ich_func = ichimoku_fallback
             except Exception:  # pragma: no cover
-
-            ich_func = ichimoku_fallback
-        ich = ich_func(high=df["high"], low=df["low"], close=df["close"])
+                logger.warning("ichimoku indicators not available")
+                ich_func = None
+        
+        if ich_func:
+            ich = ich_func(high=df["high"], low=df["low"], close=df["close"])
         if isinstance(ich, tuple):
             ich_df = ich[0]
             params = ich[1] if len(ich) > 1 else None

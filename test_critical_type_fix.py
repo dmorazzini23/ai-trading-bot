@@ -17,7 +17,7 @@ os.environ.update({
     'FLASK_PORT': '5000'
 })
 
-from trade_execution import ExecutionEngine
+from ai_trading.trade_execution import ExecutionEngine
 
 
 class MockOrder:

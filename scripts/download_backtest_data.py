@@ -11,7 +11,8 @@ import os
 from pathlib import Path
 
 import pandas as pd
-from alpaca_trade_api import REST, TimeFrame
+from alpaca_trade_api import TimeFrame
+from ai_trading.utils.base import _get_alpaca_rest
 from dotenv import load_dotenv
 
 
@@ -28,7 +29,7 @@ def main() -> None:
     if secret_key:
         os.environ.setdefault("APCA_API_SECRET_KEY", secret_key)
 
-    api = REST(api_key, secret_key, base_url)
+    api = _get_alpaca_rest()(api_key, secret_key, base_url)
 
     symbols = ["AAPL", "MSFT", "GOOG", "AMZN", "NVDA", "TSLA", "META"]
     start = "2023-01-01"
