@@ -1216,6 +1216,8 @@ if not os.getenv("PYTEST_RUNNING"):
         DataFetchException,
         get_minute_df,
         _MINUTE_CACHE,
+        get_cached_minute_timestamp,  # AI-AGENT-REF: Import minute cache helpers
+        last_minute_bar_age_seconds,
     )
 else:
     # AI-AGENT-REF: mock data_fetcher functions for test environments
@@ -1227,6 +1229,12 @@ else:
     
     def get_minute_df(*args, **kwargs):
         return pd.DataFrame()  # Mock empty DataFrame
+    
+    def get_cached_minute_timestamp(symbol: str):
+        return None  # Mock no cache
+    
+    def last_minute_bar_age_seconds(symbol: str):
+        return None  # Mock no cache
     
     _MINUTE_CACHE = {}  # Mock cache
 
@@ -1433,6 +1441,60 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         logger.error(f"Fetch failed: empty DataFrame for {symbol}")
         raise DataFetchError(f"No data for {symbol}")
     return df
+
+
+# AI-AGENT-REF: Minute cache freshness validation for fast failure on stale data
+def _ensure_data_fresh(symbols: list[str], max_age_minutes: int = 5) -> None:
+    """
+    Ensure minute cache data is fresh, raising error for stale data.
+    
+    Args:
+        symbols: List of symbols to check
+        max_age_minutes: Maximum allowed cache age in minutes
+        
+    Raises:
+        DataFetchError: If any symbol has stale cache data
+    """
+    now_utc = datetime.now(timezone.utc)
+    stale_symbols = []
+    
+    for symbol in symbols:
+        cache_age_seconds = last_minute_bar_age_seconds(symbol)
+        cached_ts = get_cached_minute_timestamp(symbol)
+        
+        if cache_age_seconds is not None and cache_age_seconds > (max_age_minutes * 60):
+            stale_symbols.append({
+                "symbol": symbol,
+                "age_minutes": round(cache_age_seconds / 60, 1),
+                "cached_at": cached_ts.isoformat() if cached_ts else None
+            })
+        elif cached_ts is None:
+            # No cache data available
+            stale_symbols.append({
+                "symbol": symbol,
+                "age_minutes": None,
+                "cached_at": None
+            })
+    
+    if stale_symbols:
+        logger.warning(
+            "STALE_MINUTE_CACHE_DETECTED at %s: %s symbols with stale/missing cache data",
+            now_utc.isoformat(),
+            len(stale_symbols),
+            extra={"stale_data": stale_symbols, "max_age_minutes": max_age_minutes}
+        )
+        symbol_names = [item["symbol"] for item in stale_symbols]
+        raise DataFetchError(
+            f"Stale minute cache detected for symbols: {symbol_names}. "
+            f"Cache data older than {max_age_minutes} minutes. "
+            f"Current time: {now_utc.isoformat()}"
+        )
+    else:
+        logger.debug(
+            "MINUTE_CACHE_FRESH_OK at %s: All %d symbols have fresh cache data",
+            now_utc.isoformat(),
+            len(symbols)
+        )
 
 
 def cancel_all_open_orders(ctx: "BotContext") -> None:
@@ -1884,11 +1946,44 @@ finnhub_breaker = pybreaker.CircuitBreaker(
     reset_timeout=300,   # 5 minutes for external services
     name="finnhub_api"
 )
+# AI-AGENT-REF: CPU-aware executor configuration with environment overrides
+def get_executor_workers() -> int:
+    """Get number of workers for main executor from environment or auto-size."""
+    workers = os.getenv("EXECUTOR_WORKERS")
+    if workers:
+        try:
+            return max(1, int(workers))
+        except (ValueError, TypeError):
+            pass
+    # Auto-size: max(2, min(4, cpu_count))
+    try:
+        import multiprocessing
+        cpu_count = multiprocessing.cpu_count()
+        return max(2, min(4, cpu_count))
+    except (ImportError, NotImplementedError):
+        return 2  # Fallback
+
+def get_prediction_workers() -> int:
+    """Get number of workers for prediction executor from environment or auto-size."""
+    workers = os.getenv("PREDICTION_WORKERS")
+    if workers:
+        try:
+            return max(1, int(workers))
+        except (ValueError, TypeError):
+            pass
+    # Auto-size: max(2, min(4, cpu_count))
+    try:
+        import multiprocessing
+        cpu_count = multiprocessing.cpu_count()
+        return max(2, min(4, cpu_count))
+    except (ImportError, NotImplementedError):
+        return 2  # Fallback
+
 executor = ThreadPoolExecutor(
-    max_workers=1
-)  # AI-AGENT-REF: limit workers for single CPU
+    max_workers=get_executor_workers()
+)  # AI-AGENT-REF: CPU-aware bounded thread pool
 # Separate executor for ML predictions and trade execution
-prediction_executor = ThreadPoolExecutor(max_workers=1)
+prediction_executor = ThreadPoolExecutor(max_workers=get_prediction_workers())
 
 # AI-AGENT-REF: Add proper cleanup with atexit handlers for ThreadPoolExecutor resource leak
 def cleanup_executors():
@@ -4039,6 +4134,7 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
             f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
             f"&CIK={ticker}&type=8-K&count=5",
             headers={"User-Agent": "AI Trading Bot"},
+            timeout=10  # AI-AGENT-REF: Add explicit timeout to prevent hangs
         )
         r.raise_for_status()
 
@@ -8268,7 +8364,7 @@ def start_metrics_server(default_port: int = 9200) -> None:
             try:
                 import requests
 
-                resp = requests.get(f"http://localhost:{default_port}")
+                resp = requests.get(f"http://localhost:{default_port}", timeout=2)  # AI-AGENT-REF: Add explicit timeout for local health probe
                 if resp.ok:
                     logger.info(
                         "Metrics port %d already serving; reusing", default_port
@@ -8959,6 +9055,13 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 )
 
             current_cash, regime_ok, symbols = _prepare_run(ctx, state)
+
+            # AI-AGENT-REF: Ensure minute cache data is fresh before processing symbols
+            try:
+                _ensure_data_fresh(symbols, max_age_minutes=5)
+            except DataFetchError as e:
+                logger.error("MINUTE_CACHE_STALE_ABORT: %s", e)
+                return  # Abort trading cycle due to stale cache data
 
             # AI-AGENT-REF: Add memory monitoring and cleanup to prevent resource issues
             if MEMORY_OPTIMIZATION_AVAILABLE:

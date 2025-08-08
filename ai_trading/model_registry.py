@@ -124,13 +124,6 @@ class ModelRegistry:
                 },
                 **metadata
             }
-                "strategy": strategy,
-                "model_type": model_type,
-                "registration_time": datetime.now(timezone.utc).isoformat(),
-                "model_file": "model.pkl",
-                "tags": tags or [],
-                **metadata
-            }
             
             metadata_file = model_dir / "meta.json"
             with open(metadata_file, 'w') as f:
@@ -239,6 +232,25 @@ class ModelRegistry:
         except Exception as e:
             logger.error(f"Error loading model {model_id}: {e}")
             raise
+    
+    def latest_for(
+        self,
+        strategy: str,
+        model_type: Optional[str] = None,
+        tags: Optional[List[str]] = None
+    ) -> Tuple[Any, Dict[str, Any], str]:
+        """
+        Load latest model for a strategy (alias for load_latest_by_strategy).
+        
+        Args:
+            strategy: Strategy name
+            model_type: Optional model type filter
+            tags: Optional tags filter
+            
+        Returns:
+            Tuple of (model, metadata, model_id)
+        """
+        return self.load_latest_by_strategy(strategy, model_type, tags)
     
     def load_latest_by_strategy(
         self,

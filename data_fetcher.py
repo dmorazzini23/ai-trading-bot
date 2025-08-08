@@ -1241,5 +1241,50 @@ def fetch_minute_yfinance(symbol: str) -> pd.DataFrame:
     return df
 
 
+# AI-AGENT-REF: Export minute cache inspection helpers for bot_engine freshness checks
+def get_cached_minute_timestamp(symbol: str) -> Optional[pd.Timestamp]:
+    """
+    Get the timestamp when minute data was cached for a symbol.
+    
+    Args:
+        symbol: Trading symbol
+        
+    Returns:
+        Timestamp when data was cached, or None if not cached
+    """
+    cached = _MINUTE_CACHE.get(symbol)
+    if cached is not None:
+        _, timestamp = cached
+        return timestamp
+    return None
+
+
+def last_minute_bar_age_seconds(symbol: str) -> Optional[float]:
+    """
+    Get the age in seconds of the cached minute data for a symbol.
+    
+    Args:
+        symbol: Trading symbol
+        
+    Returns:
+        Age in seconds since data was cached, or None if not cached
+    """
+    cached_ts = get_cached_minute_timestamp(symbol)
+    if cached_ts is not None:
+        now = pd.Timestamp.now(tz="UTC")
+        age_delta = now - cached_ts
+        return age_delta.total_seconds()
+    return None
+
+
 # Export RetryError for test compatibility
-__all__ = ["RetryError", "get_historical_data", "get_minute_df", "get_daily_df", "DataFetchError", "DataFetchException"]
+__all__ = [
+    "RetryError", 
+    "get_historical_data", 
+    "get_minute_df", 
+    "get_daily_df", 
+    "DataFetchError", 
+    "DataFetchException",
+    "get_cached_minute_timestamp",
+    "last_minute_bar_age_seconds"
+]

@@ -4,8 +4,19 @@ import time
 import pandas as pd
 import numpy as np
 import inspect
-import signals
-import indicators
+
+# AI-AGENT-REF: Harden imports for both package and repo-root execution
+try:
+    from ai_trading import signals
+    from ai_trading import indicators
+except ImportError:
+    # Fallback to repo-root import
+    try:
+        import signals
+        import indicators
+    except ImportError as e:
+        logger.error("Failed to import signals/indicators from both ai_trading and repo root: %s", e)
+        raise
 
 def profile(func, *args, **kwargs):
     start = time.perf_counter()

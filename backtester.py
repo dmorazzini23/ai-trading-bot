@@ -19,7 +19,17 @@ try:
     import execution_api as execution_api  # type: ignore
 except Exception:  # pragma: no cover - fallback for older repo layout
     import trade_execution as execution_api  # type: ignore
-from ai_trading.core import bot_engine
+
+# AI-AGENT-REF: Harden imports for both package and repo-root execution
+try:
+    from ai_trading.core import bot_engine
+except ImportError:
+    # Fallback to repo-root import
+    try:
+        import bot_engine  # type: ignore
+    except ImportError as e:
+        logger.error("Failed to import bot_engine from both ai_trading.core and repo root: %s", e)
+        raise
 
 logger = get_logger(__name__)
 
