@@ -2869,7 +2869,7 @@ class TradeLogger:
         signal_tags: str = "",
         confidence: float = 0.0,
     ) -> None:
-        now_iso = datetime.now(timezone.utc).isoformat()
+        now_iso = utc_now_iso()
         try:
             with open(self.path, "a") as f:
                 portalocker.lock(f, portalocker.LOCK_EX)
@@ -2914,7 +2914,7 @@ class TradeLogger:
                                 else "swing_trade" if days < 5 else "long_trade"
                             )
                             row[3], row[4], row[8] = (
-                                datetime.now(timezone.utc).isoformat(),
+                                utc_now_iso(),
                                 exit_price,
                                 cls,
                             )
@@ -2950,7 +2950,7 @@ class TradeLogger:
             with open(REWARD_LOG_FILE, "a", newline="") as rf:
                 csv.writer(rf).writerow(
                     [
-                        datetime.now(timezone.utc).isoformat(),
+                        utc_now_iso(),
                         symbol,
                         pnl * conf,
                         pnl,
@@ -3780,7 +3780,7 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
     except Exception as e:
         logger.warning("Data freshness check unavailable; skipping", exc_info=e)
         return
-    now_utc = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    now_utc = utc_now_iso()
     stale = []
     for sym in symbols:
         age = last_minute_bar_age_seconds(sym)
@@ -5593,7 +5593,7 @@ def vwap_pegged_submit(
                 logger.info(
                     "ORDER_SENT",
                     extra={
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "timestamp": utc_now_iso(),
                         "symbol": symbol,
                         "side": side,
                         "qty": slice_qty,
@@ -5651,7 +5651,7 @@ def vwap_pegged_submit(
                             with open(SLIPPAGE_LOG_FILE, "a", newline="") as sf:
                                 csv.writer(sf).writerow(
                                     [
-                                        datetime.now(timezone.utc).isoformat(),
+                                        utc_now_iso(),
                                         symbol,
                                         vwap_price,
                                         fill_price,
@@ -6916,7 +6916,7 @@ def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
     online_error = float(np.mean((pred - y_new) ** 2))
     log_metrics(
         {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": utc_now_iso(),
             "type": "online_update",
             "symbol": symbol,
             "error": online_error,
@@ -7078,7 +7078,7 @@ def run_meta_learning_weight_optimizer(
         logger.info("META_MODEL_TRAINED", extra={"samples": len(y)})
         log_metrics(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": utc_now_iso(),
                 "type": "meta_model_train",
                 "samples": len(y),
                 "hyperparams": json.dumps({"alpha": alpha}),
@@ -7143,7 +7143,7 @@ def run_bayesian_meta_learning_optimizer(
         logger.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
         log_metrics(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": utc_now_iso(),
                 "type": "meta_model_bayes_train",
                 "samples": len(y),
                 "seed": SEED,
@@ -8315,7 +8315,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
         log_metrics(
             {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": utc_now_iso(),
                 "type": "daily_retrain",
                 "batch_mse": batch_mse,
                 "hyperparams": json.dumps(utils.to_serializable(config.SGD_PARAMS)),
@@ -9083,7 +9083,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             if config.VERBOSE:
                 logger.info(
                     "RUN_ALL_TRADES_START",
-                    extra={"timestamp": datetime.now(timezone.utc).isoformat()},
+                    extra={"timestamp": utc_now_iso()},
                 )
 
             current_cash, regime_ok, symbols = _prepare_run(ctx, state)
