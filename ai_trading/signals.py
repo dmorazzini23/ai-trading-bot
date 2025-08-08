@@ -60,7 +60,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 # Import indicators with error handling
 try:
-    from indicators import rsi, atr, mean_reversion_zscore
+    from ai_trading.indicators import rsi, atr, mean_reversion_zscore
 except ImportError:
     print("WARNING: indicators module not available, some features will be disabled")
     rsi = atr = mean_reversion_zscore = None
@@ -100,7 +100,7 @@ logger = logging.getLogger(__name__)
 
 # AI-AGENT-REF: Portfolio-level optimization integration
 try:
-    from portfolio_optimizer import PortfolioOptimizer, PortfolioDecision, create_portfolio_optimizer
+    from ai_trading.portfolio import PortfolioOptimizer, PortfolioDecision, create_portfolio_optimizer
     from transaction_cost_calculator import TransactionCostCalculator, TradeType, create_transaction_cost_calculator
     from regime_detector import RegimeDetector, create_regime_detector
     PORTFOLIO_OPTIMIZATION_AVAILABLE = True

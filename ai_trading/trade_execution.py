@@ -317,7 +317,7 @@ class OrderInfo:
 # Global order tracking
 _active_orders: dict[str, OrderInfo] = {}
 _order_tracking_lock = Lock()
-from indicators import cached_atr_trailing_stop
+from ai_trading.indicators import cached_atr_trailing_stop
 
 # Module-level logger for order execution functions
 logger = logging.getLogger(__name__)

@@ -907,12 +907,9 @@ except ImportError:
 try:
     from ai_trading.rebalancer import maybe_rebalance as original_rebalance  # type: ignore
 except ImportError:
-    try:
-        from rebalancer import maybe_rebalance as original_rebalance
-    except ImportError:
-        # AI-AGENT-REF: rebalancer not available, create minimal fallback
-        def original_rebalance(*args, **kwargs):
-            pass
+    # AI-AGENT-REF: rebalancer not available, create minimal fallback
+    def original_rebalance(*args, **kwargs):
+        pass
 
 # Use base URL from configuration
 ALPACA_BASE_URL = config.ALPACA_BASE_URL
