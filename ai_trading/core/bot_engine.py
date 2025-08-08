@@ -893,7 +893,9 @@ except ImportError:
 
 # AI-AGENT-REF: guard custom module imports for test environments
 try:
-    from alpaca_api import alpaca_get, start_trade_updates_stream
+    from ai_trading.alpaca_api import alpaca_get, start_trade_updates_stream  # type: ignore
+except Exception:  # pragma: no cover
+    from alpaca_api import alpaca_get, start_trade_updates_stream  # type: ignore
 except ImportError:
     # AI-AGENT-REF: alpaca_api not available, create minimal fallbacks
     def alpaca_get(*args, **kwargs):
@@ -962,7 +964,10 @@ if not ALPACA_AVAILABLE:
 
 # AI-AGENT-REF: lazy import heavy meta_learning module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
-    from meta_learning import optimize_signals
+    try:
+        from ai_trading.meta_learning import optimize_signals  # type: ignore
+    except Exception:  # pragma: no cover
+        from meta_learning import optimize_signals  # type: ignore
 else:
     # AI-AGENT-REF: mock optimize_signals for test environments
     def optimize_signals(*args, **kwargs):
@@ -1138,7 +1143,9 @@ except ImportError:
         pass
 
 try:
-    from trade_execution import ExecutionEngine
+    from ai_trading.trade_execution import ExecutionEngine  # type: ignore
+except Exception:  # pragma: no cover
+    from trade_execution import ExecutionEngine  # type: ignore
 except Exception:  # pragma: no cover - allow tests with stubbed module
 
     class ExecutionEngine:
@@ -1215,12 +1222,20 @@ class StrategyAllocator:
 
 # AI-AGENT-REF: lazy import heavy data_fetcher module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
-    from data_fetcher import (
-        DataFetchError,
-        DataFetchException,
-        get_minute_df,
-        _MINUTE_CACHE,
-    )
+    try:
+        from ai_trading.data_fetcher import (  # type: ignore
+            DataFetchError,
+            DataFetchException,
+            get_minute_df, get_daily_df, fetch_minute_yfinance, fetch_daily_data_async,
+            _MINUTE_CACHE,
+        )
+    except Exception:  # pragma: no cover
+        from data_fetcher import (
+            DataFetchError,
+            DataFetchException,
+            get_minute_df, get_daily_df, fetch_minute_yfinance, fetch_daily_data_async,
+            _MINUTE_CACHE,
+        )
 else:
     # AI-AGENT-REF: mock data_fetcher functions for test environments
     class DataFetchError(Exception):
@@ -1441,7 +1456,6 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     try:
         # Allow data up to 10 minutes old during market hours (600 seconds)
         _ensure_data_fresh(
-            fetcher=type('MockFetcher', (), {'get_minute_df': lambda s, start, end: df})(),
             symbols=[symbol], 
             max_age_seconds=600
         )
@@ -1901,15 +1915,15 @@ finnhub_breaker = pybreaker.CircuitBreaker(
     reset_timeout=300,   # 5 minutes for external services
     name="finnhub_api"
 )
-executor = ThreadPoolExecutor(
-    max_workers=1
-)  # AI-AGENT-REF: limit workers for single CPU
-# Improve inference throughput: parallelize predictions sensibly
+# Bounded, CPU-aware executors; env overrides allowed
 import os as _os
-_workers_env = int(_os.getenv("PREDICTION_WORKERS", "0") or "0")
 _cpu = (_os.cpu_count() or 2)
-_default_workers = max(2, min(4, _cpu))  # keep conservative to avoid thrash
-prediction_executor = ThreadPoolExecutor(max_workers=_workers_env or _default_workers)
+_exec_env = int(_os.getenv("EXECUTOR_WORKERS", "0") or "0")
+_pred_env = int(_os.getenv("PREDICTION_WORKERS", "0") or "0")
+_exec_workers = _exec_env or max(2, min(4, _cpu))
+_pred_workers = _pred_env or max(2, min(4, _cpu))
+executor = ThreadPoolExecutor(max_workers=_exec_workers)
+prediction_executor = ThreadPoolExecutor(max_workers=_pred_workers)
 
 # AI-AGENT-REF: Add proper cleanup with atexit handlers for ThreadPoolExecutor resource leak
 def cleanup_executors():
@@ -3714,68 +3728,26 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
         )
 
 
-def _ensure_data_fresh(fetcher, symbols, max_age_seconds: int) -> None:
+def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
     """
-    Validate that the most recent minute bar for each symbol is not older than max_age_seconds.
-    Log all timestamps in UTC for auditability.
+    Validate that the cached minute data for each symbol is recent enough.
+    Logs UTC timestamps and fails fast if any symbol is stale.
     """
+    from data_fetcher import get_cached_minute_timestamp, last_minute_bar_age_seconds
     import datetime as _dt
-    import pandas as pd
-    now_utc = _dt.datetime.now(_dt.timezone.utc)
+    now_utc = _dt.datetime.now(_dt.timezone.utc).isoformat()
     stale = []
     for sym in symbols:
-        # Get last few minutes of data to check freshness
-        try:
-            df = fetcher.get_minute_df(
-                sym, 
-                now_utc - _dt.timedelta(minutes=30), 
-                now_utc
-            )
-            if df is None or df.empty:
-                stale.append((sym, "no_data"))
-                continue
-            
-            # Get the most recent timestamp
-            if hasattr(df, 'index') and len(df.index) > 0:
-                ts = df.index[-1]
-            elif 'timestamp' in df.columns and len(df) > 0:
-                ts = df['timestamp'].iloc[-1]
-            else:
-                stale.append((sym, "no_timestamp"))
-                continue
-                
-            # Convert to UTC-aware datetime if needed
-            if isinstance(ts, pd.Timestamp):
-                if ts.tz is None:
-                    ts = ts.tz_localize('UTC')
-                else:
-                    ts = ts.tz_convert('UTC')
-                ts = ts.to_pydatetime()
-            elif isinstance(ts, _dt.datetime):
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=_dt.timezone.utc)
-                elif ts.tzinfo != _dt.timezone.utc:
-                    ts = ts.astimezone(_dt.timezone.utc)
-            else:
-                # Try to parse as timestamp
-                try:
-                    ts = pd.to_datetime(ts, utc=True).to_pydatetime()
-                except Exception:
-                    stale.append((sym, "invalid_timestamp"))
-                    continue
-                
-            age = (now_utc - ts).total_seconds()
-            if age > max_age_seconds:
-                stale.append((sym, f"age={int(age)}s"))
-        except Exception as e:
-            stale.append((sym, f"error={str(e)[:50]}"))
-            continue
-            
+        age = last_minute_bar_age_seconds(sym)
+        if age is None:
+            stale.append((sym, "no_cache"))
+        elif age > max_age_seconds:
+            stale.append((sym, f"age={int(age)}s"))
     if stale:
         details = ", ".join([f"{s}({r})" for s, r in stale])
-        logger.warning("Data staleness detected [UTC now=%s]: %s", now_utc.isoformat(), details)
-        raise RuntimeError(f"Stale data for symbols: {details}")
-    logger.debug("Data freshness OK [UTC now=%s]", now_utc.isoformat())
+        logger.warning("Data staleness detected [UTC now=%s]: %s", now_utc, details)
+        raise RuntimeError(f"Stale minute-cache for symbols: {details}")
+    logger.debug("Data freshness OK [UTC now=%s]", now_utc)
 
 
 # AI-AGENT-REF: Skip expensive health checks during test imports to improve performance
@@ -6263,7 +6235,10 @@ def _model_feature_names(model) -> list[str]:
 
 
 def _should_hold_position(df: pd.DataFrame) -> bool:
-    from indicators import rsi
+    try:
+        from ai_trading.indicators import rsi  # type: ignore
+    except Exception:  # pragma: no cover
+        from indicators import rsi  # type: ignore
 
     """Return True if trend indicators favor staying in the trade."""
     try:
@@ -6691,7 +6666,12 @@ def trade_logic(
 
 def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
     """Delegates to :mod:`portfolio` to avoid import cycles."""
-    from portfolio import compute_portfolio_weights as _cpw
+    try:
+        from ai_trading import portfolio  # type: ignore
+        _cpw = portfolio.compute_portfolio_weights
+    except Exception:  # pragma: no cover
+        import portfolio  # type: ignore
+        _cpw = portfolio.compute_portfolio_weights
 
     # AI-AGENT-REF: wrapper for moved implementation
     return _cpw(ctx, symbols)
@@ -8353,7 +8333,7 @@ def start_metrics_server(default_port: int = 9200) -> None:
             try:
                 import requests
 
-                resp = requests.get(f"http://localhost:{default_port}")
+                resp = requests.get(f"http://localhost:{default_port}", timeout=2)
                 if resp.ok:
                     logger.info(
                         "Metrics port %d already serving; reusing", default_port
@@ -8439,7 +8419,10 @@ def run_multi_strategy(ctx: BotContext) -> None:
         current_positions = ctx.api.get_all_positions()
         
         # Generate hold signals for existing positions
-        from signals import generate_position_hold_signals, enhance_signals_with_position_logic
+        try:
+            from ai_trading.signals import generate_position_hold_signals, enhance_signals_with_position_logic  # type: ignore
+        except Exception:  # pragma: no cover
+            from signals import generate_position_hold_signals, enhance_signals_with_position_logic  # type: ignore
         hold_signals = generate_position_hold_signals(ctx, current_positions)
         
         # Apply position holding logic to all strategy signals

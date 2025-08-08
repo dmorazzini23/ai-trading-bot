@@ -12,9 +12,15 @@ from logger import get_logger
 import pandas as pd
 
 import config
-import signals  # noqa: F401 - used for side effects in bot modules
+try:
+    import ai_trading.signals as signals  # type: ignore  # noqa: F401
+except Exception:  # pragma: no cover
+    import signals  # noqa: F401
 import risk_engine
-import data_fetcher
+try:
+    import ai_trading.data_fetcher as data_fetcher  # type: ignore
+except Exception:  # pragma: no cover
+    import data_fetcher
 try:
     import execution_api as execution_api  # type: ignore
 except Exception:  # pragma: no cover - fallback for older repo layout

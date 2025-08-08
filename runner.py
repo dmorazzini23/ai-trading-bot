@@ -12,7 +12,10 @@ import time
 from typing import NoReturn
 
 import requests
-from trade_execution import recent_buys
+try:
+    from ai_trading.trade_execution import recent_buys  # type: ignore
+except Exception:  # pragma: no cover
+    from trade_execution import recent_buys  # type: ignore
 
 # AI-AGENT-REF: graceful numpy fallback for testing
 try:
@@ -27,13 +30,14 @@ except ImportError:
             return sum(arr) / len(arr) if arr else 0
     np = MockNumpy()
 
-from indicators import (
-    vwap,
-    donchian_channel,
-    obv,
-    stochastic_rsi,
-    hurst_exponent,
-)
+try:
+    from ai_trading.indicators import (  # type: ignore
+        vwap, donchian_channel, obv, stochastic_rsi, hurst_exponent
+    )
+except Exception:  # pragma: no cover
+    from indicators import (
+        vwap, donchian_channel, obv, stochastic_rsi, hurst_exponent,
+    )
 try:
     from ai_trading.capital_scaling import (
         fractional_kelly,
