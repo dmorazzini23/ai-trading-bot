@@ -26,7 +26,7 @@ def test_meta_learning_mixed_format():
     """Test that meta-learning can handle mixed audit/meta-learning log formats."""
     print("Testing meta-learning mixed format handling...")
     
-    from meta_learning import validate_trade_data_quality, retrain_meta_learner
+    from ai_trading.meta_learning import validate_trade_data_quality, retrain_meta_learner
     
     # Test with the actual trades.csv file
     quality_report = validate_trade_data_quality('trades.csv')

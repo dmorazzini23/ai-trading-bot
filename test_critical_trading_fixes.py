@@ -384,7 +384,7 @@ class TestIntegrationScenarios(unittest.TestCase):
         # This would be a more complex integration test
         # For now, just ensure modules can be imported together
         import sentiment
-        import meta_learning
+        from ai_trading import meta_learning
         import trade_execution
         
         # Verify key functions exist
