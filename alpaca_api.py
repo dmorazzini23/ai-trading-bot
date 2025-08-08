@@ -39,7 +39,8 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
-from ratelimit import limits, sleep_and_retry
+# AI-AGENT-REF: Use central rate limiter instead of per-call decorators
+from ai_trading.integrations.rate_limit import get_limiter
 
 
 logger = logging.getLogger(__name__)
@@ -98,8 +99,9 @@ def _warn_limited(key: str, msg: str, *args, limit: int = 3, **kwargs) -> None:
             logger.warning("Further '%s' warnings suppressed", key)
 
 
-@sleep_and_retry
-@limits(calls=RATE_LIMIT_BUDGET, period=60)
+# AI-AGENT-REF: Use central rate limiter instead of decorators
+limiter = get_limiter()
+
 @retry(
     stop=stop_after_attempt(5),
     wait=wait_exponential(multiplier=1, min=1, max=16),
@@ -110,7 +112,12 @@ def alpaca_get(
     endpoint: str,
     params: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Perform a GET request to the Alpaca API with retries."""
+    """Perform a GET request to the Alpaca API with central rate limiting."""
+    # AI-AGENT-REF: Use central rate limiter for API calls
+    success = limiter.acquire_sync("bars", 1, timeout=5.0)
+    if not success:
+        logger.warning(f"Rate limit timeout for {endpoint}")
+        return None
 
     url = f"{ALPACA_BASE_URL}{endpoint}"
     try:

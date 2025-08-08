@@ -8576,6 +8576,12 @@ def _process_symbols(
     processing_start_time = time.monotonic()
 
     for symbol in symbols:
+        # AI-AGENT-REF: Final-bar/session gating before strategy evaluation
+        from ai_trading.market.calendars import ensure_final_bar
+        if not ensure_final_bar(symbol, "1min"):  # Default to 1min timeframe
+            logger.info("SKIP_PARTIAL_BAR", extra={"symbol": symbol, "timeframe": "1min"})
+            continue
+        
         # Circuit breaker: limit processing time and symbol count
         if processed_symbols >= max_symbols_per_cycle:
             logger.warning(

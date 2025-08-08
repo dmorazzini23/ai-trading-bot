@@ -418,3 +418,6 @@ def rate_limit_sync(route: str, tokens: int = 1, timeout: Optional[float] = None
     """Convenience function for sync rate limiting."""
     limiter = get_rate_limiter()
     return limiter.acquire_sync(route, tokens, timeout)
+
+# AI-AGENT-REF: Alias for convenience 
+get_limiter = get_rate_limiter
