@@ -3589,14 +3589,15 @@ def get_strategies():
     return strategies
 
 
+# AI-AGENT-REF: Defer credential validation to runtime instead of import-time
+# This prevents crashes during import when environment variables are missing
 API_KEY = ALPACA_API_KEY
 API_SECRET = ALPACA_SECRET_KEY
 BASE_URL = config.ALPACA_BASE_URL
 paper = ALPACA_PAPER
 
-if not (API_KEY and API_SECRET) and not config.SHADOW_MODE:
-    logger.critical("Alpaca credentials missing – aborting startup")
-    sys.exit(1)
+# AI-AGENT-REF: Remove import-time credential validation - moved to runtime
+# Credential validation is now handled by _ensure_alpaca_env_or_raise() at runtime
 
 # AI-AGENT-REF: conditional client initialization with graceful fallback
 trading_client = None
@@ -3604,8 +3605,27 @@ data_client = None
 stream = None
 
 def _initialize_alpaca_clients():
-    """Initialize Alpaca trading clients lazily to avoid import delays."""
+    """
+    Initialize Alpaca trading clients with runtime credential validation.
+    
+    This function validates credentials at runtime and initializes the clients
+    only when they are actually needed, preventing import-time crashes.
+    """
     global trading_client, data_client, stream
+    
+    if trading_client is not None:
+        return  # Already initialized
+    
+    # AI-AGENT-REF: Validate credentials at runtime, not import time
+    try:
+        api_key, secret_key, base_url = _ensure_alpaca_env_or_raise()
+    except RuntimeError as e:
+        if config.SHADOW_MODE:
+            logger.warning("Running in SHADOW_MODE with missing credentials: %s", e)
+            return  # Allow shadow mode to continue
+        else:
+            logger.critical("Alpaca credentials missing – cannot initialize clients")
+            raise e
     
     if trading_client is not None:
         return  # Already initialized
@@ -3620,14 +3640,14 @@ def _initialize_alpaca_clients():
         return
         
     try:
-        # Initialize Alpaca trading clients
-        trading_client = TradingClient(API_KEY, API_SECRET, paper=paper)
-        data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
+        # Initialize Alpaca trading clients using runtime credentials
+        trading_client = TradingClient(api_key, secret_key, paper=paper)
+        data_client = StockHistoricalDataClient(api_key, secret_key)
 
-        # Create a trading stream for order status updates
+        # Create a trading stream for order status updates  
         stream = TradingStream(
-            API_KEY,
-            API_SECRET,
+            api_key,
+            secret_key,
             paper=True,
         )
         logger.info("Alpaca trading clients initialized successfully")
