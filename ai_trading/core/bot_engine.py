@@ -852,12 +852,14 @@ else:
         from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce, OrderStatus
         from alpaca.trading.models import Order
         from alpaca.trading.requests import (
-            GetOrdersRequest,
-            LimitOrderRequest,
-            MarketOrderRequest,
+            GetOrdersRequest, GetAssetsRequest, MarketOrderRequest,
         )
         from alpaca.trading.stream import TradingStream
-        from alpaca_trade_api.rest import APIError
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.models import Quote
+        from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
+        from alpaca.data.timeframe import TimeFrame
+        from alpaca_trade_api.rest import APIError  # kept for legacy exception compatibility
         
         logger.info("Real Alpaca Trading SDK imported successfully")
         logger.debug("Production trading ready with Python %s", sys.version)
@@ -1630,11 +1632,19 @@ skipped_cooldown = Counter(
 DISASTER_DD_LIMIT = float(config.get_env("DISASTER_DD_LIMIT", "0.2"))
 
 # Paths
+from pathlib import Path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# PROJECT_ROOT: repo root (…/ai_trading/core/ -> up two levels)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def abspath(fname: str) -> str:
+    """Path within core/ directory."""
     return os.path.join(BASE_DIR, fname)
+
+def abspath_repo_root(fname: str) -> str:
+    """Path relative to repository root."""
+    return str(PROJECT_ROOT.joinpath(fname))
 
 
 def atomic_joblib_dump(obj, path: str) -> None:
@@ -1685,7 +1695,8 @@ def get_git_hash() -> str:
         return "unknown"
 
 
-TICKERS_FILE = abspath("tickers.csv")
+# Tickers file resides at repo root by convention
+TICKERS_FILE = abspath_repo_root("tickers.csv")
 # AI-AGENT-REF: use centralized trade log path
 TRADE_LOG_FILE = config.TRADE_LOG_FILE
 SIGNAL_WEIGHTS_FILE = abspath("signal_weights.csv")
@@ -1697,9 +1708,9 @@ REWARD_LOG_FILE = abspath("reward_log.csv")
 FEATURE_PERF_FILE = abspath("feature_perf.csv")
 INACTIVE_FEATURES_FILE = abspath("inactive_features.json")
 
-# Hyperparameter files
-HYPERPARAMS_FILE = abspath("hyperparams.json")
-BEST_HYPERPARAMS_FILE = abspath("best_hyperparams.json")
+# Hyperparameter files (repo root, not core/)
+HYPERPARAMS_FILE = abspath_repo_root("hyperparams.json")
+BEST_HYPERPARAMS_FILE = abspath_repo_root("best_hyperparams.json")
 
 
 def load_hyperparams() -> dict:
@@ -3602,8 +3613,10 @@ def _initialize_alpaca_clients():
             logger.info("Test environment detected, skipping Alpaca client initialization")
             return
         raise
-    trading_client = REST(key, secret, base_url=base_url)
-    data_client = trading_client  # if you use a single REST client for both
+    # Initialize proper alpaca-py clients (do NOT use legacy REST for data)
+    is_paper = base_url.find("paper") != -1  # Determine if paper trading based on URL
+    trading_client = TradingClient(key, secret, paper=is_paper)
+    data_client = StockHistoricalDataClient(key, secret)
     stream = None  # initialize stream lazily elsewhere if/when required
 
 # IMPORTANT: do not initialize Alpaca clients at import time.
@@ -6708,16 +6721,9 @@ def trade_logic(
     return True
 
 
-def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
-    """Delegates to :mod:`portfolio` to avoid import cycles."""
-    try:
-        from ai_trading import portfolio  # type: ignore
-        _cpw = portfolio.compute_portfolio_weights
-    except Exception:  # pragma: no cover
-        from ai_trading import portfolio  # type: ignore
-        _cpw = portfolio.compute_portfolio_weights
-
-    # AI-AGENT-REF: wrapper for moved implementation
+def compute_portfolio_weights(ctx: "BotContext", symbols: List[str]) -> Dict[str, float]:
+    """Delegate to ai_trading.portfolio.compute_portfolio_weights with correct ctx."""
+    from ai_trading.portfolio import compute_portfolio_weights as _cpw
     return _cpw(ctx, symbols)
 
 

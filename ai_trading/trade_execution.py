@@ -571,6 +571,8 @@ class ExecutionEngine:
         # Use phase logger for execution context
         self.logger = get_phase_logger(__name__, "ORDER_EXEC")
         self.slippage_path = os.path.join(os.path.dirname(__file__), "logs", "slippage.csv")
+        # Ensure directory exists (mirrors the robust orders.csv creation)
+        os.makedirs(os.path.dirname(self.slippage_path), exist_ok=True)
         if not os.path.exists(self.slippage_path):
             # Protect file creation in case the logs directory is unwritable
             try:
