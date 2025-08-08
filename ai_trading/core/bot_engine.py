@@ -57,8 +57,8 @@ warnings.filterwarnings(
 warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 
 # Avoid failing under older Python versions during tests
-if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
-    logging.getLogger(__name__).warning("Running under unsupported Python version")
+if sys.version_info < (3, 10):  # pragma: no cover - compat check
+    logging.getLogger(__name__).warning("Running under unsupported Python version (<3.10)")
 
 from ai_trading.config import management as config
 from ai_trading.config import get_settings
@@ -708,7 +708,10 @@ def is_holiday(ts: pd.Timestamp) -> bool:
 
 # AI-AGENT-REF: lazy import heavy signal calculation module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
-    from signals import calculate_macd as signals_calculate_macd
+    try:
+        from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
+    except Exception:  # pragma: no cover
+        from signals import calculate_macd as signals_calculate_macd
 else:
     # AI-AGENT-REF: mock signals_calculate_macd for test environments
     def signals_calculate_macd(*args, **kwargs):
@@ -974,7 +977,7 @@ else:
     def optimize_signals(*args, **kwargs):
         return args[0] if args else []  # Return signals as-is
 from ai_trading.monitoring.metrics import log_metrics
-# Prefer package import, fall back to legacy root import when running from repo root
+# Package-first, fallback to root (back-compat)
 try:
     from ai_trading.pipeline import model_pipeline  # type: ignore
 except Exception:  # pragma: no cover
@@ -1181,6 +1184,7 @@ except ImportError:
     def start_http_server(*args, **kwargs):
         pass
 
+# Package-first, fallback to root (back-compat)
 try:
     from ai_trading.trade_execution import ExecutionEngine  # type: ignore
 except Exception:  # pragma: no cover
@@ -4151,6 +4155,7 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
             f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
             f"&CIK={ticker}&type=8-K&count=5",
             headers={"User-Agent": "AI Trading Bot"},
+            timeout=10,
         )
         r.raise_for_status()
 

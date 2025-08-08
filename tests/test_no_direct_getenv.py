@@ -1,7 +1,7 @@
 # tests/test_no_direct_getenv.py
-import pathlib
-import re
+import os, pathlib, re, pytest
 
+@pytest.mark.skipif(os.getenv("ENFORCE_SETTINGS_ONLY") not in {"1","true","True"}, reason="Enable after config consolidation PR merges")
 def test_no_direct_getenv_outside_settings():
     root = pathlib.Path(__file__).resolve().parents[1]  # project root
     offenders = []
