@@ -1,6 +1,7 @@
 # AI-AGENT-REF: basic trade utilities
 
 import random
+from datetime import datetime, timedelta, timezone
 from typing import Any, Sequence
 
 from ai_trading.monitoring import metrics as metrics_logger
@@ -16,6 +17,10 @@ except Exception:  # pragma: no cover - fallback for older installs
         drawdown_adjusted_kelly,
         volatility_parity_position,
     )
+
+from ai_trading.data_fetcher import get_bars
+from ai_trading.core.bot_engine import _fetch_intraday_bars_chunked
+from ai_trading.config.settings import get_settings
 
 log = get_logger(__name__)
 
@@ -149,3 +154,64 @@ def execute_trade(
         log.info("SELL %s at %s", final_size, price)
     else:
         log.info("HOLD")
+
+
+def evaluate_entries(ctx, candidates):
+    """
+    Compute entry signals using 1-Min data via chunked batch with fallback.
+    """
+    settings = get_settings()
+    lookback_min = max(5, int(getattr(settings, "intraday_lookback_minutes", 120)))
+    end_ts = getattr(ctx, "intraday_end", None) or datetime.now(timezone.utc)
+    start_ts = getattr(ctx, "intraday_start", None) or (end_ts - timedelta(minutes=lookback_min))
+    frames = _fetch_intraday_bars_chunked(ctx, candidates, start=start_ts, end=end_ts, feed=getattr(ctx, "data_feed", None))
+    signals = {}
+    for sym in candidates:
+        df = frames.get(sym)
+        if df is None or getattr(df, "empty", False):
+            continue
+        try:
+            sig = _compute_entry_signal(ctx, sym, df)
+            if sig is not None:
+                signals[sym] = sig
+        except Exception as exc:
+            ctx.logger.warning("Entry eval failed for %s: %s", sym, exc)
+    return signals
+
+
+def evaluate_exits(ctx, open_positions):
+    """
+    Compute exit signals using 1-Min data via chunked batch with fallback.
+    """
+    syms = list(open_positions) if isinstance(open_positions, (list, set, tuple)) else list(open_positions.keys())
+    if not syms:
+        return {}
+    settings = get_settings()
+    lookback_min = max(5, int(getattr(settings, "intraday_lookback_minutes", 120)))
+    end_ts = getattr(ctx, "intraday_end", None) or datetime.now(timezone.utc)
+    start_ts = getattr(ctx, "intraday_start", None) or (end_ts - timedelta(minutes=lookback_min))
+    frames = _fetch_intraday_bars_chunked(ctx, syms, start=start_ts, end=end_ts, feed=getattr(ctx, "data_feed", None))
+    exits = {}
+    for sym in syms:
+        df = frames.get(sym)
+        if df is None or getattr(df, "empty", False):
+            continue
+        try:
+            sig = _compute_exit_signal(ctx, sym, df)
+            if sig:
+                exits[sym] = sig
+        except Exception as exc:
+            ctx.logger.warning("Exit eval failed for %s: %s", sym, exc)
+    return exits
+
+
+def _compute_entry_signal(ctx, symbol, df):
+    """Placeholder for entry signal computation."""
+    # This would contain the actual entry signal logic
+    return {"buy": True}
+
+
+def _compute_exit_signal(ctx, symbol, df):
+    """Placeholder for exit signal computation.""" 
+    # This would contain the actual exit signal logic
+    return {"sell": True}

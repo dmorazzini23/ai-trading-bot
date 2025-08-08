@@ -1505,5 +1505,42 @@ def warmup_cache(
     return len(results)
 
 
+# ------------------------------
+# Intraday (1-Min) batch helpers
+# ------------------------------
+def get_minute_bars_batch(
+    symbols: list[str],
+    start: date | datetime | str,
+    end: date | datetime | str,
+    feed: str | None = None,
+) -> dict[str, pd.DataFrame]:
+    tf = _resolve_timeframe("1MIN")
+    return get_bars_batch(symbols=symbols, timeframe=tf, start=start, end=end, feed=feed)
+
+
+def get_minute_bars(
+    symbol: str,
+    start: date | datetime | str,
+    end: date | datetime | str,
+    feed: str | None = None,
+) -> pd.DataFrame:
+    tf = _resolve_timeframe("1MIN")
+    return get_bars(symbol=symbol, timeframe=tf, start=start, end=end, feed=feed)
+
+
+def get_bars(
+    symbol: str,
+    timeframe: Union[str, "TimeFrame", "TimeFrameUnit"],
+    start: Union[date, datetime, str],
+    end: Union[date, datetime, str],
+    feed: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Fetch bars for a single symbol. This wraps get_bars_batch for single symbol requests.
+    """
+    result = get_bars_batch([symbol], timeframe, start, end, feed)
+    return result.get(symbol, pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"]))
+
+
 # Export RetryError for test compatibility
-__all__ = ["RetryError", "get_historical_data", "get_minute_df", "get_daily_df", "DataFetchError", "DataFetchException", "get_bars_batch", "warmup_cache"]
+__all__ = ["RetryError", "get_historical_data", "get_minute_df", "get_daily_df", "DataFetchError", "DataFetchException", "get_bars_batch", "warmup_cache", "get_minute_bars_batch", "get_minute_bars", "get_bars"]

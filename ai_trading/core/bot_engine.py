@@ -63,6 +63,8 @@ if sys.version_info < (3, 10):  # pragma: no cover - compat check
 from ai_trading.config import management as config
 from ai_trading.config import get_settings
 from ai_trading.data_fetcher import warmup_cache
+from ai_trading.data_fetcher import get_bars, get_bars_batch
+from ai_trading.data_fetcher import get_minute_bars, get_minute_bars_batch
 from ai_trading.market.calendars import ensure_final_bar
 from ai_trading.utils.timefmt import utc_now_iso, format_datetime_utc  # AI-AGENT-REF: Import UTC timestamp utilities
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
@@ -1734,39 +1736,120 @@ def load_hyperparams() -> dict:
 
 def _maybe_warm_cache(ctx: "BotContext") -> None:
     """
-    Warm the data cache around market open for a subset of the universe.
-    Guarded to run once per process.
+    Warm up cache for the main universe symbols (daily + optional intraday).
     """
     settings = get_settings()
-    if not settings.data_cache_enable or not settings.data_warmup_enable:
-        return
-    if getattr(ctx, "_cache_warmed", False):
+    if not getattr(settings, "data_cache_enable", False):
         return
     try:
-        # Load top-N tickers from repo-root tickers.csv
-        syms = []
-        try:
-            with open(TICKERS_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    s = line.strip()
-                    if s and not s.startswith("#"):
-                        syms.append(s)
-        except Exception as e:
-            logger.warning("Cache warm-up skipped: failed to read tickers file: %s", e)
-            return
-        if not syms:
-            return
-        syms = syms[: max(1, settings.data_warmup_symbols)]
-        # Window
-        end_dt = datetime.now(timezone.utc)
-        start_dt = end_dt - timedelta(days=max(1, settings.data_warmup_lookback_days))
-        tf = settings.data_warmup_timeframe
-        warmed = warmup_cache(syms, tf, start_dt, end_dt)
-        ctx._cache_warmed = True
-        logger.info("Data cache warm-up completed: symbols=%d timeframe=%s lookback_days=%d",
-                    warmed, tf, settings.data_warmup_lookback_days)
+        # Daily warm-up
+        warmup_cache(ctx.symbols, lookback_days=settings.data_warmup_lookback_days)
+        # Optional intraday warm-up
+        if getattr(settings, "intraday_batch_enable", True):
+            end_dt = datetime.now(timezone.utc)
+            start_dt = end_dt - timedelta(minutes=int(settings.intraday_lookback_minutes))
+            _fetch_intraday_bars_chunked(ctx, ctx.symbols, start=start_dt, end=end_dt, feed=getattr(ctx, "data_feed", None))
     except Exception as exc:
         logger.warning("Cache warm-up failed: %s", exc)
+
+
+def _fetch_universe_bars_chunked(
+    ctx: "BotContext",
+    symbols: list[str],
+    timeframe: str,
+    start: "datetime | str",
+    end: "datetime | str", 
+    feed: str | None = None,
+) -> dict[str, "pd.DataFrame"]:
+    """
+    Chunked batched fetch for universe bars with safe fallback.
+    """
+    if not symbols:
+        return {}
+    settings = get_settings()
+    batch_size = max(1, int(getattr(settings, "pretrade_batch_size", 50)))
+    out: dict[str, "pd.DataFrame"] = {}
+    for i in range(0, len(symbols), batch_size):
+        chunk = symbols[i : i + batch_size]
+        try:
+            got = get_bars_batch(chunk, timeframe, start, end, feed=feed)
+        except Exception as exc:
+            logger.warning("Universe batch failed for chunk size %d: %s", len(chunk), exc)
+            got = {}
+        missing = [s for s in chunk if s not in got or got.get(s) is None or getattr(got.get(s), "empty", False)]
+        for s in missing:
+            try:
+                got[s] = get_bars(s, timeframe, start, end, feed=feed)
+            except Exception as one_exc:
+                logger.warning("Universe per-symbol fallback failed for %s: %s", s, one_exc)
+        out.update({k: v for k, v in got.items() if v is not None and not getattr(v, "empty", False)})
+    return out
+
+
+def _fetch_intraday_bars_chunked(
+    ctx: "BotContext",
+    symbols: list[str],
+    start: "datetime | str",
+    end: "datetime | str",
+    feed: str | None = None,
+) -> dict[str, "pd.DataFrame"]:
+    """
+    Chunked batched fetch for 1-minute bars with safe fallback.
+    """
+    if not symbols:
+        return {}
+    settings = get_settings()
+    if not getattr(settings, "intraday_batch_enable", True):
+        return {s: get_minute_bars(s, start, end, feed=feed) for s in symbols}
+    batch_size = max(1, int(getattr(settings, "intraday_batch_size", 40)))
+    out: dict[str, "pd.DataFrame"] = {}
+    for i in range(0, len(symbols), batch_size):
+        chunk = symbols[i : i + batch_size]
+        try:
+            got = get_minute_bars_batch(chunk, start, end, feed=feed)
+        except Exception as exc:
+            logger.warning("Intraday batch failed for chunk size %d: %s", len(chunk), exc)
+            got = {}
+        missing = [s for s in chunk if s not in got or got.get(s) is None or getattr(got.get(s), "empty", False)]
+        for s in missing:
+            try:
+                got[s] = get_minute_bars(s, start, end, feed=feed)
+            except Exception as one_exc:
+                logger.warning("Intraday per-symbol fallback failed for %s: %s", s, one_exc)
+        out.update({k: v for k, v in got.items() if v is not None and not getattr(v, "empty", False)})
+    return out
+
+
+def _fetch_regime_bars(ctx: "BotContext", start, end, timeframe="1D") -> dict[str, "pd.DataFrame"]:
+    settings = get_settings()
+    syms_csv = (getattr(settings, "regime_symbols_csv", None) or "SPY").strip()
+    symbols = [s.strip() for s in syms_csv.split(",") if s.strip()]
+    return _fetch_universe_bars_chunked(ctx, symbols, timeframe, start, end, getattr(ctx, "data_feed", None))
+
+
+def _build_regime_dataset(ctx: "BotContext") -> "pd.DataFrame":
+    """
+    Build regime dataset using a configurable basket via batch fetch.
+    """
+    logger.info("Building regime dataset (batched)")
+    try:
+        end_dt = datetime.now(timezone.utc)
+        start_dt = end_dt - timedelta(days= max(30, int(getattr(ctx, "regime_lookback_days", 100))))
+        bundle = _fetch_regime_bars(ctx, start=start_dt, end=end_dt, timeframe="1D")
+        if not bundle:
+            return pd.DataFrame()
+        cols = []
+        for sym, df in bundle.items():
+            if df is None or getattr(df, "empty", False):
+                continue
+            series = df[["timestamp","close"]].rename(columns={"close": sym}).set_index("timestamp")
+            cols.append(series)
+        if not cols:
+            return pd.DataFrame()
+        return pd.concat(cols, axis=1).sort_index().reset_index()
+    except Exception as exc:
+        logger.warning("REGIME bootstrap failed: %s", exc)
+        return pd.DataFrame()
 
 
 # <-- NEW: marker file for daily retraining -->
@@ -3853,310 +3936,47 @@ def pre_trade_health_check(
     ctx: BotContext, symbols: Sequence[str], min_rows: int = 30
 ) -> dict:
     """
-    Comprehensive system health validation before trading execution.
-
-    Performs critical pre-flight checks to ensure the trading system is ready
-    for safe operation. Validates API connectivity, data quality, account status,
-    and system resources before allowing any trading activity.
-
-    This function serves as the primary gatekeeper for trading operations,
-    preventing execution when critical issues are detected that could lead to
-    trading failures, incorrect decisions, or financial losses.
-
-    Parameters
-    ----------
-    ctx : BotContext
-        Global bot context containing API clients, configuration, and shared
-        resources. Must include valid Alpaca API connection and risk engine.
-    symbols : Sequence[str]
-        List of trading symbols to validate data availability and quality.
-        Example: ['SPY', 'AAPL', 'MSFT']
-    min_rows : int, optional
-        Minimum required number of historical data rows per symbol for
-        reliable technical analysis. Default is 30 bars.
-
-    Returns
-    -------
-    dict
-        Comprehensive health check summary containing:
-        
-        - **checked** (int): Total number of symbols validated
-        - **failures** (list): List of validation failure descriptions
-        - **api_status** (str): Alpaca API connectivity status
-        - **data_quality** (dict): Per-symbol data quality metrics
-        - **account_status** (dict): Trading account health information
-        - **system_resources** (dict): Memory, CPU, and disk usage
-        - **risk_limits** (dict): Current risk exposure and limits
-        - **is_healthy** (bool): Overall system health status
-
-    Raises
-    ------
-    ConnectionError
-        If critical API connections cannot be established
-    ValueError
-        If configuration parameters are invalid or missing
-    RuntimeError
-        If system is in an unsafe state for trading
-
-    Examples
-    --------
-    >>> from bot_engine import pre_trade_health_check
-    >>> symbols = ['SPY', 'QQQ', 'IWM']
-    >>> health = pre_trade_health_check(ctx, symbols, min_rows=50)
-    >>> if health['is_healthy']:
-    ...     print("System ready for trading")
-    ...     proceed_with_trading()
-    ... else:
-    ...     print(f"Health issues: {health['failures']}")
-    ...     handle_health_issues(health)
-
-    Validation Checks
-    -----------------
-    1. **API Connectivity**: Verifies Alpaca API authentication and rate limits
-    2. **Market Data**: Ensures sufficient historical data for analysis
-    3. **Account Status**: Validates buying power and trading permissions
-    4. **Data Quality**: Checks for gaps, stale data, and anomalies
-    5. **Risk Limits**: Verifies current exposure within configured limits
-    6. **System Resources**: Monitors memory, CPU, and disk usage
-    7. **Market Hours**: Confirms market is open for trading
-    8. **Configuration**: Validates all required settings are present
-
-    Notes
-    -----
-    - This function should be called before every trading cycle
-    - Failed health checks will prevent trade execution
-    - Results are logged for monitoring and debugging
-    - Automatic retry logic handles transient failures
-    - Critical failures trigger immediate trading halt
-
-    See Also
-    --------
-    BotContext : Global context management
-    BotState : Trading state management
-    run_all_trades_worker : Main trading execution function
+    Validate symbol data sufficiency, required columns, and timezone sanity using chunked batch.
     """
-
-    min_rows = int(os.getenv("HEALTH_MIN_ROWS", min_rows))
-
-    summary = {
-        "checked": 0,
-        "failures": [],
-        "insufficient_rows": [],
-        "missing_columns": [],
-        "timezone_issues": [],
-    }
-
-    # Test the Alpaca trading client to ensure it's accessible
-    try:
-        if ctx.api is not None and hasattr(ctx.api, "get_account"):
-            ctx.api.get_account()
-        else:
-            logger.error("Alpaca trading client unavailable for account fetch")
-            return summary
-    except Exception as exc:  # pragma: no cover - network dep
-        logger.critical("PRE_TRADE_HEALTH_API_ERROR", extra={"error": str(exc)})
-        return summary
-
-    for sym in symbols:
-        summary["checked"] += 1
-        attempts = 0
-        df = None
-        rows = 0
-        while attempts < 3:
-            try:
-                df = ctx.data_fetcher.get_daily_df(ctx, sym)
-            except Exception as exc:  # pragma: no cover - network dep
-                log_warning("HEALTH_FETCH_ERROR", exc=exc, extra={"symbol": sym})
-                summary["failures"].append(sym)
-                df = None
-                break
-
-            if df is None:
-                logger.critical(
-                    "HEALTH_FAILURE: DataFrame is None.",
-                    extra={"symbol": sym},
-                )
-                summary["failures"].append(sym)
-                break
-            if df.empty:
-                log_warning("HEALTH_NO_DATA", extra={"symbol": sym})
-                summary["failures"].append(sym)
-                break
-
-            rows = len(df)
-            if config.VERBOSE_LOGGING:
-                logger.debug("HEALTH_ROWS", extra={"symbol": sym, "rows": rows})
-            if rows < min_rows:
-                logger.warning(
-                    "HEALTH_INSUFFICIENT_ROWS: only %d rows (min expected %d)",
-                    rows,
-                    min_rows,
-                )
-                logger.debug("Shape: %s", df.shape)
-                logger.debug("Columns: %s", df.columns.tolist())
-                logger.debug("Preview:\n%s", df.head(3))
-                if rows == 0:
-                    logger.critical(
-                        "HEALTH_FAILURE: empty dataset loaded",
-                        extra={"symbol": sym},
-                    )
-                summary["insufficient_rows"].append(sym)
-                attempts += 1
-                if attempts < 3:
-                    pass  # AI-AGENT-REF: avoid long sleep during health check
-                continue
-            else:
-                from ai_trading.utils import log_health_row_check
-
-                log_health_row_check(rows, True)
-            break
-
-        if df is None or df.empty or rows < min_rows:
-            continue
-
-        required = ["open", "high", "low", "close", "volume"]
-        missing = [c for c in required if c not in df.columns or df[c].isnull().all()]
-        if missing:
-            log_warning(
-                "HEALTH_MISSING_COLS",
-                extra={"symbol": sym, "missing": ",".join(missing)},
-            )
-            summary["missing_columns"].append(sym)
-        if df[required].isna().any().any():
-            log_warning(
-                "HEALTH_INVALID_VALUES",
-                extra={"symbol": sym},
-            )
-            summary.setdefault("invalid_values", []).append(sym)
-
-        # AI-AGENT-REF: robust isinstance check that handles mocked pandas modules  
-        try:
-            orig_range = isinstance(df.index, _RealRangeIndex)
-        except (TypeError, AttributeError):
-            # Handle cases where pd.RangeIndex is not a proper type (e.g., during mocking)
-            orig_range = str(type(df.index).__name__) == "RangeIndex"
-        
-        # AI-AGENT-REF: robust isinstance check for DatetimeIndex too
-        try:
-            is_datetime_index = isinstance(df.index, _RealDatetimeIndex)
-        except (TypeError, AttributeError):
-            # Handle cases where pd.DatetimeIndex is not a proper type (e.g., during mocking)
-            is_datetime_index = str(type(df.index).__name__) == "DatetimeIndex"
-            
-        # AI-AGENT-REF: only convert to datetime if not already datetime and not a RangeIndex
-        if not is_datetime_index and not orig_range:
-            datetime_result = pd.to_datetime(df.index, errors="coerce", utc=True)
-            # Check if conversion resulted in all NaT values
-            if datetime_result.isna().all():
-                log_warning(
-                    "HEALTH_DATETIME_CONVERSION_FAILED", 
-                    extra={"symbol": sym, "index_type": str(type(df.index).__name__)}
-                )
-                summary.setdefault("datetime_conversion_failures", []).append(sym)
-                continue  # Skip further processing for this symbol
-            df.index = datetime_result
-        
-        # AI-AGENT-REF: only handle timezone for datetime indices, not RangeIndex
-        if not orig_range and (is_datetime_index or not is_datetime_index):
-            # Only process timezone if we have a datetime-like index
-            if hasattr(df.index, 'tz'):
-                if getattr(df.index, "tz", None) is None:
-                    log_warning("HEALTH_TZ_MISSING", extra={"symbol": sym})
-                    df.index = df.index.tz_localize(timezone.utc)
-                    summary["timezone_issues"].append(sym)
-                else:
-                    df.index = df.index.tz_convert("UTC")
-
-        # AI-AGENT-REF: Improved data staleness detection with market hours awareness
-        if not orig_range:
-            last_ts = df.index[-1]
-            now_utc = pd.Timestamp.now(tz="UTC")
-            
-            # Calculate staleness threshold based on market context
-            staleness_threshold_days = 2  # Default threshold
-            
-            # Check if it's currently a weekend or market holiday
-            from ai_trading.utils import is_market_open, is_weekend, is_market_holiday
-            
-            try:
-                current_is_weekend = is_weekend(now_utc)
-                current_is_holiday = is_market_holiday(now_utc.date())
-                market_currently_open = is_market_open(now_utc)
-                
-                # Adjust staleness expectations based on market state
-                if current_is_weekend:
-                    # If it's weekend, data from Friday should be acceptable
-                    staleness_threshold_days = 4  # Allow data up to 4 days old on weekends
-                elif current_is_holiday:
-                    # On holidays, allow older data
-                    staleness_threshold_days = 5
-                elif not market_currently_open:
-                    # Outside market hours, be more lenient
-                    staleness_threshold_days = 3
-                    
-                # Check if the last data timestamp is outside reasonable staleness
-                staleness_cutoff = now_utc - pd.Timedelta(days=staleness_threshold_days)
-                
-                if last_ts < staleness_cutoff:
-                    # Additional check: if last data is from a trading day, it might be acceptable
-                    last_ts_date = last_ts.date()
-                    days_since_last = (now_utc.date() - last_ts_date).days
-                    
-                    # Only flag as stale if it's been more than reasonable time considering market schedule
-                    should_flag_stale = True
-                    
-                    if days_since_last <= 1:
-                        # Data from yesterday or today - not stale
-                        should_flag_stale = False
-                    elif days_since_last == 2 and current_is_weekend:
-                        # Friday data on weekend - acceptable
-                        should_flag_stale = False
-                    elif days_since_last <= 3 and (current_is_weekend or current_is_holiday):
-                        # Recent data during non-trading periods - acceptable  
-                        should_flag_stale = False
-                        
-                    if should_flag_stale and utils.should_log_stale(sym, last_ts):
-                        log_warning(
-                            "HEALTH_STALE_DATA",
-                            extra={
-                                "symbol": sym,
-                                "last_row_time": last_ts.isoformat(),
-                                "current_utc": now_utc.isoformat(),
-                                "diff_seconds": (now_utc - last_ts).total_seconds(),
-                                "days_since_last": days_since_last,
-                                "market_open": market_currently_open,
-                                "is_weekend": current_is_weekend,
-                                "is_holiday": current_is_holiday,
-                                "staleness_threshold_days": staleness_threshold_days,
-                            },
-                        )
-                        summary.setdefault("stale_data", []).append(sym)
-                        
-            except Exception as e:
-                # Fallback to original logic if market schedule checking fails
-                logger.debug(f"Market schedule check failed for {sym}, using basic staleness: {e}")
-                if last_ts < now_utc - pd.Timedelta(days=2):
-                    if utils.should_log_stale(sym, last_ts):
-                        log_warning(
-                            "HEALTH_STALE_DATA",
-                            extra={
-                                "symbol": sym,
-                                "last_row_time": last_ts.isoformat(),
-                                "current_utc": now_utc.isoformat(),
-                                "diff_seconds": (now_utc - last_ts).total_seconds(),
-                            },
-                        )
-                    summary.setdefault("stale_data", []).append(sym)
-
-    failures = (
-        set(summary["failures"])
-        | set(summary["insufficient_rows"])
-        | set(summary["missing_columns"])
-        | set(summary.get("invalid_values", []))
+    results = {"checked": 0, "failures": [], "insufficient_rows": [], "missing_columns": [], "timezone_issues": []}
+    if not symbols:
+        return results
+    frames = _fetch_universe_bars_chunked(
+        ctx=ctx,
+        symbols=symbols,
+        timeframe="1D",
+        start=ctx.lookback_start,
+        end=ctx.lookback_end,
+        feed=getattr(ctx, "data_feed", None),
     )
-    # AI-AGENT-REF: do not raise when all symbols fail; always return summary
+    for sym in symbols:
+        df = frames.get(sym)
+        if df is None or getattr(df, "empty", False):
+            results["failures"].append((sym, "no_data"))
+            continue
+        results["checked"] += 1
+        try:
+            if len(df) < ctx.min_rows:
+                results["insufficient_rows"].append(sym)
+                continue
+            _validate_columns(df, required=["timestamp","open","high","low","close","volume"], results=results, symbol=sym)
+            _validate_timezones(df, results, sym)
+        except Exception as exc:
+            results["failures"].append((sym, str(exc)))
+    return results
 
-    return summary
+
+def _validate_columns(df, required, results, symbol):
+    """Helper to validate required columns are present."""
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        results["missing_columns"].append(symbol)
+
+
+def _validate_timezones(df, results, symbol):
+    """Helper to validate timezone information."""
+    if hasattr(df, 'index') and hasattr(df.index, 'tz') and df.index.tz is None:
+        results["timezone_issues"].append(symbol)
 
 
 # ─── H. MARKET HOURS GUARD ────────────────────────────────────────────────────
