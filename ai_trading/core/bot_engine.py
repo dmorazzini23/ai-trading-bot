@@ -3720,6 +3720,7 @@ def _ensure_data_fresh(fetcher, symbols, max_age_seconds: int) -> None:
     Log all timestamps in UTC for auditability.
     """
     import datetime as _dt
+    import pandas as pd
     now_utc = _dt.datetime.now(_dt.timezone.utc)
     stale = []
     for sym in symbols:
@@ -3735,19 +3736,33 @@ def _ensure_data_fresh(fetcher, symbols, max_age_seconds: int) -> None:
                 continue
             
             # Get the most recent timestamp
-            if hasattr(df, 'index') and not df.index.empty:
+            if hasattr(df, 'index') and len(df.index) > 0:
                 ts = df.index[-1]
-            elif 'timestamp' in df.columns:
+            elif 'timestamp' in df.columns and len(df) > 0:
                 ts = df['timestamp'].iloc[-1]
             else:
                 stale.append((sym, "no_timestamp"))
                 continue
                 
             # Convert to UTC-aware datetime if needed
-            if hasattr(ts, 'tz_localize'):
-                ts = ts.tz_localize('UTC') if ts.tz is None else ts.tz_convert('UTC')
-            elif not hasattr(ts, 'tzinfo') or ts.tzinfo is None:
-                ts = ts.replace(tzinfo=_dt.timezone.utc)
+            if isinstance(ts, pd.Timestamp):
+                if ts.tz is None:
+                    ts = ts.tz_localize('UTC')
+                else:
+                    ts = ts.tz_convert('UTC')
+                ts = ts.to_pydatetime()
+            elif isinstance(ts, _dt.datetime):
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=_dt.timezone.utc)
+                elif ts.tzinfo != _dt.timezone.utc:
+                    ts = ts.astimezone(_dt.timezone.utc)
+            else:
+                # Try to parse as timestamp
+                try:
+                    ts = pd.to_datetime(ts, utc=True).to_pydatetime()
+                except Exception:
+                    stale.append((sym, "invalid_timestamp"))
+                    continue
                 
             age = (now_utc - ts).total_seconds()
             if age > max_age_seconds:
