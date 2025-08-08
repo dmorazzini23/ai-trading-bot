@@ -26,13 +26,16 @@ def test_pretrade_batch(monkeypatch):
 
 def test_intraday_entries_and_exits(monkeypatch):
     ctx = types.SimpleNamespace(logger=types.SimpleNamespace(warning=lambda *a, **k: None), data_feed=None)
-    # Mock the chunked fetch function directly to avoid API calls
-    def mock_fetch(*args, **kwargs):
+    
+    # Mock the chunked fetch function directly in trade_logic module to avoid API calls
+    def mock_fetch_intraday(*args, **kwargs):
         return {"AAPL": _mk_df(), "MSFT": _mk_df()}
     
-    monkeypatch.setattr(be, "_fetch_intraday_bars_chunked", mock_fetch)
+    # Patch both the import and the function to ensure it's mocked
+    monkeypatch.setattr("ai_trading.trade_logic._fetch_intraday_bars_chunked", mock_fetch_intraday)
     monkeypatch.setattr(tl, "_compute_entry_signal", lambda ctx, sym, df: {"buy": True})
     monkeypatch.setattr(tl, "_compute_exit_signal", lambda ctx, sym, df: {"sell": True})
+    
     entries = tl.evaluate_entries(ctx, ["AAPL","MSFT"])
     exits = tl.evaluate_exits(ctx, {"AAPL": {}})
     assert "AAPL" in entries and "MSFT" in entries
