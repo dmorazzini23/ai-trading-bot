@@ -683,22 +683,79 @@ def validate_env_vars():
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
 
+def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
+    """
+    Resolve Alpaca credentials from environment supporting both naming schemes.
+    
+    Supports both ALPACA_* and APCA_* environment variable naming conventions.
+    The ALPACA_* scheme takes precedence if both are present.
+    
+    Returns:
+        tuple: (api_key, secret_key, base_url) or None for missing values
+    """
+    # Try ALPACA_* first (preferred)
+    api_key = os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
+    secret_key = os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY") 
+    base_url = os.getenv("ALPACA_BASE_URL") or os.getenv("APCA_API_BASE_URL")
+    
+    # Set default base URL if none provided
+    if not base_url:
+        base_url = "https://paper-api.alpaca.markets"
+    
+    return api_key, secret_key, base_url
+
+
+def _warn_duplicate_env_keys() -> None:
+    """Warn about potentially risky duplicate environment keys."""
+    risky_duplicates = [
+        ("ALPACA_API_KEY", "APCA_API_KEY_ID"),
+        ("ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY"),
+        ("ALPACA_BASE_URL", "APCA_API_BASE_URL"),
+    ]
+    
+    for alpaca_key, apca_key in risky_duplicates:
+        alpaca_val = os.getenv(alpaca_key)
+        apca_val = os.getenv(apca_key)
+        
+        if alpaca_val and apca_val and alpaca_val != apca_val:
+            logger.warning(
+                "Conflicting environment variables detected: %s and %s have different values. "
+                "Using %s (ALPACA_* takes precedence)",
+                alpaca_key, apca_key, alpaca_key
+            )
+
+
 def validate_alpaca_credentials() -> None:
-    """Ensure required Alpaca credentials are present."""
+    """
+    Ensure required Alpaca credentials are present with dual schema support.
+    
+    Supports both ALPACA_* and APCA_* environment variable naming schemes.
+    """
     if TESTING:
         # Skip validation in testing mode
         return
-        
-    alpaca_key = os.getenv("ALPACA_API_KEY")
-    alpaca_secret = os.getenv("ALPACA_SECRET_KEY") 
-    alpaca_url = os.getenv("ALPACA_BASE_URL")
     
-    if not alpaca_key or not alpaca_secret or not alpaca_url:
+    # Check for duplicate keys and warn
+    _warn_duplicate_env_keys()
+    
+    # Resolve credentials from environment
+    api_key, secret_key, base_url = _resolve_alpaca_env()
+    
+    if not api_key or not secret_key:
         logger.error("Missing Alpaca credentials")
-        raise RuntimeError(
-            "Missing Alpaca credentials. Please set ALPACA_API_KEY, "
-            "ALPACA_SECRET_KEY and ALPACA_BASE_URL in your environment"
+        logger.error(
+            "Please set either ALPACA_API_KEY/ALPACA_SECRET_KEY or "
+            "APCA_API_KEY_ID/APCA_API_SECRET_KEY in your environment"
         )
+        raise RuntimeError(
+            "Missing Alpaca credentials. Please set either "
+            "ALPACA_API_KEY/ALPACA_SECRET_KEY or APCA_API_KEY_ID/APCA_API_SECRET_KEY"
+        )
+    
+    # Log masked credentials for verification (no secrets exposed)
+    logger.info("Alpaca credentials resolved successfully")
+    logger.debug("Using API key: %s***", api_key[:8] if len(api_key) > 8 else "***")
+    logger.debug("Using base URL: %s", base_url)
 
 
 def log_config(vars_list):

@@ -6,9 +6,12 @@ import time
 from threading import Thread
 import threading
 
+# AI-AGENT-REF: Load .env BEFORE importing any heavy modules or Settings
 from dotenv import load_dotenv
-from ai_trading.config import Settings
+load_dotenv()
 
+# AI-AGENT-REF: Import Settings AFTER .env is loaded to prevent import-time crashes
+from ai_trading.config import Settings
 import ai_trading.app as app
 from ai_trading.runner import run_cycle
 from ai_trading.utils import set_random_seeds, ensure_deterministic_training, get_pid_on_port, get_free_port
@@ -30,6 +33,7 @@ except ImportError:
     def start_performance_monitoring():
         pass
 
+# AI-AGENT-REF: Create global config AFTER .env loading and Settings import
 config = Settings()
 
 logger = logging.getLogger(__name__)
@@ -44,7 +48,18 @@ def validate_environment() -> None:
 
 
 def run_bot(*_a, **_k) -> int:
-    """Compatibility wrapper to execute one trading cycle."""
+    """
+    Compatibility wrapper to execute one trading cycle.
+    
+    This function imports runner components after .env is guaranteed to be loaded
+    to prevent import-time crashes.
+    """
+    # AI-AGENT-REF: Ensure .env is loaded before importing runner components
+    load_dotenv()
+    
+    # AI-AGENT-REF: Import runner after .env is guaranteed loaded
+    from ai_trading.runner import run_cycle
+    
     # AI-AGENT-REF: run cycle directly instead of spawning subprocesses
     run_cycle()
     return 0
@@ -85,6 +100,7 @@ def start_api(ready_signal: threading.Event = None) -> None:
 
 def main() -> None:
     """Start the API thread and repeatedly run trading cycles."""
+    # AI-AGENT-REF: Ensure .env is loaded before any Settings usage
     load_dotenv()
     
     # AI-AGENT-REF: Set up deterministic behavior early

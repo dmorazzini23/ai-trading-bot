@@ -63,6 +63,7 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
 from ai_trading.config import management as config
 from ai_trading.config.settings_singleton import get_settings
 from ai_trading.market.calendars import ensure_final_bar
+from ai_trading.utils.timefmt import utc_now_iso, format_datetime_utc  # AI-AGENT-REF: Import UTC timestamp utilities
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
 try:
     from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
@@ -1071,6 +1072,64 @@ def _require_cfg(value: str | None, name: str) -> str:
 
 # AI-AGENT-REF: Remove import-time config validation to prevent import crashes
 # Config validation moved to init_runtime_config() and called from main()
+def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
+    """
+    Resolve Alpaca credentials from environment supporting both naming schemes.
+    
+    Supports both ALPACA_* and APCA_* environment variable naming conventions.
+    The ALPACA_* scheme takes precedence if both are present.
+    
+    Returns:
+        tuple: (api_key, secret_key, base_url) or None for missing values
+    """
+    import os
+    
+    # Try ALPACA_* first (preferred)
+    api_key = os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
+    secret_key = os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY") 
+    base_url = os.getenv("ALPACA_BASE_URL") or os.getenv("APCA_API_BASE_URL")
+    
+    # Set default base URL if none provided
+    if not base_url:
+        base_url = "https://paper-api.alpaca.markets"
+    
+    return api_key, secret_key, base_url
+
+
+def _ensure_alpaca_env_or_raise() -> tuple[str, str, str]:
+    """
+    Ensure Alpaca credentials are present or raise RuntimeError.
+    
+    This function performs runtime validation of credentials and should be
+    called during initialization, not at import time.
+    
+    Returns:
+        tuple: (api_key, secret_key, base_url) - all guaranteed to be non-empty
+        
+    Raises:
+        RuntimeError: If required credentials are missing
+    """
+    api_key, secret_key, base_url = _resolve_alpaca_env()
+    
+    if not api_key or not secret_key:
+        logger.error("Missing Alpaca credentials for runtime validation")
+        logger.error(
+            "Please set either ALPACA_API_KEY/ALPACA_SECRET_KEY or "
+            "APCA_API_KEY_ID/APCA_API_SECRET_KEY in your environment"
+        )
+        raise RuntimeError(
+            "Missing Alpaca credentials. Please set either "
+            "ALPACA_API_KEY/ALPACA_SECRET_KEY or APCA_API_KEY_ID/APCA_API_SECRET_KEY"
+        )
+    
+    # Log masked credentials for verification (no secrets exposed)
+    logger.info("Alpaca credentials validated successfully")
+    logger.debug("Using API key: %s***", api_key[:8] if len(api_key) > 8 else "***")
+    logger.debug("Using base URL: %s", base_url)
+    
+    return api_key, secret_key, base_url
+
+
 def init_runtime_config():
     """Initialize runtime configuration and validate critical keys."""
     from ai_trading.config import Settings
@@ -1078,8 +1137,17 @@ def init_runtime_config():
     
     # Validate critical keys at runtime, not import time
     global ALPACA_API_KEY, ALPACA_SECRET_KEY, BOT_MODE_ENV
-    ALPACA_API_KEY = _require_cfg(getattr(cfg, 'ALPACA_API_KEY', None), "ALPACA_API_KEY")
-    ALPACA_SECRET_KEY = _require_cfg(getattr(cfg, 'ALPACA_SECRET_KEY', None), "ALPACA_SECRET_KEY")
+    
+    # Use the new credential resolution functions
+    try:
+        ALPACA_API_KEY, ALPACA_SECRET_KEY, _ = _ensure_alpaca_env_or_raise()
+    except RuntimeError as e:
+        if not config.TESTING:  # Allow missing credentials in test mode
+            raise e
+        # In test mode, use dummy credentials
+        ALPACA_API_KEY = "test_api_key"
+        ALPACA_SECRET_KEY = "test_secret_key"
+    
     BOT_MODE_ENV = _require_cfg(getattr(cfg, 'BOT_MODE', None), "BOT_MODE")
     
     if not callable(validate_alpaca_credentials):
@@ -1323,7 +1391,7 @@ PORTFOLIO_FILE = "portfolio_snapshot.json"
 
 def save_portfolio_snapshot(portfolio: Dict[str, int]) -> None:
     data = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": utc_now_iso(),  # AI-AGENT-REF: Use UTC timestamp utility
         "positions": portfolio,
     }
     with open(PORTFOLIO_FILE, "w") as f:
@@ -3521,14 +3589,15 @@ def get_strategies():
     return strategies
 
 
+# AI-AGENT-REF: Defer credential validation to runtime instead of import-time
+# This prevents crashes during import when environment variables are missing
 API_KEY = ALPACA_API_KEY
 API_SECRET = ALPACA_SECRET_KEY
 BASE_URL = config.ALPACA_BASE_URL
 paper = ALPACA_PAPER
 
-if not (API_KEY and API_SECRET) and not config.SHADOW_MODE:
-    logger.critical("Alpaca credentials missing – aborting startup")
-    sys.exit(1)
+# AI-AGENT-REF: Remove import-time credential validation - moved to runtime
+# Credential validation is now handled by _ensure_alpaca_env_or_raise() at runtime
 
 # AI-AGENT-REF: conditional client initialization with graceful fallback
 trading_client = None
@@ -3536,8 +3605,27 @@ data_client = None
 stream = None
 
 def _initialize_alpaca_clients():
-    """Initialize Alpaca trading clients lazily to avoid import delays."""
+    """
+    Initialize Alpaca trading clients with runtime credential validation.
+    
+    This function validates credentials at runtime and initializes the clients
+    only when they are actually needed, preventing import-time crashes.
+    """
     global trading_client, data_client, stream
+    
+    if trading_client is not None:
+        return  # Already initialized
+    
+    # AI-AGENT-REF: Validate credentials at runtime, not import time
+    try:
+        api_key, secret_key, base_url = _ensure_alpaca_env_or_raise()
+    except RuntimeError as e:
+        if config.SHADOW_MODE:
+            logger.warning("Running in SHADOW_MODE with missing credentials: %s", e)
+            return  # Allow shadow mode to continue
+        else:
+            logger.critical("Alpaca credentials missing – cannot initialize clients")
+            raise e
     
     if trading_client is not None:
         return  # Already initialized
@@ -3552,14 +3640,14 @@ def _initialize_alpaca_clients():
         return
         
     try:
-        # Initialize Alpaca trading clients
-        trading_client = TradingClient(API_KEY, API_SECRET, paper=paper)
-        data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
+        # Initialize Alpaca trading clients using runtime credentials
+        trading_client = TradingClient(api_key, secret_key, paper=paper)
+        data_client = StockHistoricalDataClient(api_key, secret_key)
 
-        # Create a trading stream for order status updates
+        # Create a trading stream for order status updates  
         stream = TradingStream(
-            API_KEY,
-            API_SECRET,
+            api_key,
+            secret_key,
             paper=True,
         )
         logger.info("Alpaca trading clients initialized successfully")
@@ -8755,7 +8843,7 @@ def _log_loop_heartbeat(loop_id: str, start: float) -> None:
         "HEARTBEAT",
         extra={
             "loop_id": loop_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": utc_now_iso(),  # AI-AGENT-REF: Use UTC timestamp utility
             "duration": duration,
         },
     )
@@ -8765,7 +8853,7 @@ def _send_heartbeat() -> None:
     """Lightweight heartbeat when halted."""
     logger.info(
         "HEARTBEAT_HALTED",
-        extra={"timestamp": datetime.now(timezone.utc).isoformat()},
+        extra={"timestamp": utc_now_iso()},  # AI-AGENT-REF: Use UTC timestamp utility
     )
 
 
@@ -9448,6 +9536,13 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
 
 def main() -> None:
     logger.info("Main trading bot starting...")
+    
+    # AI-AGENT-REF: Initialize runtime config and validate credentials
+    try:
+        init_runtime_config()
+    except RuntimeError as e:
+        logger.critical("Runtime configuration failed: %s", e)
+        sys.exit(2)
     
     # AI-AGENT-REF: Validate Alpaca credentials using settings singleton
     cfg = get_settings()
