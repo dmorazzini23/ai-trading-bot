@@ -14,6 +14,17 @@ from pathlib import Path
 import logging
 
 from ai_trading.config import get_settings
+from ai_trading.logging_filters import SecretFilter
+import logging
+
+logger = logging.getLogger(__name__)
+# Ensure secrets are masked across all handlers attached to this logger.
+for h in logger.handlers:
+    h.addFilter(SecretFilter())
+# Also try the root logger for broad coverage (safe no-op if none).
+root = logging.getLogger()
+for h in root.handlers:
+    h.addFilter(SecretFilter())
 
 
 class ConfigValidator:
