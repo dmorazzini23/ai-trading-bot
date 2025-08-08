@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     data_cache_dir: str = Field("data_cache", env="DATA_CACHE_DIR")
     data_cache_disk_enable: bool = Field(False, env="DATA_CACHE_DISK_ENABLE")
 
+    # --- Data warm-up controls ---
+    data_warmup_enable: bool = Field(False, env="DATA_WARMUP_ENABLE")
+    data_warmup_symbols: int = Field(25, env="DATA_WARMUP_SYMBOLS")  # top N from tickers.csv
+    data_warmup_timeframe: str = Field("1Min", env="DATA_WARMUP_TIMEFRAME")  # "1Min" or "1D"
+    data_warmup_lookback_days: int = Field(5, env="DATA_WARMUP_LOOKBACK_DAYS")  # historical window
+
     model_config = {
         "env_file": ".env",
         "case_sensitive": False,

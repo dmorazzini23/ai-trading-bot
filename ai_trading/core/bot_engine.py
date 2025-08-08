@@ -62,6 +62,7 @@ if sys.version_info < (3, 10):  # pragma: no cover - compat check
 
 from ai_trading.config import management as config
 from ai_trading.config import get_settings
+from ai_trading.data_fetcher import warmup_cache
 from ai_trading.market.calendars import ensure_final_bar
 from ai_trading.utils.timefmt import utc_now_iso, format_datetime_utc  # AI-AGENT-REF: Import UTC timestamp utilities
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
@@ -1729,6 +1730,43 @@ def load_hyperparams() -> dict:
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Failed to load hyperparameters from %s: %s", path, exc)
         return {}
+
+
+def _maybe_warm_cache(ctx: "BotContext") -> None:
+    """
+    Warm the data cache around market open for a subset of the universe.
+    Guarded to run once per process.
+    """
+    settings = get_settings()
+    if not settings.data_cache_enable or not settings.data_warmup_enable:
+        return
+    if getattr(ctx, "_cache_warmed", False):
+        return
+    try:
+        # Load top-N tickers from repo-root tickers.csv
+        syms = []
+        try:
+            with open(TICKERS_FILE, "r", encoding="utf-8") as f:
+                for line in f:
+                    s = line.strip()
+                    if s and not s.startswith("#"):
+                        syms.append(s)
+        except Exception as e:
+            logger.warning("Cache warm-up skipped: failed to read tickers file: %s", e)
+            return
+        if not syms:
+            return
+        syms = syms[: max(1, settings.data_warmup_symbols)]
+        # Window
+        end_dt = datetime.now(timezone.utc)
+        start_dt = end_dt - timedelta(days=max(1, settings.data_warmup_lookback_days))
+        tf = settings.data_warmup_timeframe
+        warmed = warmup_cache(syms, tf, start_dt, end_dt)
+        ctx._cache_warmed = True
+        logger.info("Data cache warm-up completed: symbols=%d timeframe=%s lookback_days=%d",
+                    warmed, tf, settings.data_warmup_lookback_days)
+    except Exception as exc:
+        logger.warning("Cache warm-up failed: %s", exc)
 
 
 # <-- NEW: marker file for daily retraining -->

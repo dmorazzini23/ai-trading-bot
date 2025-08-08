@@ -45,7 +45,7 @@ def _load_engine():
 
 
 def run_cycle() -> None:
-    """Execute a single trading cycle if not already running."""
+    """Execute a single trading cycle with basic re-entrancy protection."""
     global _last_run_time
 
     current_time = time.time()
@@ -62,8 +62,19 @@ def run_cycle() -> None:
         # AI-AGENT-REF: Lazy load bot engine components only when needed
         run_all_trades_worker, BotState = _load_engine()
         
+        state = BotState()
+        
+        # Before invoking engine, give it an opportunity to warm cache exactly once.
+        try:
+            # Import lazily to avoid import-time penalties if engine not needed
+            from ai_trading.core.bot_engine import _maybe_warm_cache
+            if hasattr(state, "ctx"):
+                _maybe_warm_cache(state.ctx)  # best-effort; ignores if disabled or already warmed
+        except Exception:
+            pass
+        
         # Execute the trading cycle
-        run_all_trades_worker(BotState(), None)
+        run_all_trades_worker(state, None)
     except Exception as e:
         log.exception("Trading cycle failed: %s", e)
     finally:

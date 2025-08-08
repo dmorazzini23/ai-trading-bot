@@ -23,8 +23,8 @@ from ai_trading.market import cache as mcache
 # Prometheus metrics (optional)
 try:
     from prometheus_client import Counter, Histogram
-    _MET_REQS = Counter("data_requests_total", "Data requests", ["source","timeframe","cache"])
-    _MET_LAT  = Histogram("data_request_latency_seconds", "Data request latency", ["source","timeframe","cache"])
+    _MET_REQS = Counter("data_requests_total", "Data requests", ["source","timeframe","cache","mode"])
+    _MET_LAT  = Histogram("data_request_latency_seconds", "Data request latency", ["source","timeframe","cache","mode"])
 except Exception:  # pragma: no cover
     class _Noop:
         def labels(self,*a,**k): return self
@@ -792,13 +792,13 @@ def get_daily_df(
     if settings.data_cache_enable:
         df_cached = mcache.get_mem(symbol, tf_name, start_s, end_s, settings.data_cache_ttl_seconds)
         if df_cached is not None:
-            _MET_REQS.labels("cache", tf_name, "hit").inc()
+            _MET_REQS.labels("cache", tf_name, "hit", "single").inc()
             return df_cached
         if settings.data_cache_disk_enable:
             on_disk = mcache.get_disk(settings.data_cache_dir, symbol, tf_name, start_s, end_s)
             if on_disk is not None:
                 mcache.put_mem(symbol, tf_name, start_s, end_s, on_disk)
-                _MET_REQS.labels("cache", tf_name, "hit_disk").inc()
+                _MET_REQS.labels("cache", tf_name, "hit_disk", "single").inc()
                 return on_disk
 
     t0 = time.perf_counter()
@@ -815,8 +815,8 @@ def get_daily_df(
                 "Secondary provider failed for %s: %s", symbol, fh_err
             )
             raise DataSourceDownException(symbol) from fh_err
-    _MET_LAT.labels("alpaca", tf_name, "miss").observe(time.perf_counter() - t0)
-    _MET_REQS.labels("alpaca", tf_name, "miss").inc()
+    _MET_LAT.labels("alpaca", tf_name, "miss", "single").observe(time.perf_counter() - t0)
+    _MET_REQS.labels("alpaca", tf_name, "miss", "single").inc()
     try:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(-1)
@@ -1310,5 +1310,200 @@ def fetch_minute_yfinance(symbol: str) -> pd.DataFrame:
     return df
 
 
+# ------------------------------
+# Batched fetch & warm-up helpers
+# ------------------------------
+def _resolve_timeframe(timeframe: Union[str, "TimeFrame", "TimeFrameUnit"]) -> "TimeFrame":
+    """Resolve timeframe parameter to TimeFrame object."""
+    try:
+        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+        if isinstance(timeframe, str):
+            tf_map = {
+                "1MIN": TimeFrame.Minute,
+                "1Min": TimeFrame.Minute,
+                "5MIN": TimeFrame(5, TimeFrameUnit.Minute),
+                "1HOUR": TimeFrame.Hour,
+                "1DAY": TimeFrame.Day,
+                "1D": TimeFrame.Day,
+            }
+            return tf_map.get(timeframe.upper(), TimeFrame.Day)
+        return timeframe
+    except ImportError:
+        # Fallback when alpaca not available
+        return timeframe
+
+
+def _to_dt(dt_input: Union[date, datetime, str]) -> datetime:
+    """Convert date/datetime/string to datetime."""
+    if isinstance(dt_input, str):
+        return ensure_datetime(dt_input)
+    elif isinstance(dt_input, date) and not isinstance(dt_input, datetime):
+        return datetime.combine(dt_input, datetime.min.time()).replace(tzinfo=timezone.utc)
+    elif isinstance(dt_input, datetime):
+        if dt_input.tzinfo is None:
+            return dt_input.replace(tzinfo=timezone.utc)
+        return dt_input
+    else:
+        return ensure_datetime(dt_input)
+
+
+def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize DataFrame columns and structure."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+    
+    # Handle multi-index columns
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(-1)
+    
+    # Drop symbol column if present
+    df = df.drop(columns=["symbol"], errors="ignore")
+    
+    # Normalize column names to lowercase
+    if not df.empty and len(df.columns) > 0:
+        df.columns = df.columns.str.lower()
+    
+    # Ensure required columns exist
+    required_cols = ["open", "high", "low", "close", "volume"]
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = 0.0
+    
+    # Add timestamp if not present
+    if "timestamp" not in df.columns:
+        if hasattr(df.index, 'to_series'):
+            df["timestamp"] = df.index.to_series()
+        else:
+            df["timestamp"] = pd.Timestamp.now(tz="UTC")
+    
+    # Reset index and return expected columns
+    df = df.reset_index(drop=True)
+    return df[["timestamp", "open", "high", "low", "close", "volume"]]
+
+
+def get_bars_batch(
+    symbols: list[str],
+    timeframe: Union[str, "TimeFrame", "TimeFrameUnit"],
+    start: Union[date, datetime, str],
+    end: Union[date, datetime, str],
+    feed: Optional[str] = None,
+) -> dict[str, pd.DataFrame]:
+    """
+    Fetch bars for multiple symbols in one request when possible.
+    Returns a dict {symbol: DataFrame}. Applies the existing read-through cache per symbol.
+    """
+    if not symbols:
+        return {}
+    settings = get_settings()
+    # Resolve timeframe
+    tf = _resolve_timeframe(timeframe)
+    tf_name = "1D" if str(tf).endswith("Day") else (str(tf) if hasattr(tf, "__str__") else "custom")
+    start_dt, end_dt = _to_dt(start), _to_dt(end)
+    start_s, end_s = str(start_dt), str(end_dt)
+
+    # Try cache first per symbol
+    results: dict[str, pd.DataFrame] = {}
+    to_fetch: list[str] = []
+    if settings.data_cache_enable:
+        for sym in symbols:
+            cached = mcache.get_mem(sym, tf_name, start_s, end_s, settings.data_cache_ttl_seconds)
+            if cached is not None:
+                _MET_REQS.labels("cache", tf_name, "hit", "batch").inc()
+                results[sym] = cached
+            elif settings.data_cache_disk_enable:
+                disk = mcache.get_disk(settings.data_cache_dir, sym, tf_name, start_s, end_s)
+                if disk is not None:
+                    mcache.put_mem(sym, tf_name, start_s, end_s, disk)
+                    _MET_REQS.labels("cache", tf_name, "hit_disk", "batch").inc()
+                    results[sym] = disk
+                else:
+                    to_fetch.append(sym)
+            else:
+                to_fetch.append(sym)
+    else:
+        to_fetch = list(symbols)
+
+    if not to_fetch:
+        return results
+
+    # Perform one batched request
+    try:
+        from alpaca.data.requests import StockBarsRequest
+        req = StockBarsRequest(
+            symbol_or_symbols=to_fetch,
+            start=start_dt,
+            end=end_dt,
+            timeframe=tf,
+            feed=feed or _DEFAULT_FEED,
+        )
+        t0 = time.perf_counter()
+        try:
+            df = _DATA_CLIENT.get_stock_bars(req).df  # multi-indexed by (symbol, timestamp)
+        except Exception:
+            # Fall back to IEX in one more batched attempt
+            try:
+                alt = StockBarsRequest(
+                    symbol_or_symbols=to_fetch,
+                    start=start_dt,
+                    end=end_dt,
+                    timeframe=tf,
+                    feed="iex",
+                )
+                df = _DATA_CLIENT.get_stock_bars(alt).df
+            except Exception as exc:
+                logger.exception("Batched fetch failed for %s symbols: %s", len(to_fetch), exc)
+                raise
+        finally:
+            _MET_LAT.labels("alpaca", tf_name, "miss", "batch").observe(time.perf_counter() - t0)
+            _MET_REQS.labels("alpaca", tf_name, "miss", "batch").inc()
+
+        # Split df by symbol, normalize, and cache
+        if df is None or getattr(df, "empty", True):
+            return results
+        # Expect df index to include "symbol" level
+        try:
+            for sym in to_fetch:
+                try:
+                    sub = df.xs(sym, level=0) if hasattr(df.index, "levels") else df[df["symbol"] == sym]
+                except Exception:
+                    continue
+                sub = _normalize_df(sub)
+                results[sym] = sub
+                if settings.data_cache_enable:
+                    mcache.put_mem(sym, tf_name, start_s, end_s, sub)
+                    if settings.data_cache_disk_enable:
+                        try:
+                            mcache.put_disk(settings.data_cache_dir, sym, tf_name, start_s, end_s, sub)
+                        except Exception:
+                            pass
+        except Exception:
+            # If the structure is not multi-indexed by symbol, quietly return what we can
+            logger.warning("Unexpected batch frame structure; partial results returned")
+    except ImportError:
+        # Fallback to individual fetches if Alpaca not available
+        for sym in to_fetch:
+            try:
+                df = get_daily_df(sym, start, end)
+                if df is not None and not df.empty:
+                    results[sym] = df
+            except Exception:
+                continue
+    return results
+
+
+def warmup_cache(
+    symbols: list[str],
+    timeframe: Union[str, "TimeFrame", "TimeFrameUnit"],
+    start: Union[date, datetime, str],
+    end: Union[date, datetime, str],
+) -> int:
+    """
+    Warm cache for a set of symbols. Returns count of warmed symbols.
+    Uses batched fetch for efficiency.
+    """
+    results = get_bars_batch(symbols, timeframe, start, end)
+    return len(results)
+
+
 # Export RetryError for test compatibility
-__all__ = ["RetryError", "get_historical_data", "get_minute_df", "get_daily_df", "DataFetchError", "DataFetchException"]
+__all__ = ["RetryError", "get_historical_data", "get_minute_df", "get_daily_df", "DataFetchError", "DataFetchException", "get_bars_batch", "warmup_cache"]
