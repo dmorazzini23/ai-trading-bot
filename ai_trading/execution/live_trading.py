@@ -19,6 +19,9 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
+from ai_trading.math.money import Money
+from ai_trading.market.symbol_specs import TICK_BY_SYMBOL, LOT_BY_SYMBOL
+
 try:
     from ai_trading.config import get_alpaca_config
 except ImportError:

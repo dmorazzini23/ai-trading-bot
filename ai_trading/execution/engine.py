@@ -20,6 +20,8 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
+from ai_trading.math.money import Money
+from ai_trading.market.symbol_specs import TICK_BY_SYMBOL, LOT_BY_SYMBOL
 from ..core.enums import OrderSide, OrderType, OrderStatus
 from ..core.constants import EXECUTION_PARAMETERS
 
@@ -43,20 +45,23 @@ class Order:
     """
     
     def __init__(self, symbol: str, side: OrderSide, quantity: int, 
-                 order_type: OrderType = OrderType.MARKET, price: float = None, **kwargs):
+                 order_type: OrderType = OrderType.MARKET, price: Money = None, **kwargs):
         """Initialize order with institutional parameters."""
-        # AI-AGENT-REF: Institutional order model
+        # AI-AGENT-REF: Institutional order model with Money precision
         self.id = kwargs.get('id', str(uuid.uuid4()))
         self.symbol = symbol
         self.side = side
         self.quantity = quantity
         self.order_type = order_type
-        self.price = price
+        
+        # Use Money for precise price calculations
+        tick = TICK_BY_SYMBOL.get(symbol)
+        self.price = Money(price, tick) if price is not None else None
         self.status = OrderStatus.PENDING
         
         # Execution details
         self.filled_quantity = 0
-        self.average_fill_price = 0.0
+        self.average_fill_price = Money(0)
         self.fills = []
         self.created_at = datetime.now(timezone.utc)
         self.updated_at = self.created_at
@@ -104,15 +109,20 @@ class Order:
         return 0 < self.filled_quantity < self.quantity
     
     @property
-    def notional_value(self) -> float:
-        """Calculate notional value of order."""
-        price = self.price or self.average_fill_price or 0
-        return abs(self.quantity * price)
+    def notional_value(self) -> Money:
+        """Calculate notional value of order with precise money math."""
+        price = self.price or self.average_fill_price or Money(0)
+        return Money(abs(self.quantity)) * price
     
-    def add_fill(self, quantity: int, price: float, timestamp: datetime = None):
-        """Add a fill to the order."""
+    def add_fill(self, quantity: int, price: Money, timestamp: datetime = None):
+        """Add a fill to the order with precise money math."""
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
+        
+        # Ensure price uses proper tick size for this symbol
+        tick = TICK_BY_SYMBOL.get(self.symbol)
+        if not isinstance(price, Money):
+            price = Money(price, tick)
         
         fill = {
             "quantity": quantity,
@@ -124,9 +134,9 @@ class Order:
         self.fills.append(fill)
         self.filled_quantity += quantity
         
-        # Update average fill price
-        total_value = sum(f["quantity"] * f["price"] for f in self.fills)
-        self.average_fill_price = total_value / self.filled_quantity if self.filled_quantity > 0 else 0
+        # Update average fill price with precise math
+        total_value = sum(Money(f["quantity"]) * f["price"] for f in self.fills)
+        self.average_fill_price = total_value / Money(self.filled_quantity) if self.filled_quantity > 0 else Money(0)
         
         # Update status
         if self.is_filled:

@@ -15,35 +15,13 @@ The platform is designed for institutional-scale operations with proper
 risk controls, monitoring, and compliance capabilities.
 """
 
-# Import institutional-grade components
-from . import core
-from . import database
-from . import risk
-from . import strategies
-from . import execution
-from . import monitoring
-
-# Core institutional exports
-from .core import (
-    OrderSide, OrderType, OrderStatus, RiskLevel,
-    TRADING_CONSTANTS
-)
-
-from .risk import (
-    KellyCriterion, KellyCalculator, RiskManager
-)
-
-from .execution.engine import (
-    ExecutionEngine, OrderManager, Order
-)
-
-from .strategies.base import (
-    BaseStrategy, StrategyRegistry, StrategySignal
-)
-
-from .monitoring import (
-    MetricsCollector, PerformanceMonitor
-)
+# AI-AGENT-REF: Implement lazy imports to prevent import-time crashes
+def __getattr__(name):
+    """Lazy import submodules to prevent import-time config crashes."""
+    if name in ("core", "execution", "strategies", "risk", "monitoring", "database"):
+        import importlib
+        return importlib.import_module(f".{name}", __name__)
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 __version__ = "2.0.0"
 

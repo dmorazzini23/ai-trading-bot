@@ -157,16 +157,16 @@ else:
 # Mirror config to maintain historical constant name
 MIN_CYCLE = config.SCHEDULER_SLEEP_SECONDS
 # AI-AGENT-REF: guard environment validation with explicit error logging
+# AI-AGENT-REF: Move config validation to runtime to prevent import crashes
+# Config validation moved to init_runtime_config() 
+# This ensures imports don't fail due to missing environment variables
+
 try:
-    config.validate_env_vars()
+    # Only import config module, don't validate at import time
+    import config
+    logger.info("Config module loaded, validation deferred to runtime")
 except Exception as e:
-    if config.TESTING:
-        # In testing mode, just log the error and continue
-        logger.warning("Environment validation failed in test mode: %s", e)
-    else:
-        logger.critical("Environment validation failed: %s", e)
-        raise SystemExit(1) from e
-config.log_config(config.REQUIRED_ENV_VARS)
+    logger.warning("Config module import failed: %s", e)
 
 # Provide a no-op ``profile`` decorator when line_profiler is not active.
 try:
@@ -351,11 +351,11 @@ class MockPandas:
 if os.getenv("PYTEST_RUNNING") and not hasattr(pd, '_pandas'):
     pd = MockPandas()
 
-import utils
+from ai_trading import utils
 
 # AI-AGENT-REF: lazy import heavy feature computation modules to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
-    from features import (
+    from ai_trading.features.indicators import (
         compute_macd,
         compute_atr,
         compute_vwap,
@@ -1058,11 +1058,32 @@ def _require_cfg(value: str | None, name: str) -> str:
     raise RuntimeError(f"{name} must be defined in the configuration or environment")
 
 
-ALPACA_API_KEY = _require_cfg(ALPACA_API_KEY, "ALPACA_API_KEY")
-ALPACA_SECRET_KEY = _require_cfg(ALPACA_SECRET_KEY, "ALPACA_SECRET_KEY")
-if not callable(validate_alpaca_credentials):
-    raise RuntimeError("validate_alpaca_credentials not found in config")
-BOT_MODE_ENV = _require_cfg(BOT_MODE_ENV, "BOT_MODE")
+# AI-AGENT-REF: Remove import-time config validation to prevent import crashes
+# Config validation moved to init_runtime_config() and called from main()
+def init_runtime_config():
+    """Initialize runtime configuration and validate critical keys."""
+    from ai_trading.config import Settings
+    cfg = Settings()
+    
+    # Validate critical keys at runtime, not import time
+    global ALPACA_API_KEY, ALPACA_SECRET_KEY, BOT_MODE_ENV
+    ALPACA_API_KEY = _require_cfg(getattr(cfg, 'ALPACA_API_KEY', None), "ALPACA_API_KEY")
+    ALPACA_SECRET_KEY = _require_cfg(getattr(cfg, 'ALPACA_SECRET_KEY', None), "ALPACA_SECRET_KEY")
+    BOT_MODE_ENV = _require_cfg(getattr(cfg, 'BOT_MODE', None), "BOT_MODE")
+    
+    if not callable(validate_alpaca_credentials):
+        raise RuntimeError("validate_alpaca_credentials not found in config")
+    
+    logger.info("Runtime config initialized", extra={
+        "alpaca_key_set": bool(ALPACA_API_KEY and len(ALPACA_API_KEY) > 8),
+        "bot_mode": BOT_MODE_ENV
+    })
+    return cfg
+
+# Set module-level defaults that won't crash on import
+ALPACA_API_KEY = None
+ALPACA_SECRET_KEY = None  
+BOT_MODE_ENV = "development"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -8555,6 +8576,12 @@ def _process_symbols(
     processing_start_time = time.monotonic()
 
     for symbol in symbols:
+        # AI-AGENT-REF: Final-bar/session gating before strategy evaluation
+        from ai_trading.market.calendars import ensure_final_bar
+        if not ensure_final_bar(symbol, "1min"):  # Default to 1min timeframe
+            logger.info("SKIP_PARTIAL_BAR", extra={"symbol": symbol, "timeframe": "1min"})
+            continue
+        
         # Circuit breaker: limit processing time and symbol count
         if processed_symbols >= max_symbols_per_cycle:
             logger.warning(

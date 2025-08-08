@@ -141,3 +141,19 @@ def update_specs_from_config(specs_config: Dict[str, Dict]) -> None:
         lot = int(spec_dict['lot'])
         multiplier = int(spec_dict.get('multiplier', 1))
         add_symbol_spec(symbol, tick, lot, multiplier)
+
+
+# AI-AGENT-REF: Helper dictionaries for easy access to tick/lot sizes
+def get_tick_by_symbol() -> Dict[str, Decimal]:
+    """Get dictionary mapping symbol to tick size."""
+    return {symbol: spec.tick for symbol, spec in DEFAULT_SYMBOL_SPECS.items()}
+
+
+def get_lot_by_symbol() -> Dict[str, int]:
+    """Get dictionary mapping symbol to lot size."""
+    return {symbol: spec.lot for symbol, spec in DEFAULT_SYMBOL_SPECS.items()}
+
+
+# Create convenient lookup dictionaries
+TICK_BY_SYMBOL = get_tick_by_symbol()
+LOT_BY_SYMBOL = get_lot_by_symbol()

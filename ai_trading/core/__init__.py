@@ -32,12 +32,14 @@ from .enums import (
 # Import trading constants
 from .constants import TRADING_CONSTANTS
 
-# Import bot engine components
-from .bot_engine import (
-    BotState,
-    pre_trade_health_check,
-    run_all_trades_worker
-)
+# Import bot engine components  
+# AI-AGENT-REF: Use lazy import to prevent config crash at import time
+def __getattr__(name):
+    """Lazy import bot_engine components to prevent import-time config crashes."""
+    if name in ("BotState", "pre_trade_health_check", "run_all_trades_worker"):
+        from .bot_engine import BotState, pre_trade_health_check, run_all_trades_worker
+        return locals()[name]
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 # Define explicit exports
 __all__ = [
