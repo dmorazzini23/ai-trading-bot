@@ -351,11 +351,11 @@ class MockPandas:
 if os.getenv("PYTEST_RUNNING") and not hasattr(pd, '_pandas'):
     pd = MockPandas()
 
-import utils
+from ai_trading import utils
 
 # AI-AGENT-REF: lazy import heavy feature computation modules to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
-    from features import (
+    from ai_trading.features.indicators import (
         compute_macd,
         compute_atr,
         compute_vwap,
@@ -1058,11 +1058,32 @@ def _require_cfg(value: str | None, name: str) -> str:
     raise RuntimeError(f"{name} must be defined in the configuration or environment")
 
 
-ALPACA_API_KEY = _require_cfg(ALPACA_API_KEY, "ALPACA_API_KEY")
-ALPACA_SECRET_KEY = _require_cfg(ALPACA_SECRET_KEY, "ALPACA_SECRET_KEY")
-if not callable(validate_alpaca_credentials):
-    raise RuntimeError("validate_alpaca_credentials not found in config")
-BOT_MODE_ENV = _require_cfg(BOT_MODE_ENV, "BOT_MODE")
+# AI-AGENT-REF: Remove import-time config validation to prevent import crashes
+# Config validation moved to init_runtime_config() and called from main()
+def init_runtime_config():
+    """Initialize runtime configuration and validate critical keys."""
+    from ai_trading.config import Settings
+    cfg = Settings()
+    
+    # Validate critical keys at runtime, not import time
+    global ALPACA_API_KEY, ALPACA_SECRET_KEY, BOT_MODE_ENV
+    ALPACA_API_KEY = _require_cfg(getattr(cfg, 'ALPACA_API_KEY', None), "ALPACA_API_KEY")
+    ALPACA_SECRET_KEY = _require_cfg(getattr(cfg, 'ALPACA_SECRET_KEY', None), "ALPACA_SECRET_KEY")
+    BOT_MODE_ENV = _require_cfg(getattr(cfg, 'BOT_MODE', None), "BOT_MODE")
+    
+    if not callable(validate_alpaca_credentials):
+        raise RuntimeError("validate_alpaca_credentials not found in config")
+    
+    logger.info("Runtime config initialized", extra={
+        "alpaca_key_set": bool(ALPACA_API_KEY and len(ALPACA_API_KEY) > 8),
+        "bot_mode": BOT_MODE_ENV
+    })
+    return cfg
+
+# Set module-level defaults that won't crash on import
+ALPACA_API_KEY = None
+ALPACA_SECRET_KEY = None  
+BOT_MODE_ENV = "development"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 

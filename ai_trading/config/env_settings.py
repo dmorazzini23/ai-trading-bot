@@ -4,7 +4,7 @@ import logging
 import re
 import os
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 # AI-AGENT-REF: graceful fallback for missing pydantic-settings in testing
 try:
@@ -449,7 +449,7 @@ def debug_environment() -> Dict[str, Any]:
         Debug report with environment status, issues, and recommendations
     """
     debug_report = {
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'validation_status': 'unknown',
         'critical_issues': [],
         'warnings': [],

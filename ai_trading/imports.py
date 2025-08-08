@@ -126,7 +126,10 @@ except ImportError:
         def isnan(self, data: Any) -> bool:
             try:
                 return data != data  # NaN != NaN is True
-            except:
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.debug("Mock numpy helper failed", exc_info=True)
                 return False
         
         def isinf(self, data: Any) -> bool:
