@@ -13,6 +13,7 @@ import datetime as dt
 import logging
 import os
 import time
+import threading
 from collections import defaultdict
 from threading import Lock
 from datetime import datetime
@@ -45,11 +46,10 @@ from ai_trading.integrations.rate_limit import get_limiter
 
 logger = logging.getLogger(__name__)
 
-# Concurrency & order state tracking (guarded so PR is standalone)
-try:
-    _pending_orders_lock  # type: ignore[name-defined]
-except NameError:  # pragma: no cover
-    _pending_orders_lock: Lock = Lock()
+# Thread-safe pending order tracking
+# Prevents NameError and ensures any shared state is synchronized.
+_pending_orders_lock = threading.RLock()
+_pending_orders = {}
 
 try:
     pending_orders  # type: ignore[name-defined]

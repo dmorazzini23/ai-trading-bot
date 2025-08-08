@@ -4011,11 +4011,22 @@ if not os.getenv("PYTEST_RUNNING"):
 
 @memory_profile  # AI-AGENT-REF: Monitor memory usage during health checks
 def pre_trade_health_check(
-    ctx: BotContext, symbols: Sequence[str], min_rows: int = 30
+    ctx: BotContext, symbols: Sequence[str], min_rows: int | None = None
 ) -> dict:
     """
     Validate symbol data sufficiency, required columns, and timezone sanity using chunked batch.
+    
+    Robust min_rows resolution:
+      1) explicit param
+      2) ctx.min_rows if present  
+      3) default 120
+    Avoids `'BotContext' object has no attribute 'min_rows'` hard failures.
     """
+    # Robust min_rows resolution with precedence
+    if min_rows is None:
+        min_rows = getattr(ctx, "min_rows", 120)
+    min_rows = int(min_rows)
+    
     results = {"checked": 0, "failures": [], "insufficient_rows": [], "missing_columns": [], "timezone_issues": []}
     if not symbols:
         return results

@@ -16,7 +16,7 @@ validate-env:
 
 # Testing targets
 test-all: clean install-dev validate-env
-	PYTHONPATH=. pytest --maxfail=3 --disable-warnings -n auto -v
+	PYTHONPATH=. pytest -m "unit or integration" -q --disable-warnings
 
 test-fast: clean install-dev validate-env
 	PYTHONPATH=. pytest --maxfail=1 --disable-warnings -x
