@@ -3981,12 +3981,18 @@ def pre_trade_health_check(
     results = {"checked": 0, "failures": [], "insufficient_rows": [], "missing_columns": [], "timezone_issues": []}
     if not symbols:
         return results
+    # Compute start/end with fallbacks so this function is safe to call early in the loop
+    settings = get_settings()
+    _now = datetime.now(timezone.utc)
+    _fallback_days = int(getattr(settings, "pretrade_lookback_days", 120))
+    _start = getattr(ctx, "lookback_start", _now - timedelta(days=_fallback_days))
+    _end = getattr(ctx, "lookback_end", _now)
     frames = _fetch_universe_bars_chunked(
         ctx=ctx,
         symbols=symbols,
         timeframe="1D",
-        start=ctx.lookback_start,
-        end=ctx.lookback_end,
+        start=_start,
+        end=_end,
         feed=getattr(ctx, "data_feed", None),
     )
     for sym in symbols:
@@ -7513,25 +7519,26 @@ else:
     try:
         if ctx.data_client is None:
             logger.warning("Data client unavailable, using mock regime data")
-            # Create minimal mock data for regime model training
             bars = pd.DataFrame({
+                'timestamp': pd.date_range(end=end_dt, periods=100, freq="B"),
                 'close': [100.0] * 100,
                 'open': [99.0] * 100,
                 'high': [101.0] * 100,
                 'low': [98.0] * 100,
                 'volume': [1000] * 100,
-            })
+            }).set_index("timestamp")
         else:
             bars = safe_get_stock_bars(ctx.data_client, bars_req, "SPY", "REGIME")
             if bars is None:
                 logger.warning("Data client returned None, using mock regime data")
                 bars = pd.DataFrame({
+                    'timestamp': pd.date_range(end=end_dt, periods=100, freq="B"),
                     'close': [100.0] * 100,
                     'open': [99.0] * 100,
                     'high': [101.0] * 100,
                     'low': [98.0] * 100,
                     'volume': [1000] * 100,
-                })
+                }).set_index("timestamp")
     except APIError as e:
         if "subscription does not permit" in str(e).lower() and _DEFAULT_FEED != "iex":
             logger.warning(
@@ -7541,23 +7548,25 @@ else:
             if ctx.data_client is None:
                 logger.warning("Data client unavailable for retry, using mock data")
                 bars = pd.DataFrame({
+                    'timestamp': pd.date_range(end=end_dt, periods=100, freq="B"),
                     'close': [100.0] * 100,
                     'open': [99.0] * 100,
                     'high': [101.0] * 100,
                     'low': [98.0] * 100,
                     'volume': [1000] * 100,
-                })
+                }).set_index("timestamp")
             else:
                 bars = safe_get_stock_bars(ctx.data_client, bars_req, "SPY", "IEX REGIME")
                 if bars is None:
                     logger.warning("IEX data client returned None, using mock data")
                     bars = pd.DataFrame({
+                        'timestamp': pd.date_range(end=end_dt, periods=100, freq="B"),
                         'close': [100.0] * 100,
                         'open': [99.0] * 100,
                         'high': [101.0] * 100,
                         'low': [98.0] * 100,
                         'volume': [1000] * 100,
-                    })
+                    }).set_index("timestamp")
         else:
             raise
     # 1) If columns are (symbol, field), select our one symbol
@@ -7566,21 +7575,35 @@ else:
     else:
         bars = bars.drop(columns=["symbol"], errors="ignore")
 
-    # 2) Fix the index if it's a MultiIndex of (symbol, timestamp)
-    if isinstance(bars.index, _RealMultiIndex):
-        bars.index = bars.index.get_level_values(1)
-    # 3) Or if each index entry is still a 1-tuple
-    elif bars.index.dtype == object and isinstance(bars.index[0], tuple):
-        bars.index = [t[0] for t in bars.index]
-
-    # 4) Now safely convert to a timezone-naive DatetimeIndex
+    # Normalize to a DatetimeIndex robustly
     try:
-        idx = safe_to_datetime(bars.index, context="regime data")
-    except ValueError as e:
-        logger.warning("Invalid regime data index; skipping regime model train | %s", e)
+        if hasattr(bars, "index") and isinstance(bars.index, _RealMultiIndex):
+            # Prefer a named "timestamp" level if present; otherwise pick the first datetime-like level
+            names = list(bars.index.names or [])
+            if "timestamp" in names:
+                bars.index = bars.index.get_level_values("timestamp")
+            else:
+                lvl_candidates = []
+                for lvl in range(bars.index.nlevels):
+                    val = bars.index.get_level_values(lvl)[0]
+                    lvl_candidates.append((lvl, isinstance(val, (pd.Timestamp, datetime))))
+                pick = next((i for i, ok in lvl_candidates if ok), 1)
+                bars.index = bars.index.get_level_values(pick)
+        elif hasattr(bars, "index") and bars.index.dtype == object and len(bars.index) and isinstance(bars.index[0], tuple):
+            # Tuple index; try best-effort to select timestamp position
+            t0 = bars.index[0]
+            # If ('SPY', Timestamp) pick element 1; if (Timestamp, 'SPY') pick 0
+            pick = 1 if not isinstance(t0[0], (pd.Timestamp, datetime)) and isinstance(t0[1], (pd.Timestamp, datetime)) else 0
+            bars.index = [t[pick] for t in bars.index]
+        elif "timestamp" in getattr(bars, "columns", []):
+            idx = safe_to_datetime(bars["timestamp"], context="regime data")
+            bars = bars.drop(columns=["timestamp"])
+            bars.index = idx
+        # Final conversion (idempotent for Timestamps)
+        bars.index = safe_to_datetime(bars.index, context="regime data")
+    except Exception as e:
+        logger.warning("REGIME index normalization failed: %s", e)
         bars = pd.DataFrame()
-    else:
-        bars.index = idx
     bars = bars.rename(columns=lambda c: c.lower())
     feats = _compute_regime_features(bars)
     labels = (
