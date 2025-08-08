@@ -8,6 +8,26 @@
 
 A sophisticated **AI-powered algorithmic trading system** that combines machine learning, technical analysis, and risk management for automated trading through Alpaca Markets.
 
+## 📦 Package Import Paths
+
+### Preferred (Package-first)
+```python
+from ai_trading.signals import generate_position_hold_signals
+from ai_trading.data_fetcher import get_minute_df
+from ai_trading.trade_execution import recent_buys
+from ai_trading import indicators
+```
+
+### Legacy (Deprecated - will be removed in a future release)
+```python
+from signals import generate_position_hold_signals  # ⚠️ Deprecated
+from data_fetcher import get_minute_df             # ⚠️ Deprecated  
+from trade_execution import recent_buys            # ⚠️ Deprecated
+import indicators                                   # ⚠️ Deprecated
+```
+
+**Migration Note**: Root imports are deprecated and will be removed in a future release. Please migrate to use `ai_trading.<module>` imports for better package isolation and future compatibility.
+
 ## ✨ Key Features
 
 ### 🧠 Advanced AI & Machine Learning

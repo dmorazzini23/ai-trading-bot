@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Package Structure**: Moved root modules into `ai_trading/` package with deprecation shims
+  - Moved `signals.py`, `data_fetcher.py`, `trade_execution.py`, `indicators.py`, `pipeline.py`, `portfolio.py`, `rebalancer.py` into `ai_trading/` package
+  - Added root import shims that re-export from package and emit `DeprecationWarning`
+  - Updated `ai_trading/__init__.py` to export moved modules with lazy imports
+  - **Migration Required**: Use `from ai_trading.signals import ...` instead of `from signals import ...`
+  - **Deprecation Timeline**: Root imports will be removed in a future release
+
 ### Fixed
 - **Import Blocker**: Replaced corrupted `ai_trading/model_registry.py` with clean, minimal, typed model registry implementation
   - Supports `register_model`, `load_model`, and `latest_for` operations
