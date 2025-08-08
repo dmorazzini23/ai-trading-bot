@@ -12,19 +12,10 @@ from logger import get_logger
 import pandas as pd
 
 import config
-try:
-    import ai_trading.signals as signals  # type: ignore  # noqa: F401
-except Exception:  # pragma: no cover
-    import signals  # noqa: F401
+from ai_trading import signals  # noqa: F401
+from ai_trading import data_fetcher
+from ai_trading import trade_execution as execution_api  # type: ignore
 import risk_engine
-try:
-    import ai_trading.data_fetcher as data_fetcher  # type: ignore
-except Exception:  # pragma: no cover
-    import data_fetcher
-try:
-    import execution_api as execution_api  # type: ignore
-except Exception:  # pragma: no cover - fallback for older repo layout
-    import trade_execution as execution_api  # type: ignore
 from ai_trading.core import bot_engine
 
 logger = get_logger(__name__)

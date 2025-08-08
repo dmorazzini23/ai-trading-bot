@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 # Import modules under test
 import sentiment
 import meta_learning
-import trade_execution
+from ai_trading import trade_execution
 import config
 
 
