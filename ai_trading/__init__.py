@@ -21,11 +21,24 @@ def __getattr__(name):
     if name in ("core", "execution", "strategies", "risk", "monitoring", "database"):
         import importlib
         return importlib.import_module(f".{name}", __name__)
+    elif name in _moved_modules:
+        # Lazy import for moved modules
+        return _lazy_import_module(name)
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 __version__ = "2.0.0"
 
-__all__ = [
+# Public, convenience re-exports (optional, for nicer DX)
+# Use lazy imports to prevent import-time crashes
+def _lazy_import_module(name):
+    """Lazy import helper for moved modules."""
+    import importlib
+    return importlib.import_module(f".{name}", __name__)
+
+# Setup lazy attributes for moved modules
+_moved_modules = ["signals", "data_fetcher", "trade_execution", "indicators", "pipeline", "portfolio", "rebalancer"]
+
+__all__ = sorted(set(list(globals().get("__all__", [])) + [
     # Core trading infrastructure
     "OrderSide",
     "OrderType", 
@@ -59,4 +72,7 @@ __all__ = [
     "strategies",
     "execution",
     "monitoring",
-]
+    
+    # Moved modules
+    "signals", "data_fetcher", "trade_execution", "indicators", "pipeline", "portfolio", "rebalancer",
+]))

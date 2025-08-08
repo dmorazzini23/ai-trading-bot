@@ -24,13 +24,22 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from indicators import (
-    calculate_atr,
-    get_rsi_signal,
-    get_vwap_bias,
-    bollinger_bands,
-    obv,
-)
+try:
+    from ai_trading.indicators import (  # type: ignore
+        calculate_atr,
+        get_rsi_signal,
+        get_vwap_bias,
+        bollinger_bands,
+        obv,
+    )
+except Exception:  # pragma: no cover
+    from indicators import (
+        calculate_atr,
+        get_rsi_signal,
+        get_vwap_bias,
+        bollinger_bands,
+        obv,
+    )
 
 
 def compute_features(df: pd.DataFrame | None, window: int = 10) -> np.ndarray:
