@@ -20,8 +20,9 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-from ai_trading.math.money import Money
-from ai_trading.market.symbol_specs import TICK_BY_SYMBOL, LOT_BY_SYMBOL
+from ai_trading.math.money import Money, round_to_tick, round_to_lot
+from ai_trading.market.symbol_specs import TICK_BY_SYMBOL, LOT_BY_SYMBOL, get_tick_size, get_lot_size
+from ai_trading.integrations.rate_limit import get_limiter
 from ..core.enums import OrderSide, OrderType, OrderStatus
 from ..core.constants import EXECUTION_PARAMETERS
 
@@ -354,10 +355,30 @@ class OrderManager:
                 logger.error(f"Invalid order parameters: symbol={order.symbol}, quantity={order.quantity}")
                 return False
             
-            # Price validation for limit orders
-            if order.order_type == OrderType.LIMIT and (not order.price or order.price <= 0):
-                logger.error(f"Limit order requires valid price: {order.price}")
-                return False
+            # AI-AGENT-REF: Quantize quantity to lot size
+            tick = get_tick_size(order.symbol)
+            lot = get_lot_size(order.symbol)
+            
+            # Ensure quantity is rounded to lot size
+            original_quantity = order.quantity
+            order.quantity = round_to_lot(order.quantity, lot)
+            if original_quantity != order.quantity:
+                logger.debug(f"Quantity adjusted for {order.symbol}: {original_quantity} -> {order.quantity} (lot={lot})")
+            
+            # Price validation and quantization for limit orders
+            if order.order_type == OrderType.LIMIT:
+                if not order.price or order.price <= 0:
+                    logger.error(f"Limit order requires valid price: {order.price}")
+                    return False
+                
+                # AI-AGENT-REF: Quantize price to tick size using Money precision
+                if not isinstance(order.price, Money):
+                    order.price = Money(order.price)
+                
+                original_price = order.price
+                order.price = round_to_tick(order.price, tick)
+                if float(original_price) != float(order.price):
+                    logger.debug(f"Price adjusted for {order.symbol}: {original_price} -> {order.price} (tick={tick})")
             
             # Side validation
             if order.side not in [OrderSide.BUY, OrderSide.SELL]:

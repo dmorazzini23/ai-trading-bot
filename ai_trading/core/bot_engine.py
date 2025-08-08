@@ -61,6 +61,8 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     logging.getLogger(__name__).warning("Running under unsupported Python version")
 
 from ai_trading.config import management as config
+from ai_trading.config.settings_singleton import get_settings
+from ai_trading.market.calendars import ensure_final_bar
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
 try:
     from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
@@ -8577,7 +8579,6 @@ def _process_symbols(
 
     for symbol in symbols:
         # AI-AGENT-REF: Final-bar/session gating before strategy evaluation
-        from ai_trading.market.calendars import ensure_final_bar
         if not ensure_final_bar(symbol, "1min"):  # Default to 1min timeframe
             logger.info("SKIP_PARTIAL_BAR", extra={"symbol": symbol, "timeframe": "1min"})
             continue
@@ -9379,6 +9380,21 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
 
 def main() -> None:
     logger.info("Main trading bot starting...")
+    
+    # AI-AGENT-REF: Validate Alpaca credentials using settings singleton
+    cfg = get_settings()
+    api_key, api_secret = cfg.get_alpaca_keys()
+    if not api_key or not api_secret:
+        logger.critical("Alpaca credentials missing – aborting startup")
+        logger.critical("Please set ALPACA_API_KEY/APCA_API_KEY_ID and ALPACA_SECRET_KEY/APCA_API_SECRET_KEY")
+        sys.exit(2)
+    
+    # Log masked config for verification
+    logger.info("Config: ALPACA_API_KEY=***MASKED***", extra={"present": bool(api_key)})
+    logger.info("Config: ALPACA_SECRET_KEY=***MASKED***", extra={"present": bool(api_secret)})
+    logger.info(f"Config: ALPACA_BASE_URL={cfg.alpaca_base_url}")
+    logger.info(f"Config: TRADING_MODE={cfg.trading_mode}")
+    
     config.reload_env()
     
     # AI-AGENT-REF: Ensure only one bot instance is running

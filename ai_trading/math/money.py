@@ -6,15 +6,18 @@ arithmetic errors that can cause silent P&L drag.
 """
 
 from decimal import Decimal, ROUND_HALF_EVEN, getcontext
-from typing import Union, Optional
+from typing import Union, Optional, TYPE_CHECKING
 import logging
+
+if TYPE_CHECKING:
+    from typing import Self
 
 # AI-AGENT-REF: Set high precision for financial calculations
 getcontext().prec = 28
 
 logger = logging.getLogger(__name__)
 
-Number = Union[int, float, str, Decimal]
+Number = Union[int, float, str, Decimal, 'Money']
 
 
 class Money:
@@ -37,7 +40,7 @@ class Money:
         self._tick = tick
         
         if self._tick is not None:
-            self._amount = self.quantize(self._tick)
+            self._amount = self._amount.quantize(self._tick, rounding=ROUND_HALF_EVEN)
     
     @property
     def amount(self) -> Decimal:
@@ -166,6 +169,8 @@ def to_decimal(value: Number) -> Decimal:
     """
     if isinstance(value, Decimal):
         return value
+    elif isinstance(value, Money):
+        return value._amount
     elif isinstance(value, (int, str)):
         return Decimal(value)
     elif isinstance(value, float):
