@@ -9,6 +9,21 @@ from typing import Dict, List, Optional, Any, Tuple
 import config
 from ai_trading.portfolio import compute_portfolio_weights
 
+def apply_no_trade_bands(current: Dict[str, float], target: Dict[str, float], band_bps: float = 25.0) -> Dict[str, float]:
+    """
+    Suppress small reallocations that are inside a no-trade band (in basis points).
+    Example: band_bps=25 means ignore deltas smaller than 0.25% absolute weight.
+    """
+    band = band_bps / 10000.0
+    out = {}
+    for sym, tgt in target.items():
+        cur = current.get(sym, 0.0)
+        if abs(tgt - cur) < band:
+            out[sym] = cur
+        else:
+            out[sym] = tgt
+    return out
+
 # AI-AGENT-REF: Enhanced rebalancer with tax awareness
 try:
     from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer
