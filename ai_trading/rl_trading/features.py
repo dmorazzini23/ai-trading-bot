@@ -32,14 +32,6 @@ try:
         bollinger_bands,
         obv,
     )
-except Exception:  # pragma: no cover
-    from indicators import (
-        calculate_atr,
-        get_rsi_signal,
-        get_vwap_bias,
-        bollinger_bands,
-        obv,
-    )
 
 
 def compute_features(df: pd.DataFrame | None, window: int = 10) -> np.ndarray:

@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Any, Tuple
 
 import config
-from portfolio import compute_portfolio_weights
+from ai_trading.portfolio import compute_portfolio_weights
 
 # AI-AGENT-REF: Enhanced rebalancer with tax awareness
 try:
@@ -19,7 +19,7 @@ except ImportError:
 
 # AI-AGENT-REF: Portfolio-first trading integration
 try:
-    from portfolio_optimizer import PortfolioOptimizer, create_portfolio_optimizer
+    from ai_trading.portfolio import PortfolioOptimizer, create_portfolio_optimizer
     from transaction_cost_calculator import TransactionCostCalculator, create_transaction_cost_calculator
     from regime_detector import RegimeDetector, create_regime_detector
     PORTFOLIO_FIRST_AVAILABLE = True

@@ -247,10 +247,7 @@ def get_current_price(symbol: str) -> float:
             symbol,
         )
         try:
-            try:
-                from ai_trading.data_fetcher import get_daily_df  # type: ignore
-            except Exception:  # pragma: no cover
-                from data_fetcher import get_daily_df  # type: ignore
+            from ai_trading.data_fetcher import get_daily_df  # type: ignore
 
             end = dt.date.today()
             start = end - dt.timedelta(days=5)

@@ -43,10 +43,7 @@ except ImportError:
 
 # AI-AGENT-REF: Import data fetcher for historical data
 try:
-    try:
-        from ai_trading.data_fetcher import get_minute_df  # type: ignore
-    except Exception:  # pragma: no cover
-        from data_fetcher import get_minute_df  # type: ignore
+    from ai_trading.data_fetcher import get_minute_df  # type: ignore
 except ImportError:
     logger.warning("data_fetcher not available, using mock function")
     def get_minute_df(symbol, start_date, end_date, limit=None):

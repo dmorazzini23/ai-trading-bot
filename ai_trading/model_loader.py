@@ -22,7 +22,7 @@ def train_and_save_model(symbol: str):
     import pandas as pd
     import numpy as np
     from datetime import datetime, timedelta, timezone
-    from data_fetcher import get_daily_df
+    from ai_trading.data_fetcher import get_daily_df
 
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=30)
