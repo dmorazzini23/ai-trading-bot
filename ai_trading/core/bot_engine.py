@@ -1886,6 +1886,20 @@ def _build_regime_dataset(ctx: "BotContext") -> "pd.DataFrame":
             s = df[["timestamp","close"]].rename(columns={"close": sym}).set_index("timestamp")
             cols.append(s)
         if not cols:
+            logger.warning("Regime dataset empty after normalization; attempting SPY-only fallback")
+            try:
+                spy_df = ctx.data_fetcher.fetch_bars("SPY", timeframe="1D", limit=180)
+                if spy_df is not None and not getattr(spy_df, "empty", False):
+                    s = spy_df[["timestamp","close"]].rename(columns={"close": "SPY"}).set_index("timestamp")
+                    cols.append(s)
+                else:
+                    raise Exception("SPY data not available")
+            except Exception as e:
+                logger.error("SPY fallback failed: %s", e)
+                logger.error("Not enough valid rows (0) to train regime model; using dummy fallback")
+                return pd.DataFrame()
+        
+        if not cols:  # Final check after SPY fallback attempt
             return pd.DataFrame()
         out = pd.concat(cols, axis=1).sort_index().reset_index()
         out.columns.name = None
@@ -4026,7 +4040,8 @@ def pre_trade_health_check(
             continue
         results["checked"] += 1
         try:
-            if len(df) < ctx.min_rows:
+            # Use the function parameter, not a non-existent ctx attribute
+            if len(df) < min_rows:
                 results["insufficient_rows"].append(sym)
                 continue
             _validate_columns(df, required=["timestamp","open","high","low","close","volume"], results=results, symbol=sym)

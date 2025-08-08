@@ -16,7 +16,7 @@ import time
 from collections import defaultdict
 from threading import Lock
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set
 
 import pandas as pd
 import requests
@@ -44,6 +44,27 @@ from ai_trading.integrations.rate_limit import get_limiter
 
 
 logger = logging.getLogger(__name__)
+
+# Concurrency & order state tracking (guarded so PR is standalone)
+try:
+    _pending_orders_lock  # type: ignore[name-defined]
+except NameError:  # pragma: no cover
+    _pending_orders_lock: Lock = Lock()
+
+try:
+    pending_orders  # type: ignore[name-defined]
+except NameError:  # pragma: no cover
+    pending_orders: Dict[str, Dict[str, Any]] = {}
+
+try:
+    partial_fills  # type: ignore[name-defined]
+except NameError:  # pragma: no cover
+    partial_fills: Dict[str, Dict[str, Any]] = {}
+
+try:
+    partial_fill_tracker  # type: ignore[name-defined]
+except NameError:  # pragma: no cover
+    partial_fill_tracker: Set[str] = set()
 
 # Support both ALPACA_* and APCA_* naming schemes
 # Set APCA_* variables if only ALPACA_* are present (for backward compatibility)
