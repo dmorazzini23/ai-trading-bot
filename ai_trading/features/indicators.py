@@ -115,12 +115,19 @@ def compute_macds(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
 
-def ensure_columns(df: pd.DataFrame, required_columns: list) -> pd.DataFrame:
-    """Ensure DataFrame has required columns for calculations."""
+def ensure_columns(df: pd.DataFrame, required_columns: list, symbol: str | None = None) -> pd.DataFrame:
+    """
+    Ensure DataFrame has required columns for calculations.
+    Accepts an optional 'symbol' (ignored except for logging) for
+    call-site compatibility.
+    """
     try:
         for col in required_columns:
             if col not in df.columns:
-                logger.warning(f"Missing column '{col}', filling with zeros")
+                if symbol:
+                    logger.warning(f"Missing column '{col}' for {symbol}, filling with zeros")
+                else:
+                    logger.warning(f"Missing column '{col}', filling with zeros")
                 df[col] = 0.0
         return df
     except Exception as e:
