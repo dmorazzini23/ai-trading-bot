@@ -855,6 +855,34 @@ class TradingConfig:
         return config
 
 
+# File path configuration for missing files handling
+SLIPPAGE_LOG_PATH = os.getenv("SLIPPAGE_LOG_PATH", "slippage.csv")
+TICKERS_FILE_PATH = os.getenv("TICKERS_FILE_PATH", "tickers.csv")
+
+# Validate these paths exist during bot initialization
+def validate_file_paths():
+    """Validate that required file paths exist or can be created."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Check slippage log
+    if not os.path.exists(SLIPPAGE_LOG_PATH):
+        logger.warning(f"Slippage log {SLIPPAGE_LOG_PATH} not found. Creating default.")
+        try:
+            with open(SLIPPAGE_LOG_PATH, 'w') as f:
+                f.write("timestamp,order_id,symbol,expected_price,filled_price,slippage_cents\n")
+        except Exception as e:
+            logger.error(f"Could not create slippage log {SLIPPAGE_LOG_PATH}: {e}")
+    
+    # Check tickers file  
+    if not os.path.exists(TICKERS_FILE_PATH):
+        logger.warning(f"Tickers file {TICKERS_FILE_PATH} not found. Creating default.")
+        try:
+            with open(TICKERS_FILE_PATH, 'w') as f:
+                f.write("symbol\nAAPL\nGOOG\nAMZN\n")
+        except Exception as e:
+            logger.error(f"Could not create tickers file {TICKERS_FILE_PATH}: {e}")
+
 # default trading configuration used across modules
 # Load mode from environment variable or use balanced as default
 _BOT_MODE = os.getenv("BOT_MODE", "balanced")
