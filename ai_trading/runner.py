@@ -32,7 +32,11 @@ def _load_engine():
             from ai_trading.core.bot_engine import run_all_trades_worker, BotState
             _bot_engine = run_all_trades_worker
             _bot_state_class = BotState
-            log.info("Bot engine components loaded successfully")
+            if _bot_engine and _bot_state_class:
+                # Avoid duplicate info spam on repeated lazy loads
+                if not getattr(run_cycle, "_engine_loaded_logged", False):
+                    log.info("Bot engine components loaded successfully")
+                    setattr(run_cycle, "_engine_loaded_logged", True)
         except Exception as e:
             log.error("Failed to load bot engine components: %s", e)
             raise RuntimeError(f"Cannot load bot engine: {e}")
