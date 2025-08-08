@@ -1042,7 +1042,7 @@ except ImportError:
     Ridge = None
     print("WARNING: sklearn not available, ML features will be disabled")
 
-from ai_trading.utils import log_warning, model_lock, safe_to_datetime
+from ai_trading.utils import log_warning, model_lock, safe_to_datetime, validate_ohlcv
 
 try:
     from ai_trading.meta_learning import retrain_meta_learner
@@ -1869,12 +1869,13 @@ def _fetch_regime_bars(ctx: "BotContext", start, end, timeframe="1D") -> dict[st
 
 def _build_regime_dataset(ctx: "BotContext") -> "pd.DataFrame":
     """
-    Build regime dataset using a configurable basket via batch fetch.
+    Build regime dataset using a configurable basket via batched fetch.
+    Returns a *wide* DataFrame: columns are symbols, rows are aligned by timestamp (index reset).
     """
     logger.info("Building regime dataset (batched)")
     try:
         end_dt = datetime.now(timezone.utc)
-        start_dt = end_dt - timedelta(days= max(30, int(getattr(ctx, "regime_lookback_days", 100))))
+        start_dt = end_dt - timedelta(days=max(30, int(getattr(ctx, "regime_lookback_days", 100))))
         bundle = _fetch_regime_bars(ctx, start=start_dt, end=end_dt, timeframe="1D")
         if not bundle:
             return pd.DataFrame()
@@ -1882,14 +1883,37 @@ def _build_regime_dataset(ctx: "BotContext") -> "pd.DataFrame":
         for sym, df in bundle.items():
             if df is None or getattr(df, "empty", False):
                 continue
-            series = df[["timestamp","close"]].rename(columns={"close": sym}).set_index("timestamp")
-            cols.append(series)
+            s = df[["timestamp","close"]].rename(columns={"close": sym}).set_index("timestamp")
+            cols.append(s)
         if not cols:
             return pd.DataFrame()
-        return pd.concat(cols, axis=1).sort_index().reset_index()
+        out = pd.concat(cols, axis=1).sort_index().reset_index()
+        out.columns.name = None
+        return out
     except Exception as exc:
         logger.warning("REGIME bootstrap failed: %s", exc)
         return pd.DataFrame()
+
+def _regime_basket_to_proxy_bars(wide: "pd.DataFrame") -> "pd.DataFrame":
+    """
+    Convert a wide close-price frame (timestamp + per-symbol columns) into a single proxy 'bars'
+    DataFrame with at least ['timestamp','close'] for downstream model training.
+    The proxy is an equal-weighted index of normalized closes.
+    """
+    if wide is None or getattr(wide, "empty", False):
+        return pd.DataFrame()
+    if "timestamp" not in wide.columns:
+        return pd.DataFrame()
+    close_cols = [c for c in wide.columns if c != "timestamp"]
+    if not close_cols:
+        return pd.DataFrame()
+    df = wide.copy()
+    # Normalize each series to 1.0 at first valid point to avoid scale bias
+    base = df[close_cols].iloc[0]
+    norm = df[close_cols] / base.replace(0, pd.NA)
+    proxy_close = norm.mean(axis=1).astype(float)
+    out = pd.DataFrame({"timestamp": df["timestamp"], "close": proxy_close})
+    return out
 
 
 # <-- NEW: marker file for daily retraining -->
@@ -6137,6 +6161,13 @@ def _fetch_feature_data(
         logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
         return None, None, False
 
+    # Guard: validate OHLCV shape before feature engineering
+    try:
+        validate_ohlcv(raw_df)
+    except Exception as e:
+        logger.warning("OHLCV validation failed for %s: %s; skipping symbol", symbol, e)
+        return raw_df, pd.DataFrame(), True
+
     df = raw_df.copy()
     # AI-AGENT-REF: log initial dataframe and monitor row drops
     logger.debug(f"Initial tail data for {symbol}:\n{df.tail(5)}")
@@ -7499,103 +7530,17 @@ elif os.path.exists(REGIME_MODEL_PATH):
             n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
         )
 else:
-    today_date = date.today()
-    start_dt = datetime.combine(
-        today_date - timedelta(days=365), dt_time.min, timezone.utc
-    )
-    end_dt = datetime.combine(today_date, dt_time.max, timezone.utc)
-    if isinstance(start_dt, tuple):
-        start_dt, _tmp = start_dt
-    if isinstance(end_dt, tuple):
-        _, end_dt = end_dt
-    bars_req = StockBarsRequest(
-        symbol_or_symbols=[REGIME_SYMBOLS[0]],
-        timeframe=TimeFrame.Day,
-        start=start_dt,
-        end=end_dt,
-        limit=1000,
-        feed=_DEFAULT_FEED,
-    )
-    try:
-        if ctx.data_client is None:
-            logger.warning("Data client unavailable, using mock regime data")
-            bars = pd.DataFrame({
-                'timestamp': pd.date_range(end=end_dt, periods=100, freq="B"),
-                'close': [100.0] * 100,
-                'open': [99.0] * 100,
-                'high': [101.0] * 100,
-                'low': [98.0] * 100,
-                'volume': [1000] * 100,
-            }).set_index("timestamp")
-        else:
-            bars = safe_get_stock_bars(ctx.data_client, bars_req, "SPY", "REGIME")
-            if bars is None:
-                logger.warning("Data client returned None, using mock regime data")
-                bars = pd.DataFrame({
-                    'timestamp': pd.date_range(end=end_dt, periods=100, freq="B"),
-                    'close': [100.0] * 100,
-                    'open': [99.0] * 100,
-                    'high': [101.0] * 100,
-                    'low': [98.0] * 100,
-                    'volume': [1000] * 100,
-                }).set_index("timestamp")
-    except APIError as e:
-        if "subscription does not permit" in str(e).lower() and _DEFAULT_FEED != "iex":
-            logger.warning(
-                f"[regime_data] subscription error {start_dt}-{end_dt}: {e}; retrying with IEX"
-            )
-            bars_req.feed = "iex"
-            if ctx.data_client is None:
-                logger.warning("Data client unavailable for retry, using mock data")
-                bars = pd.DataFrame({
-                    'timestamp': pd.date_range(end=end_dt, periods=100, freq="B"),
-                    'close': [100.0] * 100,
-                    'open': [99.0] * 100,
-                    'high': [101.0] * 100,
-                    'low': [98.0] * 100,
-                    'volume': [1000] * 100,
-                }).set_index("timestamp")
-            else:
-                bars = safe_get_stock_bars(ctx.data_client, bars_req, "SPY", "IEX REGIME")
-                if bars is None:
-                    logger.warning("IEX data client returned None, using mock data")
-                    bars = pd.DataFrame({
-                        'timestamp': pd.date_range(end=end_dt, periods=100, freq="B"),
-                        'close': [100.0] * 100,
-                        'open': [99.0] * 100,
-                        'high': [101.0] * 100,
-                        'low': [98.0] * 100,
-                        'volume': [1000] * 100,
-                    }).set_index("timestamp")
-        else:
-            raise
-    # 1) If columns are (symbol, field), select our one symbol
-    if isinstance(bars.columns, _RealMultiIndex):
-        bars = bars.xs(REGIME_SYMBOLS[0], level=0, axis=1)
+    # --- Regime training uses basket-based proxy now ---
+    wide = _build_regime_dataset(ctx)
+    if wide is None or getattr(wide, "empty", False):
+        logger.warning("Regime basket is empty; skipping model train")
+        bars = pd.DataFrame()
     else:
-        bars = bars.drop(columns=["symbol"], errors="ignore")
+        bars = _regime_basket_to_proxy_bars(wide)
 
-    # Normalize to a DatetimeIndex robustly
+    # Normalize to a DatetimeIndex robustly (proxy has 'timestamp' column)
     try:
-        if hasattr(bars, "index") and isinstance(bars.index, _RealMultiIndex):
-            # Prefer a named "timestamp" level if present; otherwise pick the first datetime-like level
-            names = list(bars.index.names or [])
-            if "timestamp" in names:
-                bars.index = bars.index.get_level_values("timestamp")
-            else:
-                lvl_candidates = []
-                for lvl in range(bars.index.nlevels):
-                    val = bars.index.get_level_values(lvl)[0]
-                    lvl_candidates.append((lvl, isinstance(val, (pd.Timestamp, datetime))))
-                pick = next((i for i, ok in lvl_candidates if ok), 1)
-                bars.index = bars.index.get_level_values(pick)
-        elif hasattr(bars, "index") and bars.index.dtype == object and len(bars.index) and isinstance(bars.index[0], tuple):
-            # Tuple index; try best-effort to select timestamp position
-            t0 = bars.index[0]
-            # If ('SPY', Timestamp) pick element 1; if (Timestamp, 'SPY') pick 0
-            pick = 1 if not isinstance(t0[0], (pd.Timestamp, datetime)) and isinstance(t0[1], (pd.Timestamp, datetime)) else 0
-            bars.index = [t[pick] for t in bars.index]
-        elif "timestamp" in getattr(bars, "columns", []):
+        if "timestamp" in getattr(bars, "columns", []):
             idx = safe_to_datetime(bars["timestamp"], context="regime data")
             bars = bars.drop(columns=["timestamp"])
             bars.index = idx

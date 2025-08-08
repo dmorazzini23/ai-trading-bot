@@ -7,7 +7,7 @@ import socket
 import threading
 import warnings
 import time
-from datetime import date, timezone
+from datetime import date, timezone, datetime
 from typing import Any, Sequence
 from enum import Enum
 from uuid import UUID
@@ -640,6 +640,36 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
             return pd.DatetimeIndex([pd.NaT] * length, tz="UTC")
 
 
+def validate_ohlcv(
+    df: pd.DataFrame,
+    required: list[str] | None = None,
+    require_monotonic: bool = True,
+) -> None:
+    """
+    Validate an OHLCV-like DataFrame in-place. Raises ValueError on failure.
+    Required columns default to ['timestamp','open','high','low','close','volume'].
+    Ensures timestamp is parseable and, if requested, monotonic increasing.
+    """
+    required = required or ["timestamp","open","high","low","close","volume"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"missing columns: {missing}")
+    # Coerce/verify timestamp
+    ts = df["timestamp"]
+    if not isinstance(ts.iloc[0], (pd.Timestamp, datetime)):
+        ts = safe_to_datetime(ts, context="ohlcv validation")
+    if ts.isna().any():
+        raise ValueError("timestamp contains NaT/invalid values")
+    if require_monotonic and not ts.is_monotonic_increasing:
+        raise ValueError("timestamp is not monotonic increasing")
+    # Light sanity checks
+    if len(df) == 0:
+        raise ValueError("no rows")
+    if not {"open","high","low","close"}.issubset(df.columns):
+        raise ValueError("OHLC columns incomplete")
+    # No return; success == no exception
+
+
 def health_check(df: pd.DataFrame | None, resolution: str) -> bool:
     """Validate that ``df`` has enough rows for reliable analysis."""
     min_rows = int(os.getenv("HEALTH_MIN_ROWS", 100))
@@ -820,11 +850,11 @@ def get_ohlcv_columns(df):
 REQUIRED_OHLCV_COLS = ["Open", "High", "Low", "Close", "Volume"]
 
 
-def validate_ohlcv(df: pd.DataFrame) -> bool:
+def validate_ohlcv_basic(df: pd.DataFrame) -> bool:
     """Return True if ``df`` contains the required OHLCV columns."""
 
     if not isinstance(df, pd.DataFrame) or df.empty:
-        logger.error("validate_ohlcv received invalid DataFrame")
+        logger.error("validate_ohlcv_basic received invalid DataFrame")
         return False
     missing = [c for c in REQUIRED_OHLCV_COLS if c not in df.columns]
     if missing:
