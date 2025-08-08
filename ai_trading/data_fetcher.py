@@ -2,6 +2,7 @@ import logging
 import random
 import sys
 import threading
+import time
 import time as pytime
 import types
 import warnings
@@ -16,6 +17,21 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     print("Warning: Running under unsupported Python version", file=sys.stderr)
 
 import config
+from ai_trading.config.settings import get_settings
+from ai_trading.market import cache as mcache
+
+# Prometheus metrics (optional)
+try:
+    from prometheus_client import Counter, Histogram
+    _MET_REQS = Counter("data_requests_total", "Data requests", ["source","timeframe","cache"])
+    _MET_LAT  = Histogram("data_request_latency_seconds", "Data request latency", ["source","timeframe","cache"])
+except Exception:  # pragma: no cover
+    class _Noop:
+        def labels(self,*a,**k): return self
+        def inc(self,*a,**k): pass
+        def observe(self,*a,**k): pass
+    _MET_REQS = _Noop()
+    _MET_LAT  = _Noop()
 
 FINNHUB_API_KEY = config.FINNHUB_API_KEY
 ALPACA_API_KEY = config.ALPACA_API_KEY
@@ -660,7 +676,7 @@ def get_historical_data(
 
     def _fetch(feed: str = _DEFAULT_FEED):
         req = StockBarsRequest(
-            symbol_or_symbols=[symbol],
+            symbol_or_symbols=[symbol],  # NOTE: batch variant provided below
             start=start_dt,
             end=end_dt,
             timeframe=tf,
@@ -743,7 +759,7 @@ def get_daily_df(
     start: date | datetime | pd.Timestamp | str,
     end: date | datetime | pd.Timestamp | str,
 ) -> pd.DataFrame:
-    """Fetch daily bars with retry and IEX fallback."""
+    """Fetch daily bars with retry and IEX fallback, with read-through caching."""
     if start is None or end is None:
         logger.error(
             "get_daily_df called with None dates: %r, %r",
@@ -767,6 +783,25 @@ def get_daily_df(
 
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
+    
+    # --- caching layer ---
+    settings = get_settings()
+    tf_name = "1D"
+    start_s = str(start); end_s = str(end)
+    df_cached = None
+    if settings.data_cache_enable:
+        df_cached = mcache.get_mem(symbol, tf_name, start_s, end_s, settings.data_cache_ttl_seconds)
+        if df_cached is not None:
+            _MET_REQS.labels("cache", tf_name, "hit").inc()
+            return df_cached
+        if settings.data_cache_disk_enable:
+            on_disk = mcache.get_disk(settings.data_cache_dir, symbol, tf_name, start_s, end_s)
+            if on_disk is not None:
+                mcache.put_mem(symbol, tf_name, start_s, end_s, on_disk)
+                _MET_REQS.labels("cache", tf_name, "hit_disk").inc()
+                return on_disk
+
+    t0 = time.perf_counter()
     try:
         df = _fetch_bars(symbol, start_dt, end_dt, "1Day", _DEFAULT_FEED)
     except DataFetchException as primary_err:
@@ -780,6 +815,8 @@ def get_daily_df(
                 "Secondary provider failed for %s: %s", symbol, fh_err
             )
             raise DataSourceDownException(symbol) from fh_err
+    _MET_LAT.labels("alpaca", tf_name, "miss").observe(time.perf_counter() - t0)
+    _MET_REQS.labels("alpaca", tf_name, "miss").inc()
     try:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(-1)
@@ -804,7 +841,16 @@ def get_daily_df(
         df["timestamp"] = idx
         df = df.reset_index(drop=True)
 
-        return df[["timestamp", "open", "high", "low", "close", "volume"]]
+        df = df[["timestamp", "open", "high", "low", "close", "volume"]]
+        # save to cache (mem + optional disk)
+        if settings.data_cache_enable:
+            mcache.put_mem(symbol, tf_name, start_s, end_s, df)
+            if settings.data_cache_disk_enable:
+                try:
+                    mcache.put_disk(settings.data_cache_dir, symbol, tf_name, start_s, end_s, df)
+                except Exception:
+                    pass
+        return df
     except KeyError:
         logger.warning(
             "Missing OHLCV columns for %s; returning empty DataFrame",

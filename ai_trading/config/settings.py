@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     scheduler_sleep_seconds: int = Field(30, env="SCHEDULER_SLEEP_SECONDS")
     scheduler_iterations: int = Field(0, env="SCHEDULER_ITERATIONS")
 
+    # --- Data cache controls ---
+    data_cache_enable: bool = Field(False, env="DATA_CACHE_ENABLE")
+    data_cache_ttl_seconds: int = Field(90, env="DATA_CACHE_TTL_SECONDS")
+    data_cache_dir: str = Field("data_cache", env="DATA_CACHE_DIR")
+    data_cache_disk_enable: bool = Field(False, env="DATA_CACHE_DISK_ENABLE")
+
     model_config = {
         "env_file": ".env",
         "case_sensitive": False,
