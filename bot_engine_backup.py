@@ -3987,6 +3987,7 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
             f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
             f"&CIK={ticker}&type=8-K&count=5",
             headers={"User-Agent": "AI Trading Bot"},
+            timeout=10,
         )
         r.raise_for_status()
 
@@ -8216,7 +8217,7 @@ def start_metrics_server(default_port: int = 9200) -> None:
             try:
                 import requests
 
-                resp = requests.get(f"http://localhost:{default_port}")
+                resp = requests.get(f"http://localhost:{default_port}", timeout=2)
                 if resp.ok:
                     logger.info(
                         "Metrics port %d already serving; reusing", default_port
