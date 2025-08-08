@@ -301,8 +301,17 @@ except Exception:
             return f
         return decorator
     
+    class WaitStub:
+        def __add__(self, other):
+            return self
+        def __radd__(self, other):
+            return self
+    
     def wait_exponential(*args, **kwargs):
-        return None
+        return WaitStub()
+    
+    def wait_random(*args, **kwargs):
+        return WaitStub()
     
     def stop_after_attempt(*args, **kwargs):
         return None
@@ -316,6 +325,7 @@ except Exception:
     tenacity_mod = types.ModuleType("tenacity")
     tenacity_mod.retry = retry
     tenacity_mod.wait_exponential = wait_exponential
+    tenacity_mod.wait_random = wait_random
     tenacity_mod.stop_after_attempt = stop_after_attempt
     tenacity_mod.retry_if_exception_type = retry_if_exception_type
     tenacity_mod.RetryError = RetryError
@@ -903,12 +913,33 @@ except Exception:  # pragma: no cover - optional dependency
             self.PORTFOLIO_EXPOSURE_CAP = float(os.getenv("PORTFOLIO_EXPOSURE_CAP", "2.5"))
             self.SEED = int(os.getenv("SEED", "42"))
             self.RATE_LIMIT_BUDGET = int(os.getenv("RATE_LIMIT_BUDGET", "190"))
+            # Additional settings needed by bot_engine
+            self.pretrade_lookback_days = int(os.getenv("PRETRADE_LOOKBACK_DAYS", "120"))
+            self.pretrade_batch_size = int(os.getenv("PRETRADE_BATCH_SIZE", "50"))
+            self.intraday_batch_enable = os.getenv("INTRADAY_BATCH_ENABLE", "True").lower() == "true"
+            self.intraday_batch_size = int(os.getenv("INTRADAY_BATCH_SIZE", "40"))
+            self.batch_fallback_workers = int(os.getenv("BATCH_FALLBACK_WORKERS", "4"))
+            self.regime_symbols_csv = os.getenv("REGIME_SYMBOLS_CSV", "SPY")
             for k, v in kwargs.items():
                 setattr(self, k, v)
                 
         @staticmethod
         def model_json_schema():
             return {}
+        
+        def effective_executor_workers(self, cpu_count=None):
+            """Return a reasonable number of workers."""
+            cpu_count = cpu_count or 2
+            return max(2, min(4, cpu_count))
+        
+        def effective_prediction_workers(self, cpu_count=None):
+            """Return a reasonable number of prediction workers."""
+            cpu_count = cpu_count or 2
+            return max(2, min(4, cpu_count))
+        
+        def get_alpaca_keys(self):
+            """Return Alpaca API credentials."""
+            return self.ALPACA_API_KEY, self.ALPACA_SECRET_KEY
     
     class SettingsConfigDictStub:
         def __init__(self, **kwargs):
@@ -917,6 +948,16 @@ except Exception:  # pragma: no cover - optional dependency
     pydantic_settings_mod = types.ModuleType("pydantic_settings")
     pydantic_settings_mod.BaseSettings = BaseSettingsStub
     pydantic_settings_mod.SettingsConfigDict = SettingsConfigDictStub
+    
+    # Create a get_settings function that returns a properly configured instance
+    _settings_instance = None
+    def get_settings():
+        global _settings_instance
+        if _settings_instance is None:
+            _settings_instance = BaseSettingsStub()
+        return _settings_instance
+    
+    pydantic_settings_mod.get_settings = get_settings
     pydantic_settings_mod.__file__ = "stub"
     sys.modules["pydantic_settings"] = pydantic_settings_mod
 
@@ -927,13 +968,27 @@ except Exception:  # pragma: no cover - optional dependency
     
     class FieldStub:
         def __init__(self, *args, **kwargs):
-            pass
+            self.default = args[0] if args else None
+            self.kwargs = kwargs
             
         def __call__(self, *args, **kwargs):
-            return lambda x: x
+            # For Field decorators, just return the default value
+            return self.default
+    
+    def model_validator(*args, **kwargs):
+        """Stub for pydantic model_validator decorator."""
+        def decorator(func):
+            return func
+        return decorator
+    
+    class AliasChoices:
+        def __init__(self, *args, **kwargs):
+            pass
     
     pydantic_mod = types.ModuleType("pydantic")
     pydantic_mod.Field = FieldStub()
+    pydantic_mod.model_validator = model_validator
+    pydantic_mod.AliasChoices = AliasChoices
     pydantic_mod.__file__ = "stub"
     sys.modules["pydantic"] = pydantic_mod
 
@@ -1099,6 +1154,10 @@ except Exception:  # pragma: no cover - optional dependency
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
     
+    class GetAssetsRequest(dict):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+    
     class TradingStream:
         def __init__(self, *args, **kwargs):
             pass
@@ -1112,6 +1171,7 @@ except Exception:  # pragma: no cover - optional dependency
     enums_mod.QueryOrderStatus = QueryOrderStatus
     enums_mod.OrderStatus = OrderStatus
     trading_models_mod.Order = Order
+    trading_requests_mod.GetAssetsRequest = GetAssetsRequest
     trading_requests_mod.LimitOrderRequest = LimitOrderRequest
     trading_requests_mod.MarketOrderRequest = MarketOrderRequest
     trading_requests_mod.GetOrdersRequest = GetOrdersRequest
@@ -1456,3 +1516,60 @@ def load_runner(monkeypatch):
     monkeypatch.setitem(sys.modules, "alpaca.trading.stream", stream_mod)
     import runner as r
     return importlib.reload(r)
+
+
+@pytest.fixture
+def dummy_alpaca_client():
+    class DummyClient:
+        def __init__(self):
+            self.calls = []
+        def submit_order(self, *args, **kwargs):
+            # Accept any combination of positional and keyword arguments
+            self.calls.append({"args": args, "kwargs": kwargs})
+            from types import SimpleNamespace
+            return SimpleNamespace(id="dummy-order-id", status="accepted")
+    return DummyClient()
+
+
+def _make_df(rows: int = 10):
+    from datetime import datetime, timezone
+    now = datetime(2025, 8, 8, 15, 30, tzinfo=timezone.utc)
+    try:
+        import pandas as pd
+        idx = pd.date_range(end=now, periods=max(rows, 1), freq="min")
+        return pd.DataFrame(
+            {"open": 100.0, "high": 101.0, "low": 99.5, "close": 100.5, "volume": 1000},
+            index=idx
+        )
+    except ImportError:
+        # Use mock DataFrame if pandas not available
+        from tests.conftest import DataFrameStub
+        return DataFrameStub({
+            "timestamp": [now] * max(rows, 1),
+            "open": [100.0] * max(rows, 1),
+            "high": [101.0] * max(rows, 1),
+            "low": [99.5] * max(rows, 1),
+            "close": [100.5] * max(rows, 1),
+            "volume": [1000] * max(rows, 1)
+        })
+
+
+@pytest.fixture
+def dummy_data_fetcher():
+    class DF:
+        def get_minute_bars(self, symbol, start=None, end=None, limit=None):
+            return _make_df(30)
+    return DF()
+
+
+@pytest.fixture
+def dummy_data_fetcher_empty():
+    class DF:
+        def get_minute_bars(self, symbol, start=None, end=None, limit=None):
+            try:
+                import pandas as pd
+                return pd.DataFrame(columns=["open","high","low","close","volume"])
+            except ImportError:
+                from tests.conftest import DataFrameStub
+                return DataFrameStub({})  # Empty DataFrame
+    return DF()
