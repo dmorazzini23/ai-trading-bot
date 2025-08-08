@@ -28,7 +28,7 @@ os.environ.setdefault('PYTEST_RUNNING', '1')
 # Import the modules we need to test
 try:
     import bot_engine
-    import meta_learning
+    from ai_trading import meta_learning
     import trade_execution
 except ImportError as e:
     print(f"Import error: {e}")

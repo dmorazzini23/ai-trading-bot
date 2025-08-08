@@ -74,6 +74,6 @@ def test_pyramiding_adds():
 
 
 def test_volatility_filter():
-    from meta_learning import volatility_regime_filter
+    from ai_trading.meta_learning import volatility_regime_filter
     assert volatility_regime_filter(6, 100) == "high_vol"
     assert volatility_regime_filter(2, 100) == "low_vol"

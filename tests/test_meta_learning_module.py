@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import meta_learning
+from ai_trading import meta_learning
 
 
 def test_load_weights_missing(tmp_path, caplog):

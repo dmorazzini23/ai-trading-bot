@@ -4,7 +4,7 @@ import types
 import pandas as pd
 import pytest
 
-import meta_learning
+from ai_trading import meta_learning
 import sklearn.linear_model
 
 pytestmark = pytest.mark.slow

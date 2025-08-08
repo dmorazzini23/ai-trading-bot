@@ -963,9 +963,14 @@ if not ALPACA_AVAILABLE:
     TimeFrame = MockTimeFrame()  # Instance for attribute access
     logger.debug("Alpaca data client mocks initialized")
 
-# AI-AGENT-REF: lazy import heavy meta_learning module to speed up import for tests
+# AI-AGENT-REF: Optional meta-learning — do not crash if unavailable
 if not os.getenv("PYTEST_RUNNING"):
-    from ai_trading.meta_learning import optimize_signals  # type: ignore
+    try:
+        from ai_trading.meta_learning import optimize_signals  # type: ignore
+    except Exception as _e:
+        logger.warning("Meta-learning unavailable (%s); proceeding without signal optimization", _e)
+        def optimize_signals(signals, *a, **k):  # type: ignore[no-redef]
+            return signals
 else:
     # AI-AGENT-REF: mock optimize_signals for test environments
     def optimize_signals(*args, **kwargs):
@@ -1019,7 +1024,7 @@ except ImportError:
 from ai_trading.utils import log_warning, model_lock, safe_to_datetime
 
 try:
-    from meta_learning import retrain_meta_learner
+    from ai_trading.meta_learning import retrain_meta_learner
 except ImportError:
     retrain_meta_learner = None
 
@@ -2981,7 +2986,7 @@ class TradeLogger:
 
         # AI-AGENT-REF: Trigger audit-to-meta conversion after trade exit logging
         try:
-            from meta_learning import validate_trade_data_quality, _convert_audit_to_meta_format
+            from ai_trading.meta_learning import validate_trade_data_quality, _convert_audit_to_meta_format
             quality_report = validate_trade_data_quality(self.path)
             
             # If we have audit format rows, trigger conversion for meta-learning
@@ -2989,6 +2994,10 @@ class TradeLogger:
                 logger.info("METALEARN_TRIGGER_CONVERSION: Converting audit format to meta-learning format")
                 # The conversion will be handled by the meta-learning system when it reads the log
             
+        except ImportError:
+            # Meta-learning module not available, use safe defaults
+            validate_trade_data_quality = lambda *_a, **_k: True
+            _convert_audit_to_meta_format = lambda x: x
         except Exception as e:
             # Don't fail trade logging if meta-learning conversion fails
             logger.debug(f"Meta-learning conversion trigger failed: {e}")
