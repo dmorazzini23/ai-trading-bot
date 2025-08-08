@@ -8,9 +8,9 @@ import pytest
 
 np.random.seed(0)
 
-import meta_learning
+from ai_trading import meta_learning
 import sklearn.linear_model
-from meta_learning import MetaLearning
+from ai_trading.meta_learning import MetaLearning
 
 
 def test_meta_learning_instantiation():

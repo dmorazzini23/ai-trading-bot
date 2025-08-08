@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 # Import modules under test
 import sentiment
-import meta_learning
+from ai_trading import meta_learning
 from ai_trading import trade_execution
 import config
 
@@ -384,7 +384,7 @@ class TestIntegrationScenarios(unittest.TestCase):
         # This would be a more complex integration test
         # For now, just ensure modules can be imported together
         import sentiment
-        import meta_learning
+        from ai_trading import meta_learning
         import trade_execution
         
         # Verify key functions exist
@@ -397,7 +397,7 @@ if __name__ == '__main__':
     unittest.main()
 def test_meta_learning_data_quality_validation():
     """Test that meta-learning validates data quality before training."""
-    from meta_learning import validate_trade_data_quality
+    from ai_trading.meta_learning import validate_trade_data_quality
     
     # Test with non-existent file
     with tempfile.NamedTemporaryFile(delete=True) as tmp:
@@ -411,7 +411,7 @@ def test_meta_learning_data_quality_validation():
 
 def test_meta_learning_fallback_data_recovery():
     """Test that meta-learning implements fallback procedures for insufficient data."""
-    from meta_learning import _implement_fallback_data_recovery, _create_emergency_trade_log
+    from ai_trading.meta_learning import _implement_fallback_data_recovery, _create_emergency_trade_log
     
     with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
         tmp_path = tmp.name
@@ -438,7 +438,7 @@ def test_meta_learning_fallback_data_recovery():
 
 def test_meta_learning_price_validation():
     """Test that meta-learning filters out invalid price data."""
-    from meta_learning import validate_trade_data_quality
+    from ai_trading.meta_learning import validate_trade_data_quality
     
     # Create test CSV with mixed valid/invalid data
     test_data = {
@@ -709,7 +709,7 @@ def test_emergency_data_validation():
 
 def test_metalearn_invalid_prices_prevention():
     """Test that METALEARN_INVALID_PRICES warnings are prevented with proper data handling."""
-    from meta_learning import retrain_meta_learner
+    from ai_trading.meta_learning import retrain_meta_learner
     
     # Create minimal valid trade data
     valid_trade_data = {

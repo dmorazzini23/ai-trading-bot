@@ -1811,7 +1811,7 @@ class ExecutionEngine:
 
             # AI-AGENT-REF: Trigger meta-learning conversion after trade execution
             try:
-                from meta_learning import trigger_meta_learning_conversion
+                from ai_trading.meta_learning import trigger_meta_learning_conversion
                 trade_data = {
                     'symbol': symbol,
                     'qty': int(getattr(order, "filled_qty", slice_qty)),
@@ -1998,7 +1998,7 @@ class ExecutionEngine:
 
             # AI-AGENT-REF: Trigger meta-learning conversion after trade execution (async)
             try:
-                from meta_learning import trigger_meta_learning_conversion
+                from ai_trading.meta_learning import trigger_meta_learning_conversion
                 trade_data = {
                     'symbol': symbol,
                     'qty': int(getattr(order, "filled_qty", slice_qty)),

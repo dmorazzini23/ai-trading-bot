@@ -241,7 +241,7 @@ class SystemHealthChecker:
     def _check_meta_learning_health(self) -> ComponentHealth:
         """Check meta-learning system health."""
         try:
-            import meta_learning
+            from ai_trading import meta_learning
             import config
             
             # Check if meta-learning data exists

@@ -109,9 +109,9 @@ def test_meta_learning_trigger():
     """Test meta-learning conversion trigger."""
     with patch('meta_learning.config') as mock_config, \
          patch('meta_learning.pd') as mock_pd, \
-         patch('meta_learning.Path') as mock_path:
+         patch('ai_trading.meta_learning.Path') as mock_path:
         
-        from meta_learning import trigger_meta_learning_conversion
+        from ai_trading.meta_learning import trigger_meta_learning_conversion
         
         # Mock config
         mock_config.TRADE_LOG_FILE = '/tmp/test_trades.csv'

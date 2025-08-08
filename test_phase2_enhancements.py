@@ -277,7 +277,7 @@ class TestIntegrationScenarios(unittest.TestCase):
         # Import Phase 1 modules to ensure compatibility
         with patch.dict(os.environ, test_env):
             import sentiment
-            import meta_learning
+            from ai_trading import meta_learning
             
             # Test that enhanced sentiment analysis works with monitoring
             health_checker = SystemHealthChecker()

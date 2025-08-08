@@ -59,7 +59,7 @@ def test_meta_learning_functions():
     with patch('meta_learning.config') as mock_config:
         mock_config.TRADE_LOG_FILE = '/tmp/test_trades.csv'
         
-        from meta_learning import convert_audit_to_meta
+        from ai_trading.meta_learning import convert_audit_to_meta
         
         # Test single conversion
         trade_data = {

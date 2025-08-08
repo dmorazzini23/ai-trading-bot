@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-import meta_learning
+from ai_trading import meta_learning
 import sklearn.linear_model
 
 

@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 import config
-import meta_learning
+from ai_trading import meta_learning
 import ml_model
 import risk_engine
 import ai_trading.main as main
