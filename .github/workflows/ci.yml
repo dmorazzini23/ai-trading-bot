@@ -11,6 +11,9 @@ jobs:
         python-version: ['3.12.3', '3.12']
     steps:
       - uses: actions/checkout@v4
+      - name: Check for committed secrets
+        run: |
+          test ! -f .env || (echo ".env must not be committed" && exit 1)
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}

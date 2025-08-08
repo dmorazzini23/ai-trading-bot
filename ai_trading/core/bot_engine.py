@@ -1011,7 +1011,7 @@ except ImportError:
     Ridge = None
     print("WARNING: sklearn not available, ML features will be disabled")
 
-from utils import log_warning, model_lock, safe_to_datetime
+from ai_trading.utils import log_warning, model_lock, safe_to_datetime
 
 try:
     from meta_learning import retrain_meta_learner
@@ -1254,7 +1254,7 @@ def log_skip_cooldown(
 
 
 def market_is_open(now: datetime | None = None) -> bool:
-    from utils import is_market_open as utils_market_open
+    from ai_trading.utils import is_market_open as utils_market_open
 
     """Return True if the market is currently open."""
     try:
@@ -3833,7 +3833,7 @@ def pre_trade_health_check(
                     pass  # AI-AGENT-REF: avoid long sleep during health check
                 continue
             else:
-                from utils import log_health_row_check
+                from ai_trading.utils import log_health_row_check
 
                 log_health_row_check(rows, True)
             break
@@ -3903,7 +3903,7 @@ def pre_trade_health_check(
             staleness_threshold_days = 2  # Default threshold
             
             # Check if it's currently a weekend or market holiday
-            from utils import is_market_open, is_weekend, is_market_holiday
+            from ai_trading.utils import is_market_open, is_weekend, is_market_holiday
             
             try:
                 current_is_weekend = is_weekend(now_utc)
@@ -6590,7 +6590,7 @@ def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
 
 
 def on_trade_exit_rebalance(ctx: BotContext) -> None:
-    from utils import portfolio_lock
+    from ai_trading.utils import portfolio_lock
     import portfolio
 
     try:
@@ -7865,7 +7865,7 @@ def daily_summary() -> None:
 
 # ─── PCA-BASED PORTFOLIO ADJUSTMENT ─────────────────────────────────────────────
 def run_daily_pca_adjustment(ctx: BotContext) -> None:
-    from utils import portfolio_lock
+    from ai_trading.utils import portfolio_lock
 
     """
     Once per day, run PCA on last 90-day returns of current universe.
@@ -8484,7 +8484,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
 
 
 def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[str]]:
-    from utils import portfolio_lock
+    from ai_trading.utils import portfolio_lock
     import portfolio
 
     """Prepare trading run by syncing positions and generating symbols."""
@@ -9132,7 +9132,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 positions = ctx.api.get_all_positions()
                 logger.debug("Raw Alpaca positions: %s", positions)
                 try:
-                    from utils import portfolio_lock
+                    from ai_trading.utils import portfolio_lock
                     import portfolio
 
                     with portfolio_lock:

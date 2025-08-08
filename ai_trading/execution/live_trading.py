@@ -20,7 +20,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 try:
-    from validate_env import get_alpaca_config
+    from ai_trading.config import get_alpaca_config
 except ImportError:
     # Fallback for development
     def get_alpaca_config():

@@ -7,11 +7,11 @@ from threading import Thread
 import threading
 
 from dotenv import load_dotenv
-from validate_env import Settings
+from ai_trading.config import Settings
 
 import ai_trading.app as app
 from ai_trading.runner import run_cycle
-import utils
+from ai_trading.utils import set_random_seeds, ensure_deterministic_training, get_pid_on_port, get_free_port
 
 # AI-AGENT-REF: Import memory optimization and performance monitoring
 try:
@@ -57,12 +57,12 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
     original_port = port
 
     for attempt in range(max_attempts):
-        if not utils.get_pid_on_port(port):
+        if not get_pid_on_port(port):
             break
         port += 1
     else:
         # If consecutive ports are all occupied, use get_free_port as fallback
-        free_port = utils.get_free_port()
+        free_port = get_free_port()
         if free_port is None:
             raise RuntimeError(f"Could not find available port starting from {original_port}")
         port = free_port
@@ -86,6 +86,11 @@ def start_api(ready_signal: threading.Event = None) -> None:
 def main() -> None:
     """Start the API thread and repeatedly run trading cycles."""
     load_dotenv()
+    
+    # AI-AGENT-REF: Set up deterministic behavior early
+    set_random_seeds()
+    ensure_deterministic_training()
+    
     validate_environment()
 
     # AI-AGENT-REF: Initialize performance monitoring

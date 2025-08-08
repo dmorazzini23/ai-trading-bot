@@ -50,7 +50,7 @@ class ExecutionResult:
         self.quantity = quantity
         self.fill_price = fill_price
         self.message = message
-        self.execution_time = execution_time or datetime.now()
+        self.execution_time = execution_time or datetime.now(timezone.utc)
         
         # Additional metadata
         self.actual_slippage_bps = kwargs.get("actual_slippage_bps", 0.0)
@@ -339,7 +339,7 @@ class ProductionExecutionCoordinator:
             "rejected_orders": 0,
             "average_execution_time_ms": 0.0,
             "total_slippage_bps": 0.0,
-            "last_reset": datetime.now()
+            "last_reset": datetime.now(timezone.utc)
         }
         
         # Position tracking
@@ -623,7 +623,7 @@ class ProductionExecutionCoordinator:
             order.status = OrderStatus.FILLED
             order.filled_quantity = order.quantity
             order.average_fill_price = fill_price
-            order.executed_at = datetime.now()
+            order.executed_at = datetime.now(timezone.utc)
             
             # Move to completed orders
             self.completed_orders[order.id] = order
@@ -778,14 +778,14 @@ class ProductionExecutionCoordinator:
                     self.current_positions[symbol] = {
                         "quantity": new_quantity,
                         "avg_price": new_avg_price,
-                        "last_updated": datetime.now()
+                        "last_updated": datetime.now(timezone.utc)
                     }
             else:
                 if quantity != 0:
                     self.current_positions[symbol] = {
                         "quantity": quantity,
                         "avg_price": fill_price,
-                        "last_updated": datetime.now()
+                        "last_updated": datetime.now(timezone.utc)
                     }
                     
         except Exception as e:
@@ -831,7 +831,7 @@ class ProductionExecutionCoordinator:
     def _has_recent_similar_order(self, order: Order) -> bool:
         """Check for recent similar orders to prevent duplicates."""
         try:
-            cutoff_time = datetime.now() - timedelta(seconds=30)
+            cutoff_time = datetime.now(timezone.utc) - timedelta(seconds=30)
             
             for existing_order in self.pending_orders.values():
                 if (existing_order.symbol == order.symbol and
@@ -873,7 +873,7 @@ class ProductionExecutionCoordinator:
                 "account_equity": self.account_equity,
                 "risk_level": self.risk_level.value,
                 "trading_allowed": self.halt_manager.is_trading_allowed()["trading_allowed"],
-                "last_updated": datetime.now()
+                "last_updated": datetime.now(timezone.utc)
             }
             
         except Exception as e:
