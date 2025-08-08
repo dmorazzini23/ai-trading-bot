@@ -28,6 +28,10 @@ class SymbolCosts:
     slip_k: float          # Slippage coefficient (bps per √volume)
     commission_bps: float = 0.0  # Commission in basis points
     min_commission: float = 0.0  # Minimum commission per trade
+    # AI-AGENT-REF: Added short/overnight cost parameters
+    borrow_fee_bps: float = 0.0  # Short borrow fee in basis points per day
+    overnight_bps: float = 0.0   # Overnight carry cost in basis points per day
+    locate_required: bool = False  # Whether HTB locate is required for shorts
     updated_at: datetime = None
     sample_count: int = 0   # Number of trades used to estimate
     
@@ -63,6 +67,47 @@ class SymbolCosts:
             Total execution cost in basis points
         """
         return self.total_cost_bps + self.slippage_cost_bps(volume_ratio)
+    
+    # AI-AGENT-REF: Added short/overnight cost calculation methods
+    def borrow_cost_bps(self, days_held: float = 1.0) -> float:
+        """
+        Calculate borrow cost for short positions.
+        
+        Args:
+            days_held: Number of days position is held
+            
+        Returns:
+            Borrow cost in basis points
+        """
+        return self.borrow_fee_bps * days_held
+    
+    def overnight_cost_bps(self, days_held: float = 1.0) -> float:
+        """
+        Calculate overnight carry cost.
+        
+        Args:
+            days_held: Number of days position is held
+            
+        Returns:
+            Overnight cost in basis points
+        """
+        return self.overnight_bps * days_held
+    
+    def total_holding_cost_bps(self, days_held: float = 1.0, is_short: bool = False) -> float:
+        """
+        Calculate total cost of holding position.
+        
+        Args:
+            days_held: Number of days position is held
+            is_short: Whether position is short
+            
+        Returns:
+            Total holding cost in basis points
+        """
+        cost = self.overnight_cost_bps(days_held)
+        if is_short:
+            cost += self.borrow_cost_bps(days_held)
+        return cost
 
 
 class SymbolCostModel:
@@ -92,7 +137,11 @@ class SymbolCostModel:
             half_spread_bps=2.0,  # 2 bps half spread
             slip_k=1.5,           # 1.5 bps per √volume
             commission_bps=0.5,   # 0.5 bps commission
-            min_commission=1.0    # $1 minimum
+            min_commission=1.0,   # $1 minimum
+            # AI-AGENT-REF: Default short/overnight costs
+            borrow_fee_bps=10.0,  # 10 bps per day for hard-to-borrow
+            overnight_bps=0.5,    # 0.5 bps per day overnight carry
+            locate_required=False  # Most liquid stocks don't require locate
         )
         
         # Load existing cost data
@@ -162,7 +211,11 @@ class SymbolCostModel:
             half_spread_bps=self._default_costs.half_spread_bps,
             slip_k=self._default_costs.slip_k,
             commission_bps=self._default_costs.commission_bps,
-            min_commission=self._default_costs.min_commission
+            min_commission=self._default_costs.min_commission,
+            # AI-AGENT-REF: Include new cost fields for new symbols
+            borrow_fee_bps=self._default_costs.borrow_fee_bps,
+            overnight_bps=self._default_costs.overnight_bps,
+            locate_required=self._default_costs.locate_required
         )
         
         self._costs[symbol] = default
@@ -212,6 +265,10 @@ class SymbolCostModel:
             slip_k=new_slip_k,
             commission_bps=current_costs.commission_bps,
             min_commission=current_costs.min_commission,
+            # AI-AGENT-REF: Preserve new cost fields during updates
+            borrow_fee_bps=current_costs.borrow_fee_bps,
+            overnight_bps=current_costs.overnight_bps,
+            locate_required=current_costs.locate_required,
             updated_at=datetime.now(timezone.utc),
             sample_count=current_costs.sample_count + 1
         )
@@ -357,6 +414,133 @@ class SymbolCostModel:
             'max_spread_bps': np.max(spreads),
             'min_spread_bps': np.min(spreads)
         }
+    
+    # AI-AGENT-REF: Added methods for short/overnight cost handling
+    def check_short_availability(self, symbol: str) -> Tuple[bool, str]:
+        """
+        Check if symbol is available for short selling.
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            Tuple of (available, reason)
+        """
+        costs = self.get_costs(symbol)
+        
+        if costs.locate_required:
+            # In a real implementation, this would check with the broker
+            # For now, simulate based on borrow fee
+            if costs.borrow_fee_bps > 50.0:  # Very high borrow fee
+                return False, "Hard to borrow - high fee"
+            elif costs.borrow_fee_bps > 20.0:  # High borrow fee
+                return True, "Available but expensive"
+        
+        return True, "Available"
+    
+    def calculate_holding_cost(
+        self,
+        symbol: str,
+        position_value: float,
+        days_held: float = 1.0,
+        is_short: bool = False
+    ) -> Dict[str, float]:
+        """
+        Calculate cost of holding position overnight.
+        
+        Args:
+            symbol: Trading symbol
+            position_value: Position value in dollars
+            days_held: Number of days position is held
+            is_short: Whether position is short
+            
+        Returns:
+            Dict with holding cost breakdown
+        """
+        costs = self.get_costs(symbol)
+        
+        overnight_cost_bps = costs.overnight_cost_bps(days_held)
+        overnight_cost_dollars = position_value * (overnight_cost_bps / 10000)
+        
+        borrow_cost_bps = 0.0
+        borrow_cost_dollars = 0.0
+        
+        if is_short:
+            borrow_cost_bps = costs.borrow_cost_bps(days_held)
+            borrow_cost_dollars = position_value * (borrow_cost_bps / 10000)
+        
+        total_cost_bps = overnight_cost_bps + borrow_cost_bps
+        total_cost_dollars = overnight_cost_dollars + borrow_cost_dollars
+        
+        return {
+            'overnight_cost_bps': overnight_cost_bps,
+            'overnight_cost_dollars': overnight_cost_dollars,
+            'borrow_cost_bps': borrow_cost_bps,
+            'borrow_cost_dollars': borrow_cost_dollars,
+            'total_holding_cost_bps': total_cost_bps,
+            'total_holding_cost_dollars': total_cost_dollars,
+            'days_held': days_held,
+            'is_short': is_short
+        }
+    
+    def adjust_for_holding_costs(
+        self,
+        symbol: str,
+        target_size: float,
+        expected_holding_days: float = 1.0,
+        max_holding_cost_bps: float = 5.0,
+        is_short: bool = False
+    ) -> Tuple[float, Dict[str, float]]:
+        """
+        Adjust position size considering holding costs.
+        
+        Args:
+            symbol: Trading symbol
+            target_size: Target position size
+            expected_holding_days: Expected days to hold position
+            max_holding_cost_bps: Maximum acceptable holding cost
+            is_short: Whether position is short
+            
+        Returns:
+            Tuple of (adjusted_size, cost_info)
+        """
+        if target_size == 0:
+            return 0.0, {}
+        
+        costs = self.get_costs(symbol)
+        holding_cost_bps = costs.total_holding_cost_bps(expected_holding_days, is_short)
+        
+        # Check short availability for short positions
+        if is_short:
+            available, reason = self.check_short_availability(symbol)
+            if not available:
+                self.logger.warning(f"Cannot short {symbol}: {reason}")
+                return 0.0, {'rejected': True, 'reason': reason}
+        
+        # If holding costs are within limit, return original size
+        if holding_cost_bps <= max_holding_cost_bps:
+            cost_info = self.calculate_holding_cost(
+                symbol, abs(target_size), expected_holding_days, is_short
+            )
+            return target_size, cost_info
+        
+        # Scale down size to meet holding cost constraint
+        cost_ratio = max_holding_cost_bps / holding_cost_bps
+        adjusted_size = target_size * cost_ratio
+        
+        cost_info = self.calculate_holding_cost(
+            symbol, abs(adjusted_size), expected_holding_days, is_short
+        )
+        cost_info['original_size'] = target_size
+        cost_info['scaling_factor'] = cost_ratio
+        
+        self.logger.warning(
+            f"Scaled down {'short' if is_short else 'long'} position for {symbol} "
+            f"by {cost_ratio:.2%} due to high holding costs "
+            f"({holding_cost_bps:.1f}bps > {max_holding_cost_bps}bps)"
+        )
+        
+        return adjusted_size, cost_info
 
 
 # Global cost model instance
