@@ -45,10 +45,22 @@ from ai_trading.integrations.rate_limit import get_limiter
 
 logger = logging.getLogger(__name__)
 
-if "ALPACA_API_KEY" in os.environ:
+# Support both ALPACA_* and APCA_* naming schemes
+# Set APCA_* variables if only ALPACA_* are present (for backward compatibility)
+if "ALPACA_API_KEY" in os.environ and "APCA_API_KEY_ID" not in os.environ:
     os.environ.setdefault("APCA_API_KEY_ID", os.environ["ALPACA_API_KEY"])
-if "ALPACA_SECRET_KEY" in os.environ:
+if "ALPACA_SECRET_KEY" in os.environ and "APCA_API_SECRET_KEY" not in os.environ:
     os.environ.setdefault("APCA_API_SECRET_KEY", os.environ["ALPACA_SECRET_KEY"])
+if "ALPACA_BASE_URL" in os.environ and "APCA_API_BASE_URL" not in os.environ:
+    os.environ.setdefault("APCA_API_BASE_URL", os.environ["ALPACA_BASE_URL"])
+
+# Also support the reverse for full compatibility
+if "APCA_API_KEY_ID" in os.environ and "ALPACA_API_KEY" not in os.environ:
+    os.environ.setdefault("ALPACA_API_KEY", os.environ["APCA_API_KEY_ID"])
+if "APCA_API_SECRET_KEY" in os.environ and "ALPACA_SECRET_KEY" not in os.environ:
+    os.environ.setdefault("ALPACA_SECRET_KEY", os.environ["APCA_API_SECRET_KEY"])
+if "APCA_API_BASE_URL" in os.environ and "ALPACA_BASE_URL" not in os.environ:
+    os.environ.setdefault("ALPACA_BASE_URL", os.environ["APCA_API_BASE_URL"])
 
 SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
 DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
@@ -76,16 +88,42 @@ ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
 RATE_LIMIT_BUDGET = int(os.getenv("RATE_LIMIT_BUDGET", str(config.RATE_LIMIT_BUDGET)))
 
 
+def _get_cred(alpaca_key: str, apca_key: str, default: str = "") -> str:
+    """
+    Get credential from environment supporting both naming schemes.
+    
+    Args:
+        alpaca_key: ALPACA_* style environment variable name
+        apca_key: APCA_* style environment variable name  
+        default: Default value if neither is found
+        
+    Returns:
+        str: Credential value, ALPACA_* takes precedence over APCA_*
+    """
+    return os.getenv(alpaca_key) or os.getenv(apca_key) or default
+
+
 def _build_headers() -> dict:
-    """Return authorization headers constructed from the current environment.
+    """
+    Return authorization headers constructed from the current environment.
 
     Secrets are read at call time so that a configuration reload will be
     respected without keeping credentials in memory longer than necessary.
+    
+    Supports both ALPACA_* and APCA_* environment variable naming schemes.
     """
+    api_key = _get_cred("ALPACA_API_KEY", "APCA_API_KEY_ID")
+    secret_key = _get_cred("ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY")
+    
+    # Log redacted credential diagnostics (no secrets exposed)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Building headers with API key: %s***", 
+                    api_key[:8] if api_key and len(api_key) > 8 else "MISSING")
+        logger.debug("Secret key present: %s", bool(secret_key))
 
     return {
-        "APCA-API-KEY-ID": os.getenv("ALPACA_API_KEY", ""),
-        "APCA-API-SECRET-KEY": os.getenv("ALPACA_SECRET_KEY", ""),
+        "APCA-API-KEY-ID": api_key,
+        "APCA-API-SECRET-KEY": secret_key,
     }
 
 
