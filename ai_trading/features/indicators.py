@@ -37,14 +37,20 @@ except ImportError:
 import logging
 
 try:
-    from indicators import ema
+    try:
+        from ai_trading.indicators import ema  # type: ignore
+    except Exception:  # pragma: no cover
+        from indicators import ema  # type: ignore
 except ImportError:
     def ema(data, period):
         """Fallback EMA calculation."""
         return pd.Series(0.0, index=range(len(data)))
 
 try:
-    from indicators import atr
+    try:
+        from ai_trading.indicators import atr  # type: ignore
+    except Exception:  # pragma: no cover
+        from indicators import atr  # type: ignore
 except ImportError:
     def atr(high, low, close, period=14):
         """Fallback ATR calculation."""

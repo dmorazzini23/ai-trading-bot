@@ -908,11 +908,14 @@ except ImportError:
         pass
 
 try:
-    from rebalancer import maybe_rebalance as original_rebalance
+    from ai_trading.rebalancer import maybe_rebalance as original_rebalance  # type: ignore
 except ImportError:
-    # AI-AGENT-REF: rebalancer not available, create minimal fallback
-    def original_rebalance(*args, **kwargs):
-        pass
+    try:
+        from rebalancer import maybe_rebalance as original_rebalance
+    except ImportError:
+        # AI-AGENT-REF: rebalancer not available, create minimal fallback
+        def original_rebalance(*args, **kwargs):
+            pass
 
 # Use base URL from configuration
 ALPACA_BASE_URL = config.ALPACA_BASE_URL
@@ -1188,8 +1191,9 @@ except ImportError:
 try:
     from ai_trading.trade_execution import ExecutionEngine  # type: ignore
 except Exception:  # pragma: no cover
-    from trade_execution import ExecutionEngine  # type: ignore
-except Exception:  # pragma: no cover - allow tests with stubbed module
+    try:
+        from trade_execution import ExecutionEngine  # type: ignore
+    except Exception:  # pragma: no cover - allow tests with stubbed module
 
     class ExecutionEngine:
         """
@@ -3792,7 +3796,10 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
     Validate that the cached minute data for each symbol is recent enough.
     Logs UTC timestamps and fails fast if any symbol is stale.
     """
-    from data_fetcher import get_cached_minute_timestamp, last_minute_bar_age_seconds
+    try:
+        from ai_trading.data_fetcher import get_cached_minute_timestamp, last_minute_bar_age_seconds  # type: ignore
+    except Exception:  # pragma: no cover
+        from data_fetcher import get_cached_minute_timestamp, last_minute_bar_age_seconds  # type: ignore
     import datetime as _dt
     now_utc = _dt.datetime.now(_dt.timezone.utc).isoformat()
     stale = []
@@ -7325,7 +7332,10 @@ def _add_basic_indicators(
 
 
 def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
-    from signals import calculate_macd as signals_calculate_macd
+    try:
+        from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
+    except Exception:  # pragma: no cover
+        from signals import calculate_macd as signals_calculate_macd  # type: ignore
 
     """Add MACD indicators using the defensive helper."""
     try:
@@ -7549,7 +7559,10 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
-    from signals import calculate_macd as signals_calculate_macd
+    try:
+        from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
+    except Exception:  # pragma: no cover
+        from signals import calculate_macd as signals_calculate_macd  # type: ignore
 
     feat = pd.DataFrame(index=df.index)
     feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
@@ -9835,7 +9848,10 @@ def compute_ichimoku(
     try:
         ich_func = getattr(ta, "ichimoku", None)
         if ich_func is None:
-            from indicators import ichimoku_fallback
+            try:
+                from ai_trading.indicators import ichimoku_fallback  # type: ignore
+            except Exception:  # pragma: no cover
+                from indicators import ichimoku_fallback  # type: ignore
 
             ich_func = ichimoku_fallback
         ich = ich_func(high=high, low=low, close=close)
@@ -9865,7 +9881,10 @@ def ichimoku_indicator(
     try:
         ich_func = getattr(ta, "ichimoku", None)
         if ich_func is None:
-            from indicators import ichimoku_fallback
+            try:
+                from ai_trading.indicators import ichimoku_fallback  # type: ignore
+            except Exception:  # pragma: no cover
+                from indicators import ichimoku_fallback  # type: ignore
 
             ich_func = ichimoku_fallback
         ich = ich_func(high=df["high"], low=df["low"], close=df["close"])
