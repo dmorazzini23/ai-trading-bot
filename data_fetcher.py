@@ -214,6 +214,29 @@ _CACHE_STATS = {
 }
 
 
+def get_cached_minute_timestamp(symbol: str) -> "pd.Timestamp | None":
+    """
+    Return the cached 'last fetch time' for minute data in UTC, if present.
+    Does not trigger any network call.
+    """
+    entry = _MINUTE_CACHE.get(symbol)
+    if not entry:
+        return None
+    _, ts = entry
+    return ts if isinstance(ts, pd.Timestamp) else None
+
+
+def last_minute_bar_age_seconds(symbol: str) -> "int | None":
+    """
+    Return the age (in seconds) of the cached minute dataset for `symbol`.
+    Returns None if no cache entry is present.
+    """
+    ts = get_cached_minute_timestamp(symbol)
+    if ts is None:
+        return None
+    return int((pd.Timestamp.now(tz="UTC") - ts).total_seconds())
+
+
 def get_cache_stats() -> dict:
     """Get current cache statistics for monitoring and debugging."""
     total_requests = _CACHE_STATS["hits"] + _CACHE_STATS["misses"]

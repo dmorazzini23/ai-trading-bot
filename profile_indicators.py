@@ -4,8 +4,14 @@ import time
 import pandas as pd
 import numpy as np
 import inspect
-import signals
-import indicators
+try:
+    import ai_trading.signals as signals  # type: ignore
+except Exception:  # pragma: no cover
+    import signals
+try:
+    import ai_trading.indicators as indicators  # type: ignore
+except Exception:  # pragma: no cover
+    import indicators
 
 def profile(func, *args, **kwargs):
     start = time.perf_counter()
