@@ -21,7 +21,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 import requests
 from requests import Session
-import config
+from ai_trading.config import get_settings
 import utils
 try:  # AI-AGENT-REF: make optional for unit tests
     from alpaca.trading.stream import TradingStream
@@ -84,8 +84,10 @@ partial_fills: dict[str, dict[str, float]] = {}
 # AI-AGENT-REF: track first partial fill per order
 partial_fill_tracker: set[str] = set()
 
-ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://api.alpaca.markets")
-RATE_LIMIT_BUDGET = int(os.getenv("RATE_LIMIT_BUDGET", str(config.RATE_LIMIT_BUDGET)))
+_S = get_settings()
+ALPACA_API_KEY = _S.alpaca_api_key
+ALPACA_SECRET_KEY = _S.alpaca_secret_key
+ALPACA_BASE_URL = _S.alpaca_base_url
 
 
 def _get_cred(alpaca_key: str, apca_key: str, default: str = "") -> str:

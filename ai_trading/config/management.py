@@ -13,12 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import logging
 
-# Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ai_trading.config import get_settings
 
 
 class ConfigValidator:
@@ -726,36 +721,10 @@ def _warn_duplicate_env_keys() -> None:
 
 
 def validate_alpaca_credentials() -> None:
-    """
-    Ensure required Alpaca credentials are present with dual schema support.
-    
-    Supports both ALPACA_* and APCA_* environment variable naming schemes.
-    """
+    """Ensure required Alpaca credentials are present (settings-driven)."""
     if TESTING:
-        # Skip validation in testing mode
         return
-    
-    # Check for duplicate keys and warn
-    _warn_duplicate_env_keys()
-    
-    # Resolve credentials from environment
-    api_key, secret_key, base_url = _resolve_alpaca_env()
-    
-    if not api_key or not secret_key:
-        logger.error("Missing Alpaca credentials")
-        logger.error(
-            "Please set either ALPACA_API_KEY/ALPACA_SECRET_KEY or "
-            "APCA_API_KEY_ID/APCA_API_SECRET_KEY in your environment"
-        )
-        raise RuntimeError(
-            "Missing Alpaca credentials. Please set either "
-            "ALPACA_API_KEY/ALPACA_SECRET_KEY or APCA_API_KEY_ID/APCA_API_SECRET_KEY"
-        )
-    
-    # Log masked credentials for verification (no secrets exposed)
-    logger.info("Alpaca credentials resolved successfully")
-    logger.debug("Using API key: %s***", api_key[:8] if len(api_key) > 8 else "***")
-    logger.debug("Using base URL: %s", base_url)
+    get_settings().require_alpaca_or_raise()
 
 
 def log_config(vars_list):

@@ -34,7 +34,7 @@ except ImportError:
         pass
 
 # AI-AGENT-REF: Create global config AFTER .env loading and Settings import
-config = Settings()
+config: Settings | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -100,24 +100,11 @@ def start_api(ready_signal: threading.Event = None) -> None:
 
 def main() -> None:
     """Start the API thread and repeatedly run trading cycles."""
-    # AI-AGENT-REF: Ensure .env is loaded before any Settings usage
     load_dotenv()
-    
-    # AI-AGENT-REF: Set up deterministic behavior early
-    set_random_seeds()
-    ensure_deterministic_training()
-    
-    validate_environment()
-
-    # AI-AGENT-REF: Initialize performance monitoring
-    if PERFORMANCE_MONITORING_AVAILABLE:
-        logger.info("Starting performance monitoring...")
-        start_performance_monitoring()
-        
-        # Configure memory optimizer for better performance
-        memory_optimizer = get_memory_optimizer()
-        if memory_optimizer:
-            logger.info("Memory optimizer initialized")
+    global config
+    config = get_settings()
+    from ai_trading.runner import run_cycle
+    run_cycle()
 
     # Ensure API is ready before starting trading cycles
     api_ready = threading.Event()
