@@ -46,6 +46,17 @@ class Settings(BaseSettings):
     data_warmup_timeframe: str = Field("1Min", env="DATA_WARMUP_TIMEFRAME")  # "1Min" or "1D"
     data_warmup_lookback_days: int = Field(5, env="DATA_WARMUP_LOOKBACK_DAYS")  # historical window
 
+    # --- Regime configuration ---
+    regime_symbols_csv: str = Field("SPY", env="REGIME_SYMBOLS_CSV")
+
+    # --- Batch sizing ---
+    pretrade_batch_size: int = Field(50, env="PRETRADE_BATCH_SIZE")
+
+    # --- Intraday batching controls ---
+    intraday_batch_enable: bool = Field(True, env="INTRADAY_BATCH_ENABLE")
+    intraday_batch_size: int = Field(40, env="INTRADAY_BATCH_SIZE")
+    intraday_lookback_minutes: int = Field(120, env="INTRADAY_LOOKBACK_MINUTES")
+
     model_config = {
         "env_file": ".env",
         "case_sensitive": False,
