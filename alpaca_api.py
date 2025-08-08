@@ -62,8 +62,8 @@ if "APCA_API_SECRET_KEY" in os.environ and "ALPACA_SECRET_KEY" not in os.environ
 if "APCA_API_BASE_URL" in os.environ and "ALPACA_BASE_URL" not in os.environ:
     os.environ.setdefault("ALPACA_BASE_URL", os.environ["APCA_API_BASE_URL"])
 
-SHADOW_MODE = os.getenv("SHADOW_MODE", "0") == "1"
-DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
+SHADOW_MODE = _S.shadow_mode
+DRY_RUN = _S.shadow_mode  # Map DRY_RUN to shadow_mode for compatibility
 
 
 _warn_counts = defaultdict(int)
@@ -102,7 +102,15 @@ def _get_cred(alpaca_key: str, apca_key: str, default: str = "") -> str:
     Returns:
         str: Credential value, ALPACA_* takes precedence over APCA_*
     """
-    return os.getenv(alpaca_key) or os.getenv(apca_key) or default
+    # Use settings instead of direct env access
+    settings = get_settings()
+    if alpaca_key == "ALPACA_API_KEY":
+        return settings.alpaca_api_key or default
+    elif alpaca_key == "ALPACA_SECRET_KEY":
+        return settings.alpaca_secret_key or default
+    elif alpaca_key == "ALPACA_BASE_URL":
+        return settings.alpaca_base_url or default
+    return default
 
 
 def _build_headers() -> dict:

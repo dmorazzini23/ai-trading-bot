@@ -22,6 +22,17 @@ class Settings(BaseSettings):
     capital_cap: float = Field(0.04, env="CAPITAL_CAP")
     dollar_risk_limit: float = Field(0.05, env="DOLLAR_RISK_LIMIT")
     max_position_size: int = Field(8000, env="MAX_POSITION_SIZE")
+    
+    # Additional environment variables commonly used
+    news_api_key: Optional[str] = Field(None, env="NEWS_API_KEY")
+    sentiment_api_key: Optional[str] = Field(None, env="SENTIMENT_API_KEY")
+    sentiment_api_url: str = Field("https://newsapi.org/v2/everything", env="SENTIMENT_API_URL")
+    finnhub_api_key: Optional[str] = Field(None, env="FINNHUB_API_KEY")
+    bot_mode: str = Field("balanced", env="BOT_MODE")
+    bot_log_dir: str = Field("logs", env="BOT_LOG_DIR")
+    api_port: int = Field(9001, env="API_PORT")
+    scheduler_sleep_seconds: int = Field(30, env="SCHEDULER_SLEEP_SECONDS")
+    scheduler_iterations: int = Field(0, env="SCHEDULER_ITERATIONS")
 
     model_config = {
         "env_file": ".env",
