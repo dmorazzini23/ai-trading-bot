@@ -14,6 +14,7 @@ from typing import Any, Optional, Tuple
 from enum import Enum
 from uuid import uuid4
 from threading import Lock, RLock
+from typing import Set
 
 # AI-AGENT-REF: Import enhanced debugging and tracking modules
 try:
@@ -190,9 +191,16 @@ def _pre_validate_order(symbol: str, qty: int, side: str) -> dict:
     
     return validation_result
 
-# Order submission safety
-_order_submission_lock: RLock = RLock()
-_pending_orders: set[str] = set()
+# Guard definitions so this patch can be applied on any branch safely
+try:
+    _order_submission_lock  # type: ignore[name-defined]
+except NameError:  # pragma: no cover
+    _order_submission_lock = RLock()
+
+try:
+    _pending_orders  # type: ignore[name-defined]
+except NameError:  # pragma: no cover
+    _pending_orders: Set[str] = set()
 
 def cleanup_recent_buys() -> None:
     """Clean up old entries from recent_buys to prevent memory leaks."""

@@ -85,6 +85,8 @@ class PhaseLoggerAdapter(logging.LoggerAdapter):
 def get_phase_logger(name: str, phase: str) -> logging.Logger:
     """Return logger with ``bot_phase`` context."""
     base = logging.getLogger(name)
+    # Prevent duplicate prints via root/logger propagation
+    base.propagate = False
     return PhaseLoggerAdapter(base, {"bot_phase": phase})
 
 
