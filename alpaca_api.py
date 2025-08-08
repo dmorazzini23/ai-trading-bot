@@ -266,6 +266,12 @@ def submit_order(api, req, log: logging.Logger | None = None):
         symbol = getattr(req, "symbol", "")
         req.client_order_id = f"{symbol}-{uuid.uuid4().hex}"
         try:
+            # AI-AGENT-REF: Use central rate limiter for all order submissions
+            limiter = get_limiter()
+            if not limiter.acquire_sync("orders", tokens=1, timeout=30.0):
+                log.error("Rate limit exceeded for order submission")
+                raise requests.exceptions.HTTPError("Order rate limit exceeded")
+            
             try:
                 order = api.submit_order(order_data)
             except TypeError:
@@ -368,6 +374,12 @@ def fetch_bars(
     """Return OHLCV bars ``DataFrame`` from Alpaca REST API."""
     
     try:
+        # AI-AGENT-REF: Use central rate limiter for bars requests
+        limiter = get_limiter()
+        if not limiter.acquire_sync("bars", tokens=1, timeout=30.0):
+            logger.error("Rate limit exceeded for bars request")
+            return pd.DataFrame()
+        
         bars_response = api.get_bars(symbols, timeframe, start=start, end=end)
         if bars_response is None:
             logger.warning("Alpaca get_bars returned None for symbols: %s", symbols)
@@ -519,6 +531,12 @@ async def check_stuck_orders(api) -> None:
                 qty = float(getattr(req, "qty", 0)) if req is not None else 0.0
                 filled_qty = 0.0
                 try:
+                    # AI-AGENT-REF: Use central rate limiter for order status requests
+                    limiter = get_limiter()
+                    if not limiter.acquire_sync("positions", tokens=1, timeout=30.0):
+                        logger.error("Rate limit exceeded for order status request")
+                        continue
+                    
                     od = api.get_order_by_id(oid)
                     filled_qty = float(getattr(od, "filled_qty", 0))
                 except Exception as exc:  # pragma: no cover - network
@@ -540,6 +558,12 @@ async def check_stuck_orders(api) -> None:
                     symbol,
                 )
                 try:
+                    # AI-AGENT-REF: Use central rate limiter for order cancellation
+                    limiter = get_limiter()
+                    if not limiter.acquire_sync("orders", tokens=1, timeout=30.0):
+                        logger.error("Rate limit exceeded for order cancellation")
+                        continue
+                    
                     api.cancel_order_by_id(oid)
                 except Exception as exc:  # pragma: no cover - network
                     logger.warning("Failed to cancel stuck order %s: %s", oid, exc)
