@@ -6708,7 +6708,7 @@ def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
         from ai_trading import portfolio  # type: ignore
         _cpw = portfolio.compute_portfolio_weights
     except Exception:  # pragma: no cover
-        import portfolio  # type: ignore
+        from ai_trading import portfolio  # type: ignore
         _cpw = portfolio.compute_portfolio_weights
 
     # AI-AGENT-REF: wrapper for moved implementation
@@ -6717,7 +6717,7 @@ def compute_portfolio_weights(symbols: List[str]) -> Dict[str, float]:
 
 def on_trade_exit_rebalance(ctx: BotContext) -> None:
     from ai_trading.utils import portfolio_lock
-    import portfolio
+    from ai_trading import portfolio
 
     try:
         positions = ctx.api.get_all_positions()
@@ -8614,7 +8614,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
 
 def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[str]]:
     from ai_trading.utils import portfolio_lock
-    import portfolio
+    from ai_trading import portfolio
 
     """Prepare trading run by syncing positions and generating symbols."""
     cancel_all_open_orders(ctx)
@@ -9267,7 +9267,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 logger.debug("Raw Alpaca positions: %s", positions)
                 try:
                     from ai_trading.utils import portfolio_lock
-                    import portfolio
+                    from ai_trading import portfolio
 
                     with portfolio_lock:
                         ctx.portfolio_weights = portfolio.compute_portfolio_weights(
@@ -9816,7 +9816,6 @@ def compute_ichimoku(
             try:
                 from ai_trading.indicators import ichimoku_fallback  # type: ignore
             except Exception:  # pragma: no cover
-                from indicators import ichimoku_fallback  # type: ignore
 
             ich_func = ichimoku_fallback
         ich = ich_func(high=high, low=low, close=close)
@@ -9849,7 +9848,6 @@ def ichimoku_indicator(
             try:
                 from ai_trading.indicators import ichimoku_fallback  # type: ignore
             except Exception:  # pragma: no cover
-                from indicators import ichimoku_fallback  # type: ignore
 
             ich_func = ichimoku_fallback
         ich = ich_func(high=df["high"], low=df["low"], close=df["close"])

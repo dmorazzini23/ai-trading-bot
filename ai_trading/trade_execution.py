@@ -2382,7 +2382,7 @@ class ExecutionEngine:
         Examples
         --------
         >>> import asyncio
-        >>> from trade_execution import OrderExecutor
+        >>> from ai_trading.trade_execution import OrderExecutor
         >>> 
         >>> executor = OrderExecutor()
         >>> 

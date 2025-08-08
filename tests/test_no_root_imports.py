@@ -10,19 +10,19 @@ def test_no_root_level_imports_of_migrated_modules():
         r"\bfrom\s+indicators\s+import\b",
         r"\bfrom\s+portfolio\s+import\b",
         r"\bfrom\s+rebalancer\s+import\b",
-        r"\bimport\s+signals\b",
-        r"\bimport\s+data_fetcher\b",
-        r"\bimport\s+trade_execution\b",
-        r"\bimport\s+pipeline\b",
-        r"\bimport\s+indicators\b",
-        r"\bimport\s+portfolio\b",
-        r"\bimport\s+rebalancer\b",
+        r"^\s*import\s+signals\b",
+        r"^\s*import\s+data_fetcher\b",
+        r"^\s*import\s+trade_execution\b",
+        r"^\s*import\s+pipeline\b",
+        r"^\s*import\s+indicators\b",
+        r"^\s*import\s+portfolio\b",
+        r"^\s*import\s+rebalancer\b",
     }
     offenders = []
     for p in root.rglob("*.py"):
         text = p.read_text(encoding="utf-8", errors="ignore")
         for pat in banned:
-            if re.search(pat, text):
+            if re.search(pat, text, re.MULTILINE):
                 offenders.append(f"{p}:{pat}")
                 break
     assert not offenders, f"Root imports are no longer supported. Offenders: {offenders}"

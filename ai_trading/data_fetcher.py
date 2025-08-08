@@ -558,7 +558,7 @@ def get_historical_data(
 
     Examples
     --------
-    >>> from data_fetcher import get_historical_data
+    >>> from ai_trading.data_fetcher import get_historical_data
     >>> from datetime import datetime, timedelta
     >>> 
     >>> # Get 30 days of hourly data
