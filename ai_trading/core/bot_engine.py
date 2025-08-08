@@ -968,7 +968,11 @@ else:
     def optimize_signals(*args, **kwargs):
         return args[0] if args else []  # Return signals as-is
 from ai_trading.monitoring.metrics import log_metrics
-from pipeline import model_pipeline
+# Prefer package import, fall back to legacy root import when running from repo root
+try:
+    from ai_trading.pipeline import model_pipeline  # type: ignore
+except Exception:  # pragma: no cover
+    from pipeline import model_pipeline  # type: ignore
 
 # ML dependencies with graceful error handling
 try:
@@ -1432,6 +1436,19 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     if df.empty:
         logger.error(f"Fetch failed: empty DataFrame for {symbol}")
         raise DataFetchError(f"No data for {symbol}")
+    
+    # Check data freshness before proceeding with trading logic
+    try:
+        # Allow data up to 10 minutes old during market hours (600 seconds)
+        _ensure_data_fresh(
+            fetcher=type('MockFetcher', (), {'get_minute_df': lambda s, start, end: df})(),
+            symbols=[symbol], 
+            max_age_seconds=600
+        )
+    except RuntimeError as e:
+        logger.warning(f"Data staleness check failed for {symbol}: {e}")
+        # Still return the data but log the staleness issue
+        
     return df
 
 
@@ -1887,8 +1904,12 @@ finnhub_breaker = pybreaker.CircuitBreaker(
 executor = ThreadPoolExecutor(
     max_workers=1
 )  # AI-AGENT-REF: limit workers for single CPU
-# Separate executor for ML predictions and trade execution
-prediction_executor = ThreadPoolExecutor(max_workers=1)
+# Improve inference throughput: parallelize predictions sensibly
+import os as _os
+_workers_env = int(_os.getenv("PREDICTION_WORKERS", "0") or "0")
+_cpu = (_os.cpu_count() or 2)
+_default_workers = max(2, min(4, _cpu))  # keep conservative to avoid thrash
+prediction_executor = ThreadPoolExecutor(max_workers=_workers_env or _default_workers)
 
 # AI-AGENT-REF: Add proper cleanup with atexit handlers for ThreadPoolExecutor resource leak
 def cleanup_executors():
@@ -3691,6 +3712,70 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
             "DATA_SOURCE_HEALTH_CHECK: missing data for %s",
             ", ".join(missing),
         )
+
+
+def _ensure_data_fresh(fetcher, symbols, max_age_seconds: int) -> None:
+    """
+    Validate that the most recent minute bar for each symbol is not older than max_age_seconds.
+    Log all timestamps in UTC for auditability.
+    """
+    import datetime as _dt
+    import pandas as pd
+    now_utc = _dt.datetime.now(_dt.timezone.utc)
+    stale = []
+    for sym in symbols:
+        # Get last few minutes of data to check freshness
+        try:
+            df = fetcher.get_minute_df(
+                sym, 
+                now_utc - _dt.timedelta(minutes=30), 
+                now_utc
+            )
+            if df is None or df.empty:
+                stale.append((sym, "no_data"))
+                continue
+            
+            # Get the most recent timestamp
+            if hasattr(df, 'index') and len(df.index) > 0:
+                ts = df.index[-1]
+            elif 'timestamp' in df.columns and len(df) > 0:
+                ts = df['timestamp'].iloc[-1]
+            else:
+                stale.append((sym, "no_timestamp"))
+                continue
+                
+            # Convert to UTC-aware datetime if needed
+            if isinstance(ts, pd.Timestamp):
+                if ts.tz is None:
+                    ts = ts.tz_localize('UTC')
+                else:
+                    ts = ts.tz_convert('UTC')
+                ts = ts.to_pydatetime()
+            elif isinstance(ts, _dt.datetime):
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=_dt.timezone.utc)
+                elif ts.tzinfo != _dt.timezone.utc:
+                    ts = ts.astimezone(_dt.timezone.utc)
+            else:
+                # Try to parse as timestamp
+                try:
+                    ts = pd.to_datetime(ts, utc=True).to_pydatetime()
+                except Exception:
+                    stale.append((sym, "invalid_timestamp"))
+                    continue
+                
+            age = (now_utc - ts).total_seconds()
+            if age > max_age_seconds:
+                stale.append((sym, f"age={int(age)}s"))
+        except Exception as e:
+            stale.append((sym, f"error={str(e)[:50]}"))
+            continue
+            
+    if stale:
+        details = ", ".join([f"{s}({r})" for s, r in stale])
+        logger.warning("Data staleness detected [UTC now=%s]: %s", now_utc.isoformat(), details)
+        raise RuntimeError(f"Stale data for symbols: {details}")
+    logger.debug("Data freshness OK [UTC now=%s]", now_utc.isoformat())
 
 
 # AI-AGENT-REF: Skip expensive health checks during test imports to improve performance

@@ -70,7 +70,8 @@ except Exception as e:
         RATE_LIMIT_BUDGET = int(os.getenv("RATE_LIMIT_BUDGET", "190"))  # AI-AGENT-REF: add missing RATE_LIMIT_BUDGET
         REBALANCE_INTERVAL_MIN = int(os.getenv("REBALANCE_INTERVAL_MIN", "60"))  # AI-AGENT-REF: add missing value
         SHADOW_MODE = os.getenv("SHADOW_MODE", "True").lower() in ("true", "1")  # AI-AGENT-REF: add missing value
-        DISABLE_DAILY_RETRAIN = os.getenv("DISABLE_DAILY_RETRAIN", "False").lower() in ("true", "1")  # AI-AGENT-REF: add missing value
+        # Correctly read the daily retrain disable flag (default false)
+        DISABLE_DAILY_RETRAIN = os.getenv("DISABLE_DAILY_RETRAIN", "false").lower() in ("true", "1")
         # Add other commonly accessed attributes as needed
         def __getattr__(self, name):
             # Fallback for any missing attributes
