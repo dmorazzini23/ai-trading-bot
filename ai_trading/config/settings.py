@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     intraday_batch_size: int = Field(40, env="INTRADAY_BATCH_SIZE")
     intraday_lookback_minutes: int = Field(120, env="INTRADAY_LOOKBACK_MINUTES")
 
+    # --- Bounded concurrency for per-symbol fallbacks ---
+    batch_fallback_workers: int = Field(4, env="BATCH_FALLBACK_WORKERS")
+
     model_config = {
         "env_file": ".env",
         "case_sensitive": False,

@@ -65,6 +65,7 @@ from ai_trading.config import get_settings
 from ai_trading.data_fetcher import warmup_cache
 from ai_trading.data_fetcher import get_bars, get_bars_batch
 from ai_trading.data_fetcher import get_minute_bars, get_minute_bars_batch
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from ai_trading.market.calendars import ensure_final_bar
 from ai_trading.utils.timefmt import utc_now_iso, format_datetime_utc  # AI-AGENT-REF: Import UTC timestamp utilities
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
@@ -1753,6 +1754,46 @@ def _maybe_warm_cache(ctx: "BotContext") -> None:
         logger.warning("Cache warm-up failed: %s", exc)
 
 
+
+def _fetch_universe_bars(
+    ctx: "BotContext",
+    symbols: list[str],
+    timeframe: str,
+    start: "datetime | str",
+    end: "datetime | str", 
+    feed: str | None = None,
+) -> dict[str, "pd.DataFrame"]:
+    """
+    Fetch universe bars for symbols with parallel fallback.
+    """
+    if not symbols:
+        return {}
+    
+    try:
+        batch = get_bars_batch(symbols, timeframe, start, end, feed=feed)
+    except Exception as exc:
+        logger.warning("Universe batch failed: %s", exc)
+        batch = {}
+    
+    remaining = [s for s in symbols if s not in batch or batch.get(s) is None or getattr(batch.get(s), "empty", False)]
+    if remaining:
+        settings = get_settings()
+        max_workers = max(1, int(getattr(settings, "batch_fallback_workers", 4)))
+        def _pull(sym: str):
+            try:
+                return sym, get_bars(sym, timeframe, start, end)
+            except Exception as one_exc:
+                logger.warning("Per-symbol fetch failed for %s: %s", sym, one_exc)
+                return sym, None
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fallback-daily") as ex:
+            for fut in as_completed([ex.submit(_pull, s) for s in remaining]):
+                sym, df = fut.result()
+                if df is not None and not getattr(df, "empty", False):
+                    batch[sym] = df
+    
+    return {k: v for k, v in batch.items() if v is not None and not getattr(v, "empty", False)}
+
+
 def _fetch_universe_bars_chunked(
     ctx: "BotContext",
     symbols: list[str],
@@ -1771,18 +1812,7 @@ def _fetch_universe_bars_chunked(
     out: dict[str, "pd.DataFrame"] = {}
     for i in range(0, len(symbols), batch_size):
         chunk = symbols[i : i + batch_size]
-        try:
-            got = get_bars_batch(chunk, timeframe, start, end, feed=feed)
-        except Exception as exc:
-            logger.warning("Universe batch failed for chunk size %d: %s", len(chunk), exc)
-            got = {}
-        missing = [s for s in chunk if s not in got or got.get(s) is None or getattr(got.get(s), "empty", False)]
-        for s in missing:
-            try:
-                got[s] = get_bars(s, timeframe, start, end, feed=feed)
-            except Exception as one_exc:
-                logger.warning("Universe per-symbol fallback failed for %s: %s", s, one_exc)
-        out.update({k: v for k, v in got.items() if v is not None and not getattr(v, "empty", False)})
+        out.update(_fetch_universe_bars(ctx, chunk, timeframe, start, end, feed))
     return out
 
 
@@ -1808,14 +1838,24 @@ def _fetch_intraday_bars_chunked(
         try:
             got = get_minute_bars_batch(chunk, start, end, feed=feed)
         except Exception as exc:
-            logger.warning("Intraday batch failed for chunk size %d: %s", len(chunk), exc)
+            logger.warning("Intraday batch failed for chunk size %d: %s; falling back", len(chunk), exc)
             got = {}
+        # fill any missing with bounded concurrency
         missing = [s for s in chunk if s not in got or got.get(s) is None or getattr(got.get(s), "empty", False)]
-        for s in missing:
-            try:
-                got[s] = get_minute_bars(s, start, end, feed=feed)
-            except Exception as one_exc:
-                logger.warning("Intraday per-symbol fallback failed for %s: %s", s, one_exc)
+        if missing:
+            settings = get_settings()
+            max_workers = max(1, int(getattr(settings, "batch_fallback_workers", 4)))
+            def _pull(sym: str):
+                try:
+                    return sym, get_minute_bars(sym, start, end, feed=feed)
+                except Exception as one_exc:
+                    logger.warning("Intraday per-symbol fallback failed for %s: %s", sym, one_exc)
+                    return sym, None
+            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fallback-intraday") as ex:
+                for fut in as_completed([ex.submit(_pull, s) for s in missing]):
+                    sym, df = fut.result()
+                    if df is not None and not getattr(df, "empty", False):
+                        got[sym] = df
         out.update({k: v for k, v in got.items() if v is not None and not getattr(v, "empty", False)})
     return out
 
