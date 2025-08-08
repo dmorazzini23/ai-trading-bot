@@ -708,10 +708,7 @@ def is_holiday(ts: pd.Timestamp) -> bool:
 
 # AI-AGENT-REF: lazy import heavy signal calculation module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
-    try:
-        from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
-    except Exception:  # pragma: no cover
-        from signals import calculate_macd as signals_calculate_macd
+    from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
 else:
     # AI-AGENT-REF: mock signals_calculate_macd for test environments
     def signals_calculate_macd(*args, **kwargs):
@@ -971,20 +968,13 @@ if not ALPACA_AVAILABLE:
 
 # AI-AGENT-REF: lazy import heavy meta_learning module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
-    try:
-        from ai_trading.meta_learning import optimize_signals  # type: ignore
-    except Exception:  # pragma: no cover
-        from meta_learning import optimize_signals  # type: ignore
+    from ai_trading.meta_learning import optimize_signals  # type: ignore
 else:
     # AI-AGENT-REF: mock optimize_signals for test environments
     def optimize_signals(*args, **kwargs):
         return args[0] if args else []  # Return signals as-is
 from ai_trading.monitoring.metrics import log_metrics
-# Package-first, fallback to root (back-compat)
-try:
-    from ai_trading.pipeline import model_pipeline  # type: ignore
-except Exception:  # pragma: no cover
-    from pipeline import model_pipeline  # type: ignore
+from ai_trading.pipeline import model_pipeline  # type: ignore
 
 # ML dependencies with graceful error handling
 try:
@@ -1187,13 +1177,9 @@ except ImportError:
     def start_http_server(*args, **kwargs):
         pass
 
-# Package-first, fallback to root (back-compat)
 try:
     from ai_trading.trade_execution import ExecutionEngine  # type: ignore
-except Exception:  # pragma: no cover
-    try:
-        from trade_execution import ExecutionEngine  # type: ignore
-    except Exception:  # pragma: no cover - allow tests with stubbed module
+except Exception:  # pragma: no cover - allow tests with stubbed module
 
     class ExecutionEngine:
         """
@@ -1269,20 +1255,12 @@ class StrategyAllocator:
 
 # AI-AGENT-REF: lazy import heavy data_fetcher module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
-    try:
-        from ai_trading.data_fetcher import (  # type: ignore
-            DataFetchError,
-            DataFetchException,
-            get_minute_df, get_daily_df, fetch_minute_yfinance, fetch_daily_data_async,
-            _MINUTE_CACHE,
-        )
-    except Exception:  # pragma: no cover
-        from data_fetcher import (
-            DataFetchError,
-            DataFetchException,
-            get_minute_df, get_daily_df, fetch_minute_yfinance, fetch_daily_data_async,
-            _MINUTE_CACHE,
-        )
+    from ai_trading.data_fetcher import (  # type: ignore
+        DataFetchError,
+        DataFetchException,
+        get_minute_df, get_daily_df, fetch_minute_yfinance, fetch_daily_data_async,
+        _MINUTE_CACHE,
+    )
 else:
     # AI-AGENT-REF: mock data_fetcher functions for test environments
     class DataFetchError(Exception):
@@ -1298,7 +1276,7 @@ else:
 
 try:
     if not os.getenv("PYTEST_RUNNING"):
-        from data_fetcher import finnhub_client  # noqa: F401
+        from ai_trading.data_fetcher import finnhub_client  # noqa: F401
     else:
         finnhub_client = None  # Mock client for tests
 except Exception:
@@ -3798,8 +3776,6 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
     """
     try:
         from ai_trading.data_fetcher import get_cached_minute_timestamp, last_minute_bar_age_seconds  # type: ignore
-    except Exception:  # pragma: no cover
-        from data_fetcher import get_cached_minute_timestamp, last_minute_bar_age_seconds  # type: ignore
     import datetime as _dt
     now_utc = _dt.datetime.now(_dt.timezone.utc).isoformat()
     stale = []
@@ -6304,8 +6280,6 @@ def _model_feature_names(model) -> list[str]:
 def _should_hold_position(df: pd.DataFrame) -> bool:
     try:
         from ai_trading.indicators import rsi  # type: ignore
-    except Exception:  # pragma: no cover
-        from indicators import rsi  # type: ignore
 
     """Return True if trend indicators favor staying in the trade."""
     try:
@@ -7334,8 +7308,6 @@ def _add_basic_indicators(
 def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
     try:
         from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
-    except Exception:  # pragma: no cover
-        from signals import calculate_macd as signals_calculate_macd  # type: ignore
 
     """Add MACD indicators using the defensive helper."""
     try:
@@ -7561,8 +7533,6 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     try:
         from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
-    except Exception:  # pragma: no cover
-        from signals import calculate_macd as signals_calculate_macd  # type: ignore
 
     feat = pd.DataFrame(index=df.index)
     feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
@@ -8494,8 +8464,6 @@ def run_multi_strategy(ctx: BotContext) -> None:
         # Generate hold signals for existing positions
         try:
             from ai_trading.signals import generate_position_hold_signals, enhance_signals_with_position_logic  # type: ignore
-        except Exception:  # pragma: no cover
-            from signals import generate_position_hold_signals, enhance_signals_with_position_logic  # type: ignore
         hold_signals = generate_position_hold_signals(ctx, current_positions)
         
         # Apply position holding logic to all strategy signals
