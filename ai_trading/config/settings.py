@@ -51,6 +51,8 @@ class Settings(BaseSettings):
 
     # --- Batch sizing ---
     pretrade_batch_size: int = Field(50, env="PRETRADE_BATCH_SIZE")
+    # Fallback used if ctx.lookback_start/end are unset
+    pretrade_lookback_days: int = Field(120, env="PRETRADE_LOOKBACK_DAYS")
     # If ctx.lookback_start/end are not present, fall back to this many days
     pretrade_lookback_days: int = Field(120, env="PRETRADE_LOOKBACK_DAYS")
 
