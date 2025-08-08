@@ -1,18 +1,21 @@
 # Install dependencies
+PY ?= $(shell command -v python3 || echo python)
+PIP := $(PY) -m pip
+
 install:
-	python -m pip install --upgrade pip
-	pip install -r requirements.txt
+	$(PY) -m pip install --upgrade pip
+	$(PIP) install -r requirements.txt
 
 install-dev: install
 	@if [ -f requirements-dev.txt ]; then \
-		pip install -r requirements-dev.txt; \
+		$(PIP) install -r requirements-dev.txt; \
 	else \
 		echo "requirements-dev.txt not found, skipping dev dependencies"; \
 	fi
 
 # Environment validation
 validate-env:
-	python scripts/validate_test_environment.py
+	$(PY) scripts/validate_test_environment.py
 
 # Testing targets
 test-all: clean install-dev validate-env
@@ -47,7 +50,7 @@ mypy-check:
 check: lint test-fast
 
 run-backtest:
-	python backtester.py \
+	$(PY) backtester.py \
 	  --symbols AAPL MSFT GOOG AMZN TSLA \
 	  --data-dir data \
 	  --start 2023-01-01 \
