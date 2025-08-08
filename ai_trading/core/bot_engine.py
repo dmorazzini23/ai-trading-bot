@@ -1068,35 +1068,37 @@ def _require_cfg(value: str | None, name: str) -> str:
     raise RuntimeError(f"{name} must be defined in the configuration or environment")
 
 
-# AI-AGENT-REF: Remove import-time config validation to prevent import crashes
-# Config validation moved to init_runtime_config() and called from main()
-def _resolve_alpaca_env() -> tuple[str | None, str | None, str | None]:
-    """
-    Resolve Alpaca credentials from environment supporting both naming schemes.
-    
-    Supports both ALPACA_* and APCA_* environment variable naming conventions.
-    The ALPACA_* scheme takes precedence if both are present.
-    
-    Returns:
-        tuple: (api_key, secret_key, base_url) or None for missing values
-    """
-    import os
-    
-    # Try ALPACA_* first (preferred)
-    api_key = os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
-    secret_key = os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY") 
-    base_url = os.getenv("ALPACA_BASE_URL") or os.getenv("APCA_API_BASE_URL")
-    
-    # Set default base URL if none provided
-    if not base_url:
-        base_url = "https://paper-api.alpaca.markets"
-    
-    return api_key, secret_key, base_url
+# Defer credential checks to runtime (avoid import-time crashes before .env loads)
+def _resolve_alpaca_env():
+    key = os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
+    secret = os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
+    base_url = (
+        os.getenv("ALPACA_BASE_URL")
+        or os.getenv("APCA_API_BASE_URL")
+        or getattr(config, "ALPACA_BASE_URL", None)
+        or "https://paper-api.alpaca.markets"
+    )
+    return key, secret, base_url
 
 
 def _ensure_alpaca_env_or_raise():
-    settings = get_settings()
-    settings.require_alpaca_or_raise()
+    """
+    Contract: always return a (key, secret, base_url) tuple.
+    - In SHADOW_MODE, we do not raise; we still return whatever is currently resolved.
+    - Outside SHADOW_MODE, if missing key/secret, raise with a clear message.
+    """
+    k, s, b = _resolve_alpaca_env()
+    # Check both config and environment for SHADOW_MODE
+    shadow_mode = (
+        getattr(config, "SHADOW_MODE", False) or 
+        os.getenv("SHADOW_MODE", "").lower() in ("true", "1")
+    )
+    if shadow_mode:
+        return k, s, b
+    if not (k and s):
+        logger.critical("Alpaca credentials missing – aborting client initialization")
+        raise RuntimeError("Missing Alpaca API credentials")
+    return k, s, b
 
 
 def init_runtime_config():
@@ -2106,7 +2108,8 @@ def get_circuit_breaker_health() -> dict:
         return {}
 
 
-ensure_alpaca_credentials()
+# IMPORTANT: Alpaca credentials will be validated at runtime when needed.
+# Do not validate at import time to prevent crashes during module loading.
 
 
 # Prometheus-safe account fetch with circuit breaker protection
@@ -3564,62 +3567,32 @@ data_client = None
 stream = None
 
 def _initialize_alpaca_clients():
-    """
-    Initialize Alpaca trading clients with runtime credential validation.
-    
-    This function validates credentials at runtime and initializes the clients
-    only when they are actually needed, preventing import-time crashes.
-    """
+    """Initialize Alpaca trading clients lazily to avoid import delays."""
     global trading_client, data_client, stream
-    
     if trading_client is not None:
         return  # Already initialized
-    
-    # AI-AGENT-REF: Validate credentials at runtime, not import time
-    try:
-        api_key, secret_key, base_url = _ensure_alpaca_env_or_raise()
-    except RuntimeError as e:
-        if config.SHADOW_MODE:
-            logger.warning("Running in SHADOW_MODE with missing credentials: %s", e)
-            return  # Allow shadow mode to continue
-        else:
-            logger.critical("Alpaca credentials missing – cannot initialize clients")
-            raise e
-    
-    if trading_client is not None:
-        return  # Already initialized
-    
-    # In test environments, create stub clients instead of real ones
-    if os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"):
-        logger.debug("Creating stub Alpaca clients for test environment")
-        # Create stub objects to prevent AttributeError during tests
-        trading_client = type('StubClient', (), {'get_account': lambda: None})()
-        data_client = type('StubClient', (), {'get_stock_bars': lambda x: None})()
-        stream = type('StubClient', (), {'subscribe_trades': lambda x: None})()
+    # Validate at runtime, now that .env should be present
+    key, secret, base_url = _ensure_alpaca_env_or_raise()
+    if not (key and secret):
+        # In SHADOW_MODE we may not have creds; skip client init
+        logger.info("Shadow mode or missing credentials: skipping Alpaca client initialization")
         return
-        
+    # Lazy-import SDK only when needed
     try:
-        # Initialize Alpaca trading clients using runtime credentials
-        trading_client = TradingClient(api_key, secret_key, paper=paper)
-        data_client = StockHistoricalDataClient(api_key, secret_key)
-
-        # Create a trading stream for order status updates  
-        stream = TradingStream(
-            api_key,
-            secret_key,
-            paper=True,
-        )
-        logger.info("Alpaca trading clients initialized successfully")
+        from alpaca_trade_api.rest import REST  # type: ignore
     except Exception as e:
-        logger.warning("Failed to initialize Alpaca clients: %s", e)
-        # Set to stub objects to prevent AttributeError
-        trading_client = type('StubClient', (), {'get_account': lambda: None})()
-        data_client = type('StubClient', (), {'get_stock_bars': lambda x: None})()
-        stream = type('StubClient', (), {'subscribe_trades': lambda x: None})()
+        logger.error("alpaca_trade_api import failed; cannot initialize clients", exc_info=e)
+        # In test environments, don't raise - just skip initialization
+        if os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"):
+            logger.info("Test environment detected, skipping Alpaca client initialization")
+            return
+        raise
+    trading_client = REST(key, secret, base_url=base_url)
+    data_client = trading_client  # if you use a single REST client for both
+    stream = None  # initialize stream lazily elsewhere if/when required
 
-# Defer initialization - will be called when actually needed
-if not (os.getenv("PYTEST_RUNNING") or os.getenv("TESTING")):
-    _initialize_alpaca_clients()
+# IMPORTANT: do not initialize Alpaca clients at import time.
+# They will be initialized on-demand by the functions that need them.
 
 
 async def on_trade_update(event):
@@ -7586,7 +7559,7 @@ def detect_regime(df: pd.DataFrame) -> str:
 
 
 # Train or load regime model - skip in test environment
-if os.getenv("TESTING") == "1":
+if os.getenv("TESTING") == "1" or os.getenv("PYTEST_RUNNING"):
     logger.info("Skipping regime model training in test environment")
     regime_model = RandomForestClassifier(
         n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
