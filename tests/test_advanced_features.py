@@ -19,7 +19,7 @@ for _m in ["dotenv"]:
     sys.modules.setdefault(_m, mod)
 
 import alpaca_api
-import rebalancer
+from ai_trading import rebalancer
 import slippage
 
 
