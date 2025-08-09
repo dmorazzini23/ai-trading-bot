@@ -17,7 +17,8 @@ def _alpaca_available() -> bool:
 ALPACA_AVAILABLE = _alpaca_available()
 
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
-_REGIME_INSUFFICIENT_DATA_WARNED = False
+# Using a mutable dict to avoid fragile `global` declarations inside functions.
+_REGIME_INSUFFICIENT_DATA_WARNED = {"done": False}
 import asyncio
 import atexit
 import logging
@@ -7542,6 +7543,17 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+# --- Back-compat shim for tests that expect this symbol at module scope ---
+# This is a thin wrapper to ensure AST-based tests can find prepare_indicators
+# at module scope even if the implementation changes.
+def prepare_indicators_compat(*args, **kwargs):
+    """
+    Back-compat wrapper. Delegates to the current implementation.
+    Kept at module scope so AST-based tests can find it.
+    """
+    return prepare_indicators(*args, **kwargs)
+
+
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     """Compute regime features; tolerate proxy bars that only include 'close'."""
     # 1) Canonicalize columns (o/h/l/c/v mapping, lowercase)
@@ -7672,13 +7684,12 @@ else:
             logger.info("REGIME_MODEL_TRAINED", extra={"rows": len(training)})
     else:
         # Log once at WARNING level; avoid noisy ERROR during closed market.
-        global _REGIME_INSUFFICIENT_DATA_WARNED
-        if not _REGIME_INSUFFICIENT_DATA_WARNED:
+        if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
             logger.warning(
                 "Insufficient rows (%d < %d) for regime model; using fallback",
                 len(training), settings.REGIME_MIN_ROWS
             )
-            _REGIME_INSUFFICIENT_DATA_WARNED = True
+            _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
         regime_model = RandomForestClassifier(
             n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
         )
