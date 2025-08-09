@@ -5,14 +5,10 @@ PYTEST := PYTHONPATH=. pytest --disable-warnings
 
 install:
 	$(PY) -m pip install --upgrade pip
-	$(PIP) install -r requirements.txt
+	$(PIP) install -e .
 
 install-dev: install
-	@if [ -f requirements-dev.txt ]; then \
-		$(PIP) install -r requirements-dev.txt; \
-	else \
-		echo "requirements-dev.txt not found, skipping dev dependencies"; \
-	fi
+	$(PIP) install -e .[dev]
 
 # Environment validation
 validate-env:

@@ -8,6 +8,10 @@ __pycache__/
 
 # Environment files and keys
 .env
+*.env
+*.pkl
+/models
+/artifacts
 
 # Ignore config if you have a local-only config
 config.py

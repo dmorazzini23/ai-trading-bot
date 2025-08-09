@@ -5,13 +5,15 @@ Simple runner that restarts the trading bot on failures.
 
 from __future__ import annotations
 
-import logging
-import os
-import signal
-import time
-from typing import NoReturn
+import warnings
+warnings.warn(
+    "Importing from root runner.py is deprecated. Use 'from ai_trading import runner' instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
-import requests
+# Re-export everything from the canonical module
+from ai_trading.runner import *  # noqa: F401,F403
 # AI-AGENT-REF: Removed legacy trade_execution import 
 # as part of shim cleanup. Recent buys tracking now handled 
 # within ExecutionEngine if needed.
