@@ -14,7 +14,12 @@ from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+    np = None
 
 
 logger = logging.getLogger(__name__)
@@ -30,8 +35,9 @@ def set_random_seeds(seed: int = 42) -> None:
     # Python random
     random.seed(seed)
     
-    # NumPy
-    np.random.seed(seed)
+    # NumPy (if available)
+    if HAS_NUMPY:
+        np.random.seed(seed)
     
     # TensorFlow (if available)
     try:

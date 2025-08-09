@@ -32,8 +32,8 @@ except ImportError:
 try:
     import pandas as pd
 except ImportError:
-    # Import mock pandas from utils
-    from utils import pd
+    # Import mock pandas from ai_trading.utils 
+    from ai_trading.utils import pd
 
 # AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
 from ai_trading.utils import http

@@ -24,7 +24,7 @@ class TestProblemStatementFixes(unittest.TestCase):
         - Extend recovery timeout to 1800s (30 minutes)
         """
         try:
-            import sentiment
+            import ai_trading.analysis.sentiment as sentiment
             
             # Problem statement requires 15 failures, not 5 or 8
             expected_failures = 15

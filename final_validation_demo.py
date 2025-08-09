@@ -37,7 +37,7 @@ VALIDATION RESULTS:
     
     with patch.dict(os.environ, test_env):
         import config
-        import sentiment
+        import ai_trading.analysis.sentiment as sentiment
         from order_health_monitor import OrderHealthMonitor
         from system_health_checker import SystemHealthChecker
         

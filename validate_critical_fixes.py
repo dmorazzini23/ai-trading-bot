@@ -27,7 +27,7 @@ def test_sentiment_module():
     print("🔍 Testing Sentiment Module...")
     try:
         # Test import
-        import sentiment
+        import ai_trading.analysis.sentiment as sentiment
         print("  ✅ sentiment module imported successfully")
         
         # Test required functions exist

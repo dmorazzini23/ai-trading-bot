@@ -13,33 +13,29 @@ from enum import Enum
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-# AI-AGENT-REF: guard pandas import for test environments
+# AI-AGENT-REF: Simplified optional import pattern
 try:
     import pandas as pd
+    HAS_PANDAS = True
+    Timestamp = pd.Timestamp
+    DataFrame = pd.DataFrame
+    Series = pd.Series
+    Index = pd.Index
 except ImportError:
-    # AI-AGENT-REF: pandas not available - create minimal fallbacks for import compatibility
-    from datetime import datetime
-    class MockDataFrame:
-        def __init__(self, *args, **kwargs):
-            pass
-        def __len__(self):
-            return 0
-        def empty(self):
-            return True
-    class MockSeries:
-        def __init__(self, *args, **kwargs):
-            pass
-        def __len__(self):
-            return 0
-    class MockPandas:
-        DataFrame = MockDataFrame
-        Series = MockSeries
-        Timestamp = datetime  # AI-AGENT-REF: mock Timestamp with datetime
-        def read_csv(self, *args, **kwargs):
-            return MockDataFrame()
-        def concat(self, *args, **kwargs):
-            return MockDataFrame()
-    pd = MockPandas()
+    HAS_PANDAS = False
+    pd = None
+    from datetime import datetime as Timestamp  # Fallback type for annotations
+    DataFrame = object  # Fallback for DataFrame type hints
+    Series = object  # Fallback for Series type hints
+    Index = object  # Fallback for Index type hints
+
+def requires_pandas(func):
+    """Decorator to ensure pandas is available for a function."""
+    def wrapper(*args, **kwargs):
+        if not HAS_PANDAS:
+            raise ImportError(f"pandas required for {func.__name__}")
+        return func(*args, **kwargs)
+    return wrapper
 import config
 import random
 
@@ -123,12 +119,12 @@ def log_warning(
 
 
 # Cache of last logged stale timestamp per symbol
-_STALE_CACHE: dict[str, tuple[pd.Timestamp, float]] = {}
+_STALE_CACHE: dict[str, tuple[Timestamp, float]] = {}
 # AI-AGENT-REF: Add thread-safe locking for cache operations
 _STALE_CACHE_LOCK = threading.Lock()
 
 
-def should_log_stale(symbol: str, last_ts: pd.Timestamp, *, ttl: int = 300) -> bool:
+def should_log_stale(symbol: str, last_ts: Timestamp, *, ttl: int = 300) -> bool:
     """Check if stale data warning should be logged for this symbol."""
     import time
     current_time = time.time()
@@ -212,7 +208,7 @@ class _CallableLock:
 model_lock = _CallableLock()
 
 
-def get_latest_close(df: pd.DataFrame) -> float:
+def get_latest_close(df: DataFrame) -> float:
     """Return last closing price or ``0.0`` if unavailable."""
     if df is None or df.empty:
         return 0.0
@@ -363,7 +359,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         return MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME
 
 
-def is_weekend(timestamp: dt.datetime | pd.Timestamp | None = None) -> bool:
+def is_weekend(timestamp: dt.datetime | Timestamp | None = None) -> bool:
     """Check if the given timestamp (or current time) falls on a weekend."""
     if timestamp is None:
         timestamp = dt.datetime.now(timezone.utc)
@@ -566,7 +562,7 @@ def get_ml_confidence(symbol: str) -> float:
     model = load_model(model_path)
     if model is None:
         return 0.5
-    feats = pd.DataFrame({"price": [0.0]})
+    feats = DataFrame({"price": [0.0]})
     try:
         conf = float(model.predict_proba(feats)[0][1])
     except Exception as e:
@@ -606,17 +602,24 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
     """Safely convert an iterable of date strings to ``DatetimeIndex``."""
 
     if arr is None:
-        return pd.DatetimeIndex([], tz="UTC")
+        if HAS_PANDAS:
+            return pd.DatetimeIndex([], tz="UTC")
+        else:
+            return []
 
     # if someone passed (symbol, Timestamp), extract the Timestamp
-    if isinstance(arr, tuple) and len(arr) == 2 and isinstance(arr[1], pd.Timestamp):
+    if HAS_PANDAS and isinstance(arr, tuple) and len(arr) == 2 and isinstance(arr[1], pd.Timestamp):
         arr = arr[1]
-    elif (
-        isinstance(arr, (list, pd.Index, pd.Series))
+    elif HAS_PANDAS and (
+        isinstance(arr, (list, Index, Series))
         and len(arr) > 0
         and isinstance(arr[0], tuple)
     ):
         arr = [x[1] if isinstance(x, tuple) and len(x) == 2 else x for x in arr]
+
+    # If pandas is not available, return the array as-is for now
+    if not HAS_PANDAS:
+        return arr
 
     # Prefer a fast path when the format matches exactly.  If parsing fails
     # (for example when encountering numeric placeholders like "0") fall back to
@@ -641,7 +644,7 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
 
 
 def validate_ohlcv(
-    df: pd.DataFrame,
+    df: DataFrame,
     required: list[str] | None = None,
     require_monotonic: bool = True,
 ) -> None:
@@ -656,7 +659,10 @@ def validate_ohlcv(
         raise ValueError(f"missing columns: {missing}")
     # Coerce/verify timestamp
     ts = df["timestamp"]
-    if not isinstance(ts.iloc[0], (pd.Timestamp, datetime)):
+    timestamp_types = (datetime,)
+    if HAS_PANDAS:
+        timestamp_types = (pd.Timestamp, datetime)
+    if not isinstance(ts.iloc[0], timestamp_types):
         ts = safe_to_datetime(ts, context="ohlcv validation")
     if ts.isna().any():
         raise ValueError("timestamp contains NaT/invalid values")
@@ -670,7 +676,7 @@ def validate_ohlcv(
     # No return; success == no exception
 
 
-def health_check(df: pd.DataFrame | None, resolution: str) -> bool:
+def health_check(df: DataFrame | None, resolution: str) -> bool:
     """Validate that ``df`` has enough rows for reliable analysis."""
     min_rows = int(os.getenv("HEALTH_MIN_ROWS", 100))
 
@@ -771,7 +777,7 @@ def get_volume_column(df):
 
 
 def _safe_get_column(df, options, label, **kwargs):
-    if not isinstance(df, pd.DataFrame) or df.empty:
+    if not isinstance(df, DataFrame) or df.empty:
         return None
     try:
         return get_column(df, options, label, **kwargs)
@@ -833,7 +839,7 @@ def get_order_column(df, name):
 def get_ohlcv_columns(df):
     """Return the names of the OHLCV columns if present."""
 
-    if not isinstance(df, pd.DataFrame):
+    if not isinstance(df, DataFrame):
         return []
     cols = [
         get_open_column(df),
@@ -850,10 +856,10 @@ def get_ohlcv_columns(df):
 REQUIRED_OHLCV_COLS = ["Open", "High", "Low", "Close", "Volume"]
 
 
-def validate_ohlcv_basic(df: pd.DataFrame) -> bool:
+def validate_ohlcv_basic(df: DataFrame) -> bool:
     """Return True if ``df`` contains the required OHLCV columns."""
 
-    if not isinstance(df, pd.DataFrame) or df.empty:
+    if not isinstance(df, DataFrame) or df.empty:
         logger.error("validate_ohlcv_basic received invalid DataFrame")
         return False
     missing = [c for c in REQUIRED_OHLCV_COLS if c not in df.columns]

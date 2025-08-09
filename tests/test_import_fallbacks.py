@@ -74,7 +74,7 @@ def test_runner_import_fallbacks():
 
 def test_backtester_import_fallbacks():
     """Test that backtester.py import fallbacks are correctly implemented."""
-    import backtester
+    import ai_trading.strategies.backtester as backtester
     import inspect
     
     source = inspect.getsource(backtester)

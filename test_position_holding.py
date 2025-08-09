@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
 def test_position_manager_should_hold_profit():
     """Test that profitable positions are held."""
-    from position_manager import PositionManager
+    from ai_trading.position.legacy_manager import PositionManager
     
     # Create mock context
     ctx = Mock()
@@ -157,7 +157,7 @@ def test_meta_learning_trigger():
 
 def test_position_manager_cleanup():
     """Test position manager cleanup of stale positions."""
-    from position_manager import PositionManager
+    from ai_trading.position.legacy_manager import PositionManager
     
     # Create mock context
     ctx = Mock()
@@ -186,7 +186,7 @@ def test_position_manager_cleanup():
 
 def test_position_score_calculation():
     """Test position scoring calculation.""" 
-    from position_manager import PositionManager
+    from ai_trading.position.legacy_manager import PositionManager
     
     # Create mock context
     ctx = Mock()

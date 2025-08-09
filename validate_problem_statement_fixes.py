@@ -21,7 +21,7 @@ def validate_sentiment_circuit_breaker():
     print("="*50)
     
     try:
-        import sentiment
+        import ai_trading.analysis.sentiment as sentiment
         
         # Expected values from problem statement:
         # - Increase failure threshold from current to 15 (more tolerant)

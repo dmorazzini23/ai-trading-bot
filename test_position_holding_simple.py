@@ -19,7 +19,7 @@ def test_position_holding_standalone():
     """Test standalone position holding functions."""
     
     # Test the standalone should_hold_position function
-    from position_manager import should_hold_position
+    from ai_trading.position.legacy_manager import should_hold_position
     
     # Test holding profitable position
     result = should_hold_position("AAPL", None, 8.5, 2)
@@ -39,7 +39,7 @@ def test_position_holding_standalone():
 def test_position_score_standalone():
     """Test standalone position scoring."""
     
-    from position_manager import calculate_position_score
+    from ai_trading.position.legacy_manager import calculate_position_score
     
     # Test with mock position
     position = Mock()

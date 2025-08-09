@@ -6,29 +6,36 @@ from typing import Dict, List
 from dataclasses import dataclass
 from threading import Lock
 
-# AI-AGENT-REF: graceful imports with fallbacks
+# AI-AGENT-REF: Simplified optional import pattern
 try:
     import numpy as np
+    HAS_NUMPY = True
 except ImportError:
-    # Create minimal numpy fallback
-    class MockNumpy:
-        nan = float('nan')
-        def array(self, *args, **kwargs):
-            return list(args[0]) if args else []
-        def mean(self, arr):
-            return sum(arr) / len(arr) if arr else 0
-        def std(self, arr):
-            if not arr:
-                return 0
-            mean_val = sum(arr) / len(arr)
-            return (sum((x - mean_val)**2 for x in arr) / len(arr))**0.5
-    np = MockNumpy()
+    HAS_NUMPY = False
+    np = None
+
+def requires_numpy(func):
+    """Decorator to ensure numpy is available for a function.""" 
+    def wrapper(*args, **kwargs):
+        if not HAS_NUMPY:
+            raise ImportError(f"numpy required for {func.__name__}")
+        return func(*args, **kwargs)
+    return wrapper
 
 try:
     import pandas as pd
+    HAS_PANDAS = True
 except ImportError:
-    # Import mock pandas from utils
-    pass
+    HAS_PANDAS = False
+    pd = None
+
+def requires_pandas_position(func):
+    """Decorator to ensure pandas is available for position functions."""
+    def wrapper(*args, **kwargs):
+        if not HAS_PANDAS:
+            raise ImportError(f"pandas required for {func.__name__}")
+        return func(*args, **kwargs)
+    return wrapper
 
 logger = logging.getLogger(__name__)
 
