@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List
 
-from logger import get_logger
+from ai_trading.logging import get_logger
 
 import pandas as pd
 

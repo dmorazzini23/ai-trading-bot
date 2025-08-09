@@ -44,15 +44,8 @@ class MemoryOptimizer:
         except ImportError:
             # Fallback to standard logging if ai_trading module not available
             logger = logging.getLogger('memory_optimizer')
-            logger.setLevel(logging.INFO)
             # Don't add handlers - let the root logger handle it to prevent duplicates
-            if not logger.handlers and not logging.getLogger().handlers:
-                handler = logging.StreamHandler()
-                formatter = logging.Formatter(
-                    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-                )
-                handler.setFormatter(formatter)
-                logger.addHandler(handler)
+            # The logger will inherit from root logger configuration
         
         return logger
     
