@@ -35,17 +35,24 @@ class MemoryOptimizer:
             self.start_memory_monitoring()
     
     def _setup_logger(self) -> logging.Logger:
-        """Setup memory optimizer logger."""
-        logger = logging.getLogger('memory_optimizer')
-        logger.setLevel(logging.INFO)
-        
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
+        """Setup memory optimizer logger using centralized logging system."""
+        # AI-AGENT-REF: Use centralized logging to prevent duplicate handlers
+        try:
+            # Try to use the centralized logging system from ai_trading
+            from ai_trading.logging import get_logger
+            logger = get_logger('memory_optimizer')
+        except ImportError:
+            # Fallback to standard logging if ai_trading module not available
+            logger = logging.getLogger('memory_optimizer')
+            logger.setLevel(logging.INFO)
+            # Don't add handlers - let the root logger handle it to prevent duplicates
+            if not logger.handlers and not logging.getLogger().handlers:
+                handler = logging.StreamHandler()
+                formatter = logging.Formatter(
+                    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+                )
+                handler.setFormatter(formatter)
+                logger.addHandler(handler)
         
         return logger
     

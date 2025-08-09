@@ -120,6 +120,9 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     logger = logging.getLogger()
     if _configured:
         return logger
+    
+    # AI-AGENT-REF: Clear any existing handlers to prevent duplicates from other logging configs
+    logger.handlers.clear()
 
     logger.setLevel(logging.DEBUG)
 
@@ -174,10 +177,12 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
 def get_logger(name: str) -> logging.Logger:
     """Return a named logger, configuring logging on first use."""
     if name not in _loggers:
-        root = setup_logging()
+        # Ensure root logging is configured first
+        setup_logging()
         logger = logging.getLogger(name)
-        logger.handlers = root.handlers.copy()
-        logger.setLevel(root.level)
+        # AI-AGENT-REF: Don't copy handlers - let propagation handle it to prevent duplicates
+        logger.propagate = True  # Ensure messages propagate to root logger
+        logger.setLevel(logging.NOTSET)  # Use root logger's level
         _loggers[name] = logger
     return _loggers[name]
 

@@ -2,6 +2,16 @@ import logging
 import json
 import traceback
 from datetime import datetime, timezone
+import warnings
+
+# AI-AGENT-REF: This module is deprecated to prevent duplicate logging
+# Use ai_trading.logging module instead
+warnings.warn(
+    "logging_config.py is deprecated and causes duplicate logging. "
+    "Use ai_trading.logging.setup_logging() instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 class JsonFormatter(logging.Formatter):
@@ -30,8 +40,30 @@ class JsonFormatter(logging.Formatter):
 
 
 def setup_logging():
-    if logging.getLogger().handlers:
-        return  # Already configured
-    handler = logging.StreamHandler()
-    handler.setFormatter(JsonFormatter())
-    logging.basicConfig(level=logging.INFO, handlers=[handler])
+    """
+    DEPRECATED: This function is now a no-op to prevent duplicate logging.
+    Use ai_trading.logging.setup_logging() instead.
+    """
+    # AI-AGENT-REF: No-op to prevent duplicate logging configuration
+    # The ai_trading.logging module should be used instead
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Only log deprecation warning once per session
+    if not hasattr(setup_logging, '_warned'):
+        logger.warning(
+            "logging_config.setup_logging() is deprecated and disabled. "
+            "Use ai_trading.logging.setup_logging() to avoid duplicate logging."
+        )
+        setup_logging._warned = True
+    
+    # Check if any logging is already configured
+    root_logger = logging.getLogger()
+    if root_logger.handlers:
+        return  # Already configured by another system
+    
+    # If no logging configured at all, set up minimal fallback
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
