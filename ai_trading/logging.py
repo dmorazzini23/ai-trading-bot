@@ -200,9 +200,10 @@ def get_phase_logger(name: str, phase: Optional[str] = None) -> logging.Logger:
     Returns
     -------
     logging.Logger
-        Logger with phase filtering enabled
+        Logger with phase filtering enabled and propagation disabled
     """
     logger = logging.getLogger(name)
+    logger.propagate = False  # Prevent duplicate logging
     if phase:
         # Lightweight filter to stamp phase once per record
         class _PhaseFilter(logging.Filter):

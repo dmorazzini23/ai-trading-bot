@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: forbid-legacy-trade-execution-import
+        name: Forbid 'trade_execution' imports
+        entry: bash -c "! grep -rn \"^(from|import)\\s\\+trade_execution\\b\" --include=\"*.py\" ."
+        language: system
+        pass_filenames: false
+        description: Prevents legacy trade_execution imports; use 'from ai_trading import ExecutionEngine' instead

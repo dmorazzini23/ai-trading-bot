@@ -14,7 +14,8 @@ import pandas as pd
 import config
 from ai_trading import signals  # noqa: F401
 from ai_trading import data_fetcher
-from ai_trading import trade_execution as execution_api  # type: ignore
+# AI-AGENT-REF: Removed legacy trade_execution import as part of shim cleanup
+# from ai_trading import trade_execution as execution_api  # type: ignore
 import risk_engine
 from ai_trading.core import bot_engine
 
