@@ -3882,6 +3882,7 @@ class LazyBotContext:
     
     def _ensure_initialized(self):
         """Ensure the context is initialized."""
+        _init_metrics()
         global _ctx, _exec_engine
         
         if self._initialized and self._context is not None:

@@ -1,0 +1,1 @@
+from ai_trading.trade_execution import *  # shim for tests and legacy imports
