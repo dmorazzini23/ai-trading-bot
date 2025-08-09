@@ -779,6 +779,30 @@ def _warn_duplicate_env_keys() -> None:
             )
 
 
+# Re-export settings components for lazy import compatibility
+# This allows the lazy import mechanism in __init__.py to work properly
+try:
+    from .settings import Settings, get_settings
+except ImportError:
+    # Fallback for missing dependencies - provide basic implementations
+    import functools
+    
+    class Settings:
+        """Fallback Settings class when dependencies are missing."""
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+        
+        def require_alpaca_or_raise(self):
+            """Fallback method."""
+            pass
+    
+    @functools.lru_cache(maxsize=1)
+    def get_settings():
+        """Fallback get_settings when dependencies are missing."""
+        return Settings()
+
+
 def validate_alpaca_credentials() -> None:
     """Ensure required Alpaca credentials are present (settings-driven)."""
     if TESTING:
