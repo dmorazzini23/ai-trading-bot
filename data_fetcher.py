@@ -3,11 +3,70 @@ Compatibility layer for tests that monkeypatch module-level hooks.
 Runtime code continues to use the current implementations; these shims
 forward to them so the test suite remains stable.
 """
-from typing import Any
+from __future__ import annotations
+
+from datetime import date, datetime, timezone
+from typing import Any, Union
 import requests as requests  # tests monkeypatch data_fetcher.requests.get
+
+import pandas as pd
 
 # Tests assert this exact value.
 _DEFAULT_FEED: str = "iex"
+
+
+def ensure_datetime(value: Union[str, datetime, date, pd.Timestamp]) -> pd.Timestamp:
+    """
+    Normalize many datetime-like inputs to a pandas.Timestamp with UTC tz.
+
+    Expected behavior (per tests):
+      - None or ""           -> ValueError
+      - Unsupported type     -> TypeError
+      - Strings              -> parsed via pandas.to_datetime(..., utc=True)
+      - Naive datetime/date  -> assume UTC
+      - Aware datetime       -> convert to UTC
+
+    Returns:
+      pandas.Timestamp(tz='UTC')
+    """
+    # Explicit None handling
+    if value is None:
+        raise ValueError("value must not be None")
+
+    # Handle pandas NaT (Not a Time)
+    if pd.isna(value):
+        raise ValueError("value must not be NaT")
+
+    # Fast-path for pandas.Timestamp
+    if isinstance(value, pd.Timestamp):
+        return value.tz_localize("UTC") if value.tzinfo is None else value.tz_convert("UTC")
+
+    # Python datetime
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        else:
+            value = value.astimezone(timezone.utc)
+        return pd.Timestamp(value)
+
+    # Python date -> midnight UTC
+    if isinstance(value, date):
+        return pd.Timestamp(datetime(value.year, value.month, value.day, tzinfo=timezone.utc))
+
+    # String inputs
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            raise ValueError("value must not be empty")
+        try:
+            ts = pd.to_datetime(s, utc=True)
+        except Exception as e:
+            raise ValueError(f"could not parse datetime string: {s!r}") from e
+        return pd.Timestamp(ts)  # already tz-aware UTC
+
+    # Everything else
+    raise TypeError(f"Unsupported type for ensure_datetime: {type(value).__name__}")
+
 
 # Tests monkeypatch this to a dummy client; use the real client from ai_trading module
 try:
