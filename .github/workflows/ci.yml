@@ -45,6 +45,15 @@ jobs:
           pip install -e .[dev]
       - name: Run pytest with quiet output
         run: pytest -q
+      - name: Smoke import ai_trading
+        run: |
+          python - <<'PY'
+          import importlib
+          cfg = importlib.import_module("ai_trading.config")
+          assert callable(cfg.get_settings)
+          s = cfg.get_settings()
+          print("Settings type:", type(s).__name__)
+          PY
 
   lint-contracts:
     runs-on: ubuntu-latest

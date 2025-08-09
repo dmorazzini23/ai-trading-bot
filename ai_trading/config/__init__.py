@@ -7,29 +7,24 @@ from typing import TYPE_CHECKING
 
 def __getattr__(name: str):
     """
-    Lazy import config items to prevent import-time crashes.
-    Crucially, we do NOT predefine 'get_settings'/'Settings' in module globals,
-    so 'from ai_trading.config import get_settings' resolves via this hook.
+    Lazy import config items to prevent import-time crashes and circulars.
+    We resolve symbols via `management.py`, which re-exports from `settings.py`.
     """
     if name in {"get_settings", "Settings"}:
         try:
             from . import management as _management
+            return getattr(_management, name)
         except Exception as e:
             raise ImportError(
-                f"Failed to import '{name}' from ai_trading.config.management: {e}"
-            ) from e
-        try:
-            return getattr(_management, name)
-        except AttributeError as e:
-            raise ImportError(
-                f"'ai_trading.config.management' has no attribute '{name}'"
+                "'ai_trading.config.management' has no attribute "
+                f"'{name}'"
             ) from e
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
-# Make symbols visible to type checkers without importing at runtime.
-if TYPE_CHECKING:  # pragma: no cover
-    from .management import Settings as Settings
-    from .management import get_settings as get_settings
+if TYPE_CHECKING:
+    # These help static type checkers without triggering imports at runtime.
+    from .settings import Settings as Settings  # noqa: F401
+    from .management import get_settings as get_settings  # noqa: F401
 
 # Add file path configuration for compatibility
 import os
