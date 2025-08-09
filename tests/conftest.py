@@ -1,3 +1,58 @@
+# ----- TEST COMPATIBILITY SHIMS FOR PHASE-2 DUPLICATE REMOVAL -----
+# Map legacy root-level module names to canonical ai_trading.* modules and
+# provide a minimal yfinance stub if the real package is unavailable during tests.
+
+import sys
+import importlib
+import types
+
+def _alias(old_name: str, new_name: str) -> None:
+    try:
+        mod = importlib.import_module(new_name)
+        sys.modules[old_name] = mod
+    except Exception:
+        # If the canonical module isn't importable, don't break test discovery.
+        pass
+
+for _old, _new in {
+    "bot_engine": "ai_trading.bot_engine",
+    "data_fetcher": "ai_trading.data_fetcher",
+    "data_validation": "ai_trading.data_validation",
+    "indicators": "ai_trading.indicators",
+    "rebalancer": "ai_trading.rebalancer",
+    "runner": "ai_trading.runner",
+    "signals": "ai_trading.signals",
+}.items():
+    _alias(_old, _new)
+
+# Provide a minimal yfinance stub if the real package is not installed.
+try:
+    import yfinance as _yf  # noqa: F401
+except Exception:  # pragma: no cover
+    y = types.ModuleType("yfinance")
+
+    def _dl(*args, **kwargs):
+        try:
+            import pandas as pd
+            return pd.DataFrame()
+        except Exception:
+            return None
+
+    class _Ticker:
+        def __init__(self, *args, **kwargs):
+            pass
+        def history(self, *args, **kwargs):
+            try:
+                import pandas as pd
+                return pd.DataFrame()
+            except Exception:
+                return None
+
+    y.download = _dl
+    y.Ticker = _Ticker
+    sys.modules["yfinance"] = y
+# ----- END SHIMS -----
+
 import sys
 import os
 
