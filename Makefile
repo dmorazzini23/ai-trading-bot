@@ -20,6 +20,13 @@ validate-env:
 # Testing targets
 test-all: clean install-dev validate-env
 	PYTHONPATH=. pytest -m "unit or integration" -q --disable-warnings
+	@echo "🔎 Checking for legacy trade_execution imports..."
+	@if grep -rn "^from trade_execution\|^import trade_execution" --include="*.py" . ; then \
+	  echo "❌ Found legacy 'trade_execution' imports. Please migrate to 'from ai_trading import ExecutionEngine'."; \
+	  exit 1; \
+	else \
+	  echo "✅ No legacy 'trade_execution' imports found."; \
+	fi
 
 test-fast: clean install-dev validate-env
 	PYTHONPATH=. pytest --maxfail=1 --disable-warnings -x

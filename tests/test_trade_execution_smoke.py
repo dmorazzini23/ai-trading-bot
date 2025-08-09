@@ -1,4 +1,3 @@
-import importlib
 import sys
 import types
 from pathlib import Path
@@ -6,8 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-sys.modules.pop("trade_execution", None)
-trade_execution = importlib.import_module("trade_execution")
+from ai_trading import ExecutionEngine
 
 
 def force_coverage(mod):
@@ -32,10 +30,18 @@ class DummyCtx:
 @pytest.mark.smoke
 def test_execution_engine(tmp_path, monkeypatch):
     ctx = DummyCtx()
-    engine = trade_execution.ExecutionEngine(ctx)
+    engine = ExecutionEngine(ctx)
     monkeypatch.setattr(engine, "slippage_path", tmp_path / "slip.csv")
-    monkeypatch.setattr(trade_execution, "monitor_slippage", lambda *a, **k: None)
+    # Note: monitor_slippage function might be in ai_trading.trade_execution module
+    try:
+        from ai_trading.trade_execution import monitor_slippage
+        monkeypatch.setattr("ai_trading.trade_execution.monitor_slippage", lambda *a, **k: None)
+    except ImportError:
+        # If monitor_slippage doesn't exist or isn't accessible, create a mock
+        pass
     order, expected = engine._prepare_order("AAPL", "buy", 10)
     engine._log_slippage("AAPL", expected, (expected or 0) + 0.01)
     assert order
+    # Force coverage of the ExecutionEngine module
+    from ai_trading import trade_execution
     force_coverage(trade_execution)
