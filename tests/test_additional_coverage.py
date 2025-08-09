@@ -14,7 +14,7 @@ from ai_trading import meta_learning
 import ml_model
 import risk_engine
 import ai_trading.main as main
-import utils
+from ai_trading import utils
 from strategies.mean_reversion import MeanReversionStrategy
 
 
