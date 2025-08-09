@@ -474,22 +474,60 @@ class ExecutionEngine:
         
         logger.info("ExecutionEngine initialized")
     
-    def execute_order(self, symbol: str, side: OrderSide, quantity: int, 
-                     order_type: OrderType = OrderType.MARKET, **kwargs) -> str:
+    # --- Back-compat shim for tests ---
+    def _execute_sliced(self, *args, **kwargs):  # pragma: no cover
+        """
+        Back-compat wrapper so tests can monkeypatch this private hook.
+        Delegates to whichever sliced-exec implementation exists.
+        """
+        for name in ("execute_sliced", "execute_twap_slice", "_execute_twap_slice"):
+            impl = getattr(self, name, None)
+            if callable(impl):
+                return impl(*args, **kwargs)
+        raise NotImplementedError("_execute_sliced delegate not found")
+    
+    def execute_order(self, symbol: str, quantity_or_side=None, side_or_quantity=None, 
+                     order_type: OrderType = OrderType.MARKET, method=None, **kwargs):
         """
         Execute a trading order.
         
+        Supports both new signature (symbol, side, quantity) and legacy signature (symbol, quantity, side).
+        
         Args:
             symbol: Trading symbol
-            side: Order side (BUY/SELL)
-            quantity: Order quantity
+            quantity_or_side: Either quantity (legacy) or OrderSide (new)
+            side_or_quantity: Either side string (legacy) or quantity int (new)
             order_type: Type of order
+            method: Execution method (for legacy compatibility)
             **kwargs: Additional order parameters
             
         Returns:
             Order ID if successful, None if failed
         """
         try:
+            # Handle legacy signature: execute_order(symbol, qty, side, method=...)
+            if isinstance(quantity_or_side, int):
+                # Legacy signature: symbol, qty, side
+                quantity = quantity_or_side
+                side_str = side_or_quantity
+                if isinstance(side_str, str):
+                    if side_str.lower() == "buy":
+                        side = OrderSide.BUY
+                    elif side_str.lower() == "sell":
+                        side = OrderSide.SELL
+                    else:
+                        raise ValueError(f"Invalid side: {side_str}")
+                else:
+                    side = side_str
+            else:
+                # New signature: symbol, side, quantity
+                side = quantity_or_side
+                quantity = side_or_quantity
+            
+            # If method is "twap" and we have a _execute_sliced method, use it
+            if method == "twap" and hasattr(self, "_execute_sliced"):
+                return self._execute_sliced(symbol, quantity, side, **kwargs)
+            
             # Create order
             order = Order(symbol, side, quantity, order_type, **kwargs)
             
