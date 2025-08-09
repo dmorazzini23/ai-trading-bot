@@ -21,7 +21,7 @@ from .execution.engine import ExecutionEngine
 # AI-AGENT-REF: Implement lazy imports to prevent import-time crashes
 def __getattr__(name):
     """Lazy import submodules to prevent import-time config crashes."""
-    if name in ("core", "execution", "strategies", "risk", "monitoring", "database"):
+    if name in ("core", "execution", "strategies", "risk", "monitoring", "database", "workers"):
         import importlib
         return importlib.import_module(f".{name}", __name__)
     elif name in _moved_modules:
