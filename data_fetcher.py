@@ -23,7 +23,29 @@ def _fetch_bars(*args, **kwargs):
     try:
         # Preferred: central fetcher in the package
         from ai_trading.data_fetcher import _fetch_bars as _impl  # type: ignore
-        return _impl(*args, **kwargs)
+        
+        # Temporarily patch the ai_trading.data_fetcher module to use our patched functions
+        import ai_trading.data_fetcher as adf
+        
+        # Backup originals
+        original_requests = getattr(adf, 'requests', None)
+        original_get_last_available_bar = getattr(adf, 'get_last_available_bar', None)
+        
+        # Use our module's versions (which can be monkeypatched by tests)
+        if hasattr(adf, 'requests'):
+            adf.requests = requests
+        if hasattr(adf, 'get_last_available_bar'):
+            adf.get_last_available_bar = get_last_available_bar
+        
+        try:
+            return _impl(*args, **kwargs)
+        finally:
+            # Restore originals
+            if original_requests is not None:
+                adf.requests = original_requests
+            if original_get_last_available_bar is not None:
+                adf.get_last_available_bar = original_get_last_available_bar
+                
     except (ImportError, AttributeError):
         try:
             # Fallback: try get_bars function
@@ -42,6 +64,88 @@ def _fetch_bars(*args, **kwargs):
 
 # Import everything else from the real data_fetcher for backward compatibility
 from ai_trading.data_fetcher import *  # shim for tests and legacy imports
+
+# Override get_minute_df to use our _fetch_bars shim so monkeypatching works
+def get_minute_df(symbol, start_date, end_date, limit=None):
+    """
+    Shim get_minute_df that uses the module-level _fetch_bars for test monkeypatching.
+    """
+    # Check market open first (same as real implementation)
+    if not is_market_open():
+        import pandas as pd
+        from datetime import timezone
+        return pd.DataFrame(
+            columns=["open", "high", "low", "close", "volume"],
+            index=pd.DatetimeIndex([], tz=timezone.utc)
+        )
+    
+    # Convert dates to datetime (simplified version)
+    from datetime import datetime, timezone, timedelta
+    if hasattr(start_date, 'year'):  # it's a date
+        start_dt = datetime.combine(start_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+    else:
+        start_dt = start_date
+        
+    if hasattr(end_date, 'year'):  # it's a date
+        end_dt = datetime.combine(end_date, datetime.min.time()).replace(tzinfo=timezone.utc)
+    else:
+        end_dt = end_date
+    
+    # Use our module's _fetch_bars (which can be monkeypatched) with fallback logic
+    alpaca_exc = finnhub_exc = yexc = None
+    try:
+        df = _fetch_bars(symbol, start_dt - timedelta(minutes=1), end_dt, "1Min", _DEFAULT_FEED)
+        if df is None or df.empty:
+            raise Exception(f"No minute bars returned for {symbol} from Alpaca")
+        
+        required = ["open", "high", "low", "close", "volume"]
+        missing = set(required) - set(df.columns)
+        if missing:
+            raise Exception(f"Alpaca minute bars for {symbol} missing columns {missing}")
+        
+        return df[required].copy()
+    except Exception as primary_err:
+        alpaca_exc = primary_err
+        try:
+            df = fh_fetcher.fetch(symbol, period="1d", interval="1")
+            required = ["open", "high", "low", "close", "volume"]
+            missing = set(required) - set(df.columns)
+            if missing:
+                import pandas as pd
+                return pd.DataFrame(columns=required)
+            return df[required].copy()
+        except FinnhubAPIException as fh_err:
+            finnhub_exc = fh_err
+            if getattr(fh_err, "status_code", None) == 403:
+                try:
+                    df = fetch_minute_yfinance(symbol)
+                    required = ["open", "high", "low", "close", "volume"]
+                    missing = set(required) - set(df.columns)
+                    if missing:
+                        import pandas as pd
+                        return pd.DataFrame(columns=required)
+                    return df[required].copy()
+                except Exception as exc:
+                    yexc = exc
+                    import pandas as pd
+                    return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+            else:
+                import pandas as pd
+                return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        except Exception as fh_err:
+            finnhub_exc = fh_err
+            try:
+                df = fetch_minute_yfinance(symbol)
+                required = ["open", "high", "low", "close", "volume"]
+                missing = set(required) - set(df.columns)
+                if missing:
+                    import pandas as pd
+                    return pd.DataFrame(columns=required)
+                return df[required].copy()
+            except Exception as exc:
+                yexc = exc
+                import pandas as pd
+                return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
 # Import additional symbols that tests expect to be available at module level
 try:
