@@ -48,19 +48,47 @@ def validate_environment() -> None:
 
 def run_bot(*_a, **_k) -> int:
     """
-    Compatibility wrapper to execute one trading cycle.
+    Main entry point for the trading bot.
     
-    This function imports runner components after .env is guaranteed to be loaded
-    to prevent import-time crashes.
+    Sets up logging, validates configuration, and starts the bot.
     """
-    # AI-AGENT-REF: Ensure .env is loaded before importing runner components
-    load_dotenv()
+    global config
     
-    # AI-AGENT-REF: Import runner after .env is guaranteed loaded
+    # AI-AGENT-REF: Setup logging exactly once at startup
+    from ai_trading.logging import setup_logging, validate_logging_setup
+    logger = setup_logging(log_file="logs/bot.log", debug=False)
     
-    # AI-AGENT-REF: run cycle directly instead of spawning subprocesses
-    run_cycle()
-    return 0
+    # Validate single handler setup to detect duplicates
+    validation_result = validate_logging_setup()
+    if not validation_result['validation_passed']:
+        logger.error("Logging validation failed: %s", validation_result['issues'])
+        # Don't fail startup, just warn about potential duplicates
+    
+    logger.info("Application startup - logging configured once")
+    
+    try:
+        # Load configuration
+        config = get_settings()
+        validate_environment()
+        
+        # Memory optimization and performance monitoring
+        if PERFORMANCE_MONITORING_AVAILABLE:
+            memory_optimizer = get_memory_optimizer()
+            performance_monitor = get_performance_monitor()
+            
+            if memory_optimizer and memory_optimizer.enable_monitoring:
+                logger.info("Memory optimization enabled")
+            
+            if performance_monitor:
+                start_performance_monitoring()
+                logger.info("Performance monitoring started")
+        
+        logger.info("Bot startup complete - entering main loop")
+        return run_cycle()
+        
+    except Exception as e:
+        logger.error("Bot startup failed: %s", e, exc_info=True)
+        return 1
 
 
 def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> None:

@@ -8,8 +8,9 @@ import sys
 import csv
 import json
 import traceback
+import threading
 from datetime import date, datetime, timezone
-from typing import Optional
+from typing import Optional, Dict, Any
 import atexit
 from ai_trading.config import management as config
 from ai_trading.monitoring import metrics as metrics_logger
@@ -93,7 +94,8 @@ _loggers: Dict[str, logging.Logger] = {}
 _log_queue: queue.Queue | None = None
 _listener: QueueListener | None = None
 
-# AI-AGENT-REF: Global flag to prevent multiple logging setup calls across all modules
+# AI-AGENT-REF: Global thread-safe protection flag to prevent multiple logging setup calls
+_LOGGING_LOCK = threading.Lock()
 _LOGGING_CONFIGURED = False
 
 
@@ -115,67 +117,73 @@ def get_rotating_handler(
 def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.Logger:
     """Configure the root logger in an idempotent way."""
     global _configured, _log_queue, _listener, _LOGGING_CONFIGURED
-    logger = logging.getLogger()
     
-    # AI-AGENT-REF: Check global flag first to prevent any duplicate setup across modules
-    if _LOGGING_CONFIGURED:
+    # AI-AGENT-REF: Thread-safe check of global flag to prevent any duplicate setup
+    with _LOGGING_LOCK:
+        if _LOGGING_CONFIGURED:
+            logging.getLogger(__name__).debug("Logging already configured, skipping duplicate setup")
+            return logging.getLogger()
+    
+        logger = logging.getLogger()
+        
+        if _configured:
+            return logger
+        
+        # AI-AGENT-REF: Clear any existing handlers to prevent duplicates from other logging configs
+        logger.handlers.clear()
+
+        logger.setLevel(logging.DEBUG)
+
+        formatter = JSONFormatter(
+            "%(asctime)sZ"
+        )
+
+        class _PhaseFilter(logging.Filter):
+            def filter(self, record: logging.LogRecord) -> bool:
+                if not hasattr(record, "bot_phase"):
+                    record.bot_phase = "GENERAL"
+                return True
+
+        handlers: list[logging.Handler] = []
+
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(formatter)
+        stream_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+        stream_handler.addFilter(_PhaseFilter())
+        handlers.append(stream_handler)
+
+        if log_file:
+            rotating_handler = get_rotating_handler(log_file)
+            rotating_handler.setFormatter(formatter)
+            rotating_handler.setLevel(logging.INFO)
+            rotating_handler.addFilter(_PhaseFilter())
+            handlers.append(rotating_handler)
+
+        _log_queue = queue.Queue(-1)
+        queue_handler = QueueHandler(_log_queue)
+        queue_handler.setLevel(logging.DEBUG if debug else logging.INFO)
+        queue_handler.addFilter(_PhaseFilter())
+        # AI-AGENT-REF: QueueHandler should enqueue raw records without formatting
+        logger.handlers = [queue_handler]
+        # AI-AGENT-REF: use background queue listener to reduce I/O blocking
+        _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
+        _listener.start()
+
+        def _stop_listener() -> None:
+            if _listener:
+                try:
+                    _listener.stop()
+                except Exception:
+                    pass
+
+        atexit.register(_stop_listener)
+
+        _configured = True
+        _LOGGING_CONFIGURED = True  # AI-AGENT-REF: Set global flag to prevent setup in other modules
+        
+        # Add validation logging
+        logging.getLogger(__name__).info("Logging configured successfully - no duplicates possible")
         return logger
-    
-    if _configured:
-        return logger
-    
-    # AI-AGENT-REF: Clear any existing handlers to prevent duplicates from other logging configs
-    logger.handlers.clear()
-
-    logger.setLevel(logging.DEBUG)
-
-    formatter = JSONFormatter(
-        "%(asctime)sZ"
-    )
-
-    class _PhaseFilter(logging.Filter):
-        def filter(self, record: logging.LogRecord) -> bool:
-            if not hasattr(record, "bot_phase"):
-                record.bot_phase = "GENERAL"
-            return True
-
-    handlers: list[logging.Handler] = []
-
-    stream_handler = logging.StreamHandler(sys.stdout)
-    stream_handler.setFormatter(formatter)
-    stream_handler.setLevel(logging.DEBUG if debug else logging.INFO)
-    stream_handler.addFilter(_PhaseFilter())
-    handlers.append(stream_handler)
-
-    if log_file:
-        rotating_handler = get_rotating_handler(log_file)
-        rotating_handler.setFormatter(formatter)
-        rotating_handler.setLevel(logging.INFO)
-        rotating_handler.addFilter(_PhaseFilter())
-        handlers.append(rotating_handler)
-
-    _log_queue = queue.Queue(-1)
-    queue_handler = QueueHandler(_log_queue)
-    queue_handler.setLevel(logging.DEBUG if debug else logging.INFO)
-    queue_handler.addFilter(_PhaseFilter())
-    # AI-AGENT-REF: QueueHandler should enqueue raw records without formatting
-    logger.handlers = [queue_handler]
-    # AI-AGENT-REF: use background queue listener to reduce I/O blocking
-    _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
-    _listener.start()
-
-    def _stop_listener() -> None:
-        if _listener:
-            try:
-                _listener.stop()
-            except Exception:
-                pass
-
-    atexit.register(_stop_listener)
-
-    _configured = True
-    _LOGGING_CONFIGURED = True  # AI-AGENT-REF: Set global flag to prevent setup in other modules
-    return logger
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -516,59 +524,61 @@ def setup_enhanced_logging(
     """
     global _LOGGING_CONFIGURED
     
-    # AI-AGENT-REF: Check global flag to prevent duplicate enhanced logging setup
-    if _LOGGING_CONFIGURED:
-        return
+    # AI-AGENT-REF: Thread-safe check of global flag to prevent duplicate enhanced logging setup
+    with _LOGGING_LOCK:
+        if _LOGGING_CONFIGURED:
+            logging.getLogger(__name__).debug("Enhanced logging already configured, skipping duplicate setup")
+            return
+            
+        # Configure root logger
+        root_logger = logging.getLogger()
+        root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
         
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
-    
-    # Clear existing handlers
-    root_logger.handlers.clear()
-    
-    # Setup console handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_formatter = UTCFormatter(
-        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    console_handler.setFormatter(console_formatter)
-    root_logger.addHandler(console_handler)
-    
-    # Setup file handler if log file specified
-    if log_file:
-        try:
-            os.makedirs(os.path.dirname(log_file), exist_ok=True)
-            
-            file_handler = RotatingFileHandler(
-                log_file,
-                maxBytes=max_file_size_mb * 1024 * 1024,
-                backupCount=backup_count,
-                encoding='utf-8'
-            )
-            
-            if enable_json_format:
-                file_formatter = JSONFormatter()
-            else:
-                file_formatter = UTCFormatter(
-                    "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-                    datefmt="%Y-%m-%d %H:%M:%S"
+        # Clear existing handlers
+        root_logger.handlers.clear()
+        
+        # Setup console handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_formatter = UTCFormatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        console_handler.setFormatter(console_formatter)
+        root_logger.addHandler(console_handler)
+        
+        # Setup file handler if log file specified
+        if log_file:
+            try:
+                os.makedirs(os.path.dirname(log_file), exist_ok=True)
+                
+                file_handler = RotatingFileHandler(
+                    log_file,
+                    maxBytes=max_file_size_mb * 1024 * 1024,
+                    backupCount=backup_count,
+                    encoding='utf-8'
                 )
-            
-            file_handler.setFormatter(file_formatter)
-            root_logger.addHandler(file_handler)
-            
-        except (OSError, IOError) as e:
-            logging.error("Failed to setup file logging: %s", e)
-    
-    # Setup performance logging if enabled
-    if enable_performance_logging:
-        _setup_performance_logging()
-    
-    _LOGGING_CONFIGURED = True  # AI-AGENT-REF: Set global flag to prevent duplicate setup
-    logging.info("Enhanced logging configured - Level: %s, File: %s, JSON: %s", 
-                level, log_file or "console-only", enable_json_format)
+                
+                if enable_json_format:
+                    file_formatter = JSONFormatter()
+                else:
+                    file_formatter = UTCFormatter(
+                        "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                        datefmt="%Y-%m-%d %H:%M:%S"
+                    )
+                
+                file_handler.setFormatter(file_formatter)
+                root_logger.addHandler(file_handler)
+                
+            except (OSError, IOError) as e:
+                logging.error("Failed to setup file logging: %s", e)
+        
+        # Setup performance logging if enabled
+        if enable_performance_logging:
+            _setup_performance_logging()
+        
+        _LOGGING_CONFIGURED = True  # AI-AGENT-REF: Set global flag to prevent duplicate setup
+        logging.info("Enhanced logging configured - Level: %s, File: %s, JSON: %s", 
+                    level, log_file or "console-only", enable_json_format)
 
 
 def _setup_performance_logging():
@@ -598,6 +608,46 @@ def _setup_performance_logging():
         logging.warning("Could not setup performance logging: %s", e)
 
 
+def validate_logging_setup() -> Dict[str, Any]:
+    """
+    Validate that logging is properly configured without duplicates.
+    
+    Returns
+    -------
+    Dict[str, Any]
+        Validation results including handler count and potential issues
+    """
+    root_logger = logging.getLogger()
+    handler_count = len(root_logger.handlers)
+    
+    validation_result = {
+        'handlers_count': handler_count,
+        'is_configured': _LOGGING_CONFIGURED,
+        'expected_max_handlers': 2,  # Should be: 1 console + 1 file handler max
+        'validation_passed': True,
+        'issues': []
+    }
+    
+    # Check for too many handlers (potential duplicates)
+    if handler_count > 2:
+        validation_result['validation_passed'] = False
+        validation_result['issues'].append(f"Too many handlers detected: {handler_count} (expected ≤ 2)")
+        logging.getLogger(__name__).warning("WARNING: %d handlers detected - possible duplicate logging setup", handler_count)
+    
+    # Check if logging is not configured at all
+    if handler_count == 0 and not _LOGGING_CONFIGURED:
+        validation_result['validation_passed'] = False
+        validation_result['issues'].append("No logging handlers configured")
+    
+    # Log validation results
+    if validation_result['validation_passed']:
+        logging.getLogger(__name__).info("Logging validation passed - %d handlers configured", handler_count)
+    else:
+        logging.getLogger(__name__).error("Logging validation failed: %s", validation_result['issues'])
+    
+    return validation_result
+
+
 __all__ = [
     "setup_logging",
     "get_logger", 
@@ -607,6 +657,7 @@ __all__ = [
     "log_performance_metrics",
     "log_trading_event",
     "setup_enhanced_logging",
+    "validate_logging_setup",
 ]
 
 
