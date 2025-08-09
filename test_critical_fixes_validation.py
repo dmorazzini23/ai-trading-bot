@@ -37,7 +37,7 @@ class TestCriticalFixes(unittest.TestCase):
     
     def test_data_staleness_detection_improvement(self):
         """Test 4: Data Staleness Detection - Weekend/holiday awareness."""
-        from utils import is_weekend, is_market_holiday
+        from ai_trading.utils.base import is_weekend, is_market_holiday
         
         # Test weekend detection
         saturday = datetime(2024, 1, 6, 12, 0, tzinfo=timezone.utc)  # Saturday

@@ -138,7 +138,7 @@ except Exception as e:  # pragma: no cover - allow missing in test env
         ),
     )
     urllib3 = types.SimpleNamespace(exceptions=types.SimpleNamespace(HTTPError=Exception))
-from utils import ensure_utc, is_market_open, safe_to_datetime
+from ai_trading.utils.base import ensure_utc, is_market_open, safe_to_datetime
 
 MINUTES_REQUIRED = 31
 MIN_EXPECTED_ROWS = 5

@@ -2,7 +2,7 @@ import types
 import time
 import pytest
 
-import utils
+from ai_trading import utils
 import bot_engine
 import alpaca_api
 from strategies.base import TradeSignal

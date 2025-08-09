@@ -5,7 +5,7 @@ import types
 import pandas as pd
 
 import data_fetcher
-from utils import health_check
+from ai_trading.utils.base import health_check
 
 
 def _stub_df():

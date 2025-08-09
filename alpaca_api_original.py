@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional, Set
 import pandas as pd
 import requests
 from ai_trading.config import get_settings
-import utils
+from ai_trading.utils.base import backoff_delay
 try:  # AI-AGENT-REF: make optional for unit tests
     from alpaca.trading.stream import TradingStream
     from alpaca.common.exceptions import APIError
@@ -373,7 +373,7 @@ def submit_order(api, req, log: logging.Logger | None = None):
             raise
         except requests.exceptions.HTTPError as e:
             if "429" in str(e) or "rate limit" in str(e).lower():
-                wait = utils.backoff_delay(attempt)
+                wait = backoff_delay(attempt)
                 _warn_limited(
                     "order-rate-limit",
                     "Rate limit hit for Alpaca order (attempt %s/%s), sleeping %ss",
@@ -397,7 +397,7 @@ def submit_order(api, req, log: logging.Logger | None = None):
             )
             if attempt == max_retries:
                 raise
-            time.sleep(utils.backoff_delay(attempt))
+            time.sleep(backoff_delay(attempt))
         finally:
             if order_id:
                 with _pending_orders_lock:

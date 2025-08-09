@@ -1432,7 +1432,7 @@ def reload_module(mod):
 @pytest.fixture(autouse=True)
 def reload_utils_module():
     """Ensure utils is reloaded for each test."""
-    import utils
+    from ai_trading import utils
     importlib.reload(utils)
     yield
 

@@ -6,7 +6,7 @@ from typing import List
 import pandas as pd
 
 from strategies.base import Strategy, TradeSignal, asset_class_for
-from utils import get_phase_logger
+from ai_trading.utils.base import get_phase_logger
 from ai_trading.indicators import mean_reversion_zscore
 
 logger = get_phase_logger(__name__, "STRATEGY")
