@@ -54,11 +54,11 @@ try:
     import pandas as pd
 except ImportError:
     # Import mock pandas from utils
-    from utils import pd
+    from ai_trading.utils import pd
 
 import config
 from metrics_logger import log_metrics
-from utils import safe_to_datetime
+from ai_trading.utils.base import safe_to_datetime
 
 logger = logging.getLogger(__name__)
 

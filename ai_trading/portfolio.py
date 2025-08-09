@@ -2,7 +2,7 @@ import logging
 from typing import List, Dict
 import threading
 
-from utils import get_latest_close
+from ai_trading.utils.base import get_latest_close
 
 logger = logging.getLogger(__name__)
 
