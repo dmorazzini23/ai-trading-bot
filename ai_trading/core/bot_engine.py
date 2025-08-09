@@ -15,6 +15,9 @@ def _alpaca_available() -> bool:
 
 # Set global flag for Alpaca availability
 ALPACA_AVAILABLE = _alpaca_available()
+
+# AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
+_REGIME_INSUFFICIENT_DATA_WARNED = False
 import asyncio
 import atexit
 import logging
@@ -7646,7 +7649,12 @@ else:
         .rename("label")
     )
     training = feats.join(labels, how="inner").dropna()
-    if len(training) >= 50:
+    
+    # Import settings for regime configuration
+    from ai_trading.config.settings import get_settings
+    settings = get_settings()
+    
+    if len(training) >= settings.REGIME_MIN_ROWS:
         X = training[["atr", "rsi", "macd", "vol"]]
         y = training["label"]
         regime_model = RandomForestClassifier(
@@ -7663,9 +7671,14 @@ else:
         else:
             logger.info("REGIME_MODEL_TRAINED", extra={"rows": len(training)})
     else:
-        logger.error(
-            f"Not enough valid rows ({len(training)}) to train regime model; using dummy fallback"
-        )
+        # Log once at WARNING level; avoid noisy ERROR during closed market.
+        global _REGIME_INSUFFICIENT_DATA_WARNED
+        if not _REGIME_INSUFFICIENT_DATA_WARNED:
+            logger.warning(
+                "Insufficient rows (%d < %d) for regime model; using fallback",
+                len(training), settings.REGIME_MIN_ROWS
+            )
+            _REGIME_INSUFFICIENT_DATA_WARNED = True
         regime_model = RandomForestClassifier(
             n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
         )

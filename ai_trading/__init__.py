@@ -15,8 +15,8 @@ The platform is designed for institutional-scale operations with proper
 risk controls, monitoring, and compliance capabilities.
 """
 
-# Public API re-exports
-from .trade_execution import ExecutionEngine
+# Public API re-exports - canonical import path
+from .execution.engine import ExecutionEngine
 
 # AI-AGENT-REF: Implement lazy imports to prevent import-time crashes
 def __getattr__(name):
@@ -39,7 +39,7 @@ def _lazy_import_module(name):
     return importlib.import_module(f".{name}", __name__)
 
 # Setup lazy attributes for moved modules
-_moved_modules = ["signals", "data_fetcher", "trade_execution", "indicators", "pipeline", "portfolio", "rebalancer"]
+_moved_modules = ["signals", "data_fetcher", "indicators", "pipeline", "portfolio", "rebalancer"]
 
 __all__ = [
     "ExecutionEngine",
@@ -78,5 +78,5 @@ __all__ = [
     "monitoring",
     
     # Moved modules
-    "signals", "data_fetcher", "trade_execution", "indicators", "pipeline", "portfolio", "rebalancer",
+    "signals", "data_fetcher", "indicators", "pipeline", "portfolio", "rebalancer",
 ]))

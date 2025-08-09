@@ -9,6 +9,7 @@ import csv
 import json
 import traceback
 from datetime import date, datetime, timezone
+from typing import Optional
 import atexit
 from ai_trading.config import management as config
 from ai_trading.monitoring import metrics as metrics_logger
@@ -183,6 +184,37 @@ def get_logger(name: str) -> logging.Logger:
 
 
 logger = logging.getLogger(__name__)
+
+def get_phase_logger(name: str, phase: Optional[str] = None) -> logging.Logger:
+    """
+    Return a logger that prefixes messages with a trading 'phase' token so
+    dedupe/filters in tests and structured logging can key off it.
+    
+    Parameters
+    ----------
+    name : str
+        Logger name
+    phase : Optional[str]
+        Trading phase identifier (e.g., "ORDER_EXEC", "SIGNAL_GEN")
+        
+    Returns
+    -------
+    logging.Logger
+        Logger with phase filtering enabled and propagation disabled
+    """
+    logger = logging.getLogger(name)
+    logger.propagate = False  # Prevent duplicate logging
+    if phase:
+        # Lightweight filter to stamp phase once per record
+        class _PhaseFilter(logging.Filter):
+            def filter(self, record: logging.LogRecord) -> bool:
+                if not hasattr(record, "bot_phase") or not record.bot_phase:
+                    record.bot_phase = phase
+                return True
+        # avoid duplicate filters on repeated calls
+        if not any(isinstance(f, _PhaseFilter) for f in logger.filters):
+            logger.addFilter(_PhaseFilter())
+    return logger
 
 def init_logger(log_file: str) -> logging.Logger:
     """Wrapper used by utilities to initialize logging."""
@@ -554,6 +586,7 @@ def _setup_performance_logging():
 __all__ = [
     "setup_logging",
     "get_logger", 
+    "get_phase_logger",
     "init_logger",
     "logger",
     "log_performance_metrics",

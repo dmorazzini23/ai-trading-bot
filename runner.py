@@ -12,10 +12,13 @@ import time
 from typing import NoReturn
 
 import requests
-try:
-    from ai_trading.trade_execution import recent_buys  # type: ignore
-except Exception:  # pragma: no cover
-    from trade_execution import recent_buys  # type: ignore
+# AI-AGENT-REF: Removed legacy trade_execution import 
+# as part of shim cleanup. Recent buys tracking now handled 
+# within ExecutionEngine if needed.
+# try:
+#     from ai_trading.trade_execution import recent_buys  # type: ignore
+# except Exception:  # pragma: no cover
+#     from trade_execution import recent_buys  # type: ignore
 
 # AI-AGENT-REF: graceful numpy fallback for testing
 try:
@@ -101,9 +104,10 @@ def _run_forever() -> NoReturn:
 
         if not _shutdown:
             log_cpu_usage(logger)
-            if any(time.time() - ts < 2 for ts in recent_buys.values()):
-                logger.info("Post-buy sync wait")
-                time.sleep(2)
+            # AI-AGENT-REF: Legacy recent_buys tracking removed with trade_execution shim
+            # if any(time.time() - ts < 2 for ts in recent_buys.values()):
+            #     logger.info("Post-buy sync wait")
+            #     time.sleep(2)
             # AI-AGENT-REF: slow down runner loop to once per minute
             time.sleep(60)
 

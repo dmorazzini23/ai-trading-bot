@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     trading_mode: str = Field("balanced", env="TRADING_MODE")
     shadow_mode: bool = Field(False, env="SHADOW_MODE")
     disable_daily_retrain: bool = Field(False, env="DISABLE_DAILY_RETRAIN")
+    
+    # Portfolio features (default disabled to reduce startup noise)
+    ENABLE_PORTFOLIO_FEATURES: bool = Field(False, env="ENABLE_PORTFOLIO_FEATURES")
+    REGIME_MIN_ROWS: int = Field(50, env="REGIME_MIN_ROWS")
 
     # Worker sizing (None/0 => auto)
     executor_workers: Optional[int] = Field(None, env="EXECUTOR_WORKERS")
