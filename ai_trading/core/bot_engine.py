@@ -7540,38 +7540,52 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
-    # Ensure canonical OHLCV columns to avoid KeyError: 'high' / 'low' / 'close'
+    """Compute regime features; tolerate proxy bars that only include 'close'."""
+    # 1) Canonicalize columns (o/h/l/c/v mapping, lowercase)
     try:
         from ai_trading.utils.ohlcv import standardize_ohlcv
         df = standardize_ohlcv(df)
     except Exception:
         pass
-    
+
+    # 2) Synthesize missing OHLC from 'close' when needed (proxy baskets)
+    if "close" in df.columns:
+        if "high" not in df.columns:
+            df["high"] = df["close"].rolling(3, min_periods=1).max()
+        if "low" not in df.columns:
+            df["low"] = df["close"].rolling(3, min_periods=1).min()
+        if "open" not in df.columns:
+            df["open"] = df["close"].shift(1).fillna(df["close"])
+        if "volume" not in df.columns:
+            df["volume"] = 0.0
+
+    # 3) Optional MACD import (keep failures soft)
     try:
         from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
-    except ImportError:
+    except Exception:
         logger.warning("signals module not available for regime features")
         signals_calculate_macd = None
-    
-    # Safeguard: if any required column is still missing, raise a clear error
-    for col in ("high", "low", "close"):
-        if col not in df.columns:
-            raise KeyError(f"Missing required OHLCV column: {col}")
-    
+
+    # 4) Build features with fallbacks
     feat = pd.DataFrame(index=df.index)
-    feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+    try:
+        feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+    except Exception:
+        # Fallback ATR proxy from close-to-close movement
+        tr = (df["close"].diff().abs()).fillna(0.0)
+        feat["atr"] = tr.rolling(14, min_periods=1).mean()
     feat["rsi"] = ta.rsi(df["close"], length=14)
     if signals_calculate_macd:
-        macd_df = signals_calculate_macd(df["close"])
-        if macd_df is not None and "macd" in macd_df:
-            feat["macd"] = macd_df["macd"]
-        else:
-            logger.warning("Regime MACD calculation failed")
+        try:
+            macd_df = signals_calculate_macd(df["close"])
+            feat["macd"] = macd_df["macd"] if macd_df is not None and "macd" in macd_df else np.nan
+        except Exception as e:
+            logger.warning("Regime MACD calculation failed: %s", e)
             feat["macd"] = np.nan
     else:
         feat["macd"] = np.nan
-    feat["vol"] = df["close"].pct_change(fill_method=None).rolling(14).std()
-    return feat.dropna()
+    feat["vol"] = df["close"].pct_change(fill_method=None).rolling(14, min_periods=1).std()
+    return feat.dropna(how="all")
 
 
 def detect_regime(df: pd.DataFrame) -> str:
