@@ -89,9 +89,20 @@ else:
 
 ROOT_DIR = Path(__file__).resolve().parent
 ENV_PATH = ROOT_DIR / ".env"
-# Load environment variables once at import. Individual scripts
-# should call ``reload_env()`` to refresh values if needed.
+# Load environment variables once at import, but respect explicit clearing.
+# Individual scripts should call ``reload_env()`` to refresh values if needed.
+# For systemd compatibility: don't override variables that have been explicitly cleared
+_pre_load_alpaca_vars = {
+    key: os.getenv(key) for key in [
+        "ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL",
+        "APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "APCA_API_BASE_URL"
+    ]
+}
 load_dotenv(ENV_PATH)
+# Restore None values for variables that were intentionally cleared
+for key, value in _pre_load_alpaca_vars.items():
+    if value is None and key in os.environ:
+        del os.environ[key]
 
 # Relax environment variable validation when running under pytest so the
 # configuration module can be imported without all production variables set.

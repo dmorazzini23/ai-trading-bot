@@ -16,12 +16,17 @@ risk controls, monitoring, and compliance capabilities.
 """
 
 # Public API re-exports - canonical import path
-from .execution.engine import ExecutionEngine
+# Delayed import to prevent import-time crashes
+ExecutionEngine = None  # Will be lazily imported
 
 # AI-AGENT-REF: Implement lazy imports to prevent import-time crashes
 def __getattr__(name):
     """Lazy import submodules to prevent import-time config crashes."""
-    if name in ("core", "execution", "strategies", "risk", "monitoring", "database", "workers"):
+    if name == "ExecutionEngine":
+        # Lazy import ExecutionEngine to prevent config import cascade
+        from .execution.engine import ExecutionEngine as _EE
+        return _EE
+    elif name in ("core", "execution", "strategies", "risk", "monitoring", "database", "workers"):
         import importlib
         return importlib.import_module(f".{name}", __name__)
     elif name in _moved_modules:

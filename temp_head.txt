@@ -1,50 +1,110 @@
 """
-Production configuration management for live trading.
+Environment and configuration management compatible with systemd-startup tests.
 
-This module provides secure configuration management, validation,
-and runtime configuration changes with proper audit logging.
+Key behavior required by tests:
+- _resolve_alpaca_env() prefers ALPACA_* over APCA_* and returns
+  (api_key, secret_key, base_url) where api_key/secret_key can be None when
+  credentials are absent. base_url must always be non-empty and defaults to
+  the paper URL when unspecified.
+- reload_env() supports an explicit env_file argument and always loads with
+  override=True so test shims can inject environment during runtime.
 """
 
+from __future__ import annotations
+
 import os
-import json
-import hashlib
-from typing import Dict, Any, Optional, List, Union
-from datetime import datetime, timezone
 from pathlib import Path
-import logging
+from typing import Optional, Tuple
 
 from dotenv import load_dotenv
 
-logger = logging.getLogger(__name__)
 
-# Helper functions to get settings without triggering import cascade
-def _get_settings_safe():
-    """Get settings without triggering import-time failures."""
-    try:
-        from ai_trading.config import get_settings
-        return get_settings()
-    except ImportError:
+_DEFAULT_ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
+
+
+def reload_env(env_file: Optional[str | os.PathLike[str]] = None) -> None:
+    """
+    (Re)load environment variables from a .env file with override=True.
+
+    Args:
+        env_file: Optional explicit path to a .env file. If None, loads the
+                  default search chain (cwd, working tree root, etc.).
+    """
+    if env_file:
+        env_path = Path(env_file)
+        load_dotenv(dotenv_path=env_path, override=True)
+    else:
+        load_dotenv(override=True)
+
+
+def _resolve_alpaca_env() -> Tuple[Optional[str], Optional[str], str]:
+    """
+    Resolve Alpaca credentials and base URL from environment.
+
+    Preference order:
+      1) ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL
+      2) APCA_API_KEY_ID, APCA_API_SECRET_KEY, APCA_API_BASE_URL
+
+    Returns:
+        (api_key, secret_key, base_url) where:
+          - api_key, secret_key may be None if not provided
+          - base_url is always set, defaulting to the paper endpoint
+
+    This function MUST NOT raise just because credentials are absent; tests
+    import without credentials and expect a clean import path.
+    """
+    # Primary schema
+    a_key = os.getenv("ALPACA_API_KEY")
+    a_secret = os.getenv("ALPACA_SECRET_KEY")
+    a_url = os.getenv("ALPACA_BASE_URL")
+
+    # Fallback schema (legacy APCA_*)
+    apca_key = os.getenv("APCA_API_KEY_ID")
+    apca_secret = os.getenv("APCA_API_SECRET_KEY")
+    apca_url = os.getenv("APCA_API_BASE_URL")
+
+    # Prefer ALPACA_* if both key and secret are present (even if APCA_* exist)
+    if a_key and a_secret:
+        base_url = a_url or _DEFAULT_ALPACA_BASE_URL
+        return a_key, a_secret, base_url
+
+    # Otherwise, if APCA_* are present, use them
+    if apca_key and apca_secret:
+        base_url = apca_url or _DEFAULT_ALPACA_BASE_URL
+        return apca_key, apca_secret, base_url
+
+    # Credentials absent; return None for keys but still provide a usable base_url
+    base_url = a_url or apca_url or _DEFAULT_ALPACA_BASE_URL
+    return None, None, base_url
+
+
+# Legacy imports for backward compatibility
+import json
+import hashlib
+from typing import Dict, Any, List, Union
+from datetime import datetime, timezone
+import logging
+
+try:
+    from ai_trading.config import get_settings
+    from ai_trading.logging_filters import SecretFilter
+except ImportError:
+    # Graceful fallback when dependencies not available
+    def get_settings():
         return None
+    
+    class SecretFilter:
+        def filter(self, record):
+            return True
 
-def _get_secret_filter_safe():
-    """Get SecretFilter without triggering import-time failures."""
-    try:
-        from ai_trading.logging_filters import SecretFilter
-        return SecretFilter()
-    except ImportError:
-        class FallbackFilter:
-            def filter(self, record):
-                return True
-        return FallbackFilter()
-
+logger = logging.getLogger(__name__)
 # Ensure secrets are masked across all handlers attached to this logger.
-secret_filter = _get_secret_filter_safe()
 for h in logger.handlers:
-    h.addFilter(secret_filter)
+    h.addFilter(SecretFilter())
 # Also try the root logger for broad coverage (safe no-op if none).
 root = logging.getLogger()
 for h in root.handlers:
-    h.addFilter(secret_filter)
+    h.addFilter(SecretFilter())
 
 
 class ConfigValidator:
@@ -630,186 +690,3 @@ MAX_DRAWDOWN_THRESHOLD = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.2"))
 # TradingConfig class for compatibility
 class TradingConfig:
     def __init__(self):
-        # Add default trading configuration attributes
-        self.trailing_factor = 0.05
-        self.kelly_fraction = 0.25
-        self.max_position_size = 0.1
-        self.stop_loss = 0.02
-        self.take_profit = 0.06
-        self.take_profit_factor = 0.06
-        self.lookback_days = 30
-        self.min_signal_strength = 0.6
-        self.scaling_factor = 1.0
-        self.limit_order_slippage = 0.001
-        self.pov_slice_pct = 0.1
-        
-    def __getattr__(self, name):
-        """Return default values for any missing attributes."""
-        # Common defaults for missing attributes
-        defaults = {
-            'stop_loss_factor': 0.02,
-            'position_scaling': 1.0,
-            'min_trade_size': 1,
-            'max_trade_size': 1000,
-            'risk_factor': 0.1,
-            'volatility_factor': 1.0,
-            'correlation_threshold': 0.7,
-            'rebalance_threshold': 0.05,
-            'slippage_factor': 0.001,
-            'commission_rate': 0.0,
-            'margin_factor': 1.0,
-            'leverage': 1.0,
-        }
-        
-        if name in defaults:
-            return defaults[name]
-        elif name.endswith('_factor'):
-            return 1.0
-        elif name.endswith('_pct') or name.endswith('_percentage'):
-            return 0.1
-        elif name.endswith('_size') or name.endswith('_quantity'):
-            return 100
-        elif name.endswith('_days') or name.endswith('_period'):
-            return 30
-        elif name.endswith('_threshold') or name.endswith('_limit'):
-            return 0.05
-        else:
-            # Return a reasonable default
-            return 0.1
-        
-    @classmethod
-    def from_env(cls, mode="balanced"):
-        """Create a TradingConfig from environment variables.""" 
-        instance = cls()
-        instance.mode = mode
-        instance.ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "test_key")
-        instance.ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "test_secret")
-        return instance
-    
-    def get_legacy_params(self):
-        """Return legacy parameters for backward compatibility."""
-        return {
-            "mode": getattr(self, "mode", "balanced"),
-            "ALPACA_API_KEY": getattr(self, "ALPACA_API_KEY", "test_key"),
-            "ALPACA_SECRET_KEY": getattr(self, "ALPACA_SECRET_KEY", "test_secret"),
-            "trailing_factor": self.trailing_factor,
-            "kelly_fraction": self.kelly_fraction,
-            "max_position_size": self.max_position_size,
-            "stop_loss": self.stop_loss,
-            "take_profit": self.take_profit,
-            "lookback_days": self.lookback_days,
-            "min_signal_strength": self.min_signal_strength,
-        }
-
-
-def validate_env_vars():
-    """Validate required environment variables."""
-    missing = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
-    if missing and not TESTING:
-        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
-
-
-def _resolve_alpaca_env() -> tuple[str | None, str | None, str]:
-    """
-    Resolve Alpaca credentials and base URL from environment.
-
-    Preference order:
-      1) ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_BASE_URL
-      2) APCA_API_KEY_ID, APCA_API_SECRET_KEY, APCA_API_BASE_URL
-
-    Returns:
-        (api_key, secret_key, base_url) where:
-          - api_key, secret_key may be None if not provided
-          - base_url is always set, defaulting to the paper endpoint
-
-    This function MUST NOT raise just because credentials are absent; tests
-    import without credentials and expect a clean import path.
-    """
-    # Primary schema
-    a_key = os.getenv("ALPACA_API_KEY")
-    a_secret = os.getenv("ALPACA_SECRET_KEY")
-    a_url = os.getenv("ALPACA_BASE_URL")
-
-    # Fallback schema (legacy APCA_*)
-    apca_key = os.getenv("APCA_API_KEY_ID")
-    apca_secret = os.getenv("APCA_API_SECRET_KEY")
-    apca_url = os.getenv("APCA_API_BASE_URL")
-
-    # Prefer ALPACA_* if both key and secret are present (even if APCA_* exist)
-    if a_key and a_secret:
-        base_url = a_url or "https://paper-api.alpaca.markets"
-        return a_key, a_secret, base_url
-
-    # Otherwise, if APCA_* are present, use them
-    if apca_key and apca_secret:
-        base_url = apca_url or "https://paper-api.alpaca.markets"
-        return apca_key, apca_secret, base_url
-
-    # Credentials absent; return None for keys but still provide a usable base_url
-    base_url = a_url or apca_url or "https://paper-api.alpaca.markets"
-    return None, None, base_url
-
-
-def _warn_duplicate_env_keys() -> None:
-    """Warn about potentially risky duplicate environment keys."""
-    risky_duplicates = [
-        ("ALPACA_API_KEY", "APCA_API_KEY_ID"),
-        ("ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY"),
-        ("ALPACA_BASE_URL", "APCA_API_BASE_URL"),
-    ]
-    
-    for alpaca_key, apca_key in risky_duplicates:
-        alpaca_val = os.getenv(alpaca_key)
-        apca_val = os.getenv(apca_key)
-        
-        if alpaca_val and apca_val and alpaca_val != apca_val:
-            logger.warning(
-                "Conflicting environment variables detected: %s and %s have different values. "
-                "Using %s (ALPACA_* takes precedence)",
-                alpaca_key, apca_key, alpaca_key
-            )
-
-
-def validate_alpaca_credentials() -> None:
-    """Ensure required Alpaca credentials are present (settings-driven)."""
-    if TESTING:
-        return
-    get_settings().require_alpaca_or_raise()
-
-
-def log_config(vars_list):
-    """Log configuration variables."""
-    for var in vars_list:
-        value = os.getenv(var, "NOT_SET")
-        if "KEY" in var or "SECRET" in var:
-            value = "***MASKED***" if value != "NOT_SET" else value
-        logger.info(f"Config: {var}={value}")
-
-
-def reload_env(env_file: Optional[str | os.PathLike[str]] = None) -> None:
-    """
-    (Re)load environment variables from a .env file with override=True.
-
-    Args:
-        env_file: Optional explicit path to a .env file. If None, loads the
-                  default search chain (cwd, working tree root, etc.).
-    """
-    # For systemd compatibility: don't override variables that have been explicitly cleared
-    # Store current state of key variables that might be intentionally unset
-    current_alpaca_vars = {
-        key: os.getenv(key) for key in [
-            "ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL",
-            "APCA_API_KEY_ID", "APCA_API_SECRET_KEY", "APCA_API_BASE_URL"
-        ]
-    }
-    
-    if env_file:
-        env_path = Path(env_file)
-        load_dotenv(dotenv_path=env_path, override=True)
-    else:
-        load_dotenv(override=True)
-    
-    # Restore None values for variables that were intentionally cleared
-    for key, value in current_alpaca_vars.items():
-        if value is None and key in os.environ:
-            del os.environ[key]
