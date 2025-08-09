@@ -1,2 +1,0 @@
-[console_scripts]
-ai-trading-bot = ai_trading.main:main
