@@ -83,7 +83,7 @@ class _DummyFinnhubException(Exception):
 
 sys.modules["finnhub"].FinnhubAPIException = _DummyFinnhubException
 
-import data_fetcher
+from ai_trading import data_fetcher
 
 
 class FakeBars:

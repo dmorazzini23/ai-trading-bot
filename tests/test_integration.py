@@ -12,7 +12,7 @@ if "joblib" in sys.modules:
 
 pytestmark = pytest.mark.usefixtures("default_env")
 import config
-import data_fetcher
+from ai_trading import data_fetcher
 from ml_model import MLModel
 
 

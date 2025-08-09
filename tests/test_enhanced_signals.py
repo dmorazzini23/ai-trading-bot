@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 import risk_engine
-import signals
+from ai_trading import signals
 
 
 def test_dynamic_position_size_scaling():

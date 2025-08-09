@@ -1,4 +1,4 @@
-import signals
+from ai_trading import signals
 
 
 def test_generate():

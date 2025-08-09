@@ -4,7 +4,7 @@ import types
 import pandas as pd
 import pytest
 
-import data_fetcher
+from ai_trading import data_fetcher
 
 
 class DummyClient:

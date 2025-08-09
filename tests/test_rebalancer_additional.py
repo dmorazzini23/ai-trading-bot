@@ -1,4 +1,4 @@
-import rebalancer
+from ai_trading import rebalancer
 
 
 def test_maybe_rebalance_triggers(monkeypatch):
