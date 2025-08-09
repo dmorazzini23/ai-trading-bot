@@ -994,7 +994,7 @@ else:
     # AI-AGENT-REF: mock optimize_signals for test environments
     def optimize_signals(*args, **kwargs):
         return args[0] if args else []  # Return signals as-is
-from ai_trading.monitoring.metrics import log_metrics
+from metrics_logger import log_metrics
 from ai_trading.pipeline import model_pipeline  # type: ignore
 
 # ML dependencies with graceful error handling
