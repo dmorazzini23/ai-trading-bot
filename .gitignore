@@ -5,6 +5,7 @@ venv/
 # Python caches and bytecode
 __pycache__/
 *.pyc
+*.egg-info/
 
 # Environment files and keys
 .env
