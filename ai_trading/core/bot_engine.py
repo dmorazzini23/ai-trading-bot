@@ -1182,7 +1182,7 @@ except ImportError:
 
 # AI-AGENT-REF: guard prometheus_client import for test environments
 try:
-    from prometheus_client import Counter, Gauge, Histogram, start_http_server
+    from prometheus_client import Counter, Gauge, Histogram, start_http_server, REGISTRY
 except ImportError:
     # AI-AGENT-REF: prometheus_client not available, create minimal fallbacks
     class MockMetric:
@@ -1199,8 +1199,66 @@ except ImportError:
     Counter = MockMetric
     Gauge = MockMetric
     Histogram = MockMetric
+    REGISTRY = None
     def start_http_server(*args, **kwargs):
         pass
+
+# Prometheus metrics - lazy initialization to prevent duplicates
+_METRICS_READY = False
+
+def _init_metrics() -> None:
+    """Create/register metrics once; tolerate partial imports & re-imports."""
+    global _METRICS_READY, orders_total, order_failures, daily_drawdown, signals_evaluated
+    global run_all_trades_duration, minute_cache_hit, minute_cache_miss, daily_cache_hit
+    global daily_cache_miss, event_cooldown_hits, slippage_total, slippage_count
+    global weekly_drawdown, skipped_duplicates, skipped_cooldown
+    if _METRICS_READY:
+        return
+    try:
+        orders_total = Counter("bot_orders_total", "Total orders sent")
+        order_failures = Counter("bot_order_failures", "Order submission failures")
+        daily_drawdown = Gauge("bot_daily_drawdown", "Current daily drawdown fraction")
+        signals_evaluated = Counter("bot_signals_evaluated_total", "Total signals evaluated")
+        run_all_trades_duration = Histogram(
+            "run_all_trades_duration_seconds", "Time spent in run_all_trades"
+        )
+        minute_cache_hit = Counter("bot_minute_cache_hits", "Minute bar cache hits")
+        minute_cache_miss = Counter("bot_minute_cache_misses", "Minute bar cache misses")
+        daily_cache_hit = Counter("bot_daily_cache_hits", "Daily bar cache hits")
+        daily_cache_miss = Counter("bot_daily_cache_misses", "Daily bar cache misses")
+        event_cooldown_hits = Counter("bot_event_cooldown_hits", "Event cooldown hits")
+        slippage_total = Counter("bot_slippage_total", "Cumulative slippage in cents")
+        slippage_count = Counter("bot_slippage_count", "Number of orders with slippage logged")
+        weekly_drawdown = Gauge("bot_weekly_drawdown", "Current weekly drawdown fraction")
+        skipped_duplicates = Counter(
+            "bot_skipped_duplicates",
+            "Trades skipped due to open position",
+        )
+        skipped_cooldown = Counter(
+            "bot_skipped_cooldown",
+            "Trades skipped due to recent execution",
+        )
+    except ValueError:
+        # Already registered (e.g., prior partial import). Reuse existing.
+        # Accessing REGISTRY internals is stable in prometheus-client; safe fallback.
+        if REGISTRY is not None:
+            existing = getattr(REGISTRY, "_names_to_collectors", {})
+            orders_total = existing.get("bot_orders_total")
+            order_failures = existing.get("bot_order_failures")
+            daily_drawdown = existing.get("bot_daily_drawdown")
+            signals_evaluated = existing.get("bot_signals_evaluated_total")
+            run_all_trades_duration = existing.get("run_all_trades_duration_seconds")
+            minute_cache_hit = existing.get("bot_minute_cache_hits")
+            minute_cache_miss = existing.get("bot_minute_cache_misses")
+            daily_cache_hit = existing.get("bot_daily_cache_hits")
+            daily_cache_miss = existing.get("bot_daily_cache_misses")
+            event_cooldown_hits = existing.get("bot_event_cooldown_hits")
+            slippage_total = existing.get("bot_slippage_total")
+            slippage_count = existing.get("bot_slippage_count")
+            weekly_drawdown = existing.get("bot_weekly_drawdown")
+            skipped_duplicates = existing.get("bot_skipped_duplicates")
+            skipped_cooldown = existing.get("bot_skipped_cooldown")
+    _METRICS_READY = True
 
 try:
     from ai_trading.trade_execution import ExecutionEngine  # type: ignore
@@ -1608,30 +1666,7 @@ else:
     _HUGGINGFACE_AVAILABLE = True
     logger.debug("FinBERT mocks initialized for tests")
 
-# Prometheus metrics
-orders_total = Counter("bot_orders_total", "Total orders sent")
-order_failures = Counter("bot_order_failures", "Order submission failures")
-daily_drawdown = Gauge("bot_daily_drawdown", "Current daily drawdown fraction")
-signals_evaluated = Counter("bot_signals_evaluated_total", "Total signals evaluated")
-run_all_trades_duration = Histogram(
-    "run_all_trades_duration_seconds", "Time spent in run_all_trades"
-)
-minute_cache_hit = Counter("bot_minute_cache_hits", "Minute bar cache hits")
-minute_cache_miss = Counter("bot_minute_cache_misses", "Minute bar cache misses")
-daily_cache_hit = Counter("bot_daily_cache_hits", "Daily bar cache hits")
-daily_cache_miss = Counter("bot_daily_cache_misses", "Daily bar cache misses")
-event_cooldown_hits = Counter("bot_event_cooldown_hits", "Event cooldown hits")
-slippage_total = Counter("bot_slippage_total", "Cumulative slippage in cents")
-slippage_count = Counter("bot_slippage_count", "Number of orders with slippage logged")
-weekly_drawdown = Gauge("bot_weekly_drawdown", "Current weekly drawdown fraction")
-skipped_duplicates = Counter(
-    "bot_skipped_duplicates",
-    "Trades skipped due to open position",
-)
-skipped_cooldown = Counter(
-    "bot_skipped_cooldown",
-    "Trades skipped due to recent execution",
-)
+
 
 DISASTER_DD_LIMIT = float(config.get_env("DISASTER_DD_LIMIT", "0.2"))
 
@@ -7504,11 +7539,23 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
+    # Ensure canonical OHLCV columns to avoid KeyError: 'high' / 'low' / 'close'
+    try:
+        from ai_trading.utils.ohlcv import standardize_ohlcv
+        df = standardize_ohlcv(df)
+    except Exception:
+        pass
+    
     try:
         from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
     except ImportError:
         logger.warning("signals module not available for regime features")
         signals_calculate_macd = None
+    
+    # Safeguard: if any required column is still missing, raise a clear error
+    for col in ("high", "low", "close"):
+        if col not in df.columns:
+            raise KeyError(f"Missing required OHLCV column: {col}")
     
     feat = pd.DataFrame(index=df.index)
     feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
@@ -8941,6 +8988,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
     BotContext : Global context and configuration
     trade_execution : Order execution and monitoring
     """
+    _init_metrics()
     import uuid
 
     loop_id = str(uuid.uuid4())
