@@ -1,9 +1,8 @@
 import logging
 import os
 import random
-import warnings
 from typing import Any, Dict, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 # AI-AGENT-REF: guard numpy import for test environments
 try:
@@ -591,8 +590,8 @@ class RiskEngine:
                     is_min_qty_finite = np.isfinite(min_qty)
                 else:
                     # Fallback for mocked numpy
-                    is_raw_qty_finite = not (str(raw_qty).lower() in ['nan', 'inf', '-inf'])
-                    is_min_qty_finite = not (str(min_qty).lower() in ['nan', 'inf', '-inf'])
+                    is_raw_qty_finite = str(raw_qty).lower() not in ['nan', 'inf', '-inf']
+                    is_min_qty_finite = str(min_qty).lower() not in ['nan', 'inf', '-inf']
             except (AttributeError, TypeError):
                 # Additional fallback
                 is_raw_qty_finite = isinstance(raw_qty, (int, float)) and raw_qty == raw_qty and abs(raw_qty) != float('inf')
@@ -1167,7 +1166,7 @@ def apply_trailing_atr_stop(
                     if hasattr(ctx, "risk_engine") and not ctx.risk_engine.position_exists(ctx.api, symbol):
                         logger.info("No position to sell for %s, skipping.", symbol)
                         return
-                    from bot_engine import send_exit_order
+                    from ai_trading.bot_engine import send_exit_order
 
                     send_exit_order(ctx, symbol, abs(int(qty)), price, "atr_stop")
                 except Exception as exc:  # pragma: no cover - best effort

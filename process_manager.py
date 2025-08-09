@@ -5,12 +5,11 @@ Addresses duplicate processes, failed services, and process conflicts.
 """
 
 import os
-import sys
 import subprocess
 import time
 import signal
 import logging
-from typing import List, Dict, Optional
+from typing import List, Dict
 from datetime import datetime, timezone
 
 # AI-AGENT-REF: Process management and service cleanup script
@@ -331,7 +330,7 @@ class ProcessManager:
                     
                     # Get target user info
                     try:
-                        import pwd, grp
+                        import pwd
                         target_pwd = pwd.getpwnam(target_user)
                         target_uid = target_pwd.pw_uid
                         target_gid = target_pwd.pw_gid
@@ -442,7 +441,6 @@ class ProcessManager:
             True if lock acquired successfully, False if another instance is running
         """
         try:
-            import fcntl
             import atexit
             
             # Check if lock file exists and contains a valid PID
@@ -541,30 +539,30 @@ def main():
     # Generate comprehensive report
     report = manager.generate_process_report()
     
-    print(f"\nPROCESS SUMMARY:")
+    print("\nPROCESS SUMMARY:")
     print(f"- Total Python processes: {report['process_summary']['total_python_processes']}")
     print(f"- Total memory usage: {report['process_summary']['total_memory_mb']:.1f}MB")
     print(f"- Duplicate processes: {report['process_summary']['duplicate_processes']}")
     
     if report['processes']:
-        print(f"\nACTIVE TRADING PROCESSES:")
+        print("\nACTIVE TRADING PROCESSES:")
         for proc in report['processes']:
             print(f"- PID {proc['pid']}: {proc['memory_mb']:.1f}MB - {proc['command'][:80]}...")
     
     if report['duplicates']:
-        print(f"\nDUPLICATE PROCESSES DETECTED:")
+        print("\nDUPLICATE PROCESSES DETECTED:")
         for dup in report['duplicates']:
             orig = dup['original_process']
             dupl = dup['duplicate_process']
             print(f"- Original: PID {orig['pid']} ({orig['memory_mb']:.1f}MB)")
             print(f"- Duplicate: PID {dupl['pid']} ({dupl['memory_mb']:.1f}MB)")
     
-    print(f"\nSERVICE STATUS:")
+    print("\nSERVICE STATUS:")
     for service, status in report['service_status'].items():
         status_str = "✓ ACTIVE" if status['active'] else "✗ FAILED"
         print(f"- {service}: {status_str}")
     
-    print(f"\nRECOMMENDATIONS:")
+    print("\nRECOMMENDATIONS:")
     for i, rec in enumerate(report['recommendations'], 1):
         print(f"{i}. {rec}")
     

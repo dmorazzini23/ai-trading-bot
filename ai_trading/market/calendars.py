@@ -7,7 +7,7 @@ outside market hours and handle ETF half-days, futures sessions, etc.
 
 import logging
 from datetime import datetime, timezone, time, date, timedelta
-from typing import Dict, Optional, Tuple, Set, List
+from typing import Dict, Optional, Tuple, Set
 from dataclasses import dataclass
 from enum import Enum
 

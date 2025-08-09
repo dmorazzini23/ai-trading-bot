@@ -14,23 +14,18 @@ AI-AGENT-REF: Production-grade performance optimization system
 
 from __future__ import annotations
 
-import asyncio
-import cProfile
 import functools
 import gc
 import logging
-import os
 import psutil
 import statistics
-import threading
 import time
 import tracemalloc
 from collections import defaultdict, deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Callable, Tuple
-import weakref
+from typing import Dict, List, Optional, Any, Callable
 
 # AI-AGENT-REF: Performance optimization for institutional-grade trading
 

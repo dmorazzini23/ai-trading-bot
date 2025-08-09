@@ -6,7 +6,7 @@ Implements circuit breaker pattern for external API calls to improve system resi
 import logging
 import time
 from enum import Enum
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional
 from dataclasses import dataclass
 from functools import wraps
 
@@ -126,7 +126,7 @@ class CircuitBreaker:
             result = func(*args, **kwargs)
             self._record_success()
             return result
-        except Exception as e:
+        except Exception:
             self._record_failure()
             raise
     

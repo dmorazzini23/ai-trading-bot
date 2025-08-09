@@ -9,8 +9,8 @@ AI-AGENT-REF: Clean architecture interfaces for production trading platform
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Union, Tuple, AsyncIterator
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Tuple, AsyncIterator
 from dataclasses import dataclass
 from enum import Enum
 

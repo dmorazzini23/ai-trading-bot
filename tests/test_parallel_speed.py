@@ -1,6 +1,5 @@
 import time
 import pandas as pd
-import pytest
 import signals
 
 def test_parallel_vs_serial_prep_speed():

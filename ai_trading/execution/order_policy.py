@@ -6,7 +6,7 @@ IOC for fades, and market fallback logic.
 """
 
 import logging
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum

@@ -1,8 +1,6 @@
 """Test package vs repo-root import fallback mechanisms."""
 
 import sys
-import pytest
-from unittest.mock import patch
 
 
 def test_model_registry_import_fallback():
@@ -138,7 +136,7 @@ def test_import_robustness():
 def test_data_fetcher_helpers_available():
     """Test that the new data_fetcher helper functions are available."""
     try:
-        from data_fetcher import get_cached_minute_timestamp, last_minute_bar_age_seconds
+        from ai_trading.data_fetcher import get_cached_minute_timestamp, last_minute_bar_age_seconds
         assert callable(get_cached_minute_timestamp)
         assert callable(last_minute_bar_age_seconds)
     except ImportError:

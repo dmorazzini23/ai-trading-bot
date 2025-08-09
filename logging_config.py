@@ -24,7 +24,7 @@ class JsonFormatter(logging.Formatter):
                 log_record["bot_phase"] = record.bot_phase
 
             return json.dumps(log_record, default=str)
-        except Exception as e:
+        except Exception:
             # Fallback to simple format if JSON fails
             return f"{datetime.now(timezone.utc).isoformat()} {record.levelname} {record.name} {record.getMessage()}"
 

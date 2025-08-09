@@ -4,11 +4,9 @@ Tests for ExecutionResult and OrderRequest classes.
 Validates the newly added classes that fix the ImportError in the execution module.
 """
 
-import pytest
-from datetime import datetime, timezone
 
 # Import our new classes
-from ai_trading.execution import ExecutionResult, OrderRequest, ProductionExecutionCoordinator
+from ai_trading.execution import ExecutionResult, OrderRequest
 from ai_trading.core.enums import OrderSide, OrderType
 
 

@@ -5,7 +5,6 @@ Does not import from ai_trading package to avoid initialization issues.
 """
 
 import sys
-import os
 from pathlib import Path
 
 # Add the repo root to path to import modules directly
@@ -18,7 +17,7 @@ def test_money_math():
     
     # Import directly from file to avoid package initialization
     sys.path.insert(0, str(repo_root / "ai_trading" / "math"))
-    from money import Money, to_decimal
+    from money import Money
     from decimal import Decimal
     
     # Test as specified in problem statement

@@ -5,14 +5,13 @@ Validates core portfolio-level decision making and transaction cost analysis.
 
 import pytest
 import os
-from typing import Dict, Any
 
 # Set testing environment
 os.environ['TESTING'] = '1'
 
 from portfolio_optimizer import PortfolioOptimizer, PortfolioDecision, create_portfolio_optimizer
-from transaction_cost_calculator import TransactionCostCalculator, TradeType, create_transaction_cost_calculator
-from regime_detector import RegimeDetector, MarketRegime, create_regime_detector
+from transaction_cost_calculator import TradeType, create_transaction_cost_calculator
+from regime_detector import MarketRegime, create_regime_detector
 
 
 class TestPortfolioOptimizer:

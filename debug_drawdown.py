@@ -4,7 +4,6 @@
 import os
 import sys
 import traceback
-from datetime import datetime
 
 # Set testing environment
 os.environ["TESTING"] = "1"
@@ -14,7 +13,7 @@ def test_drawdown_circuit_breaker():
     try:
         print("🔍 Testing DrawdownCircuitBreaker...")
         
-        from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker, CircuitBreakerState
+        from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
         
         # Initialize circuit breaker
         breaker = DrawdownCircuitBreaker(max_drawdown=0.08)  # 8% like in your logs

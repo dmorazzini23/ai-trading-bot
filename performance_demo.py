@@ -6,7 +6,6 @@ Demonstrates all implemented performance improvements for the AI Trading Bot.
 
 import os
 import sys
-import time
 from datetime import datetime, timezone
 
 def print_header(title):
@@ -55,7 +54,7 @@ def demo_memory_optimizer():
     print_section("Memory Optimizer")
     
     try:
-        from memory_optimizer import MemoryOptimizer, optimize_memory
+        from memory_optimizer import MemoryOptimizer
         
         # Create optimizer instance
         optimizer = MemoryOptimizer(enable_monitoring=False)

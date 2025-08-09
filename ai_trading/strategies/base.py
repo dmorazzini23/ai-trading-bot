@@ -8,7 +8,7 @@ for implementing and managing institutional trading strategies.
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional
 import logging
 
 # Use the centralized logger as per AGENTS.md
@@ -19,7 +19,6 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from ..core.enums import OrderSide, RiskLevel
-from ..core.constants import TRADING_CONSTANTS
 
 
 class StrategySignal:

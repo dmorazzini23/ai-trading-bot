@@ -7,7 +7,7 @@ trading bot without breaking current functionality.
 # STEP 1: Enable debugging in bot startup
 def enable_enhanced_debugging():
     """Enable enhanced debugging during bot startup."""
-    from ai_trading.execution import enable_debug_mode, start_position_monitoring
+    from ai_trading.execution import enable_debug_mode
     
     # Enable verbose debugging (set to False for production)
     enable_debug_mode(verbose=True, trace=False)
@@ -153,7 +153,7 @@ def setup_periodic_checks():
         """Run periodic health checks on execution system."""
         from ai_trading.execution import (
             force_position_reconciliation, get_execution_statistics,
-            get_portfolio_pnl_summary, get_position_discrepancies
+            get_portfolio_pnl_summary
         )
         
         # Check for position discrepancies

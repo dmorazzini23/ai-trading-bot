@@ -8,7 +8,7 @@ and runtime configuration changes with proper audit logging.
 import os
 import json
 import hashlib
-from typing import Dict, Any, Optional, List, Union
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 from pathlib import Path
 import logging
@@ -596,7 +596,6 @@ def get_env(
 
 
 # Compatibility attributes for root config interface
-import os
 
 SCHEDULER_SLEEP_SECONDS = float(os.getenv("SCHEDULER_SLEEP_SECONDS", "30"))
 TESTING = os.getenv("TESTING", "false").lower() in ("true", "1", "yes")

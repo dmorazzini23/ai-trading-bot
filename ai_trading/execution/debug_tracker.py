@@ -7,7 +7,6 @@ tracking, and detailed execution logging.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 import uuid
@@ -15,7 +14,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from enum import Enum
 from threading import Lock
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 from ai_trading.logging import get_logger
 
@@ -200,7 +199,7 @@ class ExecutionDebugTracker:
                           ExecutionPhase.ORDER_FILLED, ExecutionPhase.ORDER_REJECTED]:
                 # Log only key phases in normal mode (but not if already logged in verbose mode)
                 self.logger.info(f"EXEC_EVENT_{phase.value.upper()}", extra=log_data)
-        except Exception as log_e:
+        except Exception:
             # AI-AGENT-REF: Prevent logging errors from cascading
             pass  # Silently ignore logging errors to prevent deadlock
     
@@ -320,7 +319,7 @@ class ExecutionDebugTracker:
         self.trace_mode = trace
         
         mode = "TRACE" if trace else "VERBOSE" if verbose else "NORMAL"
-        self.logger.info(f"DEBUG_MODE_CHANGED", extra={'mode': mode})
+        self.logger.info("DEBUG_MODE_CHANGED", extra={'mode': mode})
     
     def get_execution_stats(self) -> Dict[str, Any]:
         """Get execution statistics for monitoring."""

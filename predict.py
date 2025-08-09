@@ -6,7 +6,6 @@ import argparse
 import json
 import logging
 import os
-import warnings
 
 # AI-AGENT-REF: graceful joblib fallback for testing
 try:
@@ -55,7 +54,6 @@ MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 import time
 import threading
-from datetime import datetime, timedelta
 
 # AI-AGENT-REF: Memory leak prevention with TTLCache
 try:

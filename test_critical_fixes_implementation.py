@@ -4,12 +4,8 @@ Tests the thread safety, memory leak prevention, division by zero protection,
 and other critical fixes for production readiness.
 """
 
-import pytest
 import pandas as pd
-import numpy as np
 import threading
-import time
-import asyncio
 from unittest.mock import Mock, patch
 import sys
 import os
@@ -186,7 +182,7 @@ def test_incremental_indicators():
 def test_market_data_validation():
     """Test market data validation."""
     sys.path.append('ai_trading')
-    from data_validation import MarketDataValidator, ValidationSeverity
+    from ai_trading.data_validation import MarketDataValidator, ValidationSeverity
     
     validator = MarketDataValidator()
     
@@ -220,7 +216,7 @@ def test_market_data_validation():
 def test_security_manager():
     """Test security manager functionality."""
     sys.path.append('ai_trading')
-    from security import SecurityManager, mask_sensitive_data
+    from security import mask_sensitive_data
     
     # Test data masking
     sensitive_data = {

@@ -1,4 +1,3 @@
-import os
 import pytest
 # Ensure repository root in path
 import sys

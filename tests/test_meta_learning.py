@@ -1,15 +1,12 @@
-import pickle
 import types
 import torch.nn as nn
 
 import numpy as np
-import pandas as pd
 import pytest
 
 np.random.seed(0)
 
 from ai_trading import meta_learning
-import sklearn.linear_model
 from ai_trading.meta_learning import MetaLearning
 
 

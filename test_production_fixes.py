@@ -12,10 +12,8 @@ This test suite validates the four main fixes:
 import os
 import sys
 import unittest
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone, timedelta
-import tempfile
-import subprocess
 
 # Add the project root to Python path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -51,7 +49,6 @@ class TestSentimentAPIConfiguration(unittest.TestCase):
     def test_sentiment_api_backwards_compatibility(self):
         """Test backwards compatibility with NEWS_API_KEY."""
         # Test that SENTIMENT_API_KEY takes precedence
-        import config
         
         # Simulate the configuration logic
         sentiment_key = os.getenv('SENTIMENT_API_KEY') or os.getenv('NEWS_API_KEY')
@@ -127,7 +124,7 @@ class TestDataStalenessThresholds(unittest.TestCase):
         """Set up data validation test."""
         try:
             import pandas as pd
-            from data_validation import (
+            from ai_trading.data_validation import (
                 is_market_hours, get_staleness_threshold, 
                 check_data_freshness
             )

@@ -5,10 +5,8 @@ This strategy implements ensemble machine learning methods to predict price move
 and generate trading signals with confidence scoring and risk assessment.
 """
 
-import pickle
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Any, Tuple
-from pathlib import Path
+from typing import Dict, List, Optional, Any
 import warnings
 warnings.filterwarnings('ignore')
 

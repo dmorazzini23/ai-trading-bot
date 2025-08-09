@@ -6,8 +6,6 @@ to valid probability ranges in the Kelly calculation.
 """
 import pytest
 import math
-import logging
-from unittest.mock import Mock
 
 # Test the actual import and function from bot_engine
 import sys
@@ -30,7 +28,7 @@ def test_kelly_confidence_normalization():
     
     # Import the actual function (if available)
     try:
-        from bot_engine import fractional_kelly_size
+        from ai_trading.bot_engine import fractional_kelly_size
         
         ctx = MockBotContext()
         balance = 10000.0
@@ -93,7 +91,7 @@ def test_kelly_input_validation():
             self.capital_scaler = MockScaler()
     
     try:
-        from bot_engine import fractional_kelly_size
+        from ai_trading.bot_engine import fractional_kelly_size
         
         ctx = MockBotContext()
         

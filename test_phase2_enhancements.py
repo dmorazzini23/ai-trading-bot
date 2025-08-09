@@ -6,12 +6,10 @@ Tests the enhanced order management and comprehensive system health monitoring.
 """
 
 import unittest
-import tempfile
 import os
 import time
-import threading
 from datetime import datetime, timezone
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 # Mock environment variables for testing
 test_env = {
@@ -26,7 +24,7 @@ test_env = {
 
 with patch.dict(os.environ, test_env):
     import config
-    from order_health_monitor import OrderHealthMonitor, OrderInfo, PartialFillInfo
+    from order_health_monitor import OrderHealthMonitor, OrderInfo
     from system_health_checker import SystemHealthChecker, ComponentHealth
 
 
@@ -276,8 +274,6 @@ class TestIntegrationScenarios(unittest.TestCase):
         """Test that Phase 1 and Phase 2 fixes work together."""
         # Import Phase 1 modules to ensure compatibility
         with patch.dict(os.environ, test_env):
-            import sentiment
-            from ai_trading import meta_learning
             
             # Test that enhanced sentiment analysis works with monitoring
             health_checker = SystemHealthChecker()

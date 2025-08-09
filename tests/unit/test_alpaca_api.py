@@ -1,4 +1,3 @@
-import threading
 import pytest
 
 alpaca_api = pytest.importorskip("alpaca_api", reason="alpaca_api module not found")

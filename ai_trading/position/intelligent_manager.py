@@ -12,16 +12,16 @@ AI-AGENT-REF: Main intelligent position management orchestrator
 """
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
 
 from market_regime import MarketRegimeDetector, MarketRegime, RegimeMetrics
-from technical_analyzer import TechnicalSignalAnalyzer, TechnicalSignals, SignalStrength, DivergenceType
-from trailing_stops import TrailingStopManager, TrailingStopLevel, TrailingStopType
-from profit_taking import ProfitTakingEngine, ProfitTakingPlan, ProfitTarget
-from correlation_analyzer import PortfolioCorrelationAnalyzer, PortfolioAnalysis, ConcentrationLevel
+from technical_analyzer import TechnicalSignalAnalyzer, SignalStrength, DivergenceType
+from trailing_stops import TrailingStopManager
+from profit_taking import ProfitTakingEngine
+from correlation_analyzer import PortfolioCorrelationAnalyzer, PortfolioAnalysis
 
 # AI-AGENT-REF: graceful imports with fallbacks
 try:

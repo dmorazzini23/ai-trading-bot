@@ -4,7 +4,6 @@ Test for the specific fix: ai_trading/core/__init__.py
 This test validates that the core module ImportError mentioned in the
 problem statement has been resolved by adding the missing __init__.py file.
 """
-import pytest
 import sys
 import os
 

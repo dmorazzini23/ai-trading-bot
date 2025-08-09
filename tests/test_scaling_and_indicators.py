@@ -1,4 +1,3 @@
-import pytest
 from ai_trading.capital_scaling import volatility_parity_position
 
 

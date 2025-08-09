@@ -1,5 +1,4 @@
 import types
-import pandas as pd
 
 class DummyAPI:
     def __init__(self):

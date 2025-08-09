@@ -4,8 +4,6 @@ Validation script for peak-performance hardening implementation.
 """
 
 import sys
-import os
-import tempfile
 from pathlib import Path
 
 # Add current directory to path for imports
@@ -48,7 +46,7 @@ def test_basic_functionality():
     
     try:
         # Test idempotency
-        from ai_trading.execution.idempotency import OrderIdempotencyCache, IdempotencyKey
+        from ai_trading.execution.idempotency import OrderIdempotencyCache
         from ai_trading.core.interfaces import OrderSide
         
         cache = OrderIdempotencyCache(ttl_seconds=60)

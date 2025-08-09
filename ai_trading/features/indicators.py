@@ -66,7 +66,7 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
         df["signal"] = ema(tuple(df["macd"]), 9)
         df["histogram"] = df["macd"] - df["signal"]
         return df
-    except Exception as e:
+    except Exception:
         logger.error("MACD computation failed", exc_info=True)
         return df
 
@@ -84,7 +84,7 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
         
         df["atr"] = atr(high, low, close, period)
         return df
-    except Exception as e:
+    except Exception:
         logger.error("ATR computation failed", exc_info=True)
         return df
 
@@ -99,7 +99,7 @@ def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
         typical_price = (df["high"] + df["low"] + df["close"]) / 3
         df["vwap"] = (typical_price * df["volume"]).cumsum() / df["volume"].cumsum()
         return df
-    except Exception as e:
+    except Exception:
         logger.error("VWAP computation failed", exc_info=True)
         return df
 
@@ -110,7 +110,7 @@ def compute_macds(df: pd.DataFrame) -> pd.DataFrame:
         df = compute_macd(df)
         # Add additional MACD variations if needed
         return df
-    except Exception as e:
+    except Exception:
         logger.error("MACDS computation failed", exc_info=True)
         return df
 
@@ -130,7 +130,7 @@ def ensure_columns(df: pd.DataFrame, required_columns: list, symbol: str | None 
                     logger.warning(f"Missing column '{col}', filling with zeros")
                 df[col] = 0.0
         return df
-    except Exception as e:
+    except Exception:
         logger.error("Column validation failed", exc_info=True)
         return df
 

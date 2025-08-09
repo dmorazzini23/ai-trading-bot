@@ -7,7 +7,7 @@ bar finality before signal generation.
 
 import logging
 import time
-from typing import Optional, Dict, Set
+from typing import Optional, Dict
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 

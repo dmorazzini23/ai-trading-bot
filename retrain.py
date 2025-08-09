@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import random
-import warnings
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
 
@@ -289,7 +288,6 @@ MODEL_FILES = {
 
 # ─── COPY&PASTE of prepare_indicators (unchanged) ─────────────────
 def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
-    import importlib
     # re-import TA each call so test monkeypatches of pandas_ta are used
     ta = importlib.import_module("pandas_ta")
     df = df.copy()

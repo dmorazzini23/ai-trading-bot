@@ -40,7 +40,7 @@ except ImportError:
         pass
 
 try:
-    from .signals import TradingSignal
+    from .ai_trading.signals import TradingSignal
 except ImportError:
     class TradingSignal:
         pass

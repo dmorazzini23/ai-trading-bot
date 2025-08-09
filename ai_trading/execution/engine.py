@@ -6,7 +6,7 @@ and real-time execution monitoring with institutional controls.
 """
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Callable
 from enum import Enum
 import threading
@@ -21,8 +21,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from ai_trading.math.money import Money, round_to_tick, round_to_lot
-from ai_trading.market.symbol_specs import TICK_BY_SYMBOL, LOT_BY_SYMBOL, get_tick_size, get_lot_size
-from ai_trading.integrations.rate_limit import get_limiter
+from ai_trading.market.symbol_specs import TICK_BY_SYMBOL, get_tick_size, get_lot_size
 from ..core.enums import OrderSide, OrderType, OrderStatus
 from ..core.constants import EXECUTION_PARAMETERS
 

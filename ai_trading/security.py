@@ -9,7 +9,6 @@ AI-AGENT-REF: Security enhancements for institutional-grade trading
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import json
@@ -17,7 +16,7 @@ import secrets
 import base64
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Union
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 

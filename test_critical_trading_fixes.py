@@ -12,11 +12,10 @@ Tests the five main areas of improvement:
 
 import pytest
 import unittest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 import tempfile
 import os
 import csv
-import json
 import time
 from datetime import datetime, timezone
 
@@ -411,7 +410,7 @@ def test_meta_learning_data_quality_validation():
 
 def test_meta_learning_fallback_data_recovery():
     """Test that meta-learning implements fallback procedures for insufficient data."""
-    from ai_trading.meta_learning import _implement_fallback_data_recovery, _create_emergency_trade_log
+    from ai_trading.meta_learning import _implement_fallback_data_recovery
     
     with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp:
         tmp_path = tmp.name
@@ -494,7 +493,7 @@ def test_order_execution_partial_fill_tracking():
 
 def test_quantity_tracking_fix():
     """Test the critical quantity tracking bug fix for accurate filled quantity reporting."""
-    from unittest.mock import Mock, patch
+    from unittest.mock import Mock
     import logging
     import io
     
@@ -589,8 +588,7 @@ def test_risk_management_sector_exposure_logging():
     """Test that sector exposure rejections include clear reasoning."""
     # This is a minimal test - full test would require bot_engine context
     # Testing the structure exists for enhanced logging
-    from bot_engine import sector_exposure_ok
-    import logging
+    from ai_trading.bot_engine import sector_exposure_ok
     
     # Mock BotContext
     mock_ctx = Mock()
@@ -608,7 +606,7 @@ def test_risk_management_sector_exposure_logging():
 
 def test_data_integrity_validation():
     """Test comprehensive data integrity validation."""
-    from data_validation import validate_trade_log_integrity, monitor_real_time_data_quality
+    from ai_trading.data_validation import validate_trade_log_integrity, monitor_real_time_data_quality
     
     # Test trade log integrity validation
     test_data = {
@@ -652,7 +650,7 @@ def test_data_integrity_validation():
 
 def test_data_corruption_detection():
     """Test that data corruption is properly detected."""
-    from data_validation import validate_trade_log_integrity
+    from ai_trading.data_validation import validate_trade_log_integrity
     
     # Create corrupted test data
     corrupted_data = {
@@ -683,7 +681,7 @@ def test_data_corruption_detection():
 
 def test_emergency_data_validation():
     """Test emergency data validation for critical trades."""
-    from data_validation import emergency_data_check
+    from ai_trading.data_validation import emergency_data_check
     
     # Test with valid data
     valid_data = pd.DataFrame({

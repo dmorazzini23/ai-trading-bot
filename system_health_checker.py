@@ -12,8 +12,8 @@ Provides centralized health monitoring for:
 import logging
 import time
 import threading
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any
+from datetime import datetime, timezone
+from typing import Dict, List, Any
 from dataclasses import dataclass, field
 from collections import defaultdict, deque
 import json

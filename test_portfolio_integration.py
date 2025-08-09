@@ -5,7 +5,6 @@ Tests the complete workflow with realistic signal objects.
 
 import pytest
 import os
-from typing import Dict, Any
 
 # Set testing environment
 os.environ['TESTING'] = '1'
@@ -37,7 +36,6 @@ class MockDataFetcher:
     
     def get_daily_df(self, ctx, symbol):
         """Return mock dataframe data."""
-        import pandas as pd
         from datetime import datetime, timedelta
         
         # Generate mock price data
@@ -234,7 +232,7 @@ class TestPortfolioRebalancingIntegration:
     
     def test_rebalancing_integration(self):
         """Test that portfolio optimization integrates with rebalancing logic."""
-        from rebalancer import portfolio_first_rebalance, _get_current_positions_for_rebalancing
+        from ai_trading.rebalancer import portfolio_first_rebalance, _get_current_positions_for_rebalancing
         
         # Test position extraction
         positions = _get_current_positions_for_rebalancing(self.ctx)

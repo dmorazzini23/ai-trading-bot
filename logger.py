@@ -25,7 +25,6 @@ from logging.handlers import (
     QueueHandler,
     QueueListener,
     RotatingFileHandler,
-    TimedRotatingFileHandler,
 )
 from typing import Dict
 

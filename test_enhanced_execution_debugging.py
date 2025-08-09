@@ -6,8 +6,7 @@ position reconciliation, and PnL attribution functionality.
 
 import unittest
 import time
-from unittest.mock import Mock, patch
-from datetime import datetime, timezone
+from unittest.mock import Mock
 
 try:
     # Try to import the enhanced execution modules

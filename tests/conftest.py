@@ -1,57 +1,4 @@
-# ----- TEST COMPATIBILITY SHIMS FOR PHASE-2 DUPLICATE REMOVAL -----
-# Map legacy root-level module names to canonical ai_trading.* modules and
-# provide a minimal yfinance stub if the real package is unavailable during tests.
 
-import sys
-import importlib
-import types
-
-def _alias(old_name: str, new_name: str) -> None:
-    try:
-        mod = importlib.import_module(new_name)
-        sys.modules[old_name] = mod
-    except Exception:
-        # If the canonical module isn't importable, don't break test discovery.
-        pass
-
-for _old, _new in {
-    "bot_engine": "ai_trading.bot_engine",
-    "data_fetcher": "ai_trading.data_fetcher",
-    "data_validation": "ai_trading.data_validation",
-    "indicators": "ai_trading.indicators",
-    "rebalancer": "ai_trading.rebalancer",
-    "runner": "ai_trading.runner",
-    "signals": "ai_trading.signals",
-}.items():
-    _alias(_old, _new)
-
-# Provide a minimal yfinance stub if the real package is not installed.
-try:
-    import yfinance as _yf  # noqa: F401
-except Exception:  # pragma: no cover
-    y = types.ModuleType("yfinance")
-
-    def _dl(*args, **kwargs):
-        try:
-            import pandas as pd
-            return pd.DataFrame()
-        except Exception:
-            return None
-
-    class _Ticker:
-        def __init__(self, *args, **kwargs):
-            pass
-        def history(self, *args, **kwargs):
-            try:
-                import pandas as pd
-                return pd.DataFrame()
-            except Exception:
-                return None
-
-    y.download = _dl
-    y.Ticker = _Ticker
-    sys.modules["yfinance"] = y
-# ----- END SHIMS -----
 
 import sys
 import os
@@ -147,7 +94,7 @@ except Exception:
 
 # AI-AGENT-REF: Add portalocker stub early
 try:
-    import portalocker
+    pass
 except Exception:
     import types
     class LockStub:
@@ -167,7 +114,7 @@ except Exception:
 
 # AI-AGENT-REF: Add schedule stub early
 try:
-    import schedule
+    pass
 except Exception:
     import types
     class ScheduleStub:
@@ -186,7 +133,7 @@ except Exception:
 
 # AI-AGENT-REF: Add gymnasium stub for RL tests
 try:
-    import gymnasium
+    pass
 except Exception:
     import types
     
@@ -234,7 +181,7 @@ except Exception:
 
 # AI-AGENT-REF: Add hmmlearn stub
 try:
-    import hmmlearn
+    pass
 except Exception:
     import types
     hmmlearn_mod = types.ModuleType("hmmlearn")
@@ -256,7 +203,7 @@ except Exception:
 
 # AI-AGENT-REF: Add finnhub stub
 try:
-    import finnhub
+    pass
 except Exception:
     import types
     
@@ -280,7 +227,7 @@ except Exception:
 
 # AI-AGENT-REF: Add torch stub for RL tests
 try:
-    import torch
+    pass
 except Exception:
     import types
     
@@ -429,7 +376,7 @@ import types
 
 # AI-AGENT-REF: Add numpy stub before any imports that might need it
 try:
-    import numpy as np
+    pass
 except Exception:  # pragma: no cover - optional dependency
     import types
     
@@ -541,7 +488,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 # AI-AGENT-REF: Add pandas stub for strategy allocator tests
 try:
-    import pandas as pd
+    pass
 except Exception:  # pragma: no cover - optional dependency
     import types
     
@@ -803,7 +750,7 @@ except Exception:  # pragma: no cover - optional dependency
         
         def __add__(self, other):
             # Support timestamp + timedelta operations
-            from datetime import datetime, timezone, timedelta
+            from datetime import timedelta
             if hasattr(other, 'td'):  # TimedeltaStub
                 return TimestampStub(str(self._dt + other.td))
             return TimestampStub(str(self._dt + timedelta(minutes=1)))
@@ -891,7 +838,7 @@ except Exception:  # pragma: no cover - optional dependency
     sys.modules["pandas"] = pandas_mod
     sys.modules["pd"] = pandas_mod
 try:
-    import requests  # ensure real package available
+    pass  # ensure real package available
 except Exception:  # pragma: no cover - allow missing in test env
     req_mod = types.ModuleType("requests")
     exc_mod = types.ModuleType("requests.exceptions")
@@ -904,7 +851,7 @@ except Exception:  # pragma: no cover - allow missing in test env
 
 # AI-AGENT-REF: Add additional dependency stubs for tests
 try:
-    import pandas_ta
+    pass
 except Exception:  # pragma: no cover - optional dependency
     import types
     ta_mod = types.ModuleType("pandas_ta")
@@ -922,7 +869,7 @@ except Exception:  # pragma: no cover - optional dependency
     sys.modules["pandas_ta"] = ta_mod
 
 try:
-    import numba
+    pass
 except Exception:  # pragma: no cover - optional dependency
     import types
     
@@ -939,7 +886,7 @@ except Exception:  # pragma: no cover - optional dependency
     sys.modules["numba"] = numba_mod
 
 try:
-    from pydantic_settings import BaseSettings
+    pass
 except Exception:  # pragma: no cover - optional dependency
     import types
     
@@ -1040,7 +987,7 @@ except Exception:  # pragma: no cover - optional dependency
     sys.modules["pydantic_settings"] = pydantic_settings_mod
 
 try:
-    import pydantic
+    pass
 except Exception:  # pragma: no cover - optional dependency
     import types
     
@@ -1072,7 +1019,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 # AI-AGENT-REF: Add alpaca_trade_api stubs
 try:
-    import alpaca_trade_api
+    pass
 except Exception:  # pragma: no cover - optional dependency
     import types
     
@@ -1283,7 +1230,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 # AI-AGENT-REF: Add other missing dependencies
 try:
-    import psutil
+    pass
 except Exception:  # pragma: no cover - optional dependency
     import types
     psutil_mod = types.ModuleType("psutil")
@@ -1291,7 +1238,7 @@ except Exception:  # pragma: no cover - optional dependency
     sys.modules["psutil"] = psutil_mod
 
 try:
-    import tzlocal
+    pass
 except Exception:  # pragma: no cover - optional dependency
     import types
     tzlocal_mod = types.ModuleType("tzlocal")
@@ -1373,7 +1320,7 @@ except Exception:  # pragma: no cover - optional dependency
 
 # AI-AGENT-REF: Add pybreaker stub
 try:
-    import pybreaker
+    pass
 except Exception:  # pragma: no cover - optional dependency
     import types
     

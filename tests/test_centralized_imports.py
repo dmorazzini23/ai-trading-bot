@@ -5,9 +5,8 @@ AI-AGENT-REF: Comprehensive tests for dependency import fallbacks
 """
 
 import pytest
-import importlib
 import sys
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 class TestImportFallbacks:
@@ -86,7 +85,7 @@ class TestImportFallbacks:
     
     def test_talib_fallback(self):
         """Test TA-Lib fallback functionality."""
-        from ai_trading.imports import talib, get_ta_lib
+        from ai_trading.imports import get_ta_lib
         
         ta_lib = get_ta_lib()
         
@@ -415,7 +414,6 @@ def test_import_summary_logging(caplog):
     if 'ai_trading.imports' in sys.modules:
         del sys.modules['ai_trading.imports']
     
-    import ai_trading.imports
     
     # Check that some logging occurred
     assert len(caplog.records) >= 0  # May have warnings or info messages

@@ -14,14 +14,10 @@ import logging
 import os
 import time
 import threading
-from collections import defaultdict
-from threading import Lock
-from datetime import datetime
 from typing import Any, Dict, Optional, Set
 
 import pandas as pd
 import requests
-from requests import Session
 from ai_trading.config import get_settings
 import utils
 try:  # AI-AGENT-REF: make optional for unit tests

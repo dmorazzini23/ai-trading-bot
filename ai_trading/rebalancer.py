@@ -4,7 +4,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Any
 
 import config
 from ai_trading.portfolio import compute_portfolio_weights

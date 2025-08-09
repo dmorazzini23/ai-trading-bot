@@ -1,11 +1,8 @@
 """Test cache timestamp retrieval and age calculation."""
 
-import pytest
 import pandas as pd
-from datetime import datetime, timezone
-from unittest.mock import patch
 
-from data_fetcher import (
+from ai_trading.data_fetcher import (
     get_cached_minute_timestamp, 
     last_minute_bar_age_seconds,
     _MINUTE_CACHE

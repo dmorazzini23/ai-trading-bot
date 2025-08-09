@@ -106,7 +106,7 @@ def validate_issue_4_position_limits():
             fixes_found += 1
     
     if fixes_found >= 1:
-        print(f"   ✅ Position limit increase: 10 → 20 (+100% capacity)")
+        print("   ✅ Position limit increase: 10 → 20 (+100% capacity)")
         return True
     
     print("   ❌ Fix not found")

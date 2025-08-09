@@ -3,9 +3,7 @@ Tests for model registry functionality.
 """
 import tempfile
 import json
-import pickle
 from pathlib import Path
-from datetime import datetime, timezone
 from unittest.mock import Mock
 
 import pytest

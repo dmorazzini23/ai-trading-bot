@@ -1,6 +1,5 @@
 """Test timeout parameters on HTTP requests."""
 
-import pytest
 import inspect
 from unittest.mock import patch, MagicMock
 

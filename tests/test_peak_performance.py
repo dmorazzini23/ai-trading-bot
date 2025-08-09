@@ -6,8 +6,7 @@ Tests for peak performance hardening modules.
 import pytest
 import pandas as pd
 import numpy as np
-from datetime import datetime, timezone, timedelta
-from unittest.mock import Mock, patch
+from datetime import datetime, timezone
 
 # Test idempotency
 def test_order_idempotency():
@@ -157,7 +156,7 @@ def test_symbol_costs():
 
 def test_adaptive_risk_controls():
     """Test adaptive risk control system."""
-    from ai_trading.portfolio.risk_controls import AdaptiveRiskController, RiskBudget
+    from ai_trading.portfolio.risk_controls import AdaptiveRiskController
     
     # Create test data
     np.random.seed(42)
@@ -198,7 +197,7 @@ def test_adaptive_risk_controls():
 
 def test_determinism():
     """Test deterministic training setup."""
-    from ai_trading.utils.determinism import set_random_seeds, hash_data, ensure_deterministic_training
+    from ai_trading.utils.determinism import set_random_seeds, hash_data
     
     # Test seed setting
     set_random_seeds(42)

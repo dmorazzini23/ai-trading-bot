@@ -11,8 +11,8 @@ AI-AGENT-REF: Advanced profit taking with multi-tiered scale-out strategies
 """
 
 import logging
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple, Any
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from enum import Enum
 

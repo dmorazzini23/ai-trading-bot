@@ -2,7 +2,7 @@
 Tests for data staleness guard functionality.
 """
 import datetime
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 import pandas as pd
 
 import pytest
@@ -133,7 +133,6 @@ class TestStalenessGuard:
     def test_staleness_guard_utc_logging(self):
         """Test that staleness guard logs UTC timestamps."""
         from ai_trading.core.bot_engine import _ensure_data_fresh
-        import logging
         from unittest.mock import patch
         
         # Mock logger to capture log messages
@@ -190,7 +189,7 @@ class TestStalenessGuard:
                 success = True
             except Exception:
                 success = False
-            assert success, f"Should handle both timezone-aware and naive timestamps"
+            assert success, "Should handle both timezone-aware and naive timestamps"
 
     def test_staleness_guard_error_handling(self):
         """Test staleness guard handles fetcher errors gracefully."""

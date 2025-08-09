@@ -1,6 +1,5 @@
 """Mean reversion trading strategy implementation."""
 
-import logging
 import os
 from typing import List
 
@@ -8,7 +7,7 @@ import pandas as pd
 
 from strategies.base import Strategy, TradeSignal, asset_class_for
 from utils import get_phase_logger
-from indicators import mean_reversion_zscore
+from ai_trading.indicators import mean_reversion_zscore
 
 logger = get_phase_logger(__name__, "STRATEGY")
 

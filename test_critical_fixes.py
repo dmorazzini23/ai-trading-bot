@@ -8,18 +8,16 @@ Tests for the fixes addressing the critical issues:
 4. Data validation functionality
 """
 
-import pytest
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 import os
 import tempfile
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 
 def test_risk_engine_missing_methods():
     """Test that RiskEngine has the missing critical methods."""
     from risk_engine import RiskEngine
-    import config
     
     # Create risk engine instance
     risk_engine = RiskEngine()
@@ -51,7 +49,6 @@ def test_risk_engine_missing_methods():
 def test_bot_context_alpaca_client_compatibility():
     """Test that BotContext has alpaca_client property for backward compatibility."""
     from ai_trading.core.bot_engine import BotContext
-    from unittest.mock import Mock
     
     # Create a mock trading client
     mock_api = Mock()
@@ -114,7 +111,7 @@ def test_process_manager_lock_mechanism():
 
 def test_data_validation_freshness():
     """Test data validation and staleness detection."""
-    from data_validation import check_data_freshness, validate_trading_data, get_stale_symbols
+    from ai_trading.data_validation import check_data_freshness, validate_trading_data, get_stale_symbols
     
     # Create test data with different timestamps
     now = datetime.now(timezone.utc)
@@ -170,7 +167,7 @@ def test_data_validation_freshness():
 
 def test_data_validation_emergency_check():
     """Test emergency data validation for critical trades."""
-    from data_validation import emergency_data_check
+    from ai_trading.data_validation import emergency_data_check
     
     now = datetime.now(timezone.utc)
     

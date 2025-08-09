@@ -1,13 +1,10 @@
 import ast
 import types
-import os
 from pathlib import Path
 
 import joblib
 import pickle
 import numpy as np
-import pandas as pd
-import pytest
 from sklearn.dummy import DummyClassifier
 
 # Extract _load_ml_model and _cleanup_ml_model_cache from bot_engine using AST to avoid heavy import

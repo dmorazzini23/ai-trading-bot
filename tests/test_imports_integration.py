@@ -8,7 +8,6 @@ AI-AGENT-REF: Robust tests for production environment compatibility
 """
 
 import pytest
-import sys
 import importlib.util
 
 

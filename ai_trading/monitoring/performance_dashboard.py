@@ -5,11 +5,10 @@ Provides comprehensive performance tracking, real-time P&L monitoring,
 risk metrics calculation, and anomaly detection for institutional trading.
 """
 
-import time
 import statistics
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Any, Tuple
 from datetime import datetime, timedelta, timezone
-from collections import deque, defaultdict
+from collections import deque
 import threading
 import logging
 

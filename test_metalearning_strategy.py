@@ -4,11 +4,10 @@ Test suite for MetaLearning strategy.
 """
 
 import os
-import pytest
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Set minimal environment variables to avoid config errors
 os.environ['ALPACA_API_KEY'] = 'test'

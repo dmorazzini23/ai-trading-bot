@@ -5,7 +5,6 @@ from ai_trading.trade_logic import (
     compute_order_price,
     extract_price,
 )
-from ai_trading.capital_scaling import drawdown_adjusted_kelly
 
 
 def test_should_enter_trade_basic():

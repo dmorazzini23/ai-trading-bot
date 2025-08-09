@@ -194,7 +194,7 @@ def test_redacted_logging():
     print("6. Testing redacted credential logging...")
     
     try:
-        from ai_trading.config.management import validate_alpaca_credentials, _resolve_alpaca_env
+        from ai_trading.config.management import _resolve_alpaca_env
         
         # Set up test credentials
         os.environ['ALPACA_API_KEY'] = 'secret_key_should_be_masked'

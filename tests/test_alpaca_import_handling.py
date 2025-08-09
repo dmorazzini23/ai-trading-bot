@@ -7,7 +7,6 @@ with the specific Python 3.12 compatibility error.
 
 import unittest
 from unittest.mock import patch, MagicMock
-import sys
 import logging
 
 

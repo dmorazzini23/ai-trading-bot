@@ -7,8 +7,7 @@ and working as expected.
 """
 
 import os
-import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 
 def validate_sentiment_api_config():
     """Validate sentiment API configuration is properly set up."""

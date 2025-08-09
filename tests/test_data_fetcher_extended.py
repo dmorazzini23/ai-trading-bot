@@ -3,7 +3,6 @@ import types
 
 import pandas as pd
 import pytest
-from tenacity import RetryError
 
 import data_fetcher
 

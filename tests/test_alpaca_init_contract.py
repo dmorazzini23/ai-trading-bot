@@ -1,5 +1,3 @@
-import os
-import sys
 from unittest import mock
 
 def test_no_import_time_initialization(monkeypatch):

@@ -1,4 +1,3 @@
-import sys
 import types
 from pathlib import Path
 

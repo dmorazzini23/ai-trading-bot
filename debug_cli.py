@@ -16,7 +16,7 @@ Usage:
 import argparse
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 
 # Set required environment variables for CLI usage
 os.environ.setdefault('ALPACA_API_KEY', 'cli_key')
@@ -114,8 +114,7 @@ def cmd_positions():
     
     try:
         from ai_trading.execution import (
-            get_position_reconciler, force_position_reconciliation,
-            get_position_discrepancies
+            get_position_reconciler, force_position_reconciliation
         )
         
         reconciler = get_position_reconciler()
@@ -130,7 +129,7 @@ def cmd_positions():
             print("  No positions tracked by bot")
         
         # Force reconciliation check
-        print(f"\n🔄 Running reconciliation check...")
+        print("\n🔄 Running reconciliation check...")
         discrepancies = force_position_reconciliation()
         
         if discrepancies:
@@ -144,7 +143,7 @@ def cmd_positions():
                 print(f"    Type: {disc.discrepancy_type}")
                 print(f"    Severity: {disc.severity}")
         else:
-            print(f"\n✅ No discrepancies found - positions are in sync")
+            print("\n✅ No discrepancies found - positions are in sync")
             
     except Exception as e:
         print(f"❌ Error checking positions: {e}")
@@ -180,7 +179,7 @@ def cmd_pnl(symbol=None):
                         if source != 'unrealized':
                             total_realized += amount
                 
-                print(f"\n📊 SUMMARY:")
+                print("\n📊 SUMMARY:")
                 print(f"  Total Realized: ${total_realized:+.2f}")
                 if 'unrealized' in breakdown:
                     print(f"  Unrealized: ${breakdown['unrealized']:+.2f}")
@@ -189,7 +188,7 @@ def cmd_pnl(symbol=None):
                 # Explain recent changes
                 explanation = explain_recent_pnl_changes(symbol, minutes=60)
                 if explanation['total_change'] != 0:
-                    print(f"\n📝 RECENT CHANGES (last hour):")
+                    print("\n📝 RECENT CHANGES (last hour):")
                     print(f"  {explanation['explanation']}")
                     print(f"  Total change: ${explanation['total_change']:+.2f}")
             else:
@@ -198,20 +197,20 @@ def cmd_pnl(symbol=None):
             # Show portfolio summary
             summary = get_portfolio_pnl_summary()
             
-            print(f"📊 PORTFOLIO SUMMARY:")
+            print("📊 PORTFOLIO SUMMARY:")
             print(f"  Total Realized PnL: ${summary['total_realized_pnl']:+.2f}")
             print(f"  Total Unrealized PnL: ${summary['total_unrealized_pnl']:+.2f}")
             print(f"  Net PnL: ${summary['total_pnl']:+.2f}")
             
             if summary['pnl_by_source']:
-                print(f"\n💰 PnL BY SOURCE:")
+                print("\n💰 PnL BY SOURCE:")
                 for source, amount in summary['pnl_by_source'].items():
                     if amount != 0:
                         icon = "💚" if amount > 0 else "💸"
                         print(f"  {icon} {source}: ${amount:+.2f}")
             
             if summary['today_pnl']:
-                print(f"\n📅 TODAY'S PnL:")
+                print("\n📅 TODAY'S PnL:")
                 for source, amount in summary['today_pnl'].items():
                     if amount != 0:
                         print(f"  {source}: ${amount:+.2f}")
@@ -280,8 +279,7 @@ def cmd_health():
     
     try:
         from ai_trading.execution import (
-            get_execution_statistics, get_reconciliation_statistics,
-            get_pnl_attribution_stats, force_position_reconciliation
+            get_execution_statistics, get_pnl_attribution_stats, force_position_reconciliation
         )
         
         issues = []
@@ -312,7 +310,7 @@ def cmd_health():
             issues.append("No PnL events recorded - may indicate tracking issues")
         
         # Report results
-        print(f"\n📋 HEALTH CHECK RESULTS:")
+        print("\n📋 HEALTH CHECK RESULTS:")
         if issues:
             print(f"⚠️  {len(issues)} ISSUES FOUND:")
             for i, issue in enumerate(issues, 1):
@@ -321,7 +319,7 @@ def cmd_health():
             print("✅ No issues detected - system appears healthy")
         
         # Show summary stats
-        print(f"\n📊 SYSTEM METRICS:")
+        print("\n📊 SYSTEM METRICS:")
         print(f"  Execution success rate: {exec_stats['success_rate']:.1%}")
         print(f"  Active orders: {exec_stats['active_orders']}")
         print(f"  Position discrepancies: {len(discrepancies)}")

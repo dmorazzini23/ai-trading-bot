@@ -13,13 +13,11 @@ AI-AGENT-REF: Production integration for institutional-grade trading
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import logging
-import threading
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, Optional, Any, Callable
 
 # AI-AGENT-REF: Import all production systems
 try:

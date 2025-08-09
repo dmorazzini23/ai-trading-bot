@@ -1,4 +1,4 @@
-import os, time
+import time
 import pandas as pd
 from ai_trading.market import cache as mcache
 
@@ -35,7 +35,6 @@ def test_cache_key_generation():
 def test_memory_cache_thread_safety():
     """Test that memory cache handles concurrent access safely"""
     import threading
-    import time
     
     df = pd.DataFrame({"close": [100, 101, 102]})
     results = []

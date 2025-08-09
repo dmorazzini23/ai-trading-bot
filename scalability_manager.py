@@ -15,23 +15,19 @@ AI-AGENT-REF: Enterprise scalability and high availability system
 
 from __future__ import annotations
 
-import asyncio
 import concurrent.futures
 import logging
 import multiprocessing
-import os
 import queue
 import shutil
 import threading
 import time
-from collections import defaultdict, deque
-from contextlib import contextmanager
+from collections import deque
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Callable, Tuple
+from typing import Dict, List, Optional, Any, Callable
 import json
-import pickle
 import hashlib
 
 # AI-AGENT-REF: Enterprise-grade scalability for institutional trading

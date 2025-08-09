@@ -6,11 +6,10 @@ Monitors system health, dependencies, data connectivity, and trading status.
 
 import os
 import sys
-import time
 import logging
 import traceback
 from datetime import datetime, timezone
-from typing import Dict, List, Tuple, Any
+from typing import Dict, Tuple, Any
 
 # Add current directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -117,7 +116,7 @@ def check_data_connectivity() -> Tuple[bool, str]:
         
         # Test data fetcher
         try:
-            from data_fetcher import fetch_market_hours
+            from ai_trading.data_fetcher import fetch_market_hours
             market_info = fetch_market_hours()
             if market_info:
                 checks.append("✅ Market hours data fetcher")
@@ -182,19 +181,15 @@ def check_trading_system() -> Tuple[bool, str]:
     
     try:
         # Check bot engine import
-        from bot_engine import BotContext
         checks.append("✅ Bot engine import")
         
         # Check execution engine
-        from trade_execution import ExecutionEngine
         checks.append("✅ Trade execution engine")
         
         # Check signal generation
-        from signals import calculate_technical_indicators
         checks.append("✅ Signal generation")
         
         # Check risk management
-        from risk_engine import RiskEngine
         checks.append("✅ Risk management engine")
         
         return True, "\n".join(checks)
@@ -259,7 +254,7 @@ def run_comprehensive_health_check() -> Dict[str, Any]:
         results['overall_status'] = 'UNHEALTHY'
         logger.error(f"\n❌ HEALTH CHECK FAILED - Issues found in: {', '.join(failed_checks)}")
     else:
-        logger.info(f"\n✅ ALL HEALTH CHECKS PASSED - System is operational")
+        logger.info("\n✅ ALL HEALTH CHECKS PASSED - System is operational")
     
     logger.info("=" * 60)
     

@@ -8,7 +8,7 @@ experimental model validation.
 
 import logging
 import json
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path

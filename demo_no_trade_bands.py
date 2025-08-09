@@ -80,13 +80,13 @@ def demo_no_trade_bands():
             status = "AVOIDED" if trade_avoided else ("TRADE" if trade_executed else "NO CHANGE")
             print(f"  {symbol}: {final:.4f} [Δ{final_delta_bps:+.0f}bps] - {status}")
         
-        print(f"\nSummary:")
+        print("\nSummary:")
         print(f"  Trades needed: {trades_needed}/7 positions")
         print(f"  Total turnover: {total_turnover:.4f} ({total_turnover*100:.2f}%)")
         print(f"  Transaction cost savings: ~{(7-trades_needed)*0.0005*100:.2f}bps per avoided trade")
     
     # Demonstrate with larger moves that should trigger trades
-    print(f"\n=== Large Rebalancing Example ===")
+    print("\n=== Large Rebalancing Example ===")
     large_target_weights = {
         "AAPL": 0.30,  # +500 bps
         "MSFT": 0.15,  # -500 bps

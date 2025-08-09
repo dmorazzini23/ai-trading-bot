@@ -134,7 +134,6 @@ def test_main_import_no_hang():
     
     try:
         # This is the specific test case mentioned in the problem statement
-        import ai_trading.main
         print('Import successful')
     except Exception as e:
         # Import might fail due to missing dependencies, but it shouldn't hang

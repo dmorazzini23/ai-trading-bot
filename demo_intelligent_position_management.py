@@ -18,7 +18,7 @@ AI-AGENT-REF: Demo of advanced intelligent position management capabilities
 import sys
 import os
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from dataclasses import dataclass
 
 # Set up logging
@@ -81,7 +81,7 @@ def demo_technical_signal_analysis():
     print("\n🌟 DEMO 2: Technical Signal Analysis for Exit Timing")
     print("=" * 60)
     
-    from technical_analyzer import TechnicalSignalAnalyzer, SignalStrength, DivergenceType
+    from technical_analyzer import TechnicalSignalAnalyzer
     
     analyzer = TechnicalSignalAnalyzer()
     
@@ -123,7 +123,7 @@ def demo_dynamic_trailing_stops():
     print("\n🌟 DEMO 3: Dynamic Trailing Stop Management")
     print("=" * 60)
     
-    from trailing_stops import TrailingStopManager, TrailingStopType
+    from trailing_stops import TrailingStopManager
     
     stop_manager = TrailingStopManager()
     
@@ -161,7 +161,7 @@ def demo_multi_tiered_profit_taking():
     print("\n🌟 DEMO 4: Multi-Tiered Profit Taking System")
     print("=" * 60)
     
-    from profit_taking import ProfitTakingEngine, ProfitTakingStrategy
+    from profit_taking import ProfitTakingEngine
     
     profit_engine = ProfitTakingEngine()
     
@@ -202,7 +202,7 @@ def demo_portfolio_correlation_intelligence():
     print("\n🌟 DEMO 5: Portfolio Correlation Intelligence")
     print("=" * 60)
     
-    from correlation_analyzer import PortfolioCorrelationAnalyzer, ConcentrationLevel
+    from correlation_analyzer import PortfolioCorrelationAnalyzer
     
     corr_analyzer = PortfolioCorrelationAnalyzer()
     
@@ -246,7 +246,7 @@ def demo_intelligent_integration():
     print("\n🌟 DEMO 6: Complete Intelligent Integration")
     print("=" * 60)
     
-    from intelligent_manager import IntelligentPositionManager, PositionAction
+    from intelligent_manager import IntelligentPositionManager
     
     manager = IntelligentPositionManager()
     

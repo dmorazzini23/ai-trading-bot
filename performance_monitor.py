@@ -10,9 +10,8 @@ import sys
 import time
 import threading
 import subprocess
-import json
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Callable, Any
+from datetime import datetime, timezone
+from typing import Dict, List, Callable
 import logging
 from collections import deque
 

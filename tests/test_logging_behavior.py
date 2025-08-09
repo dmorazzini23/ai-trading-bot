@@ -4,7 +4,6 @@ import pytest
 
 import utils
 import bot_engine
-from strategy_allocator import StrategyAllocator
 import alpaca_api
 from strategies.base import TradeSignal
 

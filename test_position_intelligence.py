@@ -34,7 +34,7 @@ def test_intelligent_position_components():
         
         # Test 2: Technical Signal Analysis
         print("\n2. Testing Technical Signal Analysis...")
-        from technical_analyzer import TechnicalSignalAnalyzer, SignalStrength, DivergenceType
+        from technical_analyzer import TechnicalSignalAnalyzer
         
         analyzer = TechnicalSignalAnalyzer()
         
@@ -83,7 +83,7 @@ def test_intelligent_position_components():
         
         # Test 3: Trailing Stop Management
         print("\n3. Testing Trailing Stop Management...")
-        from trailing_stops import TrailingStopManager, TrailingStopType
+        from trailing_stops import TrailingStopManager
         
         stop_manager = TrailingStopManager()
         
@@ -101,7 +101,7 @@ def test_intelligent_position_components():
         
         # Test 4: Profit Taking Engine
         print("\n4. Testing Profit Taking Engine...")
-        from profit_taking import ProfitTakingEngine, ProfitTakingStrategy
+        from profit_taking import ProfitTakingEngine
         
         profit_engine = ProfitTakingEngine()
         
@@ -115,7 +115,7 @@ def test_intelligent_position_components():
         
         # Test 5: Portfolio Correlation Analysis
         print("\n5. Testing Portfolio Correlation Analysis...")
-        from correlation_analyzer import PortfolioCorrelationAnalyzer, ConcentrationLevel
+        from correlation_analyzer import PortfolioCorrelationAnalyzer
         
         corr_analyzer = PortfolioCorrelationAnalyzer()
         
@@ -132,7 +132,7 @@ def test_intelligent_position_components():
         
         # Test 6: Intelligent Position Manager
         print("\n6. Testing Intelligent Position Manager...")
-        from intelligent_manager import IntelligentPositionManager, PositionAction
+        from intelligent_manager import IntelligentPositionManager
         
         manager = IntelligentPositionManager()
         print(f"   ✓ Initialized with {len(manager.analysis_weights)} analysis components")
@@ -163,7 +163,7 @@ def test_integration_scenarios():
         if position_path not in sys.path:
             sys.path.insert(0, position_path)
         
-        from intelligent_manager import IntelligentPositionManager, PositionAction
+        from intelligent_manager import IntelligentPositionManager
         from market_regime import MarketRegime
         
         manager = IntelligentPositionManager()

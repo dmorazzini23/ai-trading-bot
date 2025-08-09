@@ -26,10 +26,10 @@ except ImportError:
     np = MockNumpy()
 
 import logging
-from indicators import ema
+from ai_trading.indicators import ema
 
 try:
-    from indicators import atr
+    from ai_trading.indicators import atr
 except ImportError:
 
     def atr(high, low, close, period=14):

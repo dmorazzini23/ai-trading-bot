@@ -1,5 +1,4 @@
 import importlib
-import pytest
 
 main = importlib.import_module("run")
 

@@ -14,19 +14,15 @@ AI-AGENT-REF: Comprehensive production validation and testing system
 
 from __future__ import annotations
 
-import asyncio
 import concurrent.futures
 import logging
 import random
 import statistics
 import threading
 import time
-from collections import defaultdict, deque
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Callable, Tuple
-import json
-import traceback
+from typing import Dict, List, Optional, Any, Callable
 
 # AI-AGENT-REF: Production validation for institutional trading
 

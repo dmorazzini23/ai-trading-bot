@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 from threading import Thread
 import threading
@@ -14,7 +13,7 @@ load_dotenv()
 from ai_trading.config import get_settings, Settings
 import ai_trading.app as app
 from ai_trading.runner import run_cycle
-from ai_trading.utils import set_random_seeds, ensure_deterministic_training, get_pid_on_port, get_free_port
+from ai_trading.utils import get_pid_on_port, get_free_port
 
 # AI-AGENT-REF: Import memory optimization and performance monitoring
 try:
@@ -58,7 +57,6 @@ def run_bot(*_a, **_k) -> int:
     load_dotenv()
     
     # AI-AGENT-REF: Import runner after .env is guaranteed loaded
-    from ai_trading.runner import run_cycle
     
     # AI-AGENT-REF: run cycle directly instead of spawning subprocesses
     run_cycle()
@@ -104,7 +102,6 @@ def main() -> None:
     load_dotenv()
     global config
     config = get_settings()
-    from ai_trading.runner import run_cycle
     run_cycle()
 
     # Ensure API is ready before starting trading cycles

@@ -10,15 +10,12 @@ from ai_trading.logging import get_logger
 try:
     from ai_trading.capital_scaling import (
         drawdown_adjusted_kelly_alt as drawdown_adjusted_kelly,
-        volatility_parity_position_alt as volatility_parity_position,
     )
 except Exception:  # pragma: no cover - fallback for older installs
     from ai_trading.capital_scaling import (
         drawdown_adjusted_kelly,
-        volatility_parity_position,
     )
 
-from ai_trading.data_fetcher import get_bars
 from ai_trading.core.bot_engine import _fetch_intraday_bars_chunked
 from ai_trading.config.settings import get_settings
 

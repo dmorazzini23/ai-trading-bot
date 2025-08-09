@@ -7,7 +7,7 @@ import importlib
 
 np.random.seed(0)
 
-from signals import GaussianHMM, detect_market_regime_hmm
+from ai_trading.signals import GaussianHMM, detect_market_regime_hmm
 
 
 def test_hmm_regime_detection():

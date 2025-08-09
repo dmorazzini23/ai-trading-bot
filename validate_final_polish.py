@@ -4,9 +4,7 @@ Basic validation tests that don't require full config setup.
 """
 
 import os
-import sys
 import tempfile
-from pathlib import Path
 
 def test_basic_validations():
     """Run basic validations that don't require config."""

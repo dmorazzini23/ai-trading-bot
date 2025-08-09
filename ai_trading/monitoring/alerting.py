@@ -5,12 +5,11 @@ Implements comprehensive alerting with email, SMS, and team notifications
 for critical trading events, system failures, and performance issues.
 """
 
-import json
 import smtplib
 import requests
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Any, Callable
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 import threading
@@ -412,7 +411,7 @@ class AlertManager:
             
             message = f"Trading event occurred: {event_type}"
             if details:
-                message += f"\n\nDetails:\n"
+                message += "\n\nDetails:\n"
                 for key, value in details.items():
                     message += f"{key}: {value}\n"
             
@@ -449,7 +448,7 @@ class AlertManager:
         """Send performance-related alert."""
         try:
             title = f"Performance Alert: {metric} Threshold Exceeded"
-            message = f"Performance metric outside acceptable range:\n\n"
+            message = "Performance metric outside acceptable range:\n\n"
             message += f"Metric: {metric}\n"
             message += f"Current Value: {current_value}\n"
             message += f"Threshold: {threshold}"

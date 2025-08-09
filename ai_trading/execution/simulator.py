@@ -7,8 +7,7 @@ partial fills, and market impact modeling.
 
 import random
 import math
-from typing import Dict, List, Optional, Tuple
-from datetime import datetime
+from typing import Dict, List
 import logging
 
 # Use the centralized logger as per AGENTS.md
@@ -19,7 +18,6 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from ..core.enums import OrderSide, OrderType
-from ..core.constants import EXECUTION_PARAMETERS
 
 
 class SlippageModel:

@@ -7,12 +7,10 @@ and performance tracking with proper relationships and constraints.
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional
 import uuid
 
 # Using built-in modules to avoid dependency issues
-import json
-from datetime import datetime as dt_datetime, timezone
+from datetime import datetime as dt_datetime
 
 
 # Minimal SQLAlchemy-like base class for now

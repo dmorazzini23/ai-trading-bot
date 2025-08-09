@@ -6,10 +6,9 @@ breaking when performance degrades beyond acceptable thresholds.
 """
 
 import logging
-import time
 import json
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List, Optional, Callable, NamedTuple
+from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
 from collections import deque, defaultdict
 from enum import Enum

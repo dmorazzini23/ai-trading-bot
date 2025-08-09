@@ -10,10 +10,10 @@ Addresses the critical issues:
 import logging
 import time
 import threading
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Dict
 from dataclasses import dataclass, field
-from collections import defaultdict, deque
+from collections import deque
 import json
 
 # AI-AGENT-REF: Import configuration and execution modules

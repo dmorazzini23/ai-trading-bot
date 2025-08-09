@@ -1,7 +1,6 @@
 """Test DISABLE_DAILY_RETRAIN parsing for various values."""
 
 import os
-import pytest
 
 
 def test_disable_daily_retrain_env_parsing():

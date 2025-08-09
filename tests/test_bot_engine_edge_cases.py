@@ -23,7 +23,7 @@ if 'bot_engine' not in sys.modules:
     exec(compile(ast.Module([func], []), filename=str(src_path), mode='exec'), mod.__dict__)
     sys.modules['bot_engine'] = mod
 
-from bot_engine import prepare_indicators
+from ai_trading.bot_engine import prepare_indicators
 
 
 def test_prepare_indicators_missing_close_column():

@@ -13,7 +13,6 @@ def test_money_execution_integration():
     from ai_trading.execution.engine import Order
     from ai_trading.core.enums import OrderSide, OrderType
     from ai_trading.math.money import Money
-    from decimal import Decimal
     
     # Test order creation with Money price
     order = Order(

@@ -5,7 +5,7 @@ Provides comprehensive risk monitoring, portfolio risk assessment,
 and real-time risk controls for institutional trading operations.
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 from datetime import datetime, timedelta, timezone
 import statistics
 import math
@@ -19,7 +19,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from ..core.enums import RiskLevel
-from ..core.constants import RISK_PARAMETERS, PERFORMANCE_THRESHOLDS
+from ..core.constants import RISK_PARAMETERS
 from .kelly import KellyCalculator
 
 

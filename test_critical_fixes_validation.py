@@ -6,7 +6,6 @@ Tests the 5 major issues identified in the problem statement.
 
 import unittest
 from datetime import datetime, timezone, date
-import tempfile
 import os
 import sys
 

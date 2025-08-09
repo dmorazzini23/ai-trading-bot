@@ -6,8 +6,7 @@ trading dashboards and real-time monitoring interfaces.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Any
-import statistics
+from typing import Dict, List, Any
 import logging
 
 # Use the centralized logger as per AGENTS.md

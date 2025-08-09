@@ -11,9 +11,6 @@ This test validates the key fixes:
 
 import os
 import sys
-import tempfile
-import pandas as pd
-from datetime import datetime, timezone
 from unittest.mock import Mock
 
 # Set testing environment
@@ -54,7 +51,7 @@ def test_cache_performance_monitoring():
     """Test that cache performance monitoring is working."""
     print("Testing cache performance monitoring...")
     
-    from data_fetcher import get_cache_stats, _CACHE_STATS
+    from ai_trading.data_fetcher import get_cache_stats, _CACHE_STATS
     
     # Reset cache stats
     _CACHE_STATS["hits"] = 0
@@ -103,7 +100,6 @@ def test_latency_tracking():
     print("Testing enhanced latency tracking...")
     
     import time
-    import random
     from trade_execution import ExecutionEngine
     
     # Create mock context and engine

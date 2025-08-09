@@ -3,7 +3,6 @@
 Problem statement validation script to check all requirements are satisfied.
 """
 
-import os
 import re
 from pathlib import Path
 
