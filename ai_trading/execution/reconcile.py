@@ -8,11 +8,11 @@ Reconciles local trading state with broker truth by:
 """
 
 import logging
-from typing import Dict, List, Optional, Set, Tuple
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from ai_trading.core.interfaces import Position, Order, OrderSide, OrderStatus
+from ai_trading.core.interfaces import Position, Order, OrderStatus
 
 
 logger = logging.getLogger(__name__)

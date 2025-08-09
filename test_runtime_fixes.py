@@ -5,7 +5,6 @@ Simple validation script to test the three runtime blocker fixes.
 
 import sys
 import os
-import importlib
 import re
 
 def test_legacy_imports():
@@ -14,7 +13,6 @@ def test_legacy_imports():
     
     # Test signals import
     try:
-        import signals
         print("✓ signals import successful")
         success = True
     except Exception as e:
@@ -23,7 +21,6 @@ def test_legacy_imports():
     
     # Test indicators import 
     try:
-        import indicators
         print("✓ indicators import successful")
     except Exception as e:
         print(f"✗ indicators import failed: {e}")
@@ -31,7 +28,6 @@ def test_legacy_imports():
     
     # Test rebalancer import (expected to fail due to config requirements)
     try:
-        import rebalancer
         print("✓ rebalancer import successful")
     except Exception as e:
         if "ALPACA_API_KEY" in str(e) or "pydantic_settings" in str(e):

@@ -5,10 +5,9 @@ Manages the promotion process from shadow testing to production deployment
 with performance validation and safety checks.
 """
 
-import os
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path

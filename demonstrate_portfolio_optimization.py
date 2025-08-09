@@ -8,7 +8,6 @@ including churn reduction, transaction cost analysis, and market regime adaptati
 
 import os
 import sys
-from datetime import datetime, timezone
 
 # Set testing environment
 os.environ['TESTING'] = '1'
@@ -17,8 +16,8 @@ os.environ['TESTING'] = '1'
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from portfolio_optimizer import create_portfolio_optimizer, PortfolioDecision
-from transaction_cost_calculator import create_transaction_cost_calculator, TradeType
-from regime_detector import create_regime_detector, MarketRegime
+from transaction_cost_calculator import create_transaction_cost_calculator
+from regime_detector import create_regime_detector
 
 
 def demonstrate_portfolio_optimization():

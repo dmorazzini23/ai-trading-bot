@@ -1,8 +1,6 @@
 """Test trading parameter validation in bot_engine.py"""
 import ast
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 
 def test_validate_trading_parameters_no_name_error():

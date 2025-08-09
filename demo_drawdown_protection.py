@@ -33,7 +33,7 @@ def simulate_trading_session():
     
     # Use balanced mode for the simulation
     current_config = balanced_config
-    print(f"Using BALANCED mode configuration:")
+    print("Using BALANCED mode configuration:")
     print(f"  • Max Drawdown Threshold: {current_config.max_drawdown_threshold:.1%}")
     print(f"  • Daily Loss Limit: {current_config.daily_loss_limit:.1%}")
     print(f"  • Kelly Fraction: {current_config.kelly_fraction}")

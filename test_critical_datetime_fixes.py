@@ -19,7 +19,7 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
     
     def test_ensure_datetime_returns_timezone_aware(self):
         """Test that ensure_datetime returns timezone-aware datetime objects."""
-        from data_fetcher import ensure_datetime
+        from ai_trading.data_fetcher import ensure_datetime
         
         # Test with naive datetime
         naive_dt = datetime(2025, 1, 1, 12, 0, 0)
@@ -30,7 +30,7 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
         
     def test_alpaca_api_format_compatibility(self):
         """Test that datetime format is compatible with Alpaca API RFC3339 requirements."""
-        from data_fetcher import ensure_datetime
+        from ai_trading.data_fetcher import ensure_datetime
         
         # Test various input formats
         test_inputs = [
@@ -52,7 +52,7 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
                 
     def test_get_minute_df_datetime_parameters(self):
         """Test that get_minute_df properly handles timezone-aware datetime parameters."""
-        from data_fetcher import get_minute_df
+        from ai_trading.data_fetcher import get_minute_df
         
         # Mock the Alpaca client to avoid real API calls
         with patch('data_fetcher._DATA_CLIENT') as mock_client:
@@ -171,7 +171,7 @@ class TestRetryConfiguration(unittest.TestCase):
     
     def test_historical_data_retry_limit(self):
         """Test that historical data fetching has reasonable retry limits."""
-        from data_fetcher import get_historical_data
+        from ai_trading.data_fetcher import get_historical_data
         
         # The retry decorator should have reasonable limits
         # We can check the function's retry configuration
@@ -189,7 +189,7 @@ class TestRetryConfiguration(unittest.TestCase):
             
     def test_get_minute_df_handles_persistent_errors(self):
         """Test that get_minute_df doesn't retry infinitely on persistent datetime format errors."""
-        from data_fetcher import get_minute_df
+        from ai_trading.data_fetcher import get_minute_df
         
         # Mock the Alpaca client to always fail with datetime format error
         with patch('data_fetcher._DATA_CLIENT') as mock_client:

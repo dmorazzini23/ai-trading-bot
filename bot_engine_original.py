@@ -666,7 +666,7 @@ def is_holiday(ts: pd.Timestamp) -> bool:
 
 # AI-AGENT-REF: lazy import heavy signal calculation module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
-    from signals import calculate_macd as signals_calculate_macd
+    from ai_trading.signals import calculate_macd as signals_calculate_macd
 else:
     # AI-AGENT-REF: mock signals_calculate_macd for test environments
     def signals_calculate_macd(*args, **kwargs):
@@ -697,7 +697,7 @@ try:
     import requests  # type: ignore[assignment]
     from requests import Session  # type: ignore[assignment]
     from requests.exceptions import HTTPError  # type: ignore[assignment]
-except Exception as import_exc:  # pragma: no cover - fallback when requests is missing or partially mocked
+except Exception:  # pragma: no cover - fallback when requests is missing or partially mocked
     import types
     requests = types.SimpleNamespace(
         Session=lambda *a, **k: types.SimpleNamespace(get=lambda *a, **k: None),
@@ -867,7 +867,7 @@ except ImportError:
         pass
 
 try:
-    from rebalancer import maybe_rebalance as original_rebalance
+    from ai_trading.rebalancer import maybe_rebalance as original_rebalance
 except ImportError:
     # AI-AGENT-REF: rebalancer not available, create minimal fallback
     def original_rebalance(*args, **kwargs):
@@ -1139,7 +1139,7 @@ class StrategyAllocator:
 
 # AI-AGENT-REF: lazy import heavy data_fetcher module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
-    from data_fetcher import (
+    from ai_trading.data_fetcher import (
         DataFetchError,
         DataFetchException,
         get_minute_df,
@@ -1160,7 +1160,7 @@ else:
 
 try:
     if not os.getenv("PYTEST_RUNNING"):
-        from data_fetcher import finnhub_client  # noqa: F401
+        from ai_trading.data_fetcher import finnhub_client  # noqa: F401
     else:
         finnhub_client = None  # Mock client for tests
 except Exception:
@@ -1937,7 +1937,7 @@ def log_circuit_breaker_status():
         for name, cb in breakers.items():
             if hasattr(cb, 'state') and hasattr(cb, 'fail_counter'):
                 logger.info(
-                    f"CIRCUIT_BREAKER_STATUS",
+                    "CIRCUIT_BREAKER_STATUS",
                     extra={
                         "breaker": name,
                         "state": cb.state,
@@ -2856,7 +2856,7 @@ class TradeLogger:
 
         # AI-AGENT-REF: Trigger audit-to-meta conversion after trade exit logging
         try:
-            from meta_learning import validate_trade_data_quality, _convert_audit_to_meta_format
+            from meta_learning import validate_trade_data_quality
             quality_report = validate_trade_data_quality(self.path)
             
             # If we have audit format rows, trigger conversion for meta-learning
@@ -5595,7 +5595,7 @@ def pov_submit(
             # Less aggressive reduction - only 25% instead of 50%
             slice_qty = min(int(vol * cfg.pct * 0.75), total_qty - placed)
             logger.debug(
-                f"[pov_submit] High spread detected, reducing slice by 25%",
+                "[pov_submit] High spread detected, reducing slice by 25%",
                 extra={
                     "symbol": symbol, 
                     "spread": spread, 
@@ -5618,7 +5618,7 @@ def pov_submit(
             order = submit_order(ctx, symbol, slice_qty, side)
             if order is None:
                 logger.warning(
-                    f"[pov_submit] submit_order returned None for slice, skipping",
+                    "[pov_submit] submit_order returned None for slice, skipping",
                     extra={"symbol": symbol, "slice_qty": slice_qty},
                 )
                 continue
@@ -6107,7 +6107,7 @@ def _model_feature_names(model) -> list[str]:
 
 
 def _should_hold_position(df: pd.DataFrame) -> bool:
-    from indicators import rsi
+    from ai_trading.indicators import rsi
 
     """Return True if trend indicators favor staying in the trade."""
     try:
@@ -7129,7 +7129,7 @@ def _add_basic_indicators(
 
 
 def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
-    from signals import calculate_macd as signals_calculate_macd
+    from ai_trading.signals import calculate_macd as signals_calculate_macd
 
     """Add MACD indicators using the defensive helper."""
     try:
@@ -7353,7 +7353,7 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
-    from signals import calculate_macd as signals_calculate_macd
+    from ai_trading.signals import calculate_macd as signals_calculate_macd
 
     feat = pd.DataFrame(index=df.index)
     feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
@@ -8283,7 +8283,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
         current_positions = ctx.api.get_all_positions()
         
         # Generate hold signals for existing positions
-        from signals import generate_position_hold_signals, enhance_signals_with_position_logic
+        from ai_trading.signals import generate_position_hold_signals, enhance_signals_with_position_logic
         hold_signals = generate_position_hold_signals(ctx, current_positions)
         
         # Apply position holding logic to all strategy signals
@@ -9609,7 +9609,7 @@ def compute_ichimoku(
     try:
         ich_func = getattr(ta, "ichimoku", None)
         if ich_func is None:
-            from indicators import ichimoku_fallback
+            from ai_trading.indicators import ichimoku_fallback
 
             ich_func = ichimoku_fallback
         ich = ich_func(high=high, low=low, close=close)
@@ -9639,7 +9639,7 @@ def ichimoku_indicator(
     try:
         ich_func = getattr(ta, "ichimoku", None)
         if ich_func is None:
-            from indicators import ichimoku_fallback
+            from ai_trading.indicators import ichimoku_fallback
 
             ich_func = ichimoku_fallback
         ich = ich_func(high=df["high"], low=df["low"], close=df["close"])

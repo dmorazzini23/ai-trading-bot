@@ -1,8 +1,6 @@
 import builtins
 import importlib
-import logging
 import runpy
-import signal
 import sys
 import types
 from datetime import datetime
@@ -17,7 +15,6 @@ import ml_model
 import risk_engine
 import ai_trading.main as main
 import utils
-import validate_env
 from strategies.mean_reversion import MeanReversionStrategy
 
 
@@ -65,7 +62,6 @@ def test_create_flask_routes():
     sys.modules['flask.testing'].FlaskClient = DummyClient
     sys.modules.pop('ai_trading.main', None)
     sys.modules.pop('ai_trading.app', None)  # Also remove app module
-    import importlib
     main_mod = importlib.import_module('ai_trading.main')
     import ai_trading.app as app_mod
     app = app_mod.create_app()

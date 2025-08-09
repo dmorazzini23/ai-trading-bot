@@ -1,8 +1,6 @@
 """Test fill rate calculation fixes and alert thresholds."""
 
 import pytest
-import types
-import logging
 import os
 from unittest.mock import MagicMock, patch
 

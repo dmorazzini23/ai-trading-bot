@@ -115,7 +115,7 @@ def main():
             print(f"❌ Test {test.__name__} failed: {e}")
             results.append(False)
     
-    print(f"\n📊 Final Validation Results:")
+    print("\n📊 Final Validation Results:")
     print(f"✅ Passed: {sum(results)}/{len(results)}")
     print(f"❌ Failed: {len(results) - sum(results)}/{len(results)}")
     

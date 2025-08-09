@@ -11,7 +11,7 @@ AI-AGENT-REF: Technical signal analysis for intelligent position exits
 """
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum

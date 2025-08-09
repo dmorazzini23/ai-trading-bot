@@ -6,10 +6,8 @@ analysis, and tax-aware rebalancing functionality.
 """
 
 import unittest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
 from datetime import datetime, timedelta, timezone
-import math
-import statistics
 
 # Test adaptive position sizing
 class TestAdaptivePositionSizing(unittest.TestCase):
@@ -326,7 +324,7 @@ class TestTaxAwareRebalancing(unittest.TestCase):
             import os
             sys.path.append(os.path.dirname(os.path.dirname(__file__)))
             
-            from rebalancer import TaxAwareRebalancer
+            from ai_trading.rebalancer import TaxAwareRebalancer
             self.TaxAwareRebalancer = TaxAwareRebalancer
             self.imports_available = True
         except ImportError:
@@ -410,7 +408,7 @@ class TestEnhancedRebalancer(unittest.TestCase):
         import os
         sys.path.append(os.path.dirname(os.path.dirname(__file__)))
         
-        from rebalancer import rebalance_portfolio, enhanced_maybe_rebalance
+        from ai_trading.rebalancer import rebalance_portfolio, enhanced_maybe_rebalance
         
         # Mock context
         ctx = Mock()

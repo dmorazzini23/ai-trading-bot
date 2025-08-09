@@ -10,7 +10,6 @@ AI-AGENT-REF: Centralized dependency imports with comprehensive fallbacks
 from __future__ import annotations
 
 import logging
-import warnings
 from typing import Any, Optional, Union, Dict, List, Tuple
 
 # Initialize logger for import warnings
@@ -126,7 +125,7 @@ except ImportError:
         def isnan(self, data: Any) -> bool:
             try:
                 return data != data  # NaN != NaN is True
-            except Exception as e:
+            except Exception:
                 import logging
                 logger = logging.getLogger(__name__)
                 logger.debug("Mock numpy helper failed", exc_info=True)

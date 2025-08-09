@@ -555,7 +555,7 @@ def print_environment_debug() -> None:
         for warning in debug_report['warnings']:
             print(f"  - {warning}")
     
-    print(f"\n📋 ENVIRONMENT VARIABLES:")
+    print("\n📋 ENVIRONMENT VARIABLES:")
     for var, info in debug_report['environment_vars'].items():
         status_emoji = "✅" if info['status'] == 'set' else "❌"
         print(f"  {status_emoji} {var}: {info.get('value', 'NOT SET')}")
@@ -565,7 +565,7 @@ def print_environment_debug() -> None:
         for rec in debug_report['recommendations']:
             print(f"  - {rec}")
     
-    print(f"\n📁 .ENV FILE:")
+    print("\n📁 .ENV FILE:")
     env_info = debug_report.get('env_file', {})
     print(f"  Exists: {'✅' if env_info.get('exists') else '❌'}")
     print(f"  Readable: {'✅' if env_info.get('readable') else '❌'}")

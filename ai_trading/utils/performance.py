@@ -8,7 +8,7 @@ for improved performance.
 import logging
 import time
 import functools
-from typing import Dict, List, Optional, Callable, Any, Tuple
+from typing import Dict, List, Optional, Callable, Any
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone

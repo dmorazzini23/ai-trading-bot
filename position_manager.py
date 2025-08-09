@@ -1,9 +1,8 @@
 """Position holding and management logic for reducing churn."""
 
 import logging
-import time
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Dict, List
 from dataclasses import dataclass
 from threading import Lock
 
@@ -29,7 +28,7 @@ try:
     import pandas as pd
 except ImportError:
     # Import mock pandas from utils
-    from utils import pd
+    pass
 
 logger = logging.getLogger(__name__)
 

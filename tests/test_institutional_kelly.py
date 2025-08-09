@@ -6,7 +6,7 @@ and risk-adjusted capital allocation functionality.
 """
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from ai_trading.risk.kelly import KellyCriterion, KellyCalculator
 from ai_trading.core.enums import RiskLevel

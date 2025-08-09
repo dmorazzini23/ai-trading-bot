@@ -5,7 +5,6 @@ import threading
 import time
 import time as pytime
 import types
-import warnings
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional, Sequence, Union
@@ -124,8 +123,7 @@ import atexit
 atexit.register(cleanup_session)
 try:
     import requests
-    from requests import Session
-    from requests.exceptions import HTTPError, RequestException
+    from requests.exceptions import RequestException
     import urllib3
 except Exception as e:  # pragma: no cover - allow missing in test env
     logger.warning("Optional dependencies missing: %s", e)

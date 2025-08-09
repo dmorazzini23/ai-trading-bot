@@ -5,12 +5,10 @@ Provides training for LightGBM, XGBoost, and Ridge models with proper
 financial time series validation and hyperparameter optimization.
 """
 
-import os
 import json
 import pickle
-import hashlib
 from datetime import datetime
-from typing import Dict, Any, Optional, List, Tuple, Union
+from typing import Dict, Any, Optional, List, Tuple
 import logging
 
 import numpy as np
@@ -54,7 +52,6 @@ except ImportError:
     logger.warning("Optuna not available")
 
 from ..data.splits import PurgedGroupTimeSeriesSplit
-from ..features.pipeline import create_feature_pipeline
 
 
 class MLTrainer:

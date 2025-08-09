@@ -1,10 +1,8 @@
 """Test position holding logic and meta-learning triggers."""
 
-import pytest
 import sys
 import os
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, timezone, timedelta
+from unittest.mock import Mock, patch
 
 # Add the project root to Python path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
@@ -48,7 +46,7 @@ def test_position_manager_should_hold_profit():
 
 def test_position_hold_signals_generation():
     """Test position hold signal generation."""
-    from signals import generate_position_hold_signals
+    from ai_trading.signals import generate_position_hold_signals
     
     # Create mock context with position manager
     ctx = Mock()
@@ -75,7 +73,7 @@ def test_position_hold_signals_generation():
 
 def test_signals_enhancement_with_position_logic():
     """Test that signals are enhanced with position holding logic."""
-    from signals import enhance_signals_with_position_logic
+    from ai_trading.signals import enhance_signals_with_position_logic
     
     # Create mock signals
     signal1 = Mock()

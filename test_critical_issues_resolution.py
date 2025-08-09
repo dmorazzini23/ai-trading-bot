@@ -2,12 +2,9 @@
 
 import logging
 import os
-import tempfile
-import time
 import unittest
 from datetime import datetime, timezone, timedelta
-from unittest.mock import Mock, patch, MagicMock
-from typing import Dict, Optional
+from unittest.mock import Mock
 
 # Set minimal environment variables for testing
 os.environ.setdefault('ALPACA_API_KEY', 'test_key')

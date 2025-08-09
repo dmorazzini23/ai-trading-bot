@@ -88,10 +88,10 @@ sys.exit(exit_code)
             )
         except subprocess.TimeoutExpired as e:
             # Handle subprocess timeout gracefully
-            print(f"Subprocess timeout after 5 seconds")
+            print("Subprocess timeout after 5 seconds")
             print(f"Stdout so far: {e.stdout}")
             print(f"Stderr so far: {e.stderr}")
-            assert False, f"Subprocess timeout - bot_engine import took longer than 5 seconds"
+            assert False, "Subprocess timeout - bot_engine import took longer than 5 seconds"
         
         print(f"Test script output: {result.stdout}")
         if result.stderr:

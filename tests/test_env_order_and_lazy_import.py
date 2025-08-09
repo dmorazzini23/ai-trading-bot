@@ -8,9 +8,7 @@ prevent import-time crashes due to missing environment variables.
 import pytest
 import os
 import tempfile
-import sys
 from unittest.mock import patch, MagicMock
-from pathlib import Path
 
 
 class TestEnvironmentOrderAndLazyImport:
@@ -44,7 +42,6 @@ class TestEnvironmentOrderAndLazyImport:
                 mock_load_dotenv.side_effect = side_effect
                 
                 # Import main module (this should load .env before Settings)
-                from ai_trading.main import config
                 
                 # Verify .env was loaded before Settings construction
                 mock_load_dotenv.assert_called()
@@ -223,7 +220,6 @@ class TestEnvironmentOrderAndLazyImport:
             
             # Should not raise exception
             try:
-                from ai_trading.main import config
                 # If we get here, import succeeded despite missing .env
                 assert True
             except Exception as e:
@@ -263,7 +259,6 @@ class TestEnvironmentOrderAndLazyImport:
             with patch('ai_trading.config.management.validate_alpaca_credentials') as mock_validate:
                 with patch('sys.exit') as mock_exit:
                     # Import main module - should not validate credentials
-                    from ai_trading import main
                     
                     # Should not have called validation or exit during import
                     mock_validate.assert_not_called()

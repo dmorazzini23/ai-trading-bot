@@ -13,7 +13,7 @@ for m in [
     sys.modules.pop(m, None)
 
 from strategies import (MeanReversionStrategy, MomentumStrategy,
-                        MovingAverageCrossoverStrategy, asset_class_for)
+                        asset_class_for)
 
 
 class DummyFetcher:

@@ -4,7 +4,6 @@ Script to complete the short selling logic fix by updating the specific lines
 that couldn't be updated with str_replace due to duplicates.
 """
 
-import sys
 
 def patch_short_selling_logic():
     """Apply the short selling logic patches."""

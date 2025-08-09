@@ -7,7 +7,7 @@ Tests the specific changes needed to enable short selling capability.
 import os
 import sys
 import unittest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 # Set minimal environment variables
 os.environ['ALPACA_API_KEY'] = 'test_key'
@@ -99,7 +99,7 @@ class TestShortSellingImplementation(unittest.TestCase):
                         # Test that sell_short orders reach the validation step (don't get blocked by SKIP_NO_POSITION)
                         try:
                             result = engine.execute_order("AAPL", 10, "sell_short")
-                        except Exception as e:
+                        except Exception:
                             # Expected to reach this point, meaning it passed the initial validation
                             pass
                         
@@ -122,7 +122,7 @@ class TestShortSellingImplementation(unittest.TestCase):
         
     def test_order_status_monitoring_needed(self):
         """Test framework for order status monitoring."""
-        from trade_execution import ExecutionEngine, OrderInfo
+        from trade_execution import ExecutionEngine
         
         # Create mock context
         mock_ctx = Mock()

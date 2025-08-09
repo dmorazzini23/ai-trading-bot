@@ -7,11 +7,11 @@ including position-based PnL, market movement PnL, and fee/slippage costs.
 from __future__ import annotations
 
 import logging
-from collections import defaultdict, deque
+from collections import defaultdict
 from datetime import datetime, timezone
 from enum import Enum
 from threading import Lock
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from ai_trading.logging import get_logger
 

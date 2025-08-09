@@ -12,9 +12,7 @@ Tests the new position management components:
 AI-AGENT-REF: Comprehensive tests for intelligent position management
 """
 
-import logging
-from datetime import datetime, timezone, timedelta
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock
 from dataclasses import dataclass
 
 # Import the new position management components
@@ -37,9 +35,9 @@ except ImportError as e:
     
     from ai_trading.position.intelligent_manager import IntelligentPositionManager
     from ai_trading.position.market_regime import MarketRegimeDetector, MarketRegime  
-    from ai_trading.position.technical_analyzer import TechnicalSignalAnalyzer, SignalStrength, DivergenceType
-    from ai_trading.position.trailing_stops import TrailingStopManager, TrailingStopType
-    from ai_trading.position.profit_taking import ProfitTakingEngine, ProfitTakingStrategy
+    from ai_trading.position.technical_analyzer import TechnicalSignalAnalyzer
+    from ai_trading.position.trailing_stops import TrailingStopManager
+    from ai_trading.position.profit_taking import ProfitTakingEngine
     from ai_trading.position.correlation_analyzer import PortfolioCorrelationAnalyzer, ConcentrationLevel
 
 

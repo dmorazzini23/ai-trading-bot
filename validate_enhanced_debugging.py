@@ -3,8 +3,6 @@
 
 import os
 import sys
-import time
-from datetime import datetime, timezone
 
 # Set required environment variables
 os.environ['ALPACA_API_KEY'] = 'test_key'

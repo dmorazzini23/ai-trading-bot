@@ -1,7 +1,6 @@
 """Test for Alpaca import handling when packages are missing."""
 
 import sys
-import pytest
 
 
 def test_ai_trading_import_without_alpaca():

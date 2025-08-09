@@ -1,15 +1,13 @@
 """Integration test for retry/backoff and idempotency in order submission."""
 
-import pytest
 import time
-from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timezone
 
 # Set PYTHONPATH to include our tenacity mock
 import sys
 sys.path.insert(0, '/tmp')
 
-from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 
 class MockBrokerAPI:
@@ -97,7 +95,7 @@ def submit_order_with_retry(broker, idempotency_mgr, order_data):
         # Attempt broker submission
         result = broker.submit_order(order_data)
         return result
-    except Exception as e:
+    except Exception:
         # If submission fails, we keep the idempotency mark
         # This prevents retry storms from causing duplicate orders
         raise

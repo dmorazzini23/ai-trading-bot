@@ -7,7 +7,7 @@ and institutional-grade monitoring capabilities.
 
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Tuple
 from collections import defaultdict, deque
 import statistics
 import threading
@@ -81,7 +81,7 @@ class MetricsCollector:
                 self.trade_metrics.append(metric)
                 
                 # Update counters
-                self.counters[f"trades_total"] += 1
+                self.counters["trades_total"] += 1
                 self.counters[f"trades_{side.lower()}"] += 1
                 self.counters[f"trades_{symbol}"] += 1
                 

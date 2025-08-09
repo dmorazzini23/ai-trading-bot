@@ -1,7 +1,6 @@
 """Test auto-sizing logic and environment overrides for executors."""
 
 import os
-import pytest
 from unittest.mock import patch
 
 
@@ -17,7 +16,6 @@ def test_executor_auto_sizing():
         mock_cpu_count.return_value = 8
         
         # Import the module to trigger executor creation
-        import ai_trading.core.bot_engine as bot_engine
         
         # Check auto-sizing logic
         # For 8 CPUs: max(2, min(4, 8)) = 4

@@ -20,7 +20,7 @@ except ImportError:
 
 from .engine import Order, OrderStatus, ExecutionAlgorithm
 from ..core.enums import OrderSide, OrderType, RiskLevel
-from ..core.constants import EXECUTION_PARAMETERS, RISK_PARAMETERS
+from ..core.constants import EXECUTION_PARAMETERS
 from ..risk import (
     DynamicPositionSizer,
     TradingHaltManager,

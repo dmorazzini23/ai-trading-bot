@@ -1,5 +1,4 @@
 import numpy as np
-import types
 
 import ai_trading.rl_trading.train as train_mod
 import ai_trading.rl_trading.inference as inf

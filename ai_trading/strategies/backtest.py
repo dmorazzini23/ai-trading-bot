@@ -5,8 +5,8 @@ Provides comprehensive backtesting capabilities and
 performance analysis for institutional trading strategies.
 """
 
-from typing import List, Dict, Optional, Tuple
-from datetime import datetime, timedelta, timezone
+from typing import List, Dict, Optional
+from datetime import datetime, timezone
 import statistics
 import logging
 
@@ -74,7 +74,7 @@ class BacktestEngine:
             self.microstructure_available = False
             logger.warning("Microstructure module not available - using simplified execution")
         
-        logger.info(f"BacktestEngine initialized with realistic execution modeling")
+        logger.info("BacktestEngine initialized with realistic execution modeling")
     
     def run_backtest(self, strategy: BaseStrategy, historical_data: Dict, 
                     start_date: datetime, end_date: datetime) -> Dict:

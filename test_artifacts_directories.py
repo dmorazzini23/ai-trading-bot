@@ -5,8 +5,6 @@ Test artifacts directory creation and environment variable overrides.
 
 import os
 import tempfile
-import shutil
-from pathlib import Path
 
 
 def test_walkforward_artifacts_directory():

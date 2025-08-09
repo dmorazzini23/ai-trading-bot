@@ -1,5 +1,5 @@
 import pandas as pd
-from indicators import compute_ema, compute_sma, compute_bollinger, compute_atr
+from ai_trading.indicators import compute_ema, compute_sma, compute_bollinger, compute_atr
 
 
 def test_multi_horizon_indicators():

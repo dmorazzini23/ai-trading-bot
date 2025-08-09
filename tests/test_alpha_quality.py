@@ -7,8 +7,8 @@ slippage calculations, and RL reward penalties.
 
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
-from unittest.mock import Mock, patch
+from datetime import timedelta
+from unittest.mock import Mock
 
 # Test data labeling and splits
 def test_fixed_horizon_return():

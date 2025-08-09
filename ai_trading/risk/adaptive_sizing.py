@@ -7,8 +7,8 @@ volatility regimes, correlation environments, and risk-adjusted portfolio alloca
 
 import math
 import statistics
-from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional, Any
+from datetime import datetime, timezone
 from enum import Enum
 import logging
 
@@ -19,9 +19,9 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-from ..core.constants import RISK_PARAMETERS, KELLY_PARAMETERS
+from ..core.constants import RISK_PARAMETERS
 from ..core.enums import RiskLevel
-from .position_sizing import DynamicPositionSizer, PortfolioPositionManager
+from .position_sizing import DynamicPositionSizer
 from .kelly import KellyCalculator
 
 

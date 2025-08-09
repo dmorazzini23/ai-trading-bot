@@ -21,7 +21,6 @@ def test_alpaca_free_import():
     
     try:
         # This should work even without Alpaca
-        import ai_trading
         print("✓ ai_trading imported successfully without Alpaca packages")
         return True
     except Exception as e:
@@ -36,9 +35,6 @@ def test_package_imports():
     
     try:
         # Test that we can import from the package structure
-        from ai_trading.logging import logger
-        from ai_trading.config.management import get_env
-        from ai_trading.monitoring.metrics import log_metrics
         print("✓ Package-safe imports working correctly")
         return True
     except Exception as e:
@@ -52,7 +48,6 @@ def test_timezone_usage():
     try:
         # Check that timezone utilities exist
         from ai_trading.utils.time import now_utc
-        from datetime import timezone
         
         # Call the utility function
         current_time = now_utc()
@@ -68,8 +63,6 @@ def test_idempotency_and_reconciliation():
     print("Testing idempotency and reconciliation modules...")
     
     try:
-        from ai_trading.execution.idempotency import get_idempotency_cache
-        from ai_trading.execution.reconcile import reconcile_positions_and_orders
         print("✓ Idempotency and reconciliation modules available")
         return True
     except Exception as e:

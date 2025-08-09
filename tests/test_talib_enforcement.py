@@ -1,8 +1,6 @@
 """Test TA-Lib enforcement and audit file creation improvements."""
 
 import csv
-import os
-import tempfile
 from pathlib import Path
 
 import pytest

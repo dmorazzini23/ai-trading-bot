@@ -10,7 +10,7 @@ import json
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional, List, Tuple, Union
+from typing import Dict, Any, Optional, List, Union
 import logging
 
 # Use the centralized logger as per AGENTS.md
@@ -557,7 +557,7 @@ def run_walkforward_smoke_test() -> None:
             save_results=True
         )
         
-        logger.info(f"Smoke test completed successfully:")
+        logger.info("Smoke test completed successfully:")
         logger.info(f"  - Folds: {results['n_folds']}")
         logger.info(f"  - Final return: {results['total_return']:.2%}")
         logger.info(f"  - Max drawdown: {results['max_drawdown']:.2%}")

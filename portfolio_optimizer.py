@@ -7,10 +7,9 @@ Integrates Kelly Criterion, correlation analysis, and tax-aware rebalancing.
 """
 
 import logging
-import math
 import statistics
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple, Any, Union
+from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
 
@@ -100,7 +99,7 @@ class PortfolioOptimizer:
             self.adaptive_sizer = AdaptivePositionSizer()
             # Use late import to avoid circular import
             try:
-                from rebalancer import TaxAwareRebalancer
+                from ai_trading.rebalancer import TaxAwareRebalancer
                 self.tax_rebalancer = TaxAwareRebalancer()
             except ImportError:
                 self.tax_rebalancer = None

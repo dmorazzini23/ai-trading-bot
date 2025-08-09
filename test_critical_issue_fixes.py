@@ -4,13 +4,9 @@ Test suite for critical trading bot issue fixes.
 Tests the specific fixes for the four critical issues identified in the problem statement.
 """
 
-import csv
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
-from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
 
 # Set up minimal environment for imports
 os.environ.setdefault('ALPACA_API_KEY', 'test_key')

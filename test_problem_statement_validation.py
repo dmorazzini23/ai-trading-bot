@@ -5,11 +5,8 @@ package-safe imports, async modernization, and deployment hardening.
 
 import os
 import sys
-import tempfile
-import pytest
-from datetime import datetime, timezone
+from datetime import timezone
 from unittest.mock import patch, MagicMock
-import importlib
 
 
 def test_alpaca_availability_detection():
@@ -59,7 +56,7 @@ def test_package_safe_imports():
     print("✓ ai_trading.logging imports work")
     
     # Test core imports  
-    from ai_trading.core.bot_engine import BotState, _alpaca_available
+    from ai_trading.core.bot_engine import _alpaca_available
     assert callable(_alpaca_available)
     print("✓ ai_trading.core.bot_engine imports work")
     
@@ -77,7 +74,7 @@ def test_utc_datetime_handling():
     
     # Test execution engine datetime handling
     from ai_trading.execution.engine import Order
-    from ai_trading.core.enums import OrderSide, OrderType, OrderStatus
+    from ai_trading.core.enums import OrderSide, OrderType
     
     # Create an order and check timestamps
     order = Order(

@@ -18,10 +18,10 @@ def profile(func, *args, **kwargs):
     try:
         result = func(*args, **kwargs)
     except Exception as e:
-        logger.error(f"%s failed: %s", func.__name__, e)
+        logger.error("%s failed: %s", func.__name__, e)
         return None, -1
     elapsed = time.perf_counter() - start
-    logger.info(f"%s took %.6f sec", func.__name__, elapsed)
+    logger.info("%s took %.6f sec", func.__name__, elapsed)
     return result, elapsed
 
 def run_profiles():

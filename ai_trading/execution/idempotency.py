@@ -5,7 +5,6 @@ Provides TTL cache keyed by (symbol, side, qty, intent_ts_bucket) to ensure
 orders are idempotent across retry attempts.
 """
 
-import time
 import hashlib
 from typing import Dict, Tuple, Optional, Union
 from dataclasses import dataclass
@@ -13,7 +12,7 @@ from datetime import datetime, timezone
 from cachetools import TTLCache
 import threading
 
-from ai_trading.core.interfaces import OrderSide, OrderIntent
+from ai_trading.core.interfaces import OrderSide
 
 
 @dataclass

@@ -1,6 +1,5 @@
 from strategies import TradeSignal
 import sys
-import importlib
 from pathlib import Path
 import pytest
 

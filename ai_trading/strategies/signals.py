@@ -7,11 +7,10 @@ meta-learning, stacking, and turnover management.
 """
 
 from typing import List, Dict, Optional, Tuple, Any
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import statistics
 import logging
 import numpy as np
-import pandas as pd
 
 # Use the centralized logger as per AGENTS.md
 try:

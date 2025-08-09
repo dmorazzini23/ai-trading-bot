@@ -45,3 +45,44 @@ jobs:
           pip install -e .[dev]
       - name: Run pytest with quiet output
         run: pytest -q
+
+  lint-contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install tools
+        run: |
+          python -m pip install -U pip
+          pip install ruff import-linter -r tools/requirements-codemod.txt
+      - name: Run codemod in check mode (no changes)
+        run: |
+          python tools/codemods/phase3_canonical_imports.py
+          git diff --exit-code || (echo "::error ::Codemod would change files; run locally and commit." && exit 1)
+      - name: Lint (ruff)
+        run: |
+          ruff check .
+      - name: Import Linter contracts
+        run: |
+          lint-imports
+      - name: Prevent reintroduction of root duplicates and relative imports
+        run: |
+          set -euo pipefail
+          # Block forbidden root files:
+          for f in bot_engine.py data_fetcher.py data_validation.py indicators.py rebalancer.py runner.py signals.py yfinance.py; do
+            if [ -f "$f" ]; then
+              echo "::error ::Forbidden root module found: $f"
+              exit 1
+            fi
+          done
+          # Block relative imports in production code:
+          if grep -RIn "from \.\." ai_trading/ | grep -v "__init__.py"; then
+            echo "::error ::Relative imports found in ai_trading/"
+            exit 1
+          fi
+          if grep -RIn "from \." ai_trading/ | grep -v "__init__.py"; then
+            echo "::error ::Relative imports found in ai_trading/"
+            exit 1
+          fi

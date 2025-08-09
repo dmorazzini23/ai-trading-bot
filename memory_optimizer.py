@@ -10,9 +10,8 @@ import os
 import sys
 import time
 import threading
-import weakref
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Callable, Any
+from typing import Dict, Callable
 import logging
 
 # AI-AGENT-REF: Memory optimization and leak detection module

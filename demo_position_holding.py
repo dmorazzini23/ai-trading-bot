@@ -10,7 +10,6 @@ This script demonstrates the key improvements implemented:
 
 import os
 from datetime import datetime, timezone
-from unittest.mock import Mock
 
 # Set required environment variables for demo
 os.environ['ALPACA_API_KEY'] = 'demo_key'
@@ -104,7 +103,7 @@ def demo_signal_enhancement():
         
         print(f"{symbol:6} | {side:8} | {hold_action:7} | {final_action:20} | {explanation}")
     
-    print(f"\nSummary:")
+    print("\nSummary:")
     print(f"• Original signals: {len(original_signals)}")
     print(f"• Enhanced signals: {len(enhanced_signals)}")
     print(f"• Filtered out: {len(original_signals) - len(enhanced_signals)}")
@@ -140,8 +139,8 @@ def demo_meta_learning_trigger():
         
         # Mock conversion (in real system this would call trigger_meta_learning_conversion)
         print(f"   ➜ 🧠 META_LEARNING_TRIGGERED | symbol={trade['symbol']}")
-        print(f"   ➜ 📊 Converting audit format to meta-learning format")
-        print(f"   ➜ 💾 Storing for strategy optimization")
+        print("   ➜ 📊 Converting audit format to meta-learning format")
+        print("   ➜ 💾 Storing for strategy optimization")
         print()
     
     print("Key Benefits:")

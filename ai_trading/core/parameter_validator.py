@@ -6,7 +6,7 @@ and provides validation for parameter changes.
 """
 
 import logging
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any
 from datetime import datetime, timezone
 
 # Use the centralized logger as per AGENTS.md
@@ -18,7 +18,7 @@ except ImportError:
 
 from .constants import (
     KELLY_PARAMETERS, RISK_PARAMETERS, EXECUTION_PARAMETERS, 
-    PERFORMANCE_THRESHOLDS, TRADING_CONSTANTS
+    PERFORMANCE_THRESHOLDS
 )
 
 

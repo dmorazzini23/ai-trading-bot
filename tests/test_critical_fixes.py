@@ -17,7 +17,6 @@ def test_production_scenario_fix():
     """
     from strategies.base import TradeSignal
     import importlib
-    import sys
     
     # AI-AGENT-REF: Import real StrategyAllocator, not the mocked version from other tests
     # Multiple tests mock StrategyAllocator globally in different ways, so we need to work around that
@@ -129,20 +128,20 @@ def test_production_scenario_fix():
             # Check blocking conditions
             if last_dir and last_dir != s.side:
                 if s.side == "sell" and allocator.hold_protect.get(s.symbol, 0) > 0:
-                    print(f"DEBUG:   BLOCKED by hold protection")
+                    print("DEBUG:   BLOCKED by hold protection")
                     continue
             
             if delta < allocator.config.delta_threshold and last_dir == s.side:
-                print(f"DEBUG:   BLOCKED by delta threshold")
+                print("DEBUG:   BLOCKED by delta threshold")
                 continue
             
-            print(f"DEBUG:   ALLOWED - adding to final signals")
+            print("DEBUG:   ALLOWED - adding to final signals")
             final_signals.append(s)
         
         print(f"DEBUG: Final signals after filtering: {len(final_signals)}")
     
     # Validate that the production issue is fixed
-    assert buy_count > 0, f"Should have buy signals, not zero. Debug info above shows why."
+    assert buy_count > 0, "Should have buy signals, not zero. Debug info above shows why."
     assert sell_count == 0, "Should not have any sell signals from buy signal input"
     assert total_buy_weight > 0, "Total buy weight should be positive"
     

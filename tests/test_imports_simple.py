@@ -10,7 +10,6 @@ import pytest
 def test_imports_module_loads():
     """Test that the imports module loads successfully."""
     from ai_trading.imports import (
-        np, pd, get_ta_lib,
         NUMPY_AVAILABLE, PANDAS_AVAILABLE, SKLEARN_AVAILABLE,
         TALIB_AVAILABLE, PANDAS_TA_AVAILABLE
     )

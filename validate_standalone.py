@@ -6,14 +6,12 @@ Tests only the new modules without external dependencies.
 
 import sys
 import os
-import tempfile
 import hashlib
 import json
 from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Any, Optional
 
 # Set dummy environment variables to avoid config issues
 os.environ['ALPACA_API_KEY'] = 'dummy'
@@ -61,12 +59,8 @@ def test_idempotency():
     # Import the idempotency module directly
     sys.path.append('ai_trading/execution')
     
-    import hashlib
     import time
-    from typing import Dict, Tuple, Optional, Union
     from dataclasses import dataclass
-    from datetime import datetime, timezone
-    from collections import defaultdict
     import threading
     
     # Simplified TTL cache for testing
@@ -135,7 +129,7 @@ def test_cost_model():
     print("Testing cost model...")
     
     import math
-    from dataclasses import dataclass, asdict
+    from dataclasses import dataclass
     
     @dataclass
     class SymbolCosts:
@@ -177,8 +171,6 @@ def test_determinism():
     print("Testing determinism...")
     
     import random
-    import hashlib
-    import json
     
     def set_random_seeds(seed: int = 42):
         random.seed(seed)
@@ -320,8 +312,7 @@ def test_performance_cache():
     """Test performance caching."""
     print("Testing performance cache...")
     
-    import time
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta
     
     class PerformanceCache:
         def __init__(self, max_size=100, ttl_seconds=300):

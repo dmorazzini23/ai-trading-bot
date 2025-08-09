@@ -6,7 +6,7 @@ This script helps identify missing dependencies before running tests.
 
 import sys
 import importlib
-from typing import List, Tuple
+from typing import Tuple
 
 # Required packages for testing
 REQUIRED_PACKAGES = [
@@ -55,21 +55,21 @@ def main():
             print(f"❌ {package_name}: {info}")
     
     print("\n" + "=" * 50)
-    print(f"📊 Summary:")
+    print("📊 Summary:")
     print(f"   Available: {len(available_packages)}")
     print(f"   Missing:   {len(missing_packages)}")
     
     if missing_packages:
-        print(f"\n🚨 Missing packages:")
+        print("\n🚨 Missing packages:")
         for package_name, error in missing_packages:
             print(f"   - {package_name}")
         
-        print(f"\n💡 To install missing packages:")
-        print(f"   pip install -r requirements-dev.txt")
+        print("\n💡 To install missing packages:")
+        print("   pip install -r requirements-dev.txt")
         
         return 1
     else:
-        print(f"\n🎉 All test dependencies are available!")
+        print("\n🎉 All test dependencies are available!")
         return 0
 
 if __name__ == "__main__":

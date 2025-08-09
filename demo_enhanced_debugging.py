@@ -133,8 +133,7 @@ def demonstrate_position_reconciliation():
     print("=" * 60)
     
     from ai_trading.execution import (
-        get_position_reconciler, update_bot_position, force_position_reconciliation,
-        get_position_discrepancies
+        get_position_reconciler, update_bot_position, force_position_reconciliation
     )
     
     reconciler = get_position_reconciler()
@@ -184,7 +183,7 @@ def demonstrate_position_reconciliation():
     
     # Show reconciliation statistics
     stats = reconciler.get_reconciliation_stats()
-    print(f"\n📊 RECONCILIATION STATS:")
+    print("\n📊 RECONCILIATION STATS:")
     print(f"  Current discrepancies: {stats['current_discrepancies']}")
     print(f"  Historical discrepancies: {stats['total_historical_discrepancies']}")
     print(f"  Bot positions: {stats['bot_positions_count']}")
@@ -252,7 +251,7 @@ def demonstrate_pnl_attribution():
         print(f"  TOTAL REALIZED: ${total:+.2f}")
     
     # Explain recent changes
-    print(f"\n📝 RECENT PnL EXPLANATION FOR AAPL:")
+    print("\n📝 RECENT PnL EXPLANATION FOR AAPL:")
     explanation = explain_recent_pnl_changes("AAPL", minutes=60)
     print(f"  {explanation['explanation']}")
     print(f"  Total change: ${explanation['total_change']:+.2f}")
@@ -260,7 +259,7 @@ def demonstrate_pnl_attribution():
     # Show portfolio summary
     from ai_trading.execution import get_portfolio_pnl_summary
     summary = get_portfolio_pnl_summary()
-    print(f"\n📊 PORTFOLIO PnL SUMMARY:")
+    print("\n📊 PORTFOLIO PnL SUMMARY:")
     print(f"  Total realized PnL: ${summary['total_realized_pnl']:+.2f}")
     print(f"  Total unrealized PnL: ${summary['total_unrealized_pnl']:+.2f}")
     print(f"  Net PnL: ${summary['total_pnl']:+.2f}")
@@ -283,7 +282,7 @@ def demonstrate_debugging_a_problem():
     debug_tracker = get_debug_tracker()
     exec_stats = debug_tracker.get_execution_stats()
     
-    print(f"\n1. EXECUTION STATISTICS:")
+    print("\n1. EXECUTION STATISTICS:")
     print(f"   Recent successful orders: {exec_stats['recent_successes']}")
     print(f"   Recent failed orders: {exec_stats['recent_failures']}")
     print(f"   Success rate: {exec_stats['success_rate']:.1%}")
@@ -303,7 +302,7 @@ def demonstrate_debugging_a_problem():
         print(f"   {symbol} {side} {qty} shares - {'✓' if success else '✗'}")
     
     # 3. Force position reconciliation to find discrepancies
-    print(f"\n3. POSITION RECONCILIATION:")
+    print("\n3. POSITION RECONCILIATION:")
     reconciler = get_position_reconciler()
     bot_positions = reconciler.get_bot_positions()
     print(f"   Bot positions: {bot_positions}")
@@ -318,7 +317,7 @@ def demonstrate_debugging_a_problem():
         print("   ✓ No position discrepancies found")
     
     # 4. Analyze PnL attribution
-    print(f"\n4. PnL ATTRIBUTION ANALYSIS:")
+    print("\n4. PnL ATTRIBUTION ANALYSIS:")
     attributor = get_pnl_attributor()
     portfolio_summary = get_portfolio_pnl_summary()
     
@@ -328,7 +327,7 @@ def demonstrate_debugging_a_problem():
     
     # Break down PnL by source
     pnl_by_source = portfolio_summary['pnl_by_source']
-    print(f"   PnL by source:")
+    print("   PnL by source:")
     for source, amount in pnl_by_source.items():
         if amount != 0:
             print(f"     {source}: ${amount:+.2f}")
@@ -343,7 +342,7 @@ def demonstrate_debugging_a_problem():
         print(f"   {symbol}: ${amount:+.2f} from {source}")
     
     # 6. Provide debugging recommendations
-    print(f"\n6. DEBUGGING RECOMMENDATIONS:")
+    print("\n6. DEBUGGING RECOMMENDATIONS:")
     print("   ✓ Check execution timeline for each order using correlation IDs")
     print("   ✓ Verify position updates were properly recorded after fills")
     print("   ✓ Check if orders were submitted but never filled")
@@ -378,7 +377,7 @@ def main():
         print("- Unexplained PnL changes")
         print("- Failed order executions")
         
-        print(f"\n🔧 TO USE IN PRODUCTION:")
+        print("\n🔧 TO USE IN PRODUCTION:")
         print("1. Import: from ai_trading.execution import enable_debug_mode")
         print("2. Enable: enable_debug_mode(verbose=True)")
         print("3. Monitor: Check logs for execution events and discrepancies")

@@ -1,5 +1,4 @@
 import types
-import pytest
 
 
 class DummyLock:
@@ -54,7 +53,8 @@ def manual_fractional(balance, price, atr, win_prob, peak):
 
 
 def test_fractional_kelly_drawdown(monkeypatch, tmp_path):
-    import sys, types
+    import sys
+    import types
     sys.modules.setdefault('schedule', types.ModuleType('schedule'))
     sys.modules.setdefault('yfinance', types.ModuleType('yfinance'))
     import bot_engine as bot

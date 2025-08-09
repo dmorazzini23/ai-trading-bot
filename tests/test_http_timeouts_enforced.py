@@ -1,4 +1,5 @@
-import pathlib, re
+import pathlib
+import re
 
 def test_all_requests_have_timeout():
     root = pathlib.Path(__file__).resolve().parents[1]

@@ -11,8 +11,8 @@ AI-AGENT-REF: Market regime detection for intelligent position management
 """
 
 import logging
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
 from enum import Enum
 from dataclasses import dataclass
 

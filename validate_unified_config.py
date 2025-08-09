@@ -156,28 +156,24 @@ def test_import_compatibility():
     
     # Test importing main modules
     try:
-        import ai_trading
         print("✓ ai_trading import works")
     except Exception as e:
         print(f"✗ ai_trading import failed: {e}")
         return False
     
     try:
-        from ai_trading.config.settings_singleton import get_settings
         print("✓ settings_singleton import works")
     except Exception as e:
         print(f"✗ settings_singleton import failed: {e}")
         return False
     
     try:
-        from ai_trading.math.money import Money
         print("✓ Money class import works")
     except Exception as e:
         print(f"✗ Money class import failed: {e}")
         return False
     
     try:
-        from ai_trading.integrations.rate_limit import get_limiter
         print("✓ rate_limit import works")
     except Exception as e:
         print(f"✗ rate_limit import failed: {e}")

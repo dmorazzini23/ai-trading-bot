@@ -8,9 +8,7 @@ Validates that trades exceed total costs with required safety margins.
 
 import logging
 import math
-import statistics
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple, Any, Union
+from typing import Dict, Optional, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
 

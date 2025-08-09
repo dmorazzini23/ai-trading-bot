@@ -10,7 +10,7 @@ from typing import Union, Optional, TYPE_CHECKING
 import logging
 
 if TYPE_CHECKING:
-    from typing import Self
+    pass
 
 # AI-AGENT-REF: Set high precision for financial calculations
 getcontext().prec = 28

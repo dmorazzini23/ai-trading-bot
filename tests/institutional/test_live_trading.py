@@ -8,7 +8,6 @@ capabilities, including end-to-end workflows, risk management, and compliance.
 import pytest
 import asyncio
 import os
-from datetime import datetime, timezone
 
 # Set test environment
 os.environ['PYTEST_RUNNING'] = '1'
@@ -174,7 +173,7 @@ class TestLiveTradingBot:
         try:
             invalid_side_result = execution_engine.submit_market_order("AAPL", "invalid_side", 100)
             # Should handle gracefully
-        except Exception as e:
+        except Exception:
             # Error handling is working
             pass
     

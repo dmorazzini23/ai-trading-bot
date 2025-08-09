@@ -6,12 +6,10 @@ Integrates memory optimization, performance monitoring, and process management.
 
 import os
 import sys
-import time
 import logging
 import signal
 import atexit
 from datetime import datetime, timezone
-from typing import Optional
 
 # AI-AGENT-REF: Optimized startup script with performance monitoring
 

@@ -6,7 +6,7 @@ precise order sizing and execution.
 """
 
 from decimal import Decimal
-from typing import Dict, NamedTuple, Optional
+from typing import Dict, NamedTuple
 import logging
 
 logger = logging.getLogger(__name__)

@@ -90,7 +90,7 @@ def ichimoku_fallback(
 
         signal = pd.DataFrame(df)
         return df, signal
-    except Exception as e:
+    except Exception:
         # Return empty DataFrames on error to prevent system crash
         empty_df = pd.DataFrame()
         return empty_df, empty_df
@@ -154,7 +154,7 @@ def ema(series: tuple[float, ...], period: int) -> pd.Series:
             raise ValueError("Input series contains only NaN values")
         
         return s.ewm(span=period, adjust=False).mean()
-    except Exception as e:
+    except Exception:
         # Return empty Series on error
         return pd.Series(dtype=float)
 
@@ -176,7 +176,7 @@ def sma(series: tuple[float, ...], period: int) -> pd.Series:
             raise ValueError("Input series contains only NaN values")
         
         return s.rolling(window=period).mean()
-    except Exception as e:
+    except Exception:
         # Return empty Series on error
         return pd.Series(dtype=float)
 
@@ -213,7 +213,7 @@ def bollinger_bands(x, length: int = 20, num_std: float = 2.0) -> pd.DataFrame:
         lower = sma - (std * num_std)
 
         return pd.DataFrame({"upper": upper, "middle": sma, "lower": lower})
-    except Exception as e:
+    except Exception:
         # Return empty DataFrame on error to prevent system crash
         return pd.DataFrame({"upper": pd.Series(dtype=float), 
                            "middle": pd.Series(dtype=float), 
@@ -238,7 +238,7 @@ def rsi(series: tuple[float, ...], period: int = 14) -> pd.Series:
         
         result = rsi_numba(arr, period)
         return pd.Series(result)
-    except Exception as e:
+    except Exception:
         # Return empty Series on error
         return pd.Series(dtype=float)
 
@@ -271,7 +271,7 @@ def atr(
         lc = (low - close.shift()).abs()
         tr = pd.concat([hl, hc, lc], axis=1).max(axis=1)
         return tr.rolling(period).mean()
-    except Exception as e:
+    except Exception:
         # Return empty Series on error
         return pd.Series(dtype=float)
 
@@ -429,7 +429,7 @@ def vwap(prices: np.ndarray, volumes: np.ndarray) -> float:
             raise ValueError("Total volume cannot be zero")
         
         return np.sum(prices * volumes) / total_volume
-    except Exception as e:
+    except Exception:
         # Return 0 on error to prevent system crash
         return 0.0
 
@@ -458,7 +458,7 @@ def donchian_channel(
         upper = np.max(highs[-period:])
         lower = np.min(lows[-period:])
         return {"upper": upper, "lower": lower}
-    except Exception as e:
+    except Exception:
         # Return safe default values on error
         return {"upper": 0.0, "lower": 0.0}
 

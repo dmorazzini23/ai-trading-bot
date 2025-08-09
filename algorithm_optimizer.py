@@ -16,16 +16,14 @@ AI-AGENT-REF: Advanced algorithm optimization for institutional trading
 from __future__ import annotations
 
 import logging
-import math
 import numpy as np
 import pandas as pd
 import statistics
-import time
 import threading  # AI-AGENT-REF: Thread safety for algorithm optimizer
-from collections import defaultdict, deque
-from dataclasses import dataclass, field
+from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Tuple, Callable
+from typing import Dict, List, Optional, Any
 from enum import Enum
 
 # AI-AGENT-REF: Advanced algorithm optimization for production trading

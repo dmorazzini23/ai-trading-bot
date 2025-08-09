@@ -1,8 +1,6 @@
 import sys
 import tempfile
 import os
-from pathlib import Path
-import pytest
 
 # Mock the config module to avoid environment variable requirements
 # Create a simple class-based approach that avoids singleton complexity

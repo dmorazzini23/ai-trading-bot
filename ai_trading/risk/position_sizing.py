@@ -8,8 +8,8 @@ for institutional-grade trading operations.
 
 import math
 import statistics
-from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Any
+from datetime import datetime, timezone
 import logging
 
 # Use the centralized logger as per AGENTS.md
@@ -20,7 +20,7 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from ..core.enums import RiskLevel
-from ..core.constants import RISK_PARAMETERS, KELLY_PARAMETERS
+from ..core.constants import RISK_PARAMETERS
 from .kelly import KellyCriterion
 
 

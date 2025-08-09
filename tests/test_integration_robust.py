@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 """Minimal import-time stubs so strategy_allocator and other modules load."""
 try:
-    import pandas  # type: ignore
+    pass  # type: ignore
 except Exception:
     sys.modules["pandas"] = types.ModuleType("pandas")
     sys.modules["pandas"].DataFrame = MagicMock()
@@ -330,8 +330,6 @@ sys.modules["ai_trading.capital_scaling"].CapitalScalingEngine = _CapScaler
 sys.modules["ai_trading.capital_scaling"].drawdown_adjusted_kelly = lambda *a, **k: 0.02
 sys.modules["ai_trading.capital_scaling"].volatility_parity_position = lambda *a, **k: 0.01
 
-from ai_trading.main import main
-from bot_engine import pre_trade_health_check
 
 
 def test_bot_main_normal(monkeypatch):

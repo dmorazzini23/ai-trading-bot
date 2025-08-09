@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import glob, os
+import glob
+import os
 import sys
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List
 
@@ -13,7 +14,6 @@ import pandas as pd
 
 import config
 from ai_trading import signals  # noqa: F401
-from ai_trading import data_fetcher
 # AI-AGENT-REF: Removed legacy trade_execution import as part of shim cleanup
 # from ai_trading import trade_execution as execution_api  # type: ignore
 import risk_engine

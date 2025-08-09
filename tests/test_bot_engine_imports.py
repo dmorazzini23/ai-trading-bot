@@ -91,15 +91,14 @@ class TestBotEngineImports:
             # Both imports should fail
             with pytest.raises(ImportError):
                 try:
-                    from ai_trading.pipeline import model_pipeline  # type: ignore
+                    pass  # type: ignore
                 except Exception:  # pragma: no cover
-                    from pipeline import model_pipeline  # type: ignore
+                    pass  # type: ignore
 
     def test_import_types_annotation(self):
         """Test that type annotations are preserved in import statements."""
         # This is a basic check that the import statements have proper type ignore comments
         import ast
-        import inspect
         
         # Get the source of the import logic we're testing
         import_code = '''

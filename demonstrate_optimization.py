@@ -45,21 +45,21 @@ def demonstrate_parameter_optimizations():
         print("-"*60)
         print("Three distinct trading modes with optimized risk profiles:")
         
-        print(f"\n  CONSERVATIVE MODE (Lower Risk):")
+        print("\n  CONSERVATIVE MODE (Lower Risk):")
         print(f"  • KELLY_FRACTION: {conservative_config.kelly_fraction} (25% lower risk)")
         print(f"  • CONF_THRESHOLD: {conservative_config.conf_threshold} (85% confidence requirement)")
         print(f"  • DAILY_LOSS_LIMIT: {conservative_config.daily_loss_limit} (3% daily loss limit)")
         print(f"  • CAPITAL_CAP: {conservative_config.capital_cap} (20% capital allocation)")
         print(f"  • CONFIRMATION_COUNT: {conservative_config.confirmation_count} (Triple confirmation)")
         
-        print(f"\n  BALANCED MODE (Default):")
+        print("\n  BALANCED MODE (Default):")
         print(f"  • KELLY_FRACTION: {balanced_config.kelly_fraction} (Balanced risk)")
         print(f"  • CONF_THRESHOLD: {balanced_config.conf_threshold} (75% confidence requirement)")
         print(f"  • DAILY_LOSS_LIMIT: {balanced_config.daily_loss_limit} (7% daily loss limit)")
         print(f"  • CAPITAL_CAP: {balanced_config.capital_cap} (25% capital allocation)")
         print(f"  • CONFIRMATION_COUNT: {balanced_config.confirmation_count} (Double confirmation)")
         
-        print(f"\n  AGGRESSIVE MODE (Higher Risk):")
+        print("\n  AGGRESSIVE MODE (Higher Risk):")
         print(f"  • KELLY_FRACTION: {aggressive_config.kelly_fraction} (75% higher risk tolerance)")
         print(f"  • CONF_THRESHOLD: {aggressive_config.conf_threshold} (65% confidence requirement)")
         print(f"  • DAILY_LOSS_LIMIT: {aggressive_config.daily_loss_limit} (8% daily loss limit)")
@@ -162,7 +162,7 @@ def demonstrate_parameter_optimizations():
         print("Summary of centralized parameter configuration:")
         
         # Display configuration summary for all modes
-        print(f"\n  📊 Configuration Summary:")
+        print("\n  📊 Configuration Summary:")
         print(f"    CONSERVATIVE Mode: {len([k for k in conservative_config.__dict__ if not k.startswith('_')])} parameters")
         print(f"    BALANCED Mode:     {len([k for k in balanced_config.__dict__ if not k.startswith('_')])} parameters")
         print(f"    AGGRESSIVE Mode:   {len([k for k in aggressive_config.__dict__ if not k.startswith('_')])} parameters")
@@ -185,7 +185,7 @@ def demonstrate_parameter_optimizations():
         print("✅ Parameter validation available")
         print("✅ Single-file parameter updates now possible")
         
-        print(f"\n🎯 Benefits of Centralized Configuration:")
+        print("\n🎯 Benefits of Centralized Configuration:")
         print("   1. Single-file parameter updates affect entire system")
         print("   2. Mode-specific risk profiles (Conservative/Balanced/Aggressive)")
         print("   3. Environment variable overrides for runtime configuration")

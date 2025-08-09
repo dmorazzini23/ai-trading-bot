@@ -11,9 +11,8 @@ import sys
 import time
 import threading
 import subprocess
-import tracemalloc
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
 import json
 import logging
 

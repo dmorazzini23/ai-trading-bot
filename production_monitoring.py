@@ -11,14 +11,12 @@ This module provides comprehensive monitoring capabilities including:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 import threading
 import psutil
-import json
-from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Callable
+from datetime import datetime, timezone
+from typing import Dict, Optional, Any, Callable
 from dataclasses import dataclass, asdict
 from collections import deque, defaultdict
 from contextlib import contextmanager

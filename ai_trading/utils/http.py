@@ -7,7 +7,6 @@ and retry behavior to replace raw requests calls.
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from typing import Optional, Dict, Any
 
 
 class HTTPSession:

@@ -12,11 +12,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-import sys
 import threading
-import time
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Any, Callable, Union
+from typing import Dict, List, Optional, Any, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -350,7 +348,7 @@ class ShutdownHandler:
             
             for order in all_orders:
                 if datetime.now(timezone.utc) - start_time > timeout:
-                    self.logger.warning(f"Order cancellation timeout reached")
+                    self.logger.warning("Order cancellation timeout reached")
                     break
                 
                 try:
@@ -394,7 +392,7 @@ class ShutdownHandler:
             
             for position in all_positions:
                 if datetime.now(timezone.utc) - start_time > timeout:
-                    self.logger.warning(f"Position closing timeout reached")
+                    self.logger.warning("Position closing timeout reached")
                     break
                 
                 try:

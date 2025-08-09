@@ -8,7 +8,6 @@ in both training environment and inference wrapper.
 import numpy as np
 import tempfile
 import os
-from pathlib import Path
 import logging
 
 # Setup logging
@@ -138,7 +137,7 @@ def test_reward_normalization():
     print("Testing reward normalization...")
     
     try:
-        from ..env import TradingEnv, ActionSpaceConfig, RewardConfig, RunningStats
+        from ..env import TradingEnv, RewardConfig, RunningStats
         
         # Test running stats
         stats = RunningStats(window=10)

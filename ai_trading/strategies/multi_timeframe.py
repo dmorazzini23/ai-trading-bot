@@ -7,9 +7,9 @@ institutional-grade trading strategies.
 """
 
 # AI-AGENT-REF: use centralized import management
-from .imports import np, pd, NUMPY_AVAILABLE, PANDAS_AVAILABLE
-from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime, timedelta, timezone
+from .imports import pd
+from typing import Dict, List, Any
+from datetime import datetime, timezone
 from enum import Enum
 import logging
 
@@ -21,7 +21,6 @@ except ImportError:
     logger = logging.getLogger(__name__)
 
 from ..core.enums import TimeFrame
-from ..core.constants import TRADING_CONSTANTS
 
 
 class SignalStrength(Enum):

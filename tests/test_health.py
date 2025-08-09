@@ -3,7 +3,6 @@ import types
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 # Minimal stubs so importing bot_engine succeeds without optional deps
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -229,7 +228,7 @@ sys.modules["torch.optim"] = torch_optim
 
 # AI-AGENT-REF: Remove ai_trading.main import that causes deep torch dependency chain
 # from ai_trading.main import main  # Not used in this test, causes torch import issues
-from bot_engine import pre_trade_health_check
+from ai_trading.bot_engine import pre_trade_health_check
 
 
 class DummyFetcher:

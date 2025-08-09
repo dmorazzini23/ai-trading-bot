@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import random
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 from pathlib import Path
 

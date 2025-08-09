@@ -15,19 +15,15 @@ AI-AGENT-REF: Production-grade monitoring dashboard system
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import math
 import statistics
 import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Callable
 from flask import Flask, render_template_string, jsonify, request
-import socket
 
 # AI-AGENT-REF: Real-time monitoring dashboard for institutional trading
 

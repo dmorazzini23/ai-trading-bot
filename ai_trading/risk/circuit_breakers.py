@@ -6,9 +6,8 @@ volatility circuit breakers, and emergency stop mechanisms to protect against
 catastrophic losses and system failures.
 """
 
-import time
-from typing import Dict, List, Optional, Any, Callable
-from datetime import datetime, timedelta, timezone
+from typing import Dict, Any, Callable
+from datetime import datetime, timezone
 from enum import Enum
 import threading
 import logging
@@ -20,8 +19,7 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-from ..core.enums import RiskLevel
-from ..core.constants import RISK_PARAMETERS, PERFORMANCE_THRESHOLDS
+from ..core.constants import PERFORMANCE_THRESHOLDS
 
 
 class CircuitBreakerState(Enum):

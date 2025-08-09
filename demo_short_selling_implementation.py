@@ -24,7 +24,7 @@ def demonstrate_short_selling():
     print("=== Short Selling Capability Demonstration ===")
     
     try:
-        from trade_execution import ExecutionEngine, OrderInfo
+        from trade_execution import ExecutionEngine
         
         # Create mock context and API
         mock_ctx = Mock()
@@ -131,7 +131,7 @@ def demonstrate_meta_learning():
     print("\n=== Meta-Learning Graceful Degradation Demonstration ===")
     
     try:
-        from bot_engine import load_global_signal_performance
+        from ai_trading.bot_engine import load_global_signal_performance
         
         # Test with no trade history (new deployment scenario)
         with patch('os.path.exists', return_value=False):
@@ -140,7 +140,7 @@ def demonstrate_meta_learning():
         
         # Test with configurable parameters
         result = load_global_signal_performance(min_trades=1, threshold=0.2)
-        print(f"✓ Configurable parameters: min_trades=1, threshold=0.2")
+        print("✓ Configurable parameters: min_trades=1, threshold=0.2")
         
         print("✓ Meta-learning graceful degradation working correctly!")
         

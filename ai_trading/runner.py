@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from threading import Lock, RLock
+from threading import RLock
 
 import time
 from ai_trading.logging import get_logger

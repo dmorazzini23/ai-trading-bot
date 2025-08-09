@@ -4,8 +4,6 @@ Test startup permissions and runtime paths.
 Validates that the application has write permissions to required directories.
 """
 import pytest
-import tempfile
-from pathlib import Path
 
 def test_runtime_paths_writable():
     """Test that runtime paths are writable."""

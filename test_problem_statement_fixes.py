@@ -5,7 +5,6 @@ Focused test suite for the specific critical trading bot issues described in the
 
 import os
 import unittest
-from unittest.mock import Mock, patch, MagicMock
 
 # Set up minimal environment for imports
 os.environ.setdefault('ALPACA_API_KEY', 'test_key')

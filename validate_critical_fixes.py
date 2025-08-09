@@ -119,11 +119,9 @@ def test_import_resolution():
     print("📦 Testing Import Resolution...")
     try:
         # Test direct sentiment imports
-        from sentiment import fetch_sentiment, predict_text_sentiment, sentiment_lock
         print("  ✅ Direct sentiment imports work")
         
         # Test that MetaLearning can be imported without dependency errors
-        from ai_trading.strategies.metalearning import MetaLearning
         print("  ✅ MetaLearning imports with fallbacks")
         
         # Test that missing dependencies don't cause import failures

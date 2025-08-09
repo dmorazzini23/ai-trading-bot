@@ -11,7 +11,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from threading import Lock, Thread
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from collections import defaultdict
 
 from ai_trading.logging import get_logger

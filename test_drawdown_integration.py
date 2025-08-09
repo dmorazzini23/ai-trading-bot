@@ -9,8 +9,7 @@ into the main trading loop and responds correctly to equity changes.
 import os
 import sys
 import unittest
-from unittest.mock import Mock, patch, MagicMock
-from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 # Set testing environment
 os.environ["TESTING"] = "1"

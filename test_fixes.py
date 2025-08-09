@@ -153,7 +153,7 @@ def main():
             print(f"❌ Test {test.__name__} failed with exception: {e}")
             results.append(False)
     
-    print(f"\n📊 Test Results:")
+    print("\n📊 Test Results:")
     print(f"✅ Passed: {sum(results)}/{len(results)}")
     print(f"❌ Failed: {len(results) - sum(results)}/{len(results)}")
     

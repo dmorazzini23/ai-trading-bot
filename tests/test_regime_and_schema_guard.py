@@ -1,6 +1,5 @@
 import pandas as pd
 import pytest
-from datetime import datetime, timedelta, timezone
 
 def test_validate_ohlcv_detects_missing():
     """Test that validate_ohlcv detects missing columns."""

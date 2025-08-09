@@ -1,8 +1,6 @@
 """Test model registry register → latest_for → load_model workflow."""
 
 import tempfile
-import shutil
-from pathlib import Path
 import pytest
 from sklearn.linear_model import LinearRegression
 import numpy as np

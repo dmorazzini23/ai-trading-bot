@@ -5,7 +5,6 @@ Tests core trading enums, constants, and basic functionality
 of the institutional trading platform infrastructure.
 """
 
-import pytest
 from datetime import time
 
 from ai_trading.core.enums import (
@@ -13,7 +12,7 @@ from ai_trading.core.enums import (
     TimeFrame, AssetClass
 )
 from ai_trading.core.constants import (
-    TRADING_CONSTANTS, MARKET_HOURS, RISK_PARAMETERS,
+    TRADING_CONSTANTS, RISK_PARAMETERS,
     KELLY_PARAMETERS, EXECUTION_PARAMETERS
 )
 

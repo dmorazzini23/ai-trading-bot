@@ -38,7 +38,6 @@ VALIDATION RESULTS:
     with patch.dict(os.environ, test_env):
         import config
         import sentiment
-        from ai_trading import meta_learning
         from order_health_monitor import OrderHealthMonitor
         from system_health_checker import SystemHealthChecker
         
@@ -72,15 +71,15 @@ VALIDATION RESULTS:
         order_monitor = OrderHealthMonitor()
         print(f"   • Fill rate target: {config.ORDER_FILL_RATE_TARGET} (80%)")
         print(f"   • Max retry attempts: {config.ORDER_MAX_RETRY_ATTEMPTS}")
-        print(f"   • Partial fill tracking: Active")
-        print(f"   • Quantity reconciliation: Enhanced")
+        print("   • Partial fill tracking: Active")
+        print("   • Quantity reconciliation: Enhanced")
         print("   ➜ RESULT: Optimal partial fill handling with auto-retry")
         
         print("\n✅ ISSUE 5: ORDER STATUS MONITORING - SOLVED")
         print("   Automated timeout prevention and active monitoring:")
         print(f"   • Order timeout: {config.ORDER_TIMEOUT_SECONDS}s (5 minutes max)")
         print(f"   • Cleanup interval: {config.ORDER_STALE_CLEANUP_INTERVAL}s (active)")
-        print(f"   • Health monitoring: 4-component system")
+        print("   • Health monitoring: 4-component system")
         order_summary = order_monitor.get_health_summary()
         print(f"   • Metrics tracked: {len(order_summary)} order health indicators")
         print("   ➜ RESULT: No more capital lockup from stuck orders")
@@ -94,7 +93,7 @@ VALIDATION RESULTS:
             status_emoji = {"healthy": "✅", "warning": "⚠️", "critical": "❌"}.get(comp_data['status'], "❓")
             print(f"   {status_emoji} {comp_name.title()}: {comp_data['status']} ({comp_data['success_rate']:.1%})")
         
-        print(f"\n📊 PERFORMANCE IMPACT MATRIX:")
+        print("\n📊 PERFORMANCE IMPACT MATRIX:")
         print("-" * 80)
         print(f"{'Component':<25} {'Before':<20} {'After':<20} {'Improvement'}")
         print("-" * 80)
@@ -104,7 +103,7 @@ VALIDATION RESULTS:
         print(f"{'Capital Lockup':<25} {'Indefinite pending':<20} {'5 min timeout':<20} {'ELIMINATED'}")
         print(f"{'System Monitoring':<25} {'Basic logging':<20} {'4-component':<20} {'COMPLETE'}")
         
-        print(f"\n🎯 SUCCESS CRITERIA - ALL ACHIEVED:")
+        print("\n🎯 SUCCESS CRITERIA - ALL ACHIEVED:")
         print("   ✅ Sentiment analysis success rate >90%")
         print("   ✅ Order fill rates improve to >80% of intended size")
         print("   ✅ Meta-learning system activates within reasonable timeframes")
@@ -112,14 +111,14 @@ VALIDATION RESULTS:
         print("   ✅ Order timeouts prevent capital lockup")
         print("   ✅ System health monitoring provides early warning")
         
-        print(f"\n⚙️  CONFIGURATION SUMMARY:")
-        print(f"   • Total new parameters: 21 configurable settings")
-        print(f"   • Backward compatibility: 100% maintained")
-        print(f"   • Thread safety: Proper locking implemented")
-        print(f"   • Error handling: Comprehensive exception handling")
-        print(f"   • Monitoring coverage: All critical components")
+        print("\n⚙️  CONFIGURATION SUMMARY:")
+        print("   • Total new parameters: 21 configurable settings")
+        print("   • Backward compatibility: 100% maintained")
+        print("   • Thread safety: Proper locking implemented")
+        print("   • Error handling: Comprehensive exception handling")
+        print("   • Monitoring coverage: All critical components")
         
-        print(f"\n🚀 PRODUCTION READINESS:")
+        print("\n🚀 PRODUCTION READINESS:")
         print("   ✅ All fixes tested and validated")
         print("   ✅ Comprehensive test suites created")
         print("   ✅ Configuration-driven fine-tuning")

@@ -5,10 +5,9 @@ Provides comprehensive liquidity analysis, volume screening,
 and execution optimization for institutional-grade trading operations.
 """
 
-import time
 import statistics
-from typing import Dict, List, Optional, Tuple, Any
-from datetime import datetime, timedelta
+from typing import Dict, List, Any
+from datetime import datetime
 from enum import Enum
 import logging
 
@@ -19,8 +18,7 @@ except ImportError:
     import logging
     logger = logging.getLogger(__name__)
 
-from ..core.enums import TimeFrame, OrderType
-from ..core.constants import RISK_PARAMETERS, EXECUTION_PARAMETERS
+from ..core.enums import OrderType
 
 
 class LiquidityLevel(Enum):

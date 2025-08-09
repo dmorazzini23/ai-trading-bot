@@ -8,7 +8,6 @@ full market data or external dependencies.
 import asyncio
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta
 import sys
 import os
 
@@ -181,7 +180,7 @@ def test_integrated_strategy_system():
             "reasoning": f"MTF analysis: {mtf_recommendation['action']}, Market regime: {regime.value}"
         }
         
-        print(f"✓ Integrated strategy system:")
+        print("✓ Integrated strategy system:")
         print(f"  Final action: {integrated_recommendation['action']}")
         print(f"  Combined confidence: {integrated_recommendation['confidence']:.2f}")
         print(f"  Adjusted position size: {integrated_recommendation['position_size_multiplier']:.2f}")
@@ -229,7 +228,7 @@ def test_strategy_performance_scenarios():
         
         volatile_result = detector.detect_regime(volatile_data)
         
-        print(f"✓ Strategy performance scenarios:")
+        print("✓ Strategy performance scenarios:")
         print(f"  Bull market regime: {bull_result.get('primary_regime', 'Unknown')}")
         print(f"  Bear market regime: {bear_result.get('primary_regime', 'Unknown')}")
         print(f"  High volatility regime: {volatile_result.get('primary_regime', 'Unknown')}")

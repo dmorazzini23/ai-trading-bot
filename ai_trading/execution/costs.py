@@ -7,7 +7,6 @@ them in both backtesting and live position sizing.
 
 import logging
 import json
-import os
 from typing import Dict, Optional, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, date

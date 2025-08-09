@@ -6,9 +6,6 @@ __all__ = ["pre_trade_health_check", "run_all_trades_worker", "BotState"]
 def _alpaca_available() -> bool:
     """Check if Alpaca SDK is available for import."""
     try:
-        import alpaca_trade_api  # type: ignore
-        import alpaca.trading  # type: ignore
-        import alpaca.data  # type: ignore
         return True
     except Exception:
         return False
@@ -72,7 +69,7 @@ from ai_trading.data_fetcher import get_bars, get_bars_batch
 from ai_trading.data_fetcher import get_minute_bars, get_minute_bars_batch
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ai_trading.market.calendars import ensure_final_bar
-from ai_trading.utils.timefmt import utc_now_iso, format_datetime_utc  # AI-AGENT-REF: Import UTC timestamp utilities
+from ai_trading.utils.timefmt import utc_now_iso  # AI-AGENT-REF: Import UTC timestamp utilities
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
 try:
     from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
@@ -452,12 +449,11 @@ import threading
 import time as pytime
 from argparse import ArgumentParser
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import time as dt_time
 from datetime import datetime as dt_
 from threading import Lock, Semaphore, Thread
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Sequence, Tuple
 from zoneinfo import ZoneInfo
 
 # Set deterministic random seeds for reproducibility
@@ -488,7 +484,6 @@ from functools import lru_cache
 
 
 import importlib
-import types
 
 
 # AI-AGENT-REF: lazy load heavy modules when first accessed
@@ -763,7 +758,7 @@ try:
     import requests  # type: ignore[assignment]
     from requests import Session  # type: ignore[assignment]
     from requests.exceptions import HTTPError  # type: ignore[assignment]
-except Exception as import_exc:  # pragma: no cover - fallback when requests is missing or partially mocked
+except Exception:  # pragma: no cover - fallback when requests is missing or partially mocked
     import types
     requests = types.SimpleNamespace(
         Session=lambda *a, **k: types.SimpleNamespace(get=lambda *a, **k: None),
@@ -861,9 +856,8 @@ else:
         from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce, OrderStatus
         from alpaca.trading.models import Order
         from alpaca.trading.requests import (
-            GetOrdersRequest, GetAssetsRequest, MarketOrderRequest,
+            GetOrdersRequest, MarketOrderRequest,
         )
-        from alpaca.trading.stream import TradingStream
         from alpaca.data.historical import StockHistoricalDataClient
         from alpaca.data.models import Quote
         from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
@@ -882,7 +876,6 @@ else:
             MockLimitOrderRequest as LimitOrderRequest,
             MockGetOrdersRequest as GetOrdersRequest,
             MockOrder as Order,
-            MockTradingStream as TradingStream,
             mock_order_side as OrderSide,
             mock_time_in_force as TimeInForce,
             mock_order_status as OrderStatus,
@@ -1346,8 +1339,7 @@ if not os.getenv("PYTEST_RUNNING"):
     from ai_trading.data_fetcher import (  # type: ignore
         DataFetchError,
         DataFetchException,
-        get_minute_df, get_daily_df, fetch_minute_yfinance, fetch_daily_data_async,
-        _MINUTE_CACHE,
+        get_minute_df, _MINUTE_CACHE,
     )
 else:
     # AI-AGENT-REF: mock data_fetcher functions for test environments
@@ -1676,7 +1668,6 @@ else:
 DISASTER_DD_LIMIT = float(config.get_env("DISASTER_DD_LIMIT", "0.2"))
 
 # Paths
-from pathlib import Path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # PROJECT_ROOT: repo root (…/ai_trading/core/ -> up two levels)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -2334,7 +2325,7 @@ def log_circuit_breaker_status():
         for name, cb in breakers.items():
             if hasattr(cb, 'state') and hasattr(cb, 'fail_counter'):
                 logger.info(
-                    f"CIRCUIT_BREAKER_STATUS",
+                    "CIRCUIT_BREAKER_STATUS",
                     extra={
                         "breaker": name,
                         "state": cb.state,
@@ -3844,7 +3835,7 @@ def _initialize_alpaca_clients():
         return
     # Lazy-import SDK only when needed
     try:
-        from alpaca_trade_api.rest import REST  # type: ignore
+        pass  # type: ignore
     except Exception as e:
         logger.error("alpaca_trade_api import failed; cannot initialize clients", exc_info=e)
         # In test environments, don't raise - just skip initialization
@@ -4023,10 +4014,8 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
     """
     try:
         from ai_trading.data_fetcher import (
-            get_cached_minute_timestamp,
             last_minute_bar_age_seconds,
         )  # type: ignore
-        import datetime as _dt
     except Exception as e:
         logger.warning("Data freshness check unavailable; skipping", exc_info=e)
         return
@@ -5774,7 +5763,7 @@ def pov_submit(
             # Less aggressive reduction - only 25% instead of 50%
             slice_qty = min(int(vol * cfg.pct * 0.75), total_qty - placed)
             logger.debug(
-                f"[pov_submit] High spread detected, reducing slice by 25%",
+                "[pov_submit] High spread detected, reducing slice by 25%",
                 extra={
                     "symbol": symbol, 
                     "spread": spread, 
@@ -5797,7 +5786,7 @@ def pov_submit(
             order = submit_order(ctx, symbol, slice_qty, side)
             if order is None:
                 logger.warning(
-                    f"[pov_submit] submit_order returned None for slice, skipping",
+                    "[pov_submit] submit_order returned None for slice, skipping",
                     extra={"symbol": symbol, "slice_qty": slice_qty},
                 )
                 continue

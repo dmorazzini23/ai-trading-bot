@@ -7,7 +7,6 @@ This script validates that all the key changes are working properly.
 import sys
 import re
 import pathlib
-from typing import List
 
 def test_utc_helper():
     """Test UTC timestamp helper functionality."""
@@ -161,7 +160,7 @@ def main():
             failed += 1
         print()
     
-    print(f"=== Summary ===")
+    print("=== Summary ===")
     print(f"Passed: {passed}")
     print(f"Failed: {failed}")
     print(f"Total:  {len(tests)}")
