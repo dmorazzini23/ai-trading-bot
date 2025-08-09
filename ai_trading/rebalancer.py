@@ -36,7 +36,7 @@ except ImportError:
 try:
     from ai_trading.portfolio import PortfolioOptimizer, create_portfolio_optimizer
     from transaction_cost_calculator import TransactionCostCalculator, create_transaction_cost_calculator
-    from regime_detector import RegimeDetector, create_regime_detector
+    from ai_trading.strategies.regime_detector import RegimeDetector, create_regime_detector
     PORTFOLIO_FIRST_AVAILABLE = True
 except ImportError:
     PORTFOLIO_FIRST_AVAILABLE = False

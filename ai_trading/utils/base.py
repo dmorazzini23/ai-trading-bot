@@ -13,33 +13,21 @@ from enum import Enum
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-# AI-AGENT-REF: guard pandas import for test environments
+# AI-AGENT-REF: Simplified optional import pattern
 try:
     import pandas as pd
+    HAS_PANDAS = True
 except ImportError:
-    # AI-AGENT-REF: pandas not available - create minimal fallbacks for import compatibility
-    from datetime import datetime
-    class MockDataFrame:
-        def __init__(self, *args, **kwargs):
-            pass
-        def __len__(self):
-            return 0
-        def empty(self):
-            return True
-    class MockSeries:
-        def __init__(self, *args, **kwargs):
-            pass
-        def __len__(self):
-            return 0
-    class MockPandas:
-        DataFrame = MockDataFrame
-        Series = MockSeries
-        Timestamp = datetime  # AI-AGENT-REF: mock Timestamp with datetime
-        def read_csv(self, *args, **kwargs):
-            return MockDataFrame()
-        def concat(self, *args, **kwargs):
-            return MockDataFrame()
-    pd = MockPandas()
+    HAS_PANDAS = False
+    pd = None
+
+def requires_pandas(func):
+    """Decorator to ensure pandas is available for a function."""
+    def wrapper(*args, **kwargs):
+        if not HAS_PANDAS:
+            raise ImportError(f"pandas required for {func.__name__}")
+        return func(*args, **kwargs)
+    return wrapper
 import config
 import random
 

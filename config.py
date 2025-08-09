@@ -2,6 +2,7 @@ import logging
 import os
 import threading
 import time
+import json
 from pathlib import Path
 
 # Optional import: avoid import error when dotenv is missing.
@@ -903,3 +904,37 @@ def validate_file_paths():
 # Load mode from environment variable or use balanced as default
 _BOT_MODE = os.getenv("BOT_MODE", "balanced")
 CONFIG = TradingConfig.from_env(mode=_BOT_MODE)
+
+
+# AI-AGENT-REF: Symbol universe management (integrated from symbol_patch.py)
+def get_symbol_universe():
+    """Get symbol universe with override support.
+    
+    Priority:
+    1. symbol_override.json file
+    2. TRADING_SYMBOLS environment variable
+    3. Default universe
+    """
+    # Check for override file
+    if os.path.exists('symbol_override.json'):
+        try:
+            with open('symbol_override.json', 'r') as f:
+                override = json.load(f)
+            return override.get('universe', [])
+        except (json.JSONDecodeError, KeyError, OSError) as e:
+            logger.warning("Failed to read symbol_override.json: %s", e)
+    
+    # Check environment variable
+    env_symbols = os.getenv('TRADING_SYMBOLS')
+    if env_symbols:
+        return [s.strip() for s in env_symbols.split(',') if s.strip()]
+    
+    # Default universe (with SQ replaced as per original patch)
+    return [
+        'AMD', 'AMZN', 'BABA', 'CRM', 'CVX', 'GOOGL', 'IWM', 'JNJ', 'JPM', 
+        'KO', 'META', 'MSFT', 'NFLX', 'NVDA', 'PG', 'PLTR', 'QQQ', 'SHOP', 
+        'SPY', 'PYPL', 'TSLA', 'UBER', 'XOM'
+    ]
+
+# Global symbol universe for use across modules
+SYMBOL_UNIVERSE = get_symbol_universe()

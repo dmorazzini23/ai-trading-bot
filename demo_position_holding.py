@@ -25,7 +25,7 @@ def demo_position_holding_logic():
     print("🔍 POSITION HOLDING LOGIC DEMO")
     print("=" * 60)
     
-    from position_manager import should_hold_position
+    from ai_trading.position.legacy_manager import should_hold_position
     
     scenarios = [
         ("UBER", None, 28.3, 5, "High profit winner from logs"),

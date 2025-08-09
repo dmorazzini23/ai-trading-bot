@@ -102,7 +102,7 @@ logger = logging.getLogger(__name__)
 try:
     from ai_trading.portfolio import PortfolioOptimizer, PortfolioDecision, create_portfolio_optimizer
     from transaction_cost_calculator import TransactionCostCalculator, TradeType, create_transaction_cost_calculator
-    from regime_detector import RegimeDetector, create_regime_detector
+    from ai_trading.strategies.regime_detector import RegimeDetector, create_regime_detector
     PORTFOLIO_OPTIMIZATION_AVAILABLE = True
     logger.info("Portfolio optimization modules loaded successfully")
 except ImportError:
@@ -124,7 +124,7 @@ _regime_detector = None
 
 # AI-AGENT-REF: Import position management for hold signals
 try:
-    from position_manager import PositionManager
+    from ai_trading.position.legacy_manager import PositionManager
 except ImportError:
     # Fallback if position_manager not available
     PositionManager = None

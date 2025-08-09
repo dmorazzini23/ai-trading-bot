@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from portfolio_optimizer import create_portfolio_optimizer, PortfolioDecision
 from transaction_cost_calculator import create_transaction_cost_calculator
-from regime_detector import create_regime_detector
+from ai_trading.strategies.regime_detector import create_regime_detector
 
 
 def demonstrate_portfolio_optimization():
