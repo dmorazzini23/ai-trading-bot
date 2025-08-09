@@ -1,3 +1,7 @@
+# Ensure .env is loaded before constructing settings (test expectation)
+from ai_trading.env import ensure_dotenv_loaded
+ensure_dotenv_loaded()
+
 import functools
 from typing import Optional
 from pydantic_settings import BaseSettings
