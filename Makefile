@@ -1,6 +1,7 @@
 # Install dependencies
 PY ?= $(shell command -v python3 || echo python)
 PIP := $(PY) -m pip
+PYTEST := PYTHONPATH=. pytest --disable-warnings
 
 install:
 	$(PY) -m pip install --upgrade pip
@@ -18,8 +19,9 @@ validate-env:
 	$(PY) scripts/validate_test_environment.py
 
 # Testing targets
-test-all: clean install-dev validate-env
-	PYTHONPATH=. pytest -m "unit or integration" -q --disable-warnings
+# Back-compat target: only marked tests (unit+integration)
+test-marked: clean install-dev validate-env
+	$(PYTEST) -q -m "unit or integration"
 	@echo "🔎 Checking for legacy trade_execution imports..."
 	@if grep -rn "^from trade_execution\|^import trade_execution" --include="*.py" . ; then \
 	  echo "❌ Found legacy 'trade_execution' imports. Please migrate to 'from ai_trading import ExecutionEngine'."; \
@@ -28,11 +30,36 @@ test-all: clean install-dev validate-env
 	  echo "✅ No legacy 'trade_execution' imports found."; \
 	fi
 
+.PHONY: test-all test-fast test-e2e test-marked
+
+# Run EVERYTHING (no markers)
+test-all: clean install-dev validate-env
+	$(PYTEST) -q
+	@echo "🔎 Checking for legacy trade_execution imports..."
+	@if grep -rn "^from trade_execution\|^import trade_execution" --include="*.py" . ; then \
+	  echo "❌ Found legacy 'trade_execution' imports. Please migrate to 'from ai_trading import ExecutionEngine'."; \
+	  exit 1; \
+	else \
+	  echo "✅ No legacy 'trade_execution' imports found."; \
+	fi
+
+# Fast inner loop
 test-fast: clean install-dev validate-env
-	PYTHONPATH=. pytest --maxfail=1 --disable-warnings -x
+	$(PYTEST) -q -m "unit"
+	@echo "🔎 Checking for legacy trade_execution imports..."
+	@if grep -rn "^from trade_execution\|^import trade_execution" --include="*.py" . ; then \
+	  echo "❌ Found legacy 'trade_execution' imports. Please migrate to 'from ai_trading import ExecutionEngine'."; \
+	  exit 1; \
+	else \
+	  echo "✅ No legacy 'trade_execution' imports found."; \
+	fi
+
+# Nightly or pre-release
+test-e2e: clean install-dev validate-env
+	$(PYTEST) -q -m "e2e"
 
 test-ci: clean install-dev validate-env
-	PYTHONPATH=. pytest --maxfail=5 --disable-warnings --tb=short
+	$(PYTEST) --maxfail=5 --disable-warnings --tb=short
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +

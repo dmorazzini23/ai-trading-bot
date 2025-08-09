@@ -47,7 +47,14 @@ logger = logging.getLogger(__name__)
 if PORTFOLIO_FIRST_AVAILABLE:
     logger.info("Portfolio-first trading capabilities loaded")
 else:
-    logger.warning("Portfolio-first trading capabilities not available")
+    # Import settings to check if portfolio features are enabled
+    from ai_trading.config.settings import get_settings
+    settings = get_settings()
+    
+    if settings.ENABLE_PORTFOLIO_FEATURES:
+        logger.warning("Portfolio-first capabilities requested but unavailable (missing optional deps)")
+    else:
+        logger.info("Portfolio-first features disabled")
 
 REBALANCE_INTERVAL_MIN = int(config.get_env("REBALANCE_INTERVAL_MIN", "10"))
 

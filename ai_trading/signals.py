@@ -106,7 +106,15 @@ try:
     PORTFOLIO_OPTIMIZATION_AVAILABLE = True
     logger.info("Portfolio optimization modules loaded successfully")
 except ImportError:
-    logger.warning("Portfolio optimization modules not available, using fallback signal processing")
+    # Import settings to check if portfolio features are enabled
+    from ai_trading.config.settings import get_settings
+    settings = get_settings()
+    
+    if settings.ENABLE_PORTFOLIO_FEATURES:
+        # If explicitly enabled but deps not present, warn.
+        logger.warning("Portfolio optimization modules not available; install optional 'portfolio' extras.")
+    else:
+        logger.info("Portfolio optimization disabled; using baseline signal processing")
     PORTFOLIO_OPTIMIZATION_AVAILABLE = False
 
 # Global portfolio optimizer instance (initialized when first used)
