@@ -87,16 +87,9 @@ except ImportError:
     PANDAS_AVAILABLE = False
     logger.warning("Pandas not available - using fallback implementation")
     
-    # Import the mock pandas from utils
-    import sys
-    import os
+    # Use simple fallback
     try:
-        # Try to import from parent directory (utils.py)
-        utils_path = os.path.dirname(os.path.dirname(__file__))
-        sys.path.insert(0, utils_path)
-        from utils import pd
-    except ImportError:
-        # Create a minimal fallback if utils is not available
+        # Create a minimal fallback
         from datetime import datetime
         class MockDataFrame:
             def __init__(self, *args, **kwargs):
@@ -119,6 +112,8 @@ except ImportError:
             def concat(self, *args, **kwargs):
                 return MockDataFrame()
         pd = MockPandas()
+    except Exception:
+        pd = None
 
 # Scikit-learn fallback
 try:

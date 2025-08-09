@@ -31,15 +31,23 @@ except ImportError:
 # Retry mechanism
 try:
     from tenacity import retry, stop_after_attempt, wait_exponential, wait_random, retry_if_exception_type
+    HAS_TENACITY = True
 except ImportError:
+    HAS_TENACITY = False
     # Fallback decorator if tenacity not available
     def retry(*args, **kwargs):
         def decorator(func):
             return func
         return decorator
+    
+    # Create mock objects that work with the + operator
+    class MockWait:
+        def __add__(self, other):
+            return self
+    
     stop_after_attempt = lambda x: None
-    wait_exponential = lambda **kwargs: None
-    wait_random = lambda *args, **kwargs: None
+    wait_exponential = lambda **kwargs: MockWait()
+    wait_random = lambda *args, **kwargs: MockWait()
     retry_if_exception_type = lambda x: None
 
 # AI-AGENT-REF: Import config with fallback

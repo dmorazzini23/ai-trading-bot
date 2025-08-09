@@ -17,11 +17,11 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
 
-from market_regime import MarketRegimeDetector, MarketRegime, RegimeMetrics
-from technical_analyzer import TechnicalSignalAnalyzer, SignalStrength, DivergenceType
-from trailing_stops import TrailingStopManager
-from profit_taking import ProfitTakingEngine
-from correlation_analyzer import PortfolioCorrelationAnalyzer, PortfolioAnalysis
+from .market_regime import MarketRegimeDetector, MarketRegime, RegimeMetrics
+from .technical_analyzer import TechnicalSignalAnalyzer, SignalStrength, DivergenceType
+from .trailing_stops import TrailingStopManager
+from .profit_taking import ProfitTakingEngine
+from .correlation_analyzer import PortfolioCorrelationAnalyzer, PortfolioAnalysis
 
 # AI-AGENT-REF: graceful imports with fallbacks
 try:

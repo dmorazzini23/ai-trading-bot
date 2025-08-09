@@ -2,11 +2,28 @@
 
 from __future__ import annotations
 
-import pandas as pd
-import numpy as np
+try:
+    import pandas as pd
+    import numpy as np
+    HAS_PANDAS = True
+    HAS_NUMPY = True
+except ImportError:
+    HAS_PANDAS = False
+    HAS_NUMPY = False
+    pd = None
+    np = None
+
+def requires_pandas_numpy(func):
+    """Decorator to ensure pandas and numpy are available."""
+    def wrapper(*args, **kwargs):
+        if not HAS_PANDAS or not HAS_NUMPY:
+            raise ImportError(f"pandas and numpy required for {func.__name__}")
+        return func(*args, **kwargs)
+    return wrapper
 
 
-def compute_basic_metrics(df: pd.DataFrame) -> dict[str, float]:
+@requires_pandas_numpy
+def compute_basic_metrics(df) -> dict[str, float]:
     """Return Sharpe ratio and max drawdown from ``df`` with a ``return`` column."""
     if "return" not in df:
         return {"sharpe": 0.0, "max_drawdown": 0.0}
