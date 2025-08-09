@@ -14,13 +14,8 @@ import atexit
 from ai_trading.config import management as config
 from ai_trading.monitoring import metrics as metrics_logger
 
-# Configure root formatting once in UTC
+# AI-AGENT-REF: Configure UTC formatting only, remove import-time basicConfig to prevent duplicates
 logging.Formatter.converter = time.gmtime
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)sZ %(levelname)s [%(name)s] %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%SZ",
-)
 from logging.handlers import (
     QueueHandler,
     QueueListener,
@@ -98,6 +93,9 @@ _loggers: Dict[str, logging.Logger] = {}
 _log_queue: queue.Queue | None = None
 _listener: QueueListener | None = None
 
+# AI-AGENT-REF: Global flag to prevent multiple logging setup calls across all modules
+_LOGGING_CONFIGURED = False
+
 
 def get_rotating_handler(
     path: str,
@@ -116,8 +114,13 @@ def get_rotating_handler(
 
 def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.Logger:
     """Configure the root logger in an idempotent way."""
-    global _configured, _log_queue, _listener
+    global _configured, _log_queue, _listener, _LOGGING_CONFIGURED
     logger = logging.getLogger()
+    
+    # AI-AGENT-REF: Check global flag first to prevent any duplicate setup across modules
+    if _LOGGING_CONFIGURED:
+        return logger
+    
     if _configured:
         return logger
     
@@ -171,6 +174,7 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
     atexit.register(_stop_listener)
 
     _configured = True
+    _LOGGING_CONFIGURED = True  # AI-AGENT-REF: Set global flag to prevent setup in other modules
     return logger
 
 
@@ -510,6 +514,12 @@ def setup_enhanced_logging(
     backup_count : int, optional
         Number of backup log files to keep (default: 5)
     """
+    global _LOGGING_CONFIGURED
+    
+    # AI-AGENT-REF: Check global flag to prevent duplicate enhanced logging setup
+    if _LOGGING_CONFIGURED:
+        return
+        
     # Configure root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
@@ -556,6 +566,7 @@ def setup_enhanced_logging(
     if enable_performance_logging:
         _setup_performance_logging()
     
+    _LOGGING_CONFIGURED = True  # AI-AGENT-REF: Set global flag to prevent duplicate setup
     logging.info("Enhanced logging configured - Level: %s, File: %s, JSON: %s", 
                 level, log_file or "console-only", enable_json_format)
 

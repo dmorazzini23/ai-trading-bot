@@ -14,13 +14,8 @@ import config
 
 import metrics_logger
 
-# Configure root formatting once in UTC
+# AI-AGENT-REF: Configure UTC formatting only, remove import-time basicConfig to prevent duplicates  
 logging.Formatter.converter = time.gmtime
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)sZ %(levelname)s [%(name)s] %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%SZ",
-)
 from logging.handlers import (
     QueueHandler,
     QueueListener,
@@ -115,13 +110,22 @@ def get_rotating_handler(
 
 
 def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.Logger:
-    """Configure the root logger in an idempotent way."""
-    global _configured, _log_queue, _listener
-    logger = logging.getLogger()
-    if _configured:
-        return logger
+    """
+    DEPRECATED: Use ai_trading.logging.setup_logging instead.
+    This function delegates to the centralized logging setup to prevent duplicates.
+    """
+    # AI-AGENT-REF: Delegate to centralized logging setup to prevent duplicates
+    try:
+        from ai_trading.logging import setup_logging as ai_setup_logging
+        return ai_setup_logging(debug=debug, log_file=log_file)
+    except ImportError:
+        # Fallback if ai_trading.logging is not available
+        global _configured, _log_queue, _listener
+        logger = logging.getLogger()
+        if _configured:
+            return logger
 
-    logger.setLevel(logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
 
     formatter = JSONFormatter(
         "%(asctime)sZ"
@@ -172,14 +176,24 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
 
 
 def get_logger(name: str) -> logging.Logger:
-    """Return a named logger, configuring logging on first use."""
-    if name not in _loggers:
-        root = setup_logging()
-        logger = logging.getLogger(name)
-        logger.handlers = root.handlers.copy()
-        logger.setLevel(root.level)
-        _loggers[name] = logger
-    return _loggers[name]
+    """
+    DEPRECATED: Use ai_trading.logging.get_logger instead.
+    Return a named logger, delegating to centralized logging setup.
+    """
+    # AI-AGENT-REF: Delegate to centralized logging to prevent handler duplication
+    try:
+        from ai_trading.logging import get_logger as ai_get_logger
+        return ai_get_logger(name)
+    except ImportError:
+        # Fallback if ai_trading.logging is not available
+        if name not in _loggers:
+            root = setup_logging()
+            logger = logging.getLogger(name)
+            # AI-AGENT-REF: Use propagation instead of copying handlers to prevent duplicates
+            logger.propagate = True
+            logger.setLevel(logging.NOTSET)  # Use root logger's level
+            _loggers[name] = logger
+        return _loggers[name]
 
 
 logger = logging.getLogger(__name__)
@@ -454,29 +468,25 @@ def setup_enhanced_logging(
     backup_count: int = 5
 ) -> None:
     """
-    Setup enhanced logging configuration for the trading bot.
-    
-    Configures multiple log handlers including file rotation, JSON formatting,
-    and performance monitoring to provide comprehensive logging capabilities.
-    
-    Parameters
-    ----------
-    log_file : str, optional
-        Path to the main log file. If None, uses console logging only.
-    level : str, optional
-        Minimum log level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL')
-    enable_json_format : bool, optional
-        Whether to use JSON formatting for structured logs
-    enable_performance_logging : bool, optional
-        Whether to enable performance and timing logs
-    max_file_size_mb : int, optional
-        Maximum size of log files before rotation (default: 100MB)
-    backup_count : int, optional
-        Number of backup log files to keep (default: 5)
+    DEPRECATED: Use ai_trading.logging.setup_enhanced_logging instead.
+    This function delegates to the centralized logging setup to prevent duplicates.
     """
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
+    # AI-AGENT-REF: Delegate to centralized enhanced logging setup
+    try:
+        from ai_trading.logging import setup_enhanced_logging as ai_setup_enhanced_logging
+        return ai_setup_enhanced_logging(
+            log_file=log_file,
+            level=level,
+            enable_json_format=enable_json_format,
+            enable_performance_logging=enable_performance_logging,
+            max_file_size_mb=max_file_size_mb,
+            backup_count=backup_count
+        )
+    except ImportError:
+        # Fallback implementation
+        # Configure root logger
+        root_logger = logging.getLogger()
+        root_logger.setLevel(getattr(logging, level.upper(), logging.INFO))
     
     # Clear existing handlers
     root_logger.handlers.clear()
