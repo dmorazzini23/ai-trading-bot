@@ -4,7 +4,7 @@ import types
 
 import pandas as pd
 
-import data_fetcher
+from ai_trading import data_fetcher
 from ai_trading.utils.base import health_check
 
 
