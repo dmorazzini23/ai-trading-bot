@@ -735,13 +735,6 @@ def _resolve_alpaca_env() -> tuple[str | None, str | None, str]:
     apca_secret = os.getenv("APCA_API_SECRET_KEY")
     apca_url = os.getenv("APCA_API_BASE_URL")
 
-    # DEBUG: Print values for debugging
-    # This will be removed after debugging
-    import sys
-    if 'pytest' not in sys.modules:  # Only in subprocess
-        print(f"DEBUG _resolve_alpaca_env: a_key={repr(a_key)}, a_secret={repr(a_secret)}")
-        print(f"DEBUG _resolve_alpaca_env: apca_key={repr(apca_key)}, apca_secret={repr(apca_secret)}")
-
     # Prefer ALPACA_* if both key and secret are present (even if APCA_* exist)
     if a_key and a_secret:
         base_url = a_url or "https://paper-api.alpaca.markets"
@@ -810,13 +803,6 @@ def reload_env(env_file: Optional[str | os.PathLike[str]] = None) -> None:
         ]
     }
     
-    # DEBUG: Print values for debugging
-    import sys
-    if 'pytest' not in sys.modules:  # Only in subprocess
-        print(f"DEBUG reload_env: env_file={env_file}")
-        for key, value in current_alpaca_vars.items():
-            print(f"DEBUG reload_env: {key}={repr(value)}")
-    
     if env_file:
         env_path = Path(env_file)
         load_dotenv(dotenv_path=env_path, override=True)
@@ -827,9 +813,6 @@ def reload_env(env_file: Optional[str | os.PathLike[str]] = None) -> None:
             if value and ("test" in value.lower() or "_from_env" in value.lower()):
                 should_load_default = False
                 break
-                
-        if 'pytest' not in sys.modules:  # Only in subprocess
-            print(f"DEBUG reload_env: should_load_default={should_load_default}")
                 
         if should_load_default:
             load_dotenv(override=True)

@@ -93,9 +93,6 @@ ENV_PATH = ROOT_DIR / ".env"
 # Individual scripts should call ``reload_env()`` to refresh values if needed.
 # For systemd compatibility: don't override variables that have been explicitly cleared
 # For test compatibility: don't override variables that have been loaded from test .env files
-
-# Temporarily disable main .env loading to debug test issue
-# TODO: Re-enable with proper test detection
 _pre_load_alpaca_vars = {
     key: os.getenv(key) for key in [
         "ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL",
@@ -103,18 +100,9 @@ _pre_load_alpaca_vars = {
     ]
 }
 
-# DEBUG: Print values for debugging
-import sys
-if 'pytest' not in sys.modules:  # Only in subprocess
-    print(f"DEBUG config.py: _pre_load_alpaca_vars={_pre_load_alpaca_vars}")
-
 # Only load main .env if no variables are already set (test compatibility)
 if not any(_pre_load_alpaca_vars.values()) and ENV_PATH.exists():
-    if 'pytest' not in sys.modules:  # Only in subprocess
-        print(f"DEBUG config.py: Loading main .env from {ENV_PATH}")
     load_dotenv(ENV_PATH)
-elif 'pytest' not in sys.modules:  # Only in subprocess
-    print(f"DEBUG config.py: Skipping main .env loading, vars already set: {any(_pre_load_alpaca_vars.values())}")
     
 # Always restore None values for variables that were intentionally cleared
 for key, value in _pre_load_alpaca_vars.items():
