@@ -1,6 +1,29 @@
 import sys
 import os
 
+# AI-AGENT-REF: Mock yfinance module for deterministic tests
+class MockYfinance:
+    """Mock yfinance module to avoid network calls in tests."""
+    
+    @staticmethod
+    def download(*args, **kwargs):
+        import pandas as pd
+        return pd.DataFrame()
+    
+    class Ticker:
+        def __init__(self, *args):
+            pass
+        
+        def history(self, *args, **kwargs):
+            import pandas as pd
+            return pd.DataFrame()
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: None
+
+# Inject yfinance mock into sys.modules before any imports
+sys.modules["yfinance"] = MockYfinance()
+
 # AI-AGENT-REF: Add dotenv stub early to prevent import errors
 try:
     from dotenv import load_dotenv

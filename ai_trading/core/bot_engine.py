@@ -66,6 +66,7 @@ if sys.version_info < (3, 10):  # pragma: no cover - compat check
 
 from ai_trading.config import management as config
 from ai_trading.config import get_settings
+from ai_trading import paths  # AI-AGENT-REF: Runtime paths for proper directory separation
 from ai_trading.data_fetcher import warmup_cache
 from ai_trading.data_fetcher import get_bars, get_bars_batch
 from ai_trading.data_fetcher import get_minute_bars, get_minute_bars_batch
@@ -1742,12 +1743,12 @@ def get_git_hash() -> str:
 TICKERS_FILE = abspath_repo_root("tickers.csv")
 # AI-AGENT-REF: use centralized trade log path
 TRADE_LOG_FILE = config.TRADE_LOG_FILE
-SIGNAL_WEIGHTS_FILE = abspath("signal_weights.csv")
-EQUITY_FILE = abspath("last_equity.txt")
-PEAK_EQUITY_FILE = abspath("peak_equity.txt")
-HALT_FLAG_PATH = abspath("halt.flag")
-SLIPPAGE_LOG_FILE = abspath("slippage.csv")
-REWARD_LOG_FILE = abspath("reward_log.csv")
+SIGNAL_WEIGHTS_FILE = str(paths.DATA_DIR / "signal_weights.csv")
+EQUITY_FILE = str(paths.DATA_DIR / "last_equity.txt")
+PEAK_EQUITY_FILE = str(paths.DATA_DIR / "peak_equity.txt")
+HALT_FLAG_PATH = str(paths.DATA_DIR / "halt.flag")
+SLIPPAGE_LOG_FILE = str(paths.LOG_DIR / "slippage.csv")
+REWARD_LOG_FILE = str(paths.LOG_DIR / "reward_log.csv")
 FEATURE_PERF_FILE = abspath("feature_perf.csv")
 INACTIVE_FEATURES_FILE = abspath("inactive_features.json")
 

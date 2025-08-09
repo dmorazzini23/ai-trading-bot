@@ -1,4 +1,11 @@
 # Deprecated shim: forward to package module
+import warnings
+warnings.warn(
+    "Importing from root bot_engine.py is deprecated. Use 'from ai_trading.core import bot_engine' instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
 from ai_trading.core.bot_engine import *  # noqa: F401,F403
 
 # --- Test compatibility: AST-extracted function expected by tests ---

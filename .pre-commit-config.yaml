@@ -7,3 +7,9 @@ repos:
         language: system
         pass_filenames: false
         description: Prevents legacy trade_execution imports; use 'from ai_trading import ExecutionEngine' instead
+      - id: detect-secrets
+        name: Detect secrets
+        entry: detect-secrets-hook
+        language: system
+        types: [text]
+        exclude: \.secrets\.baseline$

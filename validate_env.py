@@ -392,18 +392,18 @@ def _validate_api_connectivity(settings: Settings) -> List[str]:
     # This is optional and can be skipped if APIs are temporarily unavailable
     try:
         # Basic URL validation
-        import requests
+        from ai_trading.utils import http
         
         # Test Alpaca API reachability (without authentication)
-        response = requests.head(settings.ALPACA_BASE_URL, timeout=10)
+        response = http.head(settings.ALPACA_BASE_URL)
         if response.status_code >= 500:
             logger.warning(f"Alpaca API may be experiencing issues: {response.status_code}")
             
-    except requests.RequestException:
+    except Exception:
         # API connectivity issues are warnings, not errors
         logger.warning("Could not verify API connectivity (this may be temporary)")
     except ImportError:
-        # requests not available - skip connectivity check
+        # http utilities not available - skip connectivity check
         pass
     
     return errors

@@ -6,11 +6,13 @@ extracted from bot_engine.py to enable standalone imports and testing.
 """
 
 import time as pytime
-import requests
 from datetime import datetime
 from threading import Lock
 from typing import Dict, List, Tuple, Optional
 import os
+
+# AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
+from ai_trading.utils import http
 
 # AI-AGENT-REF: Use centralized logger as per AGENTS.md
 try:
@@ -141,7 +143,7 @@ def _record_sentiment_failure():
 @retry(
     stop=stop_after_attempt(SENTIMENT_MAX_RETRIES),  # Increased retries for rate limiting
     wait=wait_exponential(multiplier=SENTIMENT_BASE_DELAY, min=SENTIMENT_BASE_DELAY, max=180) + wait_random(0, 5),  # More aggressive backoff with jitter
-    retry=retry_if_exception_type((requests.RequestException,)),
+    retry=retry_if_exception_type((Exception,)),  # AI-AGENT-REF: Use generic exception since we're using http utilities
 )
 def fetch_sentiment(ctx, ticker: str) -> float:
     """
@@ -197,7 +199,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
             f"&apiKey={api_key}"
         )
-        resp = requests.get(url, timeout=10)
+        resp = http.get(url)
         
         # AI-AGENT-REF: Enhanced rate limiting detection and handling
         if resp.status_code == 429:
@@ -244,7 +246,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             _SENTIMENT_CACHE[ticker] = (now_ts, final_score)
         return final_score
         
-    except requests.exceptions.RequestException as e:
+    except Exception as e:
         logger.warning(f"Sentiment API request failed for {ticker}: {e}")
         _record_sentiment_failure()
         
@@ -335,9 +337,8 @@ def _try_alternative_sentiment_sources(ticker: str) -> Optional[float]:
     if alt_api_key and alt_api_url:
         try:
             # Example implementation for alternative API
-            response = requests.get(
-                f"{alt_api_url}?symbol={ticker}&apikey={alt_api_key}",
-                timeout=10
+            response = http.get(
+                f"{alt_api_url}?symbol={ticker}&apikey={alt_api_key}"
             )
             if response.status_code == 200:
                 data = response.json()
@@ -484,7 +485,7 @@ def fetch_form4_filings(ticker: str) -> List[dict]:
         
     url = f"https://www.sec.gov/cgi-bin/own-disp?action=getowner&CIK={ticker}&type=4"
     try:
-        r = requests.get(url, headers={"User-Agent": "AI Trading Bot"}, timeout=10)
+        r = http.get(url, headers={"User-Agent": "AI Trading Bot"})
         r.raise_for_status()
         soup = BeautifulSoup(r.content, "lxml")
         filings = []

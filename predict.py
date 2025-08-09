@@ -35,7 +35,9 @@ try:
 except ImportError:
     # Import mock pandas from utils
     from utils import pd
-import requests
+
+# AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
+from ai_trading.utils import http
 
 import config
 from metrics_logger import log_metrics
@@ -124,7 +126,7 @@ def fetch_sentiment(symbol: str) -> float:
             f"{base_url}?q="
             f"{symbol}&pageSize=5&sortBy=publishedAt&apiKey={api_key}"
         )
-        resp = requests.get(url, timeout=10)
+        resp = http.get(url)
         resp.raise_for_status()
         arts = resp.json().get("articles", [])
         if not arts:
@@ -152,7 +154,7 @@ def fetch_sentiment(symbol: str) -> float:
         logger.debug("Fetched fresh sentiment for %s: %.2f", symbol, score)
         return score
         
-    except (requests.RequestException, ValueError) as exc:
+    except (Exception, ValueError) as exc:
         logger.error("fetch_sentiment failed for %s: %s", symbol, exc)
         # Return cached value if available during error, otherwise neutral
         with _sentiment_lock:

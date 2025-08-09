@@ -5,9 +5,15 @@ forward to them so the test suite remains stable.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
-from typing import Any, Union
-import requests as requests  # tests monkeypatch data_fetcher.requests.get
+import warnings
+warnings.warn(
+    "Importing from root data_fetcher.py is deprecated. Use 'from ai_trading import data_fetcher' instead.",
+    DeprecationWarning,
+    stacklevel=2
+)
+
+# Re-export everything from the canonical module
+from ai_trading.data_fetcher import *  # noqa: F401,F403
 
 import pandas as pd
 
