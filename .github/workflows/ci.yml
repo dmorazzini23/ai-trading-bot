@@ -27,5 +27,7 @@ jobs:
             ${{ runner.os }}-pip-
       - name: Install dependencies
         run: make install-dev
+      - name: Forbid legacy imports
+        run: bash ci/scripts/forbid_legacy_imports.sh
       - name: Test
         run: make test-ci

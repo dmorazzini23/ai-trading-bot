@@ -15,6 +15,9 @@ The platform is designed for institutional-scale operations with proper
 risk controls, monitoring, and compliance capabilities.
 """
 
+# Public API re-exports
+from .trade_execution import ExecutionEngine
+
 # AI-AGENT-REF: Implement lazy imports to prevent import-time crashes
 def __getattr__(name):
     """Lazy import submodules to prevent import-time config crashes."""
@@ -38,7 +41,9 @@ def _lazy_import_module(name):
 # Setup lazy attributes for moved modules
 _moved_modules = ["signals", "data_fetcher", "trade_execution", "indicators", "pipeline", "portfolio", "rebalancer"]
 
-__all__ = sorted(set(list(globals().get("__all__", [])) + [
+__all__ = [
+    "ExecutionEngine",
+] + sorted(set(list(globals().get("__all__", [])) + [
     # Core trading infrastructure
     "OrderSide",
     "OrderType", 
@@ -52,7 +57,6 @@ __all__ = sorted(set(list(globals().get("__all__", [])) + [
     "RiskManager",
     
     # Execution engine
-    "ExecutionEngine",
     "OrderManager",
     "Order",
     

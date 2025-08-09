@@ -15,7 +15,7 @@ os.environ.update({
     'FLASK_PORT': '5000'
 })
 
-from trade_execution import ExecutionEngine
+from ai_trading import ExecutionEngine
 
 
 class MockOrder:
@@ -52,7 +52,7 @@ def test_fill_rate_calculation_fix():
         
         engine._reconcile_partial_fills(
             symbol="QQQ",
-            requested_qty=100,
+            submitted_qty=100,
             remaining_qty=50,  # 50 remaining = 50 filled out of 100
             side="buy", 
             last_order=order_without_filled_qty
@@ -84,7 +84,7 @@ def test_fill_rate_alert_thresholds_updated():
         
         engine._reconcile_partial_fills(
             symbol="SPY",
-            requested_qty=50,
+            submitted_qty=50,
             remaining_qty=25,
             side="buy",
             last_order=order_50pct
@@ -101,7 +101,7 @@ def test_fill_rate_alert_thresholds_updated():
         
         engine._reconcile_partial_fills(
             symbol="AMZN",
-            requested_qty=50, 
+            submitted_qty=50, 
             remaining_qty=35,
             side="buy",
             last_order=order_30pct
@@ -118,7 +118,7 @@ def test_fill_rate_alert_thresholds_updated():
         
         engine._reconcile_partial_fills(
             symbol="MSFT",
-            requested_qty=50,
+            submitted_qty=50,
             remaining_qty=40,
             side="buy", 
             last_order=order_20pct
@@ -144,7 +144,7 @@ def test_fill_rate_calculation_with_valid_order_data():
         
         engine._reconcile_partial_fills(
             symbol="TSLA", 
-            requested_qty=100,
+            submitted_qty=100,
             remaining_qty=25,  # This should be ignored since order has filled_qty
             side="buy",
             last_order=order_with_filled_qty
