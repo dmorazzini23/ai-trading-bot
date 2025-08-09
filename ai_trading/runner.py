@@ -11,6 +11,9 @@ _run_lock = RLock()  # Use RLock for re-entrant capability
 _last_run_time = 0.0
 _min_interval = 5.0  # Minimum seconds between runs
 
+# Lazy cache used by tests to verify determinism
+_LAZY_CACHE = {}
+
 # AI-AGENT-REF: Lazy import variables to defer heavy imports until runtime
 _bot_engine = None
 _bot_state_class = None
@@ -42,6 +45,22 @@ def _load_engine():
             raise RuntimeError(f"Cannot load bot engine: {e}")
     
     return _bot_engine, _bot_state_class
+
+
+def lazy_load_workers():
+    """
+    Lazy-imported accessor with deterministic caching.
+    First call imports and caches; subsequent calls return the exact same object.
+    On import failure, raise RuntimeError (test expectation).
+    """
+    if "workers" in _LAZY_CACHE:
+        return _LAZY_CACHE["workers"]
+    try:
+        from ai_trading.workers import run_all_trades_worker  # patched in tests
+    except Exception as e:  # ImportError or anything raised during import
+        raise RuntimeError(f"Failed to lazy import workers: {e}") from e
+    _LAZY_CACHE["workers"] = run_all_trades_worker
+    return run_all_trades_worker
 
 
 def run_cycle() -> None:
