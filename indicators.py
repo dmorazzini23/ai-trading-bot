@@ -1,1 +1,0 @@
-from ai_trading.indicators import *  # shim for tests and legacy imports
