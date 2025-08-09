@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     alpaca_api_key: Optional[str] = Field(None, validation_alias=AliasChoices("ALPACA_API_KEY", "APCA_API_KEY_ID"))
     alpaca_secret_key: Optional[str] = Field(None, validation_alias=AliasChoices("ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY"))
     alpaca_base_url: Optional[str] = Field(None, validation_alias=AliasChoices("ALPACA_BASE_URL", "APCA_API_BASE_URL"))
+    
+    # Webhook secret for API security
+    webhook_secret: Optional[str] = Field(None, env="WEBHOOK_SECRET")
 
     # Risk knobs (align defaults with current behavior)
     capital_cap: float = Field(0.04, env="CAPITAL_CAP")
@@ -102,6 +105,22 @@ class Settings(BaseSettings):
 
     def effective_prediction_workers(self, cpu_count: int) -> int:
         return (self.prediction_workers or 0) or max(2, min(4, cpu_count or 2))
+    
+    # Uppercase property aliases for main.py compatibility
+    @property
+    def WEBHOOK_SECRET(self) -> Optional[str]:
+        """Uppercase alias for webhook_secret."""
+        return self.webhook_secret
+    
+    @property
+    def ALPACA_API_KEY(self) -> Optional[str]:
+        """Uppercase alias for alpaca_api_key."""
+        return self.alpaca_api_key
+    
+    @property
+    def ALPACA_SECRET_KEY(self) -> Optional[str]:
+        """Uppercase alias for alpaca_secret_key."""
+        return self.alpaca_secret_key
 
 @functools.lru_cache(maxsize=1)
 def get_settings() -> Settings:
