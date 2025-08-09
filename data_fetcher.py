@@ -1,0 +1,1 @@
+from ai_trading.data_fetcher import *  # shim for tests and legacy imports
