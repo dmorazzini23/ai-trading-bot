@@ -22,3 +22,14 @@ except NameError:
                 return mgr
             except Exception:
                 return None
+
+# --- Test compatibility: AST-extracted functions expected by tests ---
+def _load_ml_model(symbol: str):
+    """Thin wrapper so tests that parse this file via AST can find the symbol."""
+    from ai_trading.core.bot_engine import _load_ml_model as _impl  # type: ignore
+    return _impl(symbol)
+
+def _cleanup_ml_model_cache(max_age_minutes: int = 60):
+    """Thin wrapper for test discovery; delegates to package implementation."""
+    from ai_trading.core.bot_engine import _cleanup_ml_model_cache as _impl  # type: ignore
+    return _impl(max_age_minutes)

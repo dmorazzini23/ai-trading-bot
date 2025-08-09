@@ -1543,4 +1543,8 @@ def get_bars(
 
 
 # Export RetryError for test compatibility
-__all__ = ["RetryError", "get_historical_data", "get_minute_df", "get_daily_df", "DataFetchError", "DataFetchException", "get_bars_batch", "warmup_cache", "get_minute_bars_batch", "get_minute_bars", "get_bars"]
+__all__ = ["RetryError", "get_historical_data", "get_minute_df", "get_daily_df",
+           "DataFetchError", "DataFetchException", "get_bars_batch", "warmup_cache",
+           "get_minute_bars_batch", "get_minute_bars", "get_bars",
+           # Test-required cache helpers (must be re-exported via top-level shim)
+           "get_cached_minute_timestamp", "last_minute_bar_age_seconds", "_MINUTE_CACHE"]
