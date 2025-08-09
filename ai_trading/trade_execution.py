@@ -84,14 +84,18 @@ try:
                           wait_exponential, wait_random)
 except ImportError:
     # Create minimal tenacity fallbacks
+    class _FakeWaitStrategy:
+        def __add__(self, other):
+            return self
+    
     def retry(*args, **kwargs):
         def decorator(func):
             return func
         return decorator
     retry_if_exception_type = lambda x: None
     stop_after_attempt = lambda x: None
-    wait_exponential = lambda *args, **kwargs: None
-    wait_random = lambda *args, **kwargs: None
+    wait_exponential = lambda *args, **kwargs: _FakeWaitStrategy()
+    wait_random = lambda *args, **kwargs: _FakeWaitStrategy()
 import utils
 
 # AI-AGENT-REF: track recent buy timestamps to avoid immediate re-checks
