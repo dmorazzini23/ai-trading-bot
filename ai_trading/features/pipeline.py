@@ -12,61 +12,12 @@ import numpy as np
 import pandas as pd
 
 # Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
+from ai_trading.logging import logger
 
-    logger = logging.getLogger(__name__)
-
-try:
-    from sklearn.base import BaseEstimator, TransformerMixin
-    from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import RobustScaler, StandardScaler
-
-    sklearn_available = True
-except ImportError:
-    # Fallback classes if sklearn not available
-    class BaseEstimator:
-        pass
-
-    class TransformerMixin:
-        pass
-
-    class StandardScaler:
-        def fit(self, X, y=None):
-            return self
-
-        def transform(self, X):
-            return X
-
-        def fit_transform(self, X, y=None):
-            return X
-
-    class RobustScaler:
-        def fit(self, X, y=None):
-            return self
-
-        def transform(self, X):
-            return X
-
-        def fit_transform(self, X, y=None):
-            return X
-
-    class Pipeline:
-        def __init__(self, steps):
-            self.steps = steps
-
-        def fit(self, X, y=None):
-            return self
-
-        def transform(self, X):
-            return X
-
-        def fit_transform(self, X, y=None):
-            return X
-
-    sklearn_available = False
+# sklearn is a hard dependency
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import RobustScaler, StandardScaler
 
 
 class BuildFeatures(BaseEstimator, TransformerMixin):

@@ -2,67 +2,29 @@
 
 from __future__ import annotations
 
-# AI-AGENT-REF: guard numpy/pandas imports for test environments
-try:
-    import numpy as np
-except ImportError:
+# AI-AGENT-REF: numpy is a hard dependency
+import numpy as np
 
-    class MockNumpy:
-        def array(self, *args, **kwargs):
-            return []
-
-        def mean(self, *args, **kwargs):
-            return 0.0
-
-        def std(self, *args, **kwargs):
-            return 1.0
-
-        def nan(self):
-            return float("nan")
-
-        def isnan(self, *args, **kwargs):
-            return False
-
-        def zeros(self, *args, **kwargs):
-            return []
-
-    np = MockNumpy()
-
-try:
-    import pandas as pd
-except ImportError:
-    from datetime import datetime
-
-    class MockSeries:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def mean(self):
-            return 0.0
-
-        def std(self):
-            return 1.0
-
-    class MockPandas:
-        Series = MockSeries
-        Timestamp = datetime
-
-    pd = MockPandas()
+# pandas is a hard dependency
+import pandas as pd
 
 import logging
 from functools import lru_cache
 from typing import Any
 
+from ai_trading.config.settings import get_settings
+
 logger = logging.getLogger(__name__)
 
-try:
+# Optional numba optimization based on settings
+S = get_settings()
+if S.enable_numba_optimization:
     from numba import jit
-except ImportError:
-    # AI-AGENT-REF: numba fallback
+else:
+    # Fallback decorator when numba optimization is disabled
     def jit(*args, **kwargs):
         def decorator(func):
             return func
-
         return decorator
 
 

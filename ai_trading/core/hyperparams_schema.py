@@ -11,28 +11,8 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
-# AI-AGENT-REF: graceful fallback for missing pydantic
-try:
-    from pydantic import BaseModel, Field, validator
-
-    PYDANTIC_AVAILABLE = True
-except ImportError:
-    # Fallback for testing environments
-    class BaseModel:
-        def __init__(self, **kwargs):
-            for k, v in kwargs.items():
-                setattr(self, k, v)
-
-    def Field(*args, **kwargs):
-        return kwargs.get("default")
-
-    def validator(*args, **kwargs):
-        def decorator(func):
-            return func
-
-        return decorator
-
-    PYDANTIC_AVAILABLE = False
+# pydantic is a hard dependency
+from pydantic import BaseModel, Field, validator
 
 logger = logging.getLogger(__name__)
 

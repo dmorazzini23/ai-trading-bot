@@ -21,15 +21,7 @@ execution controls, monitoring, and compliance capabilities.
 """
 
 # Import execution components
-try:
-    from .engine import ExecutionAlgorithm, Order
-except ImportError:
-    # Create placeholder classes if not available
-    class Order:
-        pass
-
-    class ExecutionAlgorithm:
-        pass
+from .engine import ExecutionAlgorithm, Order
 
 
 # Import enhanced debugging and tracking modules

@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     # Portfolio features (default disabled to reduce startup noise)
     ENABLE_PORTFOLIO_FEATURES: bool = Field(False, env="ENABLE_PORTFOLIO_FEATURES")
     REGIME_MIN_ROWS: int = Field(50, env="REGIME_MIN_ROWS")
+    
+    # Performance optimizations (optional)
+    enable_numba_optimization: bool = Field(False, env="ENABLE_NUMBA_OPTIMIZATION")
+    enable_memory_optimization: bool = Field(False, env="ENABLE_MEMORY_OPTIMIZATION")
+    
+    # Visualization features (optional)
+    enable_plotting: bool = Field(False, env="ENABLE_PLOTTING")
 
     # Worker sizing (None/0 => auto)
     executor_workers: int | None = Field(None, env="EXECUTOR_WORKERS")

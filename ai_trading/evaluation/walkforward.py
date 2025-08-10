@@ -15,21 +15,19 @@ import numpy as np
 import pandas as pd
 
 # Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
+from ai_trading.logging import logger
 
-    logger = logging.getLogger(__name__)
+# Optional plotting with feature flag
+from ai_trading.config import get_settings
+_S = get_settings()
 
-try:
+if _S.enable_plotting:
     import matplotlib.dates as mdates
     import matplotlib.pyplot as plt
-
     matplotlib_available = True
-except ImportError:
+else:
     matplotlib_available = False
-    logger.warning("Matplotlib not available - plotting disabled")
+    logger.debug("Matplotlib plotting disabled by configuration")
 
 from ..data.splits import walkforward_splits
 from ..features.pipeline import create_feature_pipeline

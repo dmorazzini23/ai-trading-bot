@@ -14,12 +14,7 @@ from datetime import UTC, datetime
 from enum import Enum
 
 # Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
-
-    logger = logging.getLogger(__name__)
+from ai_trading.logging import logger
 
 from ai_trading.market.symbol_specs import TICK_BY_SYMBOL, get_lot_size, get_tick_size
 from ai_trading.math.money import Money, round_to_lot, round_to_tick

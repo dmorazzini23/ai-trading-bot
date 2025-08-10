@@ -1,8 +1,6 @@
 issue,file,line,snippet
 config_dunder_getattr,ai_trading/__init__.py,24,def __getattr__(name):
 config_dunder_getattr,ai_trading/analysis/sentiment.py,109,"        def __getattr__(self, name):"
-config_dunder_getattr,ai_trading/config/__init__.py,10,def __getattr__(name: str):
-config_dunder_getattr,ai_trading/config/management.py,710,"    def __getattr__(self, name):"
 config_dunder_getattr,ai_trading/core/__init__.py,30,def __getattr__(name):
 config_dunder_getattr,ai_trading/core/bot_engine.py,176,"            def __getattr__(self, name):"
 config_dunder_getattr,ai_trading/core/bot_engine.py,181,"    def __getattr__(self, name):"
@@ -12,7 +10,7 @@ config_dunder_getattr,ai_trading/core/bot_engine.py,592,"    def __getattr__(sel
 config_dunder_getattr,ai_trading/core/bot_engine.py,4284,"    def __getattr__(self, name):"
 config_dunder_getattr,ai_trading/utils/base.py,929,"                def __getattr__(self, name):"
 import_guard,ai_trading/analysis/sentiment.py,17,try:
-import_guard,ai_trading/config/management.py,843,try:
+import_guard,ai_trading/config/management.py,809,try:
 import_guard,ai_trading/core/bot_engine.py,191,    try:
 import_guard,ai_trading/core/bot_engine.py,344,    try:
 import_guard,ai_trading/core/bot_engine.py,820,try:
@@ -31,8 +29,6 @@ import_guard,ai_trading/data/labels.py,14,try:
 import_guard,ai_trading/data/splits.py,15,try:
 import_guard,ai_trading/data/splits.py,21,try:
 import_guard,ai_trading/data_fetcher.py,206,try:
-import_guard,ai_trading/database/connection.py,15,try:
-import_guard,ai_trading/env.py,5,try:
 import_guard,ai_trading/evaluation/walkforward.py,18,try:
 import_guard,ai_trading/execution/__init__.py,24,try:
 import_guard,ai_trading/execution/algorithms.py,12,try:

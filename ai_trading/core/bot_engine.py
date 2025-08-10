@@ -6,16 +6,9 @@ __all__ = ["pre_trade_health_check", "run_all_trades_worker", "BotState"]
 
 def _alpaca_available() -> bool:
     """Check if Alpaca SDK is available for import."""
-    try:
-        import alpaca_py
-
-        return True
-    except ImportError:
-        import logging
-
-        logger = logging.getLogger(__name__)
-        logger.debug("Alpaca SDK not available - running in mock mode")
-        return False
+    # alpaca_py is a hard dependency, so it should always be available
+    import alpaca_py
+    return True
 
 
 # Set global flag for Alpaca availability
@@ -39,31 +32,34 @@ import warnings
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-# AI-AGENT-REF: Import memory optimization for performance
-try:
-    from memory_optimizer import (
-        emergency_memory_cleanup,
-        memory_profile,
-        optimize_memory,
-    )
+# AI-AGENT-REF: Memory optimization as optional feature
+# (settings will be imported below with other config imports)
+def _get_memory_optimization():
+    """Initialize memory optimization based on settings."""
+    from ai_trading.config import get_settings
+    S = get_settings()
+    
+    if S.enable_memory_optimization:
+        from memory_optimizer import (
+            emergency_memory_cleanup,
+            memory_profile,
+            optimize_memory,
+        )
+        return True, memory_profile, optimize_memory, emergency_memory_cleanup
+    else:
+        # Fallback no-op decorators when memory optimization is disabled
+        def memory_profile(func):
+            return func
+        
+        def optimize_memory():
+            return {}
+        
+        def emergency_memory_cleanup():
+            return {}
+            
+        return False, memory_profile, optimize_memory, emergency_memory_cleanup
 
-    MEMORY_OPTIMIZATION_AVAILABLE = True
-except ImportError as e:
-    # Fallback decorators if memory optimization not available
-    # AI-AGENT-REF: Log memory optimization unavailability for debugging
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.debug(f"Memory optimization not available: {e}")
-    MEMORY_OPTIMIZATION_AVAILABLE = False
-
-    def memory_profile(func):
-        return func
-
-    def optimize_memory():
-        return {}
-
-    def emergency_memory_cleanup():
-        return {}
+MEMORY_OPTIMIZATION_AVAILABLE, memory_profile, optimize_memory, emergency_memory_cleanup = _get_memory_optimization()
 
 
 # AI-AGENT-REF: replace utcnow with timezone-aware now
