@@ -187,7 +187,7 @@ MIN_CYCLE = config.SCHEDULER_SLEEP_SECONDS
 
 try:
     # Only import config module, don't validate at import time
-    import config
+    from ai_trading import config
     logger.info("Config module loaded, validation deferred to runtime")
 except Exception as e:
     logger.warning("Config module import failed: %s", e)

@@ -6,7 +6,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any
 
-import config
+from ai_trading import config
 from ai_trading.portfolio import compute_portfolio_weights
 
 def apply_no_trade_bands(current: Dict[str, float], target: Dict[str, float], band_bps: float = 25.0) -> Dict[str, float]:

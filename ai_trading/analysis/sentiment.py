@@ -52,7 +52,7 @@ except ImportError:
 
 # AI-AGENT-REF: Import config with fallback
 try:
-    import config
+    from ai_trading import config
     NEWS_API_KEY = getattr(config, "NEWS_API_KEY", None)
     SENTIMENT_API_KEY = getattr(config, "SENTIMENT_API_KEY", None) or NEWS_API_KEY
     SENTIMENT_API_URL = getattr(config, "SENTIMENT_API_URL", "https://newsapi.org/v2/everything")

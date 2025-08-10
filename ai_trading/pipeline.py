@@ -5,7 +5,7 @@ except ImportError:
     print("WARNING: numpy not available in pipeline.py")
     np = None
 
-import config
+from ai_trading import config
 
 # ML dependencies with graceful error handling
 try:
