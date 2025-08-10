@@ -57,7 +57,7 @@ except ImportError:
     from ai_trading.utils import pd
 
 import config
-from metrics_logger import log_metrics
+from ai_trading.telemetry.metrics_logger import log_metrics
 
 from ai_trading.utils.base import safe_to_datetime
 

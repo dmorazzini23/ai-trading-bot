@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-sys.modules.pop("metrics_logger", None)
-metrics_logger = importlib.import_module("metrics_logger")
+sys.modules.pop("ai_trading.telemetry.metrics_logger", None)
+metrics_logger = importlib.import_module("ai_trading.telemetry.metrics_logger")
 
 
 def force_coverage(mod):

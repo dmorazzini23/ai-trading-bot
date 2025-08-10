@@ -37,7 +37,7 @@ except ImportError:
 
 # AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
 import config
-from metrics_logger import log_metrics
+from ai_trading.telemetry.metrics_logger import log_metrics
 from retrain import prepare_indicators
 
 from ai_trading.utils import http
