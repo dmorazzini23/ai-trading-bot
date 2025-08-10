@@ -33,7 +33,7 @@ pytz>=2024.1
 # pin setuptools to avoid pandas_ta/pkg_resources deprecation warnings
 setuptools>=69,<80
 yfinance>=0.2.28
-websockets>=13.0
+websockets>=10.4
 urllib3>=1.26,<3.0
 statsmodels>=0.14.1,<0.15
 transformers==4.35.2
