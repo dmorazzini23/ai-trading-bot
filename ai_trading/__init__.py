@@ -5,7 +5,7 @@ This module contains the core trading bot functionality and institutional-grade
 components for professional trading operations including:
 
 - Core trading enums and constants
-- Database models and connection management  
+- Database models and connection management
 - Kelly Criterion risk management
 - Strategy framework and execution engine
 - Performance monitoring and alerting

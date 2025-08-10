@@ -17,41 +17,41 @@ class TestDualSchemaCredentials:
     def test_alpaca_schema_only(self):
         """Test using only ALPACA_* environment variables."""
         env_vars = {
-            "ALPACA_API_KEY": "alpaca_key_123",
-            "ALPACA_SECRET_KEY": "alpaca_secret_456", 
+            "ALPACA_API_KEY": "fake_alpaca_key_not_real",
+            "ALPACA_SECRET_KEY": "fake_alpaca_secret_not_real", 
             "ALPACA_BASE_URL": "https://paper-api.alpaca.markets"
         }
         
         with patch.dict(os.environ, env_vars, clear=True):
             api_key, secret_key, base_url = _resolve_alpaca_env()
             
-            assert api_key == "alpaca_key_123"
-            assert secret_key == "alpaca_secret_456"
+            assert api_key == "fake_alpaca_key_not_real"
+            assert secret_key == "fake_alpaca_secret_not_real"
             assert base_url == "https://paper-api.alpaca.markets"
     
     def test_apca_schema_only(self):
         """Test using only APCA_* environment variables."""
         env_vars = {
-            "APCA_API_KEY_ID": "apca_key_789",
-            "APCA_API_SECRET_KEY": "apca_secret_012",
+            "APCA_API_KEY_ID": "fake_apca_key_not_real",
+            "APCA_API_SECRET_KEY": "fake_apca_secret_not_real",
             "APCA_API_BASE_URL": "https://api.alpaca.markets"
         }
         
         with patch.dict(os.environ, env_vars, clear=True):
             api_key, secret_key, base_url = _resolve_alpaca_env()
             
-            assert api_key == "apca_key_789"
-            assert secret_key == "apca_secret_012"
+            assert api_key == "fake_apca_key_not_real"
+            assert secret_key == "fake_apca_secret_not_real"
             assert base_url == "https://api.alpaca.markets"
     
     def test_alpaca_precedence_over_apca(self):
         """Test that ALPACA_* variables take precedence over APCA_*."""
         env_vars = {
-            "ALPACA_API_KEY": "alpaca_key_priority",
-            "ALPACA_SECRET_KEY": "alpaca_secret_priority",
+            "ALPACA_API_KEY": "fake_alpaca_key_priority_not_real",
+            "ALPACA_SECRET_KEY": "fake_alpaca_secret_priority_not_real",
             "ALPACA_BASE_URL": "https://alpaca-priority.com",
-            "APCA_API_KEY_ID": "apca_key_fallback",
-            "APCA_API_SECRET_KEY": "apca_secret_fallback",
+            "APCA_API_KEY_ID": "fake_apca_key_fallback_not_real",
+            "APCA_API_SECRET_KEY": "fake_apca_secret_fallback_not_real",
             "APCA_API_BASE_URL": "https://apca-fallback.com"
         }
         
@@ -59,36 +59,36 @@ class TestDualSchemaCredentials:
             api_key, secret_key, base_url = _resolve_alpaca_env()
             
             # Should use ALPACA_* values
-            assert api_key == "alpaca_key_priority"
-            assert secret_key == "alpaca_secret_priority"
+            assert api_key == "fake_alpaca_key_priority_not_real"
+            assert secret_key == "fake_alpaca_secret_priority_not_real"
             assert base_url == "https://alpaca-priority.com"
     
     def test_mixed_schema_alpaca_key_apca_secret(self):
         """Test mixed schema with ALPACA key and APCA secret."""
         env_vars = {
-            "ALPACA_API_KEY": "alpaca_key_mixed",
-            "APCA_API_SECRET_KEY": "apca_secret_mixed"
+            "ALPACA_API_KEY": "fake_alpaca_key_mixed_not_real",
+            "APCA_API_SECRET_KEY": "fake_apca_secret_mixed_not_real"
         }
         
         with patch.dict(os.environ, env_vars, clear=True):
             api_key, secret_key, base_url = _resolve_alpaca_env()
             
-            assert api_key == "alpaca_key_mixed"
-            assert secret_key == "apca_secret_mixed"
+            assert api_key == "fake_alpaca_key_mixed_not_real"
+            assert secret_key == "fake_apca_secret_mixed_not_real"
             assert base_url == "https://paper-api.alpaca.markets"  # Default
     
     def test_mixed_schema_apca_key_alpaca_secret(self):
         """Test mixed schema with APCA key and ALPACA secret."""
         env_vars = {
-            "APCA_API_KEY_ID": "apca_key_mixed",
-            "ALPACA_SECRET_KEY": "alpaca_secret_mixed"
+            "APCA_API_KEY_ID": "fake_apca_key_mixed_not_real",
+            "ALPACA_SECRET_KEY": "fake_alpaca_secret_mixed_not_real"
         }
         
         with patch.dict(os.environ, env_vars, clear=True):
             api_key, secret_key, base_url = _resolve_alpaca_env()
             
-            assert api_key == "apca_key_mixed"  
-            assert secret_key == "alpaca_secret_mixed"
+            assert api_key == "fake_apca_key_mixed_not_real"  
+            assert secret_key == "fake_alpaca_secret_mixed_not_real"
             assert base_url == "https://paper-api.alpaca.markets"  # Default
     
     def test_default_base_url_when_missing(self):

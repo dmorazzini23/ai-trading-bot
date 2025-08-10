@@ -275,9 +275,9 @@ def test_utils_edge_cases(tmp_path, monkeypatch):
 def test_validate_env_main(monkeypatch):
     """Running validate_env as script calls _main."""
     # AI-AGENT-REF: Mock environment variables to ensure validation passes
-    monkeypatch.setenv("WEBHOOK_SECRET", "test_webhook_secret_that_is_at_least_32_characters_long_for_security")
-    monkeypatch.setenv("ALPACA_API_KEY", "PKT12345678901234567890123456789012345")  # Realistic length
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ")  # Realistic length
+    monkeypatch.setenv("WEBHOOK_SECRET", "fake_test_webhook_secret_that_is_at_least_32_characters_long_for_security_not_real")
+    monkeypatch.setenv("ALPACA_API_KEY", "FAKE_TEST_API_KEY_NOT_REAL_123456789012345")  # Realistic length
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789012345678901234567890ABCDEFGHIJKLMN")  # Realistic length
     monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
     
     # AI-AGENT-REF: Clear sys.argv to prevent pytest args from interfering with validate_env argument parsing

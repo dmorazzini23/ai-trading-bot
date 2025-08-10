@@ -109,7 +109,8 @@ def run_basic_pytest():
             cwd='/home/runner/work/ai-trading-bot/ai-trading-bot',
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=30,
+            check=True
         )
         
         if result.returncode == 0:
