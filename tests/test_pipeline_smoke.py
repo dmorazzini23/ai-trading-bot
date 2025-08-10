@@ -9,9 +9,10 @@ import pytest
 
 
 def force_coverage(mod):
+    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
     lines = Path(mod.__file__).read_text().splitlines()
     dummy = "\n".join("pass" for _ in lines)
-    exec(compile(dummy, mod.__file__, "exec"), {})
+    compile(dummy, mod.__file__, "exec")  # Just compile, don't execute
 
 
 @pytest.mark.smoke

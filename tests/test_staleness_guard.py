@@ -166,7 +166,7 @@ class TestStalenessGuard:
         now = datetime.datetime.now(datetime.timezone.utc)
         
         # Test with timezone-naive timestamp (should be treated as UTC)
-        naive_timestamp = datetime.datetime.now() - datetime.timedelta(seconds=30)
+        naive_timestamp = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - datetime.timedelta(seconds=30)  # AI-AGENT-REF: Create naive datetime from UTC
         df_naive = pd.DataFrame({
             'timestamp': [naive_timestamp],
             'close': [100.0]

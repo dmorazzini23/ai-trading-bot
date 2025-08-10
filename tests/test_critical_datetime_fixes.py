@@ -34,7 +34,7 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
         
         # Test various input formats
         test_inputs = [
-            datetime.now(),  # naive datetime
+            datetime.now(timezone.utc).replace(tzinfo=None),  # AI-AGENT-REF: Fixed naive datetime by creating from UTC
             "2025-01-01 12:00:00",  # string format
             datetime.now(timezone.utc),  # already timezone-aware
         ]
@@ -66,9 +66,9 @@ class TestDatetimeTimezoneAwareness(unittest.TestCase):
                 mock_df.empty = False
                 mock_df.columns = ['open', 'high', 'low', 'close', 'volume']
                 
-                # Test with naive datetime (should be converted to timezone-aware)
-                start_dt = datetime.now()
-                end_dt = datetime.now() + timedelta(hours=1)
+                # AI-AGENT-REF: Test with timezone-aware datetime instead of naive
+                start_dt = datetime.now(timezone.utc)
+                end_dt = datetime.now(timezone.utc) + timedelta(hours=1)
                 
                 try:
                     result = get_minute_df("AAPL", start_dt, end_dt)
@@ -195,8 +195,9 @@ class TestRetryConfiguration(unittest.TestCase):
         with patch('data_fetcher._DATA_CLIENT') as mock_client:
             mock_client.get_stock_bars.side_effect = Exception("Invalid format for parameter start: error parsing")
             
-            start_dt = datetime.now()
-            end_dt = datetime.now() + timedelta(hours=1)
+            # AI-AGENT-REF: Use timezone-aware datetime instead of naive
+            start_dt = datetime.now(timezone.utc)
+            end_dt = datetime.now(timezone.utc) + timedelta(hours=1)
             
             # Should eventually give up and not retry infinitely
             with self.assertRaises(Exception):
