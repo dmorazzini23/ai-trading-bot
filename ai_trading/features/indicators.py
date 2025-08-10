@@ -66,7 +66,7 @@ def compute_macd(df: pd.DataFrame) -> pd.DataFrame:
         df["signal"] = ema(tuple(df["macd"]), 9)
         df["histogram"] = df["macd"] - df["signal"]
         return df
-    except Exception:
+    except (KeyError, ValueError, TypeError):
         logger.error("MACD computation failed", exc_info=True)
         return df
 
@@ -84,7 +84,7 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
         
         df["atr"] = atr(high, low, close, period)
         return df
-    except Exception:
+    except (KeyError, ValueError, TypeError):
         logger.error("ATR computation failed", exc_info=True)
         return df
 

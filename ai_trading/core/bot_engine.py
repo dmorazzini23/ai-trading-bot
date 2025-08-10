@@ -216,7 +216,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
         try:
             h.flush()
             h.close()
-        except Exception:
+        except (AttributeError, OSError):
             pass
     logging.shutdown()
 
@@ -1448,8 +1448,8 @@ def compute_current_positions(ctx: "BotContext") -> Dict[str, int]:
         positions = ctx.api.get_all_positions()
         logger.debug("Raw Alpaca positions: %s", positions)
         return {p.symbol: int(p.qty) for p in positions}
-    except Exception:
-        logger.warning("compute_current_positions failed", exc_info=True)
+    except (AttributeError, ValueError, ConnectionError, TimeoutError) as e:
+        logger.warning("compute_current_positions failed: %s", e, exc_info=True)
         return {}
 
 
@@ -3440,7 +3440,7 @@ class SignalManager:
             s = 1 if val > 0 else -1 if val < 0 else -1
             w = min(abs(val) * 10, 1.0)
             return s, w, "momentum"
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError):
             logger.exception("Error in signal_momentum")
             return -1, 0.0, "momentum"
 
@@ -3461,7 +3461,7 @@ class SignalManager:
             )
             w = min(abs(val) / 3, 1.0)
             return s, w, "mean_reversion"
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError):
             logger.exception("Error in signal_mean_reversion")
             return -1, 0.0, "mean_reversion"
 
@@ -3472,7 +3472,7 @@ class SignalManager:
             val = df["stochrsi"].iloc[-1]
             s = 1 if val < 0.2 else -1 if val > 0.8 else -1
             return s, 0.3, "stochrsi"
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError):
             logger.exception("Error in signal_stochrsi")
             return -1, 0.0, "stochrsi"
 
@@ -3487,7 +3487,7 @@ class SignalManager:
             s = 1 if slope > 0 else -1 if slope < 0 else -1
             w = min(abs(slope) / 1e6, 1.0)
             return s, w, "obv"
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError):
             logger.exception("Error in signal_obv")
             return -1, 0.0, "obv"
 
