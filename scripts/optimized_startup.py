@@ -159,8 +159,10 @@ def cleanup_on_exit():
         from memory_optimizer import emergency_memory_cleanup
         result = emergency_memory_cleanup()
         logging.info(str(f"Emergency cleanup: {result.get('rss_mb', 0)):.1f}MB memory")
-    except:
-        pass
+    except ImportError:
+        logging.debug("Memory optimizer not available, skipping emergency cleanup")
+    except Exception as e:
+        logging.warning(f"Emergency memory cleanup failed: {e}")
 
 
 def main():

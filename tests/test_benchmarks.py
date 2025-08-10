@@ -50,7 +50,7 @@ def test_benchmarks(request, func):
         # Try to use the benchmark fixture if available
         benchmark = request.getfixturevalue('benchmark')
         benchmark(func, df)
-    except:
+    except LookupError:
         # Fallback: just run the function to ensure it works
         result = func(df)
         # Basic verification that function completed without error

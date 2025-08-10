@@ -716,7 +716,7 @@ except Exception:  # pragma: no cover - optional dependency
                             from datetime import datetime
                             dt = datetime.fromisoformat(args[0])
                             self._dt = dt.replace(tzinfo=timezone.utc)
-                        except:
+                        except (ValueError, TypeError):
                             self._dt = datetime.now(timezone.utc)
                     else:
                         self._dt = datetime.now(timezone.utc)

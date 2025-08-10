@@ -86,7 +86,7 @@ def check_shebang_removal():
                         first_line = f.readline()
                         if first_line.startswith('#!'):
                             library_files_with_shebangs.append(file_path)
-                except:
+                except (OSError, IOError, UnicodeDecodeError):
                     continue
     
     if library_files_with_shebangs:

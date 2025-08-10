@@ -272,7 +272,7 @@ def test_drift_monitoring():
                     psi += (cp - bp) * math.log(cp / bp)
             
             return abs(psi)
-        except:
+        except (ZeroDivisionError, ValueError, IndexError):
             return 0.0
     
     # Test PSI calculation with simple random data

@@ -216,7 +216,7 @@ class SystemDiagnostic:
                     attrs = len(module.__dict__)
                     if attrs > 100:  # Arbitrary threshold for "large"
                         large_modules.append((name, attrs))
-            except:
+            except (AttributeError, ImportError):
                 continue
         
         module_info['trading_modules'] = trading_modules
