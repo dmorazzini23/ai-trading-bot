@@ -14,7 +14,7 @@ def run_command(cmd, description):
     """Run a command and return success status."""
     logging.info(f"Running: {description}")
     try:
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=Path(__file__, timeout=30).parent)
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30, cwd=Path(__file__).parent)
         if result.returncode == 0:
             logging.info(f"✓ {description} passed")
             if result.stdout.strip():

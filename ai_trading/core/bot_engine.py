@@ -472,7 +472,9 @@ try:
 
     torch.manual_seed(SEED)
 except ImportError:
-    pass
+    # PyTorch not available - continue with deterministic fallback seed
+    import random
+    random.seed(SEED)
 
 _DEFAULT_FEED = config.ALPACA_DATA_FEED or "iex"
 
