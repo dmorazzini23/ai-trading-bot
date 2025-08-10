@@ -48,8 +48,12 @@ try:
     )
 
     MEMORY_OPTIMIZATION_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     # Fallback decorators if memory optimization not available
+    # AI-AGENT-REF: Log memory optimization unavailability for debugging
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.debug(f"Memory optimization not available: {e}")
     MEMORY_OPTIMIZATION_AVAILABLE = False
 
     def memory_profile(func):
@@ -96,11 +100,12 @@ from ai_trading.utils.timefmt import (
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
 try:
     from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
-except ImportError:
+except ImportError as e:
     # Fallback if circuit breaker module not available
+    # AI-AGENT-REF: Log circuit breaker import failure with context
     DrawdownCircuitBreaker = None
     logger.warning(
-        "DrawdownCircuitBreaker not available - drawdown protection disabled"
+        f"DrawdownCircuitBreaker not available - drawdown protection disabled: {e}"
     )
 # AI-AGENT-REF: Import circuit breaker for external service resilience
 try:

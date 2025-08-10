@@ -1,9 +1,12 @@
 # tools/codemods/sweep_fix.py
 import pathlib
 import sys
+import logging
 
 import libcst as cst
 import libcst.matchers as m
+
+logger = logging.getLogger(__name__)
 
 PKG = pathlib.Path("ai_trading")
 REQ_TIMEOUT = int(sys.argv[1]) if len(sys.argv) > 1 else 10
@@ -140,11 +143,13 @@ def ensure_timezone_import(mod: cst.Module) -> cst.Module:
 def transform_file(p: pathlib.Path):
     try:
         src = p.read_text(encoding="utf-8")
-    except:
+    except (OSError, UnicodeDecodeError) as e:
+        logger.exception(f"Failed to read file {p}")
         return
     try:
         mod = cst.parse_module(src)
-    except:
+    except (cst.ParserError, ValueError) as e:
+        logger.exception(f"Failed to parse file {p}")
         return
     t = Fixer()
     new = mod.visit(t)

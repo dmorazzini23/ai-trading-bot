@@ -25,7 +25,11 @@ def _get_settings_safe():
         from ai_trading.config import get_settings
 
         return get_settings()
-    except ImportError:
+    except ImportError as e:
+        # AI-AGENT-REF: Log import failures for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Could not import get_settings: {e}")
         return None
 
 

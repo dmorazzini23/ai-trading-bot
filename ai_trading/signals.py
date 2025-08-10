@@ -27,8 +27,12 @@ except ImportError:
     sys.path.insert(0, os.path.dirname(__file__))
     try:
         from ai_trading.utils import pd
-    except ImportError:
+    except ImportError as e:
         # Create minimal fallback
+        # AI-AGENT-REF: Log utils import failure for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Could not import utils.pd, using fallback: {e}")
         from datetime import datetime
 
         class MockDataFrame:
