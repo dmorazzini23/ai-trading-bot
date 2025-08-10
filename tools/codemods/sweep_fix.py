@@ -94,7 +94,7 @@ class Fixer(cst.CSTTransformer):
                     )
             return updated_node.with_changes(args=args)
 
-        # Handle datetime.now() calls
+        # Handle naive datetime.now calls (timezone-aware required)
         if m.matches(
             updated_node,
             m.Call(
