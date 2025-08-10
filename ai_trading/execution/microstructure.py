@@ -355,7 +355,7 @@ class OrderFlowAnalyzer:
             
             return len(recent_trades) / time_span
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0
     
     def _calculate_order_imbalance(self, quote_data: List[Dict]) -> float:
@@ -374,7 +374,7 @@ class OrderFlowAnalyzer:
             
             return (total_bid_size - total_ask_size) / (total_bid_size + total_ask_size)
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0
     
     def _calculate_flow_toxicity(self, trade_data: List[Dict], quote_data: List[Dict]) -> float:
@@ -422,7 +422,7 @@ class OrderFlowAnalyzer:
             
             return statistics.mean(toxicity_measures) if toxicity_measures else 0.0
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0
     
     def _estimate_information_content(self, trade_data: List[Dict]) -> float:
@@ -450,7 +450,7 @@ class OrderFlowAnalyzer:
             # Normalize to 0-1 scale
             return min(1.0, information_content * 1000)  # Scaling factor
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0
     
     def _calculate_vwap_deviation(self, trade_data: List[Dict]) -> float:
@@ -483,7 +483,7 @@ class OrderFlowAnalyzer:
             
             return 0.0
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0
     
     def _identify_primary_concern(self, flow_features: Dict[str, float]) -> str:
@@ -696,7 +696,7 @@ class MarketMicrostructureEngine:
             
             return features
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return {"estimated_impact": 0.05}
     
     def _analyze_microstructure_volatility(self, trade_history: List[Dict]) -> Dict[str, float]:
@@ -759,7 +759,7 @@ class MarketMicrostructureEngine:
             
             return min(200, max(1, total_impact))  # Cap between 1-200 bps
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 50.0  # Default impact estimate
     
     def _assess_impact_confidence(self, microstructure_data: MarketMicrostructureData) -> float:
@@ -789,7 +789,7 @@ class MarketMicrostructureEngine:
             
             return statistics.mean(confidence_factors) if confidence_factors else 0.5
             
-        except Exception:
+        except (ValueError, TypeError, ZeroDivisionError):
             return 0.5
     
     def _calculate_autocorrelation(self, data: List[float], lag: int = 1) -> float:
@@ -812,7 +812,7 @@ class MarketMicrostructureEngine:
             
             return autocovariance / variance if variance > 0 else 0.0
             
-        except Exception:
+        except (ValueError, TypeError, ZeroDivisionError, IndexError):
             return 0.0
     
     def _create_default_microstructure_data(self, symbol: str) -> MarketMicrostructureData:
