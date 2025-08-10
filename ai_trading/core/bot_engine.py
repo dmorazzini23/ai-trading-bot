@@ -3606,7 +3606,9 @@ def audit_positions(ctx: BotContext) -> None:
     # 2) Fetch remote (broker) positions
     try:
         remote = {p.symbol: int(p.qty) for p in ctx.api.get_all_positions()}
-    except Exception:
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.exception("bot_engine: failed to fetch remote positions from broker", exc_info=e)
         return
 
     max_order_size = int(os.getenv("MAX_ORDER_SIZE", "1000"))
@@ -3678,7 +3680,9 @@ def validate_open_orders(ctx: BotContext) -> None:
         return
     try:
         open_orders = ctx.api.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
-    except Exception:
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.exception("bot_engine: failed to fetch open orders from broker", exc_info=e)
         return
 
     now = datetime.now(UTC)
