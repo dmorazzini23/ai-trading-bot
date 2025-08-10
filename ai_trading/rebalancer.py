@@ -327,7 +327,7 @@ class TaxAwareRebalancer:
             
             return max(0, base_score - gain_magnitude_penalty)
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.5
     
     def _calculate_harvest_priority(self, total_loss: float, tax_benefit: float, position: Dict) -> float:
@@ -349,7 +349,7 @@ class TaxAwareRebalancer:
             
             return base_score + loss_bonus - recency_penalty
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0
     
     def _calculate_rebalance_priority(self, weight_diff: float, tax_impact: Dict) -> float:
@@ -367,7 +367,7 @@ class TaxAwareRebalancer:
             
             return deviation_score - tax_penalty + timing_bonus
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0
     
     def _calculate_portfolio_drift(self, current_weights: Dict[str, float], 
@@ -384,7 +384,7 @@ class TaxAwareRebalancer:
             
             return total_drift / 2  # Normalize (sum of absolute differences / 2)
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0
     
     def _calculate_overall_tax_efficiency(self, rebalance_trades: List[Dict]) -> float:
@@ -412,7 +412,7 @@ class TaxAwareRebalancer:
             
             return sum(efficiency_scores) / len(efficiency_scores)
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.5
     
     def _generate_rebalance_recommendations(self, rebalance_trades: List[Dict]) -> List[str]:
