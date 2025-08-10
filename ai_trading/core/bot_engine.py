@@ -85,6 +85,9 @@ from ai_trading import (
 )
 from ai_trading.config import get_settings
 from ai_trading.config import management as config
+
+# Initialize settings once for global use
+S = get_settings()
 from ai_trading.data_fetcher import (
     get_bars,
     get_bars_batch,
@@ -496,7 +499,7 @@ if "ALPACA_SECRET_KEY" in os.environ:
 config.reload_env()
 
 # BOT_MODE must be defined before any classes that reference it
-BOT_MODE = config.get_env("BOT_MODE", "balanced")
+BOT_MODE = S.bot_mode
 assert BOT_MODE is not None, "BOT_MODE must be set before using BotState"
 import csv
 import json
@@ -1016,7 +1019,6 @@ except ImportError:
     Flask = MockFlask
 
 from ai_trading.alpaca_api import alpaca_get, start_trade_updates_stream
-
 
 try:
     from ai_trading.rebalancer import (
@@ -1826,7 +1828,7 @@ else:
     logger.debug("FinBERT mocks initialized for tests")
 
 
-DISASTER_DD_LIMIT = float(config.get_env("DISASTER_DD_LIMIT", "0.2"))
+DISASTER_DD_LIMIT = S.disaster_dd_limit
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -2190,10 +2192,10 @@ def _regime_basket_to_proxy_bars(wide: pd.DataFrame) -> pd.DataFrame:
 RETRAIN_MARKER_FILE = abspath("last_retrain.txt")
 
 # Main meta‐learner path: this is where retrain.py will dump the new sklearn model each day.
-MODEL_PATH = abspath(config.get_env("MODEL_PATH", "meta_model.pkl"))
-MODEL_RF_PATH = abspath(config.get_env("MODEL_RF_PATH", "model_rf.pkl"))
-MODEL_XGB_PATH = abspath(config.get_env("MODEL_XGB_PATH", "model_xgb.pkl"))
-MODEL_LGB_PATH = abspath(config.get_env("MODEL_LGB_PATH", "model_lgb.pkl"))
+MODEL_PATH = abspath(S.model_path)
+MODEL_RF_PATH = abspath(S.model_rf_path)
+MODEL_XGB_PATH = abspath(S.model_xgb_path)
+MODEL_LGB_PATH = abspath(S.model_lgb_path)
 
 REGIME_MODEL_PATH = abspath("regime_model.pkl")
 # (We keep a separate meta‐model for signal‐weight learning, if you use Bayesian/Ridge, etc.)
@@ -2331,14 +2333,14 @@ DAILY_LOSS_LIMIT = params.get(
     "DAILY_LOSS_LIMIT", state.mode_obj.config.daily_loss_limit
 )
 # AI-AGENT-REF: Increase default position limit from 10 to 20 for better portfolio utilization
-MAX_PORTFOLIO_POSITIONS = int(config.get_env("MAX_PORTFOLIO_POSITIONS", "20"))
+MAX_PORTFOLIO_POSITIONS = S.max_portfolio_positions
 CORRELATION_THRESHOLD = 0.60
-SECTOR_EXPOSURE_CAP = float(config.get_env("SECTOR_EXPOSURE_CAP", "0.4"))
-MAX_OPEN_POSITIONS = int(config.get_env("MAX_OPEN_POSITIONS", "10"))
-WEEKLY_DRAWDOWN_LIMIT = float(config.get_env("WEEKLY_DRAWDOWN_LIMIT", "0.15"))
+SECTOR_EXPOSURE_CAP = S.sector_exposure_cap
+MAX_OPEN_POSITIONS = S.max_open_positions
+WEEKLY_DRAWDOWN_LIMIT = S.weekly_drawdown_limit
 MARKET_OPEN = dt_time(6, 30)
 MARKET_CLOSE = dt_time(13, 0)
-VOLUME_THRESHOLD = int(config.get_env("VOLUME_THRESHOLD", "50000"))
+VOLUME_THRESHOLD = S.volume_threshold
 ENTRY_START_OFFSET = timedelta(
     minutes=params.get(
         "ENTRY_START_OFFSET_MIN", state.mode_obj.config.entry_start_offset_min
@@ -2362,9 +2364,7 @@ CONFIRMATION_COUNT = params.get(
     "CONFIRMATION_COUNT", state.mode_obj.config.confirmation_count
 )
 CAPITAL_CAP = params.get("CAPITAL_CAP", state.mode_obj.config.capital_cap)
-DOLLAR_RISK_LIMIT = float(
-    config.get_env("DOLLAR_RISK_LIMIT", str(state.mode_obj.config.dollar_risk_limit))
-)
+DOLLAR_RISK_LIMIT = S.dollar_risk_limit
 BUY_THRESHOLD = params.get("BUY_THRESHOLD", state.mode_obj.config.buy_threshold)
 
 
@@ -2422,7 +2422,7 @@ if not os.getenv("TESTING"):
 PACIFIC = ZoneInfo("America/Los_Angeles")
 PDT_DAY_TRADE_LIMIT = params.get("PDT_DAY_TRADE_LIMIT", 3)
 PDT_EQUITY_THRESHOLD = params.get("PDT_EQUITY_THRESHOLD", 25_000.0)
-FINNHUB_RPM = int(config.get_env("FINNHUB_RPM", "60"))
+FINNHUB_RPM = S.finnhub_rpm
 
 # Regime symbols (makes SPY configurable)
 REGIME_SYMBOLS = ["SPY"]
@@ -2494,15 +2494,11 @@ EVENT_COOLDOWN = 15.0  # seconds
 # AI-AGENT-REF: hold time now configurable; default to 0 for pure signal holding
 REBALANCE_HOLD_SECONDS = int(os.getenv("REBALANCE_HOLD_SECONDS", "0"))
 RUN_INTERVAL_SECONDS = 60  # don't run trading loop more often than this
-TRADE_COOLDOWN_MIN = int(config.get_env("TRADE_COOLDOWN_MIN", "5"))  # minutes
+TRADE_COOLDOWN_MIN = S.trade_cooldown_min  # minutes
 
 # AI-AGENT-REF: Enhanced overtrading prevention with frequency limits
-MAX_TRADES_PER_HOUR = int(
-    config.get_env("MAX_TRADES_PER_HOUR", "10")
-)  # limit high-frequency trading
-MAX_TRADES_PER_DAY = int(
-    config.get_env("MAX_TRADES_PER_DAY", "50")
-)  # daily limit to prevent excessive trading
+MAX_TRADES_PER_HOUR = S.max_trades_per_hour  # limit high-frequency trading
+MAX_TRADES_PER_DAY = S.max_trades_per_day  # daily limit to prevent excessive trading
 TRADE_FREQUENCY_WINDOW_HOURS = 1  # rolling window for hourly limits
 
 # Loss streak kill-switch (managed via BotState)
@@ -2652,7 +2648,7 @@ def chunked(iterable: Sequence, n: int):
 
 def ttl_seconds() -> int:
     """Configurable TTL for minute-bar cache (default 60s)."""
-    return int(config.get_env("MINUTE_CACHE_TTL", "60"))
+    return S.minute_cache_ttl
 
 
 def asset_class_for(symbol: str) -> str:
@@ -9039,7 +9035,7 @@ def health() -> str:
 
 
 def start_healthcheck() -> None:
-    port = int(config.get_env("HEALTHCHECK_PORT", "8080"))
+    port = S.healthcheck_port
     try:
         app.run(host="0.0.0.0", port=port)
     except OSError as e:
