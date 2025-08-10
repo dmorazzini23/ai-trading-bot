@@ -131,7 +131,7 @@ print("✓ ALPACA schema with .env file works")
                 f.write(test_script)
                 script_path = f.name
             
-            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30)  # AI-AGENT-REF: Added timeout for security
             assert result.returncode == 0, f"ALPACA test failed: {result.stderr}"
             os.unlink(script_path)
             
@@ -154,7 +154,7 @@ print("✓ APCA schema with .env file works")
                 f.write(test_script)
                 script_path = f.name
             
-            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30)  # AI-AGENT-REF: Added timeout for security
             assert result.returncode == 0, f"APCA test failed: {result.stderr}"
             os.unlink(script_path)
             
@@ -195,7 +195,7 @@ print("✓ All UTC timestamp functions work correctly")
             script_path = f.name
         
         try:
-            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30)  # AI-AGENT-REF: Added timeout for security
             print("STDOUT:", result.stdout)
             if result.stderr:
                 print("STDERR:", result.stderr)
@@ -233,7 +233,7 @@ print("✓ Lazy import mechanism working correctly")
             script_path = f.name
         
         try:
-            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30)  # AI-AGENT-REF: Added timeout for security
             print("STDOUT:", result.stdout)
             if result.stderr:
                 print("STDERR:", result.stderr)
