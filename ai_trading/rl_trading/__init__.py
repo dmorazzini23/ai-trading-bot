@@ -36,7 +36,9 @@ class RLAgent:
         else:  # pragma: no cover - model optional in tests
             logger.error("RL model not found at %s", self.model_path)
 
-    def predict(self, state, symbols: list[str] | None = None) -> TradeSignal | list[TradeSignal] | None:
+    def predict(
+        self, state, symbols: list[str] | None = None
+    ) -> TradeSignal | list[TradeSignal] | None:
         """
         Predict one or more trade signals from the current model.
 
@@ -58,12 +60,20 @@ class RLAgent:
             return None
         try:
             # batch prediction when multiple symbols are provided
-            if symbols is not None and hasattr(state, "__len__") and len(state) == len(symbols):
+            if (
+                symbols is not None
+                and hasattr(state, "__len__")
+                and len(state) == len(symbols)
+            ):
                 actions, _ = self.model.predict(state, deterministic=True)
                 signals: list[TradeSignal] = []
-                for sym, act in zip(symbols, actions):
+                for sym, act in zip(symbols, actions, strict=False):
                     side = {0: "hold", 1: "buy", 2: "sell"}.get(int(act), "hold")
-                    signals.append(TradeSignal(symbol=sym, side=side, confidence=1.0, strategy="rl"))
+                    signals.append(
+                        TradeSignal(
+                            symbol=sym, side=side, confidence=1.0, strategy="rl"
+                        )
+                    )
                 return signals
             # single prediction fallback
             action, _ = self.model.predict(state, deterministic=True)

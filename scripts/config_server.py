@@ -1,6 +1,7 @@
-from flask import Flask, request, jsonify
 import logging
+
 from config import set_runtime_config
+from flask import Flask, jsonify, request
 
 app = Flask(__name__)
 

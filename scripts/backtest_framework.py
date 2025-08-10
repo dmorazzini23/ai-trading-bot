@@ -1,11 +1,12 @@
 """
 Property-based testing framework for trading bot validation.
 """
-import pandas as pd
-import numpy as np
 import gc
 import weakref
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import pytest
 
 

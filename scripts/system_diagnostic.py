@@ -6,31 +6,30 @@ Uses only built-in Python modules for maximum compatibility.
 """
 
 import gc
-import os
-import sys
-import time
-import threading
-import subprocess
-from datetime import datetime, timezone
-from typing import Dict, List
 import json
 import logging
+import os
+import subprocess
+import sys
+import threading
+import time
+from datetime import UTC, datetime
 
 # AI-AGENT-REF: System diagnostic script for memory and performance analysis
 
 class SystemDiagnostic:
     """Comprehensive system diagnostic and performance analyzer."""
-    
+
     def __init__(self):
         self.start_time = time.time()
         self.results = {}
         self.logger = self._setup_logger()
-        
+
     def _setup_logger(self) -> logging.Logger:
         """Setup diagnostic logger."""
         logger = logging.getLogger('system_diagnostic')
         logger.setLevel(logging.INFO)
-        
+
         if not logger.handlers:
             handler = logging.StreamHandler()
             formatter = logging.Formatter(
@@ -38,13 +37,13 @@ class SystemDiagnostic:
             )
             handler.setFormatter(formatter)
             logger.addHandler(handler)
-        
+
         return logger
-    
-    def get_memory_info(self) -> Dict:
+
+    def get_memory_info(self) -> dict:
         """Analyze current memory usage patterns."""
         memory_info = {}
-        
+
         # Process memory information
         try:
             import resource
@@ -59,16 +58,16 @@ class SystemDiagnostic:
             }
         except ImportError:
             memory_info['process_memory'] = {'error': 'resource module not available'}
-        
+
         # System memory information
         try:
             # Read /proc/meminfo for detailed memory information
-            with open('/proc/meminfo', 'r') as f:
+            with open('/proc/meminfo') as f:
                 meminfo = {}
                 for line in f:
                     key, value = line.split(':', 1)
                     meminfo[key.strip()] = value.strip()
-                
+
                 memory_info['system_memory'] = {
                     'total_mb': int(meminfo['MemTotal'].split()[0]) / 1024,
                     'available_mb': int(meminfo['MemAvailable'].split()[0]) / 1024,
@@ -77,18 +76,18 @@ class SystemDiagnostic:
                     'cached_mb': int(meminfo['Cached'].split()[0]) / 1024,
                     'swap_total_mb': int(meminfo['SwapTotal'].split()[0]) / 1024,
                     'swap_free_mb': int(meminfo['SwapFree'].split()[0]) / 1024,
-                    'swap_used_mb': (int(meminfo['SwapTotal'].split()[0]) - 
+                    'swap_used_mb': (int(meminfo['SwapTotal'].split()[0]) -
                                    int(meminfo['SwapFree'].split()[0])) / 1024
                 }
         except (FileNotFoundError, KeyError, ValueError) as e:
             memory_info['system_memory'] = {'error': str(e)}
-        
+
         return memory_info
-    
-    def check_python_processes(self) -> List[Dict]:
+
+    def check_python_processes(self) -> list[dict]:
         """Identify all Python processes and their resource usage."""
         processes = []
-        
+
         try:
             # Use ps to find Python processes
             result = subprocess.run(['ps', 'aux'], capture_output=True, text=True, timeout=30, check=True)
@@ -108,10 +107,10 @@ class SystemDiagnostic:
                             })
         except (subprocess.SubprocessError, ValueError) as e:
             processes.append({'error': str(e)})
-        
+
         return processes
-    
-    def analyze_garbage_collection(self) -> Dict:
+
+    def analyze_garbage_collection(self) -> dict:
         """Analyze garbage collection statistics and performance."""
         gc_info = {
             'enabled': gc.isenabled(),
@@ -119,17 +118,17 @@ class SystemDiagnostic:
             'thresholds': gc.get_threshold(),
             'stats': gc.get_stats() if hasattr(gc, 'get_stats') else None
         }
-        
+
         # Force garbage collection and measure time
         start_time = time.time()
         collected = gc.collect()
         gc_time = time.time() - start_time
-        
+
         gc_info['collection_test'] = {
             'objects_collected': collected,
             'collection_time_ms': gc_time * 1000
         }
-        
+
         # Get referrers for large objects
         try:
             all_objects = gc.get_objects()
@@ -141,20 +140,20 @@ class SystemDiagnostic:
             }
         except Exception as e:
             gc_info['object_counts'] = {'error': str(e)}
-        
+
         return gc_info
-    
-    def check_file_handles(self) -> Dict:
+
+    def check_file_handles(self) -> dict:
         """Check open file handles and potential leaks."""
         file_info = {}
-        
+
         try:
             # Count open file descriptors
             proc_fd = f'/proc/{os.getpid()}/fd'
             if os.path.exists(proc_fd):
                 fd_count = len(os.listdir(proc_fd))
                 file_info['open_file_descriptors'] = fd_count
-                
+
                 # List some file descriptors
                 file_info['sample_fds'] = []
                 for fd in os.listdir(proc_fd)[:10]:  # Show first 10
@@ -165,17 +164,17 @@ class SystemDiagnostic:
                         continue
         except Exception as e:
             file_info['error'] = str(e)
-        
+
         return file_info
-    
-    def check_thread_usage(self) -> Dict:
+
+    def check_thread_usage(self) -> dict:
         """Analyze thread usage and potential issues."""
         thread_info = {
             'active_threads': threading.active_count(),
             'current_thread': threading.current_thread().name,
             'main_thread_alive': threading.main_thread().is_alive()
         }
-        
+
         # List all threads
         threads = []
         for thread in threading.enumerate():
@@ -185,31 +184,31 @@ class SystemDiagnostic:
                 'alive': thread.is_alive(),
                 'ident': thread.ident
             })
-        
+
         thread_info['all_threads'] = threads
-        
+
         return thread_info
-    
-    def check_modules_loaded(self) -> Dict:
+
+    def check_modules_loaded(self) -> dict:
         """Check loaded modules and their memory impact."""
         module_info = {
             'total_modules': len(sys.modules),
             'builtin_modules': len(sys.builtin_module_names),
         }
-        
+
         # Categorize modules
         large_modules = []
         trading_modules = []
-        
+
         for name, module in sys.modules.items():
             if module is None:
                 continue
-                
+
             # Check for trading-related modules
-            if any(keyword in name.lower() for keyword in 
+            if any(keyword in name.lower() for keyword in
                    ['trading', 'alpaca', 'pandas', 'numpy', 'sklearn', 'ai_trading']):
                 trading_modules.append(name)
-            
+
             # Try to estimate module size (this is approximate)
             try:
                 if hasattr(module, '__dict__'):
@@ -218,39 +217,39 @@ class SystemDiagnostic:
                         large_modules.append((name, attrs))
             except (AttributeError, ImportError):
                 continue
-        
+
         module_info['trading_modules'] = trading_modules
         module_info['large_modules'] = sorted(large_modules, key=lambda x: x[1], reverse=True)[:20]
-        
+
         return module_info
-    
-    def check_environment_variables(self) -> Dict:
+
+    def check_environment_variables(self) -> dict:
         """Check environment variables for potential issues."""
         env_info = {}
-        
+
         # Check Python-specific environment variables
         python_env_vars = [
             'PYTHONPATH', 'PYTHONHOME', 'PYTHON_ENABLE_STACK_TRAMPOLINES',
             'PYTEST_RUNNING', 'TRADING_ENV'
         ]
-        
+
         for var in python_env_vars:
             env_info[var] = os.environ.get(var, 'Not set')
-        
+
         # Check memory-related environment variables
         memory_env_vars = ['MALLOC_TRIM_THRESHOLD_', 'MALLOC_MMAP_THRESHOLD_']
         for var in memory_env_vars:
             env_info[var] = os.environ.get(var, 'Not set')
-        
+
         return env_info
-    
-    def check_disk_usage(self) -> Dict:
+
+    def check_disk_usage(self) -> dict:
         """Check disk usage and temporary file accumulation."""
         disk_info = {}
-        
+
         try:
             import shutil
-            
+
             # Check current directory usage
             total, used, free = shutil.disk_usage('.')
             disk_info['current_dir'] = {
@@ -259,13 +258,13 @@ class SystemDiagnostic:
                 'free_gb': free / (1024**3),
                 'usage_percent': (used / total) * 100
             }
-            
+
             # Check for large files in current directory
             large_files = []
             for root, dirs, files in os.walk('.'):
                 # Skip .git and other version control directories
                 dirs[:] = [d for d in dirs if not d.startswith('.git')]
-                
+
                 for file in files:
                     filepath = os.path.join(root, file)
                     try:
@@ -274,25 +273,25 @@ class SystemDiagnostic:
                             large_files.append((filepath, size / (1024**2)))  # Size in MB
                     except OSError:
                         continue
-            
+
             disk_info['large_files'] = sorted(large_files, key=lambda x: x[1], reverse=True)[:10]
-            
+
         except Exception as e:
             disk_info['error'] = str(e)
-        
+
         return disk_info
-    
-    def run_full_diagnostic(self) -> Dict:
+
+    def run_full_diagnostic(self) -> dict:
         """Run complete system diagnostic."""
         self.logger.info("Starting comprehensive system diagnostic...")
-        
+
         diagnostic_results = {
-            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'timestamp': datetime.now(UTC).isoformat(),
             'python_version': sys.version,
             'platform': sys.platform,
             'diagnostic_runtime_seconds': 0
         }
-        
+
         # Run all diagnostic checks
         checks = [
             ('memory_analysis', self.get_memory_info),
@@ -304,33 +303,33 @@ class SystemDiagnostic:
             ('environment_variables', self.check_environment_variables),
             ('disk_usage', self.check_disk_usage)
         ]
-        
+
         for check_name, check_func in checks:
             self.logger.info(f"Running {check_name}...")
             try:
                 start_time = time.time()
                 result = check_func()
                 check_time = time.time() - start_time
-                
+
                 diagnostic_results[check_name] = result
                 diagnostic_results[f'{check_name}_time_ms'] = check_time * 1000
-                
+
             except Exception as e:
                 self.logger.error(f"Error in {check_name}: {str(e)}")
                 diagnostic_results[check_name] = {'error': str(e)}
-        
+
         diagnostic_results['diagnostic_runtime_seconds'] = time.time() - self.start_time
-        
+
         return diagnostic_results
-    
-    def generate_recommendations(self, results: Dict) -> List[str]:
+
+    def generate_recommendations(self, results: dict) -> list[str]:
         """Generate performance optimization recommendations."""
         recommendations = []
-        
+
         # Memory recommendations
         if 'memory_analysis' in results:
             memory = results['memory_analysis']
-            
+
             if 'system_memory' in memory and isinstance(memory['system_memory'], dict):
                 sys_mem = memory['system_memory']
                 if 'swap_used_mb' in sys_mem and sys_mem['swap_used_mb'] > 100:
@@ -338,14 +337,14 @@ class SystemDiagnostic:
                         f"HIGH PRIORITY: Reduce swap usage ({sys_mem['swap_used_mb']:.1f}MB). "
                         "Consider increasing available RAM or reducing memory usage."
                     )
-                
-                if ('total_mb' in sys_mem and 'available_mb' in sys_mem and 
+
+                if ('total_mb' in sys_mem and 'available_mb' in sys_mem and
                     sys_mem['available_mb'] / sys_mem['total_mb'] < 0.1):
                     recommendations.append(
                         "MEDIUM PRIORITY: Low available memory. "
                         "Consider garbage collection optimization."
                     )
-        
+
         # Process recommendations
         if 'process_analysis' in results and isinstance(results['process_analysis'], list):
             python_processes = [p for p in results['process_analysis'] if isinstance(p, dict) and 'pid' in p]
@@ -354,18 +353,18 @@ class SystemDiagnostic:
                     f"MEDIUM PRIORITY: Multiple Python processes detected ({len(python_processes)}). "
                     "Consider consolidating or implementing proper process management."
                 )
-        
+
         # Garbage collection recommendations
         if 'garbage_collection' in results:
             gc_data = results['garbage_collection']
             if ('object_counts' in gc_data and isinstance(gc_data['object_counts'], dict) and
-                'total_objects' in gc_data['object_counts'] and 
+                'total_objects' in gc_data['object_counts'] and
                 gc_data['object_counts']['total_objects'] > 100000):
                 recommendations.append(
                     "MEDIUM PRIORITY: High object count detected. "
                     "Consider implementing regular garbage collection cycles."
                 )
-        
+
         # Thread recommendations
         if 'thread_analysis' in results:
             thread_data = results['thread_analysis']
@@ -374,7 +373,7 @@ class SystemDiagnostic:
                     f"LOW PRIORITY: High thread count ({thread_data['active_threads']}). "
                     "Monitor for thread leaks."
                 )
-        
+
         # File handle recommendations
         if 'file_handles' in results:
             fh_data = results['file_handles']
@@ -383,7 +382,7 @@ class SystemDiagnostic:
                     f"MEDIUM PRIORITY: High file descriptor count ({fh_data['open_file_descriptors']}). "
                     "Check for file handle leaks."
                 )
-        
+
         return recommendations
 
 
@@ -391,33 +390,33 @@ def main():
     """Main diagnostic function."""
     logging.info("AI Trading Bot - System Diagnostic Tool")
     logging.info(str("=" * 50))
-    
+
     diagnostic = SystemDiagnostic()
     results = diagnostic.run_full_diagnostic()
-    
+
     # Generate recommendations
     recommendations = diagnostic.generate_recommendations(results)
-    
+
     # Output results
     logging.info("\nDIAGNOSTIC RESULTS:")
     logging.info(str(json.dumps(results, indent=2)))
-    
+
     logging.info("\nRECOMMENDATIONS:")
     for i, rec in enumerate(recommendations, 1):
         logging.info(f"{i}. {rec}")
-    
+
     # Save results to file
     timestamp = datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
     output_file = f"diagnostic_results_{timestamp}.json"
-    
+
     with open(output_file, 'w') as f:
         json.dump({
             'results': results,
             'recommendations': recommendations
         }, f, indent=2)
-    
+
     logging.info(f"\nResults saved to: {output_file}")
-    
+
     return results
 
 

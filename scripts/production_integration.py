@@ -16,14 +16,17 @@ from __future__ import annotations
 import functools
 import logging
 import time
-from datetime import datetime, timezone
-from typing import Dict, Optional, Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 # AI-AGENT-REF: Import all production systems
 try:
     from production_monitoring import (
-        get_production_monitor, initialize_production_monitoring,
-        ProductionMonitor, CircuitBreaker
+        CircuitBreaker,
+        ProductionMonitor,
+        get_production_monitor,
+        initialize_production_monitoring,
     )
     PRODUCTION_MONITORING_AVAILABLE = True
 except ImportError:
@@ -31,24 +34,25 @@ except ImportError:
 
 try:
     from performance_optimizer import (
-        get_performance_optimizer, initialize_performance_optimizer,
-        profile_performance, cached
+        cached,
+        get_performance_optimizer,
+        initialize_performance_optimizer,
+        profile_performance,
     )
     PERFORMANCE_OPTIMIZER_AVAILABLE = True
 except ImportError:
     PERFORMANCE_OPTIMIZER_AVAILABLE = False
 
 try:
-    from security_manager import (
-        get_security_manager, initialize_security_manager
-    )
+    from security_manager import get_security_manager, initialize_security_manager
     SECURITY_MANAGER_AVAILABLE = True
 except ImportError:
     SECURITY_MANAGER_AVAILABLE = False
 
 try:
     from monitoring_dashboard import (
-        get_monitoring_dashboard, initialize_monitoring_dashboard
+        get_monitoring_dashboard,
+        initialize_monitoring_dashboard,
     )
     DASHBOARD_AVAILABLE = True
 except ImportError:
@@ -63,32 +67,32 @@ except ImportError:
 
 class ProductionIntegrator:
     """Main integration class for production systems."""
-    
+
     def __init__(self, enable_all: bool = True):
         self.logger = logging.getLogger(__name__)
         self.enable_all = enable_all
-        
+
         # Initialize systems
-        self.production_monitor: Optional[ProductionMonitor] = None
+        self.production_monitor: ProductionMonitor | None = None
         self.performance_optimizer = None
         self.security_manager = None
         self.monitoring_dashboard = None
-        
+
         # Integration flags
         self.systems_initialized = False
         self.monitoring_active = False
-        
+
         # Circuit breakers for key services
-        self.circuit_breakers: Dict[str, CircuitBreaker] = {}
-        
+        self.circuit_breakers: dict[str, CircuitBreaker] = {}
+
         self.logger.info("Production integrator initialized")
-    
-    def initialize_all_systems(self, alert_callback: Optional[Callable] = None) -> bool:
+
+    def initialize_all_systems(self, alert_callback: Callable | None = None) -> bool:
         """Initialize all production systems."""
         try:
             success_count = 0
             total_systems = 0
-            
+
             # Initialize production monitoring
             if PRODUCTION_MONITORING_AVAILABLE and self.enable_all:
                 total_systems += 1
@@ -98,7 +102,7 @@ class ProductionIntegrator:
                     success_count += 1
                 except Exception as e:
                     self.logger.error(f"✗ Failed to initialize production monitoring: {e}")
-            
+
             # Initialize performance optimizer
             if PERFORMANCE_OPTIMIZER_AVAILABLE and self.enable_all:
                 total_systems += 1
@@ -108,7 +112,7 @@ class ProductionIntegrator:
                     success_count += 1
                 except Exception as e:
                     self.logger.error(f"✗ Failed to initialize performance optimizer: {e}")
-            
+
             # Initialize security manager
             if SECURITY_MANAGER_AVAILABLE and self.enable_all:
                 total_systems += 1
@@ -118,7 +122,7 @@ class ProductionIntegrator:
                     success_count += 1
                 except Exception as e:
                     self.logger.error(f"✗ Failed to initialize security manager: {e}")
-            
+
             # Initialize monitoring dashboard
             if DASHBOARD_AVAILABLE and self.enable_all:
                 total_systems += 1
@@ -128,31 +132,31 @@ class ProductionIntegrator:
                     success_count += 1
                 except Exception as e:
                     self.logger.error(f"✗ Failed to initialize monitoring dashboard: {e}")
-            
+
             # Setup circuit breakers
             self._setup_circuit_breakers()
-            
+
             # Setup health checks integration
             self._setup_health_check_integration()
-            
+
             self.systems_initialized = (success_count == total_systems and total_systems > 0)
-            
+
             if self.systems_initialized:
                 self.logger.info(f"✓ All {total_systems} production systems initialized successfully")
             else:
                 self.logger.warning(f"⚠ Only {success_count}/{total_systems} production systems initialized")
-            
+
             return self.systems_initialized
-            
+
         except Exception as e:
             self.logger.error(f"Failed to initialize production systems: {e}")
             return False
-    
+
     def _setup_circuit_breakers(self):
         """Setup circuit breakers for critical services."""
         if not self.production_monitor:
             return
-        
+
         # Alpaca API circuit breaker
         alpaca_breaker = CircuitBreaker(
             failure_threshold=5,
@@ -163,7 +167,7 @@ class ProductionIntegrator:
         # AI-AGENT-REF: Add defensive null checks for production systems
         if self.production_monitor is not None:
             self.production_monitor.register_circuit_breaker('alpaca_api', alpaca_breaker)
-        
+
         # Data feed circuit breaker
         data_breaker = CircuitBreaker(
             failure_threshold=3,
@@ -174,14 +178,14 @@ class ProductionIntegrator:
         # AI-AGENT-REF: Add defensive null checks for production systems
         if self.production_monitor is not None:
             self.production_monitor.register_circuit_breaker('data_feed', data_breaker)
-        
+
         self.logger.info("Circuit breakers configured for critical services")
-    
+
     def _setup_health_check_integration(self):
         """Setup health check integration with production monitoring."""
         if not (self.production_monitor and HEALTH_CHECK_AVAILABLE):
             return
-        
+
         try:
             # Register health checks with production monitor
             def trading_system_health():
@@ -193,62 +197,62 @@ class ProductionIntegrator:
                     latency_ms=1.0,
                     message="Trading system operational",
                     details={},
-                    timestamp=datetime.now(timezone.utc)
+                    timestamp=datetime.now(UTC)
                 )
-            
+
             # AI-AGENT-REF: Add defensive null checks for production systems
             if self.production_monitor is not None:
                 self.production_monitor.register_health_check(
                     "trading_system", trading_system_health
                 )
-            
+
             self.logger.info("Health check integration configured")
-            
+
         except Exception as e:
             self.logger.error(f"Failed to setup health check integration: {e}")
-    
+
     def start_monitoring(self):
         """Start all monitoring systems."""
         if not self.systems_initialized:
             self.logger.warning("Systems not initialized, cannot start monitoring")
             return False
-        
+
         try:
             # Start production monitoring
             if self.production_monitor:
                 self.production_monitor.start_monitoring(interval_seconds=30)
-            
+
             # Start dashboard monitoring
             if self.monitoring_dashboard:
                 self.monitoring_dashboard.start_monitoring(interval_seconds=60)
-            
+
             self.monitoring_active = True
             self.logger.info("✓ All monitoring systems started")
             return True
-            
+
         except Exception as e:
             self.logger.error(f"Failed to start monitoring: {e}")
             return False
-    
+
     def stop_monitoring(self):
         """Stop all monitoring systems."""
         try:
             if self.production_monitor:
                 self.production_monitor.stop_monitoring()
-            
+
             if self.monitoring_dashboard:
                 self.monitoring_dashboard.stop_monitoring()
-            
+
             self.monitoring_active = False
             self.logger.info("✓ All monitoring systems stopped")
-            
+
         except Exception as e:
             self.logger.error(f"Error stopping monitoring: {e}")
-    
+
     def wrap_trading_function(self, func: Callable, operation_name: str = None) -> Callable:
         """Wrap trading function with production monitoring and optimization."""
         operation_name = operation_name or f"{func.__module__}.{func.__name__}"
-        
+
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             # Security check for sensitive operations
@@ -260,10 +264,10 @@ class ProductionIntegrator:
                     {"function": operation_name, "args_count": len(args)},
                     user_id="system"
                 )
-            
+
             # Performance monitoring
             start_time = time.perf_counter()
-            
+
             try:
                 # Execute with circuit breaker if applicable
                 if 'alpaca' in operation_name.lower() and 'alpaca_api' in self.circuit_breakers:
@@ -271,22 +275,22 @@ class ProductionIntegrator:
                     return circuit_breaker(func)(*args, **kwargs)
                 else:
                     result = func(*args, **kwargs)
-                
+
                 # Track successful execution
                 execution_time = (time.perf_counter() - start_time) * 1000
                 # AI-AGENT-REF: Add defensive null checks for production systems
                 if self.production_monitor is not None:
                     self.production_monitor.track_latency(operation_name, execution_time)
-                
+
                 return result
-                
+
             except Exception as e:
                 # Track failed execution
                 execution_time = (time.perf_counter() - start_time) * 1000
                 # AI-AGENT-REF: Add defensive null checks for production systems
                 if self.production_monitor is not None:
                     self.production_monitor.track_latency(f"{operation_name}_failed", execution_time)
-                
+
                 # Security logging for failures
                 # AI-AGENT-REF: Add defensive null checks for production systems
                 if self.security_manager is not None:
@@ -295,16 +299,16 @@ class ProductionIntegrator:
                         {"function": operation_name, "error": str(e)},
                         user_id="system"
                     )
-                
+
                 raise
-        
+
         return wrapper
-    
+
     def secure_api_endpoint(self, func: Callable) -> Callable:
         """Secure API endpoint with authentication and rate limiting."""
         if not self.security_manager:
             return func
-        
+
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             # Extract request information (this would be adapted based on framework)
@@ -313,7 +317,7 @@ class ProductionIntegrator:
             signature = kwargs.get('signature', '')
             timestamp = kwargs.get('timestamp', str(time.time()))
             body = kwargs.get('body', '')
-            
+
             # Authenticate request
             # AI-AGENT-REF: Add defensive null checks for production systems
             if self.security_manager is not None:
@@ -323,12 +327,12 @@ class ProductionIntegrator:
                     raise Exception("Authentication failed")
             else:
                 self.logger.warning("Security manager not available, skipping authentication")
-            
+
             return func(*args, **kwargs)
-        
+
         return wrapper
-    
-    def monitor_trade_execution(self, symbol: str, side: str, quantity: float, 
+
+    def monitor_trade_execution(self, symbol: str, side: str, quantity: float,
                               price: float, pnl: float = 0.0, order_id: str = None):
         """Monitor trade execution across all systems."""
         try:
@@ -337,7 +341,7 @@ class ProductionIntegrator:
                 self.monitoring_dashboard.record_trade(
                     symbol, side, quantity, price, pnl, order_id
                 )
-            
+
             # Security anomaly detection
             # AI-AGENT-REF: Add defensive null checks for production systems
             if self.security_manager is not None:
@@ -346,26 +350,26 @@ class ProductionIntegrator:
                 )
                 if anomaly:
                     self.logger.warning(f"Trade anomaly detected: {anomaly}")
-            
+
             # Audit logging
             # AI-AGENT-REF: Add defensive null checks for production systems
             if self.security_manager is not None:
                 self.security_manager.audit_logger.log_trade_execution(
                     symbol, side, quantity, price, order_id or "unknown", "system"
                 )
-            
+
         except Exception as e:
             self.logger.error(f"Error monitoring trade execution: {e}")
-    
-    def get_system_status(self) -> Dict[str, Any]:
+
+    def get_system_status(self) -> dict[str, Any]:
         """Get comprehensive system status."""
         status = {
-            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'timestamp': datetime.now(UTC).isoformat(),
             'systems_initialized': self.systems_initialized,
             'monitoring_active': self.monitoring_active,
             'systems': {}
         }
-        
+
         # Production monitoring status
         if self.production_monitor:
             try:
@@ -378,7 +382,7 @@ class ProductionIntegrator:
                     'status': 'error',
                     'error': str(e)
                 }
-        
+
         # Security status
         # AI-AGENT-REF: Add defensive null checks for production systems
         if self.security_manager is not None:
@@ -392,7 +396,7 @@ class ProductionIntegrator:
                     'status': 'error',
                     'error': str(e)
                 }
-        
+
         # Performance optimizer status
         # AI-AGENT-REF: Add defensive null checks for production systems
         if self.performance_optimizer is not None:
@@ -406,7 +410,7 @@ class ProductionIntegrator:
                     'status': 'error',
                     'error': str(e)
                 }
-        
+
         # Health check status
         if HEALTH_CHECK_AVAILABLE:
             try:
@@ -417,23 +421,23 @@ class ProductionIntegrator:
                     'status': 'error',
                     'error': str(e)
                 }
-        
+
         return status
-    
-    def run_comprehensive_audit(self) -> Dict[str, Any]:
+
+    def run_comprehensive_audit(self) -> dict[str, Any]:
         """Run comprehensive production audit."""
         audit_results = {
-            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'timestamp': datetime.now(UTC).isoformat(),
             'audit_type': 'comprehensive_production_audit',
             'systems_audited': [],
             'overall_score': 0,
             'critical_issues': [],
             'recommendations': []
         }
-        
+
         total_score = 0
         systems_count = 0
-        
+
         # Security audit
         # AI-AGENT-REF: Add defensive null checks for production systems
         if self.security_manager is not None:
@@ -443,15 +447,15 @@ class ProductionIntegrator:
                 audit_results['systems_audited'].append('security')
                 total_score += security_audit['security_score']
                 systems_count += 1
-                
+
                 if security_audit['security_score'] < 70:
                     audit_results['critical_issues'].extend(
                         security_audit['recommendations']
                     )
-                
+
             except Exception as e:
                 audit_results['security_audit'] = {'error': str(e)}
-        
+
         # Performance audit
         # AI-AGENT-REF: Add defensive null checks for production systems
         if self.performance_optimizer is not None:
@@ -459,24 +463,24 @@ class ProductionIntegrator:
                 perf_report = self.performance_optimizer.get_performance_report()
                 audit_results['performance_audit'] = perf_report
                 audit_results['systems_audited'].append('performance')
-                
+
                 # Score performance (simplified)
                 perf_score = 100
                 violations = perf_report.get('performance_violations', [])
                 if violations:
                     perf_score -= len(violations) * 10
-                
+
                 total_score += max(0, perf_score)
                 systems_count += 1
-                
+
                 if perf_score < 70:
                     audit_results['critical_issues'].append(
                         f"Performance violations detected: {len(violations)}"
                     )
-                
+
             except Exception as e:
                 audit_results['performance_audit'] = {'error': str(e)}
-        
+
         # Health audit
         if HEALTH_CHECK_AVAILABLE:
             try:
@@ -484,29 +488,29 @@ class ProductionIntegrator:
                 health_status = get_health_status()
                 audit_results['health_audit'] = health_status
                 audit_results['systems_audited'].append('health')
-                
+
                 # Score health
                 health_score = 100
                 if health_status['overall_status'] == 'critical':
                     health_score = 0
                 elif health_status['overall_status'] == 'warning':
                     health_score = 60
-                
+
                 total_score += health_score
                 systems_count += 1
-                
+
                 if health_score < 70:
                     audit_results['critical_issues'].append(
                         f"Health status: {health_status['overall_status']}"
                     )
-                
+
             except Exception as e:
                 audit_results['health_audit'] = {'error': str(e)}
-        
+
         # Calculate overall score
         if systems_count > 0:
             audit_results['overall_score'] = total_score / systems_count
-        
+
         # Generate recommendations
         if audit_results['overall_score'] < 80:
             audit_results['recommendations'].extend([
@@ -523,12 +527,12 @@ class ProductionIntegrator:
             audit_results['recommendations'].append(
                 "System operating at production standards"
             )
-        
+
         return audit_results
 
 
 # Global production integrator instance
-_production_integrator: Optional[ProductionIntegrator] = None
+_production_integrator: ProductionIntegrator | None = None
 
 
 def get_production_integrator() -> ProductionIntegrator:
@@ -539,14 +543,14 @@ def get_production_integrator() -> ProductionIntegrator:
     return _production_integrator
 
 
-def initialize_production_systems(alert_callback: Optional[Callable] = None) -> ProductionIntegrator:
+def initialize_production_systems(alert_callback: Callable | None = None) -> ProductionIntegrator:
     """Initialize all production systems."""
     global _production_integrator
     _production_integrator = ProductionIntegrator()
-    
+
     if _production_integrator.initialize_all_systems(alert_callback):
         _production_integrator.start_monitoring()
-    
+
     return _production_integrator
 
 

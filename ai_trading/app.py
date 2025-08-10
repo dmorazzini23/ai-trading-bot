@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from flask import Flask, jsonify
 import logging
+
+from flask import Flask, jsonify
 
 
 def create_app():

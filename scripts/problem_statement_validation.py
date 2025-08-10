@@ -8,6 +8,7 @@ Problem statement validation script to check all requirements are satisfied.
 import re
 from pathlib import Path
 
+
 def check_model_registry():
     """Check that model registry is clean and functional."""
     logging.info("✓ Model Registry - Fixed import blocker:")
@@ -20,7 +21,7 @@ def check_model_registry():
             assert f"def {method}" in content, f"Missing {method} method"
         logging.info("  - Clean, minimal, typed registry with JSON index persistence ✓")
         logging.info("  - Supports register_model, load_model, and latest_for ✓")
-    
+
 def check_env_flag():
     """Check DISABLE_DAILY_RETRAIN is correctly implemented."""
     logging.info("✓ Correct env toggle:")
@@ -58,7 +59,7 @@ def check_import_hardening():
             "import ai_trading.indicators as indicators",
         ]
     }
-    
+
     for filepath, required_imports in files_to_check.items():
         if Path(filepath).exists():
             content = Path(filepath).read_text()
@@ -66,7 +67,7 @@ def check_import_hardening():
                 assert import_stmt in content, f"Missing import in {filepath}: {import_stmt}"
             # Check for fallback patterns
             assert "except Exception:" in content, f"Missing fallback patterns in {filepath}"
-    
+
     logging.info("  - Root/packaged execution reliable across key modules ✓")
     logging.info("  - Try/except fallback patterns implemented ✓")
 
@@ -102,7 +103,7 @@ def check_timeouts():
 def check_minute_cache():
     """Check minute-cache freshness helpers and validation."""
     logging.info("✓ Minute-cache freshness:")
-    
+
     # Check data_fetcher exports
     data_fetcher_path = Path("data_fetcher.py")
     if data_fetcher_path.exists():
@@ -110,7 +111,7 @@ def check_minute_cache():
         assert "def get_cached_minute_timestamp" in content
         assert "def last_minute_bar_age_seconds" in content
         logging.info("  - Exported helpers from data_fetcher.py ✓")
-    
+
     # Check _ensure_data_fresh implementation
     bot_engine_path = Path("ai_trading/core/bot_engine.py")
     if bot_engine_path.exists():
@@ -137,44 +138,44 @@ def check_backward_compatibility():
 def main():
     """Run all validation checks."""
     logging.info("Final validation of problem statement requirements...\n")
-    
+
     try:
         check_model_registry()
         print()
-        
+
         check_env_flag()
         print()
-        
+
         check_import_hardening()
         print()
-        
+
         check_executors()
         print()
-        
+
         check_timeouts()
         print()
-        
+
         check_minute_cache()
         print()
-        
+
         check_new_env_vars()
         print()
-        
+
         check_backward_compatibility()
         print()
-        
+
         logging.info("🎉 ALL REQUIREMENTS FROM PROBLEM STATEMENT SATISFIED!")
         logging.info("\nImplementation Summary:")
         logging.info("- ✅ Model registry: Clean implementation with JSON persistence")
-        logging.info("- ✅ Env toggle: DISABLE_DAILY_RETRAIN correctly configured")  
+        logging.info("- ✅ Env toggle: DISABLE_DAILY_RETRAIN correctly configured")
         logging.info("- ✅ Import hardening: Try/except patterns across all key modules")
         logging.info("- ✅ Executor throughput: CPU-aware bounded pools with env overrides")
         logging.info("- ✅ HTTP timeouts: All blocking requests have explicit timeouts")
         logging.info("- ✅ Cache freshness: Fast-fail validation with UTC logging")
         logging.info("- ✅ Backward compatibility: Conservative defaults, no breaking changes")
-        
+
         return True
-        
+
     except Exception as e:
         logging.info(f"❌ Validation failed: {e}")
         import traceback

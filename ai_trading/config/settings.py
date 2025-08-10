@@ -1,44 +1,54 @@
 # Ensure .env is loaded before constructing settings (test expectation)
 from ai_trading.env import ensure_dotenv_loaded
+
 ensure_dotenv_loaded()
 
 import functools
-from typing import Optional
+
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings
-from pydantic import Field, model_validator, AliasChoices
+
 
 class Settings(BaseSettings):
     # Runtime toggles
     trading_mode: str = Field("balanced", env="TRADING_MODE")
     shadow_mode: bool = Field(False, env="SHADOW_MODE")
     disable_daily_retrain: bool = Field(False, env="DISABLE_DAILY_RETRAIN")
-    
+
     # Portfolio features (default disabled to reduce startup noise)
     ENABLE_PORTFOLIO_FEATURES: bool = Field(False, env="ENABLE_PORTFOLIO_FEATURES")
     REGIME_MIN_ROWS: int = Field(50, env="REGIME_MIN_ROWS")
 
     # Worker sizing (None/0 => auto)
-    executor_workers: Optional[int] = Field(None, env="EXECUTOR_WORKERS")
-    prediction_workers: Optional[int] = Field(None, env="PREDICTION_WORKERS")
+    executor_workers: int | None = Field(None, env="EXECUTOR_WORKERS")
+    prediction_workers: int | None = Field(None, env="PREDICTION_WORKERS")
 
     # Alpaca credentials (dual-schema)
-    alpaca_api_key: Optional[str] = Field(None, validation_alias=AliasChoices("ALPACA_API_KEY", "APCA_API_KEY_ID"))
-    alpaca_secret_key: Optional[str] = Field(None, validation_alias=AliasChoices("ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY"))
-    alpaca_base_url: Optional[str] = Field(None, validation_alias=AliasChoices("ALPACA_BASE_URL", "APCA_API_BASE_URL"))
-    
+    alpaca_api_key: str | None = Field(
+        None, validation_alias=AliasChoices("ALPACA_API_KEY", "APCA_API_KEY_ID")
+    )
+    alpaca_secret_key: str | None = Field(
+        None, validation_alias=AliasChoices("ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY")
+    )
+    alpaca_base_url: str | None = Field(
+        None, validation_alias=AliasChoices("ALPACA_BASE_URL", "APCA_API_BASE_URL")
+    )
+
     # Webhook secret for API security
-    webhook_secret: Optional[str] = Field(None, env="WEBHOOK_SECRET")
+    webhook_secret: str | None = Field(None, env="WEBHOOK_SECRET")
 
     # Risk knobs (align defaults with current behavior)
     capital_cap: float = Field(0.04, env="CAPITAL_CAP")
     dollar_risk_limit: float = Field(0.05, env="DOLLAR_RISK_LIMIT")
     max_position_size: int = Field(8000, env="MAX_POSITION_SIZE")
-    
+
     # Additional environment variables commonly used
-    news_api_key: Optional[str] = Field(None, env="NEWS_API_KEY")
-    sentiment_api_key: Optional[str] = Field(None, env="SENTIMENT_API_KEY")
-    sentiment_api_url: str = Field("https://newsapi.org/v2/everything", env="SENTIMENT_API_URL")
-    finnhub_api_key: Optional[str] = Field(None, env="FINNHUB_API_KEY")
+    news_api_key: str | None = Field(None, env="NEWS_API_KEY")
+    sentiment_api_key: str | None = Field(None, env="SENTIMENT_API_KEY")
+    sentiment_api_url: str = Field(
+        "https://newsapi.org/v2/everything", env="SENTIMENT_API_URL"
+    )
+    finnhub_api_key: str | None = Field(None, env="FINNHUB_API_KEY")
     bot_mode: str = Field("balanced", env="BOT_MODE")
     bot_log_dir: str = Field("logs", env="BOT_LOG_DIR")
     api_port: int = Field(9001, env="API_PORT")
@@ -53,9 +63,15 @@ class Settings(BaseSettings):
 
     # --- Data warm-up controls ---
     data_warmup_enable: bool = Field(False, env="DATA_WARMUP_ENABLE")
-    data_warmup_symbols: int = Field(25, env="DATA_WARMUP_SYMBOLS")  # top N from tickers.csv
-    data_warmup_timeframe: str = Field("1Min", env="DATA_WARMUP_TIMEFRAME")  # "1Min" or "1D"
-    data_warmup_lookback_days: int = Field(5, env="DATA_WARMUP_LOOKBACK_DAYS")  # historical window
+    data_warmup_symbols: int = Field(
+        25, env="DATA_WARMUP_SYMBOLS"
+    )  # top N from tickers.csv
+    data_warmup_timeframe: str = Field(
+        "1Min", env="DATA_WARMUP_TIMEFRAME"
+    )  # "1Min" or "1D"
+    data_warmup_lookback_days: int = Field(
+        5, env="DATA_WARMUP_LOOKBACK_DAYS"
+    )  # historical window
 
     # --- Regime configuration ---
     regime_symbols_csv: str = Field("SPY", env="REGIME_SYMBOLS_CSV")
@@ -65,7 +81,6 @@ class Settings(BaseSettings):
     # Fallback used if ctx.lookback_start/end are unset
     pretrade_lookback_days: int = Field(120, env="PRETRADE_LOOKBACK_DAYS")
     # If ctx.lookback_start/end are not present, fall back to this many days
-    pretrade_lookback_days: int = Field(120, env="PRETRADE_LOOKBACK_DAYS")
 
     # --- Intraday batching controls ---
     intraday_batch_enable: bool = Field(True, env="INTRADAY_BATCH_ENABLE")
@@ -75,21 +90,20 @@ class Settings(BaseSettings):
     # --- Bounded concurrency for per-symbol fallbacks ---
     batch_fallback_workers: int = Field(4, env="BATCH_FALLBACK_WORKERS")
 
-    model_config = {
-        "env_file": ".env",
-        "case_sensitive": False,
-        "extra": "ignore"
-    }
+    model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def _normalize_alpaca(self):
-        def clean(v: Optional[str]) -> Optional[str]:
+        def clean(v: str | None) -> str | None:
             if not v:
                 return None
             return v.strip().strip('"').strip("'") or None
+
         self.alpaca_api_key = clean(self.alpaca_api_key)
         self.alpaca_secret_key = clean(self.alpaca_secret_key)
-        self.alpaca_base_url = clean(self.alpaca_base_url) or "https://paper-api.alpaca.markets"
+        self.alpaca_base_url = (
+            clean(self.alpaca_base_url) or "https://paper-api.alpaca.markets"
+        )
         return self
 
     # Enforcement
@@ -105,22 +119,23 @@ class Settings(BaseSettings):
 
     def effective_prediction_workers(self, cpu_count: int) -> int:
         return (self.prediction_workers or 0) or max(2, min(4, cpu_count or 2))
-    
+
     # Uppercase property aliases for main.py compatibility
     @property
-    def WEBHOOK_SECRET(self) -> Optional[str]:
+    def WEBHOOK_SECRET(self) -> str | None:
         """Uppercase alias for webhook_secret."""
         return self.webhook_secret
-    
+
     @property
-    def ALPACA_API_KEY(self) -> Optional[str]:
+    def ALPACA_API_KEY(self) -> str | None:
         """Uppercase alias for alpaca_api_key."""
         return self.alpaca_api_key
-    
+
     @property
-    def ALPACA_SECRET_KEY(self) -> Optional[str]:
+    def ALPACA_SECRET_KEY(self) -> str | None:
         """Uppercase alias for alpaca_secret_key."""
         return self.alpaca_secret_key
+
 
 @functools.lru_cache(maxsize=1)
 def get_settings() -> Settings:

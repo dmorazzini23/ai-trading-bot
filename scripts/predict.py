@@ -22,7 +22,7 @@ except ImportError:
                 def predict_proba(self, X):
                     return [[0.5, 0.5]] * len(X)
             return MockModel()
-        
+
         @staticmethod
         def dump(obj, filename):
             pass  # Mock dump
@@ -32,15 +32,15 @@ except ImportError:
 try:
     import pandas as pd
 except ImportError:
-    # Import mock pandas from ai_trading.utils 
+    # Import mock pandas from ai_trading.utils
     from ai_trading.utils import pd
 
 # AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
-from ai_trading.utils import http
-
 import config
 from metrics_logger import log_metrics
 from retrain import prepare_indicators
+
+from ai_trading.utils import http
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +52,8 @@ INACTIVE_FEATURES_FILE = os.path.join(BASE_DIR, "inactive_features.json")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 
 
-import time
 import threading
+import time
 
 # AI-AGENT-REF: Memory leak prevention with TTLCache
 try:
@@ -79,9 +79,9 @@ def fetch_sentiment(symbol: str) -> float:
     if not api_key:
         logger.debug("No sentiment API key configured (checked SENTIMENT_API_KEY and NEWS_API_KEY)")
         return 0.0
-    
+
     current_time = time.time()
-    
+
     with _sentiment_lock:
         # Check cache first (TTLCache handles expiration automatically)
         if _CACHETOOLS_AVAILABLE:
@@ -99,13 +99,13 @@ def fetch_sentiment(symbol: str) -> float:
                 else:
                     # Remove expired entry
                     del _sentiment_cache[symbol]
-        
+
         # Check rate limiting
         if symbol in _last_request_time:
             time_since_last = current_time - _last_request_time[symbol]
             if time_since_last < _min_request_interval:
                 logger.warning(
-                    "fetch_sentiment(%s) rate-limited → returning cached/neutral 0.0", 
+                    "fetch_sentiment(%s) rate-limited → returning cached/neutral 0.0",
                     symbol
                 )
                 # Return cached value if available, otherwise neutral
@@ -114,7 +114,7 @@ def fetch_sentiment(symbol: str) -> float:
                 elif not _CACHETOOLS_AVAILABLE and symbol in _sentiment_cache:
                     return _sentiment_cache[symbol][0]
                 return 0.0
-        
+
         _last_request_time[symbol] = current_time
 
     try:
@@ -133,9 +133,9 @@ def fetch_sentiment(symbol: str) -> float:
             score = sum(
                 1 for a in arts if "positive" in (a.get("title") or "").lower()
             ) / len(arts)
-        
+
         score = float(score)
-        
+
         # Cache the result with memory leak prevention
         with _sentiment_lock:
             if _CACHETOOLS_AVAILABLE:
@@ -144,14 +144,14 @@ def fetch_sentiment(symbol: str) -> float:
                 # Manual cache with size limit to prevent memory leaks
                 if len(_sentiment_cache) >= 1000:
                     # Remove oldest entry
-                    oldest_key = min(_sentiment_cache.keys(), 
+                    oldest_key = min(_sentiment_cache.keys(),
                                    key=lambda k: _sentiment_cache[k][1])
                     del _sentiment_cache[oldest_key]
                 _sentiment_cache[symbol] = (score, current_time)
-        
+
         logger.debug("Fetched fresh sentiment for %s: %.2f", symbol, score)
         return score
-        
+
     except (Exception, ValueError) as exc:
         logger.error("fetch_sentiment failed for %s: %s", symbol, exc)
         # Return cached value if available during error, otherwise neutral
@@ -230,7 +230,7 @@ def predict(csv_path: str, freq: str = "intraday") -> tuple[int | None, float | 
     features = (
         feat[expected_features]
         .iloc[-1:]
-        .astype({col: "float64" for col in expected_features})
+        .astype(dict.fromkeys(expected_features, "float64"))
     )
     try:
         pred = model.predict(features)[0]

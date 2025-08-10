@@ -5,7 +5,9 @@ Usage:
   python tools/codemods/phase3_canonical_imports.py
 """
 from __future__ import annotations
+
 from pathlib import Path
+
 import libcst as cst
 from libcst.metadata import PositionProvider, QualifiedNameProvider, ScopeProvider
 
@@ -55,7 +57,7 @@ class CanonicalizeImports(cst.CSTTransformer):
         # Handle "from X import Y" and relative "from . import Z" / "from ..module import Z"
         if updated.module is None:
             return updated  # "from  import" (malformed) — ignore
-        
+
         # Handle absolute imports like "from bot_engine import ..."
         if isinstance(updated.module, cst.Name):
             root = updated.module.value
@@ -75,18 +77,18 @@ class CanonicalizeImports(cst.CSTTransformer):
             # For relative imports, only convert if we're NOT inside ai_trading/
             # and only for specific patterns that make sense to convert
             parts = self.file_path.parts
-            
+
             # Skip conversion of relative imports within ai_trading/ - they should stay relative
             if "ai_trading" in parts:
                 return updated
-            
+
             # For files outside ai_trading/, convert relative imports if they reference legacy modules
             if updated.module.module is not None:
                 module_name = cst.Module([]).code_for_node(updated.module.module)
                 if module_name in LEGACY_TO_CANON:
                     new_module = LEGACY_TO_CANON[module_name]
                     return updated.with_changes(module=cst.parse_expression(new_module))
-        
+
         return updated
 
 def rewrite_file(path: Path):

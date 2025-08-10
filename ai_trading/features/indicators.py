@@ -1,7 +1,7 @@
 """
 Technical indicator calculations for AI trading platform.
 
-This module provides compute functions for MACD, ATR, VWAP and other 
+This module provides compute functions for MACD, ATR, VWAP and other
 technical indicators used in trading strategies.
 
 Moved from root features.py for package-safe imports.
@@ -12,26 +12,34 @@ try:
     import pandas as pd
 except ImportError:
     from datetime import datetime
+
     class MockDataFrame:
         def __init__(self, *args, **kwargs):
             pass
+
     class MockPandas:
         DataFrame = MockDataFrame
         Timestamp = datetime
+
     pd = MockPandas()
 
 try:
     import numpy as np
 except ImportError:
+
     class MockNumpy:
         def array(self, *args, **kwargs):
             return []
+
         def mean(self, *args, **kwargs):
             return 0.0
+
         def std(self, *args, **kwargs):
             return 1.0
+
         def nan(self):
-            return float('nan')
+            return float("nan")
+
     np = MockNumpy()
 
 import logging
@@ -39,16 +47,20 @@ import logging
 try:
     from ai_trading.indicators import ema  # type: ignore
 except ImportError:
+
     def ema(data, period):
         """Fallback EMA calculation."""
         return pd.Series(0.0, index=range(len(data)))
 
+
 try:
     from ai_trading.indicators import atr  # type: ignore
 except ImportError:
+
     def atr(high, low, close, period=14):
         """Fallback ATR calculation."""
         return pd.Series(0.0, index=close.index)
+
 
 logger = logging.getLogger(__name__)
 
@@ -77,11 +89,11 @@ def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
         if not all(col in df.columns for col in ["high", "low", "close"]):
             logger.error("Missing required columns for ATR calculation")
             return df
-        
+
         high = df["high"]
-        low = df["low"] 
+        low = df["low"]
         close = df["close"]
-        
+
         df["atr"] = atr(high, low, close, period)
         return df
     except (KeyError, ValueError, TypeError):
@@ -95,7 +107,7 @@ def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
         if not all(col in df.columns for col in ["high", "low", "close", "volume"]):
             logger.error("Missing required columns for VWAP calculation")
             return df
-        
+
         typical_price = (df["high"] + df["low"] + df["close"]) / 3
         df["vwap"] = (typical_price * df["volume"]).cumsum() / df["volume"].cumsum()
         return df
@@ -105,7 +117,7 @@ def compute_vwap(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_macds(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute MACD with multiple timeframes.""" 
+    """Compute MACD with multiple timeframes."""
     try:
         df = compute_macd(df)
         # Add additional MACD variations if needed
@@ -115,7 +127,9 @@ def compute_macds(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
 
-def ensure_columns(df: pd.DataFrame, required_columns: list, symbol: str | None = None) -> pd.DataFrame:
+def ensure_columns(
+    df: pd.DataFrame, required_columns: list, symbol: str | None = None
+) -> pd.DataFrame:
     """
     Ensure DataFrame has required columns for calculations.
     Accepts an optional 'symbol' (ignored except for logging) for
@@ -125,7 +139,9 @@ def ensure_columns(df: pd.DataFrame, required_columns: list, symbol: str | None 
         for col in required_columns:
             if col not in df.columns:
                 if symbol:
-                    logger.warning(f"Missing column '{col}' for {symbol}, filling with zeros")
+                    logger.warning(
+                        f"Missing column '{col}' for {symbol}, filling with zeros"
+                    )
                 else:
                     logger.warning(f"Missing column '{col}', filling with zeros")
                 df[col] = 0.0
@@ -138,8 +154,8 @@ def ensure_columns(df: pd.DataFrame, required_columns: list, symbol: str | None 
 # Export all compute functions
 __all__ = [
     "compute_macd",
-    "compute_atr", 
+    "compute_atr",
     "compute_vwap",
     "compute_macds",
-    "ensure_columns"
+    "ensure_columns",
 ]

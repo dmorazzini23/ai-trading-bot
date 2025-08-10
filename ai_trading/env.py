@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import os
 
 try:
@@ -8,7 +9,9 @@ except ImportError:
     def load_dotenv(*args, **kwargs):
         pass
 
+
 _ENV_LOADED = False
+
 
 def ensure_dotenv_loaded() -> None:
     """

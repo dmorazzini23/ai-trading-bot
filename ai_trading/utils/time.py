@@ -1,8 +1,8 @@
 """Time utilities for timezone-aware datetime operations."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def now_utc():
     """Get current UTC time as timezone-aware datetime."""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)

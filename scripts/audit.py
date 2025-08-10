@@ -11,8 +11,9 @@ except ImportError:
     class Settings:
         TRADE_AUDIT_DIR = os.getenv("TRADE_AUDIT_DIR", "logs/audit")
     settings = Settings()
-    
+
 import json
+
 import config
 
 TRADE_LOG_FILE = config.TRADE_LOG_FILE
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 _disable_trade_log = False
 _fields = [
     "symbol",
-    "entry_time", 
+    "entry_time",
     "entry_price",
     "exit_time",
     "exit_price",
@@ -37,10 +38,10 @@ _fields = [
 # Simple audit format for compatibility
 _simple_fields = [
     "id",
-    "timestamp", 
+    "timestamp",
     "symbol",
     "side",
-    "qty", 
+    "qty",
     "price",
     "exposure",
     "mode",
@@ -58,7 +59,7 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
         # Detected parameter order issue: qty and side are swapped
         logger.warning("Parameter order correction: swapping qty and side parameters")
         qty, side = side, qty
-    
+
     # Critical validation to prevent crashes
     if not symbol or not isinstance(symbol, str):
         logger.error("Invalid symbol provided: %s", symbol)
@@ -76,10 +77,10 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
     if _disable_trade_log:
         # Skip writing after a permission error was encountered
         return
-        
+
     # Determine if we should use simple audit format (for tests or specific modes)
     use_simple_format = (extra_info and ("TEST" in str(extra_info).upper() or "AUDIT" in str(extra_info).upper()))
-    
+
     # AI-AGENT-REF: record exposure and intent
     logger.info(
         "Trade Log | symbol=%s, qty=%s, side=%s, fill_price=%.2f, exposure=%s, timestamp=%s",
@@ -104,10 +105,10 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
             _disable_trade_log = True
             logger.warning("Trade log disabled due to directory creation failure")
         return
-    
+
     # Check if file exists before any operations
     file_existed = os.path.exists(TRADE_LOG_FILE)
-    
+
     # Ensure the trade log file exists with proper permissions
     if not file_existed:
         try:
@@ -121,13 +122,13 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
                 _disable_trade_log = True
                 logger.warning("Trade log disabled due to file creation failure")
             return
-    
+
     try:
         fields_to_use = _simple_fields if use_simple_format else _fields
-        
+
         # AI-AGENT-REF: Check if file is empty to determine if header is needed
         file_is_empty = not file_existed or os.path.getsize(TRADE_LOG_FILE) == 0
-        
+
         with open(TRADE_LOG_FILE, "a", newline="") as f:
             writer = csv.DictWriter(
                 f,
@@ -136,7 +137,7 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
             )
             if file_is_empty:
                 writer.writeheader()
-                
+
             if use_simple_format:
                 # Simple audit format for tests
                 writer.writerow(
@@ -174,13 +175,13 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
         logger.error(
             "ERROR [audit] permission denied writing %s: %s", TRADE_LOG_FILE, exc
         )
-        
+
         # AI-AGENT-REF: Attempt automatic permission repair
         try:
             from process_manager import ProcessManager
             pm = ProcessManager()
             repair_result = pm.fix_file_permissions([TRADE_LOG_FILE])
-            
+
             if repair_result['paths_fixed']:
                 logger.info("Successfully repaired file permissions, retrying trade log")
                 # Retry writing the trade log
@@ -215,10 +216,10 @@ def log_trade(symbol, qty, side, fill_price, timestamp, extra_info=None, exposur
                     logger.error("Trade log retry failed after permission repair: %s", retry_exc)
             else:
                 logger.warning("Failed to repair file permissions automatically")
-                
+
         except Exception as repair_exc:
             logger.warning("Permission repair attempt failed: %s", repair_exc)
-        
+
         if not _disable_trade_log:
             _disable_trade_log = True
             logger.warning("Trade log disabled due to permission error")

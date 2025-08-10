@@ -5,30 +5,27 @@ Provides robust error handling throughout the trading system.
 
 import logging
 import traceback
-from datetime import datetime, timezone
-from typing import Any, Callable, Optional, Type
+from collections.abc import Callable
+from datetime import UTC, datetime
 from functools import wraps
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 class TradingBotError(Exception):
     """Base exception for trading bot errors."""
-    pass
 
 class APIError(TradingBotError):
     """API-related errors."""
-    pass
 
 class DataError(TradingBotError):
     """Data quality or availability errors."""
-    pass
 
 class ExecutionError(TradingBotError):
     """Trade execution errors."""
-    pass
 
 def with_error_handling(
-    error_type: Type[Exception] = Exception,
+    error_type: type[Exception] = Exception,
     default_return: Any = None,
     log_level: str = "error",
     reraise: bool = False
@@ -53,20 +50,20 @@ def with_error_handling(
                     "function": func.__name__,
                     "error_type": type(e).__name__,
                     "error_message": str(e),
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "traceback": traceback.format_exc()
                 }
-                
+
                 if log_level == "error":
                     logger.error(error_msg, extra=error_details)
                 elif log_level == "warning":
                     logger.warning(error_msg, extra=error_details)
                 elif log_level == "critical":
                     logger.critical(error_msg, extra=error_details)
-                
+
                 if reraise:
                     raise
-                    
+
                 return default_return
         return wrapper
     return decorator
@@ -84,7 +81,7 @@ def safe_api_call(func: Callable, retries: int = 3, delay: float = 1.0) -> Any:
         Function result or None on failure
     """
     import time
-    
+
     last_error = None
     for attempt in range(retries + 1):
         try:
@@ -96,10 +93,10 @@ def safe_api_call(func: Callable, retries: int = 3, delay: float = 1.0) -> Any:
                 time.sleep(delay * (attempt + 1))  # Exponential backoff
             else:
                 logger.error(f"API call failed after {retries + 1} attempts: {e}")
-                
+
     return None
 
-def validate_trade_data(symbol: str, qty: int, side: str, price: Optional[float] = None) -> bool:
+def validate_trade_data(symbol: str, qty: int, side: str, price: float | None = None) -> bool:
     """
     Validate trade data before execution.
     
@@ -117,21 +114,21 @@ def validate_trade_data(symbol: str, qty: int, side: str, price: Optional[float]
         if not symbol or not isinstance(symbol, str):
             logger.error("Invalid symbol: %s", symbol)
             return False
-            
+
         if not isinstance(qty, int) or qty <= 0:
             logger.error("Invalid quantity: %s", qty)
             return False
-            
+
         if side not in ['buy', 'sell']:
             logger.error("Invalid side: %s", side)
             return False
-            
+
         if price is not None and (not isinstance(price, (int, float)) or price <= 0):
             logger.error("Invalid price: %s", price)
             return False
-            
+
         return True
-        
+
     except Exception as e:
         logger.error("Error validating trade data: %s", e)
         return False
@@ -145,9 +142,9 @@ def graceful_shutdown(reason: str = "Unknown"):
     """
     logger.critical("TRADING_BOT_SHUTDOWN", extra={
         "reason": reason,
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "timestamp": datetime.now(UTC).isoformat()
     })
-    
+
     # Log final statistics if monitor is available
     try:
         from trade_monitor import trade_monitor
