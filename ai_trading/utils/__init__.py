@@ -1,6 +1,13 @@
 """Utility functions and helpers for the AI trading bot."""
 
-from .base import *  # keep public API stable
+from .base import (
+    # Re-exported from base
+    safe_to_datetime, log_warning, model_lock, portfolio_lock,
+    is_market_open, is_weekend, is_market_holiday, get_free_port,
+    get_pid_on_port, log_health_row_check,
+    # Pandas support
+    pd, HAS_PANDAS, requires_pandas,
+)
 from .determinism import (
     set_random_seeds,
     ensure_deterministic_training,

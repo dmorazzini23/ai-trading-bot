@@ -13,7 +13,8 @@ import requests  # AI-AGENT-REF: ensure requests import for function annotations
 
 # Do not hard fail when running under older Python versions in tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
-    print("Warning: Running under unsupported Python version", file=sys.stderr)
+    import logging
+    logging.getLogger(__name__).warning("Running under unsupported Python version")
 
 from ai_trading import config
 from ai_trading.config.settings import get_settings
@@ -99,6 +100,7 @@ def get_session():
                 try:
                     _session.close()
                 except Exception:
+                    # Ignore session cleanup errors during error handling
                     pass
                 _session = None
             raise

@@ -1,6 +1,9 @@
 import sys
 import argparse
+import logging
 from ai_trading.env import ensure_dotenv_loaded
+
+logger = logging.getLogger(__name__)
 
 def run_trade():
     """Entry point for ai-trade command."""
@@ -13,14 +16,15 @@ def run_trade():
     args = parser.parse_args()
     
     if args.dry_run:
-        print("AI Trade: Dry run mode - config loaded successfully, exiting gracefully")
+        logger.info("AI Trade: Dry run mode - config loaded successfully, exiting gracefully")
         return
     
     from ai_trading import runner
     try:
         runner.run_cycle()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("Trade execution failed: %s", e, exc_info=True)
+        sys.exit(1)
 
 def run_backtest():
     """Entry point for ai-backtest command."""
@@ -33,14 +37,15 @@ def run_backtest():
     args = parser.parse_args()
     
     if args.dry_run:
-        print("AI Backtest: Dry run mode - config loaded successfully, exiting gracefully")
+        logger.info("AI Backtest: Dry run mode - config loaded successfully, exiting gracefully")
         return
     
     from ai_trading import runner
     try:
         runner.run_cycle()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("Backtest execution failed: %s", e, exc_info=True)
+        sys.exit(1)
 
 def run_healthcheck():
     """Entry point for ai-health command."""
@@ -52,14 +57,15 @@ def run_healthcheck():
     args = parser.parse_args()
     
     if args.dry_run:
-        print("AI Health: Dry run mode - config loaded successfully, exiting gracefully")
+        logger.info("AI Health: Dry run mode - config loaded successfully, exiting gracefully")
         return
     
     from ai_trading.health_monitor import run_health_check
     try:
         run_health_check()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("Health check failed: %s", e, exc_info=True)
+        sys.exit(1)
 
 def main() -> None:
     """Default main entry point."""
@@ -67,8 +73,9 @@ def main() -> None:
     from ai_trading import runner
     try:
         runner.run_cycle()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("Main execution failed: %s", e, exc_info=True)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

@@ -1038,7 +1038,7 @@ except ImportError:
         def predict(self, X):
             return [0] * len(X) if hasattr(X, '__len__') else [0]
     Ridge = None
-    print("WARNING: sklearn not available, ML features will be disabled")
+    logger.warning("sklearn not available, ML features will be disabled")
 
 from ai_trading.utils import log_warning, model_lock, safe_to_datetime, validate_ohlcv
 
@@ -1722,8 +1722,14 @@ def get_git_hash() -> str:
         import subprocess
 
         return (
-            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])
-            .decode()
+            subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                check=True,
+                timeout=10,
+                capture_output=True,
+                text=True
+            )
+            .stdout
             .strip()
         )
     except Exception:

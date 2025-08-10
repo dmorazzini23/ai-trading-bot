@@ -554,4 +554,5 @@ class ProductionTradingSystem:
                    self.halt_manager.is_trading_allowed()["trading_allowed"] and
                    self.account_equity > 0)
         except Exception:
+            # Any error in health check should return unhealthy status
             return False

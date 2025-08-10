@@ -86,3 +86,8 @@ test = [
   "pytest-asyncio>=0.20.2",
   "hypothesis>=6.0.0",
 ]
+
+[tool.ruff]
+select = ["E", "F", "W", "B", "I", "T201", "E722"]
+ignore = []
+exclude = ["tests/**/*.py"]  # Allow print in tests
