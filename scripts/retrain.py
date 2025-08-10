@@ -156,7 +156,7 @@ def get_git_hash() -> str:
         import subprocess
 
         return (
-            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"])
+            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], timeout=30)
             .decode()
             .strip()
         )

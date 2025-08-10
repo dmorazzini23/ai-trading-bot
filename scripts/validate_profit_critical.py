@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Standalone validation script for profit-critical features.
 Does not import from ai_trading package to avoid initialization issues.
@@ -13,7 +15,7 @@ sys.path.insert(0, str(repo_root))
 
 def test_money_math():
     """Test Money math determinism."""
-    print("Testing Money math determinism...")
+    logging.info("Testing Money math determinism...")
     
     # Import directly from file to avoid package initialization
     sys.path.insert(0, str(repo_root / "ai_trading" / "math"))
@@ -25,7 +27,7 @@ def test_money_math():
     result = m.quantize(Decimal('0.01'))
     result_str = str(result)
     
-    print(f"Money('1.005').quantize(Decimal('0.01')) = {result_str}")
+    logging.info(str(f"Money('1.005')).quantize(Decimal('0.01')) = {result_str}")
     
     # Should be either 1.00 or 1.01 due to banker's rounding
     assert result_str in ('1.00', '1.01'), f"Expected 1.00 or 1.01, got {result_str}"
@@ -36,12 +38,12 @@ def test_money_math():
     assert str(m1 + m2) == '15.75'
     assert str(m1 - m2) == '5.25'
     
-    print("✓ Money math determinism test passed")
+    logging.info("✓ Money math determinism test passed")
     return True
 
 def test_symbol_specs():
     """Test symbol specifications."""
-    print("Testing symbol specifications...")
+    logging.info("Testing symbol specifications...")
     
     sys.path.insert(0, str(repo_root / "ai_trading" / "market"))
     from symbol_specs import get_symbol_spec, get_tick_size, get_lot_size
@@ -58,12 +60,12 @@ def test_symbol_specs():
     lot = get_lot_size('QQQ')
     assert lot == 1
     
-    print("✓ Symbol specifications test passed")
+    logging.info("✓ Symbol specifications test passed")
     return True
 
 def test_file_structure():
     """Test that all required files exist."""
-    print("Testing file structure...")
+    logging.info("Testing file structure...")
     
     required_files = [
         "ai_trading/math/__init__.py",
@@ -88,15 +90,15 @@ def test_file_structure():
             missing_files.append(file_path)
     
     if missing_files:
-        print(f"✗ Missing files: {missing_files}")
+        logging.info(f"✗ Missing files: {missing_files}")
         return False
     
-    print("✓ All required files exist")
+    logging.info("✓ All required files exist")
     return True
 
 def main():
     """Run validation tests."""
-    print("=== Profit-Critical Features Validation ===")
+    logging.info("=== Profit-Critical Features Validation ===")
     
     tests = [
         test_file_structure,
@@ -110,20 +112,20 @@ def main():
             result = test()
             results.append(result)
         except Exception as e:
-            print(f"✗ Test {test.__name__} failed: {e}")
+            logging.info(f"✗ Test {test.__name__} failed: {e}")
             results.append(False)
         print()
     
     success_count = sum(results)
     total_count = len(results)
     
-    print(f"=== Results: {success_count}/{total_count} tests passed ===")
+    logging.info(f"=== Results: {success_count}/{total_count} tests passed ===")
     
     if all(results):
-        print("✓ All validation tests passed!")
+        logging.info("✓ All validation tests passed!")
         return 0
     else:
-        print("✗ Some validation tests failed!")
+        logging.info("✗ Some validation tests failed!")
         return 1
 
 if __name__ == "__main__":

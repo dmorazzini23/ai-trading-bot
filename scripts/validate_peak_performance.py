@@ -1,4 +1,6 @@
 #!/usr/bin/env python3.12
+import logging
+
 """
 Validation script for peak-performance hardening implementation.
 """
@@ -11,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 def test_imports():
     """Test that all modules can be imported."""
-    print("Testing module imports...")
+    logging.info("Testing module imports...")
     
     modules = [
         'ai_trading.execution.idempotency',
@@ -32,17 +34,17 @@ def test_imports():
         try:
             __import__(module)
             imported.append(module)
-            print(f"  ✓ {module}")
+            logging.info(f"  ✓ {module}")
         except Exception as e:
             failed.append((module, str(e)))
-            print(f"  ✗ {module}: {e}")
+            logging.info(f"  ✗ {module}: {e}")
     
     return imported, failed
 
 
 def test_basic_functionality():
     """Test basic functionality of key modules."""
-    print("\nTesting basic functionality...")
+    logging.info("\nTesting basic functionality...")
     
     try:
         # Test idempotency
@@ -54,10 +56,10 @@ def test_basic_functionality():
         assert not cache.is_duplicate(key)
         cache.mark_submitted(key, "test_order_123")
         assert cache.is_duplicate(key)
-        print("  ✓ Idempotency system working")
+        logging.info("  ✓ Idempotency system working")
         
     except Exception as e:
-        print(f"  ✗ Idempotency test failed: {e}")
+        logging.info(f"  ✗ Idempotency test failed: {e}")
         return False
     
     try:
@@ -73,10 +75,10 @@ def test_basic_functionality():
         
         total_cost = costs.total_execution_cost_bps(volume_ratio=1.0)
         assert total_cost > 0
-        print("  ✓ Cost model working")
+        logging.info("  ✓ Cost model working")
         
     except Exception as e:
-        print(f"  ✗ Cost model test failed: {e}")
+        logging.info(f"  ✗ Cost model test failed: {e}")
         return False
     
     try:
@@ -91,10 +93,10 @@ def test_basic_functionality():
         random2 = np.random.random(5)
         
         assert np.array_equal(random1, random2)
-        print("  ✓ Determinism working")
+        logging.info("  ✓ Determinism working")
         
     except Exception as e:
-        print(f"  ✗ Determinism test failed: {e}")
+        logging.info(f"  ✗ Determinism test failed: {e}")
         return False
     
     try:
@@ -104,10 +106,10 @@ def test_basic_functionality():
         cache = PerformanceCache(max_size=10, ttl_seconds=60)
         cache.set("test", "value")
         assert cache.get("test") == "value"
-        print("  ✓ Performance cache working")
+        logging.info("  ✓ Performance cache working")
         
     except Exception as e:
-        print(f"  ✗ Performance cache test failed: {e}")
+        logging.info(f"  ✗ Performance cache test failed: {e}")
         return False
     
     return True
@@ -115,7 +117,7 @@ def test_basic_functionality():
 
 def test_integration():
     """Test integration between modules."""
-    print("\nTesting module integration...")
+    logging.info("\nTesting module integration...")
     
     try:
         # Test that modules can work together
@@ -146,55 +148,55 @@ def test_integration():
         assert isinstance(limit_price, float)
         assert limit_price > market_data.bid
         
-        print("  ✓ Module integration working")
+        logging.info("  ✓ Module integration working")
         return True
         
     except Exception as e:
-        print(f"  ✗ Integration test failed: {e}")
+        logging.info(f"  ✗ Integration test failed: {e}")
         return False
 
 
 def main():
     """Run all validation tests."""
-    print("Peak-Performance Hardening Validation")
-    print("=" * 40)
+    logging.info("Peak-Performance Hardening Validation")
+    logging.info(str("=" * 40))
     
     # Test imports
     imported, failed = test_imports()
     
     if failed:
-        print(f"\n❌ {len(failed)} modules failed to import:")
+        logging.info(f"\n❌ {len(failed)} modules failed to import:")
         for module, error in failed:
-            print(f"   {module}: {error}")
+            logging.info(f"   {module}: {error}")
         return False
     
-    print(f"\n✅ All {len(imported)} modules imported successfully")
+    logging.info(f"\n✅ All {len(imported)} modules imported successfully")
     
     # Test functionality
     if not test_basic_functionality():
-        print("\n❌ Basic functionality tests failed")
+        logging.info("\n❌ Basic functionality tests failed")
         return False
     
-    print("\n✅ Basic functionality tests passed")
+    logging.info("\n✅ Basic functionality tests passed")
     
     # Test integration
     if not test_integration():
-        print("\n❌ Integration tests failed")
+        logging.info("\n❌ Integration tests failed")
         return False
     
-    print("\n✅ Integration tests passed")
+    logging.info("\n✅ Integration tests passed")
     
-    print("\n🎉 Peak-performance hardening implementation validated!")
-    print("\nKey features implemented:")
-    print("  • Order idempotency with TTL cache")
-    print("  • Position reconciliation system")  
-    print("  • Exchange-aligned timing")
-    print("  • Symbol-aware cost modeling")
-    print("  • Adaptive risk controls")
-    print("  • Deterministic training")
-    print("  • Feature drift monitoring")
-    print("  • Performance optimizations")
-    print("  • Smart order routing")
+    logging.info("\n🎉 Peak-performance hardening implementation validated!")
+    logging.info("\nKey features implemented:")
+    logging.info("  • Order idempotency with TTL cache")
+    logging.info("  • Position reconciliation system")  
+    logging.info("  • Exchange-aligned timing")
+    logging.info("  • Symbol-aware cost modeling")
+    logging.info("  • Adaptive risk controls")
+    logging.info("  • Deterministic training")
+    logging.info("  • Feature drift monitoring")
+    logging.info("  • Performance optimizations")
+    logging.info("  • Smart order routing")
     
     return True
 

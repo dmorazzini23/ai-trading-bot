@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Example usage of the grid runner for backtesting and risk parameter optimization.
 This demonstrates how to use the new parallel grid search functionality.
@@ -43,7 +45,7 @@ def evaluator(params):
 
 def main():
     """Run example grid search for parameter optimization."""
-    print("=== AI Trading Bot - Grid Search Example ===\n")
+    logging.info("=== AI Trading Bot - Grid Search Example ===\n")
     
     # Define parameter grid for optimization
     grid = {
@@ -52,30 +54,30 @@ def main():
         "lookback": [50, 100, 150],
     }
     
-    print(f"Testing {len(grid['kelly']) * len(grid['atr_mult']) * len(grid['lookback'])} parameter combinations...")
-    print(f"Grid: {grid}\n")
+    logging.info(str(f"Testing {len(grid['kelly'])) * len(grid['atr_mult']) * len(grid['lookback'])} parameter combinations...")
+    logging.info(f"Grid: {grid}\n")
     
     # Run parallel grid search
-    print("Running grid search with parallel processing...")
+    logging.info("Running grid search with parallel processing...")
     run = grid_search(evaluator, grid, n_jobs=-1)
-    print(f"Completed {run['count']} backtests\n")
+    logging.info(str(f"Completed {run['count']} backtests\n"))
     
     # Find best parameters
     results = run['results']
     best_result = max(results, key=lambda x: x['metrics']['sharpe'])
     worst_result = min(results, key=lambda x: x['metrics']['sharpe'])
     
-    print("=== Results Summary ===")
-    print(f"Best Parameters: {best_result['params']}")
-    print(f"Best Metrics: {best_result['metrics']}")
-    print(f"Best Sharpe: {best_result['metrics']['sharpe']}")
+    logging.info("=== Results Summary ===")
+    logging.info(str(f"Best Parameters: {best_result['params']}"))
+    logging.info(str(f"Best Metrics: {best_result['metrics']}"))
+    logging.info(str(f"Best Sharpe: {best_result['metrics']['sharpe']}"))
     print()
-    print(f"Worst Parameters: {worst_result['params']}")
-    print(f"Worst Sharpe: {worst_result['metrics']['sharpe']}")
+    logging.info(str(f"Worst Parameters: {worst_result['params']}"))
+    logging.info(str(f"Worst Sharpe: {worst_result['metrics']['sharpe']}"))
     print()
     
     # Show parameter impact analysis
-    print("=== Parameter Impact Analysis ===")
+    logging.info("=== Parameter Impact Analysis ===")
     kelly_impact = {}
     for result in results:
         kelly = result['params']['kelly']
@@ -85,15 +87,15 @@ def main():
     
     for kelly, sharpes in kelly_impact.items():
         avg_sharpe = sum(sharpes) / len(sharpes)
-        print(f"Kelly {kelly}: Average Sharpe = {avg_sharpe:.3f}")
+        logging.info(f"Kelly {kelly}: Average Sharpe = {avg_sharpe:.3f}")
     
     # Persist artifacts
     with tempfile.TemporaryDirectory() as tmp_dir:
         out_dir = persist_artifacts(run, tmp_dir)
-        print(f"\nArtifacts saved to: {out_dir}")
-        print("(Note: Using temporary directory for demo - in production, use persistent storage)")
+        logging.info(f"\nArtifacts saved to: {out_dir}")
+        logging.info("(Note: Using temporary directory for demo - in production, use persistent storage)")
     
-    print("\n=== Grid Search Complete ===")
+    logging.info("\n=== Grid Search Complete ===")
 
 
 if __name__ == "__main__":

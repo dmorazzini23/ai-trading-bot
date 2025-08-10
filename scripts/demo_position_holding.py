@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Demo script showing position holding logic and meta-learning integration.
 
@@ -21,9 +23,9 @@ os.environ['PYTEST_RUNNING'] = '1'
 
 def demo_position_holding_logic():
     """Demonstrate position holding decisions."""
-    print("=" * 60)
-    print("🔍 POSITION HOLDING LOGIC DEMO")
-    print("=" * 60)
+    logging.info(str("=" * 60))
+    logging.info("🔍 POSITION HOLDING LOGIC DEMO")
+    logging.info(str("=" * 60))
     
     from ai_trading.position.legacy_manager import should_hold_position
     
@@ -36,26 +38,26 @@ def demo_position_holding_logic():
         ("GOOGL", None, -8.1, 10, "Loss, old position"),
     ]
     
-    print("Position Hold Decisions:")
-    print("-" * 60)
+    logging.info("Position Hold Decisions:")
+    logging.info(str("-" * 60))
     
     for symbol, _, pnl_pct, days, description in scenarios:
         hold = should_hold_position(symbol, None, pnl_pct, days)
         action = "🟢 HOLD" if hold else "🔴 SELL"
-        print(f"{symbol:6} | {pnl_pct:+6.1f}% | {days:2d} days | {action} | {description}")
+        logging.info(f"{symbol:6} | {pnl_pct:+6.1f}% | {days:2d} days | {action} | {description}")
     
-    print("\nKey Insights:")
-    print("• Profitable positions (>5% gain) are held: UBER, SHOP, PG")
-    print("• New positions (<3 days) are held even with small losses: JNJ")
-    print("• Old losing positions are marked for sale: GOOGL")
-    print("• This prevents premature exit from winners!")
+    logging.info("\nKey Insights:")
+    logging.info("• Profitable positions (>5% gain) are held: UBER, SHOP, PG")
+    logging.info("• New positions (<3 days) are held even with small losses: JNJ")
+    logging.info("• Old losing positions are marked for sale: GOOGL")
+    logging.info("• This prevents premature exit from winners!")
 
 
 def demo_signal_enhancement():
     """Demonstrate signal enhancement with position logic."""
-    print("\n" + "=" * 60)
-    print("📊 SIGNAL ENHANCEMENT DEMO")
-    print("=" * 60)
+    logging.info(str("\n" + "=" * 60))
+    logging.info("📊 SIGNAL ENHANCEMENT DEMO")
+    logging.info(str("=" * 60))
     
     # Mock original trading signals (what would happen without position logic)
     original_signals = [
@@ -77,10 +79,10 @@ def demo_signal_enhancement():
         "GOOGL": "sell",   # Loss position - sell OK
     }
     
-    print("Signal Enhancement Results:")
-    print("-" * 60)
-    print("Symbol | Original | Hold Signal | Final Action | Explanation")
-    print("-" * 60)
+    logging.info("Signal Enhancement Results:")
+    logging.info(str("-" * 60))
+    logging.info("Symbol | Original | Hold Signal | Final Action | Explanation")
+    logging.info(str("-" * 60))
     
     enhanced_signals = []
     
@@ -101,20 +103,20 @@ def demo_signal_enhancement():
             explanation = "Signal allowed"
             enhanced_signals.append(signal)
         
-        print(f"{symbol:6} | {side:8} | {hold_action:7} | {final_action:20} | {explanation}")
+        logging.info(f"{symbol:6} | {side:8} | {hold_action:7} | {final_action:20} | {explanation}")
     
-    print("\nSummary:")
-    print(f"• Original signals: {len(original_signals)}")
-    print(f"• Enhanced signals: {len(enhanced_signals)}")
-    print(f"• Filtered out: {len(original_signals) - len(enhanced_signals)}")
-    print(f"• Churn reduction: {((len(original_signals) - len(enhanced_signals)) / len(original_signals) * 100):.1f}%")
+    logging.info("\nSummary:")
+    logging.info(f"• Original signals: {len(original_signals)}")
+    logging.info(f"• Enhanced signals: {len(enhanced_signals)}")
+    logging.info(f"• Filtered out: {len(original_signals) - len(enhanced_signals)}")
+    logging.info(f"• Churn reduction: {((len(original_signals) - len(enhanced_signals)) / len(original_signals) * 100):.1f}%")
 
 
 def demo_meta_learning_trigger():
     """Demonstrate meta-learning trigger functionality."""
-    print("\n" + "=" * 60) 
-    print("🧠 META-LEARNING TRIGGER DEMO")
-    print("=" * 60)
+    logging.info(str("\n" + "=" * 60)) 
+    logging.info("🧠 META-LEARNING TRIGGER DEMO")
+    logging.info(str("=" * 60))
     
     # Simulate trade execution with meta-learning trigger
     trade_executions = [
@@ -124,11 +126,11 @@ def demo_meta_learning_trigger():
         {"symbol": "NVDA", "qty": 75, "side": "buy", "price": 875.30, "order_id": "nvda-001"},
     ]
     
-    print("Trade Execution → Meta-Learning Conversion:")
-    print("-" * 60)
+    logging.info("Trade Execution → Meta-Learning Conversion:")
+    logging.info(str("-" * 60))
     
     for trade in trade_executions:
-        print(f"📈 TRADE_EXECUTED: {trade['symbol']} {trade['side']} {trade['qty']} @ ${trade['price']:.2f}")
+        logging.info(str(f"📈 TRADE_EXECUTED: {trade['symbol']} {trade['side']} {trade['qty']} @ ${trade['price']:.2f}"))
         
         # Simulate meta-learning trigger
         trade_data = {
@@ -138,52 +140,52 @@ def demo_meta_learning_trigger():
         }
         
         # Mock conversion (in real system this would call trigger_meta_learning_conversion)
-        print(f"   ➜ 🧠 META_LEARNING_TRIGGERED | symbol={trade['symbol']}")
-        print("   ➜ 📊 Converting audit format to meta-learning format")
-        print("   ➜ 💾 Storing for strategy optimization")
+        logging.info(str(f"   ➜ 🧠 META_LEARNING_TRIGGERED | symbol={trade['symbol']}"))
+        logging.info("   ➜ 📊 Converting audit format to meta-learning format")
+        logging.info("   ➜ 💾 Storing for strategy optimization")
         print()
     
-    print("Key Benefits:")
-    print("• Trade data automatically flows to meta-learning system")
-    print("• No more 'METALEARN_EMPTY_TRADE_LOG' errors")
-    print("• Strategy optimization can analyze all executed trades")
-    print("• Real-time learning from trading performance")
+    logging.info("Key Benefits:")
+    logging.info("• Trade data automatically flows to meta-learning system")
+    logging.info(str("• No more 'METALEARN_EMPTY_TRADE_LOG' errors"))
+    logging.info("• Strategy optimization can analyze all executed trades")
+    logging.info("• Real-time learning from trading performance")
 
 
 def demo_before_vs_after():
     """Show before vs after behavior."""
-    print("\n" + "=" * 60)
-    print("🔄 BEFORE vs AFTER COMPARISON")
-    print("=" * 60)
+    logging.info(str("\n" + "=" * 60))
+    logging.info("🔄 BEFORE vs AFTER COMPARISON")
+    logging.info(str("=" * 60))
     
-    print("BEFORE (High Churn Behavior):")
-    print("-" * 30)
-    print("Cycle 1: Buy UBER, SHOP, PG")
-    print("Cycle 2: Sell UBER (+28.3%), SHOP (+20.0%), PG (+16.6%)")
-    print("         Buy JNJ, NVDA, GOOGL")
-    print("Cycle 3: Sell JNJ, NVDA, GOOGL")
-    print("         Buy new positions...")
-    print("Result: Constant turnover, missed gains on winners")
+    logging.info("BEFORE (High Churn Behavior):")
+    logging.info(str("-" * 30))
+    logging.info("Cycle 1: Buy UBER, SHOP, PG")
+    logging.info("Cycle 2: Sell UBER (+28.3%), SHOP (+20.0%), PG (+16.6%)")
+    logging.info("         Buy JNJ, NVDA, GOOGL")
+    logging.info("Cycle 3: Sell JNJ, NVDA, GOOGL")
+    logging.info("         Buy new positions...")
+    logging.info("Result: Constant turnover, missed gains on winners")
     
-    print("\nAFTER (Position Holding Logic):")
-    print("-" * 30)
-    print("Cycle 1: Buy UBER, SHOP, PG")
-    print("Cycle 2: Hold UBER (+28.3%), SHOP (+20.0%), PG (+16.6%)")
-    print("         Only buy JNJ (tactical position)")
-    print("Cycle 3: Continue holding winners, manage new positions")
-    print("         Add to winners or diversify carefully")
-    print("Result: Lower turnover, maximize gains from winners")
+    logging.info("\nAFTER (Position Holding Logic):")
+    logging.info(str("-" * 30))
+    logging.info("Cycle 1: Buy UBER, SHOP, PG")
+    logging.info("Cycle 2: Hold UBER (+28.3%), SHOP (+20.0%), PG (+16.6%)")
+    logging.info("         Only buy JNJ (tactical position)")
+    logging.info("Cycle 3: Continue holding winners, manage new positions")
+    logging.info("         Add to winners or diversify carefully")
+    logging.info("Result: Lower turnover, maximize gains from winners")
     
-    print("\nMeta-Learning Enhancement:")
-    print("-" * 30)
-    print("BEFORE: Manual conversion, often empty trade logs")
-    print("AFTER:  Automatic trigger after each trade execution")
-    print("        → Real-time strategy learning and optimization")
+    logging.info("\nMeta-Learning Enhancement:")
+    logging.info(str("-" * 30))
+    logging.info("BEFORE: Manual conversion, often empty trade logs")
+    logging.info("AFTER:  Automatic trigger after each trade execution")
+    logging.info("        → Real-time strategy learning and optimization")
 
 
 if __name__ == "__main__":
-    print("🚀 AI Trading Bot - Position Holding & Meta-Learning Demo")
-    print("Demonstrating fixes for position churn and meta-learning issues")
+    logging.info("🚀 AI Trading Bot - Position Holding & Meta-Learning Demo")
+    logging.info("Demonstrating fixes for position churn and meta-learning issues")
     
     try:
         demo_position_holding_logic()
@@ -191,17 +193,17 @@ if __name__ == "__main__":
         demo_meta_learning_trigger()
         demo_before_vs_after()
         
-        print("\n" + "=" * 60)
-        print("✅ DEMO COMPLETE")
-        print("=" * 60)
-        print("The trading bot now:")
-        print("• Holds profitable positions to maximize gains")
-        print("• Reduces unnecessary position churn")
-        print("• Automatically feeds data to meta-learning system")
-        print("• Learns from trading performance in real-time")
-        print("\nReady for deployment! 🎉")
+        logging.info(str("\n" + "=" * 60))
+        logging.info("✅ DEMO COMPLETE")
+        logging.info(str("=" * 60))
+        logging.info("The trading bot now:")
+        logging.info("• Holds profitable positions to maximize gains")
+        logging.info("• Reduces unnecessary position churn")
+        logging.info("• Automatically feeds data to meta-learning system")
+        logging.info("• Learns from trading performance in real-time")
+        logging.info("\nReady for deployment! 🎉")
         
     except Exception as e:
-        print(f"❌ Demo failed: {e}")
+        logging.info(f"❌ Demo failed: {e}")
         import traceback
         traceback.print_exc()

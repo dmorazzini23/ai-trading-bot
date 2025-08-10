@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Validation script for critical module import fixes.
 
@@ -24,77 +26,77 @@ os.environ.setdefault('FLASK_PORT', '5000')
 
 def test_sentiment_module():
     """Test that sentiment module can be imported and used."""
-    print("🔍 Testing Sentiment Module...")
+    logging.info("🔍 Testing Sentiment Module...")
     try:
         # Test import
         import ai_trading.analysis.sentiment as sentiment
-        print("  ✅ sentiment module imported successfully")
+        logging.info("  ✅ sentiment module imported successfully")
         
         # Test required functions exist
         required_functions = ['fetch_sentiment', 'predict_text_sentiment', 'sentiment_lock']
         for func_name in required_functions:
             assert hasattr(sentiment, func_name), f"Missing function: {func_name}"
-        print("  ✅ All required sentiment functions available")
+        logging.info("  ✅ All required sentiment functions available")
         
         # Test basic functionality
         result = sentiment.predict_text_sentiment('This is a test')
         assert isinstance(result, (int, float)), "predict_text_sentiment should return a number"
-        print(f"  ✅ predict_text_sentiment works: {result}")
+        logging.info(f"  ✅ predict_text_sentiment works: {result}")
         
         return True
     except Exception as e:
-        print(f"  ❌ Sentiment module test failed: {e}")
+        logging.info(f"  ❌ Sentiment module test failed: {e}")
         traceback.print_exc()
         return False
 
 def test_metalearning_strategy():
     """Test that MetaLearning strategy method signature is fixed."""
-    print("🧠 Testing MetaLearning Strategy...")
+    logging.info("🧠 Testing MetaLearning Strategy...")
     try:
         from ai_trading.strategies.metalearning import MetaLearning
         strategy = MetaLearning()
-        print("  ✅ MetaLearning import successful")
+        logging.info("  ✅ MetaLearning import successful")
         
         # Test method signature
         import inspect
         sig = inspect.signature(strategy.execute_strategy)
-        print(f"  ✅ execute_strategy signature: {sig}")
+        logging.info(f"  ✅ execute_strategy signature: {sig}")
         
         # Test original calling pattern: execute_strategy(symbol)
         result1 = strategy.execute_strategy('AAPL')
         assert isinstance(result1, dict), "execute_strategy should return a dict"
         assert 'signal' in result1, "Result should contain 'signal' key"
-        print("  ✅ execute_strategy(symbol) works")
+        logging.info("  ✅ execute_strategy(symbol) works")
         
         # Test new calling pattern: execute_strategy(data, symbol)
         mock_data = {'close': [100, 101, 102]}
         result2 = strategy.execute_strategy(mock_data, 'AAPL')
         assert isinstance(result2, dict), "execute_strategy should return a dict"
         assert 'signal' in result2, "Result should contain 'signal' key"
-        print("  ✅ execute_strategy(data, symbol) works")
+        logging.info("  ✅ execute_strategy(data, symbol) works")
         
         # Verify the error that was mentioned in problem statement is fixed
         # "takes 2 positional arguments but 3 were given"
-        print("  ✅ Method signature mismatch fixed - both calling patterns work")
+        logging.info("  ✅ Method signature mismatch fixed - both calling patterns work")
         
         return True
     except Exception as e:
-        print(f"  ❌ MetaLearning strategy test failed: {e}")
+        logging.info(f"  ❌ MetaLearning strategy test failed: {e}")
         traceback.print_exc()
         return False
 
 def test_alpaca_api_endpoints():
     """Test that Alpaca API endpoints are correctly configured."""
-    print("🌐 Testing Alpaca API Configuration...")
+    logging.info("🌐 Testing Alpaca API Configuration...")
     try:
         # Check data_fetcher uses correct endpoint for market data
         with open('data_fetcher.py', 'r') as f:
             data_fetcher_content = f.read()
         
         if 'data.alpaca.markets' in data_fetcher_content:
-            print("  ✅ data_fetcher.py correctly uses data.alpaca.markets for market data")
+            logging.info("  ✅ data_fetcher.py correctly uses data.alpaca.markets for market data")
         else:
-            print("  ❌ data_fetcher.py does not use data.alpaca.markets")
+            logging.info("  ❌ data_fetcher.py does not use data.alpaca.markets")
             return False
         
         # Check config uses paper-api for trading
@@ -102,41 +104,41 @@ def test_alpaca_api_endpoints():
             config_content = f.read()
         
         if 'paper-api.alpaca.markets' in config_content:
-            print("  ✅ config.py correctly uses paper-api.alpaca.markets for trading")
+            logging.info("  ✅ config.py correctly uses paper-api.alpaca.markets for trading")
         else:
-            print("  ❌ config.py does not use paper-api.alpaca.markets")
+            logging.info("  ❌ config.py does not use paper-api.alpaca.markets")
             return False
         
-        print("  ✅ Alpaca API endpoints are correctly configured")
+        logging.info("  ✅ Alpaca API endpoints are correctly configured")
         return True
     except Exception as e:
-        print(f"  ❌ Alpaca API test failed: {e}")
+        logging.info(f"  ❌ Alpaca API test failed: {e}")
         traceback.print_exc()
         return False
 
 def test_import_resolution():
     """Test that import path problems are resolved."""
-    print("📦 Testing Import Resolution...")
+    logging.info("📦 Testing Import Resolution...")
     try:
         # Test direct sentiment imports
-        print("  ✅ Direct sentiment imports work")
+        logging.info("  ✅ Direct sentiment imports work")
         
         # Test that MetaLearning can be imported without dependency errors
-        print("  ✅ MetaLearning imports with fallbacks")
+        logging.info("  ✅ MetaLearning imports with fallbacks")
         
         # Test that missing dependencies don't cause import failures
-        print("  ✅ Missing dependencies handled gracefully with fallbacks")
+        logging.info("  ✅ Missing dependencies handled gracefully with fallbacks")
         
         return True
     except Exception as e:
-        print(f"  ❌ Import resolution test failed: {e}")
+        logging.info(f"  ❌ Import resolution test failed: {e}")
         traceback.print_exc()
         return False
 
 def main():
     """Run all validation tests."""
-    print("🔧 AI Trading Bot - Critical Fixes Validation")
-    print("=" * 50)
+    logging.info("🔧 AI Trading Bot - Critical Fixes Validation")
+    logging.info(str("=" * 50))
     print()
     
     tests = [
@@ -150,30 +152,30 @@ def main():
     total = len(tests)
     
     for test_name, test_func in tests:
-        print(f"Running {test_name} test...")
+        logging.info(f"Running {test_name} test...")
         if test_func():
             passed += 1
-            print(f"✅ {test_name} test PASSED")
+            logging.info(f"✅ {test_name} test PASSED")
         else:
-            print(f"❌ {test_name} test FAILED")
+            logging.info(f"❌ {test_name} test FAILED")
         print()
     
-    print("=" * 50)
-    print(f"📊 Test Results: {passed}/{total} tests passed")
+    logging.info(str("=" * 50))
+    logging.info(f"📊 Test Results: {passed}/{total} tests passed")
     
     if passed == total:
-        print("🎉 ALL CRITICAL FIXES VALIDATED SUCCESSFULLY!")
+        logging.info("🎉 ALL CRITICAL FIXES VALIDATED SUCCESSFULLY!")
         print()
-        print("📋 Summary of fixes:")
-        print("   ✅ Missing sentiment module created")
-        print("   ✅ MetaLearning method signature supports both patterns")
-        print("   ✅ Alpaca API endpoints correctly configured")
-        print("   ✅ All imports work with proper fallbacks")
+        logging.info("📋 Summary of fixes:")
+        logging.info("   ✅ Missing sentiment module created")
+        logging.info("   ✅ MetaLearning method signature supports both patterns")
+        logging.info("   ✅ Alpaca API endpoints correctly configured")
+        logging.info("   ✅ All imports work with proper fallbacks")
         print()
-        print("🚀 The AI trading bot should now function properly!")
+        logging.info("🚀 The AI trading bot should now function properly!")
         return 0
     else:
-        print(f"❌ {total - passed} test(s) failed. Please review the issues above.")
+        logging.info(f"❌ {total - passed} test(s) failed. Please review the issues above.")
         return 1
 
 if __name__ == "__main__":
