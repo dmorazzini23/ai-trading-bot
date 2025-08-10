@@ -225,7 +225,7 @@ class TechnicalSignalAnalyzer:
                 'roc': roc
             }
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError):
             return {'score': 0.5, 'rsi': 50.0, 'macd': 0.0}
     
     def _analyze_divergence(self, data: pd.DataFrame) -> Dict[str, Any]:
@@ -278,7 +278,7 @@ class TechnicalSignalAnalyzer:
                 'rsi_trend': rsi_trend
             }
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError):
             return {'type': DivergenceType.NONE, 'strength': 0.0}
     
     def _analyze_volume(self, data: pd.DataFrame) -> Dict[str, Any]:
@@ -330,7 +330,7 @@ class TechnicalSignalAnalyzer:
                 'ratio': vol_ratio if 'vol_ratio' in locals() else 1.0
             }
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError):
             return {'strength': 0.5, 'trend': 'neutral'}
     
     def _analyze_relative_strength(self, symbol: str, data: pd.DataFrame) -> Dict[str, Any]:
@@ -369,7 +369,7 @@ class TechnicalSignalAnalyzer:
                 'relative_strength': relative_strength if 'relative_strength' in locals() else 0.0
             }
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError):
             return {'score': 0.5, 'rank': 0.5}
     
     def _analyze_support_resistance(self, data: pd.DataFrame) -> Dict[str, Any]:
@@ -432,7 +432,7 @@ class TechnicalSignalAnalyzer:
                 'resistance_levels': valid_resistance[:3] if valid_resistance else []
             }
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError):
             return {
                 'support_distance': 10.0,
                 'resistance_distance': 10.0,
@@ -503,7 +503,7 @@ class TechnicalSignalAnalyzer:
             else:
                 return SignalStrength.VERY_WEAK
                 
-        except Exception:
+        except (KeyError, ValueError, TypeError):
             return SignalStrength.NEUTRAL
     
     def _calculate_exit_urgency(self, momentum: Dict, divergence: Dict, volume: Dict) -> float:
@@ -530,7 +530,7 @@ class TechnicalSignalAnalyzer:
             # Cap at 1.0
             return min(1.0, urgency)
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0
     
     def _get_market_data(self, symbol: str) -> Optional[pd.DataFrame]:
@@ -549,7 +549,7 @@ class TechnicalSignalAnalyzer:
             
             return None
             
-        except Exception:
+        except (AttributeError, KeyError, ValueError):
             return None
     
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> float:
@@ -570,7 +570,7 @@ class TechnicalSignalAnalyzer:
             
             return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50.0
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError, ZeroDivisionError):
             return 50.0
     
     def _calculate_macd(self, prices: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple[float, float]:
@@ -591,7 +591,7 @@ class TechnicalSignalAnalyzer:
             
             return macd_line.iloc[-1], macd_signal.iloc[-1]
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError):
             return 0.0, 0.0
     
     def _calculate_trend(self, values: List[float]) -> float:
@@ -625,7 +625,7 @@ class TechnicalSignalAnalyzer:
             
             return normalized_slope
             
-        except Exception:
+        except (ValueError, TypeError, ZeroDivisionError):
             return 0.0
     
     def _get_default_signals(self, symbol: str) -> TechnicalSignals:
