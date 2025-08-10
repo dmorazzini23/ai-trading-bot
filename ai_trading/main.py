@@ -39,11 +39,37 @@ logger = logging.getLogger(__name__)
 
 
 def validate_environment() -> None:
-    """Ensure required environment variables are present."""
+    """Ensure required environment variables are present and dependencies are available."""
+    # Check critical environment variables
     if not config.WEBHOOK_SECRET:
         raise RuntimeError("WEBHOOK_SECRET is required")
     if not config.ALPACA_API_KEY or not config.ALPACA_SECRET_KEY:
         raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
+    
+    # Check optional but important dependencies
+    try:
+        import alpaca_trade_api
+        logger.debug("alpaca_trade_api dependency available")
+    except ImportError:
+        logger.warning("alpaca_trade_api not available - some features may use fallbacks")
+    
+    try:
+        import alpaca
+        logger.debug("alpaca-py dependency available")
+    except ImportError:
+        logger.warning("alpaca-py not available - some features may be limited")
+    
+    # Validate data directories exist
+    import os
+    data_dir = "data"
+    if not os.path.exists(data_dir):
+        logger.info("Creating data directory: %s", data_dir)
+        os.makedirs(data_dir, exist_ok=True)
+    
+    logs_dir = "logs" 
+    if not os.path.exists(logs_dir):
+        logger.info("Creating logs directory: %s", logs_dir)
+        os.makedirs(logs_dir, exist_ok=True)
 
 
 def run_bot(*_a, **_k) -> int:

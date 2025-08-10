@@ -3835,7 +3835,9 @@ def _initialize_alpaca_clients():
         return
     # Lazy-import SDK only when needed
     try:
-        pass  # type: ignore
+        from alpaca.trading.client import TradingClient
+        from alpaca.data.historical import StockHistoricalDataClient
+        logger.debug("Successfully imported Alpaca SDK classes")
     except Exception as e:
         logger.error("alpaca_trade_api import failed; cannot initialize clients", exc_info=e)
         # In test environments, don't raise - just skip initialization
@@ -7652,9 +7654,23 @@ else:
     )
     training = feats.join(labels, how="inner").dropna()
     
+    # Add validation for training data quality
+    if training.empty:
+        logger.warning("Regime training dataset is empty after joining features and labels")
+        if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
+            logger.warning("No valid training data for regime model; using fallback")
+            _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
+        regime_model = RandomForestClassifier(
+            n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
+        )
+        return regime_model
+    
     # Import settings for regime configuration
     from ai_trading.config.settings import get_settings
     settings = get_settings()
+    
+    logger.debug("Regime training data validation: %d rows available, minimum required: %d", 
+                len(training), settings.REGIME_MIN_ROWS)
     
     if len(training) >= settings.REGIME_MIN_ROWS:
         X = training[["atr", "rsi", "macd", "vol"]]
