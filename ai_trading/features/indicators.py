@@ -7,59 +7,13 @@ technical indicators used in trading strategies.
 Moved from root features.py for package-safe imports.
 """
 
-# AI-AGENT-REF: guard pandas/numpy imports for test environments
-try:
-    import pandas as pd
-except ImportError:
-    from datetime import datetime
-
-    class MockDataFrame:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class MockPandas:
-        DataFrame = MockDataFrame
-        Timestamp = datetime
-
-    pd = MockPandas()
-
-try:
-    import numpy as np
-except ImportError:
-
-    class MockNumpy:
-        def array(self, *args, **kwargs):
-            return []
-
-        def mean(self, *args, **kwargs):
-            return 0.0
-
-        def std(self, *args, **kwargs):
-            return 1.0
-
-        def nan(self):
-            return float("nan")
-
-    np = MockNumpy()
+# AI-AGENT-REF: pandas and numpy are hard dependencies
+import pandas as pd
+import numpy as np
 
 import logging
 
-try:
-    from ai_trading.indicators import ema  # type: ignore
-except ImportError:
-
-    def ema(data, period):
-        """Fallback EMA calculation."""
-        return pd.Series(0.0, index=range(len(data)))
-
-
-try:
-    from ai_trading.indicators import atr  # type: ignore
-except ImportError:
-
-    def atr(high, low, close, period=14):
-        """Fallback ATR calculation."""
-        return pd.Series(0.0, index=close.index)
+from ai_trading.indicators import ema, atr  # type: ignore
 
 
 logger = logging.getLogger(__name__)

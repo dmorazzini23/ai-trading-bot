@@ -86,6 +86,9 @@ test = [
   "pytest-asyncio>=0.20.2",
   "hypothesis>=6.0.0",
 ]
+optimization = [
+  "numba>=0.57.0",
+]
 
 [tool.ruff]
 exclude = ["tests/**/*.py"]  # Allow print in tests

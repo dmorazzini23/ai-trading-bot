@@ -14,108 +14,46 @@ from threading import Lock
 from ai_trading.utils import http
 
 # AI-AGENT-REF: Use centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
+from ai_trading.logging import logger
 
-    logger = logging.getLogger(__name__)
-
-try:
-    from bs4 import BeautifulSoup
-
-    BS4_AVAILABLE = True
-except ImportError:
-    BS4_AVAILABLE = False
-    logger.warning("BeautifulSoup not available, Form 4 parsing disabled")
+from bs4 import BeautifulSoup
 
 # Retry mechanism
-try:
-    from tenacity import (
-        retry,
-        retry_if_exception_type,
-        stop_after_attempt,
-        wait_exponential,
-        wait_random,
-    )
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random,
+)
 
-    HAS_TENACITY = True
-except ImportError:
-    HAS_TENACITY = False
+# AI-AGENT-REF: Import config
+from ai_trading.config.settings import get_settings
 
-    # Fallback decorator if tenacity not available
-    def retry(*args, **kwargs):
-        def decorator(func):
-            return func
-
-        return decorator
-
-    # Create mock objects that work with the + operator
-    class MockWait:
-        def __add__(self, other):
-            return self
-
-    def stop_after_attempt(x):
-        return None
-    def wait_exponential(**kwargs):
-        return MockWait()
-    def wait_random(*args, **kwargs):
-        return MockWait()
-    def retry_if_exception_type(x):
-        return None
-
-# AI-AGENT-REF: Import config with fallback
-try:
-    from ai_trading.config.settings import get_settings
-    S = get_settings()
-
-    NEWS_API_KEY = S.news_api_key
-    SENTIMENT_API_KEY = S.sentiment_api_key or NEWS_API_KEY
-    SENTIMENT_API_URL = S.sentiment_api_url
-except ImportError:
-    # Fallback for testing environments
-    import os
-
-    NEWS_API_KEY = os.getenv("NEWS_API_KEY")
-    SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY") or NEWS_API_KEY
-    SENTIMENT_API_URL = os.getenv(
-        "SENTIMENT_API_URL", "https://newsapi.org/v2/everything"
-    )
+S = get_settings()
+NEWS_API_KEY = S.news_api_key
+SENTIMENT_API_KEY = S.sentiment_api_key or NEWS_API_KEY
+SENTIMENT_API_URL = S.sentiment_api_url
 
 # FinBERT model initialization
+import torch
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
 try:
-    import torch
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-    try:
-        _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
-        _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
-            "yiyanghkust/finbert-tone"
-        )
-        _FINBERT_MODEL.eval()
-        _HUGGINGFACE_AVAILABLE = True
-        logger.info("FinBERT loaded successfully")
-    except Exception as e:
-        logger.warning(f"FinBERT load failed ({e}); falling back to neutral sentiment")
-        _HUGGINGFACE_AVAILABLE = False
-        _FINBERT_TOKENIZER = None
-        _FINBERT_MODEL = None
-except ImportError:
-    # Mock for testing environments without transformers/torch
-    class MockFinBERT:
-        def __call__(self, *args, **kwargs):
-            return self
-
-        def __getattr__(self, name):
-            return lambda *args, **kwargs: self
-
-        def tolist(self):
-            return [0.33, 0.34, 0.33]  # neutral sentiment
-
+    _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
+    _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
+        "yiyanghkust/finbert-tone"
+    )
+    _FINBERT_MODEL.eval()
+    _HUGGINGFACE_AVAILABLE = True
+    logger.info("FinBERT loaded successfully")
+except Exception as e:
+    logger.warning(f"FinBERT load failed ({e}); falling back to mock FinBERT")
+    # Import mock from test support
+    from tests.support.mocks_runtime import MockFinBERT
     _FINBERT_TOKENIZER = MockFinBERT()
     _FINBERT_MODEL = MockFinBERT()
-    _HUGGINGFACE_AVAILABLE = True
-    logger.info("Using mock FinBERT for testing environment")
+    _HUGGINGFACE_AVAILABLE = False
 
 # Sentiment caching and circuit breaker - Enhanced for critical rate limiting fix
 SENTIMENT_TTL_SEC = 600  # 10 minutes normal cache

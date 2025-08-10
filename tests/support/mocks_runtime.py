@@ -82,3 +82,29 @@ class MockSeries:
 
 
 # Add more mock classes as needed when moving them from runtime code
+
+class MockFinBERT:
+    """Mock FinBERT model for testing."""
+    
+    def __call__(self, *args, **kwargs):
+        return self
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+    def tolist(self):
+        return [0.33, 0.34, 0.33]  # neutral sentiment
+
+
+class MockSklearn:
+    """Mock scikit-learn for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockTalib:
+    """Mock TA-Lib for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
