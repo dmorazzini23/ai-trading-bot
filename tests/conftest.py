@@ -1477,7 +1477,11 @@ def stub_capital_scaling(monkeypatch):
             else:
                 # If config is an instance, set it as an attribute 
                 setattr(config, 'TradingConfig', MockTradingConfig)
-    except ImportError:
+    except ImportError as e:
+        # AI-AGENT-REF: Log config import failure for debugging 
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Could not import config module for mocking: {e}")
         pass
     
     try:
@@ -1487,7 +1491,11 @@ def stub_capital_scaling(monkeypatch):
             monkeypatch.setattr(cs, "drawdown_adjusted_kelly", lambda *a, **k: 0.02)
         if hasattr(cs, "volatility_parity_position"):
             monkeypatch.setattr(cs, "volatility_parity_position", lambda *a, **k: 0.01)
-    except ImportError:
+    except ImportError as e:
+        # AI-AGENT-REF: Log capital scaling import failure for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Could not import capital_scaling module for mocking: {e}")
         pass
     
     # Add missing bot_engine functions

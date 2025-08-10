@@ -25,8 +25,12 @@ try:
     )
 
     PERFORMANCE_MONITORING_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     # Fallback if modules not available
+    # AI-AGENT-REF: Log performance monitoring unavailability for debugging
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.debug(f"Performance monitoring not available: {e}")
     PERFORMANCE_MONITORING_AVAILABLE = False
 
     def get_memory_optimizer():
