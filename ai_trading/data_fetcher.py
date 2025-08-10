@@ -15,7 +15,7 @@ import requests  # AI-AGENT-REF: ensure requests import for function annotations
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     print("Warning: Running under unsupported Python version", file=sys.stderr)
 
-import config
+from ai_trading import config
 from ai_trading.config.settings import get_settings
 from ai_trading.market import cache as mcache
 

@@ -12,7 +12,7 @@ from ai_trading.logging import get_logger
 
 import pandas as pd
 
-import config
+from ai_trading import config
 from ai_trading import signals  # noqa: F401
 # AI-AGENT-REF: Removed legacy trade_execution import as part of shim cleanup
 # from ai_trading import trade_execution as execution_api  # type: ignore

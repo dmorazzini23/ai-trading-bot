@@ -19,6 +19,20 @@ def __getattr__(name: str):
                 "'ai_trading.config.management' has no attribute "
                 f"'{name}'"
             ) from e
+    
+    # Forward other config attributes from management module
+    if name in {"MODEL_PATH", "VERBOSE_LOGGING", "BOT_MODE", "USE_RL_AGENT", 
+                "FINNHUB_API_KEY", "NEWS_API_KEY", "SENTIMENT_API_KEY", 
+                "SENTIMENT_API_URL", "IEX_API_TOKEN", "ALPACA_PAPER",
+                "TRADE_LOG_FILE", "RL_MODEL_PATH", "HALT_FLAG_PATH"}:
+        try:
+            from . import management as _management
+            return getattr(_management, name)
+        except Exception as e:
+            raise ImportError(
+                f"'ai_trading.config.management' has no attribute '{name}'"
+            ) from e
+    
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 if TYPE_CHECKING:
