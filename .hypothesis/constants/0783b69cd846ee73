@@ -1,4 +1,0 @@
-# file: /usr/lib/python3/dist-packages/urllib3/util/timeout.py
-# hypothesis_version: 6.136.6
-
-['connect', 'read', 'total']

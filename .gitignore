@@ -24,22 +24,25 @@ id_rsa*
 # Swap and editor backups
 *~
 
-# Logs and runtime artifacts
+# Runtime & artifacts
+var/
+data/
 logs/
-slippage.csv
-reward_log.csv
+*.backup.*
+*.corrupted.*
 
-# Test and hypothesis cache
+# Local environment
+.env
+
+# Caches
 .hypothesis/
 .pytest_cache/
-.coverage
+.mypy_cache/
+**/__pycache__/
 
-# Temporary test files for quantity mismatch fix
-test_quantity_*.py
-test_production_scenarios.py
+# Test artifacts  
 htmlcov/
 coverage.xml
-.mypy_cache/
 
 # Benchmark results
 .benchmarks/

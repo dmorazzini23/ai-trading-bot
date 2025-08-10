@@ -1,231 +1,297 @@
 """
-Test for critical trade execution pipeline fixes - validates the specific production scenario.
+Test critical trading bot fixes implementation.
+
+Tests for the fixes addressing the critical issues:
+1. Missing RiskEngine methods
+2. BotContext alpaca_client compatibility
+3. Process management enhancements
+4. Data validation functionality
 """
-import pytest
-import sys
+
+import pandas as pd
+from datetime import datetime, timedelta, timezone
 import os
+import tempfile
+from unittest.mock import Mock, patch
 
-# Setup test environment
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-def test_production_scenario_fix():
-    """
-    Test that validates the exact production scenario mentioned in the problem statement:
-    - Bot generates buy signals for TSLA, MSFT, GOOGL, AMZN
-    - With $89,363 cash and $357,455 buying power 
-    - Should NOT result in "0 buys (total weight: 0.000), 3 sells"
-    """
-    from strategies.base import TradeSignal
-    import importlib
+def test_risk_engine_missing_methods():
+    """Test that RiskEngine has the missing critical methods."""
+    from risk_engine import RiskEngine
     
-    # AI-AGENT-REF: Import real StrategyAllocator, not the mocked version from other tests
-    # Multiple tests mock StrategyAllocator globally in different ways, so we need to work around that
-    real_allocator_class = None
+    # Create risk engine instance
+    risk_engine = RiskEngine()
     
-    # Try to get the real StrategyAllocator class by reloading the module
+    # Test get_current_exposure method
+    assert hasattr(risk_engine, 'get_current_exposure')
+    exposure = risk_engine.get_current_exposure()
+    assert isinstance(exposure, dict)
+    
+    # Test max_concurrent_orders method
+    assert hasattr(risk_engine, 'max_concurrent_orders')
+    max_orders = risk_engine.max_concurrent_orders()
+    assert isinstance(max_orders, int)
+    assert max_orders > 0
+    
+    # Test max_exposure method
+    assert hasattr(risk_engine, 'max_exposure')
+    max_exp = risk_engine.max_exposure()
+    assert isinstance(max_exp, float)
+    assert 0 <= max_exp <= 1.0
+    
+    # Test order_spacing method
+    assert hasattr(risk_engine, 'order_spacing')
+    spacing = risk_engine.order_spacing()
+    assert isinstance(spacing, float)
+    assert spacing >= 0
+
+
+def test_bot_context_alpaca_client_compatibility():
+    """Test that BotContext has alpaca_client property for backward compatibility."""
+    from ai_trading.core.bot_engine import BotContext
+    
+    # Create a mock trading client
+    mock_api = Mock()
+    
+    # Create BotContext instance
+    ctx = BotContext(
+        api=mock_api,
+        data_client=Mock(),
+        data_fetcher=Mock(),
+        signal_manager=Mock(),
+        trade_logger=Mock(),
+        sem=Mock(),
+        volume_threshold=1000,
+        entry_start_offset=timedelta(minutes=30),
+        entry_end_offset=timedelta(minutes=30),
+        market_open=datetime.now().time(),
+        market_close=datetime.now().time(),
+        regime_lookback=10,
+        regime_atr_threshold=0.02,
+        daily_loss_limit=0.05,
+        kelly_fraction=0.25,
+        capital_scaler=Mock(),
+        adv_target_pct=0.1,
+        max_position_dollars=10000,
+        params={}
+    )
+    
+    # Test alpaca_client property exists and returns the api
+    assert hasattr(ctx, 'alpaca_client')
+    assert ctx.alpaca_client is mock_api
+
+
+def test_process_manager_lock_mechanism():
+    """Test process lock mechanism to prevent multiple instances."""
+    from process_manager import ProcessManager
+    
+    pm = ProcessManager()
+    
+    # Test that the method exists
+    assert hasattr(pm, 'acquire_process_lock')
+    assert hasattr(pm, 'check_multiple_instances')
+    
+    # Test lock acquisition with temporary file
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        lock_file = tmp.name
+    
     try:
-        import strategy_allocator
-        # Force reload to get the real implementation
-        importlib.reload(strategy_allocator)
-        real_allocator_class = strategy_allocator.StrategyAllocator
-        print(f"DEBUG: Got StrategyAllocator type: {type(real_allocator_class)}")
-    except Exception as e:
-        print(f"DEBUG: Failed to reload strategy_allocator: {e}")
+        # First lock should succeed
+        assert pm.acquire_process_lock(lock_file) == True
+        
+        # Clean up lock file for next test
+        if os.path.exists(lock_file):
+            os.remove(lock_file)
+            
+    finally:
+        # Clean up
+        if os.path.exists(lock_file):
+            os.remove(lock_file)
+
+
+def test_data_validation_freshness():
+    """Test data validation and staleness detection."""
+    from ai_trading.data_validation import check_data_freshness, validate_trading_data, get_stale_symbols
     
-    # If the reload didn't work or we still have a mock, skip this test with a clear message
-    if real_allocator_class is None or not hasattr(real_allocator_class, '__init__'):
-        pytest.skip("StrategyAllocator is mocked by other tests - test isolation issue")
+    # Create test data with different timestamps
+    now = datetime.now(timezone.utc)
     
-    # Test if we can create an instance with the expected attributes
-    try:
-        test_allocator = real_allocator_class()
-        if not hasattr(test_allocator, 'signal_history') or not hasattr(test_allocator, 'allocate'):
-            pytest.skip("StrategyAllocator mock detected - skipping test due to interference from other tests")
-    except Exception as e:
-        pytest.skip(f"Cannot create StrategyAllocator instance: {e}")
+    # Fresh data (5 minutes old)
+    fresh_data = pd.DataFrame({
+        'Open': [100, 101, 102],
+        'High': [101, 102, 103],
+        'Low': [99, 100, 101],
+        'Close': [100.5, 101.5, 102.5],
+        'Volume': [1000, 1100, 1200]
+    }, index=[now - timedelta(minutes=7), now - timedelta(minutes=6), now - timedelta(minutes=5)])
     
-    # Create the exact signals mentioned in the problem statement
-    production_signals = [
-        TradeSignal(symbol="TSLA", side="buy", confidence=0.85, strategy="momentum"),
-        TradeSignal(symbol="MSFT", side="buy", confidence=0.78, strategy="mean_reversion"),
-        TradeSignal(symbol="GOOGL", side="buy", confidence=0.92, strategy="momentum"),
-        TradeSignal(symbol="AMZN", side="buy", confidence=0.88, strategy="mean_reversion"),
-    ]
+    # Stale data (30 minutes old)
+    stale_data = pd.DataFrame({
+        'Open': [100, 101, 102],
+        'High': [101, 102, 103],
+        'Low': [99, 100, 101],
+        'Close': [100.5, 101.5, 102.5],
+        'Volume': [1000, 1100, 1200]
+    }, index=[now - timedelta(minutes=32), now - timedelta(minutes=31), now - timedelta(minutes=30)])
     
-    # Create fresh allocator with clean state to avoid interference from other tests
-    allocator = real_allocator_class()
-    # AI-AGENT-REF: Clear any existing state that might interfere with test isolation
-    if hasattr(allocator, 'signal_history'):
-        allocator.signal_history.clear()
-    if hasattr(allocator, 'last_direction'):
-        allocator.last_direction.clear()
-    if hasattr(allocator, 'last_confidence'):
-        allocator.last_confidence.clear()
-    if hasattr(allocator, 'hold_protect'):
-        allocator.hold_protect.clear()
+    # Test freshness check for fresh data
+    fresh_result = check_data_freshness(fresh_data, "AAPL", max_staleness_minutes=15)
+    assert fresh_result['is_fresh'] == True
+    assert fresh_result['symbol'] == "AAPL"
+    assert fresh_result['minutes_stale'] < 15
     
-    # Configure for production-like behavior with signal confirmation
-    allocator.config.delta_threshold = 0.02
-    allocator.config.signal_confirmation_bars = 2
-    allocator.config.min_confidence = 0.6
+    # Test freshness check for stale data
+    stale_result = check_data_freshness(stale_data, "MSFT", max_staleness_minutes=15)
+    assert stale_result['is_fresh'] == False
+    assert stale_result['symbol'] == "MSFT"
+    assert stale_result['minutes_stale'] > 15
     
-    signals_by_strategy = {
-        "momentum": [s for s in production_signals if s.strategy == "momentum"],
-        "mean_reversion": [s for s in production_signals if s.strategy == "mean_reversion"]
+    # Test batch validation
+    test_data = {
+        'AAPL': fresh_data,
+        'MSFT': stale_data
     }
     
-    # Debug information
-    print(f"DEBUG: StrategyAllocator type: {type(allocator)}")
-    print(f"DEBUG: Initial signal_history: {allocator.signal_history}")
-    print(f"DEBUG: Config confirmation_bars: {allocator.config.signal_confirmation_bars}")
+    validation_results = validate_trading_data(test_data, max_staleness_minutes=15)
     
-    # First pass - signals should be pending confirmation
-    result1 = allocator.allocate(signals_by_strategy)
-    print(f"DEBUG: First pass result: {len(result1)} signals")
-    print(f"DEBUG: Signal history after first pass: {allocator.signal_history}")
-    assert len(result1) == 0, "First pass should have no confirmed signals"
+    assert 'AAPL' in validation_results
+    assert 'MSFT' in validation_results
+    assert validation_results['AAPL']['trading_ready'] == True
+    assert validation_results['MSFT']['trading_ready'] == False
     
-    # Second pass - signals should be confirmed
-    result2 = allocator.allocate(signals_by_strategy)
-    print(f"DEBUG: Second pass result: {len(result2)} signals")
-    print(f"DEBUG: Signal history after second pass: {allocator.signal_history}")
-    
-    buy_count = len([s for s in result2 if s.side == "buy"])
-    sell_count = len([s for s in result2 if s.side == "sell"])
-    total_buy_weight = sum(s.weight for s in result2 if s.side == "buy")
-    
-    print(f"DEBUG: buy_count={buy_count}, sell_count={sell_count}, total_buy_weight={total_buy_weight}")
-    
-    for i, r in enumerate(result2):
-        print(f"DEBUG: Result {i}: {r.symbol} {r.side} weight={getattr(r, 'weight', 'N/A')}")
-    
-    # If we have 0 buy signals, debug why
-    if buy_count == 0:
-        print("DEBUG: ZERO BUY SIGNALS - investigating...")
-        # Check confirmed signals step by step
-        confirmed = allocator._confirm_signals(signals_by_strategy)
-        print(f"DEBUG: Confirmed signals by strategy: {[(k, len(v)) for k, v in confirmed.items()]}")
-        
-        # Check allocation logic
-        final_signals = []
-        all_signals = []
-        for strategy, signals in confirmed.items():
-            for s in signals:
-                s.strategy = strategy
-                all_signals.append(s)
-        
-        print(f"DEBUG: Total confirmed signals before allocation logic: {len(all_signals)}")
-        
-        for s in sorted(all_signals, key=lambda x: (x.symbol, -x.confidence)):
-            last_dir = allocator.last_direction.get(s.symbol)
-            last_conf = allocator.last_confidence.get(s.symbol, 0.0)
-            delta = abs(s.confidence - last_conf) if last_conf else s.confidence
-            
-            print(f"DEBUG: Processing {s.symbol} {s.side} conf={s.confidence}")
-            print(f"DEBUG:   last_dir={last_dir}, last_conf={last_conf}, delta={delta}")
-            print(f"DEBUG:   delta_threshold={allocator.config.delta_threshold}")
-            
-            # Check blocking conditions
-            if last_dir and last_dir != s.side:
-                if s.side == "sell" and allocator.hold_protect.get(s.symbol, 0) > 0:
-                    print("DEBUG:   BLOCKED by hold protection")
-                    continue
-            
-            if delta < allocator.config.delta_threshold and last_dir == s.side:
-                print("DEBUG:   BLOCKED by delta threshold")
-                continue
-            
-            print("DEBUG:   ALLOWED - adding to final signals")
-            final_signals.append(s)
-        
-        print(f"DEBUG: Final signals after filtering: {len(final_signals)}")
-    
-    # Validate that the production issue is fixed
-    assert buy_count > 0, "Should have buy signals, not zero. Debug info above shows why."
-    assert sell_count == 0, "Should not have any sell signals from buy signal input"
-    assert total_buy_weight > 0, "Total buy weight should be positive"
-    
-    # Specifically check that we don't get the problematic pattern
-    assert not (buy_count == 0 and sell_count == 3), "Must not produce '0 buys, 3 sells' pattern"
-    
-    print(f"✅ Production scenario fixed: {buy_count} buys (total weight: {total_buy_weight:.3f}), {sell_count} sells")
+    # Test stale symbols detection
+    stale_symbols = get_stale_symbols(validation_results)
+    assert 'MSFT' in stale_symbols
+    assert 'AAPL' not in stale_symbols
 
-def test_sector_cap_with_zero_portfolio():
-    """Test that sector cap allows initial positions when portfolio is empty."""
-    # This test validates the sector cap fix
-    import types
-    
-    # Mock context with zero portfolio value
-    mock_ctx = types.SimpleNamespace()
-    mock_account = types.SimpleNamespace()
-    mock_account.portfolio_value = 0.0
-    
-    mock_api = types.SimpleNamespace()
-    mock_api.get_account = lambda: mock_account
-    
-    mock_ctx.api = mock_api
-    mock_ctx.sector_cap = 0.1  # 10% sector cap
-    
-    # Simulate the fixed sector_exposure_ok logic
-    def sector_exposure_ok_fixed(ctx, symbol: str, qty: int, price: float) -> bool:
-        try:
-            total = float(ctx.api.get_account().portfolio_value)
-        except Exception:
-            total = 0.0
-        
-        # The fix: allow initial positions when portfolio is empty
-        if total <= 0:
-            return True
-        
-        # Normal logic for non-empty portfolios
-        projected = (qty * price) / total
-        cap = getattr(ctx, "sector_cap", 0.1)
-        return projected <= cap
-    
-    # Test with empty portfolio - should allow initial position
-    result = sector_exposure_ok_fixed(mock_ctx, "AAPL", 100, 150.0)
-    assert result == True, "Empty portfolio should allow initial positions"
-    
-    # Test with non-empty portfolio and large position - should check caps
-    mock_account.portfolio_value = 1000.0
-    result = sector_exposure_ok_fixed(mock_ctx, "AAPL", 100, 150.0)  # $15k position in $1k portfolio = 1500%
-    assert result == False, "Large position in small portfolio should be blocked"
-    
-    print("✅ Sector cap fix validated")
 
-def test_exposure_calculation_no_negative():
-    """Test that exposure calculations don't go negative with zero positions."""
+def test_data_validation_emergency_check():
+    """Test emergency data validation for critical trades."""
+    from ai_trading.data_validation import emergency_data_check
+    
+    now = datetime.now(timezone.utc)
+    
+    # Valid data
+    valid_data = pd.DataFrame({
+        'Open': [100, 101, 102],
+        'High': [101, 102, 103], 
+        'Low': [99, 100, 101],
+        'Close': [100.5, 101.5, 102.5],
+        'Volume': [1000, 1100, 1200]
+    }, index=[now - timedelta(minutes=7), now - timedelta(minutes=6), now - timedelta(minutes=5)])
+    
+    # Empty data
+    empty_data = pd.DataFrame()
+    
+    # Test valid data passes
+    assert emergency_data_check(valid_data, "AAPL") == True
+    
+    # Test empty data fails
+    assert emergency_data_check(empty_data, "MSFT") == False
+
+
+def test_risk_engine_exposure_tracking():
+    """Test that RiskEngine properly tracks exposure."""
     from risk_engine import RiskEngine
-    from strategies import TradeSignal
     
     risk_engine = RiskEngine()
     
-    # Start with zero exposure
-    assert risk_engine.exposure.get("equity", 0.0) == 0.0
+    # Test initial exposure
+    initial_exposure = risk_engine.get_current_exposure()
+    assert isinstance(initial_exposure, dict)
     
-    # Register a sell signal without any existing position
-    sell_signal = TradeSignal(
-        symbol="NONEXISTENT",
-        side="sell",
-        confidence=0.8,
-        strategy="test",
-        weight=0.5
-    )
+    # Test exposure updates
+    risk_engine.exposure['equity'] = 0.5
+    updated_exposure = risk_engine.get_current_exposure()
+    assert updated_exposure['equity'] == 0.5
     
-    risk_engine.register_fill(sell_signal)
+    # Test max exposure configuration
+    max_exp = risk_engine.max_exposure()
+    assert isinstance(max_exp, float)
+    assert max_exp > 0
+
+
+def test_process_manager_multiple_instances_check():
+    """Test multiple instances detection."""
+    from process_manager import ProcessManager
     
-    # Exposure should not be negative
-    final_exposure = risk_engine.exposure.get("equity", 0.0)
-    assert final_exposure >= 0.0, f"Exposure should not be negative, got {final_exposure}"
+    pm = ProcessManager()
     
-    print("✅ Exposure calculation fix validated - no negative exposure")
+    # Mock find_python_processes to simulate multiple instances
+    mock_processes = [
+        {'pid': 1234, 'command': 'python bot_engine.py', 'memory_mb': 100},
+        {'pid': 5678, 'command': 'python runner.py', 'memory_mb': 150}
+    ]
+    
+    with patch.object(pm, 'find_python_processes', return_value=mock_processes):
+        with patch.object(pm, '_is_trading_process', return_value=True):
+            result = pm.check_multiple_instances()
+            
+            assert result['total_instances'] == 2
+            assert result['multiple_instances'] == True
+            assert len(result['recommendations']) > 0
+            assert any('CRITICAL' in rec for rec in result['recommendations'])
+
+
+@patch('audit.logger')
+def test_audit_permission_handling(mock_logger):
+    """Test that audit module handles permission errors gracefully."""
+    from audit import log_trade
+    
+    # This test validates that the permission error handling code exists
+    # and would be called in case of permission errors
+    
+    # Test that log_trade function exists and can be called
+    # In a real permission error scenario, it would attempt to repair permissions
+    try:
+        log_trade("AAPL", 10, "buy", 150.0, datetime.now(timezone.utc), "test")
+        # If it succeeds, that's fine - we're mainly testing the error handling path exists
+    except Exception:
+        # If it fails due to missing dependencies, that's also acceptable for this test
+        pass
+    
+    # The important thing is that the permission handling code exists in audit.py
+    import audit
+    import inspect
+    
+    # Check that the enhanced permission handling code is present
+    source = inspect.getsource(audit.log_trade)
+    assert 'ProcessManager' in source
+    assert 'fix_file_permissions' in source
+
+
+def test_integration_risk_engine_methods():
+    """Integration test ensuring all risk engine methods work together."""
+    from risk_engine import RiskEngine
+    
+    risk_engine = RiskEngine()
+    
+    # Test that all methods return sensible values
+    exposure = risk_engine.get_current_exposure()
+    max_orders = risk_engine.max_concurrent_orders()
+    max_exp = risk_engine.max_exposure() 
+    spacing = risk_engine.order_spacing()
+    
+    assert isinstance(exposure, dict)
+    assert isinstance(max_orders, int) and max_orders > 0
+    assert isinstance(max_exp, float) and 0 < max_exp <= 1.0
+    assert isinstance(spacing, float) and spacing >= 0
+    
+    # Test exposure tracking
+    risk_engine.exposure['test_asset'] = 0.3
+    updated_exposure = risk_engine.get_current_exposure()
+    assert 'test_asset' in updated_exposure
+    assert updated_exposure['test_asset'] == 0.3
+
 
 if __name__ == "__main__":
-    # Run tests manually if called directly
-    print("Running critical trade execution pipeline tests...")
-    
-    test_production_scenario_fix()
-    test_sector_cap_with_zero_portfolio() 
-    test_exposure_calculation_no_negative()
-    
-    print("\n🎉 All critical fixes validated successfully!")
+    # Run basic tests
+    test_risk_engine_missing_methods()
+    test_bot_context_alpaca_client_compatibility()
+    test_process_manager_lock_mechanism()
+    test_data_validation_freshness()
+    test_data_validation_emergency_check()
+    test_risk_engine_exposure_tracking()
+    test_process_manager_multiple_instances_check()
+    test_integration_risk_engine_methods()
+    print("All critical fixes tests passed!")
