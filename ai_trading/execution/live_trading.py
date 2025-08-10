@@ -10,25 +10,10 @@ import time
 from datetime import UTC, datetime
 
 # Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
+from ai_trading.logging import logger
 
-    logger = logging.getLogger(__name__)
-
-
-try:
-    from ai_trading.config import get_alpaca_config
-except ImportError:
-    # Fallback for development
-    def get_alpaca_config():
-        return {
-            "api_key": "test",
-            "secret_key": "test",
-            "base_url": "https://paper-api.alpaca.markets",
-            "paper": True,
-        }
+# Internal config import
+from ai_trading.config import get_alpaca_config
 
 
 class AlpacaExecutionEngine:

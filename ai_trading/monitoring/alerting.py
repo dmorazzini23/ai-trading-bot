@@ -20,12 +20,7 @@ from typing import Any
 import requests
 
 # Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
-
-    logger = logging.getLogger(__name__)
+from ai_trading.logging import logger
 
 
 class AlertSeverity(Enum):

@@ -32,32 +32,10 @@ from .performance_dashboard import (
     RealTimePnLTracker,
 )
 
-# Import existing components if available
-try:
-    from .metrics import MetricsCollector, PerformanceMonitor
-except ImportError:
-    # Create placeholder classes if not available
-    class MetricsCollector:
-        pass
-
-    class PerformanceMonitor:
-        pass
-
-
-try:
-    from .alerts import AlertType
-except ImportError:
-    # Create placeholder if not available
-    class AlertType:
-        pass
-
-
-try:
-    from .dashboard import RealtimeMetrics
-except ImportError:
-    # Create placeholder if not available
-    class RealtimeMetrics:
-        pass
+# Import internal monitoring components
+from .metrics import MetricsCollector, PerformanceMonitor
+from .alerts import AlertType
+from .dashboard import RealtimeMetrics
 
 
 # Export all monitoring classes

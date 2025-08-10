@@ -10,17 +10,8 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from enum import Enum
 
-# AI-AGENT-REF: Guard pandas import for test environments
-try:
-    import pandas as pd
-except ImportError:
-    # Create mock pandas for test environments
-    class MockPandas:
-        @staticmethod
-        def Timestamp(*args, **kwargs):
-            return datetime.now(UTC)
-
-    pd = MockPandas()
+# pandas is a hard dependency
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 

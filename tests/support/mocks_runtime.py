@@ -174,3 +174,94 @@ class MockMetric:
     
     def __getattr__(self, name):
         return lambda *args, **kwargs: self
+
+
+class MockIndex:
+    """Mock pandas Index for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockRolling:
+    """Mock pandas rolling for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockTradingClient:
+    """Mock Alpaca trading client for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockMarketOrderRequest:
+    """Mock Alpaca market order request for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockLimitOrderRequest:
+    """Mock Alpaca limit order request for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockGetOrdersRequest:
+    """Mock Alpaca get orders request for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockOrder:
+    """Mock Alpaca order for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockTradingStream:
+    """Mock Alpaca trading stream for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockStockHistoricalDataClient:
+    """Mock Alpaca stock historical data client for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockQuote:
+    """Mock Alpaca quote for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockStockBarsRequest:
+    """Mock Alpaca stock bars request for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockStockLatestQuoteRequest:
+    """Mock Alpaca stock latest quote request for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockTimeFrame:
+    """Mock Alpaca time frame for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
