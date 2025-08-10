@@ -1015,14 +1015,7 @@ except ImportError:
 
     Flask = MockFlask
 
-# AI-AGENT-REF: guard custom module imports for test environments
-try:
-    from ai_trading.alpaca_api import (  # type: ignore
-        alpaca_get,
-        start_trade_updates_stream,
-    )
-except Exception:  # pragma: no cover
-    from alpaca_api import alpaca_get, start_trade_updates_stream  # type: ignore
+from ai_trading.alpaca_api import alpaca_get, start_trade_updates_stream
 except ImportError:
     # AI-AGENT-REF: alpaca_api not available, create minimal fallbacks
     def alpaca_get(*args, **kwargs):

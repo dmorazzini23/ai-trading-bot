@@ -242,7 +242,7 @@ def get_current_price(symbol: str) -> float:
     """Return latest quote price with fallbacks."""
     price = 0.0
     try:
-        from alpaca_api import alpaca_get
+        from ai_trading.alpaca_api import alpaca_get
 
         data = alpaca_get(f"/v2/stocks/{symbol}/quotes/latest")
         price = float(data.get("ap", 0) or 0)
