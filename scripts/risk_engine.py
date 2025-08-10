@@ -54,7 +54,7 @@ import config
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
 
-from strategies import TradeSignal
+from ai_trading.strategies.base import StrategySignal as TradeSignal
 from ai_trading.utils.base import get_phase_logger
 
 logger = get_phase_logger(__name__, "RISK_CHECK")

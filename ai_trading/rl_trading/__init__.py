@@ -13,7 +13,10 @@ except Exception:  # pragma: no cover - optional dependency
     PPO = None  # type: ignore
     DummyVecEnv = None  # type: ignore
 
-from strategies.base import TradeSignal
+from ai_trading.strategies.base import StrategySignal
+
+# Type alias for backward compatibility
+TradeSignal = StrategySignal
 
 logger = logging.getLogger(__name__)
 

@@ -399,7 +399,7 @@ python risk_engine.py --check-limits
 
 ```python
 # strategies/custom_strategy.py
-from strategies.base import BaseStrategy
+from ai_trading.strategies.base import BaseStrategy
 
 class CustomMomentumStrategy(BaseStrategy):
     def __init__(self, rsi_period=14, rsi_oversold=30, rsi_overbought=70):

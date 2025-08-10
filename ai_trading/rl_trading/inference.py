@@ -10,7 +10,10 @@ from dataclasses import dataclass, asdict
 
 from . import RLAgent
 from .env import ActionSpaceConfig, RewardConfig
-from strategies.base import TradeSignal
+from ai_trading.strategies.base import StrategySignal
+
+# Type alias for backward compatibility  
+TradeSignal = StrategySignal
 
 logger = logging.getLogger(__name__)
 
