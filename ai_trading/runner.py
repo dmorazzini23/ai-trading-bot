@@ -89,8 +89,9 @@ def run_cycle() -> None:
             from ai_trading.core.bot_engine import _maybe_warm_cache
             if hasattr(state, "ctx"):
                 _maybe_warm_cache(state.ctx)  # best-effort; ignores if disabled or already warmed
-        except Exception:
-            pass
+        except Exception as e:
+            # Cache warming failed - log warning but continue execution
+            logger.warning("Failed to warm cache during state setup: %s", e)
         
         # Execute the trading cycle
         run_all_trades_worker(state, None)

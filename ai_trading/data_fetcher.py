@@ -384,9 +384,9 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
             if result.tzinfo is None:
                 result = result.replace(tzinfo=timezone.utc)
             return result
-    except ImportError:
-        # Handle mock pandas case
-        pass
+    except ImportError as e:
+        # pandas_real not available in test environment - log and continue
+        logger.debug("pandas_real not available: %s", e)
 
     if isinstance(dt, datetime):
         logger.debug("ensure_datetime received datetime %r", dt)
@@ -421,8 +421,9 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
             if parsed.tzinfo is None:
                 parsed = parsed.replace(tzinfo=timezone.utc)
             return parsed
-        except ValueError:
-            pass
+        except ValueError as e:
+            # Date parsing failed with this format, try next format
+            logger.debug("Date parsing failed for %r with format %s: %s", value, fmt, e)
 
         for fmt in formats[1:]:
             try:

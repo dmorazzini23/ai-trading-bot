@@ -14,6 +14,8 @@ from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 try:
     import numpy as np
     HAS_NUMPY = True
@@ -62,9 +64,9 @@ def set_random_seeds(seed: int = 42) -> None:
     try:
         import lightgbm as lgb
         # LightGBM determinism is handled via parameters
-        pass
+        logger.debug("LightGBM available for deterministic training")
     except ImportError:
-        pass
+        logger.debug("LightGBM not available, skipping determinism setup")
     
     # Set environment variables for additional determinism
     os.environ['PYTHONHASHSEED'] = str(seed)

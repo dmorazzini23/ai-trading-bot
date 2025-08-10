@@ -301,8 +301,9 @@ def prepare_indicators(data, ticker: str | None = None) -> Optional[Any]:
     if cache_path:
         try:
             data.to_parquet(cache_path, engine="pyarrow")
-        except OSError:
-            pass
+        except OSError as e:
+            # Cache write failed - log but continue execution
+            logger.warning("Failed to cache indicator data to %s: %s", cache_path, e)
 
     # Additional indicators can be added here using similar defensive checks
     return data
