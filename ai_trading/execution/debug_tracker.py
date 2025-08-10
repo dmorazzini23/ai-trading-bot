@@ -228,9 +228,11 @@ class ExecutionDebugTracker:
             ]:
                 # Log only key phases in normal mode (but not if already logged in verbose mode)
                 self.logger.info(f"EXEC_EVENT_{phase.value.upper()}", extra=log_data)
-        except (ValueError, TypeError, AttributeError):
+        except (ValueError, TypeError, AttributeError) as e:
             # AI-AGENT-REF: Prevent logging errors from cascading
-            pass  # Silently ignore logging errors to prevent deadlock
+            self.logger.exception(
+                "debug_tracker: logging error during execution event", exc_info=e
+            )
 
     def log_order_result(
         self,
@@ -293,9 +295,11 @@ class ExecutionDebugTracker:
                         "message": "Attempted to log result for unknown correlation ID",
                     },
                 )
-        except (ValueError, TypeError, AttributeError):
+        except (ValueError, TypeError, AttributeError) as e:
             # AI-AGENT-REF: Prevent logging errors from cascading
-            pass
+            self.logger.exception(
+                "debug_tracker: logging error during order result", exc_info=e
+            )
 
     def log_position_update(
         self,

@@ -89,8 +89,11 @@ class AlignedClock:
             if self.exchange in ("NYSE", "NASDAQ"):
                 exchange_tz = pytz.timezone("America/New_York")
                 return utc_now.astimezone(exchange_tz)
-        except ImportError:
-            pass
+        except ImportError as e:
+            logger = logging.getLogger(__name__)
+            logger.exception(
+                "aligned_clock: pytz import failed, falling back to UTC", exc_info=e
+            )
 
         # Final fallback to UTC
         return utc_now

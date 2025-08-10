@@ -122,9 +122,12 @@ def get_session():
             if _session is not None:
                 try:
                     _session.close()
-                except (AttributeError, RuntimeError):
+                except (AttributeError, RuntimeError) as e:
                     # Ignore session cleanup errors during error handling
-                    pass
+                    logger.exception(
+                        "data_fetcher: session cleanup failed during error handling",
+                        exc_info=e,
+                    )
                 _session = None
             raise
     return _session
