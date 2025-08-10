@@ -89,6 +89,9 @@ test = [
 optimization = [
   "numba>=0.57.0",
 ]
+visualization = [
+  "matplotlib>=3.5.0",
+]
 
 [tool.ruff]
 exclude = ["tests/**/*.py"]  # Allow print in tests
