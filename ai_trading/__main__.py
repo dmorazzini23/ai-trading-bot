@@ -22,8 +22,9 @@ def run_trade():
     from ai_trading import runner
     try:
         runner.run_cycle()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("Trade execution failed: %s", e, exc_info=True)
+        sys.exit(1)
 
 def run_backtest():
     """Entry point for ai-backtest command."""
@@ -42,8 +43,9 @@ def run_backtest():
     from ai_trading import runner
     try:
         runner.run_cycle()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("Backtest execution failed: %s", e, exc_info=True)
+        sys.exit(1)
 
 def run_healthcheck():
     """Entry point for ai-health command."""
@@ -61,8 +63,9 @@ def run_healthcheck():
     from ai_trading.health_monitor import run_health_check
     try:
         run_health_check()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("Health check failed: %s", e, exc_info=True)
+        sys.exit(1)
 
 def main() -> None:
     """Default main entry point."""
@@ -70,8 +73,9 @@ def main() -> None:
     from ai_trading import runner
     try:
         runner.run_cycle()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("Main execution failed: %s", e, exc_info=True)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

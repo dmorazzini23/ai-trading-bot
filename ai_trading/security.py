@@ -220,6 +220,7 @@ class SecureConfig:
             base64.urlsafe_b64decode(value.encode())
             return True
         except Exception:
+            # Any decoding error means it's not a valid token
             return False
     
     def mask_sensitive_data(self, data: Union[str, Dict, List]) -> Union[str, Dict, List]:

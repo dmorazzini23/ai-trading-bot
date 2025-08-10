@@ -100,6 +100,7 @@ def get_session():
                 try:
                     _session.close()
                 except Exception:
+                    # Ignore session cleanup errors during error handling
                     pass
                 _session = None
             raise
