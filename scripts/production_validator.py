@@ -840,7 +840,7 @@ class ProductionValidator:
     def _test_reporting_system(self) -> float:
         """Test reporting system functionality."""
         try:
-            import metrics_logger
+from ai_trading.telemetry import metrics_logger
             return 85
         except ImportError:
             return 30

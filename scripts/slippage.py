@@ -1,6 +1,5 @@
 import logging
-
-from metrics_logger import log_metrics
+from ai_trading.telemetry.metrics_logger import log_metrics
 from validate_env import settings
 
 logger = logging.getLogger(__name__)

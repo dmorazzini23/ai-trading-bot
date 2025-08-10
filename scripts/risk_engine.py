@@ -51,7 +51,7 @@ except ImportError:
     pd = MockPandas()
 
 import config
-import metrics_logger
+from ai_trading.telemetry import metrics_logger
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
 from ai_trading.strategies.base import StrategySignal as TradeSignal

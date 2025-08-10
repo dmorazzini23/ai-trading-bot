@@ -22,7 +22,7 @@ except ImportError:
     np = None
 
 try:
-    import metrics_logger
+from ai_trading.telemetry import metrics_logger
 except ImportError:
     # Mock metrics_logger for testing
     class MockMetricsLogger:
