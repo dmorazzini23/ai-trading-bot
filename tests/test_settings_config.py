@@ -14,7 +14,13 @@ def test_shadow_mode_bypasses_validation():
     s = Settings(shadow_mode=True)
     s.require_alpaca_or_raise()  # should not raise
 
-def test_missing_creds_raises():
+def test_missing_creds_raises(monkeypatch):
+    # Clear environment variables to ensure test isolation
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    monkeypatch.delenv("APCA_API_KEY_ID", raising=False)
+    monkeypatch.delenv("APCA_API_SECRET_KEY", raising=False)
+    
     s = Settings(shadow_mode=False, alpaca_api_key=None, alpaca_secret_key=None)
     with pytest.raises(RuntimeError):
         s.require_alpaca_or_raise()

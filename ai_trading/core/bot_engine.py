@@ -234,11 +234,11 @@ MIN_CYCLE = config.SCHEDULER_SLEEP_SECONDS
 
 try:
     # Only import config module, don't validate at import time
-    from ai_trading import config
+    from ai_trading.config.settings import get_settings
 
-    logger.info("Config module loaded, validation deferred to runtime")
+    logger.info("Config settings loaded, validation deferred to runtime")
 except Exception as e:
-    logger.warning("Config module import failed: %s", e)
+    logger.warning("Config settings import failed: %s", e)
 
 # Provide a no-op ``profile`` decorator when line_profiler is not active.
 try:
@@ -539,7 +539,7 @@ except ImportError:
 
     random.seed(SEED)
 
-_DEFAULT_FEED = config.ALPACA_DATA_FEED or "iex"
+_DEFAULT_FEED = get_settings().alpaca_data_feed or "iex"
 
 # Ensure numpy.NaN exists for pandas_ta compatibility
 # AI-AGENT-REF: guard numpy.NaN assignment for test environments
@@ -1043,7 +1043,7 @@ except ImportError:
 
 
 # Use base URL from configuration
-ALPACA_BASE_URL = config.ALPACA_BASE_URL
+ALPACA_BASE_URL = get_settings().alpaca_base_url
 import pickle
 
 # Alpaca data client imports - conditional lazy loading based on availability
@@ -1183,19 +1183,17 @@ try:
 except ImportError:
     retrain_meta_learner = None
 
-ALPACA_API_KEY = getattr(config, "ALPACA_API_KEY", None)
-ALPACA_SECRET_KEY = getattr(config, "ALPACA_SECRET_KEY", None)
+ALPACA_API_KEY = get_settings().alpaca_api_key
+ALPACA_SECRET_KEY = get_settings().alpaca_secret_key
 ALPACA_PAPER = getattr(config, "ALPACA_PAPER", None)
 validate_alpaca_credentials = getattr(config, "validate_alpaca_credentials", None)
-CONFIG_NEWS_API_KEY = getattr(config, "NEWS_API_KEY", None)
+CONFIG_NEWS_API_KEY = get_settings().news_api_key
 # Support new sentiment API configuration with backwards compatibility
 CONFIG_SENTIMENT_API_KEY = (
-    getattr(config, "SENTIMENT_API_KEY", None) or CONFIG_NEWS_API_KEY
+    get_settings().sentiment_api_key or CONFIG_NEWS_API_KEY
 )
-CONFIG_SENTIMENT_API_URL = getattr(
-    config, "SENTIMENT_API_URL", "https://newsapi.org/v2/everything"
-)
-FINNHUB_API_KEY = getattr(config, "FINNHUB_API_KEY", None)
+CONFIG_SENTIMENT_API_URL = get_settings().sentiment_api_url
+FINNHUB_API_KEY = get_settings().finnhub_api_key
 BOT_MODE_ENV = getattr(config, "BOT_MODE", BOT_MODE)
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
 
@@ -2867,8 +2865,8 @@ class DataFetcher:
                         raise
                 return self._daily_cache[symbol]
 
-        api_key = config.get_env("ALPACA_API_KEY")
-        api_secret = config.get_env("ALPACA_SECRET_KEY")
+        api_key = get_settings().alpaca_api_key
+        api_secret = get_settings().alpaca_secret_key
         if not api_key or not api_secret:
             logger.error(f"Missing Alpaca credentials for {symbol}")
             return None
@@ -3007,8 +3005,8 @@ class DataFetcher:
             except Exception as exc:
                 logger.exception("bot.py unexpected", exc_info=exc)
                 raise
-        api_key = config.get_env("ALPACA_API_KEY")
-        api_secret = config.get_env("ALPACA_SECRET_KEY")
+        api_key = get_settings().alpaca_api_key
+        api_secret = get_settings().alpaca_secret_key
         if not api_key or not api_secret:
             raise RuntimeError(
                 "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
@@ -3213,8 +3211,8 @@ class DataFetcher:
 def prefetch_daily_data(
     symbols: list[str], start_date: date, end_date: date
 ) -> dict[str, pd.DataFrame]:
-    alpaca_key = config.get_env("ALPACA_API_KEY")
-    alpaca_secret = config.get_env("ALPACA_SECRET_KEY")
+    alpaca_key = get_settings().alpaca_api_key
+    alpaca_secret = get_settings().alpaca_secret_key
     if not alpaca_key or not alpaca_secret:
         raise RuntimeError(
             "ALPACA_API_KEY and ALPACA_SECRET_KEY must be set for data fetching"
@@ -4152,7 +4150,7 @@ def get_strategies():
 # This prevents crashes during import when environment variables are missing
 API_KEY = ALPACA_API_KEY
 API_SECRET = ALPACA_SECRET_KEY
-BASE_URL = config.ALPACA_BASE_URL
+BASE_URL = get_settings().alpaca_base_url
 paper = ALPACA_PAPER
 
 # AI-AGENT-REF: Remove import-time credential validation - moved to runtime

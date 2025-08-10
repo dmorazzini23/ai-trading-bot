@@ -18,7 +18,6 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
 
     logging.getLogger(__name__).warning("Running under unsupported Python version")
 
-from ai_trading import config
 from ai_trading.config.settings import get_settings
 from ai_trading.market import cache as mcache
 
@@ -49,12 +48,14 @@ except Exception:  # pragma: no cover
     _MET_REQS = _Noop()
     _MET_LAT = _Noop()
 
-FINNHUB_API_KEY = config.FINNHUB_API_KEY
-ALPACA_API_KEY = config.ALPACA_API_KEY
-ALPACA_SECRET_KEY = config.ALPACA_SECRET_KEY
-ALPACA_BASE_URL = config.ALPACA_BASE_URL
-ALPACA_DATA_FEED = config.ALPACA_DATA_FEED
-HALT_FLAG_PATH = config.HALT_FLAG_PATH
+S = get_settings()
+
+FINNHUB_API_KEY = S.finnhub_api_key
+ALPACA_API_KEY = S.alpaca_api_key
+ALPACA_SECRET_KEY = S.alpaca_secret_key
+ALPACA_BASE_URL = S.alpaca_base_url
+ALPACA_DATA_FEED = S.alpaca_data_feed or "iex"
+HALT_FLAG_PATH = S.halt_flag_path or "/var/run/ai-trading.HALT"
 
 try:
     from alpaca.data.historical import StockHistoricalDataClient
@@ -86,7 +87,10 @@ def _mask_headers(headers: dict[str, Any]) -> dict[str, Any]:
         if isinstance(v, str) and any(
             x in k.lower() for x in ("key", "token", "secret")
         ):
-            masked[k] = config.mask_secret(v)
+            from ai_trading.config.settings import get_settings
+            S = get_settings()
+            # Use proper secret masking utility if available
+            masked[k] = "***MASKED***" if v else None
         else:
             masked[k] = v
     return masked
@@ -278,7 +282,7 @@ from tenacity import (
 )
 
 # Refresh environment in case this module is executed as a script
-config.reload_env()
+# Note: config module is no longer imported; using settings instead
 
 # In-memory minute bar cache to avoid unnecessary API calls
 _MINUTE_CACHE: dict[str, tuple[pd.DataFrame, pd.Timestamp]] = {}

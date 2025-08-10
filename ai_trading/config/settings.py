@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     alpaca_base_url: str | None = Field(
         None, validation_alias=AliasChoices("ALPACA_BASE_URL", "APCA_API_BASE_URL")
     )
+    # Additional settings used by runtime
+    alpaca_data_feed: str | None = Field(None, env="ALPACA_DATA_FEED")
+    finnhub_api_key: str | None = Field(None, env="FINNHUB_API_KEY")
+    halt_flag_path: str | None = Field(None, env="HALT_FLAG_PATH")
 
     # Webhook secret for API security
     webhook_secret: str | None = Field(None, env="WEBHOOK_SECRET")
@@ -120,21 +124,7 @@ class Settings(BaseSettings):
     def effective_prediction_workers(self, cpu_count: int) -> int:
         return (self.prediction_workers or 0) or max(2, min(4, cpu_count or 2))
 
-    # Uppercase property aliases for main.py compatibility
-    @property
-    def WEBHOOK_SECRET(self) -> str | None:
-        """Uppercase alias for webhook_secret."""
-        return self.webhook_secret
-
-    @property
-    def ALPACA_API_KEY(self) -> str | None:
-        """Uppercase alias for alpaca_api_key."""
-        return self.alpaca_api_key
-
-    @property
-    def ALPACA_SECRET_KEY(self) -> str | None:
-        """Uppercase alias for alpaca_secret_key."""
-        return self.alpaca_secret_key
+    # NOTE: Intentionally no uppercase alias properties; callers should use lower-case fields via get_settings().
 
 
 @functools.lru_cache(maxsize=1)
