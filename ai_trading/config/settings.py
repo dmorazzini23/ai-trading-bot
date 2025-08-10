@@ -38,6 +38,28 @@ class Settings(BaseSettings):
     finnhub_api_key: str | None = Field(None, env="FINNHUB_API_KEY")
     halt_flag_path: str | None = Field(None, env="HALT_FLAG_PATH")
 
+    # Bot engine environment variables
+    disaster_dd_limit: float = Field(0.2, env="DISASTER_DD_LIMIT")
+    model_path: str = Field("meta_model.pkl", env="MODEL_PATH")
+    model_rf_path: str = Field("model_rf.pkl", env="MODEL_RF_PATH")
+    model_xgb_path: str = Field("model_xgb.pkl", env="MODEL_XGB_PATH")
+    model_lgb_path: str = Field("model_lgb.pkl", env="MODEL_LGB_PATH")
+    max_portfolio_positions: int = Field(20, env="MAX_PORTFOLIO_POSITIONS")
+    sector_exposure_cap: float = Field(0.4, env="SECTOR_EXPOSURE_CAP")
+    max_open_positions: int = Field(10, env="MAX_OPEN_POSITIONS")
+    weekly_drawdown_limit: float = Field(0.15, env="WEEKLY_DRAWDOWN_LIMIT")
+    volume_threshold: int = Field(50000, env="VOLUME_THRESHOLD")
+    finnhub_rpm: int = Field(60, env="FINNHUB_RPM")
+    trade_cooldown_min: int = Field(5, env="TRADE_COOLDOWN_MIN")
+    max_trades_per_hour: int = Field(10, env="MAX_TRADES_PER_HOUR")
+    max_trades_per_day: int = Field(50, env="MAX_TRADES_PER_DAY")
+    minute_cache_ttl: int = Field(60, env="MINUTE_CACHE_TTL")
+    healthcheck_port: int = Field(8080, env="HEALTHCHECK_PORT")
+
+    # Rebalancer environment variables
+    rebalance_interval_min: int = Field(10, env="REBALANCE_INTERVAL_MIN")
+    rebalance_sleep_seconds: int = Field(600, env="REBALANCE_SLEEP_SECONDS")
+
     # Webhook secret for API security
     webhook_secret: str | None = Field(None, env="WEBHOOK_SECRET")
 

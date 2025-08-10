@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ai_trading import config
+from ai_trading.config import get_settings
 from ai_trading.portfolio import compute_portfolio_weights
 
 
@@ -72,7 +73,8 @@ else:
     else:
         logger.info("Portfolio-first features disabled")
 
-REBALANCE_INTERVAL_MIN = int(config.get_env("REBALANCE_INTERVAL_MIN", "10"))
+S = get_settings()
+REBALANCE_INTERVAL_MIN = S.rebalance_interval_min
 
 _last_rebalance = datetime.now(UTC)
 
@@ -945,7 +947,7 @@ def start_rebalancer(ctx) -> threading.Thread:
             except Exception as exc:  # pragma: no cover - background errors
                 logger.error("Rebalancer loop error: %s", exc)
             # AI-AGENT-REF: configurable sleep interval, shorter for tests
-            sleep_interval = int(config.get_env("REBALANCE_SLEEP_SECONDS", "600"))
+            sleep_interval = S.rebalance_sleep_seconds
             # Detect test environment and use shorter interval
             import os
 
