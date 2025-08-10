@@ -7,17 +7,19 @@ import time
 from typing import Any, Optional, List
 from functools import lru_cache
 
+logger = logging.getLogger(__name__)
+
 # Core dependencies with graceful error handling
 try:
     import numpy as np
 except ImportError:
-    print("WARNING: numpy not available, some features will be disabled")
+    logger.warning("numpy not available, some features will be disabled")
     np = None
 
 try:
     import pandas as pd
 except ImportError:
-    print("WARNING: pandas not available, some features will be disabled")
+    logger.warning("pandas not available, some features will be disabled")
     # Import the mock pandas from utils
     import sys
     import os
@@ -62,7 +64,7 @@ except ImportError:  # pragma: no cover - optional dependency
 try:
     from ai_trading.indicators import rsi, atr, mean_reversion_zscore
 except ImportError:
-    print("WARNING: indicators module not available, some features will be disabled")
+    logger.warning("indicators module not available, some features will be disabled")
     rsi = atr = mean_reversion_zscore = None
 
 # Cache the last computed signal matrix to avoid recomputation

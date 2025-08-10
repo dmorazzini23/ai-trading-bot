@@ -1,6 +1,11 @@
 repos:
   - repo: local
     hooks:
+      - id: repo-guard
+        name: repo-guard
+        entry: tools/ci/guard.sh
+        language: system
+        pass_filenames: false
       - id: forbid-legacy-trade-execution-import
         name: Forbid 'trade_execution' imports
         entry: bash -c "! grep -rn \"^(from|import)\\s\\+trade_execution\\b\" --include=\"*.py\" ."

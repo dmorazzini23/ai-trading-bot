@@ -517,7 +517,7 @@ def console_alert_callback(alert: Dict[str, Any]):
     severity = alert["severity"].upper()
     message = alert["message"]
     timestamp = alert["timestamp"]
-    print(f"[{timestamp}] {severity}: {message}")
+    logger.info(f"[{timestamp}] {severity}: {message}")
 
 
 def file_alert_callback(alert: Dict[str, Any]):

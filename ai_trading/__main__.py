@@ -1,6 +1,9 @@
 import sys
 import argparse
+import logging
 from ai_trading.env import ensure_dotenv_loaded
+
+logger = logging.getLogger(__name__)
 
 def run_trade():
     """Entry point for ai-trade command."""
@@ -13,7 +16,7 @@ def run_trade():
     args = parser.parse_args()
     
     if args.dry_run:
-        print("AI Trade: Dry run mode - config loaded successfully, exiting gracefully")
+        logger.info("AI Trade: Dry run mode - config loaded successfully, exiting gracefully")
         return
     
     from ai_trading import runner
@@ -33,7 +36,7 @@ def run_backtest():
     args = parser.parse_args()
     
     if args.dry_run:
-        print("AI Backtest: Dry run mode - config loaded successfully, exiting gracefully")
+        logger.info("AI Backtest: Dry run mode - config loaded successfully, exiting gracefully")
         return
     
     from ai_trading import runner
@@ -52,7 +55,7 @@ def run_healthcheck():
     args = parser.parse_args()
     
     if args.dry_run:
-        print("AI Health: Dry run mode - config loaded successfully, exiting gracefully")
+        logger.info("AI Health: Dry run mode - config loaded successfully, exiting gracefully")
         return
     
     from ai_trading.health_monitor import run_health_check
