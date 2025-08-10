@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import pandas as pd
 
 CANON = {
@@ -9,6 +10,7 @@ CANON = {
     "volume": {"volume", "v", "Volume", "VOL", "Vol"},
 }
 
+
 def standardize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     """
     Return a copy with canonical lowercase ['open','high','low','close','volume'] where possible.
@@ -18,7 +20,9 @@ def standardize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
         return df
     out = df.copy()
     # 1) lower-case column names when they are strings
-    out.columns = [str(c).strip() if not isinstance(c, str) else c.strip() for c in out.columns]
+    out.columns = [
+        str(c).strip() if not isinstance(c, str) else c.strip() for c in out.columns
+    ]
     lower_map = {}
     for canon, variants in CANON.items():
         for v in variants:

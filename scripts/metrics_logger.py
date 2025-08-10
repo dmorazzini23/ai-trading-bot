@@ -5,7 +5,8 @@ from __future__ import annotations
 import csv
 import logging
 import os
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 # AI-AGENT-REF: guard numpy import for test environments
 try:

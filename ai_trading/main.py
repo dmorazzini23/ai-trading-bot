@@ -1,36 +1,46 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from threading import Thread
-import threading
 
 # AI-AGENT-REF: Load .env BEFORE importing any heavy modules or Settings
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # AI-AGENT-REF: Import Settings AFTER .env is loaded to prevent import-time crashes
-from ai_trading.config import get_settings, Settings
 import ai_trading.app as app
+from ai_trading.config import Settings, get_settings
 from ai_trading.runner import run_cycle
-from ai_trading.utils import get_pid_on_port, get_free_port
+from ai_trading.utils import get_free_port, get_pid_on_port
 
 # AI-AGENT-REF: Import memory optimization and performance monitoring
 try:
     from memory_optimizer import get_memory_optimizer, optimize_memory
-    from performance_monitor import get_performance_monitor, start_performance_monitoring
+    from performance_monitor import (
+        get_performance_monitor,
+        start_performance_monitoring,
+    )
+
     PERFORMANCE_MONITORING_AVAILABLE = True
 except ImportError:
     # Fallback if modules not available
     PERFORMANCE_MONITORING_AVAILABLE = False
+
     def get_memory_optimizer():
         return None
+
     def optimize_memory():
         return {}
+
     def get_performance_monitor():
         return None
+
     def start_performance_monitoring():
         pass
+
 
 # AI-AGENT-REF: Create global config AFTER .env loading and Settings import
 config: Settings | None = None
@@ -45,28 +55,33 @@ def validate_environment() -> None:
         raise RuntimeError("WEBHOOK_SECRET is required")
     if not config.ALPACA_API_KEY or not config.ALPACA_SECRET_KEY:
         raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
-    
+
     # Check optional but important dependencies
     try:
         import alpaca_trade_api
+
         logger.debug("alpaca_trade_api dependency available")
     except ImportError:
-        logger.warning("alpaca_trade_api not available - some features may use fallbacks")
-    
+        logger.warning(
+            "alpaca_trade_api not available - some features may use fallbacks"
+        )
+
     try:
         import alpaca
+
         logger.debug("alpaca-py dependency available")
     except ImportError:
         logger.warning("alpaca-py not available - some features may be limited")
-    
+
     # Validate data directories exist
     import os
+
     data_dir = "data"
     if not os.path.exists(data_dir):
         logger.info("Creating data directory: %s", data_dir)
         os.makedirs(data_dir, exist_ok=True)
-    
-    logs_dir = "logs" 
+
+    logs_dir = "logs"
     if not os.path.exists(logs_dir):
         logger.info("Creating logs directory: %s", logs_dir)
         os.makedirs(logs_dir, exist_ok=True)
@@ -75,43 +90,44 @@ def validate_environment() -> None:
 def run_bot(*_a, **_k) -> int:
     """
     Main entry point for the trading bot.
-    
+
     Sets up logging, validates configuration, and starts the bot.
     """
     global config
-    
+
     # AI-AGENT-REF: Setup logging exactly once at startup
     from ai_trading.logging import setup_logging, validate_logging_setup
+
     logger = setup_logging(log_file="logs/bot.log", debug=False)
-    
+
     # Validate single handler setup to detect duplicates
     validation_result = validate_logging_setup()
-    if not validation_result['validation_passed']:
-        logger.error("Logging validation failed: %s", validation_result['issues'])
+    if not validation_result["validation_passed"]:
+        logger.error("Logging validation failed: %s", validation_result["issues"])
         # Don't fail startup, just warn about potential duplicates
-    
+
     logger.info("Application startup - logging configured once")
-    
+
     try:
         # Load configuration
         config = get_settings()
         validate_environment()
-        
+
         # Memory optimization and performance monitoring
         if PERFORMANCE_MONITORING_AVAILABLE:
             memory_optimizer = get_memory_optimizer()
             performance_monitor = get_performance_monitor()
-            
+
             if memory_optimizer and memory_optimizer.enable_monitoring:
                 logger.info("Memory optimization enabled")
-            
+
             if performance_monitor:
                 start_performance_monitoring()
                 logger.info("Performance monitoring started")
-        
+
         logger.info("Bot startup complete - entering main loop")
         return run_cycle()
-        
+
     except Exception as e:
         logger.error("Bot startup failed: %s", e, exc_info=True)
         return 1
@@ -123,7 +139,7 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
     max_attempts = 10
     original_port = port
 
-    for attempt in range(max_attempts):
+    for _attempt in range(max_attempts):
         if not get_pid_on_port(port):
             break
         port += 1
@@ -131,16 +147,18 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
         # If consecutive ports are all occupied, use get_free_port as fallback
         free_port = get_free_port()
         if free_port is None:
-            raise RuntimeError(f"Could not find available port starting from {original_port}")
+            raise RuntimeError(
+                f"Could not find available port starting from {original_port}"
+            )
         port = free_port
 
     application = app.create_app()
-    
+
     # AI-AGENT-REF: Signal ready immediately after Flask app creation for faster startup
     if ready_signal is not None:
         logger.info(f"Flask app created successfully, signaling ready on port {port}")
         ready_signal.set()
-    
+
     logger.info(f"Starting Flask app on 0.0.0.0:{port}")
     application.run(host="0.0.0.0", port=port)
 
@@ -182,7 +200,7 @@ def main() -> None:
         # Check for immediate startup errors first
         if api_error.wait(timeout=2):  # Quick check for startup errors
             raise RuntimeError(f"API failed to start: {api_exception}")
-        
+
         # Wait for API ready signal with reasonable timeout
         if not api_ready.wait(timeout=10):  # Reduced timeout for test environments
             # Check if thread is still alive - if not, there might be an unhandled exception
@@ -190,11 +208,15 @@ def main() -> None:
                 raise RuntimeError("API thread terminated unexpectedly during startup")
             else:
                 # Thread is alive but not ready - this is a true timeout
-                logger.warning("API startup taking longer than expected, proceeding with degraded functionality")
+                logger.warning(
+                    "API startup taking longer than expected, proceeding with degraded functionality"
+                )
                 # In test environments, we might want to continue without the API
                 test_mode = config.scheduler_iterations != 0
                 if not test_mode:
-                    raise RuntimeError("API startup timeout - trading cannot proceed without API ready")
+                    raise RuntimeError(
+                        "API startup timeout - trading cannot proceed without API ready"
+                    )
     except RuntimeError:
         # Re-raise runtime errors as-is
         raise
@@ -206,18 +228,20 @@ def main() -> None:
     interval = config.scheduler_sleep_seconds
     iterations = config.scheduler_iterations  # AI-AGENT-REF: test hook
     count = 0
-    
+
     # AI-AGENT-REF: Track memory optimization cycles
     memory_check_interval = 10  # Check every 10 cycles
-    
+
     while iterations <= 0 or count < iterations:
         try:
             # AI-AGENT-REF: Periodic memory optimization
             if PERFORMANCE_MONITORING_AVAILABLE and count % memory_check_interval == 0:
                 gc_result = optimize_memory()
-                if gc_result.get('objects_collected', 0) > 100:
-                    logger.info(f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects")
-            
+                if gc_result.get("objects_collected", 0) > 100:
+                    logger.info(
+                        f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects"
+                    )
+
             run_cycle()
         except Exception:  # pragma: no cover - log unexpected errors
             logger.exception("run_cycle failed")

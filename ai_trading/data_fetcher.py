@@ -6,14 +6,16 @@ import time
 import time as pytime
 import types
 from collections import deque
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Optional, Sequence, Union
+from collections.abc import Sequence
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, Union
 
 import requests  # AI-AGENT-REF: ensure requests import for function annotations
 
 # Do not hard fail when running under older Python versions in tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     import logging
+
     logging.getLogger(__name__).warning("Running under unsupported Python version")
 
 from ai_trading import config
@@ -23,15 +25,29 @@ from ai_trading.market import cache as mcache
 # Prometheus metrics (optional)
 try:
     from prometheus_client import Counter, Histogram
-    _MET_REQS = Counter("data_requests_total", "Data requests", ["source","timeframe","cache","mode"])
-    _MET_LAT  = Histogram("data_request_latency_seconds", "Data request latency", ["source","timeframe","cache","mode"])
+
+    _MET_REQS = Counter(
+        "data_requests_total", "Data requests", ["source", "timeframe", "cache", "mode"]
+    )
+    _MET_LAT = Histogram(
+        "data_request_latency_seconds",
+        "Data request latency",
+        ["source", "timeframe", "cache", "mode"],
+    )
 except Exception:  # pragma: no cover
+
     class _Noop:
-        def labels(self,*a,**k): return self
-        def inc(self,*a,**k): pass
-        def observe(self,*a,**k): pass
+        def labels(self, *a, **k):
+            return self
+
+        def inc(self, *a, **k):
+            pass
+
+        def observe(self, *a, **k):
+            pass
+
     _MET_REQS = _Noop()
-    _MET_LAT  = _Noop()
+    _MET_LAT = _Noop()
 
 FINNHUB_API_KEY = config.FINNHUB_API_KEY
 ALPACA_API_KEY = config.ALPACA_API_KEY
@@ -67,19 +83,26 @@ _DEFAULT_FEED = "iex"
 def _mask_headers(headers: dict[str, Any]) -> dict[str, Any]:
     masked = {}
     for k, v in headers.items():
-        if isinstance(v, str) and any(x in k.lower() for x in ("key", "token", "secret")):
+        if isinstance(v, str) and any(
+            x in k.lower() for x in ("key", "token", "secret")
+        ):
             masked[k] = config.mask_secret(v)
         else:
             masked[k] = v
     return masked
 
 
-def _log_http_request(method: str, url: str, params: dict[str, Any], headers: dict[str, Any]) -> None:
-    logger.debug("HTTP %s %s params=%s headers=%s", method, url, params, _mask_headers(headers))
+def _log_http_request(
+    method: str, url: str, params: dict[str, Any], headers: dict[str, Any]
+) -> None:
+    logger.debug(
+        "HTTP %s %s params=%s headers=%s", method, url, params, _mask_headers(headers)
+    )
 
 
 def _log_http_response(resp: requests.Response) -> None:
     logger.debug("HTTP_RESPONSE status=%s body=%s", resp.status_code, resp.text[:300])
+
 
 _rate_limit_lock = threading.Lock()
 
@@ -90,7 +113,7 @@ def get_session():
     if _session is None:
         try:
             _session = requests.Session()
-            _session.headers.update({'User-Agent': 'AI-Trading-Bot/1.0'})
+            _session.headers.update({"User-Agent": "AI-Trading-Bot/1.0"})
             # AI-AGENT-REF: Set reasonable timeouts to prevent hanging
             _session.timeout = (10, 30)  # (connect_timeout, read_timeout)
         except Exception as e:
@@ -122,11 +145,12 @@ def cleanup_session():
 
 # AI-AGENT-REF: Ensure session cleanup on module exit
 import atexit
+
 atexit.register(cleanup_session)
 try:
     import requests
-    from requests.exceptions import RequestException
     import urllib3
+    from requests.exceptions import RequestException
 except Exception as e:  # pragma: no cover - allow missing in test env
     logger.warning("Optional dependencies missing: %s", e)
     import types
@@ -139,7 +163,9 @@ except Exception as e:  # pragma: no cover - allow missing in test env
             HTTPError=Exception,
         ),
     )
-    urllib3 = types.SimpleNamespace(exceptions=types.SimpleNamespace(HTTPError=Exception))
+    urllib3 = types.SimpleNamespace(
+        exceptions=types.SimpleNamespace(HTTPError=Exception)
+    )
 from ai_trading.utils.base import ensure_utc, is_market_open, safe_to_datetime
 
 MINUTES_REQUIRED = 31
@@ -155,13 +181,19 @@ try:
     from finnhub import FinnhubAPIException
 except Exception:  # pragma: no cover - optional dependency
     finnhub = types.SimpleNamespace(Client=lambda *a, **k: None)
+
     class FinnhubAPIException(Exception):
         """Fallback exception with status code attribute."""
 
-        def __init__(self, *args, status_code=None, **kwargs) -> None:  # AI-AGENT-REF: flex init
-            code = status_code if status_code is not None else (args[0] if args else None)
+        def __init__(
+            self, *args, status_code=None, **kwargs
+        ) -> None:  # AI-AGENT-REF: flex init
+            code = (
+                status_code if status_code is not None else (args[0] if args else None)
+            )
             self.status_code = code
             super().__init__(f"FinnhubAPIException: {code}")
+
 
 # AI-AGENT-REF: guard pandas import for test environments
 try:
@@ -169,40 +201,59 @@ try:
 except ImportError:
     # AI-AGENT-REF: pandas not available, create minimal fallback
     from datetime import datetime
+
     class MockDataFrame:
         def __init__(self, *args, **kwargs):
             self.empty = True
+
         def __len__(self):
             return 0
+
         def head(self, *args, **kwargs):
             return self
+
         def tail(self, *args, **kwargs):
             return self
+
         def dropna(self, *args, **kwargs):
             return self
+
         def reset_index(self, *args, **kwargs):
             return self
+
         def set_index(self, *args, **kwargs):
             return self
+
         def sort_values(self, *args, **kwargs):
             return self
+
         def rename(self, *args, **kwargs):
             return self
+
         def iloc(self):
             return []
+
         def to_parquet(self, *args, **kwargs):
             pass
+
     class MockPandas:
         DataFrame = MockDataFrame
         Timestamp = datetime
+
         def read_csv(self, *args, **kwargs):
             return MockDataFrame()
+
         def concat(self, *args, **kwargs):
             return MockDataFrame()
+
         def read_parquet(self, *args, **kwargs):
             return MockDataFrame()
+
         def to_datetime(self, *args, **kwargs):
-            return datetime.now(timezone.utc)  # AI-AGENT-REF: timezone-aware for API compatibility
+            return datetime.now(
+                UTC
+            )  # AI-AGENT-REF: timezone-aware for API compatibility
+
     pd = MockPandas()
 
 try:
@@ -211,10 +262,17 @@ try:
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 except Exception:  # pragma: no cover - optional dependency
     APIError = Exception  # type: ignore
-    StockBarsRequest = lambda *a, **k: None
+    def StockBarsRequest(*a, **k):
+        return None
     TimeFrame = TimeFrameUnit = types.SimpleNamespace()
-from tenacity import (RetryError, retry, retry_if_exception_type,
-                      stop_after_attempt, wait_exponential, wait_random)
+from tenacity import (
+    RetryError,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+    wait_random,
+)
 
 # Refresh environment in case this module is executed as a script
 config.reload_env()
@@ -223,11 +281,7 @@ config.reload_env()
 _MINUTE_CACHE: dict[str, tuple[pd.DataFrame, pd.Timestamp]] = {}
 
 # AI-AGENT-REF: Cache performance monitoring
-_CACHE_STATS = {
-    "hits": 0,
-    "misses": 0,
-    "invalidations": 0
-}
+_CACHE_STATS = {"hits": 0, "misses": 0, "invalidations": 0}
 
 
 def get_cached_minute_timestamp(symbol: str) -> "pd.Timestamp | None":
@@ -256,8 +310,10 @@ def last_minute_bar_age_seconds(symbol: str) -> "int | None":
 def get_cache_stats() -> dict:
     """Get current cache statistics for monitoring and debugging."""
     total_requests = _CACHE_STATS["hits"] + _CACHE_STATS["misses"]
-    hit_ratio = (_CACHE_STATS["hits"] / total_requests * 100) if total_requests > 0 else 0
-    
+    hit_ratio = (
+        (_CACHE_STATS["hits"] / total_requests * 100) if total_requests > 0 else 0
+    )
+
     return {
         "cache_size": len(_MINUTE_CACHE),
         "cached_symbols": list(_MINUTE_CACHE.keys()),
@@ -270,19 +326,25 @@ def get_cache_stats() -> dict:
             {
                 "symbol": symbol,
                 "rows": len(df),
-                "last_updated": ts.isoformat() if ts else None
+                "last_updated": ts.isoformat() if ts else None,
             }
             for symbol, (df, ts) in _MINUTE_CACHE.items()
-        ]
+        ],
     }
 
 
-def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, feed: str = _DEFAULT_FEED) -> pd.DataFrame:
+def _fetch_bars(
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    timeframe: str,
+    feed: str = _DEFAULT_FEED,
+) -> pd.DataFrame:
     """Fetch raw bars from Alpaca with detailed logging."""
     url = f"https://data.alpaca.markets/v2/stocks/{symbol}/bars"
     params = {
-        "start": ensure_utc(start).isoformat().replace('+00:00', 'Z'),
-        "end": ensure_utc(end).isoformat().replace('+00:00', 'Z'),
+        "start": ensure_utc(start).isoformat().replace("+00:00", "Z"),
+        "end": ensure_utc(end).isoformat().replace("+00:00", "Z"),
         "timeframe": timeframe,
         "feed": feed,
     }
@@ -295,13 +357,21 @@ def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, fee
     for attempt in range(3):
         try:
             resp = requests.get(url, params=params, headers=headers, timeout=10)
-            if resp.status_code == 400 and "invalid feed" in resp.text.lower() and feed != "sip":
-                logger.warning("Alpaca invalid feed %s for %s; retrying with SIP", feed, symbol)
+            if (
+                resp.status_code == 400
+                and "invalid feed" in resp.text.lower()
+                and feed != "sip"
+            ):
+                logger.warning(
+                    "Alpaca invalid feed %s for %s; retrying with SIP", feed, symbol
+                )
                 params["feed"] = "sip"
                 resp = requests.get(url, params=params, headers=headers, timeout=10)
             break
         except requests.exceptions.RequestException as exc:
-            logger.warning("HTTP request failed %s/%s for %s: %s", attempt + 1, 3, symbol, exc)
+            logger.warning(
+                "HTTP request failed %s/%s for %s: %s", attempt + 1, 3, symbol, exc
+            )
             if attempt == 2:
                 logger.exception("HTTP request error for %s", symbol, exc_info=exc)
                 raise DataFetchException(symbol, "alpaca", url, str(exc)) from exc
@@ -323,7 +393,9 @@ def _fetch_bars(symbol: str, start: datetime, end: datetime, timeframe: str, fee
         logger.warning(
             "No bars returned for %s between %s and %s. "
             "This could indicate market holiday, API outage, or delisted symbol",
-            symbol, start.date(), end.date()
+            symbol,
+            start.date(),
+            end.date(),
         )
         # no new bars yet (e.g. today's bar before market close)
         # fallback: use yesterday's last bar or skip this symbol
@@ -373,16 +445,19 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
     # Handle pandas availability check
     try:
         import pandas as pd_real
-        if dt is pd_real.NaT or (isinstance(dt, pd_real.Timestamp) and pd_real.isna(dt)):
+
+        if dt is pd_real.NaT or (
+            isinstance(dt, pd_real.Timestamp) and pd_real.isna(dt)
+        ):
             logger.error("ensure_datetime received NaT", stack_info=True)
             raise ValueError("datetime value cannot be NaT")
-        
+
         if isinstance(dt, pd_real.Timestamp):
             logger.debug("ensure_datetime using pandas.Timestamp %r", dt)
             result = dt.to_pydatetime()
             # Ensure timezone-aware
             if result.tzinfo is None:
-                result = result.replace(tzinfo=timezone.utc)
+                result = result.replace(tzinfo=UTC)
             return result
     except ImportError as e:
         # pandas_real not available in test environment - log and continue
@@ -393,13 +468,13 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
         # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
         if dt.tzinfo is None:
             logger.debug("ensure_datetime converting naive datetime to UTC")
-            return dt.replace(tzinfo=timezone.utc)
+            return dt.replace(tzinfo=UTC)
         return dt
 
     if isinstance(dt, date):
         logger.debug("ensure_datetime converting date %r", dt)
         # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
-        return datetime.combine(dt, datetime.min.time()).replace(tzinfo=timezone.utc)
+        return datetime.combine(dt, datetime.min.time()).replace(tzinfo=UTC)
 
     if isinstance(dt, str):
         value = dt.strip()
@@ -419,7 +494,7 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
             logger.debug("ensure_datetime parsed %r via ISO", value)
             # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
             if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
+                parsed = parsed.replace(tzinfo=UTC)
             return parsed
         except ValueError as e:
             # Date parsing failed with this format, try next format
@@ -430,7 +505,7 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
                 parsed = datetime.strptime(value, fmt)
                 logger.debug("ensure_datetime parsed %r with %s", value, fmt)
                 # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
-                return parsed.replace(tzinfo=timezone.utc)
+                return parsed.replace(tzinfo=UTC)
             except ValueError:
                 continue
 
@@ -442,9 +517,7 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
         )
         raise ValueError(f"Invalid datetime string {value!r}; tried {formats}")
 
-    logger.error(
-        "ensure_datetime unsupported type: %r", dt, stack_info=True
-    )
+    logger.error("ensure_datetime unsupported type: %r", dt, stack_info=True)
     raise TypeError(f"Unsupported type for ensure_datetime: {type(dt)!r}")
 
 
@@ -485,7 +558,7 @@ class DataSourceEmpty(Exception):
 
 def get_last_available_bar(symbol: str) -> pd.DataFrame:
     """Return the most recent daily bar for ``symbol`` or empty DataFrame."""
-    end = datetime.now(timezone.utc).date()
+    end = datetime.now(UTC).date()
     start = end - timedelta(days=2)
     try:
         df = get_daily_df(symbol, start, end)
@@ -496,16 +569,15 @@ def get_last_available_bar(symbol: str) -> pd.DataFrame:
     return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
 
-
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
 def get_historical_data(
     symbol: str,
-    start_date: Union[str, date, datetime, pd.Timestamp],
-    end_date: Union[str, date, datetime, pd.Timestamp],
+    start_date: str | date | datetime | pd.Timestamp,
+    end_date: str | date | datetime | pd.Timestamp,
     timeframe: str,
     *,
     raise_on_empty: bool = False,
-    provider: Optional[str] = None,
+    provider: str | None = None,
     validate_data: bool = True,
 ) -> pd.DataFrame:
     """
@@ -532,7 +604,7 @@ def get_historical_data(
     timeframe : str
         Data frequency/timeframe:
         - '1MIN': 1-minute bars
-        - '5MIN': 5-minute bars  
+        - '5MIN': 5-minute bars
         - '15MIN': 15-minute bars
         - '1HOUR': 1-hour bars
         - '1DAY': Daily bars
@@ -556,7 +628,7 @@ def get_historical_data(
         - 'open' (float): Opening prices
         - 'high' (float): High prices
         - 'low' (float): Low prices
-        - 'close' (float): Closing prices  
+        - 'close' (float): Closing prices
         - 'volume' (int): Trading volume
         - Additional columns may include 'vwap', 'trade_count'
 
@@ -577,7 +649,7 @@ def get_historical_data(
     --------
     >>> from ai_trading.data_fetcher import get_historical_data
     >>> from datetime import datetime, timedelta
-    >>> 
+    >>>
     >>> # Get 30 days of hourly data
     >>> end_date = datetime.now(timezone.utc)  # AI-AGENT-REF: timezone-aware for API compatibility
     >>> start_date = end_date - timedelta(days=30)
@@ -593,7 +665,7 @@ def get_historical_data(
 
     >>> # Handle missing data gracefully
     >>> try:
-    ...     data = get_historical_data('INVALID', '2024-01-01', '2024-01-02', '1DAY', 
+    ...     data = get_historical_data('INVALID', '2024-01-01', '2024-01-02', '1DAY',
     ...                              raise_on_empty=True)
     ... except DataFetchError:
     ...     logging.info("No data available for symbol")
@@ -601,7 +673,7 @@ def get_historical_data(
     Data Quality Validation
     ----------------------
     When validate_data=True, the function performs:
-    
+
     1. **Completeness Check**: Ensures no missing time periods
     2. **Price Validation**: Checks for unrealistic price movements
     3. **Volume Validation**: Verifies non-negative volume values
@@ -641,16 +713,14 @@ def get_historical_data(
         raise ValueError("start_date and end_date must not be None")
 
     for name, val in (("start_date", start_date), ("end_date", end_date)):
-        if not isinstance(val, (date, datetime, str, pd.Timestamp)):
+        if not isinstance(val, date | datetime | str | pd.Timestamp):
             logger.error(
                 "get_historical_data invalid %s type: %r",
                 name,
                 type(val),
                 stack_info=True,
             )
-            raise TypeError(
-                f"{name} must be date, datetime, pandas.Timestamp or str"
-            )
+            raise TypeError(f"{name} must be date, datetime, pandas.Timestamp or str")
 
     try:
         start_dt = pd.to_datetime(ensure_utc(ensure_datetime(start_date)))
@@ -693,12 +763,16 @@ def get_historical_data(
         bars = _fetch(_DEFAULT_FEED)
     except APIError as e:
         if "subscription does not permit" in str(e).lower() and _DEFAULT_FEED != "iex":
-            logger.warning("Subscription error for %s with feed %s: %s", symbol, _DEFAULT_FEED, e)
+            logger.warning(
+                "Subscription error for %s with feed %s: %s", symbol, _DEFAULT_FEED, e
+            )
             try:
                 bars = _fetch("iex")
             except APIError as iex_err:
                 logger.error("IEX fallback failed for %s: %s", symbol, iex_err)
-                raise DataFetchError(f"IEX fallback failed for {symbol}: {iex_err}") from iex_err
+                raise DataFetchError(
+                    f"IEX fallback failed for {symbol}: {iex_err}"
+                ) from iex_err
         else:
             raise
     except RetryError as e:
@@ -755,6 +829,7 @@ def get_historical_data(
     df = df.reset_index(drop=True)
     return df[["timestamp", "open", "high", "low", "close", "volume"]]
 
+
 def get_daily_df(
     symbol: str,
     start: date | datetime | pd.Timestamp | str,
@@ -771,32 +846,35 @@ def get_daily_df(
         raise ValueError("start and end must not be None")
 
     for name, val in (("start", start), ("end", end)):
-        if not isinstance(val, (date, datetime, str, pd.Timestamp)):
+        if not isinstance(val, date | datetime | str | pd.Timestamp):
             logger.error(
                 "get_daily_df invalid %s type: %r",
                 name,
                 type(val),
                 stack_info=True,
             )
-            raise TypeError(
-                f"{name} must be date, datetime, pandas.Timestamp or str"
-            )
+            raise TypeError(f"{name} must be date, datetime, pandas.Timestamp or str")
 
     start_dt = ensure_datetime(start)
     end_dt = ensure_datetime(end)
-    
+
     # --- caching layer ---
     settings = get_settings()
     tf_name = "1D"
-    start_s = str(start); end_s = str(end)
+    start_s = str(start)
+    end_s = str(end)
     df_cached = None
     if settings.data_cache_enable:
-        df_cached = mcache.get_mem(symbol, tf_name, start_s, end_s, settings.data_cache_ttl_seconds)
+        df_cached = mcache.get_mem(
+            symbol, tf_name, start_s, end_s, settings.data_cache_ttl_seconds
+        )
         if df_cached is not None:
             _MET_REQS.labels("cache", tf_name, "hit", "single").inc()
             return df_cached
         if settings.data_cache_disk_enable:
-            on_disk = mcache.get_disk(settings.data_cache_dir, symbol, tf_name, start_s, end_s)
+            on_disk = mcache.get_disk(
+                settings.data_cache_dir, symbol, tf_name, start_s, end_s
+            )
             if on_disk is not None:
                 mcache.put_mem(symbol, tf_name, start_s, end_s, on_disk)
                 _MET_REQS.labels("cache", tf_name, "hit_disk", "single").inc()
@@ -812,11 +890,11 @@ def get_daily_df(
         try:
             df = fh_fetcher.fetch(symbol, period="6mo", interval="1d")
         except Exception as fh_err:
-            logger.critical(
-                "Secondary provider failed for %s: %s", symbol, fh_err
-            )
+            logger.critical("Secondary provider failed for %s: %s", symbol, fh_err)
             raise DataSourceDownException(symbol) from fh_err
-    _MET_LAT.labels("alpaca", tf_name, "miss", "single").observe(time.perf_counter() - t0)
+    _MET_LAT.labels("alpaca", tf_name, "miss", "single").observe(
+        time.perf_counter() - t0
+    )
     _MET_REQS.labels("alpaca", tf_name, "miss", "single").inc()
     try:
         if isinstance(df.columns, pd.MultiIndex):
@@ -831,7 +909,9 @@ def get_daily_df(
             )
             return pd.DataFrame()
 
-        logger.debug("%s raw daily timestamps: %s", symbol, list(df["timestamp"].head()))
+        logger.debug(
+            "%s raw daily timestamps: %s", symbol, list(df["timestamp"].head())
+        )
         try:
             idx = safe_to_datetime(df["timestamp"], context=f"{symbol} daily")
         except ValueError as e:
@@ -848,7 +928,9 @@ def get_daily_df(
             mcache.put_mem(symbol, tf_name, start_s, end_s, df)
             if settings.data_cache_disk_enable:
                 try:
-                    mcache.put_disk(settings.data_cache_dir, symbol, tf_name, start_s, end_s, df)
+                    mcache.put_disk(
+                        settings.data_cache_dir, symbol, tf_name, start_s, end_s, df
+                    )
                 except (OSError, PermissionError, ValueError) as e:
                     logger.warning(f"Failed to cache data for {symbol}: {e}")
                     # Continue execution - caching is not critical
@@ -858,15 +940,25 @@ def get_daily_df(
             "Missing OHLCV columns for %s; returning empty DataFrame",
             symbol,
         )
-        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        return pd.DataFrame(
+            columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
     except Exception as e:
-        snippet = df.head().to_dict() if "df" in locals() and isinstance(df, pd.DataFrame) else "N/A"
-        logger.error("get_daily_df processing error for %s: %s", symbol, e, exc_info=True)
+        snippet = (
+            df.head().to_dict()
+            if "df" in locals() and isinstance(df, pd.DataFrame)
+            else "N/A"
+        )
+        logger.error(
+            "get_daily_df processing error for %s: %s", symbol, e, exc_info=True
+        )
         logger.debug("get_daily_df raw response for %s: %s", symbol, snippet)
         return None
 
 
-def fetch_daily_data_async(symbols: Sequence[str], start, end) -> dict[str, pd.DataFrame]:
+def fetch_daily_data_async(
+    symbols: Sequence[str], start, end
+) -> dict[str, pd.DataFrame]:
     """Fetch daily data for multiple ``symbols`` concurrently."""
     results: dict[str, pd.DataFrame] = {}
 
@@ -896,8 +988,8 @@ def get_minute_df(
     symbol: str,
     start_date: date | datetime | pd.Timestamp | str,
     end_date: date | datetime | pd.Timestamp | str,
-    limit: Optional[int] = None,  # AI-AGENT-REF: Add missing limit parameter
-) -> Optional[pd.DataFrame]:
+    limit: int | None = None,  # AI-AGENT-REF: Add missing limit parameter
+) -> pd.DataFrame | None:
     """Return minute-level OHLCV DataFrame for ``symbol``.
 
     Falls back to daily bars if minute data is unavailable.
@@ -939,16 +1031,14 @@ def get_minute_df(
         raise ValueError("start_date and end_date must not be None")
 
     for name, val in (("start_date", start_date), ("end_date", end_date)):
-        if not isinstance(val, (date, datetime, str, pd.Timestamp)):
+        if not isinstance(val, date | datetime | str | pd.Timestamp):
             logger.error(
                 "get_minute_df invalid %s type: %r",
                 name,
                 type(val),
                 stack_info=True,
             )
-            raise TypeError(
-                f"{name} must be date, datetime, pandas.Timestamp or str"
-            )
+            raise TypeError(f"{name} must be date, datetime, pandas.Timestamp or str")
 
     logger.debug(
         "get_minute_df converting dates start=%r (%s) end=%r (%s)",
@@ -976,7 +1066,7 @@ def get_minute_df(
         # AI-AGENT-REF: Return DataFrame with proper DatetimeIndex to prevent index mismatch
         return pd.DataFrame(
             columns=["open", "high", "low", "close", "volume"],
-            index=pd.DatetimeIndex([], tz=timezone.utc)
+            index=pd.DatetimeIndex([], tz=UTC),
         )
 
     start_dt = ensure_utc(start_date) - timedelta(minutes=1)
@@ -988,21 +1078,34 @@ def get_minute_df(
         df_cached, ts = cached
         if not df_cached.empty:
             # AI-AGENT-REF: Simplified cache validity logic - extend cache for better performance
-            cache_validity_minutes = 5  # Increase cache validity to 5 minutes for better hit ratio
+            cache_validity_minutes = (
+                5  # Increase cache validity to 5 minutes for better hit ratio
+            )
             cache_age = pd.Timestamp.now(tz="UTC") - ts
             cache_age_minutes = cache_age.total_seconds() / 60
-            
+
             if cache_age_minutes <= cache_validity_minutes:
                 _CACHE_STATS["hits"] += 1
                 logger.debug(
                     "MINUTE_CACHE_HIT",
                     extra={
-                        "symbol": symbol, 
+                        "symbol": symbol,
                         "cache_age_minutes": round(cache_age_minutes, 1),
                         "rows": len(df_cached),
                         "cache_size": len(_MINUTE_CACHE),
-                        "hit_ratio_pct": round((_CACHE_STATS["hits"] / (_CACHE_STATS["hits"] + _CACHE_STATS["misses"]) * 100), 1) if (_CACHE_STATS["hits"] + _CACHE_STATS["misses"]) > 0 else 0
-                    }
+                        "hit_ratio_pct": (
+                            round(
+                                (
+                                    _CACHE_STATS["hits"]
+                                    / (_CACHE_STATS["hits"] + _CACHE_STATS["misses"])
+                                    * 100
+                                ),
+                                1,
+                            )
+                            if (_CACHE_STATS["hits"] + _CACHE_STATS["misses"]) > 0
+                            else 0
+                        ),
+                    },
                 )
                 # AI-AGENT-REF: Filter to only return required columns to prevent shape mismatch
                 required = ["open", "high", "low", "close", "volume"]
@@ -1016,14 +1119,14 @@ def get_minute_df(
                     extra={
                         "symbol": symbol,
                         "cache_age_minutes": round(cache_age_minutes, 1),
-                        "validity_minutes": cache_validity_minutes
-                    }
+                        "validity_minutes": cache_validity_minutes,
+                    },
                 )
-    
+
     # Cache miss - will fetch new data
     _CACHE_STATS["misses"] += 1
 
-    alpaca_exc = finnhub_exc = yexc = None
+    alpaca_exc = finnhub_exc = None
     try:
         logger.debug("Trying data source: Alpaca")
         # AI-AGENT-REF: Reduce redundant logging - only log actual fallbacks
@@ -1055,12 +1158,11 @@ def get_minute_df(
         logger.debug("Falling back to Finnhub")
         try:
             logger.info("DATA_SOURCE_FALLBACK: trying %s", "Finnhub")
-            logger.debug(
-                "FETCH_FINNHUB_MINUTE_BARS: start", extra={"symbol": symbol}
-            )
+            logger.debug("FETCH_FINNHUB_MINUTE_BARS: start", extra={"symbol": symbol})
             df = fh_fetcher.fetch(symbol, period="1d", interval="1")
             logger.debug(
-                "FETCH_FINNHUB_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
+                "FETCH_FINNHUB_MINUTE_BARS: got %s bars",
+                len(df) if df is not None else 0,
             )
             required = ["open", "high", "low", "close", "volume"]
             missing = set(required) - set(df.columns)
@@ -1085,7 +1187,8 @@ def get_minute_df(
                     )
                     df = fetch_minute_yfinance(symbol)
                     logger.debug(
-                        "FETCH_YFINANCE_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
+                        "FETCH_YFINANCE_MINUTE_BARS: got %s bars",
+                        len(df) if df is not None else 0,
                     )
                     required = ["open", "high", "low", "close", "volume"]
                     missing = set(required) - set(df.columns)
@@ -1093,14 +1196,12 @@ def get_minute_df(
                         logger.error("get_minute_df missing columns %s", missing)
                         # AI-AGENT-REF: Return DataFrame with proper DatetimeIndex to prevent index mismatch
                         return pd.DataFrame(
-                            columns=required,
-                            index=pd.DatetimeIndex([], tz=timezone.utc)
+                            columns=required, index=pd.DatetimeIndex([], tz=UTC)
                         )
                     # Successfully fetched data from yfinance, return it
                     # AI-AGENT-REF: Filter to only return required columns while preserving index
                     return df[required].copy()
                 except Exception as exc:
-                    yexc = exc
                     logger.error("[DataFetcher] yfinance failed: %s", exc)
                     logger.error(
                         "DATA_SOURCE_RETRY_FINAL: alpaca failed=%s; finnhub failed=%s; yfinance failed=%s | last=%s",
@@ -1112,9 +1213,7 @@ def get_minute_df(
                     logger.debug("yfinance fetch error: %s", exc)
                     raise DataSourceDownException(symbol) from exc
             else:
-                logger.critical(
-                    "Secondary provider failed for %s: %s", symbol, fh_err
-                )
+                logger.critical("Secondary provider failed for %s: %s", symbol, fh_err)
                 raise DataSourceDownException(symbol) from fh_err
         except Exception as fh_err:
             finnhub_exc = fh_err
@@ -1128,7 +1227,8 @@ def get_minute_df(
                 )
                 df = fetch_minute_yfinance(symbol)
                 logger.debug(
-                    "FETCH_YFINANCE_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
+                    "FETCH_YFINANCE_MINUTE_BARS: got %s bars",
+                    len(df) if df is not None else 0,
                 )
                 required = ["open", "high", "low", "close", "volume"]
                 missing = set(required) - set(df.columns)
@@ -1136,14 +1236,12 @@ def get_minute_df(
                     logger.error("get_minute_df missing columns %s", missing)
                     # AI-AGENT-REF: Return DataFrame with proper DatetimeIndex to prevent index mismatch
                     return pd.DataFrame(
-                        columns=required,
-                        index=pd.DatetimeIndex([], tz=timezone.utc)
+                        columns=required, index=pd.DatetimeIndex([], tz=UTC)
                     )
                 # Successfully fetched data from yfinance, return it
                 # AI-AGENT-REF: Filter to only return required columns while preserving index
                 return df[required].copy()
             except Exception as exc:
-                yexc = exc
                 logger.error("[DataFetcher] yfinance failed: %s", exc)
                 logger.error(
                     "DATA_SOURCE_RETRY_FINAL: alpaca failed=%s; finnhub failed=%s; yfinance failed=%s | last=%s",
@@ -1160,43 +1258,53 @@ def get_minute_df(
     required_cols = {"open", "high", "low", "close", "volume"}
     missing = required_cols - set(df.columns)
     if missing:
-        logger.error("get_minute_df missing columns: %s", sorted(missing))  # AI-AGENT-REF: early validation
+        logger.error(
+            "get_minute_df missing columns: %s", sorted(missing)
+        )  # AI-AGENT-REF: early validation
         raise KeyError(f"missing columns: {sorted(missing)}")
     if len(df) < MIN_EXPECTED_ROWS:
-        logger.critical(
-            "INCOMPLETE_DATA", extra={"symbol": symbol, "rows": len(df)}
-        )
+        logger.critical("INCOMPLETE_DATA", extra={"symbol": symbol, "rows": len(df)})
     # AI-AGENT-REF: Update cache with fresh data and log performance metrics
     _MINUTE_CACHE[symbol] = (df, pd.Timestamp.now(tz="UTC"))
-    
+
     # Calculate current cache performance
     total_requests = _CACHE_STATS["hits"] + _CACHE_STATS["misses"]
-    hit_ratio = (_CACHE_STATS["hits"] / total_requests * 100) if total_requests > 0 else 0
-    
+    hit_ratio = (
+        (_CACHE_STATS["hits"] / total_requests * 100) if total_requests > 0 else 0
+    )
+
     # AI-AGENT-REF: Safe column count calculation to handle edge cases
     try:
-        cols_count = df.shape[1] if hasattr(df, 'shape') and hasattr(df.shape, '__len__') and len(df.shape) > 1 else 0
+        cols_count = (
+            df.shape[1]
+            if hasattr(df, "shape")
+            and hasattr(df.shape, "__len__")
+            and len(df.shape) > 1
+            else 0
+        )
     except (TypeError, AttributeError):
         # Fallback if df.shape access fails
-        cols_count = len(df.columns) if hasattr(df, 'columns') else 0
-    
+        cols_count = len(df.columns) if hasattr(df, "columns") else 0
+
     logger.info(
         "MINUTE_FETCHED",
         extra={
-            "symbol": symbol, 
-            "rows": len(df), 
+            "symbol": symbol,
+            "rows": len(df),
             "cols": cols_count,
             "data_source": "fresh_fetch",
             "cache_size": len(_MINUTE_CACHE),
             "cache_hit_ratio_pct": round(hit_ratio, 1),
-            "total_cache_requests": total_requests
+            "total_cache_requests": total_requests,
         },
     )
     # AI-AGENT-REF: Apply limit parameter if specified
     if limit is not None and len(df) > limit:
         df = df.tail(limit)  # Return the most recent 'limit' rows
-        logger.debug("Applied limit %d to %s data, returning %d rows", limit, symbol, len(df))
-    
+        logger.debug(
+            "Applied limit %d to %s data, returning %d rows", limit, symbol, len(df)
+        )
+
     # AI-AGENT-REF: Filter to only return required columns while preserving index
     required = ["open", "high", "low", "close", "volume"]
     return df[required].copy()
@@ -1226,7 +1334,9 @@ class FinnhubFetcher:
                     self._timestamps.append(now_ts)
                     return
                 # Calculate wait time within the lock to prevent race conditions
-                wait_secs = 60 - (now_ts - self._timestamps[0]) + random.uniform(0.1, 0.5)
+                wait_secs = (
+                    60 - (now_ts - self._timestamps[0]) + random.uniform(0.1, 0.5)
+                )
             # Sleep outside the lock to avoid blocking other threads
             if wait_secs is not None:
                 pytime.sleep(wait_secs)
@@ -1245,9 +1355,11 @@ class FinnhubFetcher:
         wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 1),
         retry=retry_if_exception_type((RequestException, urllib3.exceptions.HTTPError)),
     )
-    def fetch(self, symbols: str | Sequence[str], period: str = "1mo", interval: str = "1d") -> pd.DataFrame:
+    def fetch(
+        self, symbols: str | Sequence[str], period: str = "1mo", interval: str = "1d"
+    ) -> pd.DataFrame:
         """Fetch OHLCV data for ``symbols`` over the given period."""
-        syms = symbols if isinstance(symbols, (list, tuple)) else [symbols]
+        syms = symbols if isinstance(symbols, list | tuple) else [symbols]
         now_ts = int(pytime.time())
         span = self._parse_period(period)
         start_ts = now_ts - span
@@ -1261,7 +1373,7 @@ class FinnhubFetcher:
                 logger.debug(f"Finnhub returned no data for {sym}: {resp.get('s')}")
                 empty_df = pd.DataFrame(
                     columns=["open", "high", "low", "close", "volume"],
-                    index=pd.DatetimeIndex([], tz=timezone.utc)
+                    index=pd.DatetimeIndex([], tz=UTC),
                 )
                 frames.append(empty_df)
                 continue
@@ -1270,7 +1382,7 @@ class FinnhubFetcher:
             except ValueError as e:
                 logger.warning("Failed timestamp parse for %s: %s", sym, e)
                 logger.debug("Raw Finnhub response for %s: %s", sym, resp)
-                idx = pd.DatetimeIndex([], tz=timezone.utc)
+                idx = pd.DatetimeIndex([], tz=UTC)
             df = pd.DataFrame(
                 {
                     "open": resp["o"],
@@ -1287,7 +1399,9 @@ class FinnhubFetcher:
             return None
         if len(frames) == 1:
             return frames[0]
-        return pd.concat(frames, axis=0, keys=syms, names=["symbol"]).reset_index(level=0)
+        return pd.concat(frames, axis=0, keys=syms, names=["symbol"]).reset_index(
+            level=0
+        )
 
 
 fh_fetcher = FinnhubFetcher()
@@ -1307,18 +1421,21 @@ def fetch_minute_yfinance(symbol: str) -> pd.DataFrame:
     df = df[["timestamp", "Open", "High", "Low", "Close", "Volume"]]
     df.columns = [c.lower() for c in df.columns]
     # AI-AGENT-REF: Preserve DatetimeIndex when returning data - set timestamp as index to maintain DatetimeIndex
-    if 'timestamp' in df.columns:
-        df = df.set_index('timestamp')
+    if "timestamp" in df.columns:
+        df = df.set_index("timestamp")
     return df
 
 
 # ------------------------------
 # Batched fetch & warm-up helpers
 # ------------------------------
-def _resolve_timeframe(timeframe: Union[str, "TimeFrame", "TimeFrameUnit"]) -> "TimeFrame":
+def _resolve_timeframe(
+    timeframe: Union[str, "TimeFrame", "TimeFrameUnit"],
+) -> "TimeFrame":
     """Resolve timeframe parameter to TimeFrame object."""
     try:
         from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+
         if isinstance(timeframe, str):
             tf_map = {
                 "1MIN": TimeFrame.Minute,
@@ -1335,15 +1452,15 @@ def _resolve_timeframe(timeframe: Union[str, "TimeFrame", "TimeFrameUnit"]) -> "
         return timeframe
 
 
-def _to_dt(dt_input: Union[date, datetime, str]) -> datetime:
+def _to_dt(dt_input: date | datetime | str) -> datetime:
     """Convert date/datetime/string to datetime."""
     if isinstance(dt_input, str):
         return ensure_datetime(dt_input)
     elif isinstance(dt_input, date) and not isinstance(dt_input, datetime):
-        return datetime.combine(dt_input, datetime.min.time()).replace(tzinfo=timezone.utc)
+        return datetime.combine(dt_input, datetime.min.time()).replace(tzinfo=UTC)
     elif isinstance(dt_input, datetime):
         if dt_input.tzinfo is None:
-            return dt_input.replace(tzinfo=timezone.utc)
+            return dt_input.replace(tzinfo=UTC)
         return dt_input
     else:
         return ensure_datetime(dt_input)
@@ -1352,32 +1469,34 @@ def _to_dt(dt_input: Union[date, datetime, str]) -> datetime:
 def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize DataFrame columns and structure."""
     if df is None or df.empty:
-        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-    
+        return pd.DataFrame(
+            columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
+
     # Handle multi-index columns
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(-1)
-    
+
     # Drop symbol column if present
     df = df.drop(columns=["symbol"], errors="ignore")
-    
+
     # Normalize column names to lowercase
     if not df.empty and len(df.columns) > 0:
         df.columns = df.columns.str.lower()
-    
+
     # Ensure required columns exist
     required_cols = ["open", "high", "low", "close", "volume"]
     for col in required_cols:
         if col not in df.columns:
             df[col] = 0.0
-    
+
     # Add timestamp if not present
     if "timestamp" not in df.columns:
-        if hasattr(df.index, 'to_series'):
+        if hasattr(df.index, "to_series"):
             df["timestamp"] = df.index.to_series()
         else:
             df["timestamp"] = pd.Timestamp.now(tz="UTC")
-    
+
     # Reset index and return expected columns
     df = df.reset_index(drop=True)
     return df[["timestamp", "open", "high", "low", "close", "volume"]]
@@ -1386,9 +1505,9 @@ def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
 def get_bars_batch(
     symbols: list[str],
     timeframe: Union[str, "TimeFrame", "TimeFrameUnit"],
-    start: Union[date, datetime, str],
-    end: Union[date, datetime, str],
-    feed: Optional[str] = None,
+    start: date | datetime | str,
+    end: date | datetime | str,
+    feed: str | None = None,
 ) -> dict[str, pd.DataFrame]:
     """
     Fetch bars for multiple symbols in one request when possible.
@@ -1399,7 +1518,11 @@ def get_bars_batch(
     settings = get_settings()
     # Resolve timeframe
     tf = _resolve_timeframe(timeframe)
-    tf_name = "1D" if str(tf).endswith("Day") else (str(tf) if hasattr(tf, "__str__") else "custom")
+    tf_name = (
+        "1D"
+        if str(tf).endswith("Day")
+        else (str(tf) if hasattr(tf, "__str__") else "custom")
+    )
     start_dt, end_dt = _to_dt(start), _to_dt(end)
     start_s, end_s = str(start_dt), str(end_dt)
 
@@ -1408,12 +1531,16 @@ def get_bars_batch(
     to_fetch: list[str] = []
     if settings.data_cache_enable:
         for sym in symbols:
-            cached = mcache.get_mem(sym, tf_name, start_s, end_s, settings.data_cache_ttl_seconds)
+            cached = mcache.get_mem(
+                sym, tf_name, start_s, end_s, settings.data_cache_ttl_seconds
+            )
             if cached is not None:
                 _MET_REQS.labels("cache", tf_name, "hit", "batch").inc()
                 results[sym] = cached
             elif settings.data_cache_disk_enable:
-                disk = mcache.get_disk(settings.data_cache_dir, sym, tf_name, start_s, end_s)
+                disk = mcache.get_disk(
+                    settings.data_cache_dir, sym, tf_name, start_s, end_s
+                )
                 if disk is not None:
                     mcache.put_mem(sym, tf_name, start_s, end_s, disk)
                     _MET_REQS.labels("cache", tf_name, "hit_disk", "batch").inc()
@@ -1431,6 +1558,7 @@ def get_bars_batch(
     # Perform one batched request
     try:
         from alpaca.data.requests import StockBarsRequest
+
         req = StockBarsRequest(
             symbol_or_symbols=to_fetch,
             start=start_dt,
@@ -1440,8 +1568,16 @@ def get_bars_batch(
         )
         t0 = time.perf_counter()
         try:
-            df = _DATA_CLIENT.get_stock_bars(req).df  # multi-indexed by (symbol, timestamp)
-        except (AttributeError, ValueError, KeyError, ConnectionError, TimeoutError) as e:
+            df = _DATA_CLIENT.get_stock_bars(
+                req
+            ).df  # multi-indexed by (symbol, timestamp)
+        except (
+            AttributeError,
+            ValueError,
+            KeyError,
+            ConnectionError,
+            TimeoutError,
+        ) as e:
             logger.warning(f"Primary data fetch failed, falling back to IEX: {e}")
             # Fall back to IEX in one more batched attempt
             try:
@@ -1454,10 +1590,14 @@ def get_bars_batch(
                 )
                 df = _DATA_CLIENT.get_stock_bars(alt).df
             except Exception as exc:
-                logger.exception("Batched fetch failed for %s symbols: %s", len(to_fetch), exc)
+                logger.exception(
+                    "Batched fetch failed for %s symbols: %s", len(to_fetch), exc
+                )
                 raise
         finally:
-            _MET_LAT.labels("alpaca", tf_name, "miss", "batch").observe(time.perf_counter() - t0)
+            _MET_LAT.labels("alpaca", tf_name, "miss", "batch").observe(
+                time.perf_counter() - t0
+            )
             _MET_REQS.labels("alpaca", tf_name, "miss", "batch").inc()
 
         # Split df by symbol, normalize, and cache
@@ -1467,7 +1607,11 @@ def get_bars_batch(
         try:
             for sym in to_fetch:
                 try:
-                    sub = df.xs(sym, level=0) if hasattr(df.index, "levels") else df[df["symbol"] == sym]
+                    sub = (
+                        df.xs(sym, level=0)
+                        if hasattr(df.index, "levels")
+                        else df[df["symbol"] == sym]
+                    )
                 except (KeyError, ValueError):
                     continue
                 sub = _normalize_df(sub)
@@ -1476,7 +1620,14 @@ def get_bars_batch(
                     mcache.put_mem(sym, tf_name, start_s, end_s, sub)
                     if settings.data_cache_disk_enable:
                         try:
-                            mcache.put_disk(settings.data_cache_dir, sym, tf_name, start_s, end_s, sub)
+                            mcache.put_disk(
+                                settings.data_cache_dir,
+                                sym,
+                                tf_name,
+                                start_s,
+                                end_s,
+                                sub,
+                            )
                         except (OSError, PermissionError, ValueError) as e:
                             logger.warning(f"Failed to cache data for {sym}: {e}")
                             # Continue execution - caching is not critical
@@ -1499,8 +1650,8 @@ def get_bars_batch(
 def warmup_cache(
     symbols: list[str],
     timeframe: Union[str, "TimeFrame", "TimeFrameUnit"],
-    start: Union[date, datetime, str],
-    end: Union[date, datetime, str],
+    start: date | datetime | str,
+    end: date | datetime | str,
 ) -> int:
     """
     Warm cache for a set of symbols. Returns count of warmed symbols.
@@ -1520,7 +1671,9 @@ def get_minute_bars_batch(
     feed: str | None = None,
 ) -> dict[str, pd.DataFrame]:
     tf = _resolve_timeframe("1MIN")
-    return get_bars_batch(symbols=symbols, timeframe=tf, start=start, end=end, feed=feed)
+    return get_bars_batch(
+        symbols=symbols, timeframe=tf, start=start, end=end, feed=feed
+    )
 
 
 def get_minute_bars(
@@ -1536,20 +1689,35 @@ def get_minute_bars(
 def get_bars(
     symbol: str,
     timeframe: Union[str, "TimeFrame", "TimeFrameUnit"],
-    start: Union[date, datetime, str],
-    end: Union[date, datetime, str],
-    feed: Optional[str] = None,
+    start: date | datetime | str,
+    end: date | datetime | str,
+    feed: str | None = None,
 ) -> pd.DataFrame:
     """
     Fetch bars for a single symbol. This wraps get_bars_batch for single symbol requests.
     """
     result = get_bars_batch([symbol], timeframe, start, end, feed)
-    return result.get(symbol, pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"]))
+    return result.get(
+        symbol,
+        pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"]),
+    )
 
 
 # Export RetryError for test compatibility
-__all__ = ["RetryError", "get_historical_data", "get_minute_df", "get_daily_df",
-           "DataFetchError", "DataFetchException", "get_bars_batch", "warmup_cache",
-           "get_minute_bars_batch", "get_minute_bars", "get_bars",
-           # Test-required cache helpers (must be re-exported via top-level shim)
-           "get_cached_minute_timestamp", "last_minute_bar_age_seconds", "_MINUTE_CACHE"]
+__all__ = [
+    "RetryError",
+    "get_historical_data",
+    "get_minute_df",
+    "get_daily_df",
+    "DataFetchError",
+    "DataFetchException",
+    "get_bars_batch",
+    "warmup_cache",
+    "get_minute_bars_batch",
+    "get_minute_bars",
+    "get_bars",
+    # Test-required cache helpers (must be re-exported via top-level shim)
+    "get_cached_minute_timestamp",
+    "last_minute_bar_age_seconds",
+    "_MINUTE_CACHE",
+]

@@ -1,4 +1,5 @@
 """Path utilities for centralized data and log directory management."""
+
 from __future__ import annotations
 
 import os

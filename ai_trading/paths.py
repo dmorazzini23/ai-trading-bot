@@ -4,14 +4,16 @@ Runtime paths for AI Trading Bot.
 Defines writable data, log, and cache directories with environment overrides.
 Creates directories at import time.
 """
-import os
+
 import logging
+import os
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 APP_NAME = "ai-trading-bot"
+
 
 def _ensure_dir(path: Path) -> Path:
     try:
@@ -22,6 +24,7 @@ def _ensure_dir(path: Path) -> Path:
         logger.debug("Directory creation failed for %s: %s", path, e)
     return path
 
+
 def _first_env_path(*names: str) -> Path | None:
     for n in names:
         v = os.getenv(n)
@@ -30,10 +33,12 @@ def _first_env_path(*names: str) -> Path | None:
             return Path(v.split(":")[0])
     return None
 
+
 def _default_state_dir() -> Path:
     if os.geteuid() == 0:
         return Path("/var/lib") / APP_NAME
     return Path.home() / ".local" / "share" / APP_NAME
+
 
 def _default_cache_dir() -> Path:
     if os.geteuid() == 0:
@@ -41,10 +46,12 @@ def _default_cache_dir() -> Path:
     xdg = os.getenv("XDG_CACHE_HOME")
     return (Path(xdg) if xdg else Path.home() / ".cache") / APP_NAME
 
+
 def _default_log_dir() -> Path:
     if os.geteuid() == 0:
         return Path("/var/log") / APP_NAME
     return _default_state_dir() / "logs"
+
 
 DATA_DIR = _ensure_dir(
     _first_env_path("AI_TRADING_DATA_DIR", "STATE_DIRECTORY") or _default_state_dir()

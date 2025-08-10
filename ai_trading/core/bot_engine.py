@@ -3,12 +3,20 @@ from __future__ import annotations
 # (any existing comments or module docstring go below the future import)
 __all__ = ["pre_trade_health_check", "run_all_trades_worker", "BotState"]
 
+
 def _alpaca_available() -> bool:
     """Check if Alpaca SDK is available for import."""
     try:
+        import alpaca_py
+
         return True
-    except Exception:
+    except ImportError:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.debug("Alpaca SDK not available - running in mock mode")
         return False
+
 
 # Set global flag for Alpaca availability
 ALPACA_AVAILABLE = _alpaca_available()
@@ -18,38 +26,45 @@ ALPACA_AVAILABLE = _alpaca_available()
 _REGIME_INSUFFICIENT_DATA_WARNED = {"done": False}
 import asyncio
 import atexit
-import logging
 import io
+import logging
+import math
 import os
 import sys
 import time
-import uuid
-import math
 import traceback
 import types
+import uuid
 import warnings
-from datetime import datetime, timedelta, timezone
-from datetime import date
-from typing import Optional, Union
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 # AI-AGENT-REF: Import memory optimization for performance
 try:
-    from memory_optimizer import memory_profile, optimize_memory, emergency_memory_cleanup
+    from memory_optimizer import (
+        emergency_memory_cleanup,
+        memory_profile,
+        optimize_memory,
+    )
+
     MEMORY_OPTIMIZATION_AVAILABLE = True
 except ImportError:
     # Fallback decorators if memory optimization not available
     MEMORY_OPTIMIZATION_AVAILABLE = False
+
     def memory_profile(func):
         return func
+
     def optimize_memory():
         return {}
+
     def emergency_memory_cleanup():
         return {}
 
+
 # AI-AGENT-REF: replace utcnow with timezone-aware now
-old_generate = datetime.now(timezone.utc)  # replaced utcnow for tz-aware
-new_generate = datetime.now(timezone.utc)
+old_generate = datetime.now(UTC)  # replaced utcnow for tz-aware
+new_generate = datetime.now(UTC)
 
 # AI-AGENT-REF: suppress noisy external library warnings
 warnings.filterwarnings(
@@ -58,34 +73,50 @@ warnings.filterwarnings(
 warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 
 # Avoid failing under older Python versions during tests
-if sys.version_info < (3, 10):  # pragma: no cover - compat check
-    logging.getLogger(__name__).warning("Running under unsupported Python version (<3.10)")
 
-from ai_trading.config import management as config
-from ai_trading.config import get_settings
-from ai_trading import paths  # AI-AGENT-REF: Runtime paths for proper directory separation
-from ai_trading.data_fetcher import warmup_cache
-from ai_trading.data_fetcher import get_bars, get_bars_batch
-from ai_trading.data_fetcher import get_minute_bars, get_minute_bars_batch
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from ai_trading import (
+    paths,  # AI-AGENT-REF: Runtime paths for proper directory separation
+)
+from ai_trading.config import get_settings
+from ai_trading.config import management as config
+from ai_trading.data_fetcher import (
+    get_bars,
+    get_bars_batch,
+    get_minute_bars,
+    get_minute_bars_batch,
+    warmup_cache,
+)
 from ai_trading.market.calendars import ensure_final_bar
-from ai_trading.utils.timefmt import utc_now_iso  # AI-AGENT-REF: Import UTC timestamp utilities
+from ai_trading.utils.timefmt import (
+    utc_now_iso,  # AI-AGENT-REF: Import UTC timestamp utilities
+)
+
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
 try:
     from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
 except ImportError:
     # Fallback if circuit breaker module not available
     DrawdownCircuitBreaker = None
-    logger.warning("DrawdownCircuitBreaker not available - drawdown protection disabled")
+    logger.warning(
+        "DrawdownCircuitBreaker not available - drawdown protection disabled"
+    )
 # AI-AGENT-REF: Import circuit breaker for external service resilience
 try:
-    from circuit_breaker import circuit_breaker, CircuitBreakerConfig, CircuitBreakerOpenError
+    from circuit_breaker import (
+        CircuitBreakerConfig,
+        CircuitBreakerOpenError,
+        circuit_breaker,
+    )
 except ImportError:
     # Fallback if circuit_breaker module not available
     def circuit_breaker(name, config=None):
         def decorator(func):
             return func
+
         return decorator
+
     CircuitBreakerOpenError = Exception
 # AI-AGENT-REF: lazy import expensive modules to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
@@ -94,17 +125,20 @@ else:
     # AI-AGENT-REF: mock ML_MODELS for test environments to avoid slow imports
     ML_MODELS = {}
 
+
 # AI-AGENT-REF: lazy numpy loader for improved import performance
 class LazyNumpy:
     """Lazy loader for numpy that only imports when first accessed."""
+
     def __init__(self):
         self._numpy = None
         self._loaded = False
-    
+
     def _load(self):
         if not self._loaded:
             try:
                 import numpy as np_module
+
                 self._numpy = np_module
                 self._loaded = True
             except ImportError:
@@ -112,31 +146,33 @@ class LazyNumpy:
                 self._numpy = self._create_fallback()
                 self._loaded = True
         return self._numpy
-    
+
     def _create_fallback(self):
         """Create minimal numpy fallback for testing environments."""
+
         class MockNumpy:
             def __init__(self):
-                self.nan = float('nan')
-                self.NaN = float('nan')
+                self.nan = float("nan")
+                self.NaN = float("nan")
                 self.random = self
-            
+
             def array(self, data):
                 return list(data) if data else []
-            
+
             def mean(self, data):
                 return sum(data) / len(data) if data else 0
-            
+
             def std(self, data):
                 return 1.0  # Mock standard deviation
-            
+
             def __getattr__(self, name):
                 return lambda *args, **kwargs: 0
-        
+
         return MockNumpy()
-    
+
     def __getattr__(self, name):
         return getattr(self._load(), name)
+
 
 # AI-AGENT-REF: use lazy loading for numpy to improve import performance
 if os.getenv("PYTEST_RUNNING"):
@@ -156,22 +192,28 @@ logger = logging.getLogger(__name__)  # AI-AGENT-REF: define logger before use
 # AI-AGENT-REF: lazy logger setup to avoid expensive imports during test
 if not logging.getLogger().handlers and not os.getenv("PYTEST_RUNNING"):
     from ai_trading.logging import setup_logging  # AI-AGENT-REF: lazy logger import
+
     setup_logging(log_file=LOG_PATH)
+
 
 # Handling missing portfolio weights function
 def ensure_portfolio_weights(ctx, symbols):
     """Ensure portfolio weights are computed with fallback handling."""
     try:
         from ai_trading import portfolio
-        if hasattr(portfolio, 'compute_portfolio_weights'):
+
+        if hasattr(portfolio, "compute_portfolio_weights"):
             return portfolio.compute_portfolio_weights(ctx, symbols)
         else:
-            logger.warning("compute_portfolio_weights not found, using fallback method.")
+            logger.warning(
+                "compute_portfolio_weights not found, using fallback method."
+            )
             # Placeholder fallback: Evenly distribute portfolio weights
             return {symbol: 1.0 / len(symbols) for symbol in symbols}
     except Exception as e:
         logger.error(f"Error computing portfolio weights: {e}, using fallback")
         return {symbol: 1.0 / len(symbols) for symbol in symbols if symbols}
+
 
 # Log Alpaca availability on startup
 if ALPACA_AVAILABLE:
@@ -182,12 +224,13 @@ else:
 MIN_CYCLE = config.SCHEDULER_SLEEP_SECONDS
 # AI-AGENT-REF: guard environment validation with explicit error logging
 # AI-AGENT-REF: Move config validation to runtime to prevent import crashes
-# Config validation moved to init_runtime_config() 
+# Config validation moved to init_runtime_config()
 # This ensures imports don't fail due to missing environment variables
 
 try:
     # Only import config module, don't validate at import time
     from ai_trading import config
+
     logger.info("Config module loaded, validation deferred to runtime")
 except Exception as e:
     logger.warning("Config module import failed: %s", e)
@@ -205,7 +248,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc_value, exc_traceback)
         return
-    error_message = "".join(
+    "".join(
         traceback.format_exception(exc_type, exc_value, exc_traceback)
     )
     logging.critical(
@@ -233,17 +276,20 @@ warnings.filterwarnings(
     module="pandas_ta.*",
 )
 
+
 # AI-AGENT-REF: lazy pandas loader for improved import performance
 class LazyPandas:
     """Lazy loader for pandas that only imports when first accessed."""
+
     def __init__(self):
         self._pandas = None
         self._loaded = False
-    
+
     def _load(self):
         if not self._loaded:
             try:
                 import pandas as pd_module
+
                 self._pandas = pd_module
                 self._loaded = True
             except ImportError:
@@ -251,33 +297,35 @@ class LazyPandas:
                 self._pandas = self._create_fallback()
                 self._loaded = True
         return self._pandas
-    
+
     def _create_fallback(self):
         """Create minimal pandas fallback for testing environments."""
+
         class MockPandas:
             def DataFrame(self, data=None, index=None, columns=None):
                 return MockDataFrame(data, index, columns)
-            
+
             def MultiIndex(self, *args, **kwargs):
                 return []
-            
+
             def RangeIndex(self, *args, **kwargs):
                 return range(10)
-            
+
             def DatetimeIndex(self, *args, **kwargs):
                 return []
-            
+
             def date_range(self, *args, **kwargs):
                 return []
-            
+
             # AI-AGENT-REF: add missing Index and Series attributes for utils compatibility
             Index = MockIndex
             Series = MockSeries
-        
+
         return MockPandas()
-    
+
     def __getattr__(self, name):
         return getattr(self._load(), name)
+
 
 # AI-AGENT-REF: use lazy loading for pandas to improve import performance
 if os.getenv("PYTEST_RUNNING"):
@@ -291,6 +339,7 @@ else:
         # Create fallback pd object
         pd = LazyPandas()
 
+
 # AI-AGENT-REF: pandas not available - create minimal fallbacks for import compatibility
 class MockDataFrame:
     def __init__(self, data=None, index=None, columns=None):
@@ -298,70 +347,74 @@ class MockDataFrame:
         self.index = MockIndex() if index is None else index
         self.columns = columns or []
         self.empty = len(self._data) == 0
-    
+
     def __getitem__(self, key):
         return MockSeries([0.5] * 10)  # Mock series
-    
+
     def __setitem__(self, key, value):
         self._data[key] = value
-    
+
     def copy(self):
         return MockDataFrame(self._data.copy(), self.index, self.columns)
-    
+
     def dropna(self):
         return self
-    
+
     def fillna(self, value):
         return self
-    
+
     def drop(self, columns=None, errors="ignore"):
         return self
+
 
 class MockSeries:
     def __init__(self, data=None):
         self._data = data or []
         self.empty = len(self._data) == 0
-    
+
     def __len__(self):
         return len(self._data)
-    
+
     def __getitem__(self, key):
         if isinstance(key, int):
             return self._data[key] if key < len(self._data) else 0.5
         return MockSeries(self._data)
-    
+
     def rolling(self, *args, **kwargs):
         return self
-    
+
     def mean(self):
         return 0.5
-    
+
     def std(self):
         return 0.1
-    
+
     def ewm(self, *args, **kwargs):
         return self
-    
+
     def dropna(self):
         return self
-    
+
     def fillna(self, value):
         return self
+
 
 class MockIndex:
     def __init__(self):
         self.dtype = str  # Mock dtype attribute
-    
+
     def __getitem__(self, key):
         return "mock_index"
-    
+
     def get_level_values(self, level):
         return MockIndex()
 
+
 _RealDataFrame = MockDataFrame
 _RealMultiIndex = MockIndex
-_RealRangeIndex = range  
+_RealRangeIndex = range
 _RealDatetimeIndex = MockIndex
+
 
 # Create a minimal pandas-like object to prevent further import errors
 class MockPandas:
@@ -372,8 +425,9 @@ class MockPandas:
     Series = MockSeries
     Index = MockIndex  # AI-AGENT-REF: add missing Index attribute
 
+
 # Only use MockPandas in test environments where pandas is not available
-if os.getenv("PYTEST_RUNNING") and not hasattr(pd, '_pandas'):
+if os.getenv("PYTEST_RUNNING") and not hasattr(pd, "_pandas"):
     pd = MockPandas()
 
 from ai_trading import utils
@@ -381,28 +435,29 @@ from ai_trading import utils
 # AI-AGENT-REF: lazy import heavy feature computation modules to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
     from ai_trading.features.indicators import (
-        compute_macd,
         compute_atr,
-        compute_vwap,
+        compute_macd,
         compute_macds,
+        compute_vwap,
         ensure_columns,
     )
 else:
     # AI-AGENT-REF: mock feature functions for test environments to avoid slow imports
     def compute_macd(*args, **kwargs):
         return [0.0] * 20  # Mock MACD values
-    
+
     def compute_atr(*args, **kwargs):
         return [1.0] * 20  # Mock ATR values
-    
+
     def compute_vwap(*args, **kwargs):
         return [100.0] * 20  # Mock VWAP values
-    
+
     def compute_macds(*args, **kwargs):
         return [0.0] * 20  # Mock MACD signal values
-    
+
     def ensure_columns(*args, **kwargs):
         return args[0] if args else {}  # Mock column ensurer
+
 
 try:
     from sklearn.exceptions import InconsistentVersionWarning
@@ -444,24 +499,26 @@ import logging
 import random
 import re
 import signal
-from contextlib import contextmanager
 import sys
 import threading
 import time as pytime
 from argparse import ArgumentParser
 from collections import deque
+from collections.abc import Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import time as dt_time
+from datetime import UTC
 from datetime import datetime as dt_
+from datetime import time as dt_time
 from threading import Lock, Semaphore, Thread
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any
 from zoneinfo import ZoneInfo
 
 # Set deterministic random seeds for reproducibility
 SEED = config.SEED
 random.seed(SEED)
 # AI-AGENT-REF: guard numpy random seed for test environments
-if hasattr(np, 'random'):
+if hasattr(np, "random"):
     np.random.seed(SEED)
 
 # AI-AGENT-REF: throttle SKIP_COOLDOWN logs
@@ -474,19 +531,18 @@ try:
 except ImportError:
     # PyTorch not available - continue with deterministic fallback seed
     import random
+
     random.seed(SEED)
 
 _DEFAULT_FEED = config.ALPACA_DATA_FEED or "iex"
 
 # Ensure numpy.NaN exists for pandas_ta compatibility
 # AI-AGENT-REF: guard numpy.NaN assignment for test environments
-if hasattr(np, 'nan'):
+if hasattr(np, "nan"):
     np.NaN = np.nan
 
-from functools import lru_cache
-
-
 import importlib
+from functools import cache
 
 
 # AI-AGENT-REF: lazy load heavy modules when first accessed
@@ -509,18 +565,20 @@ class _LazyModule(types.ModuleType):
 
     def _create_fallback(self):
         """Create a fallback module object with common methods."""
+
         class FallbackModule:
             def __getattr__(self, name):
                 # Return a dummy function that returns sensible defaults
                 def dummy_func(*args, **kwargs):
-                    if 'dataframe' in name.lower() or 'df' in name.lower():
+                    if "dataframe" in name.lower() or "df" in name.lower():
                         return pd.DataFrame()  # Return empty DataFrame
                     return None
+
                 return dummy_func
-                
+
             def ichimoku(self, *args, **kwargs):
                 return pd.DataFrame(), {}
-        
+
         return FallbackModule()
 
     def __getattr__(self, item):
@@ -600,6 +658,7 @@ try:
     # proper exception type.  Fall back to a simple Exception subclass when
     # Tenacity is unavailable or invalid.
     from tenacity import RetryError as _TenacityRetryError  # type: ignore[assignment]
+
     if not isinstance(_TenacityRetryError, type) or not issubclass(
         _TenacityRetryError, BaseException
     ):
@@ -607,10 +666,10 @@ try:
     RetryError = _TenacityRetryError  # type: ignore[assignment]
 except Exception:
 
-    class RetryError(Exception):  # pragma: no cover - fallback when tenacity.RetryError is invalid
+    class RetryError(
+        Exception
+    ):  # pragma: no cover - fallback when tenacity.RetryError is invalid
         """Fallback RetryError used when Tenacity's RetryError is unavailable or not an exception."""
-
-        pass
 
 
 # AI-AGENT-REF: lazy ichimoku setup to avoid pandas_ta import in tests
@@ -622,6 +681,7 @@ else:
     # AI-AGENT-REF: mock ichimoku for test environments
     def mock_ichimoku(*a, **k):
         return (pd.DataFrame(), {})
+
     ta.ichimoku = mock_ichimoku
 
 _MARKET_SCHEDULE = None
@@ -631,8 +691,10 @@ def get_market_schedule():
     global _MARKET_SCHEDULE
     if _MARKET_SCHEDULE is None:
         # AI-AGENT-REF: Handle testing environment where NY is SimpleNamespace without schedule()
-        if hasattr(NY, 'schedule'):
-            _MARKET_SCHEDULE = NY.schedule(start_date="2020-01-01", end_date="2030-12-31")
+        if hasattr(NY, "schedule"):
+            _MARKET_SCHEDULE = NY.schedule(
+                start_date="2020-01-01", end_date="2030-12-31"
+            )
         else:
             # Return empty DataFrame for testing environments
             _MARKET_SCHEDULE = pd.DataFrame()
@@ -648,10 +710,12 @@ def get_market_calendar():
     if _MARKET_CALENDAR is None:
         try:
             import pandas_market_calendars as mcal
+
             _MARKET_CALENDAR = mcal.get_calendar("NYSE")
         except ImportError:  # pragma: no cover - test environment fallback
             # AI-AGENT-REF: Fallback for test environments without pandas_market_calendars
             import types
+
             _MARKET_CALENDAR = types.SimpleNamespace()
             _MARKET_CALENDAR.is_session_open = lambda dt: True  # Always open for tests
             _MARKET_CALENDAR.sessions_in_range = lambda start, end: []
@@ -660,12 +724,14 @@ def get_market_calendar():
 
 # AI-AGENT-REF: Only initialize market calendar in non-test environments to avoid import issues
 import os
+
 if not os.getenv("TESTING"):
     # back-compat for existing code references
     NY = get_market_calendar()
 else:
     # Provide a test-friendly stub
     import types
+
     NY = types.SimpleNamespace()
     NY.is_session_open = lambda dt: True
     NY.sessions_in_range = lambda start, end: []
@@ -695,11 +761,12 @@ def timeout_protection(seconds: int = 30):
     installing an alarm, preventing crashes in threaded environments.
     """
     import threading
+
     # Only install SIGALRM in the main thread if available
-    if (
-        threading.current_thread() is threading.main_thread()
-        and hasattr(signal, "SIGALRM")
+    if threading.current_thread() is threading.main_thread() and hasattr(
+        signal, "SIGALRM"
     ):
+
         def timeout_handler(signum, frame):
             raise TimeoutError(f"Operation timed out after {seconds} seconds")
 
@@ -719,7 +786,7 @@ def timeout_protection(seconds: int = 30):
             pass
 
 
-@lru_cache(maxsize=None)
+@cache
 def is_holiday(ts: pd.Timestamp) -> bool:
     # Compare only dates, not full timestamps, to handle schedule timezones correctly
     dt = pd.Timestamp(ts).date()
@@ -730,11 +797,14 @@ def is_holiday(ts: pd.Timestamp) -> bool:
 
 # AI-AGENT-REF: lazy import heavy signal calculation module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
-    from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
+    from ai_trading.signals import (
+        calculate_macd as signals_calculate_macd,  # type: ignore
+    )
 else:
     # AI-AGENT-REF: mock signals_calculate_macd for test environments
     def signals_calculate_macd(*args, **kwargs):
         return [0.0] * 20  # Mock MACD signal values
+
 
 # FutureWarning now filtered globally in pytest.ini
 
@@ -747,10 +817,13 @@ except ImportError:
         def __init__(self):
             self.LOCK_EX = 1
             self.LOCK_NB = 2
+
         def lock(self, *args, **kwargs):
             pass
+
         def unlock(self, *args, **kwargs):
             pass
+
     portalocker = MockPortalocker()
 # The `requests` library and its exceptions may be monkeypatched or absent in some
 # test environments.  Attempt to import them normally but fall back to simple
@@ -761,8 +834,11 @@ try:
     import requests  # type: ignore[assignment]
     from requests import Session  # type: ignore[assignment]
     from requests.exceptions import HTTPError  # type: ignore[assignment]
-except Exception:  # pragma: no cover - fallback when requests is missing or partially mocked
+except (
+    Exception
+):  # pragma: no cover - fallback when requests is missing or partially mocked
     import types
+
     requests = types.SimpleNamespace(
         Session=lambda *a, **k: types.SimpleNamespace(get=lambda *a, **k: None),
         get=lambda *a, **k: None,
@@ -782,15 +858,19 @@ except ImportError:
     class MockSchedule:
         def every(self, *args, **kwargs):
             return self
+
         def minutes(self):
             return self
+
         def do(self, *args, **kwargs):
             return self
+
     schedule = MockSchedule()
 
-# AI-AGENT-REF: guard yfinance import for test environments  
+# AI-AGENT-REF: guard yfinance import for test environments
 try:
     import yfinance as yf
+
     YFINANCE_AVAILABLE = True
 except ImportError:
     # AI-AGENT-REF: yfinance not available, create minimal fallback
@@ -798,12 +878,14 @@ except ImportError:
         def __init__(self, symbol):
             self.symbol = symbol
             self.info = {"sector": "Unknown"}
-    
+
     class MockYfinance:
         def download(self, *args, **kwargs):
             return pd.DataFrame()
+
         def Ticker(self, symbol):
             return MockTicker(symbol)
+
     yf = MockYfinance()
     YFINANCE_AVAILABLE = False
 
@@ -812,78 +894,86 @@ except ImportError:
 if not ALPACA_AVAILABLE:
     # Create inline mocks when Alpaca is not available
     logger.warning("Alpaca SDK not available, using mock classes")
-    
+
     class MockTradingClient:
         def __init__(self, *args, **kwargs):
             pass
+
         def get_account(self):
-            return type('MockAccount', (), {'cash': 10000, 'portfolio_value': 10000})()
-            
+            return type("MockAccount", (), {"cash": 10000, "portfolio_value": 10000})()
+
     class MockMarketOrderRequest:
         def __init__(self, *args, **kwargs):
             pass
-            
+
     class MockLimitOrderRequest:
         def __init__(self, *args, **kwargs):
             pass
-            
+
     class MockGetOrdersRequest:
         def __init__(self, *args, **kwargs):
             pass
-            
+
     class MockOrder:
         def __init__(self, *args, **kwargs):
             self.id = "mock-order-123"
             self.status = "filled"
-            
+
     class MockTradingStream:
         def __init__(self, *args, **kwargs):
             pass
-    
+
     TradingClient = MockTradingClient
     MarketOrderRequest = MockMarketOrderRequest
     LimitOrderRequest = MockLimitOrderRequest
     GetOrdersRequest = MockGetOrdersRequest
     Order = MockOrder
     TradingStream = MockTradingStream
-    OrderSide = type('OrderSide', (), {'BUY': 'buy', 'SELL': 'sell'})
-    TimeInForce = type('TimeInForce', (), {'DAY': 'day', 'GTC': 'gtc'})
-    OrderStatus = type('OrderStatus', (), {'FILLED': 'filled', 'PENDING': 'pending'})
-    QueryOrderStatus = type('QueryOrderStatus', (), {'ALL': 'all'})
+    OrderSide = type("OrderSide", (), {"BUY": "buy", "SELL": "sell"})
+    TimeInForce = type("TimeInForce", (), {"DAY": "day", "GTC": "gtc"})
+    OrderStatus = type("OrderStatus", (), {"FILLED": "filled", "PENDING": "pending"})
+    QueryOrderStatus = type("QueryOrderStatus", (), {"ALL": "all"})
     APIError = Exception
     logger.debug("Mock Alpaca classes created")
 else:
     # Production imports - real Alpaca SDK
     try:
-        from alpaca.trading.client import TradingClient
-        from alpaca.trading.enums import OrderSide, QueryOrderStatus, TimeInForce, OrderStatus
-        from alpaca.trading.models import Order
-        from alpaca.trading.requests import (
-            GetOrdersRequest, MarketOrderRequest,
-        )
         from alpaca.data.historical import StockHistoricalDataClient
         from alpaca.data.models import Quote
         from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
         from alpaca.data.timeframe import TimeFrame
-        from alpaca_trade_api.rest import APIError  # kept for legacy exception compatibility
-        
+        from alpaca.trading.client import TradingClient
+        from alpaca.trading.enums import (
+            OrderSide,
+            OrderStatus,
+            QueryOrderStatus,
+            TimeInForce,
+        )
+        from alpaca.trading.models import Order
+        from alpaca.trading.requests import (
+            GetOrdersRequest,
+            MarketOrderRequest,
+        )
+        from alpaca_trade_api.rest import (
+            APIError,  # kept for legacy exception compatibility
+        )
+
         logger.info("Real Alpaca Trading SDK imported successfully")
         logger.debug("Production trading ready with Python %s", sys.version)
     except Exception as e:
         logger.error("Failed to import Alpaca SDK: %s", e)
         logger.warning("Falling back to mock classes for development")
         # Fallback to mocks if Alpaca SDK not available - should not happen if ALPACA_AVAILABLE is correct
-        from tests.mocks import (
-            MockTradingClient as TradingClient,
-            MockMarketOrderRequest as MarketOrderRequest,
-            MockLimitOrderRequest as LimitOrderRequest,
-            MockGetOrdersRequest as GetOrdersRequest,
-            MockOrder as Order,
-            mock_order_side as OrderSide,
-            mock_time_in_force as TimeInForce,
-            mock_order_status as OrderStatus,
-            mock_query_order_status as QueryOrderStatus
-        )
+        from tests.mocks import MockGetOrdersRequest as GetOrdersRequest
+        from tests.mocks import MockLimitOrderRequest as LimitOrderRequest
+        from tests.mocks import MockMarketOrderRequest as MarketOrderRequest
+        from tests.mocks import MockOrder as Order
+        from tests.mocks import MockTradingClient as TradingClient
+        from tests.mocks import mock_order_side as OrderSide
+        from tests.mocks import mock_order_status as OrderStatus
+        from tests.mocks import mock_query_order_status as QueryOrderStatus
+        from tests.mocks import mock_time_in_force as TimeInForce
+
         APIError = Exception
 
 # AI-AGENT-REF: guard bs4 import for test environments
@@ -894,10 +984,13 @@ except ImportError:
     class MockBeautifulSoup:
         def __init__(self, *args, **kwargs):
             self.text = ""
+
         def find(self, *args, **kwargs):
             return self
+
         def get_text(self):
             return ""
+
     BeautifulSoup = MockBeautifulSoup
 
 # AI-AGENT-REF: guard flask import for test environments
@@ -908,30 +1001,41 @@ except ImportError:
     class MockFlask:
         def __init__(self, *args, **kwargs):
             pass
+
         def route(self, *args, **kwargs):
             def decorator(func):
                 return func
+
             return decorator
+
     Flask = MockFlask
 
 # AI-AGENT-REF: guard custom module imports for test environments
 try:
-    from ai_trading.alpaca_api import alpaca_get, start_trade_updates_stream  # type: ignore
+    from ai_trading.alpaca_api import (  # type: ignore
+        alpaca_get,
+        start_trade_updates_stream,
+    )
 except Exception:  # pragma: no cover
     from alpaca_api import alpaca_get, start_trade_updates_stream  # type: ignore
 except ImportError:
     # AI-AGENT-REF: alpaca_api not available, create minimal fallbacks
     def alpaca_get(*args, **kwargs):
         return {}
+
     def start_trade_updates_stream(*args, **kwargs):
         pass
 
+
 try:
-    from ai_trading.rebalancer import maybe_rebalance as original_rebalance  # type: ignore
+    from ai_trading.rebalancer import (
+        maybe_rebalance as original_rebalance,  # type: ignore
+    )
 except ImportError:
     # AI-AGENT-REF: rebalancer not available, create minimal fallback
     def original_rebalance(*args, **kwargs):
         pass
+
 
 # Use base URL from configuration
 ALPACA_BASE_URL = config.ALPACA_BASE_URL
@@ -944,39 +1048,42 @@ if ALPACA_AVAILABLE:
         from alpaca.data.models import Quote
         from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
         from alpaca.data.timeframe import TimeFrame
+
         logger.debug("Alpaca data client imports successful")
     except Exception as e:
         logger.error("Failed to import Alpaca data clients: %s", e)
         # Use mocks as fallback
         ALPACA_AVAILABLE = False
-        
+
 if not ALPACA_AVAILABLE:
     # Mock Alpaca data client classes that can be called with arguments
     class MockStockHistoricalDataClient:
         def __init__(self, *args, **kwargs):
             pass
+
         def get_stock_bars(self, *args, **kwargs):
-            return type('Bars', (), {'df': None})()
-    
+            return type("Bars", (), {"df": None})()
+
     class MockQuote:
         def __init__(self, *args, **kwargs):
             pass
-    
+
     class MockStockBarsRequest:
         def __init__(self, *args, **kwargs):
             pass
-    
+
     class MockStockLatestQuoteRequest:
         def __init__(self, *args, **kwargs):
             pass
-    
+
     class MockTimeFrame:
-        Minute = 'minute'
-        Hour = 'hour'
-        Day = 'day'
+        Minute = "minute"
+        Hour = "hour"
+        Day = "day"
+
         def __init__(self, *args, **kwargs):
             pass
-    
+
     # Assign the mock classes
     StockHistoricalDataClient = MockStockHistoricalDataClient
     Quote = MockQuote
@@ -990,14 +1097,21 @@ if not os.getenv("PYTEST_RUNNING"):
     try:
         from ai_trading.meta_learning import optimize_signals  # type: ignore
     except Exception as _e:
-        logger.warning("Meta-learning unavailable (%s); proceeding without signal optimization", _e)
+        logger.warning(
+            "Meta-learning unavailable (%s); proceeding without signal optimization", _e
+        )
+
         def optimize_signals(signals, *a, **k):  # type: ignore[no-redef]
             return signals
+
 else:
     # AI-AGENT-REF: mock optimize_signals for test environments
     def optimize_signals(*args, **kwargs):
         return args[0] if args else []  # Return signals as-is
+
+
 from metrics_logger import log_metrics
+
 from ai_trading.pipeline import model_pipeline  # type: ignore
 
 # ML dependencies with graceful error handling
@@ -1010,36 +1124,50 @@ except ImportError:
     class PCA:
         def __init__(self, *args, **kwargs):
             pass
+
         def fit(self, *args, **kwargs):
             return self
+
         def transform(self, X):
             return X
-    
+
     class RandomForestClassifier:
         def __init__(self, *args, **kwargs):
             pass
+
         def fit(self, *args, **kwargs):
             return self
+
         def predict(self, X):
-            return [0] * len(X) if hasattr(X, '__len__') else [0]
+            return [0] * len(X) if hasattr(X, "__len__") else [0]
+
         def predict_proba(self, X):
-            return [[0.33, 0.33, 0.34]] * len(X) if hasattr(X, '__len__') else [[0.33, 0.33, 0.34]]
-    
+            return (
+                [[0.33, 0.33, 0.34]] * len(X)
+                if hasattr(X, "__len__")
+                else [[0.33, 0.33, 0.34]]
+            )
+
     class BayesianRidge:
         def __init__(self, *args, **kwargs):
             pass
+
         def fit(self, *args, **kwargs):
             return self
+
         def predict(self, X):
-            return [0] * len(X) if hasattr(X, '__len__') else [0]
-    
+            return [0] * len(X) if hasattr(X, "__len__") else [0]
+
     class Ridge:
         def __init__(self, *args, **kwargs):
             pass
+
         def fit(self, *args, **kwargs):
             return self
+
         def predict(self, X):
-            return [0] * len(X) if hasattr(X, '__len__') else [0]
+            return [0] * len(X) if hasattr(X, "__len__") else [0]
+
     Ridge = None
     logger.warning("sklearn not available, ML features will be disabled")
 
@@ -1056,8 +1184,12 @@ ALPACA_PAPER = getattr(config, "ALPACA_PAPER", None)
 validate_alpaca_credentials = getattr(config, "validate_alpaca_credentials", None)
 CONFIG_NEWS_API_KEY = getattr(config, "NEWS_API_KEY", None)
 # Support new sentiment API configuration with backwards compatibility
-CONFIG_SENTIMENT_API_KEY = getattr(config, "SENTIMENT_API_KEY", None) or CONFIG_NEWS_API_KEY
-CONFIG_SENTIMENT_API_URL = getattr(config, "SENTIMENT_API_URL", "https://newsapi.org/v2/everything")
+CONFIG_SENTIMENT_API_KEY = (
+    getattr(config, "SENTIMENT_API_KEY", None) or CONFIG_NEWS_API_KEY
+)
+CONFIG_SENTIMENT_API_URL = getattr(
+    config, "SENTIMENT_API_URL", "https://newsapi.org/v2/everything"
+)
 FINNHUB_API_KEY = getattr(config, "FINNHUB_API_KEY", None)
 BOT_MODE_ENV = getattr(config, "BOT_MODE", BOT_MODE)
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
@@ -1067,16 +1199,16 @@ def _require_cfg(value: str | None, name: str) -> str:
     """Return value or load from config, retrying in production."""
     if value:
         return value
-    
+
     # In testing mode, return a dummy value
     if config.TESTING:
         dummy_values = {
             "ALPACA_API_KEY": "test_api_key",
-            "ALPACA_SECRET_KEY": "test_secret_key", 
-            "BOT_MODE": "test"
+            "ALPACA_SECRET_KEY": "test_secret_key",
+            "BOT_MODE": "test",
         }
         return dummy_values.get(name, f"test_{name.lower()}")
-    
+
     if BOT_MODE_ENV == "production":
         while not value:
             logger.critical("Missing %s; retrying in 60s", name)
@@ -1111,10 +1243,9 @@ def _ensure_alpaca_env_or_raise():
     """
     k, s, b = _resolve_alpaca_env()
     # Check both config and environment for SHADOW_MODE
-    shadow_mode = (
-        getattr(config, "SHADOW_MODE", False) or 
-        os.getenv("SHADOW_MODE", "").lower() in ("true", "1")
-    )
+    shadow_mode = getattr(config, "SHADOW_MODE", False) or os.getenv(
+        "SHADOW_MODE", ""
+    ).lower() in ("true", "1")
     if shadow_mode:
         return k, s, b
     if not (k and s):
@@ -1126,11 +1257,12 @@ def _ensure_alpaca_env_or_raise():
 def init_runtime_config():
     """Initialize runtime configuration and validate critical keys."""
     from ai_trading.config import Settings
+
     cfg = Settings()
-    
+
     # Validate critical keys at runtime, not import time
     global ALPACA_API_KEY, ALPACA_SECRET_KEY, BOT_MODE_ENV
-    
+
     # Use the new credential resolution functions
     try:
         ALPACA_API_KEY, ALPACA_SECRET_KEY, _ = _ensure_alpaca_env_or_raise()
@@ -1140,21 +1272,25 @@ def init_runtime_config():
         # AI-AGENT-REF: Use environment variables even in test mode to avoid hardcoded secrets
         ALPACA_API_KEY = os.getenv("TEST_ALPACA_API_KEY", "")
         ALPACA_SECRET_KEY = os.getenv("TEST_ALPACA_SECRET_KEY", "")
-    
-    BOT_MODE_ENV = _require_cfg(getattr(cfg, 'BOT_MODE', None), "BOT_MODE")
-    
+
+    BOT_MODE_ENV = _require_cfg(getattr(cfg, "BOT_MODE", None), "BOT_MODE")
+
     if not callable(validate_alpaca_credentials):
         raise RuntimeError("validate_alpaca_credentials not found in config")
-    
-    logger.info("Runtime config initialized", extra={
-        "alpaca_key_set": bool(ALPACA_API_KEY and len(ALPACA_API_KEY) > 8),
-        "bot_mode": BOT_MODE_ENV
-    })
+
+    logger.info(
+        "Runtime config initialized",
+        extra={
+            "alpaca_key_set": bool(ALPACA_API_KEY and len(ALPACA_API_KEY) > 8),
+            "bot_mode": BOT_MODE_ENV,
+        },
+    )
     return cfg
+
 
 # Set module-level defaults that won't crash on import
 ALPACA_API_KEY = None
-ALPACA_SECRET_KEY = None  
+ALPACA_SECRET_KEY = None
 BOT_MODE_ENV = "development"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1167,10 +1303,13 @@ except ImportError:
     class MockCircuitBreaker:
         def __init__(self, *args, **kwargs):
             pass
+
         def __call__(self, func):
             return func
+
     class MockPybreaker:
         CircuitBreaker = MockCircuitBreaker
+
     pybreaker = MockPybreaker()
 
 # AI-AGENT-REF: guard finnhub import for test environments
@@ -1181,31 +1320,40 @@ except ImportError:
     class FinnhubAPIException(Exception):
         pass
 
+
 # AI-AGENT-REF: guard prometheus_client import for test environments
 try:
-    from prometheus_client import Counter, Gauge, Histogram, start_http_server, REGISTRY
+    from prometheus_client import REGISTRY, Counter, Gauge, Histogram, start_http_server
 except ImportError:
     # AI-AGENT-REF: prometheus_client not available, create minimal fallbacks
     class MockMetric:
         def __init__(self, *args, **kwargs):
             pass
+
         def inc(self, *args, **kwargs):
             pass
+
         def set(self, *args, **kwargs):
             pass
+
         def observe(self, *args, **kwargs):
             pass
+
         def labels(self, *args, **kwargs):
             return self
+
     Counter = MockMetric
     Gauge = MockMetric
     Histogram = MockMetric
     REGISTRY = None
+
     def start_http_server(*args, **kwargs):
         pass
 
+
 # Prometheus metrics - lazy initialization to prevent duplicates
 _METRICS_READY = False
+
 
 def _init_metrics() -> None:
     """Create/register metrics once; tolerate partial imports & re-imports."""
@@ -1219,18 +1367,26 @@ def _init_metrics() -> None:
         orders_total = Counter("bot_orders_total", "Total orders sent")
         order_failures = Counter("bot_order_failures", "Order submission failures")
         daily_drawdown = Gauge("bot_daily_drawdown", "Current daily drawdown fraction")
-        signals_evaluated = Counter("bot_signals_evaluated_total", "Total signals evaluated")
+        signals_evaluated = Counter(
+            "bot_signals_evaluated_total", "Total signals evaluated"
+        )
         run_all_trades_duration = Histogram(
             "run_all_trades_duration_seconds", "Time spent in run_all_trades"
         )
         minute_cache_hit = Counter("bot_minute_cache_hits", "Minute bar cache hits")
-        minute_cache_miss = Counter("bot_minute_cache_misses", "Minute bar cache misses")
+        minute_cache_miss = Counter(
+            "bot_minute_cache_misses", "Minute bar cache misses"
+        )
         daily_cache_hit = Counter("bot_daily_cache_hits", "Daily bar cache hits")
         daily_cache_miss = Counter("bot_daily_cache_misses", "Daily bar cache misses")
         event_cooldown_hits = Counter("bot_event_cooldown_hits", "Event cooldown hits")
         slippage_total = Counter("bot_slippage_total", "Cumulative slippage in cents")
-        slippage_count = Counter("bot_slippage_count", "Number of orders with slippage logged")
-        weekly_drawdown = Gauge("bot_weekly_drawdown", "Current weekly drawdown fraction")
+        slippage_count = Counter(
+            "bot_slippage_count", "Number of orders with slippage logged"
+        )
+        weekly_drawdown = Gauge(
+            "bot_weekly_drawdown", "Current weekly drawdown fraction"
+        )
         skipped_duplicates = Counter(
             "bot_skipped_duplicates",
             "Trades skipped due to open position",
@@ -1260,6 +1416,7 @@ def _init_metrics() -> None:
             skipped_duplicates = existing.get("bot_skipped_duplicates")
             skipped_cooldown = existing.get("bot_skipped_cooldown")
     _METRICS_READY = True
+
 
 try:
     from ai_trading.trade_execution import ExecutionEngine  # type: ignore
@@ -1320,7 +1477,6 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
 
         def update(self, *args, **kwargs):  # AI-AGENT-REF: add missing update method
             """Update method for test compatibility."""
-            pass
 
 
 class StrategyAllocator:
@@ -1340,21 +1496,22 @@ class StrategyAllocator:
 # AI-AGENT-REF: lazy import heavy data_fetcher module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
     from ai_trading.data_fetcher import (  # type: ignore
+        _MINUTE_CACHE,
         DataFetchError,
         DataFetchException,
-        get_minute_df, _MINUTE_CACHE,
+        get_minute_df,
     )
 else:
     # AI-AGENT-REF: mock data_fetcher functions for test environments
     class DataFetchError(Exception):
         pass
-    
+
     class DataFetchException(Exception):
         pass
-    
+
     def get_minute_df(*args, **kwargs):
         return pd.DataFrame()  # Mock empty DataFrame
-    
+
     _MINUTE_CACHE = {}  # Mock cache
 
 try:
@@ -1393,10 +1550,7 @@ def log_skip_cooldown(
     """Log SKIP_COOLDOWN once per unique set within 15 seconds."""
     global _LAST_SKIP_CD_TIME, _LAST_SKIP_SYMBOLS
     now = time.monotonic()
-    if isinstance(symbols, str):
-        sym_set = frozenset([symbols])
-    else:
-        sym_set = frozenset(symbols)
+    sym_set = frozenset([symbols]) if isinstance(symbols, str) else frozenset(symbols)
     if sym_set != _LAST_SKIP_SYMBOLS or now - _LAST_SKIP_CD_TIME >= 15:
         logger.info("SKIP_COOLDOWN | %s", ", ".join(sorted(sym_set)))
         _LAST_SKIP_CD_TIME = now
@@ -1410,7 +1564,9 @@ def market_is_open(now: datetime | None = None) -> bool:
     try:
         with timeout_protection(10):
             if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
-                logger.info("FORCE_MARKET_OPEN is enabled; overriding market hours checks.")
+                logger.info(
+                    "FORCE_MARKET_OPEN is enabled; overriding market hours checks."
+                )
                 return True
             return utils_market_open(now)
     except TimeoutError:
@@ -1429,7 +1585,7 @@ is_market_open = market_is_open
 PORTFOLIO_FILE = "portfolio_snapshot.json"
 
 
-def save_portfolio_snapshot(portfolio: Dict[str, int]) -> None:
+def save_portfolio_snapshot(portfolio: dict[str, int]) -> None:
     data = {
         "timestamp": utc_now_iso(),  # AI-AGENT-REF: Use UTC timestamp utility
         "positions": portfolio,
@@ -1438,15 +1594,15 @@ def save_portfolio_snapshot(portfolio: Dict[str, int]) -> None:
         json.dump(data, f, indent=2)
 
 
-def load_portfolio_snapshot() -> Dict[str, int]:
+def load_portfolio_snapshot() -> dict[str, int]:
     if not os.path.exists(PORTFOLIO_FILE):
         return {}
-    with open(PORTFOLIO_FILE, "r") as f:
+    with open(PORTFOLIO_FILE) as f:
         data = json.load(f)
     return data.get("positions", {})
 
 
-def compute_current_positions(ctx: "BotContext") -> Dict[str, int]:
+def compute_current_positions(ctx: BotContext) -> dict[str, int]:
     try:
         positions = ctx.api.get_all_positions()
         logger.debug("Raw Alpaca positions: %s", positions)
@@ -1466,12 +1622,12 @@ def get_latest_close(df: pd.DataFrame) -> float:
     """Return the last closing price or ``0.0`` if unavailable."""
     # AI-AGENT-REF: debug output to understand test failure
     logger.debug("get_latest_close called with df: %s", type(df).__name__)
-    
+
     # AI-AGENT-REF: More robust check that works with different pandas instances
     if df is None:
         logger.debug("get_latest_close early return: df is None")
         return 0.0
-    
+
     # Check if df has empty attribute and columns attribute (duck typing)
     try:
         is_empty = df.empty
@@ -1479,32 +1635,41 @@ def get_latest_close(df: pd.DataFrame) -> float:
     except (AttributeError, TypeError) as e:
         logger.debug("get_latest_close: DataFrame methods failed: %s", e)
         return 0.0
-        
+
     if is_empty or not has_close:
-        logger.debug("get_latest_close early return: empty: %s, close in columns: %s", 
-                    is_empty, has_close)
+        logger.debug(
+            "get_latest_close early return: empty: %s, close in columns: %s",
+            is_empty,
+            has_close,
+        )
         return 0.0
-    
+
     try:
         last_valid_close = df["close"].dropna()
-        logger.debug("get_latest_close last_valid_close length: %d", len(last_valid_close))
-        
+        logger.debug(
+            "get_latest_close last_valid_close length: %d", len(last_valid_close)
+        )
+
         if not last_valid_close.empty:
             price = last_valid_close.iloc[-1]
-            logger.debug("get_latest_close price from iloc[-1]: %s (type: %s)", price, type(price).__name__)
+            logger.debug(
+                "get_latest_close price from iloc[-1]: %s (type: %s)",
+                price,
+                type(price).__name__,
+            )
         else:
             logger.critical("All NaNs in close column for get_latest_close")
             price = 0.0
-            
+
         # More robust NaN check that works with different pandas instances
-        if price is None or (hasattr(price, '__ne__') and price != price) or price <= 0:
+        if price is None or (hasattr(price, "__ne__") and price != price) or price <= 0:
             logger.debug("get_latest_close price is NaN or <= 0: price=%s", price)
             return 0.0
-            
+
         result = float(price)
         logger.debug("get_latest_close returning: %s", result)
         return result
-        
+
     except Exception as e:
         logger.warning("get_latest_close exception: %s", e)
         return 0.0
@@ -1513,7 +1678,7 @@ def get_latest_close(df: pd.DataFrame) -> float:
 def compute_time_range(minutes: int) -> tuple[datetime, datetime]:
     """Return a UTC datetime range spanning the past ``minutes`` minutes."""
     # AI-AGENT-REF: provide timezone-aware datetimes
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     start = now - timedelta(minutes=minutes)
     return start, now
 
@@ -1536,7 +1701,7 @@ def assert_row_integrity(
 
 def _load_ml_model(symbol: str):
     """Return preloaded ML model from ``ML_MODELS`` cache."""
-    
+
     # AI-AGENT-REF: Check cache size and cleanup if needed
     _cleanup_ml_model_cache()
 
@@ -1553,35 +1718,32 @@ def _load_ml_model(symbol: str):
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     """Fetch the last day of minute bars and raise on empty."""
     # AI-AGENT-REF: raise on empty DataFrame
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     start_dt = now_utc - timedelta(days=1)
     df = get_minute_df(symbol, start_dt, now_utc)
     if df.empty:
         logger.error(f"Fetch failed: empty DataFrame for {symbol}")
         raise DataFetchError(f"No data for {symbol}")
-    
+
     # Check data freshness before proceeding with trading logic
     try:
         # Allow data up to 10 minutes old during market hours (600 seconds)
-        _ensure_data_fresh(
-            symbols=[symbol], 
-            max_age_seconds=600
-        )
+        _ensure_data_fresh(symbols=[symbol], max_age_seconds=600)
     except RuntimeError as e:
         logger.warning(f"Data staleness check failed for {symbol}: {e}")
         # Still return the data but log the staleness issue
-        
+
     return df
 
 
-def cancel_all_open_orders(ctx: "BotContext") -> None:
+def cancel_all_open_orders(ctx: BotContext) -> None:
     """
     On startup or each run, cancel every Alpaca order whose status is 'open'.
     """
     if ctx.api is None:
         logger.warning("ctx.api is None - cannot cancel orders")
         return
-        
+
     try:
         req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
         open_orders = ctx.api.get_orders(req)
@@ -1592,12 +1754,16 @@ def cancel_all_open_orders(ctx: "BotContext") -> None:
                 try:
                     ctx.api.cancel_order_by_id(od.id)
                 except Exception as exc:
-                    logger.exception("Failed to cancel order %s", getattr(od, "id", "unknown"), exc_info=exc)
+                    logger.exception(
+                        "Failed to cancel order %s",
+                        getattr(od, "id", "unknown"),
+                        exc_info=exc,
+                    )
     except Exception as exc:
         logger.warning("Failed to cancel open orders: %s", exc, exc_info=True)
 
 
-def reconcile_positions(ctx: "BotContext") -> None:
+def reconcile_positions(ctx: BotContext) -> None:
     """On startup, fetch all live positions and clear any in-memory stop/take targets for assets no longer held."""
     try:
         live_positions = {
@@ -1631,7 +1797,7 @@ warnings.filterwarnings(
 )
 
 # ─── FINBERT SENTIMENT MODEL IMPORTS & FALLBACK ─────────────────────────────────
-if not os.environ.get('PYTEST_RUNNING'):
+if not os.environ.get("PYTEST_RUNNING"):
     # Only load FinBERT when not in tests
     try:
         import torch
@@ -1659,13 +1825,16 @@ if not os.environ.get('PYTEST_RUNNING'):
 else:
     # Mock FinBERT for tests
     class MockFinBERT:
-        def __init__(self): pass
-        def predict(self, text): return 0.5
+        def __init__(self):
+            pass
+
+        def predict(self, text):
+            return 0.5
+
     _FINBERT_TOKENIZER = MockFinBERT()
     _FINBERT_MODEL = MockFinBERT()
     _HUGGINGFACE_AVAILABLE = True
     logger.debug("FinBERT mocks initialized for tests")
-
 
 
 DISASTER_DD_LIMIT = float(config.get_env("DISASTER_DD_LIMIT", "0.2"))
@@ -1680,6 +1849,7 @@ def abspath(fname: str) -> str:
     """Path within core/ directory."""
     return os.path.join(BASE_DIR, fname)
 
+
 def abspath_repo_root(fname: str) -> str:
     """Path relative to repository root."""
     return str(PROJECT_ROOT.joinpath(fname))
@@ -1687,8 +1857,9 @@ def abspath_repo_root(fname: str) -> str:
 
 def atomic_joblib_dump(obj, path: str) -> None:
     """Safely write joblib file using atomic replace."""
-    import joblib
     import tempfile
+
+    import joblib
 
     dir_name = os.path.dirname(path)
     os.makedirs(dir_name, exist_ok=True)
@@ -1724,17 +1895,13 @@ def get_git_hash() -> str:
     try:
         import subprocess
 
-        return (
-            subprocess.run(
-                ["git", "rev-parse", "--short", "HEAD"],
-                check=True,
-                timeout=10,
-                capture_output=True,
-                text=True
-            )
-            .stdout
-            .strip()
-        )
+        return subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            check=True,
+            timeout=10,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
     except Exception:
         return "unknown"
 
@@ -1768,14 +1935,14 @@ def load_hyperparams() -> dict:
         logger.warning(f"Hyperparameter file {path} not found; using defaults")
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
         logger.warning("Failed to load hyperparameters from %s: %s", path, exc)
         return {}
 
 
-def _maybe_warm_cache(ctx: "BotContext") -> None:
+def _maybe_warm_cache(ctx: BotContext) -> None:
     """
     Warm up cache for the main universe symbols (daily + optional intraday).
     """
@@ -1787,61 +1954,82 @@ def _maybe_warm_cache(ctx: "BotContext") -> None:
         warmup_cache(ctx.symbols, lookback_days=settings.data_warmup_lookback_days)
         # Optional intraday warm-up
         if getattr(settings, "intraday_batch_enable", True):
-            end_dt = datetime.now(timezone.utc)
-            start_dt = end_dt - timedelta(minutes=int(settings.intraday_lookback_minutes))
-            _fetch_intraday_bars_chunked(ctx, ctx.symbols, start=start_dt, end=end_dt, feed=getattr(ctx, "data_feed", None))
+            end_dt = datetime.now(UTC)
+            start_dt = end_dt - timedelta(
+                minutes=int(settings.intraday_lookback_minutes)
+            )
+            _fetch_intraday_bars_chunked(
+                ctx,
+                ctx.symbols,
+                start=start_dt,
+                end=end_dt,
+                feed=getattr(ctx, "data_feed", None),
+            )
     except Exception as exc:
         logger.warning("Cache warm-up failed: %s", exc)
 
 
-
 def _fetch_universe_bars(
-    ctx: "BotContext",
+    ctx: BotContext,
     symbols: list[str],
     timeframe: str,
-    start: "datetime | str",
-    end: "datetime | str", 
+    start: datetime | str,
+    end: datetime | str,
     feed: str | None = None,
-) -> dict[str, "pd.DataFrame"]:
+) -> dict[str, pd.DataFrame]:
     """
     Fetch universe bars for symbols with parallel fallback.
     """
     if not symbols:
         return {}
-    
+
     try:
         batch = get_bars_batch(symbols, timeframe, start, end, feed=feed)
     except Exception as exc:
         logger.warning("Universe batch failed: %s", exc)
         batch = {}
-    
-    remaining = [s for s in symbols if s not in batch or batch.get(s) is None or getattr(batch.get(s), "empty", False)]
+
+    remaining = [
+        s
+        for s in symbols
+        if s not in batch
+        or batch.get(s) is None
+        or getattr(batch.get(s), "empty", False)
+    ]
     if remaining:
         settings = get_settings()
         max_workers = max(1, int(getattr(settings, "batch_fallback_workers", 4)))
+
         def _pull(sym: str):
             try:
                 return sym, get_bars(sym, timeframe, start, end)
             except Exception as one_exc:
                 logger.warning("Per-symbol fetch failed for %s: %s", sym, one_exc)
                 return sym, None
-        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fallback-daily") as ex:
+
+        with ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="fallback-daily"
+        ) as ex:
             for fut in as_completed([ex.submit(_pull, s) for s in remaining]):
                 sym, df = fut.result()
                 if df is not None and not getattr(df, "empty", False):
                     batch[sym] = df
-    
-    return {k: v for k, v in batch.items() if v is not None and not getattr(v, "empty", False)}
+
+    return {
+        k: v
+        for k, v in batch.items()
+        if v is not None and not getattr(v, "empty", False)
+    }
 
 
 def _fetch_universe_bars_chunked(
-    ctx: "BotContext",
+    ctx: BotContext,
     symbols: list[str],
     timeframe: str,
-    start: "datetime | str",
-    end: "datetime | str", 
+    start: datetime | str,
+    end: datetime | str,
     feed: str | None = None,
-) -> dict[str, "pd.DataFrame"]:
+) -> dict[str, pd.DataFrame]:
     """
     Chunked batched fetch for universe bars with safe fallback.
     """
@@ -1849,7 +2037,7 @@ def _fetch_universe_bars_chunked(
         return {}
     settings = get_settings()
     batch_size = max(1, int(getattr(settings, "pretrade_batch_size", 50)))
-    out: dict[str, "pd.DataFrame"] = {}
+    out: dict[str, pd.DataFrame] = {}
     for i in range(0, len(symbols), batch_size):
         chunk = symbols[i : i + batch_size]
         out.update(_fetch_universe_bars(ctx, chunk, timeframe, start, end, feed))
@@ -1857,12 +2045,12 @@ def _fetch_universe_bars_chunked(
 
 
 def _fetch_intraday_bars_chunked(
-    ctx: "BotContext",
+    ctx: BotContext,
     symbols: list[str],
-    start: "datetime | str",
-    end: "datetime | str",
+    start: datetime | str,
+    end: datetime | str,
     feed: str | None = None,
-) -> dict[str, "pd.DataFrame"]:
+) -> dict[str, pd.DataFrame]:
     """
     Chunked batched fetch for 1-minute bars with safe fallback.
     """
@@ -1872,50 +2060,76 @@ def _fetch_intraday_bars_chunked(
     if not getattr(settings, "intraday_batch_enable", True):
         return {s: get_minute_bars(s, start, end, feed=feed) for s in symbols}
     batch_size = max(1, int(getattr(settings, "intraday_batch_size", 40)))
-    out: dict[str, "pd.DataFrame"] = {}
+    out: dict[str, pd.DataFrame] = {}
     for i in range(0, len(symbols), batch_size):
         chunk = symbols[i : i + batch_size]
         try:
             got = get_minute_bars_batch(chunk, start, end, feed=feed)
         except Exception as exc:
-            logger.warning("Intraday batch failed for chunk size %d: %s; falling back", len(chunk), exc)
+            logger.warning(
+                "Intraday batch failed for chunk size %d: %s; falling back",
+                len(chunk),
+                exc,
+            )
             got = {}
         # fill any missing with bounded concurrency
-        missing = [s for s in chunk if s not in got or got.get(s) is None or getattr(got.get(s), "empty", False)]
+        missing = [
+            s
+            for s in chunk
+            if s not in got or got.get(s) is None or getattr(got.get(s), "empty", False)
+        ]
         if missing:
             settings = get_settings()
             max_workers = max(1, int(getattr(settings, "batch_fallback_workers", 4)))
+
             def _pull(sym: str):
                 try:
                     return sym, get_minute_bars(sym, start, end, feed=feed)
                 except Exception as one_exc:
-                    logger.warning("Intraday per-symbol fallback failed for %s: %s", sym, one_exc)
+                    logger.warning(
+                        "Intraday per-symbol fallback failed for %s: %s", sym, one_exc
+                    )
                     return sym, None
-            with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fallback-intraday") as ex:
+
+            with ThreadPoolExecutor(
+                max_workers=max_workers, thread_name_prefix="fallback-intraday"
+            ) as ex:
                 for fut in as_completed([ex.submit(_pull, s) for s in missing]):
                     sym, df = fut.result()
                     if df is not None and not getattr(df, "empty", False):
                         got[sym] = df
-        out.update({k: v for k, v in got.items() if v is not None and not getattr(v, "empty", False)})
+        out.update(
+            {
+                k: v
+                for k, v in got.items()
+                if v is not None and not getattr(v, "empty", False)
+            }
+        )
     return out
 
 
-def _fetch_regime_bars(ctx: "BotContext", start, end, timeframe="1D") -> dict[str, "pd.DataFrame"]:
+def _fetch_regime_bars(
+    ctx: BotContext, start, end, timeframe="1D"
+) -> dict[str, pd.DataFrame]:
     settings = get_settings()
     syms_csv = (getattr(settings, "regime_symbols_csv", None) or "SPY").strip()
     symbols = [s.strip() for s in syms_csv.split(",") if s.strip()]
-    return _fetch_universe_bars_chunked(ctx, symbols, timeframe, start, end, getattr(ctx, "data_feed", None))
+    return _fetch_universe_bars_chunked(
+        ctx, symbols, timeframe, start, end, getattr(ctx, "data_feed", None)
+    )
 
 
-def _build_regime_dataset(ctx: "BotContext") -> "pd.DataFrame":
+def _build_regime_dataset(ctx: BotContext) -> pd.DataFrame:
     """
     Build regime dataset using a configurable basket via batched fetch.
     Returns a *wide* DataFrame: columns are symbols, rows are aligned by timestamp (index reset).
     """
     logger.info("Building regime dataset (batched)")
     try:
-        end_dt = datetime.now(timezone.utc)
-        start_dt = end_dt - timedelta(days=max(30, int(getattr(ctx, "regime_lookback_days", 100))))
+        end_dt = datetime.now(UTC)
+        start_dt = end_dt - timedelta(
+            days=max(30, int(getattr(ctx, "regime_lookback_days", 100)))
+        )
         bundle = _fetch_regime_bars(ctx, start=start_dt, end=end_dt, timeframe="1D")
         if not bundle:
             return pd.DataFrame()
@@ -1923,22 +2137,34 @@ def _build_regime_dataset(ctx: "BotContext") -> "pd.DataFrame":
         for sym, df in bundle.items():
             if df is None or getattr(df, "empty", False):
                 continue
-            s = df[["timestamp","close"]].rename(columns={"close": sym}).set_index("timestamp")
+            s = (
+                df[["timestamp", "close"]]
+                .rename(columns={"close": sym})
+                .set_index("timestamp")
+            )
             cols.append(s)
         if not cols:
-            logger.warning("Regime dataset empty after normalization; attempting SPY-only fallback")
+            logger.warning(
+                "Regime dataset empty after normalization; attempting SPY-only fallback"
+            )
             try:
                 spy_df = ctx.data_fetcher.fetch_bars("SPY", timeframe="1D", limit=180)
                 if spy_df is not None and not getattr(spy_df, "empty", False):
-                    s = spy_df[["timestamp","close"]].rename(columns={"close": "SPY"}).set_index("timestamp")
+                    s = (
+                        spy_df[["timestamp", "close"]]
+                        .rename(columns={"close": "SPY"})
+                        .set_index("timestamp")
+                    )
                     cols.append(s)
                 else:
                     raise Exception("SPY data not available")
             except Exception as e:
                 logger.error("SPY fallback failed: %s", e)
-                logger.error("Not enough valid rows (0) to train regime model; using dummy fallback")
+                logger.error(
+                    "Not enough valid rows (0) to train regime model; using dummy fallback"
+                )
                 return pd.DataFrame()
-        
+
         if not cols:  # Final check after SPY fallback attempt
             return pd.DataFrame()
         out = pd.concat(cols, axis=1).sort_index().reset_index()
@@ -1948,7 +2174,8 @@ def _build_regime_dataset(ctx: "BotContext") -> "pd.DataFrame":
         logger.warning("REGIME bootstrap failed: %s", exc)
         return pd.DataFrame()
 
-def _regime_basket_to_proxy_bars(wide: "pd.DataFrame") -> "pd.DataFrame":
+
+def _regime_basket_to_proxy_bars(wide: pd.DataFrame) -> pd.DataFrame:
     """
     Convert a wide close-price frame (timestamp + per-symbol columns) into a single proxy 'bars'
     DataFrame with at least ['timestamp','close'] for downstream model training.
@@ -1994,7 +2221,7 @@ class BotMode:
 
     def set_parameters(self) -> dict[str, float]:
         """Return trading parameters for the current mode.
-        
+
         This method now delegates to the centralized configuration system
         for consistency and maintainability.
         """
@@ -2008,12 +2235,12 @@ class BotMode:
 class BotState:
     """
     Central state management for the AI trading bot.
-    
+
     This class maintains all critical bot state information including risk metrics,
     trading positions, performance tracking, and operational controls. It serves as
     the primary data structure for coordinating trading decisions and risk management
     across the entire system.
-    
+
     Attributes:
         loss_streak (int): Current consecutive losing trade count for drawdown protection
         streak_halt_until (Optional[datetime]): Timestamp until which trading is halted due to streak
@@ -2036,7 +2263,7 @@ class BotState:
         trade_cooldowns (Dict[str, datetime]): Per-symbol cooldown periods to prevent overtrading
         last_trade_direction (Dict[str, str]): Last trade direction per symbol ('buy'/'sell')
         skipped_cycles (int): Count of trading cycles skipped due to market/risk conditions
-    
+
     Examples:
         >>> state = BotState()
         >>> state.running = True
@@ -2044,47 +2271,49 @@ class BotState:
         >>> state.position_cache['AAPL'] = 100  # 100 shares long
         >>> logging.info(f"Bot running: {state.running}, Regime: {state.current_regime}")
         Bot running: True, Regime: bull
-        
+
     Note:
         This class uses dataclass fields with default factories to ensure proper
         initialization of mutable default values across instances.
     """
-    
+
     # Risk Management State
     loss_streak: int = 0
-    streak_halt_until: Optional[datetime] = None
-    day_start_equity: Optional[tuple[date, float]] = None
-    week_start_equity: Optional[tuple[date, float]] = None
+    streak_halt_until: datetime | None = None
+    day_start_equity: tuple[date, float] | None = None
+    week_start_equity: tuple[date, float] | None = None
     last_drawdown: float = 0.0
-    
+
     # Operational State
     updates_halted: bool = False
     running: bool = False
     current_regime: str = "sideways"
     rolling_losses: list[float] = field(default_factory=list)
     mode_obj: BotMode = field(default_factory=lambda: BotMode(BOT_MODE))
-    
+
     # Signal & Indicator State
     no_signal_events: int = 0
     indicator_failures: int = 0
     pdt_blocked: bool = False
-    
+
     # Position Management
-    position_cache: Dict[str, int] = field(default_factory=dict)
+    position_cache: dict[str, int] = field(default_factory=dict)
     long_positions: set[str] = field(default_factory=set)
     short_positions: set[str] = field(default_factory=set)
-    
+
     # Execution Timing
-    last_run_at: Optional[datetime] = None
+    last_run_at: datetime | None = None
     last_loop_duration: float = 0.0
-    
+
     # Trade Management
-    trade_cooldowns: Dict[str, datetime] = field(default_factory=dict)
-    last_trade_direction: Dict[str, str] = field(default_factory=dict)
+    trade_cooldowns: dict[str, datetime] = field(default_factory=dict)
+    last_trade_direction: dict[str, str] = field(default_factory=dict)
     skipped_cycles: int = 0
-    
+
     # AI-AGENT-REF: Trade frequency tracking for overtrading prevention
-    trade_history: List[Tuple[str, datetime]] = field(default_factory=list)  # (symbol, timestamp)
+    trade_history: list[tuple[str, datetime]] = field(
+        default_factory=list
+    )  # (symbol, timestamp)
 
 
 state = BotState()
@@ -2098,14 +2327,20 @@ SENTIMENT_API_KEY = CONFIG_SENTIMENT_API_KEY  # New preferred API key
 SENTIMENT_API_URL = CONFIG_SENTIMENT_API_URL  # Configurable API URL
 TRAILING_FACTOR = params.get("TRAILING_FACTOR", state.mode_obj.config.trailing_factor)
 SECONDARY_TRAIL_FACTOR = 1.0
-TAKE_PROFIT_FACTOR = params.get("TAKE_PROFIT_FACTOR", state.mode_obj.config.take_profit_factor)
+TAKE_PROFIT_FACTOR = params.get(
+    "TAKE_PROFIT_FACTOR", state.mode_obj.config.take_profit_factor
+)
 SCALING_FACTOR = params.get("SCALING_FACTOR", state.mode_obj.config.scaling_factor)
 ORDER_TYPE = "market"
-LIMIT_ORDER_SLIPPAGE = params.get("LIMIT_ORDER_SLIPPAGE", state.mode_obj.config.limit_order_slippage)
+LIMIT_ORDER_SLIPPAGE = params.get(
+    "LIMIT_ORDER_SLIPPAGE", state.mode_obj.config.limit_order_slippage
+)
 MAX_POSITION_SIZE = state.mode_obj.config.max_position_size
 SLICE_THRESHOLD = 50
 POV_SLICE_PCT = params.get("POV_SLICE_PCT", state.mode_obj.config.pov_slice_pct)
-DAILY_LOSS_LIMIT = params.get("DAILY_LOSS_LIMIT", state.mode_obj.config.daily_loss_limit)
+DAILY_LOSS_LIMIT = params.get(
+    "DAILY_LOSS_LIMIT", state.mode_obj.config.daily_loss_limit
+)
 # AI-AGENT-REF: Increase default position limit from 10 to 20 for better portfolio utilization
 MAX_PORTFOLIO_POSITIONS = int(config.get_env("MAX_PORTFOLIO_POSITIONS", "20"))
 CORRELATION_THRESHOLD = 0.60
@@ -2115,8 +2350,16 @@ WEEKLY_DRAWDOWN_LIMIT = float(config.get_env("WEEKLY_DRAWDOWN_LIMIT", "0.15"))
 MARKET_OPEN = dt_time(6, 30)
 MARKET_CLOSE = dt_time(13, 0)
 VOLUME_THRESHOLD = int(config.get_env("VOLUME_THRESHOLD", "50000"))
-ENTRY_START_OFFSET = timedelta(minutes=params.get("ENTRY_START_OFFSET_MIN", state.mode_obj.config.entry_start_offset_min))
-ENTRY_END_OFFSET = timedelta(minutes=params.get("ENTRY_END_OFFSET_MIN", state.mode_obj.config.entry_end_offset_min))
+ENTRY_START_OFFSET = timedelta(
+    minutes=params.get(
+        "ENTRY_START_OFFSET_MIN", state.mode_obj.config.entry_start_offset_min
+    )
+)
+ENTRY_END_OFFSET = timedelta(
+    minutes=params.get(
+        "ENTRY_END_OFFSET_MIN", state.mode_obj.config.entry_end_offset_min
+    )
+)
 REGIME_LOOKBACK = 14
 REGIME_ATR_THRESHOLD = 20.0
 RF_ESTIMATORS = 300
@@ -2126,43 +2369,61 @@ RF_MAX_DEPTH = 3
 RF_MIN_SAMPLES_LEAF = 5
 ATR_LENGTH = 10
 CONF_THRESHOLD = params.get("CONF_THRESHOLD", state.mode_obj.config.conf_threshold)
-CONFIRMATION_COUNT = params.get("CONFIRMATION_COUNT", state.mode_obj.config.confirmation_count)
+CONFIRMATION_COUNT = params.get(
+    "CONFIRMATION_COUNT", state.mode_obj.config.confirmation_count
+)
 CAPITAL_CAP = params.get("CAPITAL_CAP", state.mode_obj.config.capital_cap)
-DOLLAR_RISK_LIMIT = float(config.get_env("DOLLAR_RISK_LIMIT", str(state.mode_obj.config.dollar_risk_limit)))
+DOLLAR_RISK_LIMIT = float(
+    config.get_env("DOLLAR_RISK_LIMIT", str(state.mode_obj.config.dollar_risk_limit))
+)
 BUY_THRESHOLD = params.get("BUY_THRESHOLD", state.mode_obj.config.buy_threshold)
+
 
 # AI-AGENT-REF: Add comprehensive validation for critical trading parameters
 def validate_trading_parameters():
     """Validate critical trading parameters and log warnings for invalid values."""
     global CAPITAL_CAP, DOLLAR_RISK_LIMIT, MAX_POSITION_SIZE, CONF_THRESHOLD, BUY_THRESHOLD
-    
+
     # Validate CAPITAL_CAP (should be between 0.01 and 0.5)
-    if not isinstance(CAPITAL_CAP, (int, float)) or not (0.01 <= CAPITAL_CAP <= 0.5):
+    if not isinstance(CAPITAL_CAP, int | float) or not (0.01 <= CAPITAL_CAP <= 0.5):
         logger.error("Invalid CAPITAL_CAP %s, using default 0.25", CAPITAL_CAP)
         CAPITAL_CAP = 0.25
-    
+
     # Validate DOLLAR_RISK_LIMIT (should be between 0.005 and 0.1)
-    if not isinstance(DOLLAR_RISK_LIMIT, (int, float)) or not (0.005 <= DOLLAR_RISK_LIMIT <= 0.1):
-        logger.error("Invalid DOLLAR_RISK_LIMIT %s, using default 0.05", DOLLAR_RISK_LIMIT)
+    if not isinstance(DOLLAR_RISK_LIMIT, int | float) or not (
+        0.005 <= DOLLAR_RISK_LIMIT <= 0.1
+    ):
+        logger.error(
+            "Invalid DOLLAR_RISK_LIMIT %s, using default 0.05", DOLLAR_RISK_LIMIT
+        )
         DOLLAR_RISK_LIMIT = 0.05
-    
+
     # Validate MAX_POSITION_SIZE (should be between 1 and 10000)
     if not isinstance(MAX_POSITION_SIZE, int) or not (1 <= MAX_POSITION_SIZE <= 10000):
-        logger.error("Invalid MAX_POSITION_SIZE %s, using default 8000", MAX_POSITION_SIZE)
+        logger.error(
+            "Invalid MAX_POSITION_SIZE %s, using default 8000", MAX_POSITION_SIZE
+        )
         MAX_POSITION_SIZE = 8000
-    
+
     # Validate CONF_THRESHOLD (should be between 0.5 and 0.95)
-    if not isinstance(CONF_THRESHOLD, (int, float)) or not (0.5 <= CONF_THRESHOLD <= 0.95):
+    if not isinstance(CONF_THRESHOLD, int | float) or not (
+        0.5 <= CONF_THRESHOLD <= 0.95
+    ):
         logger.error("Invalid CONF_THRESHOLD %s, using default 0.75", CONF_THRESHOLD)
         CONF_THRESHOLD = 0.75
-    
+
     # Validate BUY_THRESHOLD (should be between 0.1 and 0.9)
-    if not isinstance(BUY_THRESHOLD, (int, float)) or not (0.1 <= BUY_THRESHOLD <= 0.9):
+    if not isinstance(BUY_THRESHOLD, int | float) or not (0.1 <= BUY_THRESHOLD <= 0.9):
         logger.error("Invalid BUY_THRESHOLD %s, using default 0.2", BUY_THRESHOLD)
         BUY_THRESHOLD = 0.2
-    
-    logger.info("Trading parameters validated: CAPITAL_CAP=%.3f, DOLLAR_RISK_LIMIT=%.3f, MAX_POSITION_SIZE=%d",
-                CAPITAL_CAP, DOLLAR_RISK_LIMIT, MAX_POSITION_SIZE)
+
+    logger.info(
+        "Trading parameters validated: CAPITAL_CAP=%.3f, DOLLAR_RISK_LIMIT=%.3f, MAX_POSITION_SIZE=%d",
+        CAPITAL_CAP,
+        DOLLAR_RISK_LIMIT,
+        MAX_POSITION_SIZE,
+    )
+
 
 # AI-AGENT-REF: Defer parameter validation in testing environments to prevent import blocking
 # Validate parameters after loading
@@ -2193,27 +2454,30 @@ breaker = pybreaker.CircuitBreaker(fail_max=5, reset_timeout=60)
 
 # AI-AGENT-REF: Specific circuit breakers for different external services
 alpaca_breaker = pybreaker.CircuitBreaker(
-    fail_max=3,          # Alpaca should be more reliable, fail after 3 attempts
-    reset_timeout=30,    # Shorter reset timeout for trading API
-    name="alpaca_api"
+    fail_max=3,  # Alpaca should be more reliable, fail after 3 attempts
+    reset_timeout=30,  # Shorter reset timeout for trading API
+    name="alpaca_api",
 )
 
 data_breaker = pybreaker.CircuitBreaker(
-    fail_max=5,          # Data services can be less reliable
-    reset_timeout=120,   # Longer timeout for data recovery
-    name="data_services"
+    fail_max=5,  # Data services can be less reliable
+    reset_timeout=120,  # Longer timeout for data recovery
+    name="data_services",
 )
 
 finnhub_breaker = pybreaker.CircuitBreaker(
-    fail_max=3,          # External data API
-    reset_timeout=300,   # 5 minutes for external services
-    name="finnhub_api"
+    fail_max=3,  # External data API
+    reset_timeout=300,  # 5 minutes for external services
+    name="finnhub_api",
 )
 # Bounded, CPU-aware executors sized via Settings
-_cpu = (os.cpu_count() or 2)
+_cpu = os.cpu_count() or 2
 _S = get_settings()
 executor = ThreadPoolExecutor(max_workers=_S.effective_executor_workers(_cpu))
-prediction_executor = ThreadPoolExecutor(max_workers=_S.effective_prediction_workers(_cpu))
+prediction_executor = ThreadPoolExecutor(
+    max_workers=_S.effective_prediction_workers(_cpu)
+)
+
 
 # AI-AGENT-REF: Add proper cleanup with atexit handlers for ThreadPoolExecutor resource leak
 def cleanup_executors():
@@ -2224,13 +2488,14 @@ def cleanup_executors():
             logger.debug("Main executor shutdown successfully")
     except Exception as e:
         logger.warning("Error shutting down main executor: %s", e)
-    
+
     try:
         if prediction_executor:
             prediction_executor.shutdown(wait=True, cancel_futures=True)
             logger.debug("Prediction executor shutdown successfully")
     except Exception as e:
         logger.warning("Error shutting down prediction executor: %s", e)
+
 
 atexit.register(cleanup_executors)
 
@@ -2243,8 +2508,12 @@ RUN_INTERVAL_SECONDS = 60  # don't run trading loop more often than this
 TRADE_COOLDOWN_MIN = int(config.get_env("TRADE_COOLDOWN_MIN", "5"))  # minutes
 
 # AI-AGENT-REF: Enhanced overtrading prevention with frequency limits
-MAX_TRADES_PER_HOUR = int(config.get_env("MAX_TRADES_PER_HOUR", "10"))  # limit high-frequency trading
-MAX_TRADES_PER_DAY = int(config.get_env("MAX_TRADES_PER_DAY", "50"))   # daily limit to prevent excessive trading
+MAX_TRADES_PER_HOUR = int(
+    config.get_env("MAX_TRADES_PER_HOUR", "10")
+)  # limit high-frequency trading
+MAX_TRADES_PER_DAY = int(
+    config.get_env("MAX_TRADES_PER_DAY", "50")
+)  # daily limit to prevent excessive trading
 TRADE_FREQUENCY_WINDOW_HOURS = 1  # rolling window for hourly limits
 
 # Loss streak kill-switch (managed via BotState)
@@ -2253,7 +2522,7 @@ TRADE_FREQUENCY_WINDOW_HOURS = 1  # rolling window for hourly limits
 _VOL_STATS = {"mean": None, "std": None, "last_update": None, "last": None}
 
 # Slippage logs (in-memory for quick access)
-_slippage_log: List[Tuple[str, float, float, datetime]] = (
+_slippage_log: list[tuple[str, float, float, datetime]] = (
     []
 )  # (symbol, expected, actual, timestamp)
 # Ensure persistent slippage log file exists
@@ -2268,10 +2537,10 @@ if not os.path.exists(SLIPPAGE_LOG_FILE):
         logger.warning(f"Could not create slippage log {SLIPPAGE_LOG_FILE}: {e}")
 
 # Sector cache for portfolio exposure calculations
-_SECTOR_CACHE: Dict[str, str] = {}
+_SECTOR_CACHE: dict[str, str] = {}
 
 
-def _log_health_diagnostics(ctx: "BotContext", reason: str) -> None:
+def _log_health_diagnostics(ctx: BotContext, reason: str) -> None:
     """Log detailed diagnostics used for halt decisions."""
     try:
         cash = float(ctx.api.get_account().cash)
@@ -2310,8 +2579,6 @@ class DataFetchErrorLegacy(Exception):
 class OrderExecutionError(Exception):
     """Raised when an Alpaca order fails after submission."""
 
-    pass
-
 
 # ─── B. CLIENTS & SINGLETONS ─────────────────────────────────────────────────
 
@@ -2325,22 +2592,22 @@ def log_circuit_breaker_status():
     """Log the status of all circuit breakers for monitoring."""
     try:
         breakers = {
-            'main': breaker,
-            'alpaca': alpaca_breaker, 
-            'data': data_breaker,
-            'finnhub': finnhub_breaker
+            "main": breaker,
+            "alpaca": alpaca_breaker,
+            "data": data_breaker,
+            "finnhub": finnhub_breaker,
         }
-        
+
         for name, cb in breakers.items():
-            if hasattr(cb, 'state') and hasattr(cb, 'fail_counter'):
+            if hasattr(cb, "state") and hasattr(cb, "fail_counter"):
                 logger.info(
                     "CIRCUIT_BREAKER_STATUS",
                     extra={
                         "breaker": name,
                         "state": cb.state,
                         "failures": cb.fail_counter,
-                        "last_failure": getattr(cb, 'last_failure', None)
-                    }
+                        "last_failure": getattr(cb, "last_failure", None),
+                    },
                 )
     except Exception as e:
         logger.debug(f"Circuit breaker status logging failed: {e}")
@@ -2350,23 +2617,23 @@ def get_circuit_breaker_health() -> dict:
     """Get health status of all circuit breakers."""
     try:
         breakers = {
-            'main': breaker,
-            'alpaca': alpaca_breaker,
-            'data': data_breaker, 
-            'finnhub': finnhub_breaker
+            "main": breaker,
+            "alpaca": alpaca_breaker,
+            "data": data_breaker,
+            "finnhub": finnhub_breaker,
         }
-        
+
         health = {}
         for name, cb in breakers.items():
-            if hasattr(cb, 'state'):
+            if hasattr(cb, "state"):
                 health[name] = {
-                    'state': str(cb.state),
-                    'healthy': cb.state != 'open',
-                    'failures': getattr(cb, 'fail_counter', 0)
+                    "state": str(cb.state),
+                    "healthy": cb.state != "open",
+                    "failures": getattr(cb, "fail_counter", 0),
                 }
             else:
-                health[name] = {'state': 'unknown', 'healthy': True, 'failures': 0}
-                
+                health[name] = {"state": "unknown", "healthy": True, "failures": 0}
+
         return health
     except Exception as e:
         logger.error(f"Failed to get circuit breaker health: {e}")
@@ -2379,7 +2646,7 @@ def get_circuit_breaker_health() -> dict:
 
 # Prometheus-safe account fetch with circuit breaker protection
 @alpaca_breaker
-def safe_alpaca_get_account(ctx: "BotContext"):
+def safe_alpaca_get_account(ctx: BotContext):
     """Safely get account information."""
     if ctx.api is None:
         logger.warning("ctx.api is None - Alpaca trading client unavailable")
@@ -2404,12 +2671,12 @@ def asset_class_for(symbol: str) -> str:
     sym = symbol.upper()
     if sym.endswith("USD") and len(sym) == 6:
         return "forex"
-    if sym.startswith("BTC") or sym.startswith("ETH"):
+    if sym.startswith(("BTC", "ETH")):
         return "crypto"
     return "equity"
 
 
-def compute_spy_vol_stats(ctx: "BotContext") -> None:
+def compute_spy_vol_stats(ctx: BotContext) -> None:
     """Compute daily ATR mean/std on SPY for the past 1 year."""
     today = date.today()
     with vol_lock:
@@ -2509,7 +2776,7 @@ class FinnhubFetcherLegacy:
         retry=retry_if_exception_type(Exception),
     )
     def fetch(self, symbols, period="1mo", interval="1d") -> pd.DataFrame:
-        syms = symbols if isinstance(symbols, (list, tuple)) else [symbols]
+        syms = symbols if isinstance(symbols, list | tuple) else [symbols]
         now_ts = int(pytime.time())
         span = self._parse_period(period)
         start_ts = now_ts - span
@@ -2543,7 +2810,7 @@ class FinnhubFetcherLegacy:
         return pd.concat(frames, axis=1, keys=syms, names=["Symbol", "Field"])
 
 
-_last_fh_prefetch_date: Optional[date] = None
+_last_fh_prefetch_date: date | None = None
 
 
 def safe_get_stock_bars(client, request, symbol: str, context: str = ""):
@@ -2551,30 +2818,36 @@ def safe_get_stock_bars(client, request, symbol: str, context: str = ""):
     try:
         response = client.get_stock_bars(request)
         if response is None:
-            logger.error(f"ALPACA {context} FETCH ERROR for {symbol}: get_stock_bars returned None")
+            logger.error(
+                f"ALPACA {context} FETCH ERROR for {symbol}: get_stock_bars returned None"
+            )
             return None
-        if not hasattr(response, 'df'):
-            logger.error(f"ALPACA {context} FETCH ERROR for {symbol}: response missing 'df' attribute")
+        if not hasattr(response, "df"):
+            logger.error(
+                f"ALPACA {context} FETCH ERROR for {symbol}: response missing 'df' attribute"
+            )
             return None
         return response.df
     except AttributeError as e:
         logger.error(f"ALPACA {context} FETCH ERROR for {symbol}: AttributeError: {e}")
         return None
     except Exception as e:
-        logger.error(f"ALPACA {context} FETCH ERROR for {symbol}: {type(e).__name__}: {e}")
+        logger.error(
+            f"ALPACA {context} FETCH ERROR for {symbol}: {type(e).__name__}: {e}"
+        )
         return None
 
 
 @dataclass
 class DataFetcher:
     def __post_init__(self):
-        self._daily_cache: dict[str, Optional[pd.DataFrame]] = {}
-        self._minute_cache: dict[str, Optional[pd.DataFrame]] = {}
+        self._daily_cache: dict[str, pd.DataFrame | None] = {}
+        self._minute_cache: dict[str, pd.DataFrame | None] = {}
         self._minute_timestamps: dict[str, datetime] = {}
 
-    def get_daily_df(self, ctx: "BotContext", symbol: str) -> Optional[pd.DataFrame]:
+    def get_daily_df(self, ctx: BotContext, symbol: str) -> pd.DataFrame | None:
         symbol = symbol.upper()
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         end_ts = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
         # fetch ~6 months of daily bars for health checks and indicators
         start_ts = end_ts - timedelta(days=150)
@@ -2594,10 +2867,9 @@ class DataFetcher:
         if not api_key or not api_secret:
             logger.error(f"Missing Alpaca credentials for {symbol}")
             return None
-                
+
         client = StockHistoricalDataClient(api_key, api_secret)
 
-        health_ok = False
         try:
             req = StockBarsRequest(
                 symbol_or_symbols=[symbol],
@@ -2704,10 +2976,10 @@ class DataFetcher:
         return df
 
     def get_minute_df(
-        self, ctx: "BotContext", symbol: str, lookback_minutes: int = 30
-    ) -> Optional[pd.DataFrame]:
+        self, ctx: BotContext, symbol: str, lookback_minutes: int = 30
+    ) -> pd.DataFrame | None:
         symbol = symbol.upper()
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         last_closed_minute = now_utc.replace(second=0, microsecond=0) - timedelta(
             minutes=1
         )
@@ -2828,11 +3100,11 @@ class DataFetcher:
 
     def get_historical_minute(
         self,
-        ctx: "BotContext",  # ← still needs ctx here, per retrain.py
+        ctx: BotContext,  # ← still needs ctx here, per retrain.py
         symbol: str,
         start_date: date,
         end_date: date,
-    ) -> Optional[pd.DataFrame]:
+    ) -> pd.DataFrame | None:
         """
         Fetch all minute bars for `symbol` between start_date and end_date (inclusive),
         by calling Alpaca’s get_bars for each calendar day. Returns a DataFrame
@@ -2842,8 +3114,8 @@ class DataFetcher:
         current_day = start_date
 
         while current_day <= end_date:
-            day_start = datetime.combine(current_day, dt_time.min, timezone.utc)
-            day_end = datetime.combine(current_day, dt_time.max, timezone.utc)
+            day_start = datetime.combine(current_day, dt_time.min, UTC)
+            day_end = datetime.combine(current_day, dt_time.max, UTC)
             if isinstance(day_start, tuple):
                 day_start, _tmp = day_start
             if isinstance(day_end, tuple):
@@ -2859,7 +3131,9 @@ class DataFetcher:
                     feed=_DEFAULT_FEED,
                 )
                 try:
-                    bars_day = safe_get_stock_bars(ctx.data_client, bars_req, symbol, "INTRADAY")
+                    bars_day = safe_get_stock_bars(
+                        ctx.data_client, bars_req, symbol, "INTRADAY"
+                    )
                     if bars_day is None:
                         return []
                 except APIError as e:
@@ -2878,7 +3152,9 @@ class DataFetcher:
                             e,
                         )
                         bars_req.feed = "iex"
-                        bars_day = safe_get_stock_bars(ctx.data_client, bars_req, symbol, "IEX INTRADAY")
+                        bars_day = safe_get_stock_bars(
+                            ctx.data_client, bars_req, symbol, "IEX INTRADAY"
+                        )
                         if bars_day is None:
                             return []
                     else:
@@ -2930,8 +3206,8 @@ class DataFetcher:
 # Helper to prefetch daily data in bulk with Alpaca, handling SIP subscription
 # issues and falling back to IEX delayed feed per symbol if needed.
 def prefetch_daily_data(
-    symbols: List[str], start_date: date, end_date: date
-) -> Dict[str, pd.DataFrame]:
+    symbols: list[str], start_date: date, end_date: date
+) -> dict[str, pd.DataFrame]:
     alpaca_key = config.get_env("ALPACA_API_KEY")
     alpaca_secret = config.get_env("ALPACA_SECRET_KEY")
     if not alpaca_key or not alpaca_secret:
@@ -2958,7 +3234,7 @@ def prefetch_daily_data(
                 if sym in bars.columns.get_level_values(0)
             }
         else:
-            grouped_raw = {sym: df for sym, df in bars.groupby("symbol")}
+            grouped_raw = dict(bars.groupby("symbol"))
         grouped = {}
         for sym, df in grouped_raw.items():
             df = df.drop(columns=["symbol"], errors="ignore")
@@ -2980,7 +3256,9 @@ def prefetch_daily_data(
             logger.info(f"ATTEMPTING IEX-DELAYERED BULK FETCH FOR {symbols}")
             try:
                 req.feed = "iex"
-                bars_iex = safe_get_stock_bars(client, req, str(symbols), "IEX BULK DAILY")
+                bars_iex = safe_get_stock_bars(
+                    client, req, str(symbols), "IEX BULK DAILY"
+                )
                 if bars_iex is None:
                     return {}
                 if isinstance(bars_iex.columns, _RealMultiIndex):
@@ -2990,7 +3268,7 @@ def prefetch_daily_data(
                         if sym in bars_iex.columns.get_level_values(0)
                     }
                 else:
-                    grouped_raw = {sym: df for sym, df in bars_iex.groupby("symbol")}
+                    grouped_raw = dict(bars_iex.groupby("symbol"))
                 grouped = {}
                 for sym, df in grouped_raw.items():
                     df = df.drop(columns=["symbol"], errors="ignore")
@@ -3017,7 +3295,9 @@ def prefetch_daily_data(
                             end=end_date,
                             feed=_DEFAULT_FEED,
                         )
-                        df_sym = safe_get_stock_bars(client, req_sym, sym, "FALLBACK DAILY")
+                        df_sym = safe_get_stock_bars(
+                            client, req_sym, sym, "FALLBACK DAILY"
+                        )
                         if df_sym is None:
                             continue
                         df_sym = df_sym.drop(columns=["symbol"], errors="ignore")
@@ -3104,13 +3384,13 @@ class TradeLogger:
                                 "exit_price",
                                 "qty",
                                 "side",
-                            "strategy",
-                            "classification",
-                            "signal_tags",
-                            "confidence",
-                            "reward",
-                        ]
-                    )
+                                "strategy",
+                                "classification",
+                                "signal_tags",
+                                "confidence",
+                                "reward",
+                            ]
+                        )
                     finally:
                         portalocker.unlock(f)
             except PermissionError:
@@ -3180,7 +3460,7 @@ class TradeLogger:
                     for row in data:
                         if row[0] == symbol and row[3] == "":
                             entry_t = datetime.fromisoformat(row[1])
-                            days = (datetime.now(timezone.utc) - entry_t).days
+                            days = (datetime.now(UTC) - entry_t).days
                             cls = (
                                 "day_trade"
                                 if days == 0
@@ -3241,9 +3521,9 @@ class TradeLogger:
         else:
             state.loss_streak = 0
         if state.loss_streak >= 3:
-            state.streak_halt_until = datetime.now(timezone.utc).astimezone(
-                PACIFIC
-            ) + timedelta(minutes=60)
+            state.streak_halt_until = datetime.now(UTC).astimezone(PACIFIC) + timedelta(
+                minutes=60
+            )
             logger.warning(
                 "STREAK_HALT_TRIGGERED",
                 extra={
@@ -3254,26 +3534,34 @@ class TradeLogger:
 
         # AI-AGENT-REF: Trigger audit-to-meta conversion after trade exit logging
         try:
-            from ai_trading.meta_learning import validate_trade_data_quality, _convert_audit_to_meta_format
+            from ai_trading.meta_learning import (
+                _convert_audit_to_meta_format,
+                validate_trade_data_quality,
+            )
+
             quality_report = validate_trade_data_quality(self.path)
-            
+
             # If we have audit format rows, trigger conversion for meta-learning
-            if quality_report.get('audit_format_rows', 0) > 0:
-                logger.info("METALEARN_TRIGGER_CONVERSION: Converting audit format to meta-learning format")
+            if quality_report.get("audit_format_rows", 0) > 0:
+                logger.info(
+                    "METALEARN_TRIGGER_CONVERSION: Converting audit format to meta-learning format"
+                )
                 # The conversion will be handled by the meta-learning system when it reads the log
-            
+
         except ImportError:
             # Meta-learning module not available, use safe defaults
-            validate_trade_data_quality = lambda *_a, **_k: True
-            _convert_audit_to_meta_format = lambda x: x
+            def validate_trade_data_quality(*_a, **_k):
+                return True
+            def _convert_audit_to_meta_format(x):
+                return x
         except Exception as e:
             # Don't fail trade logging if meta-learning conversion fails
             logger.debug(f"Meta-learning conversion trigger failed: {e}")
 
 
-def _parse_local_positions() -> Dict[str, int]:
+def _parse_local_positions() -> dict[str, int]:
     """Return current local open positions from the trade log."""
-    positions: Dict[str, int] = {}
+    positions: dict[str, int] = {}
     if not os.path.exists(TRADE_LOG_FILE):
         return positions
     try:
@@ -3303,7 +3591,7 @@ def _parse_local_positions() -> Dict[str, int]:
     return positions
 
 
-def audit_positions(ctx: "BotContext") -> None:
+def audit_positions(ctx: BotContext) -> None:
     """
     Fetch local vs. broker positions and submit market orders to correct any mismatch.
     """
@@ -3356,7 +3644,10 @@ def audit_positions(ctx: "BotContext") -> None:
             # AI-AGENT-REF: prevent oversize orders on unmatched locals
             if abs(lq) > max_order_size:
                 logger.warning(
-                    "Order size %d exceeds maximum %d for %s", abs(lq), max_order_size, sym
+                    "Order size %d exceeds maximum %d for %s",
+                    abs(lq),
+                    max_order_size,
+                    sym,
                 )
                 continue
             try:
@@ -3373,7 +3664,7 @@ def audit_positions(ctx: "BotContext") -> None:
                 raise
 
 
-def validate_open_orders(ctx: "BotContext") -> None:
+def validate_open_orders(ctx: BotContext) -> None:
     local = _parse_local_positions()
     if not local:
         logging.getLogger(__name__).debug(
@@ -3385,7 +3676,7 @@ def validate_open_orders(ctx: "BotContext") -> None:
     except Exception:
         return
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for od in open_orders:
         created = pd.to_datetime(getattr(od, "created_at", now))
         age = (now - created).total_seconds() / 60.0
@@ -3412,16 +3703,24 @@ def validate_open_orders(ctx: "BotContext") -> None:
 
 
 # ─── F. SIGNAL MANAGER & HELPER FUNCTIONS ─────────────────────────────────────
-_LAST_PRICE: Dict[str, float] = {}
-_SENTIMENT_CACHE: Dict[str, Tuple[float, float]] = {}  # {ticker: (timestamp, score)}
+_LAST_PRICE: dict[str, float] = {}
+_SENTIMENT_CACHE: dict[str, tuple[float, float]] = {}  # {ticker: (timestamp, score)}
 PRICE_TTL_PCT = 0.005  # only fetch sentiment if price moved > 0.5%
 SENTIMENT_TTL_SEC = 600  # 10 minutes
 # AI-AGENT-REF: Enhanced sentiment caching for rate limiting
 SENTIMENT_RATE_LIMITED_TTL_SEC = 3600  # 1 hour cache when rate limited
-_SENTIMENT_CIRCUIT_BREAKER = {"failures": 0, "last_failure": 0, "state": "closed"}  # closed, open, half-open
+_SENTIMENT_CIRCUIT_BREAKER = {
+    "failures": 0,
+    "last_failure": 0,
+    "state": "closed",
+}  # closed, open, half-open
 # AI-AGENT-REF: Enhanced sentiment circuit breaker thresholds for better resilience
-SENTIMENT_FAILURE_THRESHOLD = 15  # Increased to 15 failures for more tolerance per problem statement
-SENTIMENT_RECOVERY_TIMEOUT = 1800  # Extended to 30 minutes (1800s) for better recovery per problem statement
+SENTIMENT_FAILURE_THRESHOLD = (
+    15  # Increased to 15 failures for more tolerance per problem statement
+)
+SENTIMENT_RECOVERY_TIMEOUT = (
+    1800  # Extended to 30 minutes (1800s) for better recovery per problem statement
+)
 
 
 class SignalManager:
@@ -3430,9 +3729,9 @@ class SignalManager:
         self.mean_rev_lookback = 20
         self.mean_rev_zscore_threshold = 2.0
         self.regime_volatility_threshold = REGIME_ATR_THRESHOLD
-        self.last_components: List[Tuple[int, float, str]] = []
+        self.last_components: list[tuple[int, float, str]] = []
 
-    def signal_momentum(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
+    def signal_momentum(self, df: pd.DataFrame, model=None) -> tuple[int, float, str]:
         if df is None or len(df) <= self.momentum_lookback:
             return -1, 0.0, "momentum"
         try:
@@ -3449,7 +3748,7 @@ class SignalManager:
 
     def signal_mean_reversion(
         self, df: pd.DataFrame, model=None
-    ) -> Tuple[int, float, str]:
+    ) -> tuple[int, float, str]:
         if df is None or len(df) < self.mean_rev_lookback:
             return -1, 0.0, "mean_reversion"
         try:
@@ -3468,7 +3767,7 @@ class SignalManager:
             logger.exception("Error in signal_mean_reversion")
             return -1, 0.0, "mean_reversion"
 
-    def signal_stochrsi(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
+    def signal_stochrsi(self, df: pd.DataFrame, model=None) -> tuple[int, float, str]:
         if df is None or "stochrsi" not in df or df["stochrsi"].dropna().empty:
             return -1, 0.0, "stochrsi"
         try:
@@ -3479,7 +3778,7 @@ class SignalManager:
             logger.exception("Error in signal_stochrsi")
             return -1, 0.0, "stochrsi"
 
-    def signal_obv(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
+    def signal_obv(self, df: pd.DataFrame, model=None) -> tuple[int, float, str]:
         if df is None or len(df) < 6:
             return -1, 0.0, "obv"
         try:
@@ -3494,7 +3793,7 @@ class SignalManager:
             logger.exception("Error in signal_obv")
             return -1, 0.0, "obv"
 
-    def signal_vsa(self, df: pd.DataFrame, model=None) -> Tuple[int, float, str]:
+    def signal_vsa(self, df: pd.DataFrame, model=None) -> tuple[int, float, str]:
         if df is None or len(df) < 20:
             return -1, 0.0, "vsa"
         try:
@@ -3520,7 +3819,7 @@ class SignalManager:
 
     def signal_ml(
         self, df: pd.DataFrame, model: Any | None = None, symbol: str | None = None
-    ) -> Tuple[int, float, str] | None:
+    ) -> tuple[int, float, str] | None:
         """Machine learning prediction signal with probability logging."""
         if model is None and symbol is not None:
             model = _load_ml_model(symbol)
@@ -3549,8 +3848,8 @@ class SignalManager:
             return -1, 0.0, "ml"
 
     def signal_sentiment(
-        self, ctx: "BotContext", ticker: str, df: pd.DataFrame = None, model: Any = None
-    ) -> Tuple[int, float, str]:
+        self, ctx: BotContext, ticker: str, df: pd.DataFrame = None, model: Any = None
+    ) -> tuple[int, float, str]:
         """
         Only fetch sentiment if price has moved > PRICE_TTL_PCT; otherwise, return cached/neutral.
         """
@@ -3559,7 +3858,7 @@ class SignalManager:
 
         latest_close = float(get_latest_close(df))
         with sentiment_lock:
-            prev_close = _LAST_PRICE.get(ticker, None)
+            prev_close = _LAST_PRICE.get(ticker)
 
         # If price hasn’t moved enough, return cached or neutral
         if (
@@ -3595,7 +3894,7 @@ class SignalManager:
 
     def signal_regime(
         self, state: BotState, df: pd.DataFrame, model=None
-    ) -> Tuple[int, float, str]:
+    ) -> tuple[int, float, str]:
         ok = check_market_regime(state)
         s = 1 if ok else -1
         return s, 1.0, "regime"
@@ -3616,21 +3915,35 @@ class SignalManager:
             return {row["signal_name"]: row["weight"] for _, row in df.iterrows()}
         except ValueError as e:
             if "usecols" in str(e).lower():
-                logger.warning("Signal weights CSV missing expected columns, trying fallback read")
+                logger.warning(
+                    "Signal weights CSV missing expected columns, trying fallback read"
+                )
                 try:
                     # Fallback: read all columns and try to map
-                    df = pd.read_csv(SIGNAL_WEIGHTS_FILE, on_bad_lines="skip", engine="python")
+                    df = pd.read_csv(
+                        SIGNAL_WEIGHTS_FILE, on_bad_lines="skip", engine="python"
+                    )
                     if "signal" in df.columns:
                         # Old format with 'signal' column
-                        return {row["signal"]: row["weight"] for _, row in df.iterrows()}
+                        return {
+                            row["signal"]: row["weight"] for _, row in df.iterrows()
+                        }
                     elif "signal_name" in df.columns:
                         # New format with 'signal_name' column
-                        return {row["signal_name"]: row["weight"] for _, row in df.iterrows()}
+                        return {
+                            row["signal_name"]: row["weight"]
+                            for _, row in df.iterrows()
+                        }
                     else:
-                        logger.error("Signal weights CSV has unexpected format: %s", df.columns.tolist())
+                        logger.error(
+                            "Signal weights CSV has unexpected format: %s",
+                            df.columns.tolist(),
+                        )
                         return {}
                 except Exception as fallback_e:
-                    logger.error("Failed to load signal weights with fallback: %s", fallback_e)
+                    logger.error(
+                        "Failed to load signal weights with fallback: %s", fallback_e
+                    )
                     return {}
             else:
                 logger.error("Failed to load signal weights: %s", e)
@@ -3638,12 +3951,12 @@ class SignalManager:
 
     def evaluate(
         self,
-        ctx: "BotContext",
+        ctx: BotContext,
         state: BotState,
         df: pd.DataFrame,
         ticker: str,
         model: Any,
-    ) -> Tuple[int, float, str]:
+    ) -> tuple[int, float, str]:
         """Evaluate all active signals and return a combined decision.
 
         Parameters
@@ -3664,22 +3977,26 @@ class SignalManager:
         tuple[int, float, str]
             ``(signal, confidence, label)`` where ``signal`` is -1, 0 or 1.
         """
-        signals: List[Tuple[int, float, str]] = []
+        signals: list[tuple[int, float, str]] = []
         performance_data = load_global_signal_performance()
-        
+
         # AI-AGENT-REF: Graceful degradation when no meta-learning data exists
         if performance_data is None:
             # For new deployments, allow all signal types with warning
-            logger.info("METALEARN_FALLBACK | No trade history - allowing all signals for new deployment")
+            logger.info(
+                "METALEARN_FALLBACK | No trade history - allowing all signals for new deployment"
+            )
             allowed_tags = None  # None means allow all tags
         else:
             allowed_tags = set(performance_data.keys())
             if not allowed_tags:
-                logger.warning("METALEARN_NO_QUALIFIED_SIGNALS | No signals meet performance criteria - using basic signals")
+                logger.warning(
+                    "METALEARN_NO_QUALIFIED_SIGNALS | No signals meet performance criteria - using basic signals"
+                )
                 # Use a basic set of reliable signal types as fallback
                 allowed_tags = {"sma_cross", "bb_squeeze", "rsi_oversold", "momentum"}
-        
-        weights = self.load_signal_weights()
+
+        self.load_signal_weights()
 
         # Track total signals evaluated
         if signals_evaluated:
@@ -3746,20 +4063,20 @@ class BotContext:
     take_profit_targets: dict[str, float] = field(default_factory=dict)
     stop_targets: dict[str, float] = field(default_factory=dict)
     portfolio_weights: dict[str, float] = field(default_factory=dict)
-    tickers: List[str] = field(default_factory=list)
+    tickers: list[str] = field(default_factory=list)
     rebalance_buys: dict[str, datetime] = field(default_factory=dict)
     # AI-AGENT-REF: track client_order_id base for INITIAL_REBALANCE orders
     rebalance_ids: dict[str, str] = field(default_factory=dict)
     rebalance_attempts: dict[str, int] = field(default_factory=dict)
     trailing_stop_data: dict[str, Any] = field(default_factory=dict)
-    risk_engine: "RiskEngine | None" = None
-    allocator: "StrategyAllocator | None" = None
-    strategies: List[Any] = field(default_factory=list)
+    risk_engine: RiskEngine | None = None
+    allocator: StrategyAllocator | None = None
+    strategies: list[Any] = field(default_factory=list)
     execution_engine: ExecutionEngine | None = None
     # AI-AGENT-REF: Add drawdown circuit breaker for real-time protection
-    drawdown_circuit_breaker: "DrawdownCircuitBreaker | None" = None
+    drawdown_circuit_breaker: DrawdownCircuitBreaker | None = None
     logger: logging.Logger = logger
-    
+
     # AI-AGENT-REF: Add backward compatibility property for alpaca_client
     @property
     def alpaca_client(self):
@@ -3772,12 +4089,15 @@ signal_manager = SignalManager()
 # AI-AGENT-REF: Lazy initialization for trade logger to speed up imports in testing
 trade_logger = None
 
+
 def get_trade_logger():
     """Get trade logger instance, creating it lazily."""
     global trade_logger
     if trade_logger is None:
         trade_logger = TradeLogger()
     return trade_logger
+
+
 risk_engine = None
 allocator = None
 strategies = None
@@ -3807,11 +4127,13 @@ def get_strategies():
         # AI-AGENT-REF: guard strategy imports for test environments
         try:
             from ai_trading.strategies import BaseStrategy
+
             # Use BaseStrategy as fallback for test environments
             strategies = [BaseStrategy(), BaseStrategy()]
         except ImportError:
             # AI-AGENT-REF: fallback to base Strategy class for test environments
             from ai_trading.strategies import BaseStrategy
+
             # Create minimal strategy instances for test compatibility
             strategies = [BaseStrategy(), BaseStrategy()]
     return strategies
@@ -3832,6 +4154,7 @@ trading_client = None
 data_client = None
 stream = None
 
+
 def _initialize_alpaca_clients():
     """Initialize Alpaca trading clients lazily to avoid import delays."""
     global trading_client, data_client, stream
@@ -3841,18 +4164,25 @@ def _initialize_alpaca_clients():
     key, secret, base_url = _ensure_alpaca_env_or_raise()
     if not (key and secret):
         # In SHADOW_MODE we may not have creds; skip client init
-        logger.info("Shadow mode or missing credentials: skipping Alpaca client initialization")
+        logger.info(
+            "Shadow mode or missing credentials: skipping Alpaca client initialization"
+        )
         return
     # Lazy-import SDK only when needed
     try:
-        from alpaca.trading.client import TradingClient
         from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.trading.client import TradingClient
+
         logger.debug("Successfully imported Alpaca SDK classes")
     except Exception as e:
-        logger.error("alpaca_trade_api import failed; cannot initialize clients", exc_info=e)
+        logger.error(
+            "alpaca_trade_api import failed; cannot initialize clients", exc_info=e
+        )
         # In test environments, don't raise - just skip initialization
         if os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"):
-            logger.info("Test environment detected, skipping Alpaca client initialization")
+            logger.info(
+                "Test environment detected, skipping Alpaca client initialization"
+            )
             return
         raise
     # Initialize proper alpaca-py clients (do NOT use legacy REST for data)
@@ -3860,6 +4190,7 @@ def _initialize_alpaca_clients():
     trading_client = TradingClient(key, secret, paper=is_paper)
     data_client = StockHistoricalDataClient(key, secret)
     stream = None  # initialize stream lazily elsewhere if/when required
+
 
 # IMPORTANT: do not initialize Alpaca clients at import time.
 # They will be initialized on-demand by the functions that need them.
@@ -3881,31 +4212,32 @@ async def on_trade_update(event):
 _ctx = None
 _exec_engine = None
 
+
 class LazyBotContext:
     """Wrapper that initializes the bot context lazily on first access."""
-    
+
     def __init__(self):
         self._initialized = False
         self._context = None
-    
+
     def _ensure_initialized(self):
         """Ensure the context is initialized."""
         _init_metrics()
         global _ctx, _exec_engine
-        
+
         if self._initialized and self._context is not None:
             return
-            
+
         # Initialize Alpaca clients first if needed
         _initialize_alpaca_clients()
-        
+
         # AI-AGENT-REF: add null check for stream to handle Alpaca unavailable gracefully
-        if stream and hasattr(stream, 'subscribe_trade_updates'):
+        if stream and hasattr(stream, "subscribe_trade_updates"):
             try:
                 stream.subscribe_trade_updates(on_trade_update)
             except Exception as e:
                 logger.warning("Failed to subscribe to trade updates: %s", e)
-        
+
         self._context = BotContext(
             api=trading_client,
             data_client=data_client,
@@ -3936,10 +4268,13 @@ class LazyBotContext:
             allocator=get_allocator(),
             strategies=get_strategies(),
             # AI-AGENT-REF: Initialize drawdown circuit breaker for real-time protection
-            drawdown_circuit_breaker=DrawdownCircuitBreaker(
-                max_drawdown=config.MAX_DRAWDOWN_THRESHOLD,
-                recovery_threshold=0.8
-            ) if DrawdownCircuitBreaker else None,
+            drawdown_circuit_breaker=(
+                DrawdownCircuitBreaker(
+                    max_drawdown=config.MAX_DRAWDOWN_THRESHOLD, recovery_threshold=0.8
+                )
+                if DrawdownCircuitBreaker
+                else None
+            ),
         )
         _exec_engine = ExecutionEngine(
             self._context,
@@ -3951,36 +4286,40 @@ class LazyBotContext:
 
         # Propagate the capital_scaler to the risk engine so that position_size
         self._context.risk_engine.capital_scaler = self._context.capital_scaler
-        
+
         # Complete context setup (only in non-test environments)
         if not (os.getenv("PYTEST_RUNNING") or os.getenv("TESTING")):
             _initialize_bot_context_post_setup(self._context)
-        
+
         _ctx = self._context
         self._initialized = True
-    
+
     def __getattr__(self, name):
         """Delegate attribute access to the underlying context."""
         self._ensure_initialized()
         return getattr(self._context, name)
-    
+
     def __setattr__(self, name, value):
         """Delegate attribute setting to the underlying context."""
-        if name.startswith('_') or name in ('_initialized', '_context'):
+        if name.startswith("_") or name in ("_initialized", "_context"):
             super().__setattr__(name, value)
         else:
             self._ensure_initialized()
             setattr(self._context, name, value)
 
+
 # Create the lazy context that will initialize on first use
 ctx = LazyBotContext()
+
 
 def get_ctx():
     """Get the global bot context (backwards compatibility)."""
     return ctx
 
+
 # AI-AGENT-REF: Defer context initialization to prevent expensive operations during import
 # The context will be created when first accessed via get_ctx() or _get_bot_context()
+
 
 def _initialize_bot_context_post_setup(ctx):
     """Complete bot context setup after creation."""
@@ -3996,8 +4335,9 @@ def _initialize_bot_context_post_setup(ctx):
         ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
     except Exception as e:
         logger.warning(f"[warm_cache] failed to seed regime history: {e}")
-    
+
     return ctx
+
 
 def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
     """Log warnings if no market data is available on startup."""
@@ -4057,10 +4397,10 @@ def pre_trade_health_check(
 ) -> dict:
     """
     Validate symbol data sufficiency, required columns, and timezone sanity using chunked batch.
-    
+
     Robust min_rows resolution:
       1) explicit param
-      2) ctx.min_rows if present  
+      2) ctx.min_rows if present
       3) default 120
     Avoids `'BotContext' object has no attribute 'min_rows'` hard failures.
     """
@@ -4068,13 +4408,19 @@ def pre_trade_health_check(
     if min_rows is None:
         min_rows = getattr(ctx, "min_rows", 120)
     min_rows = int(min_rows)
-    
-    results = {"checked": 0, "failures": [], "insufficient_rows": [], "missing_columns": [], "timezone_issues": []}
+
+    results = {
+        "checked": 0,
+        "failures": [],
+        "insufficient_rows": [],
+        "missing_columns": [],
+        "timezone_issues": [],
+    }
     if not symbols:
         return results
     # Compute start/end with fallbacks so this function is safe to call early in the loop
     settings = get_settings()
-    _now = datetime.now(timezone.utc)
+    _now = datetime.now(UTC)
     _fallback_days = int(getattr(settings, "pretrade_lookback_days", 120))
     _start = getattr(ctx, "lookback_start", _now - timedelta(days=_fallback_days))
     _end = getattr(ctx, "lookback_end", _now)
@@ -4097,7 +4443,12 @@ def pre_trade_health_check(
             if len(df) < min_rows:
                 results["insufficient_rows"].append(sym)
                 continue
-            _validate_columns(df, required=["timestamp","open","high","low","close","volume"], results=results, symbol=sym)
+            _validate_columns(
+                df,
+                required=["timestamp", "open", "high", "low", "close", "volume"],
+                results=results,
+                symbol=sym,
+            )
             _validate_timezones(df, results, sym)
         except Exception as exc:
             results["failures"].append((sym, str(exc)))
@@ -4113,7 +4464,7 @@ def _validate_columns(df, required, results, symbol):
 
 def _validate_timezones(df, results, symbol):
     """Helper to validate timezone information."""
-    if hasattr(df, 'index') and hasattr(df.index, 'tz') and df.index.tz is None:
+    if hasattr(df, "index") and hasattr(df.index, "tz") and df.index.tz is None:
         results["timezone_issues"].append(symbol)
 
 
@@ -4170,7 +4521,7 @@ def _check_sentiment_circuit_breaker() -> bool:
     global _SENTIMENT_CIRCUIT_BREAKER
     now = pytime.time()
     cb = _SENTIMENT_CIRCUIT_BREAKER
-    
+
     if cb["state"] == "open":
         if now - cb["last_failure"] > SENTIMENT_RECOVERY_TIMEOUT:
             cb["state"] = "half-open"
@@ -4178,6 +4529,7 @@ def _check_sentiment_circuit_breaker() -> bool:
             return True
         return False
     return True
+
 
 def _record_sentiment_success():
     """Record successful sentiment API call."""
@@ -4187,19 +4539,25 @@ def _record_sentiment_success():
         _SENTIMENT_CIRCUIT_BREAKER["state"] = "closed"
         logger.info("Sentiment circuit breaker closed - service recovered")
 
+
 def _record_sentiment_failure():
     """Record failed sentiment API call and update circuit breaker."""
     global _SENTIMENT_CIRCUIT_BREAKER
     cb = _SENTIMENT_CIRCUIT_BREAKER
     cb["failures"] += 1
     cb["last_failure"] = pytime.time()
-    
+
     if cb["failures"] >= SENTIMENT_FAILURE_THRESHOLD:
         cb["state"] = "open"
-        logger.warning(f"Sentiment circuit breaker opened after {cb['failures']} failures")
+        logger.warning(
+            f"Sentiment circuit breaker opened after {cb['failures']} failures"
+        )
+
 
 @retry(
-    stop=stop_after_attempt(2),  # Reduced from 3 to avoid hitting rate limits too quickly
+    stop=stop_after_attempt(
+        2
+    ),  # Reduced from 3 to avoid hitting rate limits too quickly
     wait=wait_exponential(multiplier=1, min=2, max=10),  # Increased delays
     retry=retry_if_exception_type((requests.RequestException,)),
 )
@@ -4212,26 +4570,36 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     # Use new SENTIMENT_API_KEY or fallback to NEWS_API_KEY for backwards compatibility
     api_key = SENTIMENT_API_KEY or NEWS_API_KEY
     if not api_key:
-        logger.debug("No sentiment API key configured (checked SENTIMENT_API_KEY and NEWS_API_KEY)")
+        logger.debug(
+            "No sentiment API key configured (checked SENTIMENT_API_KEY and NEWS_API_KEY)"
+        )
         return 0.0
 
     now_ts = pytime.time()
-    
+
     # AI-AGENT-REF: Enhanced caching with longer TTL during rate limiting
     with sentiment_lock:
         cached = _SENTIMENT_CACHE.get(ticker)
         if cached:
             last_ts, last_score = cached
             # Use longer cache during circuit breaker open state
-            cache_ttl = SENTIMENT_RATE_LIMITED_TTL_SEC if _SENTIMENT_CIRCUIT_BREAKER["state"] == "open" else SENTIMENT_TTL_SEC
+            cache_ttl = (
+                SENTIMENT_RATE_LIMITED_TTL_SEC
+                if _SENTIMENT_CIRCUIT_BREAKER["state"] == "open"
+                else SENTIMENT_TTL_SEC
+            )
             if now_ts - last_ts < cache_ttl:
-                logger.debug(f"Sentiment cache hit for {ticker} (age: {(now_ts - last_ts)/60:.1f}m)")
+                logger.debug(
+                    f"Sentiment cache hit for {ticker} (age: {(now_ts - last_ts)/60:.1f}m)"
+                )
                 return last_score
 
     # Cache miss or stale → fetch fresh
     # AI-AGENT-REF: Circuit breaker pattern for graceful degradation
     if not _check_sentiment_circuit_breaker():
-        logger.info(f"Sentiment circuit breaker open, returning cached/neutral for {ticker}")
+        logger.info(
+            f"Sentiment circuit breaker open, returning cached/neutral for {ticker}"
+        )
         with sentiment_lock:
             # Try to use any existing cache, even if stale
             cached = _SENTIMENT_CACHE.get(ticker)
@@ -4251,18 +4619,20 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
             f"&apiKey={api_key}"
         )
         resp = requests.get(url, timeout=10)
-        
+
         if resp.status_code == 429:
             # AI-AGENT-REF: Enhanced rate limiting handling
-            logger.warning(f"fetch_sentiment({ticker}) rate-limited → caching neutral with extended TTL")
+            logger.warning(
+                f"fetch_sentiment({ticker}) rate-limited → caching neutral with extended TTL"
+            )
             _record_sentiment_failure()
             with sentiment_lock:
                 # Cache neutral score with extended TTL during rate limiting
                 _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
             return 0.0
-            
+
         resp.raise_for_status()
-        
+
         payload = resp.json()
         articles = payload.get("articles", [])
         scores = []
@@ -4282,27 +4652,31 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
                 if filing["type"] == "buy" and filing["dollar_amount"] > 50_000:
                     form4_score += 0.1
         except Exception as e:
-            logger.debug(f"Form4 fetch failed for {ticker}: {e}")  # Reduced to debug level
+            logger.debug(
+                f"Form4 fetch failed for {ticker}: {e}"
+            )  # Reduced to debug level
 
         final_score = 0.8 * news_score + 0.2 * form4_score
         final_score = max(-1.0, min(1.0, final_score))
-        
+
         # AI-AGENT-REF: Record success and update cache
         _record_sentiment_success()
         with sentiment_lock:
             _SENTIMENT_CACHE[ticker] = (now_ts, final_score)
         return final_score
-        
+
     except requests.exceptions.RequestException as e:
         logger.warning(f"Sentiment API request failed for {ticker}: {e}")
         _record_sentiment_failure()
-        
+
         # AI-AGENT-REF: Fallback to cached data or neutral if no cache
         with sentiment_lock:
             cached = _SENTIMENT_CACHE.get(ticker)
             if cached:
                 _, last_score = cached
-                logger.debug(f"Using cached sentiment fallback {last_score} for {ticker}")
+                logger.debug(
+                    f"Using cached sentiment fallback {last_score} for {ticker}"
+                )
                 return last_score
             # No cache available, return neutral
             _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
@@ -4342,7 +4716,7 @@ def predict_text_sentiment(text: str) -> float:
     return 0.0
 
 
-def fetch_form4_filings(ticker: str) -> List[dict]:
+def fetch_form4_filings(ticker: str) -> list[dict]:
     """
     Scrape SEC Form 4 filings for insider trade info.
     Returns a list of dicts: {"date": datetime, "type": "buy"/"sell", "dollar_amount": float}.
@@ -4397,8 +4771,8 @@ def _can_fetch_events(symbol: str) -> bool:
     return True
 
 
-_calendar_cache: Dict[str, pd.DataFrame] = {}
-_calendar_last_fetch: Dict[str, date] = {}
+_calendar_cache: dict[str, pd.DataFrame] = {}
+_calendar_last_fetch: dict[str, date] = {}
 
 
 def get_calendar_safe(symbol: str) -> pd.DataFrame:
@@ -4428,7 +4802,7 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
             if "Value" not in cal.index or col not in cal.columns:
                 continue
             raw = cal.at["Value", col]
-            if isinstance(raw, (list, tuple)):
+            if isinstance(raw, list | tuple):
                 raw = raw[0]
             dates.append(pd.to_datetime(raw))
     except Exception:
@@ -4534,47 +4908,55 @@ def count_day_trades() -> int:
 )
 def check_pdt_rule(ctx: BotContext) -> bool:
     """Check PDT rule with graceful degradation when Alpaca is unavailable.
-    
+
     Returns False when Alpaca is unavailable, allowing the bot to continue
     operating in simulation mode.
     """
     acct = safe_alpaca_get_account(ctx)
-    
+
     # If account is unavailable (Alpaca not available), assume no PDT blocking
     if acct is None:
-        logger.info("PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions")
+        logger.info(
+            "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions"
+        )
         return False
-    
+
     try:
         equity = float(acct.equity)
     except (AttributeError, TypeError, ValueError):
-        logger.warning("PDT_CHECK_FAILED - Invalid equity value, assuming no PDT restrictions")
+        logger.warning(
+            "PDT_CHECK_FAILED - Invalid equity value, assuming no PDT restrictions"
+        )
         return False
 
     # AI-AGENT-REF: Improve API null value handling for PDT checks
     api_day_trades = (
-        getattr(acct, "pattern_day_trades", None) 
-        or getattr(acct, "pattern_day_trades_count", None) 
+        getattr(acct, "pattern_day_trades", None)
+        or getattr(acct, "pattern_day_trades_count", None)
         or 0  # Default to 0 if API returns null
     )
     api_buying_pw = (
-        getattr(acct, "daytrade_buying_power", None) 
+        getattr(acct, "daytrade_buying_power", None)
         or getattr(acct, "day_trade_buying_power", None)
         or getattr(acct, "buying_power", None)  # Fallback to regular buying power
         or 0  # Default to 0 if API returns null
     )
-    
+
     # Convert to proper types and handle potential string values
     try:
         api_day_trades = int(api_day_trades) if api_day_trades is not None else 0
     except (ValueError, TypeError):
-        logger.warning("Invalid day_trades value from API: %s, defaulting to 0", api_day_trades)
+        logger.warning(
+            "Invalid day_trades value from API: %s, defaulting to 0", api_day_trades
+        )
         api_day_trades = 0
-        
+
     try:
         api_buying_pw = float(api_buying_pw) if api_buying_pw is not None else 0.0
     except (ValueError, TypeError):
-        logger.warning("Invalid buying_power value from API: %s, defaulting to 0", api_buying_pw)
+        logger.warning(
+            "Invalid buying_power value from API: %s, defaulting to 0", api_buying_pw
+        )
         api_buying_pw = 0.0
 
     logger.info(
@@ -4609,7 +4991,7 @@ def set_halt_flag(reason: str) -> None:
     """Persist a halt flag with the provided reason."""
     try:
         with open(HALT_FLAG_PATH, "w") as f:
-            f.write(f"{reason} " + dt_.now(timezone.utc).isoformat())
+            f.write(f"{reason} " + dt_.now(UTC).isoformat())
         logger.info(f"TRADING_HALTED set due to {reason}")
     except Exception as exc:  # pragma: no cover - disk issues
         logger.error(f"Failed to write halt flag: {exc}")
@@ -4623,7 +5005,7 @@ def check_halt_flag(ctx: BotContext | None = None) -> bool:
     reason = None
     if os.path.exists(HALT_FLAG_PATH):
         try:
-            with open(HALT_FLAG_PATH, "r") as f:
+            with open(HALT_FLAG_PATH) as f:
                 content = f.read().strip()
         except Exception:
             content = ""
@@ -4642,7 +5024,9 @@ def check_halt_flag(ctx: BotContext | None = None) -> bool:
                     reason = "margin breach"
             except Exception as e:
                 # Failed to check margin status - log error and treat as potential risk
-                logger.warning("Failed to check margin status for halt condition: %s", e)
+                logger.warning(
+                    "Failed to check margin status for halt condition: %s", e
+                )
                 reason = "margin check failure"
 
     if reason:
@@ -4651,30 +5035,34 @@ def check_halt_flag(ctx: BotContext | None = None) -> bool:
     return False
 
 
-def too_many_positions(ctx: BotContext, symbol: Optional[str] = None) -> bool:
+def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
     """Check if there are too many positions, with allowance for rebalancing."""
     try:
         current_positions = ctx.api.get_all_positions()
         position_count = len(current_positions)
-        
+
         # If we're not at the limit, allow new positions
         if position_count < MAX_PORTFOLIO_POSITIONS:
             return False
-        
+
         # If we're at the limit, check if this is a rebalancing opportunity
         if symbol and position_count >= MAX_PORTFOLIO_POSITIONS:
             # Allow trades for symbols we already have positions in (rebalancing)
             existing_symbols = {pos.symbol for pos in current_positions}
             if symbol in existing_symbols:
-                logger.info(f"ALLOW_REBALANCING | symbol={symbol} existing_positions={position_count}")
+                logger.info(
+                    f"ALLOW_REBALANCING | symbol={symbol} existing_positions={position_count}"
+                )
                 return False
-            
+
             # For new symbols at position limit, check if we can close underperforming positions
             # This implements intelligent position management
-            logger.info(f"POSITION_LIMIT_REACHED | current={position_count} max={MAX_PORTFOLIO_POSITIONS} new_symbol={symbol}")
-        
+            logger.info(
+                f"POSITION_LIMIT_REACHED | current={position_count} max={MAX_PORTFOLIO_POSITIONS} new_symbol={symbol}"
+            )
+
         return position_count >= MAX_PORTFOLIO_POSITIONS
-        
+
     except Exception as e:
         logger.warning(f"[too_many_positions] Could not fetch positions: {e}")
         return False
@@ -4694,7 +5082,7 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
     if "exit_time" not in df.columns or "symbol" not in df.columns:
         return False
     open_syms = df.loc[df.exit_time == "", "symbol"].unique().tolist() + [sym]
-    rets: Dict[str, pd.Series] = {}
+    rets: dict[str, pd.Series] = {}
     for s in open_syms:
         d = ctx.data_fetcher.get_daily_df(ctx, s)
         if d is None or d.empty:
@@ -4731,73 +5119,135 @@ def get_sector(symbol: str) -> str:
     """
     if symbol in _SECTOR_CACHE:
         return _SECTOR_CACHE[symbol]
-    
+
     # AI-AGENT-REF: Fallback sector mappings for common stocks when yfinance fails
     SECTOR_MAPPINGS = {
-        # Technology 
-        "AAPL": "Technology", "MSFT": "Technology", "GOOGL": "Technology", "GOOG": "Technology",
-        "AMZN": "Technology", "TSLA": "Technology", "META": "Technology", "NVDA": "Technology",
-        "NFLX": "Technology", "AMD": "Technology", "INTC": "Technology", "ORCL": "Technology",
-        "CRM": "Technology", "ADBE": "Technology", "PYPL": "Technology", "UBER": "Technology",
-        "SQ": "Technology", "SHOP": "Technology", "TWLO": "Technology", "ZM": "Technology",
+        # Technology
+        "AAPL": "Technology",
+        "MSFT": "Technology",
+        "GOOGL": "Technology",
+        "GOOG": "Technology",
+        "AMZN": "Technology",
+        "TSLA": "Technology",
+        "META": "Technology",
+        "NVDA": "Technology",
+        "NFLX": "Technology",
+        "AMD": "Technology",
+        "INTC": "Technology",
+        "ORCL": "Technology",
+        "CRM": "Technology",
+        "ADBE": "Technology",
+        "PYPL": "Technology",
+        "UBER": "Technology",
+        "SQ": "Technology",
+        "SHOP": "Technology",
+        "TWLO": "Technology",
+        "ZM": "Technology",
         "PLTR": "Technology",  # AI-AGENT-REF: Added PLTR to Technology sector per problem statement
         "BABA": "Technology",  # AI-AGENT-REF: Added BABA to Technology sector per problem statement
-        "JD": "Technology", "PDD": "Technology", "TCEHY": "Technology",  # Additional Chinese tech stocks
-        
+        "JD": "Technology",
+        "PDD": "Technology",
+        "TCEHY": "Technology",  # Additional Chinese tech stocks
         # Financial Services
-        "JPM": "Financial Services", "BAC": "Financial Services", "WFC": "Financial Services",
-        "GS": "Financial Services", "MS": "Financial Services", "C": "Financial Services",
-        "V": "Financial Services", "MA": "Financial Services", "BRK.B": "Financial Services",
+        "JPM": "Financial Services",
+        "BAC": "Financial Services",
+        "WFC": "Financial Services",
+        "GS": "Financial Services",
+        "MS": "Financial Services",
+        "C": "Financial Services",
+        "V": "Financial Services",
+        "MA": "Financial Services",
+        "BRK.B": "Financial Services",
         "AXP": "Financial Services",
-        
         # Healthcare
-        "JNJ": "Healthcare", "PFE": "Healthcare", "ABBV": "Healthcare", "MRK": "Healthcare", 
-        "UNH": "Healthcare", "TMO": "Healthcare", "MDT": "Healthcare", "ABT": "Healthcare",
-        "LLY": "Healthcare", "BMY": "Healthcare", "AMGN": "Healthcare", "GILD": "Healthcare",
-        
+        "JNJ": "Healthcare",
+        "PFE": "Healthcare",
+        "ABBV": "Healthcare",
+        "MRK": "Healthcare",
+        "UNH": "Healthcare",
+        "TMO": "Healthcare",
+        "MDT": "Healthcare",
+        "ABT": "Healthcare",
+        "LLY": "Healthcare",
+        "BMY": "Healthcare",
+        "AMGN": "Healthcare",
+        "GILD": "Healthcare",
         # Consumer Cyclical
-        "AMZN": "Consumer Cyclical", "HD": "Consumer Cyclical", "NKE": "Consumer Cyclical",
-        "MCD": "Consumer Cyclical", "SBUX": "Consumer Cyclical", "DIS": "Consumer Cyclical",
-        "LOW": "Consumer Cyclical", "TGT": "Consumer Cyclical",
-        
-        # Consumer Defensive 
-        "PG": "Consumer Defensive", "KO": "Consumer Defensive", "PEP": "Consumer Defensive",
-        "WMT": "Consumer Defensive", "COST": "Consumer Defensive", "CL": "Consumer Defensive",
-        
+        "AMZN": "Consumer Cyclical",
+        "HD": "Consumer Cyclical",
+        "NKE": "Consumer Cyclical",
+        "MCD": "Consumer Cyclical",
+        "SBUX": "Consumer Cyclical",
+        "DIS": "Consumer Cyclical",
+        "LOW": "Consumer Cyclical",
+        "TGT": "Consumer Cyclical",
+        # Consumer Defensive
+        "PG": "Consumer Defensive",
+        "KO": "Consumer Defensive",
+        "PEP": "Consumer Defensive",
+        "WMT": "Consumer Defensive",
+        "COST": "Consumer Defensive",
+        "CL": "Consumer Defensive",
         # Communication Services
-        "GOOGL": "Communication Services", "GOOG": "Communication Services", "META": "Communication Services",
-        "NFLX": "Communication Services", "DIS": "Communication Services", "VZ": "Communication Services",
-        "T": "Communication Services", "CMCSA": "Communication Services",
-        
+        "GOOGL": "Communication Services",
+        "GOOG": "Communication Services",
+        "META": "Communication Services",
+        "NFLX": "Communication Services",
+        "DIS": "Communication Services",
+        "VZ": "Communication Services",
+        "T": "Communication Services",
+        "CMCSA": "Communication Services",
         # Energy
-        "XOM": "Energy", "CVX": "Energy", "COP": "Energy", "EOG": "Energy", "SLB": "Energy",
-        
-        # Industrials  
-        "BA": "Industrials", "CAT": "Industrials", "GE": "Industrials", "MMM": "Industrials",
-        "UPS": "Industrials", "HON": "Industrials", "LMT": "Industrials", "RTX": "Industrials",
-        
+        "XOM": "Energy",
+        "CVX": "Energy",
+        "COP": "Energy",
+        "EOG": "Energy",
+        "SLB": "Energy",
+        # Industrials
+        "BA": "Industrials",
+        "CAT": "Industrials",
+        "GE": "Industrials",
+        "MMM": "Industrials",
+        "UPS": "Industrials",
+        "HON": "Industrials",
+        "LMT": "Industrials",
+        "RTX": "Industrials",
         # Utilities
-        "NEE": "Utilities", "DUK": "Utilities", "SO": "Utilities", "D": "Utilities",
-        
+        "NEE": "Utilities",
+        "DUK": "Utilities",
+        "SO": "Utilities",
+        "D": "Utilities",
         # Real Estate
-        "AMT": "Real Estate", "CCI": "Real Estate", "EQIX": "Real Estate", "PSA": "Real Estate",
-        
+        "AMT": "Real Estate",
+        "CCI": "Real Estate",
+        "EQIX": "Real Estate",
+        "PSA": "Real Estate",
         # Materials
-        "LIN": "Basic Materials", "APD": "Basic Materials", "ECL": "Basic Materials", "DD": "Basic Materials",
-        
+        "LIN": "Basic Materials",
+        "APD": "Basic Materials",
+        "ECL": "Basic Materials",
+        "DD": "Basic Materials",
         # ETFs - treat as diversified
-        "SPY": "Diversified", "QQQ": "Technology", "IWM": "Diversified", "VTI": "Diversified",
-        "VOO": "Diversified", "VEA": "Diversified", "VWO": "Diversified", "BND": "Fixed Income",
-        "TLT": "Fixed Income", "GLD": "Commodities", "SLV": "Commodities"
+        "SPY": "Diversified",
+        "QQQ": "Technology",
+        "IWM": "Diversified",
+        "VTI": "Diversified",
+        "VOO": "Diversified",
+        "VEA": "Diversified",
+        "VWO": "Diversified",
+        "BND": "Fixed Income",
+        "TLT": "Fixed Income",
+        "GLD": "Commodities",
+        "SLV": "Commodities",
     }
-    
+
     # First try fallback mapping
     if symbol in SECTOR_MAPPINGS:
         sector = SECTOR_MAPPINGS[symbol]
         _SECTOR_CACHE[symbol] = sector
         logger.debug(f"Using fallback sector mapping for {symbol}: {sector}")
         return sector
-    
+
     # Then try yfinance if available
     if YFINANCE_AVAILABLE:
         try:
@@ -4809,7 +5259,7 @@ def get_sector(symbol: str) -> str:
                 return sector
         except Exception as e:
             logger.debug(f"yfinance sector lookup failed for {symbol}: {e}")
-    
+
     # Default to Unknown if all methods fail
     sector = "Unknown"
     _SECTOR_CACHE[symbol] = sector
@@ -4817,7 +5267,7 @@ def get_sector(symbol: str) -> str:
     return sector
 
 
-def sector_exposure(ctx: BotContext) -> Dict[str, float]:
+def sector_exposure(ctx: BotContext) -> dict[str, float]:
     """Return current portfolio exposure by sector as fraction of equity."""
     try:
         positions = ctx.api.get_all_positions()
@@ -4827,7 +5277,7 @@ def sector_exposure(ctx: BotContext) -> Dict[str, float]:
         total = float(ctx.api.get_account().portfolio_value)
     except Exception:
         total = 0.0
-    exposure: Dict[str, float] = {}
+    exposure: dict[str, float] = {}
     for pos in positions:
         qty = abs(int(getattr(pos, "qty", 0)))
         price = float(
@@ -4837,7 +5287,7 @@ def sector_exposure(ctx: BotContext) -> Dict[str, float]:
         val = qty * price
         exposure[sec] = exposure.get(sec, 0.0) + val
     if total <= 0:
-        return {k: 0.0 for k in exposure}
+        return dict.fromkeys(exposure, 0.0)
     return {k: v / total for k, v in exposure.items()}
 
 
@@ -4848,71 +5298,89 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
     try:
         total = float(ctx.api.get_account().portfolio_value)
     except Exception as e:
-        logger.warning(f"SECTOR_EXPOSURE_PORTFOLIO_ERROR: Failed to get portfolio value for {symbol}: {e}")
+        logger.warning(
+            f"SECTOR_EXPOSURE_PORTFOLIO_ERROR: Failed to get portfolio value for {symbol}: {e}"
+        )
         total = 0.0
-    
+
     # Calculate trade value and exposure metrics
     trade_value = qty * price
     current_sector_exposure = exposures.get(sec, 0.0)
-    projected_exposure = current_sector_exposure + (trade_value / total) if total > 0 else 0.0
+    projected_exposure = (
+        current_sector_exposure + (trade_value / total) if total > 0 else 0.0
+    )
     cap = getattr(ctx, "sector_cap", SECTOR_EXPOSURE_CAP)
-    
+
     # AI-AGENT-REF: Enhanced sector cap logic with clear reasoning
     if total <= 0:
         # For empty portfolios, allow initial positions as they can't exceed sector caps
-        logger.info(f"SECTOR_EXPOSURE_EMPTY_PORTFOLIO: Allowing initial position for {symbol} (sector: {sec})")
+        logger.info(
+            f"SECTOR_EXPOSURE_EMPTY_PORTFOLIO: Allowing initial position for {symbol} (sector: {sec})"
+        )
         return True
-    
+
     # AI-AGENT-REF: Special handling for "Unknown" sector to prevent false concentration
     if sec == "Unknown":
         # Use a higher cap for Unknown sector since it's a catch-all category
         # and may contain diversified stocks that couldn't be classified
-        unknown_cap = min(cap * 2.0, 0.8)  # Allow up to 2x normal cap or 80%, whichever is lower
-        logger.debug(f"SECTOR_EXPOSURE_UNKNOWN: Using relaxed cap {unknown_cap:.1%} for Unknown sector")
+        unknown_cap = min(
+            cap * 2.0, 0.8
+        )  # Allow up to 2x normal cap or 80%, whichever is lower
+        logger.debug(
+            f"SECTOR_EXPOSURE_UNKNOWN: Using relaxed cap {unknown_cap:.1%} for Unknown sector"
+        )
         cap = unknown_cap
-    
+
     # Log detailed exposure analysis
     exposure_pct = current_sector_exposure * 100
     projected_pct = projected_exposure * 100
     cap_pct = cap * 100
-    
+
     # AI-AGENT-REF: Enhanced debugging for sector exposure analysis
-    logger.info(f"SECTOR_EXPOSURE_DEBUG: {symbol} analysis - "
-               f"Sector: {sec}, Trade Value: ${trade_value:,.2f}, "
-               f"Portfolio Value: ${total:,.2f}, "
-               f"Current Sector Exposure: {exposure_pct:.1f}%, "
-               f"Projected Exposure: {projected_pct:.1f}%, "
-               f"Sector Cap: {cap_pct:.1f}%")
-    
-    logger.debug(f"SECTOR_EXPOSURE_ANALYSIS: {symbol} (sector: {sec}) - "
-                f"Current: {exposure_pct:.1f}%, Projected: {projected_pct:.1f}%, Cap: {cap_pct:.1f}%")
-    
+    logger.info(
+        f"SECTOR_EXPOSURE_DEBUG: {symbol} analysis - "
+        f"Sector: {sec}, Trade Value: ${trade_value:,.2f}, "
+        f"Portfolio Value: ${total:,.2f}, "
+        f"Current Sector Exposure: {exposure_pct:.1f}%, "
+        f"Projected Exposure: {projected_pct:.1f}%, "
+        f"Sector Cap: {cap_pct:.1f}%"
+    )
+
+    logger.debug(
+        f"SECTOR_EXPOSURE_ANALYSIS: {symbol} (sector: {sec}) - "
+        f"Current: {exposure_pct:.1f}%, Projected: {projected_pct:.1f}%, Cap: {cap_pct:.1f}%"
+    )
+
     if projected_exposure <= cap:
-        logger.debug(f"SECTOR_EXPOSURE_OK: {symbol} trade approved - projected exposure {projected_pct:.1f}% within {cap_pct:.1f}% cap")
+        logger.debug(
+            f"SECTOR_EXPOSURE_OK: {symbol} trade approved - projected exposure {projected_pct:.1f}% within {cap_pct:.1f}% cap"
+        )
         return True
     else:
         # Provide clear reasoning for sector cap rejection
         excess_pct = (projected_exposure - cap) * 100
-        logger.warning(f"SECTOR_EXPOSURE_EXCEEDED: {symbol} trade rejected - "
-                      f"projected exposure {projected_pct:.1f}% exceeds {cap_pct:.1f}% cap by {excess_pct:.1f}%", 
-                      extra={
-                          "symbol": symbol,
-                          "sector": sec,
-                          "current_exposure_pct": exposure_pct,
-                          "projected_exposure_pct": projected_pct,
-                          "cap_pct": cap_pct,
-                          "excess_pct": excess_pct,
-                          "trade_value": trade_value,
-                          "portfolio_value": total,
-                          "reason": "sector_concentration_risk"
-                      })
+        logger.warning(
+            f"SECTOR_EXPOSURE_EXCEEDED: {symbol} trade rejected - "
+            f"projected exposure {projected_pct:.1f}% exceeds {cap_pct:.1f}% cap by {excess_pct:.1f}%",
+            extra={
+                "symbol": symbol,
+                "sector": sec,
+                "current_exposure_pct": exposure_pct,
+                "projected_exposure_pct": projected_pct,
+                "cap_pct": cap_pct,
+                "excess_pct": excess_pct,
+                "trade_value": trade_value,
+                "portfolio_value": total,
+                "reason": "sector_concentration_risk",
+            },
+        )
         return False
 
 
 # ─── K. SIZING & EXECUTION HELPERS ─────────────────────────────────────────────
 def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
     """Return True if current time is during regular Eastern trading hours."""
-    now_et = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York"))
+    now_et = datetime.now(UTC).astimezone(ZoneInfo("America/New_York"))
     start = dt_time(9, 30)
     end = dt_time(16, 0)
     if not (start <= now_et.time() <= end):
@@ -4923,7 +5391,7 @@ def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
         return False
     if (
         state.streak_halt_until
-        and datetime.now(timezone.utc).astimezone(PACIFIC) < state.streak_halt_until
+        and datetime.now(UTC).astimezone(PACIFIC) < state.streak_halt_until
     ):
         logger.info("SKIP_STREAK_HALT", extra={"until": state.streak_halt_until})
         return False
@@ -4938,92 +5406,113 @@ def scaled_atr_stop(
     market_close: datetime,
     max_factor: float = 2.0,
     min_factor: float = 0.5,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """Calculate scaled ATR stop-loss and take-profit with comprehensive validation."""
     try:
         # AI-AGENT-REF: Add comprehensive input validation for stop-loss calculation
-        
+
         # Validate entry price
-        if not isinstance(entry_price, (int, float)) or entry_price <= 0:
+        if not isinstance(entry_price, int | float) or entry_price <= 0:
             logger.error("Invalid entry price for ATR stop: %s", entry_price)
-            return entry_price * 0.95, entry_price * 1.05  # Return conservative defaults
-        
+            return (
+                entry_price * 0.95,
+                entry_price * 1.05,
+            )  # Return conservative defaults
+
         # Validate ATR
-        if not isinstance(atr, (int, float)) or atr < 0:
+        if not isinstance(atr, int | float) or atr < 0:
             logger.error("Invalid ATR for stop calculation: %s", atr)
             return entry_price * 0.95, entry_price * 1.05
-        
+
         if atr == 0:
             logger.warning("ATR is zero, using 1% stop/take levels")
             return entry_price * 0.99, entry_price * 1.01
-        
+
         # Validate datetime inputs
         if not all(isinstance(dt, datetime) for dt in [now, market_open, market_close]):
             logger.error("Invalid datetime inputs for ATR stop calculation")
             return entry_price * 0.95, entry_price * 1.05
-        
+
         # Validate market times make sense
         if market_close <= market_open:
-            logger.error("Invalid market times: close=%s <= open=%s", market_close, market_open)
+            logger.error(
+                "Invalid market times: close=%s <= open=%s", market_close, market_open
+            )
             return entry_price * 0.95, entry_price * 1.05
-        
+
         # Validate factors
-        if not isinstance(max_factor, (int, float)) or max_factor <= 0:
+        if not isinstance(max_factor, int | float) or max_factor <= 0:
             logger.warning("Invalid max_factor %s, using default 2.0", max_factor)
             max_factor = 2.0
-        
-        if not isinstance(min_factor, (int, float)) or min_factor < 0:
+
+        if not isinstance(min_factor, int | float) or min_factor < 0:
             logger.warning("Invalid min_factor %s, using default 0.5", min_factor)
             min_factor = 0.5
-        
+
         if min_factor > max_factor:
-            logger.warning("min_factor %s > max_factor %s, swapping", min_factor, max_factor)
+            logger.warning(
+                "min_factor %s > max_factor %s, swapping", min_factor, max_factor
+            )
             min_factor, max_factor = max_factor, min_factor
-        
+
         # Calculate time-based scaling factor
         total = (market_close - market_open).total_seconds()
         elapsed = (now - market_open).total_seconds()
-        
+
         # Handle edge cases
         if total <= 0:
             logger.warning("Invalid market session duration: %s seconds", total)
             α = 0.5  # Use middle factor
         else:
             α = max(0, min(1, 1 - elapsed / total))
-        
+
         factor = min_factor + α * (max_factor - min_factor)
-        
+
         # Validate factor is reasonable
         if factor <= 0 or factor > 10:  # Sanity check - no more than 10x ATR
             logger.warning("Calculated factor %s out of bounds, capping", factor)
             factor = max(0.1, min(factor, 10.0))
-        
+
         stop = entry_price - factor * atr
         take = entry_price + factor * atr
-        
+
         # Validate calculated levels are reasonable
         if stop < 0:
             logger.warning("Calculated stop price %s is negative, adjusting", stop)
             stop = entry_price * 0.5  # Minimum 50% stop
-        
+
         if take <= entry_price:
-            logger.warning("Calculated take profit %s <= entry price %s, adjusting", take, entry_price)
+            logger.warning(
+                "Calculated take profit %s <= entry price %s, adjusting",
+                take,
+                entry_price,
+            )
             take = entry_price * 1.1  # Minimum 10% profit target
-        
+
         # Ensure stop is below entry and take is above entry
         if stop >= entry_price:
-            logger.warning("Stop price %s >= entry price %s, adjusting", stop, entry_price)
+            logger.warning(
+                "Stop price %s >= entry price %s, adjusting", stop, entry_price
+            )
             stop = entry_price * 0.95
-        
+
         if take <= entry_price:
-            logger.warning("Take profit %s <= entry price %s, adjusting", take, entry_price)
+            logger.warning(
+                "Take profit %s <= entry price %s, adjusting", take, entry_price
+            )
             take = entry_price * 1.05
-        
-        logger.debug("ATR stop calculation: entry=%s, atr=%s, factor=%s, stop=%s, take=%s", 
-                    entry_price, atr, factor, stop, take)
-        
+
+        logger.debug(
+            "ATR stop calculation: entry=%s, atr=%s, factor=%s, stop=%s, take=%s",
+            entry_price,
+            atr,
+            factor,
+            stop,
+            take,
+        )
+
         return stop, take
-        
+
     except Exception as e:
         logger.error("Error in ATR stop calculation: %s", e)
         # Return conservative defaults on error
@@ -5055,16 +5544,22 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     except Exception:
         spread = 0.0
     vol_score = min(1.0, avg_vol / ctx.volume_threshold) if avg_vol else 0.0
-    
+
     # AI-AGENT-REF: More reasonable spread scoring to reduce excessive retries
     # Dynamic spread threshold based on volume - high volume stocks can handle wider spreads
     base_spread_threshold = 0.05
-    volume_adjusted_threshold = base_spread_threshold * (1 + min(1.0, avg_vol / 1000000))
-    spread_score = max(0.2, 1 - spread / volume_adjusted_threshold)  # Min 0.2 instead of 0.0
-    
+    volume_adjusted_threshold = base_spread_threshold * (
+        1 + min(1.0, avg_vol / 1000000)
+    )
+    spread_score = max(
+        0.2, 1 - spread / volume_adjusted_threshold
+    )  # Min 0.2 instead of 0.0
+
     # Combine scores with less aggressive penalization
-    final_score = (vol_score * 0.7) + (spread_score * 0.3)  # Weight volume more than spread
-    
+    final_score = (vol_score * 0.7) + (
+        spread_score * 0.3
+    )  # Weight volume more than spread
+
     return max(0.1, min(1.0, final_score))  # Min 0.1 to avoid complete blocking
 
 
@@ -5080,23 +5575,27 @@ def fractional_kelly_size(
     # AI-AGENT-REF: Add comprehensive input validation for Kelly calculation
     try:
         # Validate inputs
-        if not isinstance(balance, (int, float)) or balance <= 0:
+        if not isinstance(balance, int | float) or balance <= 0:
             logger.error("Invalid balance for Kelly calculation: %s", balance)
             return 0
-        
-        if not isinstance(price, (int, float)) or price <= 0:
+
+        if not isinstance(price, int | float) or price <= 0:
             logger.error("Invalid price for Kelly calculation: %s", price)
             return 0
-        
-        if not isinstance(atr, (int, float)) or atr < 0:
-            logger.warning("Invalid ATR for Kelly calculation: %s, using minimum position", atr)
+
+        if not isinstance(atr, int | float) or atr < 0:
+            logger.warning(
+                "Invalid ATR for Kelly calculation: %s, using minimum position", atr
+            )
             return 1
-        
+
         # AI-AGENT-REF: Normalize confidence values to valid probability range
-        if not isinstance(win_prob, (int, float)):
-            logger.error("Invalid win probability type for Kelly calculation: %s", win_prob)
+        if not isinstance(win_prob, int | float):
+            logger.error(
+                "Invalid win probability type for Kelly calculation: %s", win_prob
+            )
             return 0
-        
+
         # Handle confidence values that exceed 1.0 by normalizing them
         if win_prob > 1.0:
             logger.debug("Normalizing confidence value %s to probability", win_prob)
@@ -5107,20 +5606,24 @@ def fractional_kelly_size(
         elif win_prob < 0:
             logger.warning("Negative confidence value %s, using 0.0", win_prob)
             win_prob = 0.0
-        
-        if not isinstance(payoff_ratio, (int, float)) or payoff_ratio <= 0:
+
+        if not isinstance(payoff_ratio, int | float) or payoff_ratio <= 0:
             logger.error("Invalid payoff ratio for Kelly calculation: %s", payoff_ratio)
             return 0
-        
+
         # Validate ctx object and its attributes
-        if not hasattr(ctx, 'kelly_fraction') or not isinstance(ctx.kelly_fraction, (int, float)):
+        if not hasattr(ctx, "kelly_fraction") or not isinstance(
+            ctx.kelly_fraction, int | float
+        ):
             logger.error("Invalid kelly_fraction in context")
             return 0
-        
-        if not hasattr(ctx, 'max_position_dollars') or not isinstance(ctx.max_position_dollars, (int, float)):
+
+        if not hasattr(ctx, "max_position_dollars") or not isinstance(
+            ctx.max_position_dollars, int | float
+        ):
             logger.error("Invalid max_position_dollars in context")
             return 0
-        
+
         # AI-AGENT-REF: adaptive kelly fraction based on historical peak equity
         if os.path.exists(PEAK_EQUITY_FILE):
             try:
@@ -5130,29 +5633,36 @@ def fractional_kelly_size(
                         try:
                             data = lock.read()
                         except io.UnsupportedOperation:
-                            logger.warning("Cannot read peak equity file, using current balance")
+                            logger.warning(
+                                "Cannot read peak equity file, using current balance"
+                            )
                             return 0
                         prev_peak = float(data) if data else balance
                         if prev_peak <= 0:
-                            logger.warning("Invalid peak equity %s, using current balance", prev_peak)
+                            logger.warning(
+                                "Invalid peak equity %s, using current balance",
+                                prev_peak,
+                            )
                             prev_peak = balance
                     finally:
                         portalocker.unlock(lock)
-            except (OSError, IOError, ValueError) as e:
-                logger.warning("Error reading peak equity file: %s, using current balance", e)
+            except (OSError, ValueError) as e:
+                logger.warning(
+                    "Error reading peak equity file: %s, using current balance", e
+                )
                 prev_peak = balance
         else:
             prev_peak = balance
-        
+
         base_frac = ctx.kelly_fraction * ctx.capital_scaler.compression_factor(balance)
-        
+
         # Validate base_frac
-        if not isinstance(base_frac, (int, float)) or base_frac < 0 or base_frac > 1:
+        if not isinstance(base_frac, int | float) or base_frac < 0 or base_frac > 1:
             logger.error("Invalid base fraction calculated: %s", base_frac)
             return 0
-        
+
         drawdown = (prev_peak - balance) / prev_peak if prev_peak > 0 else 0
-        
+
         # Apply drawdown-based risk reduction
         if drawdown > 0.10:
             frac = 0.3
@@ -5160,33 +5670,36 @@ def fractional_kelly_size(
             frac = 0.45
         else:
             frac = base_frac
-        
+
         # Apply volatility-based risk reduction
         try:
             if is_high_vol_thr_spy():
                 frac *= 0.5
         except Exception as e:
             logger.warning("Error checking SPY volatility: %s", e)
-        
+
         cap_scale = frac / base_frac if base_frac > 0 else 1.0
 
         # Calculate Kelly edge with validation
         # AI-AGENT-REF: Fix division by zero in Kelly criterion calculation
         if payoff_ratio <= 0:
-            logger.warning("Invalid payoff_ratio %s for Kelly calculation, using zero position", payoff_ratio)
+            logger.warning(
+                "Invalid payoff_ratio %s for Kelly calculation, using zero position",
+                payoff_ratio,
+            )
             edge = 0
             kelly = 0
         else:
             edge = win_prob - (1 - win_prob) / payoff_ratio
             kelly = max(edge / payoff_ratio, 0) * frac
-        
+
         # Validate Kelly fraction is reasonable
         if kelly < 0 or kelly > 1:
             logger.warning("Kelly fraction %s out of bounds, capping", kelly)
             kelly = max(0, min(kelly, 1))
-        
+
         dollars_to_risk = kelly * balance
-        
+
         if atr <= 0:
             logger.warning("ATR is zero or negative, using minimum position size")
             try:
@@ -5197,7 +5710,7 @@ def fractional_kelly_size(
                         lock.write(str(new_peak))
                     finally:
                         portalocker.unlock(lock)
-            except (OSError, IOError) as e:
+            except OSError as e:
                 logger.warning("Error updating peak equity file: %s", e)
             return 1
 
@@ -5206,16 +5719,18 @@ def fractional_kelly_size(
         cap_pos = (balance * CAPITAL_CAP * cap_scale) / price if price > 0 else 0
         risk_cap = (balance * DOLLAR_RISK_LIMIT) / atr if atr > 0 else raw_pos
         dollar_cap = ctx.max_position_dollars / price if price > 0 else raw_pos
-        
+
         # Apply all limits
-        size = int(round(min(raw_pos, cap_pos, risk_cap, dollar_cap, MAX_POSITION_SIZE)))
+        size = int(
+            round(min(raw_pos, cap_pos, risk_cap, dollar_cap, MAX_POSITION_SIZE))
+        )
         size = max(size, 1)  # Ensure minimum position size
-        
+
         # Validate final size is reasonable
         if size > MAX_POSITION_SIZE:
             logger.warning("Position size %s exceeds maximum, capping", size)
             size = MAX_POSITION_SIZE
-        
+
         # Update peak equity
         try:
             new_peak = max(balance, prev_peak)
@@ -5225,14 +5740,20 @@ def fractional_kelly_size(
                     lock.write(str(new_peak))
                 finally:
                     portalocker.unlock(lock)
-        except (OSError, IOError) as e:
+        except OSError as e:
             logger.warning("Error updating peak equity file: %s", e)
-        
-        logger.debug("Kelly calculation: balance=%s, price=%s, atr=%s, win_prob=%s, size=%s", 
-                    balance, price, atr, win_prob, size)
-        
+
+        logger.debug(
+            "Kelly calculation: balance=%s, price=%s, atr=%s, win_prob=%s, size=%s",
+            balance,
+            price,
+            atr,
+            win_prob,
+            size,
+        )
+
         return size
-        
+
     except Exception as e:
         logger.error("Error in Kelly calculation: %s", e)
         return 0
@@ -5279,29 +5800,31 @@ def adjust_trailing_stop(position, new_stop: float) -> None:
     wait=wait_exponential(multiplier=1, min=1, max=10),
     retry=retry_if_exception_type(APIError),
 )
-def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Optional[Order]:
+def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | None:
     """Submit an order using the institutional execution engine."""
     if not market_is_open():
         logger.warning("MARKET_CLOSED_ORDER_SKIP", extra={"symbol": symbol})
         return None
-    
+
     # AI-AGENT-REF: Add validation for execution engine initialization
     if _exec_engine is None:
-        logger.error("EXEC_ENGINE_NOT_INITIALIZED", extra={
-            "symbol": symbol, "qty": qty, "side": side
-        })
+        logger.error(
+            "EXEC_ENGINE_NOT_INITIALIZED",
+            extra={"symbol": symbol, "qty": qty, "side": side},
+        )
         raise RuntimeError("Execution engine not initialized. Cannot execute orders.")
-    
+
     try:
         return _exec_engine.execute_order(symbol, qty, side)
     except Exception as e:
-        logger.error("ORDER_EXECUTION_FAILED", extra={
-            "symbol": symbol, "qty": qty, "side": side, "error": str(e)
-        })
+        logger.error(
+            "ORDER_EXECUTION_FAILED",
+            extra={"symbol": symbol, "qty": qty, "side": side, "error": str(e)},
+        )
         raise
 
 
-def safe_submit_order(api: TradingClient, req) -> Optional[Order]:
+def safe_submit_order(api: TradingClient, req) -> Order | None:
     config.reload_env()
     if not market_is_open():
         logger.warning(
@@ -5476,6 +5999,7 @@ def send_exit_order(
         order = safe_submit_order(ctx.api, req)
         if order is not None:
             from ai_trading.strategies.base import StrategySignal as TradeSignal
+
             try:
                 acct = ctx.api.get_account()
                 eq = float(getattr(acct, "equity", 0) or 0)
@@ -5506,6 +6030,7 @@ def send_exit_order(
     )
     if limit_order is not None:
         from ai_trading.strategies.base import StrategySignal as TradeSignal
+
         try:
             acct = ctx.api.get_account()
             eq = float(getattr(acct, "equity", 0) or 0)
@@ -5651,7 +6176,7 @@ def vwap_pegged_submit(
                             symbol,
                             vwap_price,
                             fill_price,
-                            datetime.now(timezone.utc),
+                            datetime.now(UTC),
                         )
                     )
                     with slippage_lock:
@@ -5768,21 +6293,21 @@ def pov_submit(
             spread = 0.0
 
         vol = df["volume"].iloc[-1]
-        
+
         # AI-AGENT-REF: Dynamic spread threshold based on market conditions
         # Instead of fixed 0.05, use dynamic threshold based on symbol characteristics
-        dynamic_spread_threshold = min(0.10, max(0.02, vol / 1000000 * 0.05))  
-        
+        dynamic_spread_threshold = min(0.10, max(0.02, vol / 1000000 * 0.05))
+
         if spread > dynamic_spread_threshold:
             # Less aggressive reduction - only 25% instead of 50%
             slice_qty = min(int(vol * cfg.pct * 0.75), total_qty - placed)
             logger.debug(
                 "[pov_submit] High spread detected, reducing slice by 25%",
                 extra={
-                    "symbol": symbol, 
-                    "spread": spread, 
+                    "symbol": symbol,
+                    "spread": spread,
                     "threshold": dynamic_spread_threshold,
-                    "reduced_slice_qty": slice_qty
+                    "reduced_slice_qty": slice_qty,
                 },
             )
         else:
@@ -5804,39 +6329,41 @@ def pov_submit(
                     extra={"symbol": symbol, "slice_qty": slice_qty},
                 )
                 continue
-            
+
             # Track actual filled quantity, not intended quantity
             actual_filled = int(getattr(order, "filled_qty", "0") or "0")
-            
+
             # For partially filled orders, the filled_qty might be less than slice_qty
             if actual_filled < slice_qty:
                 logger.warning(
                     "POV_SLICE_PARTIAL_FILL",
                     extra={
-                        "symbol": symbol, 
-                        "intended_qty": slice_qty, 
+                        "symbol": symbol,
+                        "intended_qty": slice_qty,
                         "actual_filled": actual_filled,
                         "order_id": getattr(order, "id", ""),
-                        "status": getattr(order, "status", "")
+                        "status": getattr(order, "status", ""),
                     },
                 )
-            
+
             placed += actual_filled  # Use actual filled, not intended
-            
+
         except Exception as e:
             logger.exception(
                 f"[pov_submit] submit_order failed on slice, aborting: {e}",
                 extra={"symbol": symbol},
             )
             return False
-        
+
         logger.info(
             "POV_SLICE_PLACED",
             extra={
-                "symbol": symbol, 
-                "slice_qty": slice_qty, 
-                "actual_filled": actual_filled if 'actual_filled' in locals() else slice_qty,
-                "total_placed": placed
+                "symbol": symbol,
+                "slice_qty": slice_qty,
+                "actual_filled": (
+                    actual_filled if "actual_filled" in locals() else slice_qty
+                ),
+                "total_placed": placed,
             },
         )
         pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
@@ -5891,17 +6418,17 @@ def calculate_entry_size(
     ctx: BotContext, symbol: str, price: float, atr: float, win_prob: float
 ) -> int:
     """Calculate entry size based on account balance and risk parameters."""
-        
+
     if ctx.api is None:
         logger.warning("ctx.api is None - using default entry size")
         return 1
-        
+
     try:
         cash = float(ctx.api.get_account().cash)
     except Exception as exc:
         logger.warning("Failed to get cash for entry size calculation: %s", exc)
         return 1
-        
+
     cap_pct = ctx.params.get("CAPITAL_CAP", CAPITAL_CAP)
     cap_sz = int(round((cash * cap_pct) / price)) if price > 0 else 0
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
@@ -5920,7 +6447,9 @@ def calculate_entry_size(
     if liq < 0.2:
         # If we have significant cash, still allow minimum position
         if cash > 5000:
-            logger.info(f"Low liquidity for {symbol} (factor={liq:.3f}), using minimum position size")
+            logger.info(
+                f"Low liquidity for {symbol} (factor={liq:.3f}), using minimum position size"
+            )
             return max(1, int(1000 / price)) if price > 0 else 1
         return 0
     size = int(round(base * factor * liq))
@@ -5929,11 +6458,11 @@ def calculate_entry_size(
 
 def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     """Execute entry order."""
-        
+
     if ctx.api is None:
         logger.warning("ctx.api is None - cannot execute entry")
         return
-        
+
     try:
         buying_pw = float(ctx.api.get_account().buying_power)
         if buying_pw <= 0:
@@ -5982,13 +6511,10 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     entry_price = get_latest_close(df_ind)
     ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "", confidence=0.5)
 
-    now_pac = datetime.now(timezone.utc).astimezone(PACIFIC)
+    now_pac = datetime.now(UTC).astimezone(PACIFIC)
     mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
     mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
-    if is_high_vol_regime():
-        tp_factor = TAKE_PROFIT_FACTOR * 1.1
-    else:
-        tp_factor = TAKE_PROFIT_FACTOR
+    tp_factor = TAKE_PROFIT_FACTOR * 1.1 if is_high_vol_regime() else TAKE_PROFIT_FACTOR
     stop, take = scaled_atr_stop(
         entry_price,
         df_ind["atr"].iloc[-1],
@@ -6053,7 +6579,7 @@ def liquidate_positions_if_needed(ctx: BotContext) -> None:
 # ─── L. SIGNAL & TRADE LOGIC ───────────────────────────────────────────────────
 def signal_and_confirm(
     ctx: BotContext, state: BotState, symbol: str, df: pd.DataFrame, model
-) -> Tuple[int, float, str]:
+) -> tuple[int, float, str]:
     """Wrapper that evaluates signals and checks confidence threshold."""
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, state, df, symbol, model)
     if sig == -1 or conf < CONF_THRESHOLD:
@@ -6073,7 +6599,7 @@ def pre_trade_checks(
     # Streak kill-switch check
     if (
         state.streak_halt_until
-        and datetime.now(timezone.utc).astimezone(PACIFIC) < state.streak_halt_until
+        and datetime.now(UTC).astimezone(PACIFIC) < state.streak_halt_until
     ):
         logger.info(
             "SKIP_STREAK_HALT",
@@ -6116,7 +6642,7 @@ def should_enter(
 
 def should_exit(
     ctx: BotContext, symbol: str, price: float, atr: float
-) -> Tuple[bool, int, str]:
+) -> tuple[bool, int, str]:
     try:
         pos = ctx.api.get_open_position(symbol)
         current_qty = int(pos.qty)
@@ -6204,7 +6730,7 @@ def _fetch_feature_data(
     ctx: BotContext,
     state: BotState,
     symbol: str,
-) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[bool]]:
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None, bool | None]:
     """Fetch raw price data and compute indicators.
 
     Returns ``(raw_df, feat_df, skip_flag)``. When data is missing returns
@@ -6302,7 +6828,7 @@ def _should_hold_position(df: pd.DataFrame) -> bool:
     except ImportError:
         # If indicators not available, fallback to simple logic
         return True
-    
+
     try:
         close = df["close"].astype(float)
         ema_fast = close.ewm(span=20, adjust=False).mean().iloc[-1]
@@ -6367,43 +6893,66 @@ def _enter_long(
     if current_price <= 0 or pd.isna(current_price):
         logger.critical(f"Invalid price computed for {symbol}: {current_price}")
         return True
-    
+
     # AI-AGENT-REF: Get target weight with sensible fallback for signal-based trading
     target_weight = ctx.portfolio_weights.get(symbol, 0.0)
     if target_weight == 0.0:
         # If no portfolio weight exists (e.g., new signal), calculate a reasonable default
         # Based on confidence and ensuring we don't exceed exposure limits
         confidence_weight = conf * 0.15  # Max 15% for high confidence signals
-        exposure_cap = getattr(ctx.config, 'exposure_cap_aggressive', 0.88) if hasattr(ctx, 'config') else 0.88
-        
+        exposure_cap = (
+            getattr(ctx.config, "exposure_cap_aggressive", 0.88)
+            if hasattr(ctx, "config")
+            else 0.88
+        )
+
         # Get current total exposure to avoid exceeding cap
         try:
             positions = ctx.api.get_all_positions()
-            current_exposure = sum(abs(float(p.market_value)) for p in positions) / float(ctx.api.get_account().equity)
+            current_exposure = sum(
+                abs(float(p.market_value)) for p in positions
+            ) / float(ctx.api.get_account().equity)
             available_exposure = max(0, exposure_cap - current_exposure)
-            target_weight = min(confidence_weight, available_exposure, 0.15)  # Cap at 15%
-            logger.info(f"Computed weight for {symbol}: {target_weight:.3f} (confidence={conf:.3f}, available_exposure={available_exposure:.3f})")
+            target_weight = min(
+                confidence_weight, available_exposure, 0.15
+            )  # Cap at 15%
+            logger.info(
+                f"Computed weight for {symbol}: {target_weight:.3f} (confidence={conf:.3f}, available_exposure={available_exposure:.3f})"
+            )
         except Exception as e:
-            logger.warning(f"Could not compute dynamic weight for {symbol}: {e}, using confidence-based weight")
+            logger.warning(
+                f"Could not compute dynamic weight for {symbol}: {e}, using confidence-based weight"
+            )
             target_weight = min(confidence_weight, 0.10)  # Conservative 10% fallback
-    
+
     raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
-    
+
     # AI-AGENT-REF: Fix zero quantity calculations - ensure minimum position size when cash available
     if raw_qty is None or not np.isfinite(raw_qty) or raw_qty <= 0:
         # If we have significant cash available and a valid signal, use minimum position size
         if balance > 1000 and target_weight > 0.001 and current_price > 0:
             raw_qty = max(1, int(1000 / current_price))  # Minimum $1000 position
-            logger.info(f"Using minimum position size for {symbol}: {raw_qty} shares (balance=${balance:.0f})")
+            logger.info(
+                f"Using minimum position size for {symbol}: {raw_qty} shares (balance=${balance:.0f})"
+            )
         else:
-            logger.warning(f"Skipping {symbol}: computed qty <= 0 (balance=${balance:.0f}, weight={target_weight:.4f})")
+            logger.warning(
+                f"Skipping {symbol}: computed qty <= 0 (balance=${balance:.0f}, weight={target_weight:.4f})"
+            )
             return True
     logger.info(
         f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={raw_qty}"
     )
     if not sector_exposure_ok(ctx, symbol, raw_qty, current_price):
-        logger.info("SKIP_SECTOR_CAP | Buy order skipped due to sector exposure limits", 
-                   extra={"symbol": symbol, "side": "buy", "qty": raw_qty, "price": current_price})
+        logger.info(
+            "SKIP_SECTOR_CAP | Buy order skipped due to sector exposure limits",
+            extra={
+                "symbol": symbol,
+                "side": "buy",
+                "qty": raw_qty,
+                "price": current_price,
+            },
+        )
         return True
     order = submit_order(ctx, symbol, raw_qty, "buy")
     if order is None:
@@ -6419,7 +6968,7 @@ def _enter_long(
             signal_tags=strat,
             confidence=conf,
         )
-        now_pac = datetime.now(timezone.utc).astimezone(PACIFIC)
+        now_pac = datetime.now(UTC).astimezone(PACIFIC)
         mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
         mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
         tp_factor = (
@@ -6439,11 +6988,11 @@ def _enter_long(
             ctx.take_profit_targets[symbol] = take
         # AI-AGENT-REF: Add thread-safe locking for trade cooldown modifications
         with trade_cooldowns_lock:
-            state.trade_cooldowns[symbol] = datetime.now(timezone.utc)
+            state.trade_cooldowns[symbol] = datetime.now(UTC)
         state.last_trade_direction[symbol] = "buy"
-        
+
         # AI-AGENT-REF: Record trade in frequency tracker for overtrading prevention
-        _record_trade_in_frequency_tracker(state, symbol, datetime.now(timezone.utc))
+        _record_trade_in_frequency_tracker(state, symbol, datetime.now(UTC))
     return True
 
 
@@ -6482,10 +7031,19 @@ def _enter_short(
         f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={qty}"
     )
     if not sector_exposure_ok(ctx, symbol, qty, current_price):
-        logger.info("SKIP_SECTOR_CAP | Short order skipped due to sector exposure limits", 
-                   extra={"symbol": symbol, "side": "sell_short", "qty": qty, "price": current_price})
+        logger.info(
+            "SKIP_SECTOR_CAP | Short order skipped due to sector exposure limits",
+            extra={
+                "symbol": symbol,
+                "side": "sell_short",
+                "qty": qty,
+                "price": current_price,
+            },
+        )
         return True
-    order = submit_order(ctx, symbol, qty, "sell_short")  # AI-AGENT-REF: Use sell_short for short signals
+    order = submit_order(
+        ctx, symbol, qty, "sell_short"
+    )  # AI-AGENT-REF: Use sell_short for short signals
     if order is None:
         logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
@@ -6499,7 +7057,7 @@ def _enter_short(
             signal_tags=strat,
             confidence=conf,
         )
-        now_pac = datetime.now(timezone.utc).astimezone(PACIFIC)
+        now_pac = datetime.now(UTC).astimezone(PACIFIC)
         mo = datetime.combine(now_pac.date(), ctx.market_open, PACIFIC)
         mc = datetime.combine(now_pac.date(), ctx.market_close, PACIFIC)
         tp_factor = (
@@ -6520,11 +7078,11 @@ def _enter_short(
             ctx.take_profit_targets[symbol] = take
         # AI-AGENT-REF: Add thread-safe locking for trade cooldown modifications
         with trade_cooldowns_lock:
-            state.trade_cooldowns[symbol] = datetime.now(timezone.utc)
+            state.trade_cooldowns[symbol] = datetime.now(UTC)
         state.last_trade_direction[symbol] = "sell"
-        
+
         # AI-AGENT-REF: Record trade in frequency tracker for overtrading prevention
-        _record_trade_in_frequency_tracker(state, symbol, datetime.now(timezone.utc))
+        _record_trade_in_frequency_tracker(state, symbol, datetime.now(UTC))
     return True
 
 
@@ -6553,11 +7111,11 @@ def _manage_existing_position(
         if reason == "stop_loss":
             # AI-AGENT-REF: Add thread-safe locking for trade cooldown modifications
             with trade_cooldowns_lock:
-                state.trade_cooldowns[symbol] = datetime.now(timezone.utc)
+                state.trade_cooldowns[symbol] = datetime.now(UTC)
             state.last_trade_direction[symbol] = "sell"
-            
+
             # AI-AGENT-REF: Record trade in frequency tracker for overtrading prevention
-            _record_trade_in_frequency_tracker(state, symbol, datetime.now(timezone.utc))
+            _record_trade_in_frequency_tracker(state, symbol, datetime.now(UTC))
         ctx.trade_logger.log_exit(state, symbol, price)
         try:
             pos_after = ctx.api.get_open_position(symbol)
@@ -6664,7 +7222,7 @@ def trade_logic(
 
     current_qty = _current_position_qty(ctx, symbol)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     signal = "buy" if final_score > 0 else "sell" if final_score < 0 else "hold"
 
@@ -6726,15 +7284,16 @@ def trade_logic(
     return True
 
 
-def compute_portfolio_weights(ctx: "BotContext", symbols: List[str]) -> Dict[str, float]:
+def compute_portfolio_weights(ctx: BotContext, symbols: list[str]) -> dict[str, float]:
     """Delegate to ai_trading.portfolio.compute_portfolio_weights with correct ctx."""
     from ai_trading.portfolio import compute_portfolio_weights as _cpw
+
     return _cpw(ctx, symbols)
 
 
 def on_trade_exit_rebalance(ctx: BotContext) -> None:
-    from ai_trading.utils import portfolio_lock
     from ai_trading import portfolio
+    from ai_trading.utils import portfolio_lock
 
     try:
         positions = ctx.api.get_all_positions()
@@ -6772,7 +7331,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     logger.info("PORTFOLIO_REBALANCED")
 
 
-def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
+def pair_trade_signal(sym1: str, sym2: str) -> tuple[str, int]:
     from statsmodels.tsa.stattools import coint
 
     df1 = ctx.data_fetcher.get_daily_df(ctx, sym1)
@@ -6803,10 +7362,10 @@ def pair_trade_signal(sym1: str, sym2: str) -> Tuple[str, int]:
 
 # ─── M. UTILITIES ─────────────────────────────────────────────────────────────
 def fetch_data(
-    ctx: BotContext, symbols: List[str], period: str, interval: str
-) -> Optional[pd.DataFrame]:
-    frames: List[pd.DataFrame] = []
-    now = datetime.now(timezone.utc)
+    ctx: BotContext, symbols: list[str], period: str, interval: str
+) -> pd.DataFrame | None:
+    frames: list[pd.DataFrame] = []
+    now = datetime.now(UTC)
     if period.endswith("d"):
         delta = timedelta(days=int(period[:-1]))
     elif period.endswith("mo"):
@@ -6867,7 +7426,7 @@ class EnsembleModel:
         return np.argmax(proba, axis=1)
 
 
-def load_model(path: str = MODEL_PATH) -> "Optional[Union[dict, EnsembleModel]]":
+def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
     """Load a model from ``path`` supporting both single and ensemble files."""
     import joblib
 
@@ -6962,7 +7521,7 @@ def update_signal_weights() -> None:
         df["reward"] = df["pnl"] * df["confidence"]
         optimize_signals(df, config)
         recent_cut = pd.to_datetime(df["exit_time"], errors="coerce")
-        recent_mask = recent_cut >= (datetime.now(timezone.utc) - timedelta(days=30))
+        recent_mask = recent_cut >= (datetime.now(UTC) - timedelta(days=30))
         df_recent = df[recent_mask]
 
         df_tags = df.assign(tag=df["signal_tags"].str.split("+")).explode("tag")
@@ -7001,10 +7560,14 @@ def update_signal_weights() -> None:
                     old = old_df.set_index("signal_name")["weight"].to_dict()
             except ValueError as e:
                 if "usecols" in str(e).lower():
-                    logger.warning("Signal weights CSV missing expected columns, trying fallback read")
+                    logger.warning(
+                        "Signal weights CSV missing expected columns, trying fallback read"
+                    )
                     try:
                         # Fallback: read all columns and try to map
-                        old_df = pd.read_csv(SIGNAL_WEIGHTS_FILE, on_bad_lines="skip", engine="python")
+                        old_df = pd.read_csv(
+                            SIGNAL_WEIGHTS_FILE, on_bad_lines="skip", engine="python"
+                        )
                         if "signal" in old_df.columns:
                             # Old format with 'signal' column
                             old = old_df.set_index("signal")["weight"].to_dict()
@@ -7012,10 +7575,16 @@ def update_signal_weights() -> None:
                             # New format with 'signal_name' column
                             old = old_df.set_index("signal_name")["weight"].to_dict()
                         else:
-                            logger.error("Signal weights CSV has unexpected format: %s", old_df.columns.tolist())
+                            logger.error(
+                                "Signal weights CSV has unexpected format: %s",
+                                old_df.columns.tolist(),
+                            )
                             old = {}
                     except Exception as fallback_e:
-                        logger.error("Failed to load signal weights with fallback: %s", fallback_e)
+                        logger.error(
+                            "Failed to load signal weights with fallback: %s",
+                            fallback_e,
+                        )
                         old = {}
                 else:
                     logger.error("Failed to load signal weights: %s", e)
@@ -7066,7 +7635,7 @@ def run_meta_learning_weight_optimizer(
         df["reward"] = df["pnl"] * df["confidence"]
         df["outcome"] = (df["pnl"] > 0).astype(int)
 
-        tags = sorted(set(tag for row in df["signal_tags"] for tag in row.split("+")))
+        tags = sorted({tag for row in df["signal_tags"] for tag in row.split("+")})
         X = np.array(
             [[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]]
         )
@@ -7097,7 +7666,8 @@ def run_meta_learning_weight_optimizer(
         )
 
         weights = {
-            tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)
+            tag: round(max(0, min(1, w)), 3)
+            for tag, w in zip(tags, model.coef_, strict=False)
         }
         out_df = pd.DataFrame(list(weights.items()), columns=["signal_name", "weight"])
         out_df.to_csv(output_path, index=False)
@@ -7132,7 +7702,7 @@ def run_bayesian_meta_learning_optimizer(
         df["pnl"] = (df["exit_price"] - df["entry_price"]) * direction
         df["outcome"] = (df["pnl"] > 0).astype(int)
 
-        tags = sorted(set(tag for row in df["signal_tags"] for tag in row.split("+")))
+        tags = sorted({tag for row in df["signal_tags"] for tag in row.split("+")})
         X = np.array(
             [[int(tag in row.split("+")) for tag in tags] for row in df["signal_tags"]]
         )
@@ -7161,7 +7731,8 @@ def run_bayesian_meta_learning_optimizer(
         )
 
         weights = {
-            tag: round(max(0, min(1, w)), 3) for tag, w in zip(tags, model.coef_)
+            tag: round(max(0, min(1, w)), 3)
+            for tag, w in zip(tags, model.coef_, strict=False)
         }
         out_df = pd.DataFrame(list(weights.items()), columns=["signal_name", "weight"])
         out_df.to_csv(output_path, index=False)
@@ -7171,20 +7742,22 @@ def run_bayesian_meta_learning_optimizer(
 
 
 def load_global_signal_performance(
-    min_trades: Optional[int] = None, threshold: Optional[float] = None
-) -> Optional[Dict[str, float]]:
+    min_trades: int | None = None, threshold: float | None = None
+) -> dict[str, float] | None:
     """Load global signal performance with enhanced error handling and configurable thresholds."""
     # AI-AGENT-REF: Use configurable meta-learning parameters from environment
     # Reduced requirements to allow meta-learning to activate more easily
     if min_trades is None:
         min_trades = int(os.getenv("METALEARN_MIN_TRADES", "2"))  # Reduced from 3 to 2
     if threshold is None:
-        threshold = float(os.getenv("METALEARN_PERFORMANCE_THRESHOLD", "0.3"))  # Reduced from 0.4 to 0.3
-    
+        threshold = float(
+            os.getenv("METALEARN_PERFORMANCE_THRESHOLD", "0.3")
+        )  # Reduced from 0.4 to 0.3
+
     if not os.path.exists(TRADE_LOG_FILE):
         logger.info("METALEARN_NO_HISTORY | Using defaults for new deployment")
         return None
-    
+
     try:
         df = pd.read_csv(
             TRADE_LOG_FILE,
@@ -7192,16 +7765,16 @@ def load_global_signal_performance(
             engine="python",
             usecols=["exit_price", "entry_price", "signal_tags", "side"],
         ).dropna(subset=["exit_price", "entry_price", "signal_tags"])
-        
+
         if df.empty:
             logger.warning("METALEARN_EMPTY_TRADE_LOG - No valid trades found")
             return {}
-        
+
         # Enhanced data validation and cleaning
         df["exit_price"] = pd.to_numeric(df["exit_price"], errors="coerce")
         df["entry_price"] = pd.to_numeric(df["entry_price"], errors="coerce")
         df["signal_tags"] = df["signal_tags"].astype(str)
-        
+
         # Remove rows with invalid price data
         df = df.dropna(subset=["exit_price", "entry_price"])
         if df.empty:
@@ -7211,64 +7784,80 @@ def load_global_signal_performance(
                 "Using default signal weights.",
                 extra={
                     "trade_log": TRADE_LOG_FILE,
-                    "suggestion": "Check price data format and trade logging"
-                }
+                    "suggestion": "Check price data format and trade logging",
+                },
             )
             return {}
-        
+
         # Calculate PnL with validation
         direction = np.where(df.side == "buy", 1, -1)
         df["pnl"] = (df.exit_price - df.entry_price) * direction
-        
+
         # Enhanced signal tag processing
         df_tags = df.assign(tag=df.signal_tags.str.split("+")).explode("tag")
-        df_tags = df_tags[df_tags["tag"].notna() & (df_tags["tag"] != "")]  # Remove empty tags
-        
+        df_tags = df_tags[
+            df_tags["tag"].notna() & (df_tags["tag"] != "")
+        ]  # Remove empty tags
+
         if df_tags.empty:
             logger.warning("METALEARN_NO_SIGNAL_TAGS - No valid signal tags found")
             return {}
-        
+
         # Calculate win rates with minimum trade validation
         win_rates = {}
         tag_groups = df_tags.groupby("tag")
-        
+
         for tag, group in tag_groups:
             if len(group) >= min_trades:
                 win_rate = (group["pnl"] > 0).mean()
                 win_rates[tag] = round(win_rate, 3)
-        
+
         if not win_rates:
-            logger.warning("METALEARN_INSUFFICIENT_TRADES - No signals meet minimum trade requirement (%d)", min_trades)
+            logger.warning(
+                "METALEARN_INSUFFICIENT_TRADES - No signals meet minimum trade requirement (%d)",
+                min_trades,
+            )
             return {}
-        
+
         # Filter by performance threshold
         filtered = {tag: wr for tag, wr in win_rates.items() if wr >= threshold}
-        
+
         # Enhanced logging with more details
         logger.info(
-            "METALEARN_FILTERED_SIGNALS", 
+            "METALEARN_FILTERED_SIGNALS",
             extra={
                 "signals": list(filtered.keys()) or [],
                 "total_signals_analyzed": len(win_rates),
                 "signals_above_threshold": len(filtered),
                 "threshold": threshold,
                 "min_trades": min_trades,
-                "total_trades": len(df)
-            }
+                "total_trades": len(df),
+            },
         )
-        
+
         if not filtered:
-            logger.warning("METALEARN_NO_SIGNALS_ABOVE_THRESHOLD - No signals above threshold %.3f", threshold)
+            logger.warning(
+                "METALEARN_NO_SIGNALS_ABOVE_THRESHOLD - No signals above threshold %.3f",
+                threshold,
+            )
             # Return best performing signals even if below threshold, with reduced weight
             if win_rates:
                 best_signal = max(win_rates.items(), key=lambda x: x[1])
-                logger.info("METALEARN_FALLBACK_SIGNAL - Using best signal: %s (%.3f)", best_signal[0], best_signal[1])
+                logger.info(
+                    "METALEARN_FALLBACK_SIGNAL - Using best signal: %s (%.3f)",
+                    best_signal[0],
+                    best_signal[1],
+                )
                 return {best_signal[0]: best_signal[1] * 0.5}  # Reduced confidence
-        
+
         return filtered
-        
+
     except Exception as e:
-        logger.error("METALEARN_PROCESSING_ERROR - Failed to process signal performance: %s", e, exc_info=True)
+        logger.error(
+            "METALEARN_PROCESSING_ERROR - Failed to process signal performance: %s",
+            e,
+            exc_info=True,
+        )
         return {}
 
 
@@ -7322,11 +7911,13 @@ def _add_basic_indicators(
 def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
     """Add MACD indicators using the defensive helper."""
     try:
-        from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
+        from ai_trading.signals import (
+            calculate_macd as signals_calculate_macd,  # type: ignore
+        )
     except ImportError:
         logger.warning("signals module not available for MACD calculation")
         return
-    
+
     try:
         if "close" not in df.columns:
             raise KeyError("'close' column missing for MACD calculation")
@@ -7563,6 +8154,7 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     # 1) Canonicalize columns (o/h/l/c/v mapping, lowercase)
     try:
         from ai_trading.utils.ohlcv import standardize_ohlcv
+
         df = standardize_ohlcv(df)
     except Exception as e:
         # OHLCV standardization failed - log warning but continue with raw data
@@ -7581,7 +8173,9 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
 
     # 3) Optional MACD import (keep failures soft)
     try:
-        from ai_trading.signals import calculate_macd as signals_calculate_macd  # type: ignore
+        from ai_trading.signals import (
+            calculate_macd as signals_calculate_macd,  # type: ignore
+        )
     except Exception:
         logger.warning("signals module not available for regime features")
         signals_calculate_macd = None
@@ -7598,13 +8192,17 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     if signals_calculate_macd:
         try:
             macd_df = signals_calculate_macd(df["close"])
-            feat["macd"] = macd_df["macd"] if macd_df is not None and "macd" in macd_df else np.nan
+            feat["macd"] = (
+                macd_df["macd"] if macd_df is not None and "macd" in macd_df else np.nan
+            )
         except Exception as e:
             logger.warning("Regime MACD calculation failed: %s", e)
             feat["macd"] = np.nan
     else:
         feat["macd"] = np.nan
-    feat["vol"] = df["close"].pct_change(fill_method=None).rolling(14, min_periods=1).std()
+    feat["vol"] = (
+        df["close"].pct_change(fill_method=None).rolling(14, min_periods=1).std()
+    )
     return feat.dropna(how="all")
 
 
@@ -7641,11 +8239,13 @@ def _initialize_regime_model(ctx=None):
             )
     else:
         if ctx is None:
-            logger.warning("No context provided for regime model training; using fallback")
+            logger.warning(
+                "No context provided for regime model training; using fallback"
+            )
             return RandomForestClassifier(
                 n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
             )
-        
+
         # --- Regime training uses basket-based proxy now ---
         wide = _build_regime_dataset(ctx)
         if wide is None or getattr(wide, "empty", False):
@@ -7674,24 +8274,32 @@ def _initialize_regime_model(ctx=None):
             .rename("label")
         )
         training = feats.join(labels, how="inner").dropna()
-        
+
         # Add validation for training data quality
         if training.empty:
-            logger.warning("Regime training dataset is empty after joining features and labels")
+            logger.warning(
+                "Regime training dataset is empty after joining features and labels"
+            )
             if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
-                logger.warning("No valid training data for regime model; using fallback")
+                logger.warning(
+                    "No valid training data for regime model; using fallback"
+                )
                 _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
             return RandomForestClassifier(
                 n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
             )
-        
+
         # Import settings for regime configuration
         from ai_trading.config.settings import get_settings
+
         settings = get_settings()
-        
-        logger.debug("Regime training data validation: %d rows available, minimum required: %d", 
-                    len(training), settings.REGIME_MIN_ROWS)
-        
+
+        logger.debug(
+            "Regime training data validation: %d rows available, minimum required: %d",
+            len(training),
+            settings.REGIME_MIN_ROWS,
+        )
+
         if len(training) >= settings.REGIME_MIN_ROWS:
             X = training[["atr", "rsi", "macd", "vol"]]
             y = training["label"]
@@ -7714,12 +8322,14 @@ def _initialize_regime_model(ctx=None):
             if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
                 logger.warning(
                     "Insufficient rows (%d < %d) for regime model; using fallback",
-                    len(training), settings.REGIME_MIN_ROWS
+                    len(training),
+                    settings.REGIME_MIN_ROWS,
                 )
                 _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
             return RandomForestClassifier(
                 n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
             )
+
 
 # Initialize regime model lazily
 regime_model = None
@@ -7766,16 +8376,16 @@ def check_market_regime(state: BotState) -> bool:
     return True
 
 
-_SCREEN_CACHE: Dict[str, float] = {}
+_SCREEN_CACHE: dict[str, float] = {}
 
 
 def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
     """
     Comprehensive market data validation to prevent trading with insufficient or poor quality data.
-    
+
     AI-AGENT-REF: Critical fix for market data validation problems from problem statement.
     Implements circuit breakers for poor data conditions and minimum data requirements.
-    
+
     Returns:
         dict: Validation result with valid flag, reason, and detailed message
     """
@@ -7786,19 +8396,25 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
                 "valid": False,
                 "reason": "no_data",
                 "message": "No data available",
-                "details": {"symbol": symbol, "data_source": "missing"}
+                "details": {"symbol": symbol, "data_source": "missing"},
             }
-        
+
         # Minimum rows requirement
-        min_rows_required = max(ATR_LENGTH, 20)  # Ensure enough for technical indicators
+        min_rows_required = max(
+            ATR_LENGTH, 20
+        )  # Ensure enough for technical indicators
         if len(df) < min_rows_required:
             return {
                 "valid": False,
                 "reason": f"insufficient_data_{len(df)}_rows",
                 "message": f"Insufficient data ({len(df)} rows, need {min_rows_required})",
-                "details": {"symbol": symbol, "rows_available": len(df), "rows_required": min_rows_required}
+                "details": {
+                    "symbol": symbol,
+                    "rows_available": len(df),
+                    "rows_required": min_rows_required,
+                },
             }
-        
+
         # Data completeness checks
         required_columns = ["open", "high", "low", "close", "volume"]
         missing_columns = [col for col in required_columns if col not in df.columns]
@@ -7807,12 +8423,16 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
                 "valid": False,
                 "reason": "missing_columns",
                 "message": f"Missing required columns: {missing_columns}",
-                "details": {"symbol": symbol, "missing_columns": missing_columns, "available_columns": list(df.columns)}
+                "details": {
+                    "symbol": symbol,
+                    "missing_columns": missing_columns,
+                    "available_columns": list(df.columns),
+                },
             }
-        
+
         # Data quality checks
         recent_data = df.tail(min(50, len(df)))  # Check last 50 rows or all available
-        
+
         # Check for excessive NaN values
         for col in required_columns:
             nan_count = recent_data[col].isna().sum()
@@ -7822,9 +8442,13 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
                     "valid": False,
                     "reason": f"excessive_nan_{col}",
                     "message": f"Excessive NaN values in {col} column ({nan_percentage:.1f}%)",
-                    "details": {"symbol": symbol, "column": col, "nan_percentage": nan_percentage}
+                    "details": {
+                        "symbol": symbol,
+                        "column": col,
+                        "nan_percentage": nan_percentage,
+                    },
                 }
-        
+
         # Check for price data anomalies
         close_prices = recent_data["close"].dropna()
         if len(close_prices) < 5:
@@ -7832,31 +8456,38 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
                 "valid": False,
                 "reason": "insufficient_price_data",
                 "message": "Less than 5 valid close prices in recent data",
-                "details": {"symbol": symbol, "valid_close_prices": len(close_prices)}
+                "details": {"symbol": symbol, "valid_close_prices": len(close_prices)},
             }
-        
+
         # Check for zero or negative prices
         if (close_prices <= 0).any():
             return {
                 "valid": False,
                 "reason": "invalid_prices",
                 "message": "Found zero or negative prices",
-                "details": {"symbol": symbol, "min_price": float(close_prices.min())}
+                "details": {"symbol": symbol, "min_price": float(close_prices.min())},
             }
-        
+
         # Check for unrealistic price volatility (circuit breaker)
         price_changes = close_prices.pct_change().dropna()
         if len(price_changes) > 0:
             extreme_moves = (abs(price_changes) > 0.5).sum()  # 50%+ single-day moves
-            if extreme_moves > len(price_changes) * 0.1:  # More than 10% of days have extreme moves
-                logger.warning("DATA_QUALITY_EXTREME_VOLATILITY", extra={
-                    "symbol": symbol,
-                    "extreme_moves": extreme_moves,
-                    "total_days": len(price_changes),
-                    "percentage": round((extreme_moves / len(price_changes)) * 100, 1),
-                    "note": "Potential data quality issue - consider excluding from trading"
-                })
-        
+            if (
+                extreme_moves > len(price_changes) * 0.1
+            ):  # More than 10% of days have extreme moves
+                logger.warning(
+                    "DATA_QUALITY_EXTREME_VOLATILITY",
+                    extra={
+                        "symbol": symbol,
+                        "extreme_moves": extreme_moves,
+                        "total_days": len(price_changes),
+                        "percentage": round(
+                            (extreme_moves / len(price_changes)) * 100, 1
+                        ),
+                        "note": "Potential data quality issue - consider excluding from trading",
+                    },
+                )
+
         # Check volume data quality
         volume_data = recent_data["volume"].dropna()
         if len(volume_data) > 0:
@@ -7867,19 +8498,29 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
                     "valid": False,
                     "reason": "low_liquidity",
                     "message": f"Median volume too low ({median_volume:,.0f})",
-                    "details": {"symbol": symbol, "median_volume": median_volume, "threshold": 10000}
+                    "details": {
+                        "symbol": symbol,
+                        "median_volume": median_volume,
+                        "threshold": 10000,
+                    },
                 }
-            
+
             # Check for zero volume days
             zero_volume_days = (volume_data == 0).sum()
-            if zero_volume_days > len(volume_data) * 0.2:  # More than 20% zero volume days
+            if (
+                zero_volume_days > len(volume_data) * 0.2
+            ):  # More than 20% zero volume days
                 return {
                     "valid": False,
                     "reason": "excessive_zero_volume",
                     "message": f"Too many zero volume days ({zero_volume_days}/{len(volume_data)})",
-                    "details": {"symbol": symbol, "zero_volume_days": zero_volume_days, "total_days": len(volume_data)}
+                    "details": {
+                        "symbol": symbol,
+                        "zero_volume_days": zero_volume_days,
+                        "total_days": len(volume_data),
+                    },
                 }
-        
+
         # All checks passed
         return {
             "valid": True,
@@ -7889,21 +8530,26 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
                 "symbol": symbol,
                 "rows_validated": len(df),
                 "recent_rows_checked": len(recent_data),
-                "validation_checks": ["existence", "completeness", "quality", "anomalies", "volume"]
-            }
+                "validation_checks": [
+                    "existence",
+                    "completeness",
+                    "quality",
+                    "anomalies",
+                    "volume",
+                ],
+            },
         }
-        
+
     except Exception as e:
-        logger.error("DATA_VALIDATION_ERROR", extra={
-            "symbol": symbol,
-            "error": str(e),
-            "error_type": type(e).__name__
-        })
+        logger.error(
+            "DATA_VALIDATION_ERROR",
+            extra={"symbol": symbol, "error": str(e), "error_type": type(e).__name__},
+        )
         return {
             "valid": False,
             "reason": "validation_error",
             "message": f"Data validation failed with error: {e}",
-            "details": {"symbol": symbol, "error": str(e)}
+            "details": {"symbol": symbol, "error": str(e)},
         }
 
 
@@ -7915,7 +8561,9 @@ def screen_universe(
     top_n: int = 20,
 ) -> list[str]:
     cand_set = set(candidates)
-    logger.info(f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}")
+    logger.info(
+        f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}"
+    )
 
     for sym in list(_SCREEN_CACHE):
         if sym not in cand_set:
@@ -7923,24 +8571,26 @@ def screen_universe(
 
     new_syms = cand_set - _SCREEN_CACHE.keys()
     filtered_out = {}  # Track reasons for filtering
-    
+
     for sym in new_syms:
         df = ctx.data_fetcher.get_daily_df(ctx, sym)
-        
+
         # AI-AGENT-REF: Enhanced market data validation for critical trading decisions
         validation_result = _validate_market_data_quality(df, sym)
         if not validation_result["valid"]:
             filtered_out[sym] = validation_result["reason"]
             logger.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
             continue
-        
+
         original_len = len(df)
         df = df[df["volume"] > 100_000]
         if df.empty:
             filtered_out[sym] = "low_volume"
-            logger.debug(f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)")
+            logger.debug(
+                f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
+            )
             continue
-        
+
         series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH)
         if series is None or not hasattr(series, "empty") or series.empty:
             filtered_out[sym] = "atr_calculation_failed"
@@ -7957,13 +8607,13 @@ def screen_universe(
     atrs = {sym: _SCREEN_CACHE[sym] for sym in cand_set if sym in _SCREEN_CACHE}
     ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
     selected = [sym for sym, _ in ranked[:top_n]]
-    
+
     logger.info(
         f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates. "
         f"Selected: {selected}. "
         f"Filtered out: {len(filtered_out)} symbols: {filtered_out}"
     )
-    
+
     return selected
 
 
@@ -7982,16 +8632,17 @@ def get_stock_bars_safe(api, symbol, timeframe):
         logger.error(f"Alpaca API Error: {e}")
         return None
 
+
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
     """Load tickers from file with fallback to default tickers."""
-    tickers: List[str] = []
-    
+    tickers: list[str] = []
+
     # Check if file exists and handle gracefully
     if not os.path.exists(path):
         logger.warning(f"Tickers file {path} not found. Using default tickers.")
         # Fallback: define default tickers
-        return ['AAPL', 'GOOG', 'AMZN']
-    
+        return ["AAPL", "GOOG", "AMZN"]
+
     try:
         with open(path, newline="") as f:
             reader = csv.reader(f)
@@ -8216,9 +8867,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
     3. Then load the (new) model from MODEL_PATH.
     """
     today_str = (
-        datetime.now(timezone.utc)
-        .astimezone(ZoneInfo("America/New_York"))
-        .strftime("%Y-%m-%d")
+        datetime.now(UTC).astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
     )
     marker = RETRAIN_MARKER_FILE
 
@@ -8227,7 +8876,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         logger.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
         need_to_retrain = False
     if os.path.isfile(marker):
-        with open(marker, "r") as f:
+        with open(marker) as f:
             last_date = f.read().strip()
         if last_date == today_str:
             need_to_retrain = False
@@ -8326,7 +8975,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
             except Exception as e:
                 logger.error(f"Daily retrain failed: {e}")
 
-        date_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        date_str = datetime.now(UTC).strftime("%Y%m%d_%H%M")
         os.makedirs("models", exist_ok=True)
         path = f"models/sgd_{date_str}.pkl"
         atomic_joblib_dump(model_pipeline, path)
@@ -8335,9 +8984,9 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         for f in os.listdir("models"):
             if f.endswith(".pkl"):
                 dt = datetime.strptime(f.split("_")[1].split(".")[0], "%Y%m%d").replace(
-                    tzinfo=timezone.utc
+                    tzinfo=UTC
                 )
-                if datetime.now(timezone.utc) - dt > timedelta(days=30):
+                if datetime.now(UTC) - dt > timedelta(days=30):
                     os.remove(os.path.join("models", f))
 
         batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
@@ -8360,7 +9009,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
 
 def on_market_close() -> None:
     """Trigger daily retraining after the market closes."""
-    now_est = dt_.now(timezone.utc).astimezone(ZoneInfo("America/New_York"))
+    now_est = dt_.now(UTC).astimezone(ZoneInfo("America/New_York"))
     if market_is_open(now_est):
         logger.info("RETRAIN_SKIP_MARKET_OPEN")
         return
@@ -8427,7 +9076,9 @@ def start_metrics_server(default_port: int = 9200) -> None:
                     return
             except Exception as e:
                 # Metrics server connectivity check failed - continue with port search
-                logger.debug("Metrics server check failed on port %d: %s", default_port, e)
+                logger.debug(
+                    "Metrics server check failed on port %d: %s", default_port, e
+                )
             port = utils.get_free_port(default_port + 1, default_port + 50)
             if port is None:
                 logger.warning("No free port available for metrics server")
@@ -8447,7 +9098,7 @@ def start_metrics_server(default_port: int = 9200) -> None:
 
 def run_multi_strategy(ctx: BotContext) -> None:
     """Execute all modular strategies via allocator and risk engine."""
-    signals_by_strategy: Dict[str, List[TradeSignal]] = {}
+    signals_by_strategy: dict[str, list[TradeSignal]] = {}
     for strat in ctx.strategies:
         try:
             sigs = strat.generate(ctx)
@@ -8459,6 +9110,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
         try:
             # Lazy load the RL policy and cache it on the context
             from ai_trading.rl_trading.inference import load_policy
+
             if not hasattr(ctx, "rl_agent"):
                 ctx.rl_agent = load_policy(config.RL_MODEL_PATH)
             # Determine the set of symbols that currently have signals from other strategies
@@ -8475,6 +9127,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
                 # indicators (RSI, ATR).  Additional features can be added
                 # by modifying ``compute_features`` in ``ai_trading.rl_trading.features``.
                 import numpy as _np  # AI-AGENT-REF: alias to avoid shadowing global np
+
                 from ai_trading.rl_trading.features import compute_features
 
                 states: list[_np.ndarray] = []
@@ -8496,24 +9149,29 @@ def run_multi_strategy(ctx: BotContext) -> None:
                     state_mat = _np.stack(states).astype(_np.float32)
                     rl_sigs = ctx.rl_agent.predict(state_mat, symbols=all_symbols)
                     if rl_sigs:
-                        signals_by_strategy["rl"] = rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
+                        signals_by_strategy["rl"] = (
+                            rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
+                        )
         except Exception as exc:
             logger.error("RL_AGENT_ERROR", extra={"exc": str(exc)})
-    
+
     # AI-AGENT-REF: Add position holding logic to reduce churn
     try:
         # Get current positions
         current_positions = ctx.api.get_all_positions()
-        
+
         # Generate hold signals for existing positions
         try:
-            from ai_trading.signals import generate_position_hold_signals, enhance_signals_with_position_logic  # type: ignore
+            from ai_trading.signals import (  # type: ignore
+                enhance_signals_with_position_logic,
+                generate_position_hold_signals,
+            )
         except ImportError:
             logger.warning("Position signals module not available")
             return
-        
+
         hold_signals = generate_position_hold_signals(ctx, current_positions)
-        
+
         # Apply position holding logic to all strategy signals
         enhanced_signals_by_strategy = {}
         for strategy_name, strategy_signals in signals_by_strategy.items():
@@ -8521,23 +9179,28 @@ def run_multi_strategy(ctx: BotContext) -> None:
                 strategy_signals, ctx, hold_signals
             )
             enhanced_signals_by_strategy[strategy_name] = enhanced_signals
-            
+
         # Log the effect of position holding
         original_count = sum(len(sigs) for sigs in signals_by_strategy.values())
-        enhanced_count = sum(len(sigs) for sigs in enhanced_signals_by_strategy.values())
-        logger.info("POSITION_HOLD_FILTER", extra={
-            "original_signals": original_count,
-            "enhanced_signals": enhanced_count,
-            "filtered_out": original_count - enhanced_count,
-            "hold_signals_count": len(hold_signals)
-        })
-        
+        enhanced_count = sum(
+            len(sigs) for sigs in enhanced_signals_by_strategy.values()
+        )
+        logger.info(
+            "POSITION_HOLD_FILTER",
+            extra={
+                "original_signals": original_count,
+                "enhanced_signals": enhanced_count,
+                "filtered_out": original_count - enhanced_count,
+                "hold_signals_count": len(hold_signals),
+            },
+        )
+
         # Use enhanced signals for allocation
         signals_by_strategy = enhanced_signals_by_strategy
-        
+
     except Exception as exc:
         logger.warning("Position holding logic failed, using original signals: %s", exc)
-    
+
     final = ctx.allocator.allocate(signals_by_strategy)
     acct = ctx.api.get_account()
     cash = float(getattr(acct, "cash", 0))
@@ -8593,7 +9256,11 @@ def run_multi_strategy(ctx: BotContext) -> None:
             logger.critical(
                 "Failed after retries: non-positive price for %s. Data context: %r",
                 sig.symbol,
-                data.tail(3).to_dict() if hasattr(data, 'tail') and hasattr(data, 'to_dict') else data,
+                (
+                    data.tail(3).to_dict()
+                    if hasattr(data, "tail") and hasattr(data, "to_dict")
+                    else data
+                ),
             )
             continue
         # Provide the account equity (cash) when sizing positions; this allows
@@ -8601,33 +9268,33 @@ def run_multi_strategy(ctx: BotContext) -> None:
         if sig.side == "buy" and ctx.risk_engine.position_exists(ctx.api, sig.symbol):
             logger.info("SKIP_DUPLICATE_LONG", extra={"symbol": sig.symbol})
             continue
-        
+
         # AI-AGENT-REF: Add validation and logging for signal processing
         logger.debug(
             "PROCESSING_SIGNAL",
             extra={
-                "symbol": sig.symbol, 
-                "side": sig.side, 
+                "symbol": sig.symbol,
+                "side": sig.side,
                 "confidence": sig.confidence,
-                "strategy": getattr(sig, 'strategy', 'unknown'),
-                "weight": getattr(sig, 'weight', 0.0)
-            }
+                "strategy": getattr(sig, "strategy", "unknown"),
+                "weight": getattr(sig, "weight", 0.0),
+            },
         )
-        
+
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty is None or not np.isfinite(qty) or qty <= 0:
             logger.warning(
                 "SKIP_INVALID_QTY",
                 extra={
                     "symbol": sig.symbol,
-                    "side": sig.side, 
+                    "side": sig.side,
                     "qty": qty,
                     "cash": cash,
-                    "price": price
-                }
+                    "price": price,
+                },
             )
             continue
-        
+
         # AI-AGENT-REF: Validate signal side before execution to catch any corruption
         if sig.side not in ["buy", "sell"]:
             logger.error(
@@ -8635,21 +9302,16 @@ def run_multi_strategy(ctx: BotContext) -> None:
                 extra={
                     "symbol": sig.symbol,
                     "side": sig.side,
-                    "expected": "buy or sell"
-                }
+                    "expected": "buy or sell",
+                },
             )
             continue
-            
+
         logger.info(
             "EXECUTING_ORDER",
-            extra={
-                "symbol": sig.symbol,
-                "side": sig.side,
-                "qty": qty,
-                "price": price
-            }
+            extra={"symbol": sig.symbol, "side": sig.side, "qty": qty, "price": price},
         )
-        
+
         ctx.execution_engine.execute_order(
             sig.symbol, qty, sig.side, asset_class=sig.asset_class
         )
@@ -8664,8 +9326,8 @@ def run_multi_strategy(ctx: BotContext) -> None:
 
 
 def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[str]]:
-    from ai_trading.utils import portfolio_lock
     from ai_trading import portfolio
+    from ai_trading.utils import portfolio_lock
 
     """Prepare trading run by syncing positions and generating symbols."""
     cancel_all_open_orders(ctx)
@@ -8724,11 +9386,11 @@ def _process_symbols(
     if not hasattr(state, "last_trade_direction"):
         state.last_trade_direction = {}
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     filtered: list[str] = []
     cd_skipped: list[str] = []
-    
+
     # AI-AGENT-REF: Add circuit breaker for symbol processing to prevent resource exhaustion
     max_symbols_per_cycle = min(50, len(symbols))  # Limit to 50 symbols per cycle
     processed_symbols = 0
@@ -8737,9 +9399,11 @@ def _process_symbols(
     for symbol in symbols:
         # AI-AGENT-REF: Final-bar/session gating before strategy evaluation
         if not ensure_final_bar(symbol, "1min"):  # Default to 1min timeframe
-            logger.info("SKIP_PARTIAL_BAR", extra={"symbol": symbol, "timeframe": "1min"})
+            logger.info(
+                "SKIP_PARTIAL_BAR", extra={"symbol": symbol, "timeframe": "1min"}
+            )
             continue
-        
+
         # Circuit breaker: limit processing time and symbol count
         if processed_symbols >= max_symbols_per_cycle:
             logger.warning(
@@ -8747,11 +9411,11 @@ def _process_symbols(
                 extra={
                     "processed_count": processed_symbols,
                     "remaining_count": len(symbols) - processed_symbols,
-                    "reason": "max_symbols_reached"
-                }
+                    "reason": "max_symbols_reached",
+                },
             )
             break
-        
+
         # Check processing time limit (max 5 minutes per cycle)
         if time.monotonic() - processing_start_time > 300:
             logger.warning(
@@ -8759,13 +9423,13 @@ def _process_symbols(
                 extra={
                     "processed_count": processed_symbols,
                     "elapsed_seconds": time.monotonic() - processing_start_time,
-                    "reason": "time_limit_reached"
-                }
+                    "reason": "time_limit_reached",
+                },
             )
             break
-        
+
         processed_symbols += 1
-        
+
         pos = state.position_cache.get(symbol, 0)
         if pos < 0 and close_shorts:
             logger.info(
@@ -8902,9 +9566,8 @@ def manage_position_risk(ctx: BotContext, position) -> None:
         if (
             volume_factor > config.VOLUME_SPIKE_THRESHOLD
             and ml_conf > config.ML_CONFIDENCE_THRESHOLD
-        ):
-            if side == "long" and price > vwap and pnl > 0.02:
-                pyramid_add_position(ctx, symbol, config.PYRAMID_LEVELS["low"], side)
+        ) and side == "long" and price > vwap and pnl > 0.02:
+            pyramid_add_position(ctx, symbol, config.PYRAMID_LEVELS["low"], side)
         logger.info(
             f"HALT_MANAGE {symbol} stop={new_stop:.2f} vwap={vwap:.2f} vol={volume_factor:.2f} ml={ml_conf:.2f}"
         )
@@ -9023,14 +9686,14 @@ def run_all_trades_worker(state: BotState, model) -> None:
     >>> import asyncio
     >>> from bot_engine import BotState, run_all_trades_worker
     >>> from ml_model import load_trained_model
-    >>> 
+    >>>
     >>> # Initialize bot state and model
     >>> state = BotState()
     >>> model = load_trained_model('models/trading_model.pkl')
-    >>> 
+    >>>
     >>> # Execute trading cycle
     >>> run_all_trades_worker(state, model)
-    >>> 
+    >>>
     >>> # Check results
     >>> logging.info(f"Trades executed: {len(state.position_cache)}")
     >>> logging.info(f"Last loop duration: {state.last_loop_duration:.2f}s")
@@ -9082,7 +9745,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 extra={"last_duration": getattr(state, "last_loop_duration", 0.0)},
             )
             return
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for sym, ts in list(state.trade_cooldowns.items()):
             if (now - ts).total_seconds() > TRADE_COOLDOWN_MIN * 60:
                 state.trade_cooldowns.pop(sym, None)
@@ -9123,16 +9786,22 @@ def run_all_trades_worker(state: BotState, model) -> None:
             if MEMORY_OPTIMIZATION_AVAILABLE:
                 try:
                     memory_stats = optimize_memory()
-                    if memory_stats.get('memory_usage_mb', 0) > 512:  # If using more than 512MB
+                    if (
+                        memory_stats.get("memory_usage_mb", 0) > 512
+                    ):  # If using more than 512MB
                         logger.warning(
                             "HIGH_MEMORY_USAGE_DETECTED",
                             extra={
-                                "memory_usage_mb": memory_stats.get('memory_usage_mb', 0),
-                                "symbols_count": len(symbols)
-                            }
+                                "memory_usage_mb": memory_stats.get(
+                                    "memory_usage_mb", 0
+                                ),
+                                "symbols_count": len(symbols),
+                            },
                         )
                         # Emergency cleanup if memory is too high
-                        if memory_stats.get('memory_usage_mb', 0) > 1024:  # 1GB threshold
+                        if (
+                            memory_stats.get("memory_usage_mb", 0) > 1024
+                        ):  # 1GB threshold
                             logger.critical("EMERGENCY_MEMORY_CLEANUP_TRIGGERED")
                             emergency_memory_cleanup()
                 except Exception as exc:
@@ -9143,11 +9812,13 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 try:
                     acct = ctx.api.get_account()
                     current_equity = float(acct.equity) if acct else 0.0
-                    trading_allowed = ctx.drawdown_circuit_breaker.update_equity(current_equity)
-                    
+                    trading_allowed = ctx.drawdown_circuit_breaker.update_equity(
+                        current_equity
+                    )
+
                     # AI-AGENT-REF: Get status once to avoid UnboundLocalError in else block
                     status = ctx.drawdown_circuit_breaker.get_status()
-                    
+
                     if not trading_allowed:
                         logger.critical(
                             "TRADING_HALTED_DRAWDOWN_PROTECTION",
@@ -9155,8 +9826,8 @@ def run_all_trades_worker(state: BotState, model) -> None:
                                 "current_drawdown": status["current_drawdown"],
                                 "max_drawdown": status["max_drawdown"],
                                 "peak_equity": status["peak_equity"],
-                                "current_equity": current_equity
-                            }
+                                "current_equity": current_equity,
+                            },
                         )
                         # Manage existing positions but skip new trades
                         try:
@@ -9173,8 +9844,8 @@ def run_all_trades_worker(state: BotState, model) -> None:
                             extra={
                                 "current_drawdown": status["current_drawdown"],
                                 "max_drawdown": status["max_drawdown"],
-                                "trading_allowed": status["trading_allowed"]
-                            }
+                                "trading_allowed": status["trading_allowed"],
+                            },
                         )
                 except Exception as exc:
                     logger.error(f"Drawdown circuit breaker update failed: {exc}")
@@ -9183,7 +9854,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
             # AI-AGENT-REF: honor global halt flag before processing symbols
             if check_halt_flag(ctx):
                 _log_health_diagnostics(ctx, "halt_flag_loop")
-                logger.info("TRADING_HALTED_VIA_FLAG: Managing existing positions only.")
+                logger.info(
+                    "TRADING_HALTED_VIA_FLAG: Managing existing positions only."
+                )
                 try:
                     portfolio = ctx.api.get_all_positions()
                     for pos in portfolio:
@@ -9200,7 +9873,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     positions = ctx.api.get_all_positions()
                     logger.debug("Raw Alpaca positions: %s", positions)
                     exposure = (
-                        sum(abs(float(p.market_value)) for p in positions) / equity * 100
+                        sum(abs(float(p.market_value)) for p in positions)
+                        / equity
+                        * 100
                         if equity > 0
                         else 0.0
                     )
@@ -9301,7 +9976,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 ctx.risk_engine.refresh_positions(ctx.api)
                 pos_list = ctx.api.get_all_positions()
                 state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
-                state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
+                state.long_positions = {
+                    s for s, q in state.position_cache.items() if q > 0
+                }
                 state.short_positions = {
                     s for s, q in state.position_cache.items() if q < 0
                 }
@@ -9319,11 +9996,11 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 positions = ctx.api.get_all_positions()
                 logger.debug("Raw Alpaca positions: %s", positions)
                 try:
-                    from ai_trading.utils import portfolio_lock
                     from ai_trading import portfolio
+                    from ai_trading.utils import portfolio_lock
                 except ImportError:
                     logger.warning("Portfolio modules not available")
-                    pass  # Skip portfolio update if modules unavailable
+                    # Skip portfolio update if modules unavailable
                 else:
                     try:
                         with portfolio_lock:
@@ -9379,7 +10056,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             try:
                 acct = ctx.api.get_account()
                 # Handle case where account object might not have last_equity attribute
-                last_equity = getattr(acct, 'last_equity', acct.equity)
+                last_equity = getattr(acct, "last_equity", acct.equity)
                 pnl = float(acct.equity) - float(last_equity)
                 logger.info(
                     "LOOP_PNL",
@@ -9398,13 +10075,15 @@ def run_all_trades_worker(state: BotState, model) -> None:
             state.running = False
             state.last_loop_duration = time.monotonic() - loop_start
             _log_loop_heartbeat(loop_id, loop_start)
-            
+
             # AI-AGENT-REF: Perform memory cleanup after trading cycle
             if MEMORY_OPTIMIZATION_AVAILABLE:
                 try:
                     gc_result = optimize_memory()
-                    if gc_result.get('objects_collected', 0) > 50:
-                        logger.info(f"Post-cycle GC: {gc_result['objects_collected']} objects collected")
+                    if gc_result.get("objects_collected", 0) > 50:
+                        logger.info(
+                            f"Post-cycle GC: {gc_result['objects_collected']} objects collected"
+                        )
                 except Exception as e:
                     logger.warning(f"Memory optimization failed: {e}")
     finally:
@@ -9433,17 +10112,17 @@ def schedule_run_all_trades_with_delay(model):
     schedule_run_all_trades(model)
 
 
-def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
+def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
     """Initial portfolio rebalancing."""
-        
+
     if ctx.api is None:
         logger.warning("ctx.api is None - cannot perform initial rebalance")
         return
-        
+
     try:
-        now_pac = datetime.now(timezone.utc).astimezone(PACIFIC)
+        datetime.now(UTC).astimezone(PACIFIC)
         acct = ctx.api.get_account()
-        equity = float(acct.equity)
+        float(acct.equity)
 
         cash = float(acct.cash)
         buying_power = float(getattr(acct, "buying_power", cash))
@@ -9456,7 +10135,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
         return
 
     # Determine current UTC time
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     # If it’s between 00:00 and 00:15 UTC, daily bars may not be published yet.
     if now_utc.hour == 0 and now_utc.minute < 15:
         logger.info("INITIAL_REBALANCE: Too early—daily bars not live yet.")
@@ -9510,7 +10189,7 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
                         # AI-AGENT-REF: confirm order result before logging success
                         if order:
                             logger.info(f"INITIAL_REBALANCE: Bought {qty_to_buy} {sym}")
-                            ctx.rebalance_buys[sym] = datetime.now(timezone.utc)
+                            ctx.rebalance_buys[sym] = datetime.now(UTC)
                         else:
                             logger.error(
                                 f"INITIAL_REBALANCE: Buy failed for {sym}: order not placed"
@@ -9548,33 +10227,38 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
 
 def main() -> None:
     logger.info("Main trading bot starting...")
-    
+
     # AI-AGENT-REF: Initialize runtime config and validate credentials
     try:
         init_runtime_config()
     except RuntimeError as e:
         logger.critical("Runtime configuration failed: %s", e)
         sys.exit(2)
-    
+
     # AI-AGENT-REF: Validate Alpaca credentials using settings singleton
     cfg = get_settings()
     api_key, api_secret = cfg.get_alpaca_keys()
     if not api_key or not api_secret:
         logger.critical("Alpaca credentials missing – aborting startup")
-        logger.critical("Please set ALPACA_API_KEY/APCA_API_KEY_ID and ALPACA_SECRET_KEY/APCA_API_SECRET_KEY")
+        logger.critical(
+            "Please set ALPACA_API_KEY/APCA_API_KEY_ID and ALPACA_SECRET_KEY/APCA_API_SECRET_KEY"
+        )
         sys.exit(2)
-    
+
     # Log masked config for verification
     logger.info("Config: ALPACA_API_KEY=***MASKED***", extra={"present": bool(api_key)})
-    logger.info("Config: ALPACA_SECRET_KEY=***MASKED***", extra={"present": bool(api_secret)})
+    logger.info(
+        "Config: ALPACA_SECRET_KEY=***MASKED***", extra={"present": bool(api_secret)}
+    )
     logger.info(f"Config: ALPACA_BASE_URL={cfg.alpaca_base_url}")
     logger.info(f"Config: TRADING_MODE={cfg.trading_mode}")
-    
+
     config.reload_env()
-    
+
     # AI-AGENT-REF: Ensure only one bot instance is running
     try:
         from process_manager import ProcessManager
+
         pm = ProcessManager()
         if not pm.ensure_single_instance():
             logger.error("Another trading bot instance is already running. Exiting.")
@@ -9583,10 +10267,11 @@ def main() -> None:
     except Exception as e:
         logger.error("Failed to acquire single instance lock: %s", e)
         sys.exit(1)
-    
+
     # AI-AGENT-REF: Add comprehensive health check on startup
     try:
         from health_check import log_health_summary
+
         log_health_summary()
     except Exception as e:
         logger.warning("Health check failed on startup: %s", e)
@@ -9667,10 +10352,10 @@ def main() -> None:
 
         # Retraining after market close (~16:05 US/Eastern)
         close_time = (
-            dt_.now(timezone.utc)
+            dt_.now(UTC)
             .astimezone(ZoneInfo("America/New_York"))
             .replace(hour=16, minute=5, second=0, microsecond=0)
-            .astimezone(timezone.utc)
+            .astimezone(UTC)
             .strftime("%H:%M")
         )
         schedule.every().day.at(close_time).do(
@@ -9710,19 +10395,21 @@ def main() -> None:
                 or summary.get("invalid_values")
                 or summary["timezone_issues"]
             )
-            
+
             # AI-AGENT-REF: Add bypass for stale data during initial deployment
             stale_data = summary.get("stale_data", [])
-            allow_stale_on_startup = os.getenv("ALLOW_STALE_DATA_STARTUP", "true").lower() == "true"
-            
+            allow_stale_on_startup = (
+                os.getenv("ALLOW_STALE_DATA_STARTUP", "true").lower() == "true"
+            )
+
             if stale_data and allow_stale_on_startup:
                 logger.warning(
                     "BYPASS_STALE_DATA_STARTUP: Allowing trading with stale data for initial deployment",
-                    extra={"stale_symbols": stale_data, "count": len(stale_data)}
+                    extra={"stale_symbols": stale_data, "count": len(stale_data)},
                 )
             elif stale_data and not allow_stale_on_startup:
                 failures = failures or stale_data
-                
+
             health_ok = not failures
             if not health_ok:
                 logger.error("HEALTH_CHECK_FAILED", extra=summary)
@@ -9851,7 +10538,7 @@ def simple_calculate_macd(
     fast: int = 12,
     slow: int = 26,
     signal: int = 9,
-) -> Tuple[Optional[pd.Series], Optional[pd.Series], Optional[pd.Series]]:
+) -> tuple[pd.Series | None, pd.Series | None, pd.Series | None]:
     if close_prices is None or close_prices.empty:
         logger.warning("Empty or None close_prices passed to calculate_macd.")
         return None, None, None
@@ -9877,11 +10564,12 @@ def compute_ichimoku(
         if ich_func is None:
             try:
                 from ai_trading.indicators import ichimoku_fallback  # type: ignore
+
                 ich_func = ichimoku_fallback
             except Exception:  # pragma: no cover
                 logger.warning("ichimoku indicators not available")
                 ich_func = None
-        
+
         if ich_func:
             ich = ich_func(high=high, low=low, close=close)
         else:
@@ -9894,9 +10582,9 @@ def compute_ichimoku(
             ich_df = ich
             signal_df = pd.DataFrame(index=ich_df.index)
         # AI-AGENT-REF: Use attribute check instead of isinstance to avoid type errors
-        if not hasattr(ich_df, 'iloc') or not hasattr(ich_df, 'columns'):
+        if not hasattr(ich_df, "iloc") or not hasattr(ich_df, "columns"):
             ich_df = pd.DataFrame(ich_df)
-        if not hasattr(signal_df, 'iloc') or not hasattr(signal_df, 'columns'):
+        if not hasattr(signal_df, "iloc") or not hasattr(signal_df, "columns"):
             signal_df = pd.DataFrame(signal_df)
         return ich_df, signal_df
     except Exception as exc:  # pragma: no cover - defensive
@@ -9908,18 +10596,19 @@ def ichimoku_indicator(
     df: pd.DataFrame,
     symbol: str,
     state: BotState | None = None,
-) -> Tuple[pd.DataFrame, Any | None]:
+) -> tuple[pd.DataFrame, Any | None]:
     """Return Ichimoku indicator DataFrame and optional params."""
     try:
         ich_func = getattr(ta, "ichimoku", None)
         if ich_func is None:
             try:
                 from ai_trading.indicators import ichimoku_fallback  # type: ignore
+
                 ich_func = ichimoku_fallback
             except Exception:  # pragma: no cover
                 logger.warning("ichimoku indicators not available")
                 ich_func = None
-        
+
         if ich_func:
             ich = ich_func(high=df["high"], low=df["low"], close=df["close"])
         if isinstance(ich, tuple):
@@ -9936,92 +10625,112 @@ def ichimoku_indicator(
         return pd.DataFrame(), None
 
 
-def _check_trade_frequency_limits(state: BotState, symbol: str, current_time: datetime) -> bool:
+def _check_trade_frequency_limits(
+    state: BotState, symbol: str, current_time: datetime
+) -> bool:
     """
     Check if trading would exceed frequency limits.
-    
+
     AI-AGENT-REF: Enhanced overtrading prevention with configurable frequency limits.
     Returns True if trade should be skipped due to frequency limits.
     """
-    if not hasattr(state, 'trade_history'):
+    if not hasattr(state, "trade_history"):
         state.trade_history = []
-    
+
     # Clean up old entries (older than 1 day)
     day_ago = current_time - timedelta(days=1)
     state.trade_history = [(sym, ts) for sym, ts in state.trade_history if ts > day_ago]
-    
+
     # Count trades in different time windows
     hour_ago = current_time - timedelta(hours=TRADE_FREQUENCY_WINDOW_HOURS)
-    
+
     # Count symbol-specific trades in last hour
-    symbol_trades_hour = len([
-        (sym, ts) for sym, ts in state.trade_history 
-        if sym == symbol and ts > hour_ago
-    ])
-    
+    symbol_trades_hour = len(
+        [
+            (sym, ts)
+            for sym, ts in state.trade_history
+            if sym == symbol and ts > hour_ago
+        ]
+    )
+
     # Count total trades in last hour
-    total_trades_hour = len([
-        (sym, ts) for sym, ts in state.trade_history 
-        if ts > hour_ago
-    ])
-    
+    total_trades_hour = len(
+        [(sym, ts) for sym, ts in state.trade_history if ts > hour_ago]
+    )
+
     # Count total trades in last day
     total_trades_day = len(state.trade_history)
-    
+
     # Check hourly limits
     if total_trades_hour >= MAX_TRADES_PER_HOUR:
-        logger.warning("FREQUENCY_LIMIT_HOURLY_EXCEEDED", extra={
-            "symbol": symbol,
-            "trades_last_hour": total_trades_hour,
-            "max_per_hour": MAX_TRADES_PER_HOUR,
-            "recommendation": "Reduce trading frequency to prevent overtrading"
-        })
+        logger.warning(
+            "FREQUENCY_LIMIT_HOURLY_EXCEEDED",
+            extra={
+                "symbol": symbol,
+                "trades_last_hour": total_trades_hour,
+                "max_per_hour": MAX_TRADES_PER_HOUR,
+                "recommendation": "Reduce trading frequency to prevent overtrading",
+            },
+        )
         return True
-    
-    # Check daily limits  
+
+    # Check daily limits
     if total_trades_day >= MAX_TRADES_PER_DAY:
-        logger.warning("FREQUENCY_LIMIT_DAILY_EXCEEDED", extra={
-            "symbol": symbol,
-            "trades_today": total_trades_day,
-            "max_per_day": MAX_TRADES_PER_DAY,
-            "recommendation": "Daily trade limit reached - consider reviewing strategy"
-        })
+        logger.warning(
+            "FREQUENCY_LIMIT_DAILY_EXCEEDED",
+            extra={
+                "symbol": symbol,
+                "trades_today": total_trades_day,
+                "max_per_day": MAX_TRADES_PER_DAY,
+                "recommendation": "Daily trade limit reached - consider reviewing strategy",
+            },
+        )
         return True
-    
+
     # Check symbol-specific hourly limit (prevent rapid ping-pong on same symbol)
-    symbol_hourly_limit = max(1, MAX_TRADES_PER_HOUR // 10)  # 10% of hourly limit per symbol
+    symbol_hourly_limit = max(
+        1, MAX_TRADES_PER_HOUR // 10
+    )  # 10% of hourly limit per symbol
     if symbol_trades_hour >= symbol_hourly_limit:
-        logger.info("FREQUENCY_LIMIT_SYMBOL_HOURLY", extra={
-            "symbol": symbol,
-            "symbol_trades_hour": symbol_trades_hour,
-            "symbol_hourly_limit": symbol_hourly_limit,
-            "note": "Preventing rapid trading on single symbol"
-        })
+        logger.info(
+            "FREQUENCY_LIMIT_SYMBOL_HOURLY",
+            extra={
+                "symbol": symbol,
+                "symbol_trades_hour": symbol_trades_hour,
+                "symbol_hourly_limit": symbol_hourly_limit,
+                "note": "Preventing rapid trading on single symbol",
+            },
+        )
         return True
-    
+
     return False
 
 
-def _record_trade_in_frequency_tracker(state: BotState, symbol: str, timestamp: datetime) -> None:
+def _record_trade_in_frequency_tracker(
+    state: BotState, symbol: str, timestamp: datetime
+) -> None:
     """
     Record a trade in the frequency tracking system.
-    
+
     AI-AGENT-REF: Part of overtrading prevention system.
     """
-    if not hasattr(state, 'trade_history'):
+    if not hasattr(state, "trade_history"):
         state.trade_history = []
-    
+
     state.trade_history.append((symbol, timestamp))
-    
+
     # Log frequency stats for monitoring
     hour_ago = timestamp - timedelta(hours=1)
     recent_trades = len([ts for _, ts in state.trade_history if ts > hour_ago])
-    
-    logger.debug("TRADE_FREQUENCY_UPDATED", extra={
-        "symbol": symbol,
-        "trades_last_hour": recent_trades,
-        "total_tracked_trades": len(state.trade_history)
-    })
+
+    logger.debug(
+        "TRADE_FREQUENCY_UPDATED",
+        extra={
+            "symbol": symbol,
+            "trades_last_hour": recent_trades,
+            "total_tracked_trades": len(state.trade_history),
+        },
+    )
 
 
 def get_latest_price(symbol: str):
@@ -10064,7 +10773,9 @@ def execute_trades(ctx, signals: pd.Series) -> list[tuple[str, str]]:
                 api.submit_order(symbol, 1, side)
             except Exception as e:
                 # Order submission failed - log error and add to failed orders
-                logger.error("Failed to submit test order for %s %s: %s", symbol, side, e)
+                logger.error(
+                    "Failed to submit test order for %s %s: %s", symbol, side, e
+                )
         orders.append((symbol, side))
     return orders
 
@@ -10098,8 +10809,9 @@ if __name__ == "__main__":
         logger.exception("Fatal error in main: %s", exc)
         raise
 
-    import schedule
     import time
+
+    import schedule
 
     while True:
         try:

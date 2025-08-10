@@ -4,14 +4,13 @@ Validate that all required test dependencies are available.
 This script helps identify missing dependencies before running tests.
 """
 
-import sys
 import importlib
-from typing import Tuple
+import sys
 
 # Required packages for testing
 REQUIRED_PACKAGES = [
     ('pytest', 'pytest'),
-    ('pytest_cov', 'pytest-cov'), 
+    ('pytest_cov', 'pytest-cov'),
     ('xdist', 'pytest-xdist'),
     ('pytest_benchmark', 'pytest-benchmark'),
     ('pytest_asyncio', 'pytest-asyncio'),
@@ -27,7 +26,7 @@ REQUIRED_PACKAGES = [
     ('mypy', 'mypy'),
 ]
 
-def check_package(import_name: str, package_name: str) -> Tuple[bool, str]:
+def check_package(import_name: str, package_name: str) -> tuple[bool, str]:
     """Check if a package can be imported."""
     try:
         module = importlib.import_module(import_name)
@@ -40,33 +39,33 @@ def main():
     """Main validation function."""
     print("🔍 Validating test environment dependencies...")
     print("=" * 50)
-    
+
     missing_packages = []
     available_packages = []
-    
+
     for import_name, package_name in REQUIRED_PACKAGES:
         success, info = check_package(import_name, package_name)
-        
+
         if success:
             available_packages.append((package_name, info))
             print(f"✅ {package_name}: {info}")
         else:
             missing_packages.append((package_name, info))
             print(f"❌ {package_name}: {info}")
-    
+
     print("\n" + "=" * 50)
     print("📊 Summary:")
     print(f"   Available: {len(available_packages)}")
     print(f"   Missing:   {len(missing_packages)}")
-    
+
     if missing_packages:
         print("\n🚨 Missing packages:")
         for package_name, error in missing_packages:
             print(f"   - {package_name}")
-        
+
         print("\n💡 To install missing packages:")
         print("   pip install -r requirements-dev.txt")
-        
+
         return 1
     else:
         print("\n🎉 All test dependencies are available!")

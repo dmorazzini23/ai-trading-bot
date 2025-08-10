@@ -9,14 +9,14 @@ Provides centralized health monitoring for:
 - Overall system health metrics
 """
 
-import logging
-import time
-import threading
-from datetime import datetime, timezone
-from typing import Dict, List, Any
-from dataclasses import dataclass, field
-from collections import defaultdict, deque
 import json
+import logging
+import threading
+import time
+from collections import defaultdict, deque
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +30,17 @@ class ComponentHealth:
     last_check: datetime
     error_count: int = 0
     warning_count: int = 0
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class SystemHealthStatus:
     """Overall system health status."""
     overall_status: str
-    components: Dict[str, ComponentHealth]
-    alerts: List[str]
-    metrics: Dict[str, float]
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    components: dict[str, ComponentHealth]
+    alerts: list[str]
+    metrics: dict[str, float]
+    timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 class SystemHealthChecker:
@@ -50,15 +50,15 @@ class SystemHealthChecker:
     Monitors all critical components and provides centralized health reporting
     with automated alerting for degraded performance.
     """
-    
+
     def __init__(self):
         """Initialize the system health checker."""
         self.logger = logging.getLogger(__name__ + ".SystemHealthChecker")
-        
+
         # Component tracking
-        self._component_metrics: Dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
+        self._component_metrics: dict[str, deque] = defaultdict(lambda: deque(maxlen=100))
         self._health_history: deque = deque(maxlen=1000)
-        
+
         # Health thresholds
         self.health_thresholds = {
             'sentiment': {
@@ -82,113 +82,113 @@ class SystemHealthChecker:
                 'avg_reduction_threshold': 0.20    # Avg reduction >20%
             }
         }
-        
+
         # Monitoring state
         self._monitoring_active = False
         self._monitor_thread = None
         self._lock = threading.Lock()
-        
+
         # Component status cache
-        self._component_status: Dict[str, ComponentHealth] = {}
-        
+        self._component_status: dict[str, ComponentHealth] = {}
+
         self.logger.info("SystemHealthChecker initialized")
-    
+
     def start_monitoring(self, check_interval: int = 60) -> None:
         """Start the system health monitoring."""
         if self._monitoring_active:
             self.logger.warning("System health monitoring already active")
             return
-            
+
         self._monitoring_active = True
         self._check_interval = check_interval
         self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._monitor_thread.start()
         self.logger.info("System health monitoring started (interval: %ds)", check_interval)
-    
+
     def stop_monitoring(self) -> None:
         """Stop the system health monitoring."""
         self._monitoring_active = False
         if self._monitor_thread and self._monitor_thread.is_alive():
             self._monitor_thread.join(timeout=5)
         self.logger.info("System health monitoring stopped")
-    
+
     def _monitor_loop(self) -> None:
         """Main health monitoring loop."""
         while self._monitoring_active:
             try:
                 # Check all component health
                 health_status = self._check_all_components()
-                
+
                 # Store health status
                 with self._lock:
                     self._health_history.append(health_status)
-                
+
                 # Process alerts
                 if health_status.alerts:
                     self._process_health_alerts(health_status)
-                
+
                 # Log health summary
                 self._log_health_summary(health_status)
-                
+
                 time.sleep(self._check_interval)
-                
+
             except Exception as e:
                 self.logger.error("Error in health monitoring loop: %s", e, exc_info=True)
                 time.sleep(30)  # Back off on errors
-    
+
     def _check_all_components(self) -> SystemHealthStatus:
         """Check health of all system components."""
         components = {}
         alerts = []
         metrics = {}
-        
+
         # Check sentiment analysis health
         sentiment_health = self._check_sentiment_health()
         components['sentiment'] = sentiment_health
         metrics['sentiment_success_rate'] = sentiment_health.success_rate
-        
+
         # Check meta-learning health
         meta_health = self._check_meta_learning_health()
         components['meta_learning'] = meta_health
         metrics['meta_learning_trades'] = meta_health.details.get('trade_count', 0)
-        
+
         # Check order execution health
         order_health = self._check_order_execution_health()
         components['order_execution'] = order_health
         metrics['order_success_rate'] = order_health.success_rate
-        
+
         # Check liquidity management health
         liquidity_health = self._check_liquidity_management_health()
         components['liquidity'] = liquidity_health
         metrics['liquidity_reduction_rate'] = liquidity_health.details.get('reduction_rate', 0)
-        
+
         # Determine overall status
         overall_status = self._determine_overall_status(components)
-        
+
         # Collect alerts
         for comp_name, comp_health in components.items():
             if comp_health.status == "critical":
                 alerts.append(f"{comp_name.title()}: CRITICAL - {comp_health.details.get('issue', 'Unknown issue')}")
             elif comp_health.status == "warning":
                 alerts.append(f"{comp_name.title()}: WARNING - {comp_health.details.get('issue', 'Performance degraded')}")
-        
+
         return SystemHealthStatus(
             overall_status=overall_status,
             components=components,
             alerts=alerts,
             metrics=metrics
         )
-    
+
     def _check_sentiment_health(self) -> ComponentHealth:
         """Check sentiment analysis component health."""
         try:
             # Import sentiment module to check current state
             import sentiment
-            
+
             # Analyze sentiment cache and circuit breaker state
             cache_size = len(sentiment._SENTIMENT_CACHE)
             circuit_breaker = sentiment._SENTIMENT_CIRCUIT_BREAKER
-            
+
             # Estimate success rate based on circuit breaker state and failures
             if circuit_breaker['state'] == 'open':
                 success_rate = 0.0
@@ -203,7 +203,7 @@ class SystemHealthChecker:
                 max_failures = sentiment.SENTIMENT_FAILURE_THRESHOLD
                 current_failures = circuit_breaker['failures']
                 success_rate = max(0.0, 1.0 - (current_failures / max_failures))
-                
+
                 if success_rate >= self.health_thresholds['sentiment']['success_rate_warning']:
                     status = "healthy"
                     issue = "Operating normally"
@@ -213,12 +213,12 @@ class SystemHealthChecker:
                 else:
                     status = "critical"
                     issue = f"Success rate {success_rate:.1%}, {current_failures} failures"
-            
+
             return ComponentHealth(
                 name="sentiment",
                 status=status,
                 success_rate=success_rate,
-                last_check=datetime.now(timezone.utc),
+                last_check=datetime.now(UTC),
                 error_count=circuit_breaker['failures'],
                 details={
                     'issue': issue,
@@ -227,50 +227,51 @@ class SystemHealthChecker:
                     'last_failure': circuit_breaker['last_failure']
                 }
             )
-            
+
         except Exception as e:
             self.logger.error("Failed to check sentiment health: %s", e)
             return ComponentHealth(
                 name="sentiment",
                 status="unknown",
                 success_rate=0.0,
-                last_check=datetime.now(timezone.utc),
+                last_check=datetime.now(UTC),
                 details={'error': str(e)}
             )
-    
+
     def _check_meta_learning_health(self) -> ComponentHealth:
         """Check meta-learning system health."""
         try:
-            from ai_trading import meta_learning
             import config
-            
+
+            from ai_trading import meta_learning
+
             # Check if meta-learning data exists
             trade_log_path = getattr(config, 'TRADE_LOG_FILE', 'trades.csv')
-            
+
             if trade_log_path:
                 quality_report = meta_learning.validate_trade_data_quality(trade_log_path)
-                
+
                 trade_count = quality_report.get('valid_price_rows', 0)
                 min_trades = getattr(config, 'META_LEARNING_MIN_TRADES_REDUCED', 10)
-                
+
                 if trade_count >= min_trades:
                     success_rate = min(1.0, trade_count / (min_trades * 2))  # Scale success rate
                     status = "healthy"
                     issue = f"Active with {trade_count} trades"
                 elif trade_count >= 3:  # Can bootstrap
                     success_rate = 0.6
-                    status = "warning" 
+                    status = "warning"
                     issue = f"Bootstrap ready with {trade_count} trades"
                 else:
                     success_rate = 0.0
                     status = "critical"
                     issue = f"Insufficient data: {trade_count} trades (need {min_trades})"
-                
+
                 return ComponentHealth(
                     name="meta_learning",
                     status=status,
                     success_rate=success_rate,
-                    last_check=datetime.now(timezone.utc),
+                    last_check=datetime.now(UTC),
                     details={
                         'issue': issue,
                         'trade_count': trade_count,
@@ -284,35 +285,35 @@ class SystemHealthChecker:
                     name="meta_learning",
                     status="warning",
                     success_rate=0.0,
-                    last_check=datetime.now(timezone.utc),
+                    last_check=datetime.now(UTC),
                     details={'issue': 'Trade log path not configured'}
                 )
-                
+
         except Exception as e:
             self.logger.error("Failed to check meta-learning health: %s", e)
             return ComponentHealth(
                 name="meta_learning",
                 status="unknown",
                 success_rate=0.0,
-                last_check=datetime.now(timezone.utc),
+                last_check=datetime.now(UTC),
                 details={'error': str(e)}
             )
-    
+
     def _check_order_execution_health(self) -> ComponentHealth:
         """Check order execution system health."""
         try:
             # Try to import order health monitor
             try:
                 from order_health_monitor import get_order_health_monitor
-                
+
                 monitor = get_order_health_monitor()
                 health_summary = monitor.get_health_summary()
-                
+
                 current_metrics = health_summary.get('current_metrics', {})
                 success_rate = current_metrics.get('success_rate', 0.0)
                 avg_fill_time = current_metrics.get('avg_fill_time', 0.0)
                 stuck_orders = current_metrics.get('stuck_orders', 0)
-                
+
                 # Determine status
                 if (success_rate >= self.health_thresholds['order_execution']['success_rate_warning'] and
                     avg_fill_time <= self.health_thresholds['order_execution']['avg_fill_time_warning']):
@@ -325,12 +326,12 @@ class SystemHealthChecker:
                 else:
                     status = "critical"
                     issue = f"Poor performance: {success_rate:.1%} success, {avg_fill_time:.1f}s avg fill"
-                
+
                 return ComponentHealth(
                     name="order_execution",
                     status=status,
                     success_rate=success_rate,
-                    last_check=datetime.now(timezone.utc),
+                    last_check=datetime.now(UTC),
                     details={
                         'issue': issue,
                         'avg_fill_time': avg_fill_time,
@@ -338,14 +339,14 @@ class SystemHealthChecker:
                         'monitoring_active': health_summary.get('monitoring_active', False)
                     }
                 )
-                
+
             except ImportError:
                 # Order health monitor not available, check basic metrics
                 from trade_execution import _active_orders, _order_tracking_lock
-                
+
                 with _order_tracking_lock:
                     active_count = len(_active_orders)
-                
+
                 # Basic health assessment
                 if active_count < 10:  # Reasonable number of active orders
                     status = "healthy"
@@ -355,42 +356,42 @@ class SystemHealthChecker:
                     status = "warning"
                     success_rate = 0.6
                     issue = f"Many active orders: {active_count}"
-                
+
                 return ComponentHealth(
                     name="order_execution",
                     status=status,
                     success_rate=success_rate,
-                    last_check=datetime.now(timezone.utc),
+                    last_check=datetime.now(UTC),
                     details={
                         'issue': issue,
                         'active_orders': active_count,
                         'monitoring_available': False
                     }
                 )
-                
+
         except Exception as e:
             self.logger.error("Failed to check order execution health: %s", e)
             return ComponentHealth(
                 name="order_execution",
                 status="unknown",
                 success_rate=0.0,
-                last_check=datetime.now(timezone.utc),
+                last_check=datetime.now(UTC),
                 details={'error': str(e)}
             )
-    
+
     def _check_liquidity_management_health(self) -> ComponentHealth:
         """Check liquidity management system health."""
         try:
             # This would ideally track liquidity management metrics
             # For now, provide basic health assessment
-            
+
             import config
-            
+
             # Check if liquidity parameters are reasonable
             spread_threshold = getattr(config, 'LIQUIDITY_SPREAD_THRESHOLD', 0.10)
             vol_threshold = getattr(config, 'LIQUIDITY_VOL_THRESHOLD', 0.50)
             aggressive_reduction = getattr(config, 'LIQUIDITY_REDUCTION_AGGRESSIVE', 0.75)
-            
+
             # Assess if thresholds are reasonable (not too aggressive)
             if spread_threshold <= 0.20 and aggressive_reduction >= 0.70:
                 status = "healthy"
@@ -404,12 +405,12 @@ class SystemHealthChecker:
                 status = "critical"
                 success_rate = 0.3
                 issue = "Thresholds too aggressive"
-            
+
             return ComponentHealth(
                 name="liquidity",
                 status=status,
                 success_rate=success_rate,
-                last_check=datetime.now(timezone.utc),
+                last_check=datetime.now(UTC),
                 details={
                     'issue': issue,
                     'spread_threshold': spread_threshold,
@@ -418,41 +419,41 @@ class SystemHealthChecker:
                     'reduction_rate': 0.0  # Would track actual reduction rate
                 }
             )
-            
+
         except Exception as e:
             self.logger.error("Failed to check liquidity management health: %s", e)
             return ComponentHealth(
                 name="liquidity",
                 status="unknown",
                 success_rate=0.0,
-                last_check=datetime.now(timezone.utc),
+                last_check=datetime.now(UTC),
                 details={'error': str(e)}
             )
-    
-    def _determine_overall_status(self, components: Dict[str, ComponentHealth]) -> str:
+
+    def _determine_overall_status(self, components: dict[str, ComponentHealth]) -> str:
         """Determine overall system status from component health."""
         if not components:
             return "unknown"
-        
+
         statuses = [comp.status for comp in components.values()]
-        
+
         if "critical" in statuses:
             return "critical"
         elif "warning" in statuses:
-            return "warning"  
+            return "warning"
         elif all(status == "healthy" for status in statuses):
             return "healthy"
         else:
             return "unknown"
-    
+
     def _process_health_alerts(self, health_status: SystemHealthStatus) -> None:
         """Process and log health alerts."""
         for alert in health_status.alerts:
             self.logger.error("SYSTEM_HEALTH_ALERT: %s", alert)
-        
+
         # Could integrate with external alerting systems here
         # (email, Slack, webhooks, etc.)
-    
+
     def _log_health_summary(self, health_status: SystemHealthStatus) -> None:
         """Log periodic health summary."""
         summary = {
@@ -463,16 +464,16 @@ class SystemHealthChecker:
             "critical_components": sum(1 for c in health_status.components.values() if c.status == "critical"),
             "alert_count": len(health_status.alerts)
         }
-        
+
         if health_status.overall_status == "healthy":
             self.logger.info("SYSTEM_HEALTH_OK", extra=summary)
         else:
             self.logger.warning("SYSTEM_HEALTH_DEGRADED", extra=summary)
-    
-    def get_current_health(self) -> Dict[str, Any]:
+
+    def get_current_health(self) -> dict[str, Any]:
         """Get current system health status."""
         health_status = self._check_all_components()
-        
+
         return {
             "overall_status": health_status.overall_status,
             "components": {
@@ -488,12 +489,12 @@ class SystemHealthChecker:
             "metrics": health_status.metrics,
             "timestamp": health_status.timestamp.isoformat()
         }
-    
+
     def export_health_report(self, filepath: str) -> None:
         """Export comprehensive health report."""
         try:
             health_data = self.get_current_health()
-            
+
             # Add historical data
             with self._lock:
                 health_data["history"] = [
@@ -505,12 +506,12 @@ class SystemHealthChecker:
                     }
                     for h in list(self._health_history)[-50:]  # Last 50 checks
                 ]
-            
+
             with open(filepath, 'w') as f:
                 json.dump(health_data, f, indent=2)
-                
+
             self.logger.info("Health report exported to %s", filepath)
-            
+
         except Exception as e:
             self.logger.error("Failed to export health report: %s", e)
 
@@ -522,10 +523,10 @@ _system_health_checker = None
 def get_system_health_checker() -> SystemHealthChecker:
     """Get or create the global system health checker."""
     global _system_health_checker
-    
+
     if _system_health_checker is None:
         _system_health_checker = SystemHealthChecker()
-    
+
     return _system_health_checker
 
 
@@ -541,7 +542,7 @@ def stop_system_health_monitoring() -> None:
         _system_health_checker.stop_monitoring()
 
 
-def get_system_health() -> Dict[str, Any]:
+def get_system_health() -> dict[str, Any]:
     """Get current system health status."""
     checker = get_system_health_checker()
     return checker.get_current_health()

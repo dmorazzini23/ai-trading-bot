@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
 import logging
 import pickle
+from datetime import UTC
+from pathlib import Path
 
 from ai_trading.config import management as config
 
@@ -18,13 +19,15 @@ ML_MODELS: dict[str, object | None] = {}
 
 def train_and_save_model(symbol: str):
     """Train a fallback linear model and persist it."""
-    from sklearn.linear_model import LinearRegression
-    import pandas as pd
+    from datetime import datetime, timedelta
+
     import numpy as np
-    from datetime import datetime, timedelta, timezone
+    import pandas as pd
+    from sklearn.linear_model import LinearRegression
+
     from ai_trading.data_fetcher import get_daily_df
 
-    end = datetime.now(timezone.utc)
+    end = datetime.now(UTC)
     start = end - timedelta(days=30)
     try:
         df = get_daily_df(symbol, start, end)
@@ -74,12 +77,13 @@ def load_model(symbol: str):
 # AI-AGENT-REF: Defer model loading in testing environments to prevent import blocking
 import os
 import sys
+
 # AI-AGENT-REF: More aggressive testing mode detection to prevent import hangs
 _is_testing = (
-    os.getenv("TESTING") 
+    os.getenv("TESTING")
     or os.getenv("PYTEST_RUNNING")
-    or getattr(config, "TESTING", False) 
-    or "pytest" in sys.modules 
+    or getattr(config, "TESTING", False)
+    or "pytest" in sys.modules
     or "test_" in os.path.basename(sys.argv[0] if sys.argv else "")
 )
 if not _is_testing:

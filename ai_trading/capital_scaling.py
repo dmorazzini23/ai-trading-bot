@@ -3,9 +3,10 @@
 Utilities for adaptive capital allocation and risk-based position sizing.
 """
 
-import numpy as np
-import math
 import logging
+import math
+
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -163,9 +164,7 @@ class CapitalScalingEngine:
         """
         try:
             if equity and equity > 0:
-                if self._base is None:
-                    self._base = equity
-                elif equity > self._base:
+                if self._base is None or equity > self._base:
                     self._base = equity
         except (TypeError, ValueError) as e:
             logger.warning(f"Failed to update baseline equity: {e}")

@@ -17,8 +17,9 @@ os.environ['TESTING'] = '1'
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from portfolio_optimizer import create_portfolio_optimizer, PortfolioDecision
+from portfolio_optimizer import PortfolioDecision, create_portfolio_optimizer
 from transaction_cost_calculator import create_transaction_cost_calculator
+
 from ai_trading.strategies.regime_detector import create_regime_detector
 
 
@@ -79,7 +80,7 @@ def demonstrate_portfolio_optimization():
     logging.info("🌊 Market Regime Detection...")
     regime, metrics = regime_detector.detect_current_regime(market_data, 'SPY')
     thresholds = regime_detector.calculate_dynamic_thresholds(regime, metrics)
-    
+
     logging.info(f"   Current Regime: {regime.value.upper()}")
     logging.info(f"   Trend Strength: {metrics.trend_strength:.3f}")
     logging.info(f"   Volatility Level: {metrics.volatility_level:.3f}")
@@ -101,7 +102,7 @@ def demonstrate_portfolio_optimization():
     # Demonstrate trade proposals and portfolio-level filtering
     logging.info("🔍 Trade Proposal Analysis (Demonstrating Churn Reduction)...")
     print()
-    
+
     trade_proposals = [
         ('AAPL', 'Small Increase', 110.0),  # Small position increase
         ('MSFT', 'Medium Increase', 100.0), # Medium position increase
@@ -116,7 +117,7 @@ def demonstrate_portfolio_optimization():
 
     for symbol, description, proposed_position in trade_proposals:
         logging.info(f"   📈 Analyzing: {symbol} - {description}")
-        
+
         # Portfolio-level decision
         decision, reasoning = portfolio_optimizer.make_portfolio_decision(
             symbol,
@@ -124,20 +125,20 @@ def demonstrate_portfolio_optimization():
             current_positions,
             market_data
         )
-        
+
         # Transaction cost analysis for approved trades
         if decision == PortfolioDecision.APPROVE:
             current_pos = current_positions.get(symbol, 0.0)
             position_change = abs(proposed_position - current_pos)
             expected_profit = position_change * market_data['prices'].get(symbol, 100.0) * 0.02  # 2% expected return
-            
+
             profitability = transaction_calculator.validate_trade_profitability(
                 symbol,
                 position_change,
                 expected_profit,
                 market_data
             )
-            
+
             if profitability.is_profitable:
                 approved_trades += 1
                 logging.info(f"      ✅ APPROVED: {reasoning}")
@@ -153,13 +154,13 @@ def demonstrate_portfolio_optimization():
         else:
             rejected_trades += 1
             logging.info(f"      ❌ REJECTED: {reasoning}")
-        
+
         print()
 
     # Churn reduction summary
     total_proposals = len(trade_proposals)
     reduction_percentage = ((rejected_trades + deferred_trades) / total_proposals) * 100
-    
+
     logging.info("📉 Churn Reduction Summary:")
     logging.info(f"   Total Trade Proposals: {total_proposals}")
     logging.info(f"   Approved: {approved_trades}")
@@ -176,13 +177,13 @@ def demonstrate_portfolio_optimization():
         'GOOGL': 0.25,
         'TSLA': 0.15
     }
-    
+
     should_rebalance, reason = portfolio_optimizer.should_trigger_rebalance(
         current_positions,
         target_weights,
         market_data['prices']
     )
-    
+
     logging.info(str(f"   Should Rebalance: {'YES' if should_rebalance else 'NO'}"))
     logging.info(f"   Reason: {reason}")
     print()
@@ -190,7 +191,7 @@ def demonstrate_portfolio_optimization():
     # Summary of capabilities
     logging.info("🎯 Portfolio Optimization Capabilities Demonstrated:")
     logging.info("   ✅ Market regime detection and dynamic threshold adjustment")
-    logging.info("   ✅ Portfolio-level Kelly efficiency optimization") 
+    logging.info("   ✅ Portfolio-level Kelly efficiency optimization")
     logging.info("   ✅ Intelligent trade filtering based on portfolio impact")
     logging.info("   ✅ Comprehensive transaction cost analysis with safety margins")
     logging.info("   ✅ Correlation impact assessment and penalty application")
@@ -198,7 +199,7 @@ def demonstrate_portfolio_optimization():
     logging.info("   ✅ Tax-aware quarterly rebalancing prioritization")
     logging.info("   ✅ Crisis and volatility regime protective measures")
     print()
-    
+
     logging.info("🚀 The portfolio-level churn reduction strategy is ready for deployment!")
     logging.info("   This system transforms signal-driven trading into intelligent")
     logging.info("   portfolio-first decision making, dramatically reducing churn")

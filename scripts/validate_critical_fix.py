@@ -14,13 +14,13 @@ BEFORE FIX: Every successful trade crashed during reconciliation
 AFTER FIX: All trades complete successfully with proper reconciliation
 """
 
-import sys
 import os
+import sys
 
 # Set up test environment
 os.environ.update({
     'ALPACA_API_KEY': 'test_key',
-    'ALPACA_SECRET_KEY': 'test_secret', 
+    'ALPACA_SECRET_KEY': 'test_secret',
     'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets',
     'WEBHOOK_SECRET': 'test_webhook',
     'FLASK_PORT': '5000'
@@ -28,8 +28,10 @@ os.environ.update({
 
 sys.path.append('.')
 
-from ai_trading.trade_execution import ExecutionEngine
 from unittest.mock import MagicMock
+
+from ai_trading.trade_execution import ExecutionEngine
+
 
 class MockOrder:
     """Simulates Alpaca order response with various filled_qty data types."""
@@ -51,10 +53,10 @@ def test_production_scenarios():
     """Test the exact scenarios from production logs."""
     logging.info("🔄 VALIDATING CRITICAL PRODUCTION FIX")
     logging.info(str("=" * 60))
-    
+
     ctx = MockContext()
     engine = ExecutionEngine(ctx)
-    
+
     # Production scenarios from the logs
     scenarios = [
         ("NFLX", "1", 1, "Filled 1 share @ $1,177.38"),
@@ -64,20 +66,20 @@ def test_production_scenarios():
         ("QQQ", "10", 10, "Order example"),
         ("PLTR", "7", 7, "Order example"),
     ]
-    
+
     logging.info("Testing production crash scenarios:")
     logging.info("Before fix: ❌ TypeError on every trade")
     logging.info("After fix:  ✅ All trades complete successfully")
     print()
-    
+
     all_passed = True
-    
+
     for symbol, filled_qty_str, expected_qty, description in scenarios:
         logging.info(f"🔍 {symbol}: {description}")
-        
+
         # Create order with STRING filled_qty (the production issue)
         order = MockOrder(filled_qty=filled_qty_str)
-        
+
         try:
             # This would have crashed EVERY TIME before the fix
             engine._reconcile_partial_fills(
@@ -88,7 +90,7 @@ def test_production_scenarios():
                 last_order=order
             )
             logging.info(str(f"   ✅ SUCCESS: String '{filled_qty_str}' → int {expected_qty}"))
-            
+
         except TypeError as e:
             if "'>' not supported between instances of 'str' and 'int'" in str(e):
                 logging.info(f"   ❌ FAILED: TypeError still occurs - {e}")
@@ -97,10 +99,10 @@ def test_production_scenarios():
                 raise
         except Exception as e:
             logging.info(f"   ⚠️  Other exception (acceptable): {type(e).__name__}")
-    
+
     print()
     logging.info("🧪 TESTING EDGE CASES:")
-    
+
     edge_cases = [
         ("", "empty string"),
         ("0", "zero string"),
@@ -109,7 +111,7 @@ def test_production_scenarios():
         ("25.5", "decimal string"),
         ("-5", "negative string"),
     ]
-    
+
     for value, description in edge_cases:
         order = MockOrder(filled_qty=value)
         try:
@@ -123,10 +125,10 @@ def test_production_scenarios():
                 raise
         except Exception:
             logging.info(f"   ✅ {description}: handled gracefully")
-    
+
     print()
     logging.info(str("=" * 60))
-    
+
     if all_passed:
         logging.info("🎉 ALL TESTS PASSED - CRITICAL FIX VALIDATED")
         print()

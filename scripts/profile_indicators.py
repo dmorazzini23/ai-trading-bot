@@ -1,9 +1,12 @@
 import logging
+
 logger = logging.getLogger(__name__)
-import time
-import pandas as pd
-import numpy as np
 import inspect
+import time
+
+import numpy as np
+import pandas as pd
+
 try:
     import ai_trading.signals as signals  # type: ignore
 except Exception:  # pragma: no cover

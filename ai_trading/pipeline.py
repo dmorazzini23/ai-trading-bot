@@ -15,17 +15,19 @@ from ai_trading import config
 try:
     from sklearn.base import BaseEstimator, TransformerMixin
 except ImportError:
+
     class BaseEstimator:
         pass
-    
+
     class TransformerMixin:
         pass
-    
+
     logger.warning("sklearn not available, using basic object inheritance")
 
 try:
     from sklearn.linear_model import SGDRegressor
 except Exception:  # pragma: no cover - optional dependency
+
     class SGDRegressor:
         """Minimal stub when scikit-learn is unavailable."""
 
@@ -39,9 +41,12 @@ except Exception:  # pragma: no cover - optional dependency
             if np is None:
                 return [0] * len(X)
             return np.zeros(len(X))
+
+
 try:
     from sklearn.pipeline import Pipeline
 except Exception:  # pragma: no cover - optional dependency
+
     class Pipeline(list):
         """Simplistic pipeline fallback."""
 
@@ -57,13 +62,16 @@ except Exception:  # pragma: no cover - optional dependency
             return self
 
         def predict(self, X):
-            for name, step in self:
+            for _name, step in self:
                 if hasattr(step, "transform"):
                     X = step.transform(X)
             return self[-1][1].predict(X)
+
+
 try:
     from sklearn.preprocessing import StandardScaler
 except Exception:  # pragma: no cover - optional dependency
+
     class StandardScaler:
         def fit(self, X, y=None):
             if np is None:

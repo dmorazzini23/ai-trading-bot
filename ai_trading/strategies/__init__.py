@@ -18,15 +18,15 @@ strategy diversification, risk management, and performance monitoring.
 from .multi_timeframe import (
     MultiTimeframeAnalyzer,
     MultiTimeframeSignal,
-    TimeframeHierarchy,
+    SignalDirection,
     SignalStrength,
-    SignalDirection
+    TimeframeHierarchy,
 )
 from .regime_detection import (
-    RegimeDetector,
     MarketRegime,
+    RegimeDetector,
+    TrendStrength,
     VolatilityRegime,
-    TrendStrength
 )
 
 # Import existing strategy components if available
@@ -36,20 +36,26 @@ except ImportError:
     # Create placeholder classes if not available
     class BaseStrategy:
         pass
+
     class StrategySignal:
         pass
+
 
 try:
     from .ai_trading.signals import TradingSignal
 except ImportError:
+
     class TradingSignal:
         pass
+
 
 try:
     from .backtest import BacktestEngine
 except ImportError:
+
     class BacktestEngine:
         pass
+
 
 # Export all strategy classes
 __all__ = [
@@ -61,9 +67,8 @@ __all__ = [
     "SignalDirection",
     "RegimeDetector",
     "MarketRegime",
-    "VolatilityRegime", 
+    "VolatilityRegime",
     "TrendStrength",
-    
     # Legacy strategy components
     "BaseStrategy",
     "StrategySignal",
