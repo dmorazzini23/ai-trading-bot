@@ -59,3 +59,7 @@ sklearn_fix_summary.md
 test_critical_type_fix.py
 *.egg-info/
 backup/
+
+# Security audit CSV files (temporary analysis files)
+post*.csv
+reorg_deletes.csv
