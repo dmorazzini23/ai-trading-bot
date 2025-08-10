@@ -58,7 +58,7 @@ class MockConfig:
     TRADE_LOG_FILE = 'logs/trades.csv'
     VERBOSE_LOGGING = True
     SCHEDULER_SLEEP_SECONDS = 30.0
-    NEWS_API_KEY = "fake_test_news_api_not_real"
+    NEWS_API_KEY = "fake_test_news_api_not_real"  # Guard: test-only fake value
     TESTING = True
     REQUIRED_ENV_VARS = []
     SEED = 42

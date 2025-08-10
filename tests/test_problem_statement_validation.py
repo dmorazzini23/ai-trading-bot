@@ -152,11 +152,13 @@ def test_env_example_exists():
         content = f.read()
     
     # Should have key placeholders
+    # Guard: test validation checking for placeholder patterns, not actual secrets
     assert 'ALPACA_API_KEY=' in content, "Should have Alpaca API key placeholder"
     assert 'ALPACA_SECRET_KEY=' in content, "Should have Alpaca secret placeholder" 
     assert 'your_alpaca_api_key_here' in content, "Should have safe placeholder values"
     
     # Should not contain real secrets
+    # Guard: test validation ensuring no real credentials leak into examples
     assert len([line for line in content.split('\n') if line.startswith('ALPACA_API_KEY=') and 'your_' not in line]) == 0, "Should not contain real API keys"
     
     print("✓ .env.example created correctly with safe placeholders")
