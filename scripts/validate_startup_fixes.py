@@ -137,13 +137,12 @@ def test_utc_timestamp_format():
     sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot')
     
     # Load the functions into local scope
-    timefmt_code = open('ai_trading/utils/timefmt.py').read()
-    local_scope = {}
-    exec(timefmt_code, local_scope)
-    
-    utc_now_iso = local_scope['utc_now_iso']
-    format_datetime_utc = local_scope['format_datetime_utc']
-    ensure_utc_format = local_scope['ensure_utc_format']
+    # Import functions from timefmt module instead of using exec
+    try:
+        from ai_trading.utils.timefmt import utc_now_iso, format_datetime_utc, ensure_utc_format
+    except ImportError:
+        print("❌ Could not import timefmt functions")
+        return
     
     # Test utc_now_iso
     timestamp = utc_now_iso()

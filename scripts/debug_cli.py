@@ -243,7 +243,7 @@ def cmd_trace(correlation_id):
                 try:
                     dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                     time_str = dt.strftime('%H:%M:%S.%f')[:-3]  # HH:MM:SS.mmm
-                except:
+                except (ValueError, TypeError):
                     time_str = timestamp
                 
                 logging.info(f"\n  {i:2d}. {time_str} - {phase.upper()}")

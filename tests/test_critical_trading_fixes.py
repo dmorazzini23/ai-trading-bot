@@ -732,8 +732,9 @@ def test_metalearn_invalid_prices_prevention():
         with patch('meta_learning.logger') as mock_logger:
             try:
                 retrain_meta_learner(trade_log_path=tmp_path, min_samples=1)
-            except:
-                pass  # Training may fail due to missing sklearn, but that's OK for this test
+            except Exception as e:
+                # Training may fail due to missing sklearn, but that's OK for this test
+                mock_logger.warning.call_args_list.append(f"Meta learning training failed as expected: {e}")
             
             # Check that quality validation occurred
             calls = [str(call) for call in mock_logger.info.call_args_list]
