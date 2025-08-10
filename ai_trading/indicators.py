@@ -49,8 +49,9 @@ except ImportError:
 
     pd = MockPandas()
 
-from functools import lru_cache
 import logging
+from functools import lru_cache
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,6 @@ except ImportError:
 
         return decorator
 
-
-from typing import Any
 
 _INDICATOR_CACHE: dict[tuple[str, Any], Any] = {}
 
