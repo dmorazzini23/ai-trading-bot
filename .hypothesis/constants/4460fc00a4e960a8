@@ -1,4 +1,0 @@
-# file: /home/runner/work/ai-trading-bot/ai-trading-bot/strategies/moving_average_crossover.py
-# hypothesis_version: 6.136.6
-
-['buy', 'close', 'sell', 'tickers']

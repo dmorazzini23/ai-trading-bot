@@ -61,7 +61,9 @@ dependencies = [
 packages = ["ai_trading"]
 
 [project.scripts]
-ai-trading-bot = "ai_trading.main:main"
+ai-trade = "ai_trading.__main__:run_trade"
+ai-backtest = "ai_trading.__main__:run_backtest"
+ai-health = "ai_trading.__main__:run_healthcheck"
 
 [project.optional-dependencies]
 dev = [

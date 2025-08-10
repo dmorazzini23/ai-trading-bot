@@ -7609,96 +7609,107 @@ def detect_regime(df: pd.DataFrame) -> str:
     return "chop"
 
 
-# Train or load regime model - skip in test environment
-if os.getenv("TESTING") == "1" or os.getenv("PYTEST_RUNNING"):
-    logger.info("Skipping regime model training in test environment")
-    regime_model = RandomForestClassifier(
-        n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
-    )
-elif os.path.exists(REGIME_MODEL_PATH):
-    try:
-        with open(REGIME_MODEL_PATH, "rb") as f:
-            regime_model = pickle.load(f)
-    except Exception as e:
-        logger.warning(f"Failed to load regime model: {e}")
-        regime_model = RandomForestClassifier(
+def _initialize_regime_model(ctx=None):
+    """Initialize regime model - load existing or train new one."""
+    # Train or load regime model - skip in test environment
+    if os.getenv("TESTING") == "1" or os.getenv("PYTEST_RUNNING"):
+        logger.info("Skipping regime model training in test environment")
+        return RandomForestClassifier(
             n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
         )
-else:
-    # --- Regime training uses basket-based proxy now ---
-    wide = _build_regime_dataset(ctx)
-    if wide is None or getattr(wide, "empty", False):
-        logger.warning("Regime basket is empty; skipping model train")
-        bars = pd.DataFrame()
-    else:
-        bars = _regime_basket_to_proxy_bars(wide)
-
-    # Normalize to a DatetimeIndex robustly (proxy has 'timestamp' column)
-    try:
-        if "timestamp" in getattr(bars, "columns", []):
-            idx = safe_to_datetime(bars["timestamp"], context="regime data")
-            bars = bars.drop(columns=["timestamp"])
-            bars.index = idx
-        # Final conversion (idempotent for Timestamps)
-        bars.index = safe_to_datetime(bars.index, context="regime data")
-    except Exception as e:
-        logger.warning("REGIME index normalization failed: %s", e)
-        bars = pd.DataFrame()
-    bars = bars.rename(columns=lambda c: c.lower())
-    feats = _compute_regime_features(bars)
-    labels = (
-        (bars["close"] > bars["close"].rolling(200).mean())
-        .loc[feats.index]
-        .astype(int)
-        .rename("label")
-    )
-    training = feats.join(labels, how="inner").dropna()
-    
-    # Add validation for training data quality
-    if training.empty:
-        logger.warning("Regime training dataset is empty after joining features and labels")
-        if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
-            logger.warning("No valid training data for regime model; using fallback")
-            _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
-        regime_model = RandomForestClassifier(
-            n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
-        )
-        return regime_model
-    
-    # Import settings for regime configuration
-    from ai_trading.config.settings import get_settings
-    settings = get_settings()
-    
-    logger.debug("Regime training data validation: %d rows available, minimum required: %d", 
-                len(training), settings.REGIME_MIN_ROWS)
-    
-    if len(training) >= settings.REGIME_MIN_ROWS:
-        X = training[["atr", "rsi", "macd", "vol"]]
-        y = training["label"]
-        regime_model = RandomForestClassifier(
-            n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
-        )
-        if X.empty:
-            logger.warning("REGIME_MODEL_TRAIN_SKIPPED_EMPTY")
-        else:
-            regime_model.fit(X, y)
+    elif os.path.exists(REGIME_MODEL_PATH):
         try:
-            atomic_pickle_dump(regime_model, REGIME_MODEL_PATH)
+            with open(REGIME_MODEL_PATH, "rb") as f:
+                return pickle.load(f)
         except Exception as e:
-            logger.warning(f"Failed to save regime model: {e}")
-        else:
-            logger.info("REGIME_MODEL_TRAINED", extra={"rows": len(training)})
-    else:
-        # Log once at WARNING level; avoid noisy ERROR during closed market.
-        if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
-            logger.warning(
-                "Insufficient rows (%d < %d) for regime model; using fallback",
-                len(training), settings.REGIME_MIN_ROWS
+            logger.warning(f"Failed to load regime model: {e}")
+            return RandomForestClassifier(
+                n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
             )
-            _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
-        regime_model = RandomForestClassifier(
-            n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
+    else:
+        if ctx is None:
+            logger.warning("No context provided for regime model training; using fallback")
+            return RandomForestClassifier(
+                n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
+            )
+        
+        # --- Regime training uses basket-based proxy now ---
+        wide = _build_regime_dataset(ctx)
+        if wide is None or getattr(wide, "empty", False):
+            logger.warning("Regime basket is empty; skipping model train")
+            bars = pd.DataFrame()
+        else:
+            bars = _regime_basket_to_proxy_bars(wide)
+
+        # Normalize to a DatetimeIndex robustly (proxy has 'timestamp' column)
+        try:
+            if "timestamp" in getattr(bars, "columns", []):
+                idx = safe_to_datetime(bars["timestamp"], context="regime data")
+                bars = bars.drop(columns=["timestamp"])
+                bars.index = idx
+            # Final conversion (idempotent for Timestamps)
+            bars.index = safe_to_datetime(bars.index, context="regime data")
+        except Exception as e:
+            logger.warning("REGIME index normalization failed: %s", e)
+            bars = pd.DataFrame()
+        bars = bars.rename(columns=lambda c: c.lower())
+        feats = _compute_regime_features(bars)
+        labels = (
+            (bars["close"] > bars["close"].rolling(200).mean())
+            .loc[feats.index]
+            .astype(int)
+            .rename("label")
         )
+        training = feats.join(labels, how="inner").dropna()
+        
+        # Add validation for training data quality
+        if training.empty:
+            logger.warning("Regime training dataset is empty after joining features and labels")
+            if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
+                logger.warning("No valid training data for regime model; using fallback")
+                _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
+            return RandomForestClassifier(
+                n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
+            )
+        
+        # Import settings for regime configuration
+        from ai_trading.config.settings import get_settings
+        settings = get_settings()
+        
+        logger.debug("Regime training data validation: %d rows available, minimum required: %d", 
+                    len(training), settings.REGIME_MIN_ROWS)
+        
+        if len(training) >= settings.REGIME_MIN_ROWS:
+            X = training[["atr", "rsi", "macd", "vol"]]
+            y = training["label"]
+            regime_model = RandomForestClassifier(
+                n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
+            )
+            if X.empty:
+                logger.warning("REGIME_MODEL_TRAIN_SKIPPED_EMPTY")
+            else:
+                regime_model.fit(X, y)
+            try:
+                atomic_pickle_dump(regime_model, REGIME_MODEL_PATH)
+            except Exception as e:
+                logger.warning(f"Failed to save regime model: {e}")
+            else:
+                logger.info("REGIME_MODEL_TRAINED", extra={"rows": len(training)})
+            return regime_model
+        else:
+            # Log once at WARNING level; avoid noisy ERROR during closed market.
+            if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
+                logger.warning(
+                    "Insufficient rows (%d < %d) for regime model; using fallback",
+                    len(training), settings.REGIME_MIN_ROWS
+                )
+                _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
+            return RandomForestClassifier(
+                n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
+            )
+
+# Initialize regime model lazily
+regime_model = None
 
 
 def _market_breadth(ctx: BotContext) -> float:
