@@ -192,8 +192,9 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
             if _listener:
                 try:
                     _listener.stop()
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Log cleanup errors but don't fail shutdown
+                    logging.getLogger(__name__).warning("Failed to stop logging listener during shutdown: %s", e)
 
         atexit.register(_stop_listener)
 

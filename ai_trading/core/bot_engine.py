@@ -216,8 +216,9 @@ def handle_exception(exc_type, exc_value, exc_traceback):
         try:
             h.flush()
             h.close()
-        except (AttributeError, OSError):
-            pass
+        except (AttributeError, OSError) as e:
+            # Log handler cleanup issues but continue shutdown process
+            logger.warning("Failed to close logging handler: %s", e)
     logging.shutdown()
 
 
@@ -4637,8 +4638,10 @@ def check_halt_flag(ctx: BotContext | None = None) -> bool:
                 acct = ctx.api.get_account()
                 if float(getattr(acct, "maintenance_margin", 0)) > float(acct.equity):
                     reason = "margin breach"
-            except Exception:
-                pass
+            except Exception as e:
+                # Failed to check margin status - log error and treat as potential risk
+                logger.warning("Failed to check margin status for halt condition: %s", e)
+                reason = "margin check failure"
 
     if reason:
         logger.info(f"TRADING_HALTED set due to {reason}")
@@ -7559,8 +7562,9 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     try:
         from ai_trading.utils.ohlcv import standardize_ohlcv
         df = standardize_ohlcv(df)
-    except Exception:
-        pass
+    except Exception as e:
+        # OHLCV standardization failed - log warning but continue with raw data
+        logger.warning("Failed to standardize OHLCV data: %s", e)
 
     # 2) Synthesize missing OHLC from 'close' when needed (proxy baskets)
     if "close" in df.columns:
@@ -8419,8 +8423,9 @@ def start_metrics_server(default_port: int = 9200) -> None:
                         "Metrics port %d already serving; reusing", default_port
                     )
                     return
-            except Exception:
-                pass
+            except Exception as e:
+                # Metrics server connectivity check failed - continue with port search
+                logger.debug("Metrics server check failed on port %d: %s", default_port, e)
             port = utils.get_free_port(default_port + 1, default_port + 50)
             if port is None:
                 logger.warning("No free port available for metrics server")
@@ -9062,8 +9067,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
     try:  # AI-AGENT-REF: ensure lock released on every exit
         try:
             ctx.risk_engine.wait_for_exposure_update(0.5)
-        except Exception:
-            pass
+        except Exception as e:
+            # Risk engine update failed - log warning but continue
+            logger.warning("Risk engine exposure update failed: %s", e)
         if not hasattr(state, "trade_cooldowns"):
             state.trade_cooldowns = {}
         if not hasattr(state, "last_trade_direction"):
@@ -9529,8 +9535,13 @@ def initial_rebalance(ctx: BotContext, symbols: List[str]) -> None:
         state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
         state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
         state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
-    except Exception:
-        pass
+    except Exception as e:
+        # Failed to refresh position cache - log error but continue
+        logger.error("Failed to refresh position cache after rebalance: %s", e)
+        # Initialize empty cache to prevent AttributeError
+        state.position_cache = {}
+        state.long_positions = set()
+        state.short_positions = set()
 
 
 def main() -> None:
@@ -10049,8 +10060,9 @@ def execute_trades(ctx, signals: pd.Series) -> list[tuple[str, str]]:
         if api is not None and hasattr(api, "submit_order"):
             try:
                 api.submit_order(symbol, 1, side)
-            except Exception:
-                pass
+            except Exception as e:
+                # Order submission failed - log error and add to failed orders
+                logger.error("Failed to submit test order for %s %s: %s", symbol, side, e)
         orders.append((symbol, side))
     return orders
 

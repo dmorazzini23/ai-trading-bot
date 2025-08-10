@@ -584,9 +584,9 @@ def get_env(
             env_path = Path(".env")
             if env_path.exists():
                 load_dotenv(env_path, override=True)
-        except ImportError:
+        except ImportError as e:
             # dotenv not available, skip reload
-            pass
+            logger.debug("python-dotenv not available for env reload: %s", e)
     
     value = os.environ.get(key, default)
     if required and value is None:

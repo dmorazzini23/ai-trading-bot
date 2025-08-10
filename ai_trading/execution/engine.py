@@ -262,9 +262,9 @@ class OrderManager:
                 from .idempotency import get_idempotency_cache
                 cache = get_idempotency_cache()
                 cache.mark_submitted(key, order.id)
-            except (ImportError, NameError):
-                # Idempotency module not available
-                pass
+            except (ImportError, NameError) as e:
+                # Idempotency module not available - log debug info
+                logger.debug("Idempotency cache not available: %s", e)
             
             # Start monitoring if not already running
             if not self._monitor_running:
@@ -422,9 +422,9 @@ class OrderManager:
                 try:
                     from .reconcile import reconcile_positions_and_orders
                     reconcile_positions_and_orders()
-                except ImportError:
-                    # Reconciliation module not available
-                    pass
+                except ImportError as e:
+                    # Reconciliation module not available - log debug info
+                    logger.debug("Reconciliation module not available: %s", e)
                 except Exception as e:
                     logger.error(f"Error during reconciliation: {e}")
                 

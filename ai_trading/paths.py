@@ -5,7 +5,10 @@ Defines writable data, log, and cache directories with environment overrides.
 Creates directories at import time.
 """
 import os
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 APP_NAME = "ai-trading-bot"
@@ -13,10 +16,10 @@ APP_NAME = "ai-trading-bot"
 def _ensure_dir(path: Path) -> Path:
     try:
         path.mkdir(parents=True, exist_ok=True)
-    except OSError:
+    except OSError as e:
         # In restricted environments (e.g., systemd with ProtectSystem/ProtectHome),
-        # creation may be disallowed. Return the path; callers can handle writability.
-        pass
+        # creation may be disallowed. Log the issue but return the path
+        logger.debug("Directory creation failed for %s: %s", path, e)
     return path
 
 def _first_env_path(*names: str) -> Path | None:

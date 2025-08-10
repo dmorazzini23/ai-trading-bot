@@ -203,8 +203,9 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                                 price = float(row[5])
                                 if price > 0:
                                     valid_price_rows += 1
-                            except (ValueError, IndexError):
-                                pass
+                            except (ValueError, IndexError) as e:
+                                # Invalid price data in audit format - continue validation
+                                logger.debug("Invalid price in audit format row: %s", e)
                     elif len(first_col) <= 10 and first_col.isalpha() and len(first_col) >= 2:  # Likely symbol
                         meta_format_rows += 1
                         # Validate meta format price (column 2)
@@ -213,8 +214,9 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                                 price = float(row[2])
                                 if price > 0:
                                     valid_price_rows += 1
-                            except (ValueError, IndexError):
-                                pass
+                            except (ValueError, IndexError) as e:
+                                # Invalid price data in meta format - continue validation
+                                logger.debug("Invalid price in meta format row: %s", e)
                     elif "price" in first_col.lower() or any("price" in str(col).lower() for col in row[:3]):
                         # Detect CSV with price column headers (test data format)
                         meta_format_rows += 1
