@@ -1,6 +1,6 @@
 import json
 import logging
-import logger
+import ai_trading.logging as logger  # Use centralized logging module
 
 
 def _make_record(**extra):

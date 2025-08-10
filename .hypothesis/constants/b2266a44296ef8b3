@@ -1,4 +1,0 @@
-# file: /usr/lib/python3/dist-packages/pytz/tzfile.py
-# hypothesis_version: 6.136.6
-
-[3600, '\x00', '/usr/share/zoneinfo', '>4s c 15x 6l', 'ASCII', 'Australia', 'Australia/Melbourne', 'Eastern', 'Got magic %s', 'Melbourne', 'TZif', 'US', 'US/Eastern', '__main__', 'lBB', 'rb']

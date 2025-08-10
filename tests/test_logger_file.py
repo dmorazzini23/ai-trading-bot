@@ -1,6 +1,6 @@
 import logging
 
-import logger
+import ai_trading.logging as logger  # Use centralized logging module
 
 
 def test_setup_logging_with_file(monkeypatch, tmp_path):

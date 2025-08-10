@@ -1,4 +1,0 @@
-# file: /home/runner/work/ai-trading-bot/ai-trading-bot/strategies/__init__.py
-# hypothesis_version: 6.136.6
-
-['MomentumStrategy', 'Strategy', 'TradeSignal', 'asset_class_for']

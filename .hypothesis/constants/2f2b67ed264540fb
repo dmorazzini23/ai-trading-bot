@@ -1,4 +1,0 @@
-# file: /usr/lib/python3/dist-packages/dateutil/tz/__init__.py
-# hypothesis_version: 6.136.6
-
-['UTC', 'datetime_ambiguous', 'datetime_exists', 'enfold', 'gettz', 'resolve_imaginary', 'tzfile', 'tzical', 'tzlocal', 'tzoffset', 'tzrange', 'tzstr', 'tzutc', 'tzwin', 'tzwinlocal']

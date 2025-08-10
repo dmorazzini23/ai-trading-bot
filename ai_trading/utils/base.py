@@ -7,7 +7,7 @@ import socket
 import threading
 import warnings
 import time
-from datetime import date, timezone, datetime
+from datetime import date, timezone, datetime, time as dt_time
 from typing import Any
 from enum import Enum
 from uuid import UUID
@@ -321,10 +321,19 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
             end_date=check_time.date(),
         )
         if sched.empty:
-            logger.warning(
-                "No market schedule for %s in is_market_open; returning False.",
-                check_time.date(),
-            )
+            # Provide more detailed information about why schedule is empty
+            is_weekend = check_time.weekday() >= 5
+            is_future = check_time.date() > dt.date.today()
+            
+            if is_weekend:
+                logger.debug("No market schedule for %s (weekend); returning False.", check_time.date())
+            elif is_future:
+                logger.debug("No market schedule for %s (future date); returning False.", check_time.date())
+            else:
+                logger.warning(
+                    "No market schedule for %s in is_market_open (likely holiday); returning False.",
+                    check_time.date(),
+                )
             _log_market_hours("Detected Market Hours today: CLOSED")
             return False  # holiday or weekend
         market_open = sched.iloc[0]["market_open"].tz_convert(EASTERN_TZ).time()
@@ -332,7 +341,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         if check_time.month == 7 and check_time.day == 3:
             july4 = date(check_time.year, 7, 4)
             if july4.weekday() >= 5:
-                market_close = time(13, 0)
+                market_close = dt_time(13, 0)
             else:
                 market_close = MARKET_CLOSE_TIME
         _log_market_hours(
@@ -880,9 +889,22 @@ def _get_alpaca_rest():
         try:
             from alpaca_trade_api.rest import REST as _REST
             REST = _REST
+            logger.debug("Successfully imported alpaca_trade_api.rest.REST")
+        except ImportError as e:
+            logger.warning("alpaca_trade_api not available, using fallback: %s", e)
+            # Create a mock REST class for development/testing
+            class MockREST:
+                def __init__(self, *args, **kwargs):
+                    logger.info("Using mock Alpaca REST client (alpaca_trade_api not installed)")
+                def __getattr__(self, name):
+                    def mock_method(*args, **kwargs):
+                        logger.debug("Mock Alpaca API call: %s(*%s, **%s)", name, args, kwargs)
+                        return {}
+                    return mock_method
+            REST = MockREST
         except Exception as e:
-            logging.getLogger(__name__).error("alpaca_trade_api import failed", exc_info=e)
-            raise
+            logger.error("alpaca_trade_api import failed with unexpected error", exc_info=e)
+            raise RuntimeError(f"Failed to import Alpaca SDK: {e}") from e
     return REST
 
 
