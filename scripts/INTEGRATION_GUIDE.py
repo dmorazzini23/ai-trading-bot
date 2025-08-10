@@ -1,3 +1,5 @@
+import logging
+
 """Integration guide for enhanced execution debugging in existing bot engine.
 
 This shows how to integrate the new debugging features into the existing
@@ -15,7 +17,7 @@ def enable_enhanced_debugging():
     # Start position monitoring every 5 minutes
     # start_position_monitoring(api_client=your_api_client, interval=300)
     
-    print("✓ Enhanced execution debugging enabled")
+    logging.info("✓ Enhanced execution debugging enabled")
 
 
 # STEP 2: Integration with existing ExecutionEngine
@@ -159,21 +161,21 @@ def setup_periodic_checks():
         # Check for position discrepancies
         discrepancies = force_position_reconciliation()
         if discrepancies:
-            print(f"⚠️ Found {len(discrepancies)} position discrepancies")
+            logging.info(f"⚠️ Found {len(discrepancies)} position discrepancies")
             for disc in discrepancies:
                 if disc.severity in ['high', 'medium']:
-                    print(f"  {disc.symbol}: Bot={disc.bot_qty}, Broker={disc.broker_qty} ({disc.severity})")
+                    logging.info(f"  {disc.symbol}: Bot={disc.bot_qty}, Broker={disc.broker_qty} ({disc.severity})")
         
         # Check execution statistics
         exec_stats = get_execution_statistics()
         success_rate = exec_stats.get('success_rate', 0)
         if success_rate < 0.95:  # Alert if success rate drops below 95%
-            print(f"⚠️ Low execution success rate: {success_rate:.1%}")
+            logging.info(f"⚠️ Low execution success rate: {success_rate:.1%}")
         
         # Check for unusual PnL patterns
         pnl_summary = get_portfolio_pnl_summary()
         if abs(pnl_summary['total_pnl']) > 1000:  # Alert for large PnL changes
-            print(f"📊 Large PnL movement: ${pnl_summary['total_pnl']:+.2f}")
+            logging.info(str(f"📊 Large PnL movement: ${pnl_summary['total_pnl']:+.2f}"))
     
     # Schedule periodic checks (you'd integrate this with your existing scheduler)
     # schedule.every(5).minutes.do(periodic_health_check)
@@ -194,18 +196,18 @@ def setup_error_alerting():
         recent_failures = [e for e in failed_executions if was_recent(e.get('timestamp'))]
         
         if len(recent_failures) > 3:  # Alert if more than 3 failures recently
-            print(f"🚨 ALERT: {len(recent_failures)} failed executions recently")
+            logging.info(f"🚨 ALERT: {len(recent_failures)} failed executions recently")
             for failure in recent_failures:
-                print(f"  {failure['symbol']} {failure['side']}: {failure.get('error', 'Unknown error')}")
+                logging.info(str(f"  {failure['symbol']} {failure['side']}: {failure.get('error', 'Unknown error'))}")
         
         # Check for stuck orders
         active_orders = tracker.get_active_orders()
         stuck_orders = [o for o in active_orders.values() if was_old(o.get('start_time'))]
         
         if stuck_orders:
-            print(f"🚨 ALERT: {len(stuck_orders)} orders appear stuck")
+            logging.info(f"🚨 ALERT: {len(stuck_orders)} orders appear stuck")
             for order in stuck_orders:
-                print(f"  {order['symbol']} {order['side']} - started {order['start_time']}")
+                logging.info(str(f"  {order['symbol']} {order['side']} - started {order['start_time']}"))
     
     def was_recent(timestamp_str, minutes=30):
         """Check if timestamp was within last N minutes."""
@@ -250,7 +252,7 @@ def complete_integration_example():
                 self.run_health_checks()
                 
             except Exception as e:
-                print(f"Trading cycle error: {e}")
+                logging.info(f"Trading cycle error: {e}")
                 # Your existing error handling
         
         def generate_signals_with_debugging(self):
@@ -302,26 +304,26 @@ def complete_integration_example():
             # Check positions
             discrepancies = force_position_reconciliation()
             if discrepancies:
-                print(f"Position discrepancies found: {len(discrepancies)}")
+                logging.info(f"Position discrepancies found: {len(discrepancies)}")
             
             # Check execution health
             stats = get_execution_statistics()
             if stats['success_rate'] < 0.9:
-                print(f"Low success rate: {stats['success_rate']:.1%}")
+                logging.info(str(f"Low success rate: {stats['success_rate']:.1%}"))
 
 
 if __name__ == '__main__':
-    print("Enhanced Execution Debugging - Integration Guide")
-    print("=" * 50)
-    print("This file shows how to integrate the new debugging features")
-    print("into your existing trading bot code.")
+    logging.info("Enhanced Execution Debugging - Integration Guide")
+    logging.info(str("=" * 50))
+    logging.info("This file shows how to integrate the new debugging features")
+    logging.info("into your existing trading bot code.")
     print()
-    print("Key integration points:")
-    print("1. Enable debugging at startup")
-    print("2. Add correlation tracking to signal generation")
-    print("3. Enhance order execution with debugging hooks")
-    print("4. Add PnL tracking to order fills")
-    print("5. Setup periodic reconciliation checks")
-    print("6. Add error alerting for execution issues")
+    logging.info("Key integration points:")
+    logging.info("1. Enable debugging at startup")
+    logging.info("2. Add correlation tracking to signal generation")
+    logging.info("3. Enhance order execution with debugging hooks")
+    logging.info("4. Add PnL tracking to order fills")
+    logging.info("5. Setup periodic reconciliation checks")
+    logging.info("6. Add error alerting for execution issues")
     print()
-    print("See the function examples above for implementation details.")
+    logging.info("See the function examples above for implementation details.")

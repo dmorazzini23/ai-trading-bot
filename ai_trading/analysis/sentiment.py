@@ -52,7 +52,7 @@ except ImportError:
 
 # AI-AGENT-REF: Import config with fallback
 try:
-    import config
+    from ai_trading import config
     NEWS_API_KEY = getattr(config, "NEWS_API_KEY", None)
     SENTIMENT_API_KEY = getattr(config, "SENTIMENT_API_KEY", None) or NEWS_API_KEY
     SENTIMENT_API_URL = getattr(config, "SENTIMENT_API_URL", "https://newsapi.org/v2/everything")
@@ -509,7 +509,7 @@ def fetch_form4_filings(ticker: str) -> List[dict]:
             date_str = cols[3].get_text(strip=True)
             try:
                 fdate = datetime.strptime(date_str, "%Y-%m-%d")
-            except Exception:
+            except ValueError:
                 continue
             # Additional parsing logic would go here
             # For now, return empty list to avoid parsing errors

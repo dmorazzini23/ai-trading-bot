@@ -13,9 +13,10 @@ import requests  # AI-AGENT-REF: ensure requests import for function annotations
 
 # Do not hard fail when running under older Python versions in tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
-    print("Warning: Running under unsupported Python version", file=sys.stderr)
+    import logging
+    logging.getLogger(__name__).warning("Running under unsupported Python version")
 
-import config
+from ai_trading import config
 from ai_trading.config.settings import get_settings
 from ai_trading.market import cache as mcache
 
@@ -98,7 +99,8 @@ def get_session():
             if _session is not None:
                 try:
                     _session.close()
-                except Exception:
+                except (AttributeError, RuntimeError):
+                    # Ignore session cleanup errors during error handling
                     pass
                 _session = None
             raise
@@ -579,8 +581,8 @@ def get_historical_data(
     >>> end_date = datetime.now(timezone.utc)  # AI-AGENT-REF: timezone-aware for API compatibility
     >>> start_date = end_date - timedelta(days=30)
     >>> data = get_historical_data('AAPL', start_date, end_date, '1HOUR')
-    >>> print(f"Retrieved {len(data)} bars")
-    >>> print(data.head())
+    >>> logging.info(f"Retrieved {len(data)} bars")
+    >>> logging.info(str(data.head()))
 
     >>> # Get daily data with specific provider
     >>> data = get_historical_data(
@@ -593,7 +595,7 @@ def get_historical_data(
     ...     data = get_historical_data('INVALID', '2024-01-01', '2024-01-02', '1DAY', 
     ...                              raise_on_empty=True)
     ... except DataFetchError:
-    ...     print("No data available for symbol")
+    ...     logging.info("No data available for symbol")
 
     Data Quality Validation
     ----------------------
@@ -846,8 +848,9 @@ def get_daily_df(
             if settings.data_cache_disk_enable:
                 try:
                     mcache.put_disk(settings.data_cache_dir, symbol, tf_name, start_s, end_s, df)
-                except Exception:
-                    pass
+                except (OSError, PermissionError, ValueError) as e:
+                    logger.warning(f"Failed to cache data for {symbol}: {e}")
+                    # Continue execution - caching is not critical
         return df
     except KeyError:
         logger.warning(
@@ -1437,7 +1440,8 @@ def get_bars_batch(
         t0 = time.perf_counter()
         try:
             df = _DATA_CLIENT.get_stock_bars(req).df  # multi-indexed by (symbol, timestamp)
-        except Exception:
+        except (AttributeError, ValueError, KeyError, ConnectionError, TimeoutError) as e:
+            logger.warning(f"Primary data fetch failed, falling back to IEX: {e}")
             # Fall back to IEX in one more batched attempt
             try:
                 alt = StockBarsRequest(
@@ -1463,7 +1467,7 @@ def get_bars_batch(
             for sym in to_fetch:
                 try:
                     sub = df.xs(sym, level=0) if hasattr(df.index, "levels") else df[df["symbol"] == sym]
-                except Exception:
+                except (KeyError, ValueError):
                     continue
                 sub = _normalize_df(sub)
                 results[sym] = sub
@@ -1472,9 +1476,10 @@ def get_bars_batch(
                     if settings.data_cache_disk_enable:
                         try:
                             mcache.put_disk(settings.data_cache_dir, sym, tf_name, start_s, end_s, sub)
-                        except Exception:
-                            pass
-        except Exception:
+                        except (OSError, PermissionError, ValueError) as e:
+                            logger.warning(f"Failed to cache data for {sym}: {e}")
+                            # Continue execution - caching is not critical
+        except (AttributeError, KeyError, ValueError):
             # If the structure is not multi-indexed by symbol, quietly return what we can
             logger.warning("Unexpected batch frame structure; partial results returned")
     except ImportError:
@@ -1484,7 +1489,8 @@ def get_bars_batch(
                 df = get_daily_df(sym, start, end)
                 if df is not None and not df.empty:
                     results[sym] = df
-            except Exception:
+            except (ValueError, KeyError, AttributeError, ConnectionError) as e:
+                logger.warning(f"Failed to fetch data for {sym}: {e}")
                 continue
     return results
 

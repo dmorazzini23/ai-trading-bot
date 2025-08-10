@@ -58,3 +58,4 @@ regime_model.pkl
 sklearn_fix_summary.md
 test_critical_type_fix.py
 *.egg-info/
+backup/

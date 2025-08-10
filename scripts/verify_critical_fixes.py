@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Verification test that the critical fixes are properly implemented in the code.
 This tests the actual code changes without requiring a full environment setup.
@@ -19,7 +21,7 @@ def test_timestamp_fix_in_data_fetcher():
     
     assert start_fixed, "Start timestamp fix not found"
     assert end_fixed, "End timestamp fix not found"
-    print("✓ RFC3339 timestamp fix verified in data_fetcher.py")
+    logging.info("✓ RFC3339 timestamp fix verified in data_fetcher.py")
 
 
 def test_position_sizing_fix_in_bot_engine():
@@ -36,7 +38,7 @@ def test_position_sizing_fix_in_bot_engine():
     assert 'Low liquidity for' in content, "Low liquidity fix not found"
     assert 'cash > 5000' in content, "Cash threshold for liquidity fix not found"
     
-    print("✓ Position sizing fixes verified in bot_engine.py")
+    logging.info("✓ Position sizing fixes verified in bot_engine.py")
 
 
 def test_meta_learning_fix():
@@ -50,7 +52,7 @@ def test_meta_learning_fix():
     assert 'errors="coerce"' in content, "Error handling for price conversion not found"
     assert 'METALEARN_INVALID_PRICES - No trades with valid prices' in content, "Invalid prices error handling not found"
     
-    print("✓ Meta learning price conversion fixes verified in meta_learning.py")
+    logging.info("✓ Meta learning price conversion fixes verified in meta_learning.py")
 
 
 def test_stale_data_bypass_fix():
@@ -63,7 +65,7 @@ def test_stale_data_bypass_fix():
     assert 'BYPASS_STALE_DATA_STARTUP' in content, "Stale data bypass logic not found"
     assert 'stale_data = summary.get("stale_data", [])' in content, "Stale data extraction not found"
     
-    print("✓ Stale data bypass fix verified in bot_engine.py")
+    logging.info("✓ Stale data bypass fix verified in bot_engine.py")
 
 
 def test_all_fixes_integrated():
@@ -78,16 +80,16 @@ def test_all_fixes_integrated():
                 content = f.read()
             # Basic syntax check - file should be valid Python
             compile(content, filename, 'exec')
-            print(f"✓ {filename} syntax is valid")
+            logging.info(f"✓ {filename} syntax is valid")
         except SyntaxError as e:
-            print(f"✗ {filename} has syntax error: {e}")
+            logging.info(f"✗ {filename} has syntax error: {e}")
             raise
     
-    print("✓ All files have valid Python syntax after fixes")
+    logging.info("✓ All files have valid Python syntax after fixes")
 
 
 if __name__ == "__main__":
-    print("Verifying critical trading bot fixes are properly implemented...\n")
+    logging.info("Verifying critical trading bot fixes are properly implemented...\n")
     
     test_timestamp_fix_in_data_fetcher()
     test_position_sizing_fix_in_bot_engine() 
@@ -95,10 +97,10 @@ if __name__ == "__main__":
     test_stale_data_bypass_fix()
     test_all_fixes_integrated()
     
-    print("\n🎉 All critical fixes verified successfully!")
-    print("\nImplemented fixes address all production issues:")
-    print("1. ✓ RFC3339 timestamp formatting prevents 'ALL DATA IS STALE'")
-    print("2. ✓ Position sizing logic prevents 'ZERO QUANTITY CALCULATIONS'") 
-    print("3. ✓ Meta learning data types prevent 'META LEARNING FAILURES'")
-    print("4. ✓ Stale data bypass enables '$88K CASH DEPLOYMENT'")
-    print("\nThe trading bot should now execute trades successfully with available cash!")
+    logging.info("\n🎉 All critical fixes verified successfully!")
+    logging.info("\nImplemented fixes address all production issues:")
+    logging.info(str("1. ✓ RFC3339 timestamp formatting prevents 'ALL DATA IS STALE'"))
+    logging.info(str("2. ✓ Position sizing logic prevents 'ZERO QUANTITY CALCULATIONS'")) 
+    logging.info(str("3. ✓ Meta learning data types prevent 'META LEARNING FAILURES'"))
+    logging.info(str("4. ✓ Stale data bypass enables '$88K CASH DEPLOYMENT'"))
+    logging.info("\nThe trading bot should now execute trades successfully with available cash!")

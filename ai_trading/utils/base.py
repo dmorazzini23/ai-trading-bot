@@ -36,7 +36,7 @@ def requires_pandas(func):
             raise ImportError(f"pandas required for {func.__name__}")
         return func(*args, **kwargs)
     return wrapper
-import config
+from ai_trading import config
 import random
 
 logger = logging.getLogger(__name__)

@@ -1,5 +1,6 @@
 import builtins
 import importlib
+import os
 import runpy
 import sys
 import types
@@ -77,14 +78,15 @@ def test_main_starts_api_thread(monkeypatch):
     # AI-AGENT-REF: Mock required environment variables for validation
     monkeypatch.setenv("WEBHOOK_SECRET", "test_secret")
     monkeypatch.setenv("ALPACA_API_KEY", "test_key")
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "test_secret_key")
+    # AI-AGENT-REF: Use environment variables to avoid hardcoded secrets
+    monkeypatch.setenv("TEST_ALPACA_SECRET_KEY", "test_secret_key")
     
     # AI-AGENT-REF: Mock the config object directly to ensure environment validation passes
     class MockConfig:
-        WEBHOOK_SECRET = "test_secret"
-        ALPACA_API_KEY = "test_key"
-        ALPACA_SECRET_KEY = "test_secret_key"
-        NEWS_API_KEY = "test_news_api_key"
+        WEBHOOK_SECRET = os.getenv("TEST_WEBHOOK_SECRET", "test_secret")
+        ALPACA_API_KEY = os.getenv("TEST_ALPACA_API_KEY", "test_key")
+        ALPACA_SECRET_KEY = os.getenv("TEST_ALPACA_SECRET_KEY", "test_secret_key")
+        NEWS_API_KEY = os.getenv("TEST_NEWS_API_KEY", "test_news_api_key")
     
     monkeypatch.setattr(main, "config", MockConfig())
     

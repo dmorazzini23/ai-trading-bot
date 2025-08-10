@@ -1,3 +1,5 @@
+from ai_trading.utils import paths
+
 """Environment validation using pydantic-settings with enhanced security checks."""
 
 import logging
@@ -93,7 +95,7 @@ class Settings(BaseSettings):
     FORCE_TRADES: bool = Field(default=False, description="Override safety checks (DANGEROUS)")
     
     # File Paths
-    TRADE_LOG_FILE: str = Field(default="data/trades.csv", description="Trade history log file")
+    TRADE_LOG_FILE: str = Field(default=paths.data_dir() / "trades.csv", description="Trade history log file")
     MODEL_RF_PATH: str = Field(default="model_rf.pkl", description="Random Forest model path")
     MODEL_XGB_PATH: str = Field(default="model_xgb.pkl", description="XGBoost model path")
     MODEL_LGB_PATH: str = Field(default="model_lgb.pkl", description="LightGBM model path")
@@ -449,7 +451,7 @@ def debug_environment() -> Dict[str, Any]:
         Debug report with environment status, issues, and recommendations
     """
     debug_report = {
-        'timestamp': datetime.now().isoformat(),
+        'timestamp': datetime.now(datetime.timezone.utc).isoformat(),
         'validation_status': 'unknown',
         'critical_issues': [],
         'warnings': [],
@@ -539,39 +541,39 @@ def print_environment_debug() -> None:
     """Print formatted environment debug information to console."""
     debug_report = debug_environment()
     
-    print("\n" + "="*60)
-    print("AI TRADING BOT - ENVIRONMENT DEBUG REPORT")
-    print("="*60)
-    print(f"Timestamp: {debug_report['timestamp']}")
-    print(f"Validation Status: {debug_report['validation_status'].upper()}")
+    logging.info(str("\n" + "="*60))
+    logging.info("AI TRADING BOT - ENVIRONMENT DEBUG REPORT")
+    logging.info(str("="*60))
+    logging.info(str(f"Timestamp: {debug_report['timestamp']}"))
+    logging.info(str(f"Validation Status: {debug_report['validation_status'].upper())}")
     
     if debug_report['critical_issues']:
-        print(f"\n🚨 CRITICAL ISSUES ({len(debug_report['critical_issues'])}):")
+        logging.info(str(f"\n🚨 CRITICAL ISSUES ({len(debug_report['critical_issues']))}):")
         for issue in debug_report['critical_issues']:
-            print(f"  - {issue}")
+            logging.info(f"  - {issue}")
     
     if debug_report['warnings']:
-        print(f"\n⚠️  WARNINGS ({len(debug_report['warnings'])}):")
+        logging.info(str(f"\n⚠️  WARNINGS ({len(debug_report['warnings']))}):")
         for warning in debug_report['warnings']:
-            print(f"  - {warning}")
+            logging.info(f"  - {warning}")
     
-    print("\n📋 ENVIRONMENT VARIABLES:")
+    logging.info("\n📋 ENVIRONMENT VARIABLES:")
     for var, info in debug_report['environment_vars'].items():
         status_emoji = "✅" if info['status'] == 'set' else "❌"
-        print(f"  {status_emoji} {var}: {info.get('value', 'NOT SET')}")
+        logging.info(str(f"  {status_emoji} {var}: {info.get('value', 'NOT SET'))}")
     
     if debug_report['recommendations']:
-        print(f"\n💡 RECOMMENDATIONS ({len(debug_report['recommendations'])}):")
+        logging.info(str(f"\n💡 RECOMMENDATIONS ({len(debug_report['recommendations']))}):")
         for rec in debug_report['recommendations']:
-            print(f"  - {rec}")
+            logging.info(f"  - {rec}")
     
-    print("\n📁 .ENV FILE:")
+    logging.info("\n📁 .ENV FILE:")
     env_info = debug_report.get('env_file', {})
-    print(f"  Exists: {'✅' if env_info.get('exists') else '❌'}")
-    print(f"  Readable: {'✅' if env_info.get('readable') else '❌'}")
-    print(f"  Size: {env_info.get('size_bytes', 0)} bytes")
+    logging.info(str(f"  Exists: {'✅' if env_info.get('exists')) else '❌'}")
+    logging.info(str(f"  Readable: {'✅' if env_info.get('readable')) else '❌'}")
+    logging.info(str(f"  Size: {env_info.get('size_bytes', 0))} bytes")
     
-    print("\n" + "="*60)
+    logging.info(str("\n" + "="*60))
 
 
 def validate_specific_env_var(var_name: str) -> Dict[str, Any]:
@@ -646,22 +648,22 @@ def _main() -> None:  # pragma: no cover - enhanced CLI helper
     
     if args.check:
         result = validate_specific_env_var(args.check)
-        print(f"\nVariable: {result['variable']}")
-        print(f"Status: {result['status']}")
+        logging.info(str(f"\nVariable: {result['variable']}"))
+        logging.info(str(f"Status: {result['status']}"))
         if result['value'] and 'KEY' not in result['variable'].upper():
-            print(f"Value: {result['value']}")
+            logging.info(str(f"Value: {result['value']}"))
         elif result['value']:
-            print(f"Value: [MASKED - {len(result['value'])} characters]")
+            logging.info(str(f"Value: [MASKED - {len(result['value']))} characters]")
         
         if result['issues']:
-            print("Issues:")
+            logging.info("Issues:")
             for issue in result['issues']:
-                print(f"  - {issue}")
+                logging.info(f"  - {issue}")
         
         if result['recommendations']:
-            print("Recommendations:")
+            logging.info("Recommendations:")
             for rec in result['recommendations']:
-                print(f"  - {rec}")
+                logging.info(f"  - {rec}")
         return
     
     # Default behavior - basic validation
@@ -669,12 +671,12 @@ def _main() -> None:  # pragma: no cover - enhanced CLI helper
     
     if not args.quiet:
         if is_valid:
-            print("✅ Environment validation passed")
+            logging.info("✅ Environment validation passed")
         else:
-            print("❌ Environment validation failed")
+            logging.info("❌ Environment validation failed")
             for error in errors:
-                print(f"  - {error}")
-            print("\nUse --debug for detailed information")
+                logging.info(f"  - {error}")
+            logging.info("\nUse --debug for detailed information")
     
     exit(0 if is_valid else 1)
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 API Key Configuration Verification Script
 
@@ -126,12 +128,12 @@ def check_config_import():
 
 def print_setup_instructions():
     """Print setup instructions."""
-    print("""
+    logging.info(str("""
 🔧 Setup Instructions:
 
 1. Get your API keys:
    → Visit: https://app.alpaca.markets/paper/dashboard/overview
-   → Generate API keys (use Paper Trading for testing)
+   → Generate API keys (use Paper Trading for testing))
 
 2. Configure your .env file:
    → Copy: cp .env.example .env
@@ -146,37 +148,37 @@ def print_setup_instructions():
 
 def main():
     """Main verification function."""
-    print("🔍 AI Trading Bot - API Key Configuration Verification\n")
+    logging.info("🔍 AI Trading Bot - API Key Configuration Verification\n")
     
     all_good = True
     
     # Check .env file
     env_ok, env_msg = check_env_file()
-    print(env_msg)
+    logging.info(str(env_msg))
     if not env_ok:
         all_good = False
     
     # Check API keys
     api_ok, api_msg = check_api_keys()
-    print(api_msg)
+    logging.info(str(api_msg))
     if not api_ok:
         all_good = False
     
     # Check config import
     config_ok, config_msg = check_config_import()
-    print(config_msg)
+    logging.info(str(config_msg))
     if not config_ok:
         all_good = False
     
-    print("\n" + "="*60)
+    logging.info(str("\n" + "="*60))
     
     if all_good:
-        print("🎉 SUCCESS: Your API key configuration is ready!")
-        print("\nNext steps:")
-        print("  → Run the bot: python -m ai_trading")
-        print("  → Or run tests: python -m pytest")
+        logging.info("🎉 SUCCESS: Your API key configuration is ready!")
+        logging.info("\nNext steps:")
+        logging.info("  → Run the bot: python -m ai_trading")
+        logging.info("  → Or run tests: python -m pytest")
     else:
-        print("❌ ISSUES FOUND: Please fix the above issues before running the bot.")
+        logging.info("❌ ISSUES FOUND: Please fix the above issues before running the bot.")
         print_setup_instructions()
         return 1
     

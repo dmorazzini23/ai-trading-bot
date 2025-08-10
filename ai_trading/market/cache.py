@@ -1,8 +1,11 @@
 from __future__ import annotations
 import time
 import threading
+import logging
 from typing import Any, Dict, Tuple, Optional
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 try:
     import pandas as pd  # type: ignore
@@ -45,7 +48,8 @@ def get_disk(cache_dir: str, symbol: str, tf: str, start: str, end: str) -> Opti
     if not p.exists(): return None
     try:
         return pd.read_parquet(p)
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to read cache file %s: %s", p, e)
         return None
 
 def put_disk(cache_dir: str, symbol: str, tf: str, start: str, end: str, df: Any) -> None:
@@ -54,5 +58,5 @@ def put_disk(cache_dir: str, symbol: str, tf: str, start: str, end: str, df: Any
     p.parent.mkdir(parents=True, exist_ok=True)
     try:
         df.to_parquet(p, index=False)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Failed to write cache file %s: %s", p, e)

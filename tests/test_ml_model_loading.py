@@ -1,34 +1,17 @@
-import ast
-import types
-from pathlib import Path
-
 import joblib
 import pickle
 import numpy as np
 from sklearn.dummy import DummyClassifier
-
-# Extract _load_ml_model and _cleanup_ml_model_cache from bot_engine using AST to avoid heavy import
-SRC = Path(__file__).resolve().parents[1] / "bot_engine.py"
-source = SRC.read_text()
-tree = ast.parse(source)
-func = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_load_ml_model")
-cleanup_func = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_cleanup_ml_model_cache")
-mod = types.ModuleType("bot_ml")
-mod.logger = __import__("logging").getLogger("bot_ml")
-mod.joblib = joblib
-mod.Path = Path
-mod.pickle = __import__("pickle")
-mod._ML_MODEL_CACHE = {}
-mod.ML_MODELS = {}
-mod._ML_MODEL_CACHE_MAX_SIZE = 100  # Add the cache size constant
-exec(compile(ast.Module([cleanup_func, func], []), filename=str(SRC), mode="exec"), mod.__dict__)
-
-# Provide stub for ai_trading.model_loader used by _load_ml_model
+from pathlib import Path
 import sys
+import types
+
+# AI-AGENT-REF: Replaced unsafe exec() with direct imports from core module
+from ai_trading.core.bot_engine import _load_ml_model, _cleanup_ml_model_cache
+
+# Setup stub for model loader dependency
 stub = types.ModuleType("ai_trading.model_loader")
 stub.ML_MODELS = {}
-
-mod.ML_MODELS = stub.ML_MODELS
 
 def _stub_load(symbol: str):
     return stub.ML_MODELS.get(symbol)
@@ -39,7 +22,7 @@ sys.modules["ai_trading.model_loader"] = stub
 
 def test_load_missing_logs_error(caplog):
     caplog.set_level("INFO")
-    result = mod._load_ml_model("FAKE")
+    result = _load_ml_model("FAKE")
     assert result is None
     assert not caplog.records
 
@@ -57,7 +40,7 @@ def test_load_real_model(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with open(path, "rb") as f:
         stub.ML_MODELS["TESTSYM"] = pickle.load(f)
-    loaded = mod._load_ml_model("TESTSYM")
+    loaded = _load_ml_model("TESTSYM")
     assert loaded is not None
     pred = loaded.predict([[0]])[0]
     assert pred in [0, 1]

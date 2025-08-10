@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Test script to validate settings singleton, Money math, and rate limiting.
 
@@ -16,7 +18,7 @@ sys.path.append('.')
 
 def test_settings_singleton():
     """Test settings singleton with Alpaca credential aliases."""
-    print("Testing Settings Singleton...")
+    logging.info("Testing Settings Singleton...")
     
     from ai_trading.config.settings_singleton import get_settings, get_masked_config
     
@@ -24,7 +26,7 @@ def test_settings_singleton():
     settings1 = get_settings()
     settings2 = get_settings()
     assert settings1 is settings2, "Settings should be singleton"
-    print("✓ Singleton pattern works")
+    logging.info("✓ Singleton pattern works")
     
     # Test alias support
     os.environ["APCA_API_KEY_ID"] = "test_key_123"
@@ -37,20 +39,20 @@ def test_settings_singleton():
     api_key, secret_key = settings.get_alpaca_keys()
     assert api_key == "test_key_123", f"Expected test_key_123, got {api_key}"
     assert secret_key == "test_secret_456", f"Expected test_secret_456, got {secret_key}"
-    print("✓ Alpaca credential aliases work")
+    logging.info("✓ Alpaca credential aliases work")
     
     # Test masked config
     masked = get_masked_config()
     assert "test..._123" in masked['alpaca_api_key'] or "***MASKED***" in masked['alpaca_api_key']
     assert masked['has_credentials'] == True
-    print("✓ Masked config logging works")
+    logging.info("✓ Masked config logging works")
     
-    print("Settings Singleton: PASS\n")
+    logging.info("Settings Singleton: PASS\n")
 
 
 def test_money_math():
     """Test Money class with quantization."""
-    print("Testing Money Math...")
+    logging.info("Testing Money Math...")
     
     from ai_trading.math.money import Money, round_to_tick, round_to_lot
     from decimal import Decimal
@@ -62,25 +64,25 @@ def test_money_math():
     assert float(m1 + m2) == 15.75, "Money addition failed"
     assert float(m1 - m2) == 5.25, "Money subtraction failed"
     assert float(m1 * 2) == 21.0, "Money multiplication failed"
-    print("✓ Money arithmetic works")
+    logging.info("✓ Money arithmetic works")
     
     # Test quantization
     tick_size = Decimal('0.01')
     price = round_to_tick('15.567', tick_size)
     assert float(price) == 15.57, f"Expected 15.57, got {float(price)}"
-    print("✓ Price quantization works")
+    logging.info("✓ Price quantization works")
     
     # Test lot rounding
     lot_qty = round_to_lot(157.8, 100)
     assert lot_qty == 200, f"Expected 200, got {lot_qty}"
-    print("✓ Lot quantization works")
+    logging.info("✓ Lot quantization works")
     
-    print("Money Math: PASS\n")
+    logging.info("Money Math: PASS\n")
 
 
 def test_rate_limiter():
     """Test central rate limiter functionality."""
-    print("Testing Rate Limiter...")
+    logging.info("Testing Rate Limiter...")
     
     from ai_trading.integrations.rate_limit import get_limiter
     
@@ -89,39 +91,39 @@ def test_rate_limiter():
     # Test basic acquisition
     acquired = limiter.acquire_sync("test_route", tokens=1, timeout=5.0)
     assert acquired == True, "Should acquire tokens successfully"
-    print("✓ Basic token acquisition works")
+    logging.info("✓ Basic token acquisition works")
     
     # Test status
     status = limiter.get_status("orders")
     assert "available_tokens" in status, "Status should include available tokens"
     assert status["enabled"] == True, "Orders route should be enabled"
-    print("✓ Rate limiter status works")
+    logging.info("✓ Rate limiter status works")
     
-    print("Rate Limiter: PASS\n")
+    logging.info("Rate Limiter: PASS\n")
 
 
 def test_final_bar_gating():
     """Test final-bar gating functionality."""
-    print("Testing Final-bar Gating...")
+    logging.info("Testing Final-bar Gating...")
     
     from ai_trading.market.calendars import ensure_final_bar, is_market_open
     
     # Test final bar check
     result = ensure_final_bar("AAPL", "1min")
     assert isinstance(result, bool), "ensure_final_bar should return boolean"
-    print(f"✓ Final bar check for AAPL 1min: {result}")
+    logging.info(f"✓ Final bar check for AAPL 1min: {result}")
     
     # Test market open check  
     market_open = is_market_open("AAPL")
     assert isinstance(market_open, bool), "is_market_open should return boolean"
-    print(f"✓ Market open check for AAPL: {market_open}")
+    logging.info(f"✓ Market open check for AAPL: {market_open}")
     
-    print("Final-bar Gating: PASS\n")
+    logging.info("Final-bar Gating: PASS\n")
 
 
 def test_hyperparams_schema():
     """Test hyperparams schema validation."""
-    print("Testing Hyperparams Schema...")
+    logging.info("Testing Hyperparams Schema...")
     
     from ai_trading.core.hyperparams_schema import (
         load_hyperparams, 
@@ -134,60 +136,60 @@ def test_hyperparams_schema():
     default_params = get_default_hyperparams()
     assert default_params.schema_version == HYPERPARAMS_SCHEMA_VERSION
     assert 0.0 <= default_params.buy_threshold <= 1.0
-    print(f"✓ Default hyperparams loaded (version {default_params.schema_version})")
+    logging.info(f"✓ Default hyperparams loaded (version {default_params.schema_version})")
     
     # Test loading (should use defaults if file missing)
     loaded_params = load_hyperparams("nonexistent_file.json")
     assert loaded_params.schema_version == HYPERPARAMS_SCHEMA_VERSION
-    print("✓ Missing file handled gracefully")
+    logging.info("✓ Missing file handled gracefully")
     
     # Test validation
     validation_report = validate_hyperparams_file("nonexistent_file.json")
     assert validation_report["file_exists"] == False
     assert len(validation_report["warnings"]) > 0
-    print("✓ Validation report works")
+    logging.info("✓ Validation report works")
     
-    print("Hyperparams Schema: PASS\n")
+    logging.info("Hyperparams Schema: PASS\n")
 
 
 def test_import_compatibility():
     """Test that imports work without breaking existing code."""
-    print("Testing Import Compatibility...")
+    logging.info("Testing Import Compatibility...")
     
     # Test importing main modules
     try:
-        print("✓ ai_trading import works")
+        logging.info("✓ ai_trading import works")
     except Exception as e:
-        print(f"✗ ai_trading import failed: {e}")
+        logging.info(f"✗ ai_trading import failed: {e}")
         return False
     
     try:
-        print("✓ settings_singleton import works")
+        logging.info("✓ settings_singleton import works")
     except Exception as e:
-        print(f"✗ settings_singleton import failed: {e}")
+        logging.info(f"✗ settings_singleton import failed: {e}")
         return False
     
     try:
-        print("✓ Money class import works")
+        logging.info("✓ Money class import works")
     except Exception as e:
-        print(f"✗ Money class import failed: {e}")
+        logging.info(f"✗ Money class import failed: {e}")
         return False
     
     try:
-        print("✓ rate_limit import works")
+        logging.info("✓ rate_limit import works")
     except Exception as e:
-        print(f"✗ rate_limit import failed: {e}")
+        logging.info(f"✗ rate_limit import failed: {e}")
         return False
     
-    print("Import Compatibility: PASS\n")
+    logging.info("Import Compatibility: PASS\n")
     return True
 
 
 def run_validation():
     """Run all validation tests."""
-    print("=" * 60)
-    print("AI TRADING BOT - CONFIGURATION VALIDATION")
-    print("=" * 60)
+    logging.info(str("=" * 60))
+    logging.info("AI TRADING BOT - CONFIGURATION VALIDATION")
+    logging.info(str("=" * 60))
     
     try:
         if not test_import_compatibility():
@@ -199,13 +201,13 @@ def run_validation():
         test_final_bar_gating()
         test_hyperparams_schema()
         
-        print("=" * 60)
-        print("🎉 ALL VALIDATION TESTS PASSED!")
-        print("=" * 60)
+        logging.info(str("=" * 60))
+        logging.info("🎉 ALL VALIDATION TESTS PASSED!")
+        logging.info(str("=" * 60))
         return True
         
     except Exception as e:
-        print(f"❌ VALIDATION FAILED: {e}")
+        logging.info(f"❌ VALIDATION FAILED: {e}")
         import traceback
         traceback.print_exc()
         return False

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Validation script for runtime hardening changes.
 This script validates that all the key changes are working properly.
@@ -10,7 +12,7 @@ import pathlib
 
 def test_utc_helper():
     """Test UTC timestamp helper functionality."""
-    print("Testing UTC timestamp helper...")
+    logging.info("Testing UTC timestamp helper...")
     sys.path.insert(0, 'ai_trading/utils')
     from timefmt import utc_now_iso, format_datetime_utc
     
@@ -25,11 +27,11 @@ def test_utc_helper():
     formatted = format_datetime_utc(dt)
     assert formatted == "2024-01-01T12:00:00Z", f"Expected '2024-01-01T12:00:00Z', got '{formatted}'"
     
-    print("✓ UTC timestamp helper working correctly")
+    logging.info("✓ UTC timestamp helper working correctly")
 
 def test_http_timeouts():
     """Test that all HTTP requests have timeout parameters."""
-    print("Testing HTTP timeout enforcement...")
+    logging.info("Testing HTTP timeout enforcement...")
     
     root = pathlib.Path('.').resolve()
     offenders = []
@@ -60,17 +62,17 @@ def test_http_timeouts():
                 important_files.append(str(p))
     
     if offenders:
-        print(f"✗ Found {len(offenders)} requests without timeout:")
+        logging.info(f"✗ Found {len(offenders)} requests without timeout:")
         for o in offenders:
-            print(f"  {o}")
+            logging.info(f"  {o}")
         return False
     else:
-        print("✓ All HTTP requests have timeout parameters")
+        logging.info("✓ All HTTP requests have timeout parameters")
         return True
 
 def test_package_imports():
     """Test that package-safe import patterns exist."""
-    print("Testing package-safe import patterns...")
+    logging.info("Testing package-safe import patterns...")
     
     # Check key files for package-safe import patterns
     files_to_check = [
@@ -91,15 +93,15 @@ def test_package_imports():
             found_patterns += 1
     
     if found_patterns > 0:
-        print(f"✓ Found package-safe import patterns in {found_patterns} files")
+        logging.info(f"✓ Found package-safe import patterns in {found_patterns} files")
         return True
     else:
-        print("✗ No package-safe import patterns found")
+        logging.info("✗ No package-safe import patterns found")
         return False
 
 def test_lazy_loading():
     """Test that lazy loading patterns exist."""
-    print("Testing lazy loading patterns...")
+    logging.info("Testing lazy loading patterns...")
     
     # Check for lazy loading in base.py
     base_file = 'ai_trading/utils/base.py'
@@ -108,15 +110,15 @@ def test_lazy_loading():
             content = f.read()
         
         if '_get_alpaca_rest' in content and 'REST = None' in content:
-            print("✓ Lazy loading pattern found for Alpaca SDK")
+            logging.info("✓ Lazy loading pattern found for Alpaca SDK")
             return True
     
-    print("✗ Lazy loading pattern not found")
+    logging.info("✗ Lazy loading pattern not found")
     return False
 
 def test_version_warning():
     """Test that Python version warning is relaxed."""
-    print("Testing Python version warning...")
+    logging.info("Testing Python version warning...")
     
     # Check bot_engine.py for version check
     bot_engine_file = 'ai_trading/core/bot_engine.py'
@@ -125,18 +127,18 @@ def test_version_warning():
             content = f.read()
         
         if "sys.version_info < (3, 10)" in content:
-            print("✓ Python version warning relaxed to accept 3.10+")
+            logging.info("✓ Python version warning relaxed to accept 3.10+")
             return True
         elif "sys.version_info < (3, 12" in content:
-            print("✗ Python version warning still too restrictive")
+            logging.info("✗ Python version warning still too restrictive")
             return False
     
-    print("✗ Python version check not found")
+    logging.info("✗ Python version check not found")
     return False
 
 def main():
     """Run all validation tests."""
-    print("=== Runtime Hardening Validation ===\n")
+    logging.info("=== Runtime Hardening Validation ===\n")
     
     tests = [
         test_utc_helper,
@@ -156,20 +158,20 @@ def main():
             else:
                 failed += 1
         except Exception as e:
-            print(f"✗ {test.__name__} failed with error: {e}")
+            logging.info(f"✗ {test.__name__} failed with error: {e}")
             failed += 1
         print()
     
-    print("=== Summary ===")
-    print(f"Passed: {passed}")
-    print(f"Failed: {failed}")
-    print(f"Total:  {len(tests)}")
+    logging.info("=== Summary ===")
+    logging.info(f"Passed: {passed}")
+    logging.info(f"Failed: {failed}")
+    logging.info(f"Total:  {len(tests)}")
     
     if failed == 0:
-        print("\n🎉 All validation tests passed!")
+        logging.info("\n🎉 All validation tests passed!")
         return 0
     else:
-        print(f"\n⚠️  {failed} validation tests failed")
+        logging.info(f"\n⚠️  {failed} validation tests failed")
         return 1
 
 if __name__ == '__main__':

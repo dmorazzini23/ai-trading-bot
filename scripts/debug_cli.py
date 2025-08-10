@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """Trading Execution Debugging CLI Tool
 
 This command-line tool helps diagnose and debug trading execution issues
@@ -28,40 +30,40 @@ os.environ.setdefault('FLASK_PORT', '9000')
 
 def cmd_status():
     """Show overall execution system status."""
-    print("📊 EXECUTION SYSTEM STATUS")
-    print("=" * 40)
+    logging.info("📊 EXECUTION SYSTEM STATUS")
+    logging.info(str("=" * 40))
     
     try:
         from ai_trading.execution import get_execution_statistics, get_reconciliation_statistics
         
         # Execution statistics
         exec_stats = get_execution_statistics()
-        print(f"Active Orders: {exec_stats['active_orders']}")
-        print(f"Recent Successes: {exec_stats['recent_successes']}")
-        print(f"Recent Failures: {exec_stats['recent_failures']}")
-        print(f"Success Rate: {exec_stats['success_rate']:.1%}")
+        logging.info(str(f"Active Orders: {exec_stats['active_orders']}"))
+        logging.info(str(f"Recent Successes: {exec_stats['recent_successes']}"))
+        logging.info(str(f"Recent Failures: {exec_stats['recent_failures']}"))
+        logging.info(str(f"Success Rate: {exec_stats['success_rate']:.1%}"))
         
         # Position reconciliation
         recon_stats = get_reconciliation_statistics()
-        print(f"Position Discrepancies: {recon_stats['current_discrepancies']}")
-        print(f"Bot Positions: {recon_stats['bot_positions_count']}")
+        logging.info(str(f"Position Discrepancies: {recon_stats['current_discrepancies']}"))
+        logging.info(str(f"Bot Positions: {recon_stats['bot_positions_count']}"))
         
         # Overall health indicator
         if exec_stats['success_rate'] > 0.95 and recon_stats['current_discrepancies'] == 0:
-            print("🟢 System Status: HEALTHY")
+            logging.info("🟢 System Status: HEALTHY")
         elif exec_stats['success_rate'] > 0.8:
-            print("🟡 System Status: CAUTION")
+            logging.info("🟡 System Status: CAUTION")
         else:
-            print("🔴 System Status: ISSUES DETECTED")
+            logging.info("🔴 System Status: ISSUES DETECTED")
             
     except Exception as e:
-        print(f"❌ Error getting status: {e}")
+        logging.info(f"❌ Error getting status: {e}")
 
 
 def cmd_executions(limit=10):
     """Show recent executions."""
-    print(f"📋 RECENT EXECUTIONS (last {limit})")
-    print("=" * 40)
+    logging.info(f"📋 RECENT EXECUTIONS (last {limit})")
+    logging.info(str("=" * 40))
     
     try:
         from ai_trading.execution import get_debug_tracker
@@ -71,46 +73,46 @@ def cmd_executions(limit=10):
         # Show recent successful executions
         successes = tracker.get_recent_executions(limit=limit)
         if successes:
-            print(f"✅ SUCCESSFUL EXECUTIONS ({len(successes)}):")
+            logging.info(f"✅ SUCCESSFUL EXECUTIONS ({len(successes)}):")
             for exec_data in successes[-limit:]:
                 symbol = exec_data.get('symbol', 'Unknown')
                 side = exec_data.get('side', 'Unknown')
                 qty = exec_data.get('qty', 'Unknown')
                 start_time = exec_data.get('start_time', 'Unknown')
-                print(f"  {symbol} {side} {qty} shares at {start_time}")
+                logging.info(f"  {symbol} {side} {qty} shares at {start_time}")
         
         # Show recent failures
         failures = tracker.get_failed_executions(limit=limit)
         if failures:
-            print(f"\n❌ FAILED EXECUTIONS ({len(failures)}):")
+            logging.info(f"\n❌ FAILED EXECUTIONS ({len(failures)}):")
             for exec_data in failures[-limit:]:
                 symbol = exec_data.get('symbol', 'Unknown')
                 side = exec_data.get('side', 'Unknown')
                 qty = exec_data.get('qty', 'Unknown')
                 error = exec_data.get('error', 'Unknown error')
-                print(f"  {symbol} {side} {qty} shares - {error}")
+                logging.info(f"  {symbol} {side} {qty} shares - {error}")
         
         # Show active orders
         active = tracker.get_active_orders()
         if active:
-            print(f"\n⏳ ACTIVE ORDERS ({len(active)}):")
+            logging.info(f"\n⏳ ACTIVE ORDERS ({len(active)}):")
             for correlation_id, order_data in active.items():
                 symbol = order_data.get('symbol', 'Unknown')
                 side = order_data.get('side', 'Unknown')
                 status = order_data.get('status', 'Unknown')
-                print(f"  {symbol} {side} - {status} (ID: {correlation_id[:8]}...)")
+                logging.info(f"  {symbol} {side} - {status} (ID: {correlation_id[:8]}...)")
         
         if not successes and not failures and not active:
-            print("No recent executions found.")
+            logging.info("No recent executions found.")
             
     except Exception as e:
-        print(f"❌ Error getting executions: {e}")
+        logging.info(f"❌ Error getting executions: {e}")
 
 
 def cmd_positions():
     """Check position discrepancies."""
-    print("🏦 POSITION RECONCILIATION")
-    print("=" * 40)
+    logging.info("🏦 POSITION RECONCILIATION")
+    logging.info(str("=" * 40))
     
     try:
         from ai_trading.execution import (
@@ -121,41 +123,41 @@ def cmd_positions():
         
         # Show current bot positions
         bot_positions = reconciler.get_bot_positions()
-        print(f"🤖 BOT POSITIONS ({len(bot_positions)}):")
+        logging.info(f"🤖 BOT POSITIONS ({len(bot_positions)}):")
         if bot_positions:
             for symbol, qty in bot_positions.items():
-                print(f"  {symbol}: {qty} shares")
+                logging.info(f"  {symbol}: {qty} shares")
         else:
-            print("  No positions tracked by bot")
+            logging.info("  No positions tracked by bot")
         
         # Force reconciliation check
-        print("\n🔄 Running reconciliation check...")
+        logging.info("\n🔄 Running reconciliation check...")
         discrepancies = force_position_reconciliation()
         
         if discrepancies:
-            print(f"\n⚠️  DISCREPANCIES FOUND ({len(discrepancies)}):")
+            logging.info(f"\n⚠️  DISCREPANCIES FOUND ({len(discrepancies)}):")
             for disc in discrepancies:
                 severity_icon = "🔴" if disc.severity == "high" else "🟡" if disc.severity == "medium" else "🟢"
-                print(f"  {severity_icon} {disc.symbol}:")
-                print(f"    Bot: {disc.bot_qty} shares")
-                print(f"    Broker: {disc.broker_qty} shares")
-                print(f"    Difference: {disc.difference}")
-                print(f"    Type: {disc.discrepancy_type}")
-                print(f"    Severity: {disc.severity}")
+                logging.info(f"  {severity_icon} {disc.symbol}:")
+                logging.info(f"    Bot: {disc.bot_qty} shares")
+                logging.info(f"    Broker: {disc.broker_qty} shares")
+                logging.info(f"    Difference: {disc.difference}")
+                logging.info(f"    Type: {disc.discrepancy_type}")
+                logging.info(f"    Severity: {disc.severity}")
         else:
-            print("\n✅ No discrepancies found - positions are in sync")
+            logging.info("\n✅ No discrepancies found - positions are in sync")
             
     except Exception as e:
-        print(f"❌ Error checking positions: {e}")
+        logging.info(f"❌ Error checking positions: {e}")
 
 
 def cmd_pnl(symbol=None):
     """Show PnL breakdown."""
     if symbol:
-        print(f"💰 PnL BREAKDOWN FOR {symbol}")
+        logging.info(f"💰 PnL BREAKDOWN FOR {symbol}")
     else:
-        print("💰 PORTFOLIO PnL SUMMARY")
-    print("=" * 40)
+        logging.info("💰 PORTFOLIO PnL SUMMARY")
+    logging.info(str("=" * 40))
     
     try:
         from ai_trading.execution import (
@@ -171,58 +173,58 @@ def cmd_pnl(symbol=None):
             
             if breakdown:
                 total_realized = 0
-                print(f"📈 {symbol} PnL BY SOURCE:")
+                logging.info(f"📈 {symbol} PnL BY SOURCE:")
                 for source, amount in breakdown.items():
                     if amount != 0:
                         icon = "💚" if amount > 0 else "💸" if amount < 0 else "⚪"
-                        print(f"  {icon} {source}: ${amount:+.2f}")
+                        logging.info(f"  {icon} {source}: ${amount:+.2f}")
                         if source != 'unrealized':
                             total_realized += amount
                 
-                print("\n📊 SUMMARY:")
-                print(f"  Total Realized: ${total_realized:+.2f}")
+                logging.info("\n📊 SUMMARY:")
+                logging.info(f"  Total Realized: ${total_realized:+.2f}")
                 if 'unrealized' in breakdown:
-                    print(f"  Unrealized: ${breakdown['unrealized']:+.2f}")
-                    print(f"  Net PnL: ${total_realized + breakdown['unrealized']:+.2f}")
+                    logging.info(str(f"  Unrealized: ${breakdown['unrealized']:+.2f}"))
+                    logging.info(str(f"  Net PnL: ${total_realized + breakdown['unrealized']:+.2f}"))
                 
                 # Explain recent changes
                 explanation = explain_recent_pnl_changes(symbol, minutes=60)
                 if explanation['total_change'] != 0:
-                    print("\n📝 RECENT CHANGES (last hour):")
-                    print(f"  {explanation['explanation']}")
-                    print(f"  Total change: ${explanation['total_change']:+.2f}")
+                    logging.info("\n📝 RECENT CHANGES (last hour):")
+                    logging.info(str(f"  {explanation['explanation']}"))
+                    logging.info(str(f"  Total change: ${explanation['total_change']:+.2f}"))
             else:
-                print(f"No PnL data found for {symbol}")
+                logging.info(f"No PnL data found for {symbol}")
         else:
             # Show portfolio summary
             summary = get_portfolio_pnl_summary()
             
-            print("📊 PORTFOLIO SUMMARY:")
-            print(f"  Total Realized PnL: ${summary['total_realized_pnl']:+.2f}")
-            print(f"  Total Unrealized PnL: ${summary['total_unrealized_pnl']:+.2f}")
-            print(f"  Net PnL: ${summary['total_pnl']:+.2f}")
+            logging.info("📊 PORTFOLIO SUMMARY:")
+            logging.info(str(f"  Total Realized PnL: ${summary['total_realized_pnl']:+.2f}"))
+            logging.info(str(f"  Total Unrealized PnL: ${summary['total_unrealized_pnl']:+.2f}"))
+            logging.info(str(f"  Net PnL: ${summary['total_pnl']:+.2f}"))
             
             if summary['pnl_by_source']:
-                print("\n💰 PnL BY SOURCE:")
+                logging.info("\n💰 PnL BY SOURCE:")
                 for source, amount in summary['pnl_by_source'].items():
                     if amount != 0:
                         icon = "💚" if amount > 0 else "💸"
-                        print(f"  {icon} {source}: ${amount:+.2f}")
+                        logging.info(f"  {icon} {source}: ${amount:+.2f}")
             
             if summary['today_pnl']:
-                print("\n📅 TODAY'S PnL:")
+                logging.info(str("\n📅 TODAY'S PnL:"))
                 for source, amount in summary['today_pnl'].items():
                     if amount != 0:
-                        print(f"  {source}: ${amount:+.2f}")
+                        logging.info(f"  {source}: ${amount:+.2f}")
                         
     except Exception as e:
-        print(f"❌ Error getting PnL data: {e}")
+        logging.info(f"❌ Error getting PnL data: {e}")
 
 
 def cmd_trace(correlation_id):
     """Trace execution timeline for correlation ID."""
-    print(f"🔍 EXECUTION TRACE: {correlation_id}")
-    print("=" * 40)
+    logging.info(f"🔍 EXECUTION TRACE: {correlation_id}")
+    logging.info(str("=" * 40))
     
     try:
         from ai_trading.execution import get_debug_tracker
@@ -231,7 +233,7 @@ def cmd_trace(correlation_id):
         timeline = tracker.get_execution_timeline(correlation_id)
         
         if timeline:
-            print(f"📅 TIMELINE ({len(timeline)} events):")
+            logging.info(f"📅 TIMELINE ({len(timeline)} events):")
             for i, event in enumerate(timeline, 1):
                 timestamp = event['timestamp']
                 phase = event['phase']
@@ -241,19 +243,19 @@ def cmd_trace(correlation_id):
                 try:
                     dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
                     time_str = dt.strftime('%H:%M:%S.%f')[:-3]  # HH:MM:SS.mmm
-                except:
+                except (ValueError, TypeError):
                     time_str = timestamp
                 
-                print(f"\n  {i:2d}. {time_str} - {phase.upper()}")
+                logging.info(f"\n  {i:2d}. {time_str} - {phase.upper()}")
                 
                 # Show relevant data
                 if data:
                     for key, value in data.items():
                         if key not in ['timestamp', 'correlation_id']:
-                            print(f"      {key}: {value}")
+                            logging.info(f"      {key}: {value}")
         else:
-            print(f"❌ No timeline found for correlation ID: {correlation_id}")
-            print("Available correlation IDs:")
+            logging.info(f"❌ No timeline found for correlation ID: {correlation_id}")
+            logging.info("Available correlation IDs:")
             
             # Show available correlation IDs
             active_orders = tracker.get_active_orders()
@@ -266,16 +268,16 @@ def cmd_trace(correlation_id):
                     all_ids.add(exec_data['correlation_id'])
             
             for correlation_id in sorted(all_ids):
-                print(f"  {correlation_id}")
+                logging.info(f"  {correlation_id}")
                 
     except Exception as e:
-        print(f"❌ Error tracing execution: {e}")
+        logging.info(f"❌ Error tracing execution: {e}")
 
 
 def cmd_health():
     """Run comprehensive health check."""
-    print("🏥 SYSTEM HEALTH CHECK")
-    print("=" * 40)
+    logging.info("🏥 SYSTEM HEALTH CHECK")
+    logging.info(str("=" * 40))
     
     try:
         from ai_trading.execution import (
@@ -285,7 +287,7 @@ def cmd_health():
         issues = []
         
         # Check execution health
-        print("🔄 Checking execution system...")
+        logging.info("🔄 Checking execution system...")
         exec_stats = get_execution_statistics()
         
         if exec_stats['success_rate'] < 0.9:
@@ -295,7 +297,7 @@ def cmd_health():
             issues.append(f"High number of active orders: {exec_stats['active_orders']}")
         
         # Check position reconciliation
-        print("🏦 Checking position reconciliation...")
+        logging.info("🏦 Checking position reconciliation...")
         discrepancies = force_position_reconciliation()
         
         high_severity_discrepancies = [d for d in discrepancies if d.severity == 'high']
@@ -303,30 +305,30 @@ def cmd_health():
             issues.append(f"High severity position discrepancies: {len(high_severity_discrepancies)}")
         
         # Check PnL attribution
-        print("💰 Checking PnL attribution...")
+        logging.info("💰 Checking PnL attribution...")
         pnl_stats = get_pnl_attribution_stats()
         
         if pnl_stats.get('total_events', 0) == 0:
             issues.append("No PnL events recorded - may indicate tracking issues")
         
         # Report results
-        print("\n📋 HEALTH CHECK RESULTS:")
+        logging.info("\n📋 HEALTH CHECK RESULTS:")
         if issues:
-            print(f"⚠️  {len(issues)} ISSUES FOUND:")
+            logging.info(f"⚠️  {len(issues)} ISSUES FOUND:")
             for i, issue in enumerate(issues, 1):
-                print(f"  {i}. {issue}")
+                logging.info(f"  {i}. {issue}")
         else:
-            print("✅ No issues detected - system appears healthy")
+            logging.info("✅ No issues detected - system appears healthy")
         
         # Show summary stats
-        print("\n📊 SYSTEM METRICS:")
-        print(f"  Execution success rate: {exec_stats['success_rate']:.1%}")
-        print(f"  Active orders: {exec_stats['active_orders']}")
-        print(f"  Position discrepancies: {len(discrepancies)}")
-        print(f"  PnL events tracked: {pnl_stats.get('total_events', 0)}")
+        logging.info("\n📊 SYSTEM METRICS:")
+        logging.info(str(f"  Execution success rate: {exec_stats['success_rate']:.1%}"))
+        logging.info(str(f"  Active orders: {exec_stats['active_orders']}"))
+        logging.info(f"  Position discrepancies: {len(discrepancies)}")
+        logging.info(str(f"  PnL events tracked: {pnl_stats.get('total_events', 0))}")
         
     except Exception as e:
-        print(f"❌ Error running health check: {e}")
+        logging.info(f"❌ Error running health check: {e}")
 
 
 def main():
@@ -379,13 +381,13 @@ def main():
         elif args.command == 'health':
             cmd_health()
         else:
-            print(f"Unknown command: {args.command}")
+            logging.info(f"Unknown command: {args.command}")
             parser.print_help()
             
     except KeyboardInterrupt:
-        print("\n👋 Goodbye!")
+        logging.info("\n👋 Goodbye!")
     except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
+        logging.info(f"\n❌ Unexpected error: {e}")
         sys.exit(1)
 
 

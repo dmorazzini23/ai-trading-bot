@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Validation script for the package-safe imports and reliability improvements.
 """
@@ -9,7 +11,7 @@ import subprocess
 
 def test_alpaca_free_import():
     """Test that ai_trading can be imported without Alpaca packages."""
-    print("Testing ai_trading import without Alpaca packages...")
+    logging.info("Testing ai_trading import without Alpaca packages...")
     
     # Remove alpaca modules to simulate missing packages
     for module in list(sys.modules.keys()):
@@ -21,29 +23,29 @@ def test_alpaca_free_import():
     
     try:
         # This should work even without Alpaca
-        print("✓ ai_trading imported successfully without Alpaca packages")
+        logging.info("✓ ai_trading imported successfully without Alpaca packages")
         return True
     except Exception as e:
-        print(f"✗ Failed to import ai_trading: {e}")
+        logging.info(f"✗ Failed to import ai_trading: {e}")
         return False
     finally:
         os.environ.pop('TESTING', None)
 
 def test_package_imports():
     """Test that package imports are working correctly."""
-    print("Testing package-safe imports...")
+    logging.info("Testing package-safe imports...")
     
     try:
         # Test that we can import from the package structure
-        print("✓ Package-safe imports working correctly")
+        logging.info("✓ Package-safe imports working correctly")
         return True
     except Exception as e:
-        print(f"✗ Package import failed: {e}")
+        logging.info(f"✗ Package import failed: {e}")
         return False
 
 def test_timezone_usage():
     """Test that timezone-aware datetime is being used."""
-    print("Testing timezone-aware datetime usage...")
+    logging.info("Testing timezone-aware datetime usage...")
     
     try:
         # Check that timezone utilities exist
@@ -52,26 +54,26 @@ def test_timezone_usage():
         # Call the utility function
         current_time = now_utc()
         assert current_time.tzinfo is not None
-        print("✓ Timezone-aware datetime utilities working")
+        logging.info("✓ Timezone-aware datetime utilities working")
         return True
     except Exception as e:
-        print(f"✗ Timezone utilities failed: {e}")
+        logging.info(f"✗ Timezone utilities failed: {e}")
         return False
 
 def test_idempotency_and_reconciliation():
     """Test that idempotency and reconciliation modules can be imported."""
-    print("Testing idempotency and reconciliation modules...")
+    logging.info("Testing idempotency and reconciliation modules...")
     
     try:
-        print("✓ Idempotency and reconciliation modules available")
+        logging.info("✓ Idempotency and reconciliation modules available")
         return True
     except Exception as e:
-        print(f"✗ Idempotency/reconciliation modules failed: {e}")
+        logging.info(f"✗ Idempotency/reconciliation modules failed: {e}")
         return False
 
 def check_shebang_removal():
     """Check that shebangs were removed from library files."""
-    print("Checking shebang removal from library files...")
+    logging.info("Checking shebang removal from library files...")
     
     library_files_with_shebangs = []
     
@@ -84,21 +86,21 @@ def check_shebang_removal():
                         first_line = f.readline()
                         if first_line.startswith('#!'):
                             library_files_with_shebangs.append(file_path)
-                except:
+                except (OSError, IOError, UnicodeDecodeError):
                     continue
     
     if library_files_with_shebangs:
-        print(f"✗ Found {len(library_files_with_shebangs)} library files with shebangs:")
+        logging.info(f"✗ Found {len(library_files_with_shebangs)} library files with shebangs:")
         for file_path in library_files_with_shebangs:
-            print(f"  - {file_path}")
+            logging.info(f"  - {file_path}")
         return False
     else:
-        print("✓ No shebangs found in library files")
+        logging.info("✓ No shebangs found in library files")
         return True
 
 def run_basic_pytest():
     """Run a basic pytest to check if the test infrastructure works."""
-    print("Running basic pytest check...")
+    logging.info("Running basic pytest check...")
     
     try:
         # Run pytest on a simple test if it exists
@@ -111,21 +113,21 @@ def run_basic_pytest():
         )
         
         if result.returncode == 0:
-            print("✓ Pytest collection successful")
+            logging.info("✓ Pytest collection successful")
             return True
         else:
-            print(f"✗ Pytest collection failed: {result.stderr}")
+            logging.info(f"✗ Pytest collection failed: {result.stderr}")
             return False
     except subprocess.TimeoutExpired:
-        print("✗ Pytest timed out")
+        logging.info("✗ Pytest timed out")
         return False
     except Exception as e:
-        print(f"✗ Pytest check failed: {e}")
+        logging.info(f"✗ Pytest check failed: {e}")
         return False
 
 def main():
     """Run all validation tests."""
-    print("Running validation tests for package-safe imports and reliability improvements...\n")
+    logging.info("Running validation tests for package-safe imports and reliability improvements...\n")
     
     # Set testing mode to avoid environment validation errors
     os.environ['TESTING'] = 'true'
@@ -146,19 +148,19 @@ def main():
             results.append(result)
             print()
         except Exception as e:
-            print(f"✗ Test {test.__name__} failed with exception: {e}\n")
+            logging.info(f"✗ Test {test.__name__} failed with exception: {e}\n")
             results.append(False)
     
     passed = sum(results)
     total = len(results)
     
-    print(f"Validation Results: {passed}/{total} tests passed")
+    logging.info(f"Validation Results: {passed}/{total} tests passed")
     
     if passed == total:
-        print("✓ All validation tests passed!")
+        logging.info("✓ All validation tests passed!")
         return True
     else:
-        print("✗ Some validation tests failed")
+        logging.info("✗ Some validation tests failed")
         return False
 
 if __name__ == "__main__":

@@ -283,7 +283,7 @@ class LiquidityValidator:
             total_slippage = spread_bps * 0.5 + impact_multiplier + depth_penalty
             return min(200.0, total_slippage)  # Cap at 200 bps
             
-        except Exception:
+        except (ValueError, TypeError, ZeroDivisionError):
             return 100.0  # Default high slippage estimate
     
     def _calculate_liquidity_score(self, participation_rate: float, slippage_bps: float,
@@ -304,7 +304,7 @@ class LiquidityValidator:
             overall_score = (participation_score * 0.4 + slippage_score * 0.4 + volume_score * 0.2)
             return max(0.0, min(1.0, overall_score))
             
-        except Exception:
+        except (ValueError, TypeError, ZeroDivisionError):
             return 0.5
 
 
@@ -508,7 +508,7 @@ class RiskValidator:
             # Weighted average
             return (position_score * 0.6 + utilization_score * 0.4)
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.5
     
     def _calculate_correlation_exposure(self, symbol: str, position_value: float,
@@ -538,7 +538,7 @@ class RiskValidator:
             
             return correlation_exposure
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0
     
     def _assess_concentration_risk(self, current_positions: Dict, account_equity: float) -> float:
@@ -563,7 +563,7 @@ class RiskValidator:
             max_hhi = 1.0  # Single position with 100% weight
             return hhi / max_hhi
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.0
     
     def _calculate_portfolio_risk_score(self, correlation_exposure: float,
@@ -583,7 +583,7 @@ class RiskValidator:
             # Weighted average
             return (correlation_score * 0.4 + concentration_score * 0.4 + diversification_score * 0.2)
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 0.5
 
 
@@ -764,5 +764,5 @@ class PreTradeValidator:
             else:
                 return ValidationStatus.REJECTED, overall_score
                 
-        except Exception:
+        except (KeyError, ValueError, TypeError, AttributeError):
             return ValidationStatus.REJECTED, 0.0

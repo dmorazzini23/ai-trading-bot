@@ -235,50 +235,27 @@ def test_fetch_bars_empty_uses_last_bar(monkeypatch):
 
     assert not df.empty and df.equals(last)
 
-import ast
-import types
-
-
-def _build_fetcher_module():
-    src = Path(__file__).resolve().parents[1] / "bot_engine.py"
-    tree = ast.parse(src.read_text())
-    func = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "fetch_minute_df_safe")
-    mod = types.ModuleType("fetch_safe")
-    mod.pd = pd
-    mod.datetime = datetime.datetime
-    mod.timedelta = datetime.timedelta
-    mod.timezone = datetime.timezone
-    mod.time = types.SimpleNamespace(sleep=lambda s: None)
-    mod.market_is_open = lambda now=None: True
-    mod._MINUTE_CACHE = {}
-    class _Err(Exception):
-        pass
-    mod.DataFetchError = _Err
-    mod.data_fetcher = types.SimpleNamespace(DataFetchError=_Err)
-    mod.get_minute_df = lambda s, start, end: pd.DataFrame()
-    mod.logger = __import__("logging").getLogger("fetch_safe")
-    exec(compile(ast.Module([func], []), filename=str(src), mode="exec"), mod.__dict__)
-    return mod
+# AI-AGENT-REF: Replaced unsafe exec() with direct import from core module
+from ai_trading.core.bot_engine import fetch_minute_df_safe
 
 
 def test_fetch_minute_df_safe_no_retry(monkeypatch):
-    mod = _build_fetcher_module()
     calls = []
 
     def fake_get(sym, start, end):
         calls.append(1)
         return pd.DataFrame({"close": [1]}, index=[pd.Timestamp("2023-01-01")])
 
-    monkeypatch.setattr(mod, "get_minute_df", fake_get)
-    result = mod.fetch_minute_df_safe("AAPL")
+    monkeypatch.setattr("ai_trading.core.bot_engine.get_minute_df", fake_get)
+    result = fetch_minute_df_safe("AAPL")
     assert len(calls) == 1
     assert not result.empty
 
 
 def test_fetch_minute_df_safe_raises(monkeypatch, caplog):
-    mod = _build_fetcher_module()
-    monkeypatch.setattr(mod, "get_minute_df", lambda *a, **k: pd.DataFrame())
+    from ai_trading.data_fetcher import DataFetchError
+    monkeypatch.setattr("ai_trading.core.bot_engine.get_minute_df", lambda *a, **k: pd.DataFrame())
     caplog.set_level("ERROR")
-    with pytest.raises(mod.DataFetchError):
-        mod.fetch_minute_df_safe("AAPL")
+    with pytest.raises(DataFetchError):
+        fetch_minute_df_safe("AAPL")
     assert any("empty DataFrame" in r.message for r in caplog.records)

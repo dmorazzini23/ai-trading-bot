@@ -5,6 +5,9 @@ Utilities for adaptive capital allocation and risk-based position sizing.
 
 import numpy as np
 import math
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class _CapScaler:
@@ -114,7 +117,7 @@ class CapitalScalingEngine:
             ratio = equity / self._base
             factor = math.log(max(ratio, 0.1)) / math.log(2) + 1
             return max(0.1, min(2.0, factor))
-        except Exception:
+        except (ValueError, TypeError, ZeroDivisionError):
             return 1.0
 
     def compute_position_size(
@@ -164,9 +167,9 @@ class CapitalScalingEngine:
                     self._base = equity
                 elif equity > self._base:
                     self._base = equity
-        except Exception:
-            # swallow errors to avoid crashing calling code
-            pass
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Failed to update baseline equity: {e}")
+            # Continue execution - this is not critical
 
     def update_baseline(self, equity: float) -> None:
         """Update the baseline equity for compression calculations."""

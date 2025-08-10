@@ -1,4 +1,6 @@
 #!/usr/bin/env python3.12
+import logging
+
 """
 Standalone validation for peak-performance hardening modules.
 Tests only the new modules without external dependencies.
@@ -54,7 +56,7 @@ class Order:
 
 def test_idempotency():
     """Test order idempotency system."""
-    print("Testing idempotency system...")
+    logging.info("Testing idempotency system...")
     
     # Import the idempotency module directly
     sys.path.append('ai_trading/execution')
@@ -121,12 +123,12 @@ def test_idempotency():
     # Second check should find it
     assert cache.get(key_hash) is not None
     
-    print("  ✓ Idempotency cache working")
+    logging.info("  ✓ Idempotency cache working")
 
 
 def test_cost_model():
     """Test symbol cost model."""
-    print("Testing cost model...")
+    logging.info("Testing cost model...")
     
     import math
     from dataclasses import dataclass
@@ -163,12 +165,12 @@ def test_cost_model():
     expected_total = (2.0 * 2) + 0.5 + (1.5 * math.sqrt(1.5))
     assert abs(total_cost - expected_total) < 0.01
     
-    print("  ✓ Cost model calculations working")
+    logging.info("  ✓ Cost model calculations working")
 
 
 def test_determinism():
     """Test deterministic training."""
-    print("Testing determinism...")
+    logging.info("Testing determinism...")
     
     import random
     
@@ -207,12 +209,12 @@ def test_determinism():
     hash3 = hash_data(test_data2)
     assert hash1 != hash3
     
-    print("  ✓ Determinism working")
+    logging.info("  ✓ Determinism working")
 
 
 def test_drift_monitoring():
     """Test drift monitoring."""
-    print("Testing drift monitoring...")
+    logging.info("Testing drift monitoring...")
     
     import random
     import math
@@ -270,7 +272,7 @@ def test_drift_monitoring():
                     psi += (cp - bp) * math.log(cp / bp)
             
             return abs(psi)
-        except:
+        except (ZeroDivisionError, ValueError, IndexError):
             return 0.0
     
     # Test PSI calculation with simple random data
@@ -305,12 +307,12 @@ def test_drift_monitoring():
     assert metrics.sample_size == 500
     assert metrics.drift_level in ["low", "medium", "high"]
     
-    print("  ✓ Drift monitoring working")
+    logging.info("  ✓ Drift monitoring working")
 
 
 def test_performance_cache():
     """Test performance caching."""
-    print("Testing performance cache...")
+    logging.info("Testing performance cache...")
     
     from datetime import datetime, timedelta
     
@@ -358,12 +360,12 @@ def test_performance_cache():
     cache.cache["test1"]['timestamp'] = datetime.now(timezone.utc) - timedelta(seconds=120)
     assert cache.get("test1") is None
     
-    print("  ✓ Performance cache working")
+    logging.info("  ✓ Performance cache working")
 
 
 def test_smart_routing():
     """Test smart order routing."""
-    print("Testing smart order routing...")
+    logging.info("Testing smart order routing...")
     
     from dataclasses import dataclass
     from enum import Enum
@@ -443,13 +445,13 @@ def test_smart_routing():
     assert limit_price <= market_data.mid
     assert order_type in [OrderType.IOC, OrderType.MARKETABLE_LIMIT]
     
-    print("  ✓ Smart routing working")
+    logging.info("  ✓ Smart routing working")
 
 
 def main():
     """Run all tests."""
-    print("Peak-Performance Hardening Standalone Validation")
-    print("=" * 50)
+    logging.info("Peak-Performance Hardening Standalone Validation")
+    logging.info(str("=" * 50))
     
     tests = [
         test_idempotency,
@@ -468,24 +470,24 @@ def main():
             test()
             passed += 1
         except Exception as e:
-            print(f"  ✗ {test.__name__} failed: {e}")
+            logging.info(f"  ✗ {test.__name__} failed: {e}")
             failed += 1
     
-    print(f"\nResults: {passed} passed, {failed} failed")
+    logging.info(f"\nResults: {passed} passed, {failed} failed")
     
     if failed == 0:
-        print("\n🎉 All peak-performance components validated!")
-        print("\nImplemented features:")
-        print("  • Order idempotency caching")
-        print("  • Symbol-aware cost modeling") 
-        print("  • Deterministic training")
-        print("  • Feature drift monitoring")
-        print("  • Performance caching")
-        print("  • Smart order routing")
-        print("\nThe peak-performance hardening implementation is working correctly!")
+        logging.info("\n🎉 All peak-performance components validated!")
+        logging.info("\nImplemented features:")
+        logging.info("  • Order idempotency caching")
+        logging.info("  • Symbol-aware cost modeling") 
+        logging.info("  • Deterministic training")
+        logging.info("  • Feature drift monitoring")
+        logging.info("  • Performance caching")
+        logging.info("  • Smart order routing")
+        logging.info("\nThe peak-performance hardening implementation is working correctly!")
         return True
     else:
-        print(f"\n❌ {failed} tests failed")
+        logging.info(f"\n❌ {failed} tests failed")
         return False
 
 

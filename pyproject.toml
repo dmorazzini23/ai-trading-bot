@@ -86,3 +86,27 @@ test = [
   "pytest-asyncio>=0.20.2",
   "hypothesis>=6.0.0",
 ]
+
+[tool.ruff]
+exclude = ["tests/**/*.py"]  # Allow print in tests
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "F",     # pyflakes
+    "W",     # pycodestyle warnings
+    "B",     # flake8-bugbear
+    "I",     # isort
+    "T201",  # print found
+    "E722",  # bare except
+    "S",     # bandit security
+    "UP",    # pyupgrade
+    "C4",    # flake8-comprehensions
+    "PIE",   # flake8-pie
+    "SIM",   # flake8-simplify
+]
+ignore = [
+    "S101",  # assert found - common in tests
+    "S603",  # subprocess without shell=False check (handled by guard)
+    "S607",  # subprocess calls with partial path
+]

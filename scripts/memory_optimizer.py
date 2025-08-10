@@ -401,23 +401,23 @@ if __name__ == "__main__":
     # Test the memory optimizer
     optimizer = MemoryOptimizer(enable_monitoring=False)
     
-    print("Memory Optimizer Test")
-    print("=" * 30)
+    logging.info("Memory Optimizer Test")
+    logging.info(str("=" * 30))
     
     # Get initial memory stats
     initial_memory = optimizer.get_memory_usage()
-    print(f"Initial memory: {initial_memory['rss_mb']:.2f}MB")
-    print(f"Initial objects: {initial_memory['total_objects']}")
+    logging.info(str(f"Initial memory: {initial_memory['rss_mb']:.2f}MB"))
+    logging.info(str(f"Initial objects: {initial_memory['total_objects']}"))
     
     # Force garbage collection
     gc_result = optimizer.force_garbage_collection()
-    print(f"GC collected: {gc_result['objects_collected']} objects")
+    logging.info(str(f"GC collected: {gc_result['objects_collected']} objects"))
     
     # Get final memory stats
     final_memory = optimizer.get_memory_usage()
-    print(f"Final memory: {final_memory['rss_mb']:.2f}MB")
-    print(f"Final objects: {final_memory['total_objects']}")
+    logging.info(str(f"Final memory: {final_memory['rss_mb']:.2f}MB"))
+    logging.info(str(f"Final objects: {final_memory['total_objects']}"))
     
     # Generate report
     report = optimizer.get_memory_report()
-    print(f"Memory report generated with {len(report)} sections")
+    logging.info(f"Memory report generated with {len(report)} sections")

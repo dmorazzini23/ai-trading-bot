@@ -12,7 +12,7 @@ from ai_trading.logging import get_logger
 
 import pandas as pd
 
-import config
+from ai_trading import config
 from ai_trading import signals  # noqa: F401
 # AI-AGENT-REF: Removed legacy trade_execution import as part of shim cleanup
 # from ai_trading import trade_execution as execution_api  # type: ignore
@@ -176,8 +176,8 @@ class BacktestEngine:
         if hasattr(bot_engine, "apply_fill"):
             try:
                 bot_engine.apply_fill(fill)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to apply fill in backtester: %s", e)
         qty = fill.order.qty if fill.order.side.lower() == "buy" else -fill.order.qty
         cost = fill.fill_price * qty
         if qty > 0:
@@ -209,13 +209,14 @@ class BacktestEngine:
                 if df is not None and ts in df.index and hasattr(bot_engine, "update_market_data"):
                     try:
                         bot_engine.update_market_data(sym, df.loc[ts])
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("Failed to update market data for %s: %s", sym, e)
             orders = []
             if hasattr(bot_engine, "next_cycle"):
                 try:
                     orders = bot_engine.next_cycle()
-                except Exception:
+                except Exception as e:
+                    logger.debug("Failed to execute next_cycle: %s", e)
                     orders = []
             for order in orders:
                 for fill in self.execution_model.on_order(order):

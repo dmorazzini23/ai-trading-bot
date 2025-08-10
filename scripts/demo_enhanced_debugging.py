@@ -1,3 +1,5 @@
+import logging
+
 """Example usage of the enhanced execution debugging system.
 
 This script demonstrates how to use the new debugging features to track
@@ -17,9 +19,9 @@ os.environ.setdefault('FLASK_PORT', '9000')
 
 def demonstrate_signal_to_execution_debugging():
     """Demonstrate complete signal-to-execution debugging."""
-    print("=" * 60)
-    print("DEMONSTRATION: Signal-to-Execution Debugging")
-    print("=" * 60)
+    logging.info(str("=" * 60))
+    logging.info("DEMONSTRATION: Signal-to-Execution Debugging")
+    logging.info(str("=" * 60))
     
     from ai_trading.execution import (
         log_signal_to_execution, log_execution_phase, log_order_outcome,
@@ -28,7 +30,7 @@ def demonstrate_signal_to_execution_debugging():
     
     # Enable verbose debugging
     enable_debug_mode(verbose=True, trace=True)
-    print("✓ Enabled verbose debugging mode")
+    logging.info("✓ Enabled verbose debugging mode")
     
     # Simulate a trading signal
     signal_data = {
@@ -46,10 +48,10 @@ def demonstrate_signal_to_execution_debugging():
         qty=100,
         signal_data=signal_data
     )
-    print(f"✓ Started tracking execution with ID: {correlation_id}")
+    logging.info(f"✓ Started tracking execution with ID: {correlation_id}")
     
     # Simulate execution phases
-    print("\nSimulating execution phases...")
+    logging.info("\nSimulating execution phases...")
     
     # Risk check phase
     log_execution_phase(correlation_id, ExecutionPhase.RISK_CHECK, {
@@ -58,7 +60,7 @@ def demonstrate_signal_to_execution_debugging():
         'buying_power_check': 'passed',
         'volatility_check': 'passed'
     })
-    print("  ✓ Risk check completed")
+    logging.info("  ✓ Risk check completed")
     
     # Order preparation phase
     log_execution_phase(correlation_id, ExecutionPhase.ORDER_PREPARED, {
@@ -67,7 +69,7 @@ def demonstrate_signal_to_execution_debugging():
         'estimated_cost': 14950.00,
         'account_equity': 50000.00
     })
-    print("  ✓ Order prepared")
+    logging.info("  ✓ Order prepared")
     
     # Order submission phase
     log_execution_phase(correlation_id, ExecutionPhase.ORDER_SUBMITTED, {
@@ -75,7 +77,7 @@ def demonstrate_signal_to_execution_debugging():
         'submission_time': datetime.now(timezone.utc).isoformat(),
         'order_type': 'market'
     })
-    print("  ✓ Order submitted to broker")
+    logging.info("  ✓ Order submitted to broker")
     
     # Simulate a small delay
     time.sleep(0.1)
@@ -85,7 +87,7 @@ def demonstrate_signal_to_execution_debugging():
         'broker_status': 'accepted',
         'estimated_fill_time': '2-5 seconds'
     })
-    print("  ✓ Order acknowledged by broker")
+    logging.info("  ✓ Order acknowledged by broker")
     
     # Order fill
     log_execution_phase(correlation_id, ExecutionPhase.ORDER_FILLED, {
@@ -94,7 +96,7 @@ def demonstrate_signal_to_execution_debugging():
         'fill_time': datetime.now(timezone.utc).isoformat(),
         'execution_quality': 'good'
     })
-    print("  ✓ Order filled")
+    logging.info("  ✓ Order filled")
     
     # Position update
     log_execution_phase(correlation_id, ExecutionPhase.POSITION_UPDATED, {
@@ -102,7 +104,7 @@ def demonstrate_signal_to_execution_debugging():
         'new_position': 100,
         'avg_cost': 149.75
     })
-    print("  ✓ Position updated")
+    logging.info("  ✓ Position updated")
     
     # Final outcome
     log_order_outcome(correlation_id, True, {
@@ -111,26 +113,26 @@ def demonstrate_signal_to_execution_debugging():
         'fees': 1.00,
         'slippage': 0.25  # Paid 0.25 more than expected
     })
-    print("  ✓ Execution completed successfully")
+    logging.info("  ✓ Execution completed successfully")
     
     # Show execution timeline
     tracker = get_debug_tracker()
     timeline = tracker.get_execution_timeline(correlation_id)
     
-    print(f"\n📊 EXECUTION TIMELINE ({len(timeline)} events):")
+    logging.info(f"\n📊 EXECUTION TIMELINE ({len(timeline)} events):")
     for i, event in enumerate(timeline, 1):
-        print(f"  {i}. {event['phase']} at {event['timestamp']}")
+        logging.info(str(f"  {i}. {event['phase']} at {event['timestamp']}"))
         if event.get('data'):
             for key, value in event['data'].items():
-                print(f"     {key}: {value}")
+                logging.info(f"     {key}: {value}")
     
     return correlation_id
 
 def demonstrate_position_reconciliation():
     """Demonstrate position reconciliation between bot and broker."""
-    print("\n" + "=" * 60)
-    print("DEMONSTRATION: Position Reconciliation")
-    print("=" * 60)
+    logging.info(str("\n" + "=" * 60))
+    logging.info("DEMONSTRATION: Position Reconciliation")
+    logging.info(str("=" * 60))
     
     from ai_trading.execution import (
         get_position_reconciler, update_bot_position, force_position_reconciliation
@@ -146,13 +148,13 @@ def demonstrate_position_reconciliation():
         ("TSLA", 75)
     ]
     
-    print("Setting up bot positions...")
+    logging.info("Setting up bot positions...")
     for symbol, qty in positions:
         update_bot_position(symbol, qty, f"demo_trade_{symbol}")
-        print(f"  ✓ {symbol}: {qty} shares")
+        logging.info(f"  ✓ {symbol}: {qty} shares")
     
     # Simulate a discrepancy (broker shows different position for TSLA)
-    print(f"\nBot positions: {reconciler.get_bot_positions()}")
+    logging.info(f"\nBot positions: {reconciler.get_bot_positions()}")
     
     # Mock broker positions that differ from bot
     def mock_broker_positions():
@@ -167,33 +169,33 @@ def demonstrate_position_reconciliation():
     # Override the method for demo
     reconciler.get_broker_positions = mock_broker_positions
     
-    print(f"Simulated broker positions: {mock_broker_positions()}")
+    logging.info(f"Simulated broker positions: {mock_broker_positions()}")
     
     # Run reconciliation
-    print("\nRunning position reconciliation...")
+    logging.info("\nRunning position reconciliation...")
     discrepancies = force_position_reconciliation()
     
     if discrepancies:
-        print(f"⚠️  Found {len(discrepancies)} discrepancies:")
+        logging.info(f"⚠️  Found {len(discrepancies)} discrepancies:")
         for disc in discrepancies:
-            print(f"  {disc.symbol}: Bot={disc.bot_qty}, Broker={disc.broker_qty}")
-            print(f"    Type: {disc.discrepancy_type}, Severity: {disc.severity}")
+            logging.info(f"  {disc.symbol}: Bot={disc.bot_qty}, Broker={disc.broker_qty}")
+            logging.info(f"    Type: {disc.discrepancy_type}, Severity: {disc.severity}")
     else:
-        print("✓ All positions reconciled successfully")
+        logging.info("✓ All positions reconciled successfully")
     
     # Show reconciliation statistics
     stats = reconciler.get_reconciliation_stats()
-    print("\n📊 RECONCILIATION STATS:")
-    print(f"  Current discrepancies: {stats['current_discrepancies']}")
-    print(f"  Historical discrepancies: {stats['total_historical_discrepancies']}")
-    print(f"  Bot positions: {stats['bot_positions_count']}")
-    print(f"  Broker positions: {stats['broker_positions_count']}")
+    logging.info("\n📊 RECONCILIATION STATS:")
+    logging.info(str(f"  Current discrepancies: {stats['current_discrepancies']}"))
+    logging.info(str(f"  Historical discrepancies: {stats['total_historical_discrepancies']}"))
+    logging.info(str(f"  Bot positions: {stats['bot_positions_count']}"))
+    logging.info(str(f"  Broker positions: {stats['broker_positions_count']}"))
 
 def demonstrate_pnl_attribution():
     """Demonstrate detailed PnL attribution."""
-    print("\n" + "=" * 60)
-    print("DEMONSTRATION: PnL Attribution")
-    print("=" * 60)
+    logging.info(str("\n" + "=" * 60))
+    logging.info("DEMONSTRATION: PnL Attribution")
+    logging.info(str("=" * 60))
     
     from ai_trading.execution import (
         get_pnl_attributor, record_trade_pnl, record_dividend_income,
@@ -203,7 +205,7 @@ def demonstrate_pnl_attribution():
     attributor = get_pnl_attributor()
     
     # Simulate various PnL events
-    print("Recording PnL events...")
+    logging.info("Recording PnL events...")
     
     # Trade PnL (profitable AAPL trade)
     record_trade_pnl(
@@ -215,15 +217,15 @@ def demonstrate_pnl_attribution():
         slippage=0.25,
         correlation_id="demo_trade_aapl"
     )
-    print("  ✓ AAPL trade: +$475 profit, -$1 fees, -$0.25 slippage")
+    logging.info("  ✓ AAPL trade: +$475 profit, -$1 fees, -$0.25 slippage")
     
     # Market movement (AAPL price went up)
     update_position_for_pnl("AAPL", 100, 149.75, 152.00)  # Price moved up $2.25
-    print("  ✓ AAPL market movement: +$225 unrealized gain")
+    logging.info("  ✓ AAPL market movement: +$225 unrealized gain")
     
     # Dividend income
     record_dividend_income("AAPL", 0.24, 100, "dividend_q4_2024")
-    print("  ✓ AAPL dividend: +$24")
+    logging.info("  ✓ AAPL dividend: +$24")
     
     # Losing trade (TSLA)
     record_trade_pnl(
@@ -234,41 +236,41 @@ def demonstrate_pnl_attribution():
         fees=1.50,
         correlation_id="demo_trade_tsla"
     )
-    print("  ✓ TSLA trade: -$500 loss, -$1.50 fees")
+    logging.info("  ✓ TSLA trade: -$500 loss, -$1.50 fees")
     
     # Show PnL breakdown by symbol
-    print("\n📊 PnL BREAKDOWN BY SYMBOL:")
+    logging.info("\n📊 PnL BREAKDOWN BY SYMBOL:")
     
     for symbol in ["AAPL", "TSLA"]:
         breakdown = get_symbol_pnl_breakdown(symbol)
-        print(f"\n{symbol}:")
+        logging.info(f"\n{symbol}:")
         total = 0
         for source, amount in breakdown.items():
             if amount != 0:
-                print(f"  {source}: ${amount:+.2f}")
+                logging.info(f"  {source}: ${amount:+.2f}")
                 if source != 'unrealized':
                     total += amount
-        print(f"  TOTAL REALIZED: ${total:+.2f}")
+        logging.info(f"  TOTAL REALIZED: ${total:+.2f}")
     
     # Explain recent changes
-    print("\n📝 RECENT PnL EXPLANATION FOR AAPL:")
+    logging.info("\n📝 RECENT PnL EXPLANATION FOR AAPL:")
     explanation = explain_recent_pnl_changes("AAPL", minutes=60)
-    print(f"  {explanation['explanation']}")
-    print(f"  Total change: ${explanation['total_change']:+.2f}")
+    logging.info(str(f"  {explanation['explanation']}"))
+    logging.info(str(f"  Total change: ${explanation['total_change']:+.2f}"))
     
     # Show portfolio summary
     from ai_trading.execution import get_portfolio_pnl_summary
     summary = get_portfolio_pnl_summary()
-    print("\n📊 PORTFOLIO PnL SUMMARY:")
-    print(f"  Total realized PnL: ${summary['total_realized_pnl']:+.2f}")
-    print(f"  Total unrealized PnL: ${summary['total_unrealized_pnl']:+.2f}")
-    print(f"  Net PnL: ${summary['total_pnl']:+.2f}")
+    logging.info("\n📊 PORTFOLIO PnL SUMMARY:")
+    logging.info(str(f"  Total realized PnL: ${summary['total_realized_pnl']:+.2f}"))
+    logging.info(str(f"  Total unrealized PnL: ${summary['total_unrealized_pnl']:+.2f}"))
+    logging.info(str(f"  Net PnL: ${summary['total_pnl']:+.2f}"))
 
 def demonstrate_debugging_a_problem():
     """Demonstrate how to debug the specific problem mentioned: '$514 PnL with 0 positions'."""
-    print("\n" + "=" * 60)
-    print("DEMONSTRATION: Debugging '$514 PnL with 0 positions' Problem")
-    print("=" * 60)
+    logging.info(str("\n" + "=" * 60))
+    logging.info(str("DEMONSTRATION: Debugging '$514 PnL with 0 positions' Problem"))
+    logging.info(str("=" * 60))
     
     from ai_trading.execution import (
         get_debug_tracker, get_position_reconciler, get_pnl_attributor,
@@ -276,84 +278,84 @@ def demonstrate_debugging_a_problem():
     )
     
     # This is how you would investigate the problem
-    print("🔍 INVESTIGATING PnL/POSITION DISCREPANCY...")
+    logging.info("🔍 INVESTIGATING PnL/POSITION DISCREPANCY...")
     
     # 1. Check current execution statistics
     debug_tracker = get_debug_tracker()
     exec_stats = debug_tracker.get_execution_stats()
     
-    print("\n1. EXECUTION STATISTICS:")
-    print(f"   Recent successful orders: {exec_stats['recent_successes']}")
-    print(f"   Recent failed orders: {exec_stats['recent_failures']}")
-    print(f"   Success rate: {exec_stats['success_rate']:.1%}")
-    print(f"   Active orders: {exec_stats['active_orders']}")
+    logging.info("\n1. EXECUTION STATISTICS:")
+    logging.info(str(f"   Recent successful orders: {exec_stats['recent_successes']}"))
+    logging.info(str(f"   Recent failed orders: {exec_stats['recent_failures']}"))
+    logging.info(str(f"   Success rate: {exec_stats['success_rate']:.1%}"))
+    logging.info(str(f"   Active orders: {exec_stats['active_orders']}"))
     
     if exec_stats['recent_successes'] > 0:
-        print("   → Orders were executed successfully, but where did positions go?")
+        logging.info("   → Orders were executed successfully, but where did positions go?")
     
     # 2. Check recent executions for clues
     recent_executions = debug_tracker.get_recent_executions(limit=5)
-    print(f"\n2. RECENT EXECUTIONS ({len(recent_executions)} found):")
+    logging.info(f"\n2. RECENT EXECUTIONS ({len(recent_executions)} found):")
     for execution in recent_executions:
         symbol = execution.get('symbol', 'Unknown')
         side = execution.get('side', 'Unknown')
         qty = execution.get('qty', 'Unknown')
         success = execution.get('success', False)
-        print(f"   {symbol} {side} {qty} shares - {'✓' if success else '✗'}")
+        logging.info(str(f"   {symbol} {side} {qty} shares - {'✓' if success else '✗'}"))
     
     # 3. Force position reconciliation to find discrepancies
-    print("\n3. POSITION RECONCILIATION:")
+    logging.info("\n3. POSITION RECONCILIATION:")
     reconciler = get_position_reconciler()
     bot_positions = reconciler.get_bot_positions()
-    print(f"   Bot positions: {bot_positions}")
+    logging.info(f"   Bot positions: {bot_positions}")
     
     # Force reconciliation (would check against broker API in real scenario)
     discrepancies = force_position_reconciliation()
     if discrepancies:
-        print(f"   ⚠️  Found {len(discrepancies)} position discrepancies!")
+        logging.info(f"   ⚠️  Found {len(discrepancies)} position discrepancies!")
         for disc in discrepancies:
-            print(f"   {disc.symbol}: Bot={disc.bot_qty}, Broker={disc.broker_qty}")
+            logging.info(f"   {disc.symbol}: Bot={disc.bot_qty}, Broker={disc.broker_qty}")
     else:
-        print("   ✓ No position discrepancies found")
+        logging.info("   ✓ No position discrepancies found")
     
     # 4. Analyze PnL attribution
-    print("\n4. PnL ATTRIBUTION ANALYSIS:")
+    logging.info("\n4. PnL ATTRIBUTION ANALYSIS:")
     attributor = get_pnl_attributor()
     portfolio_summary = get_portfolio_pnl_summary()
     
-    print(f"   Total realized PnL: ${portfolio_summary['total_realized_pnl']:+.2f}")
-    print(f"   Total unrealized PnL: ${portfolio_summary['total_unrealized_pnl']:+.2f}")
-    print(f"   Net PnL: ${portfolio_summary['total_pnl']:+.2f}")
+    logging.info(str(f"   Total realized PnL: ${portfolio_summary['total_realized_pnl']:+.2f}"))
+    logging.info(str(f"   Total unrealized PnL: ${portfolio_summary['total_unrealized_pnl']:+.2f}"))
+    logging.info(str(f"   Net PnL: ${portfolio_summary['total_pnl']:+.2f}"))
     
     # Break down PnL by source
     pnl_by_source = portfolio_summary['pnl_by_source']
-    print("   PnL by source:")
+    logging.info("   PnL by source:")
     for source, amount in pnl_by_source.items():
         if amount != 0:
-            print(f"     {source}: ${amount:+.2f}")
+            logging.info(f"     {source}: ${amount:+.2f}")
     
     # 5. Check for recent PnL events that might explain the situation
     recent_events = attributor.get_recent_pnl_events(limit=10)
-    print(f"\n5. RECENT PnL EVENTS ({len(recent_events)} found):")
+    logging.info(f"\n5. RECENT PnL EVENTS ({len(recent_events)} found):")
     for event in recent_events[-5:]:  # Show last 5
         symbol = event['symbol']
         amount = event['pnl_amount']
         source = event['source']
-        print(f"   {symbol}: ${amount:+.2f} from {source}")
+        logging.info(f"   {symbol}: ${amount:+.2f} from {source}")
     
     # 6. Provide debugging recommendations
-    print("\n6. DEBUGGING RECOMMENDATIONS:")
-    print("   ✓ Check execution timeline for each order using correlation IDs")
-    print("   ✓ Verify position updates were properly recorded after fills")
-    print("   ✓ Check if orders were submitted but never filled")
-    print("   ✓ Look for position adjustments or manual corrections")
-    print("   ✓ Verify broker API position sync is working")
-    print("   ✓ Check for unreported fills or partial fills")
+    logging.info("\n6. DEBUGGING RECOMMENDATIONS:")
+    logging.info("   ✓ Check execution timeline for each order using correlation IDs")
+    logging.info("   ✓ Verify position updates were properly recorded after fills")
+    logging.info("   ✓ Check if orders were submitted but never filled")
+    logging.info("   ✓ Look for position adjustments or manual corrections")
+    logging.info("   ✓ Verify broker API position sync is working")
+    logging.info("   ✓ Check for unreported fills or partial fills")
 
 def main():
     """Run all demonstrations."""
-    print("Enhanced Execution Debugging System - Demonstrations")
-    print("This shows how the new debugging features help track and resolve trading issues")
+    logging.info("Enhanced Execution Debugging System - Demonstrations")
+    logging.info("This shows how the new debugging features help track and resolve trading issues")
     
     try:
         # Demonstrate each feature
@@ -362,29 +364,29 @@ def main():
         demonstrate_pnl_attribution()
         demonstrate_debugging_a_problem()
         
-        print("\n" + "=" * 60)
-        print("SUMMARY: Enhanced Debugging Features")
-        print("=" * 60)
-        print("✓ Signal-to-execution correlation tracking")
-        print("✓ Complete execution timeline with phase logging")
-        print("✓ Position reconciliation with discrepancy detection")
-        print("✓ Detailed PnL attribution by source")
-        print("✓ Comprehensive debugging workflow for problem resolution")
-        print("\nThese features provide complete visibility into the trading pipeline")
-        print("and will help quickly identify and resolve issues like:")
-        print("- Missing orders that should have been placed")
-        print("- Position discrepancies between bot and broker")
-        print("- Unexplained PnL changes")
-        print("- Failed order executions")
+        logging.info(str("\n" + "=" * 60))
+        logging.info("SUMMARY: Enhanced Debugging Features")
+        logging.info(str("=" * 60))
+        logging.info("✓ Signal-to-execution correlation tracking")
+        logging.info("✓ Complete execution timeline with phase logging")
+        logging.info("✓ Position reconciliation with discrepancy detection")
+        logging.info("✓ Detailed PnL attribution by source")
+        logging.info("✓ Comprehensive debugging workflow for problem resolution")
+        logging.info("\nThese features provide complete visibility into the trading pipeline")
+        logging.info("and will help quickly identify and resolve issues like:")
+        logging.info("- Missing orders that should have been placed")
+        logging.info("- Position discrepancies between bot and broker")
+        logging.info("- Unexplained PnL changes")
+        logging.info("- Failed order executions")
         
-        print("\n🔧 TO USE IN PRODUCTION:")
-        print("1. Import: from ai_trading.execution import enable_debug_mode")
-        print("2. Enable: enable_debug_mode(verbose=True)")
-        print("3. Monitor: Check logs for execution events and discrepancies")
-        print("4. Debug: Use correlation IDs to trace specific order issues")
+        logging.info("\n🔧 TO USE IN PRODUCTION:")
+        logging.info("1. Import: from ai_trading.execution import enable_debug_mode")
+        logging.info("2. Enable: enable_debug_mode(verbose=True)")
+        logging.info("3. Monitor: Check logs for execution events and discrepancies")
+        logging.info("4. Debug: Use correlation IDs to trace specific order issues")
         
     except Exception as e:
-        print(f"\nDemonstration failed: {e}")
+        logging.info(f"\nDemonstration failed: {e}")
         import traceback
         traceback.print_exc()
 

@@ -54,7 +54,7 @@ import config
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
 
-from strategies import TradeSignal
+from ai_trading.strategies.base import StrategySignal as TradeSignal
 from ai_trading.utils.base import get_phase_logger
 
 logger = get_phase_logger(__name__, "RISK_CHECK")
@@ -949,13 +949,13 @@ def calculate_position_size(*args, **kwargs) -> int:
     --------
     >>> # Simple position sizing
     >>> shares = calculate_position_size(10000, 150.0)  # $10k capital, $150/share
-    >>> print(f"Buy {shares} shares")
+    >>> logging.info(f"Buy {shares} shares")
     
     >>> # Advanced position sizing with signal
     >>> from risk_engine import TradeSignal
     >>> signal = TradeSignal(symbol='AAPL', side='buy', confidence=0.8, strategy='momentum')
     >>> shares = calculate_position_size(signal, 10000, 150.0)
-    >>> print(f"Buy {shares} shares based on {signal.confidence:.1%} confidence")
+    >>> logging.info(f"Buy {shares} shares based on {signal.confidence:.1%} confidence")
     
     Notes
     -----
@@ -1033,7 +1033,7 @@ def check_max_drawdown(state: Dict[str, float]) -> bool:
     ...     'peak_value': 50000
     ... }
     >>> if check_max_drawdown(state):
-    ...     print("WARNING: Drawdown limit exceeded!")
+    ...     logging.info("WARNING: Drawdown limit exceeded!")
     ...     reduce_position_sizes()
     
     Notes
@@ -1087,7 +1087,7 @@ def can_trade() -> bool:
     >>> if can_trade():
     ...     execute_trading_strategy()
     ... else:
-    ...     print("Trading halted due to risk conditions")
+    ...     logging.info("Trading halted due to risk conditions")
     ...     wait_for_market_open()
     
     Notes

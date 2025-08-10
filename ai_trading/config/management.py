@@ -627,6 +627,7 @@ except ImportError:
 
 USE_RL_AGENT = os.getenv("USE_RL_AGENT", "false").lower() in ("true", "1", "yes")
 BOT_MODE = os.getenv("BOT_MODE", "balanced")
+VERBOSE_LOGGING = os.getenv("VERBOSE_LOGGING", "false").lower() in ("true", "1", "yes")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY") or os.getenv("NEWS_API_KEY")

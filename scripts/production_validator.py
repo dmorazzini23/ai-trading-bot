@@ -531,8 +531,8 @@ class ChaosEngineer:
             for temp_file in temp_files:
                 try:
                     os.remove(temp_file)
-                except:
-                    pass
+                except (OSError, FileNotFoundError):
+                    logging.debug(f"Could not remove temporary file: {temp_file}")
     
     def _inject_random_exceptions(self, duration: int):
         """Inject random exceptions in system operations."""

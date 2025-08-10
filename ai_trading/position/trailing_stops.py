@@ -283,7 +283,7 @@ class TrailingStopManager:
             
             return self.base_trail_percent
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError):
             return self.base_trail_percent
     
     def _calculate_atr_stop_distance(self, data: pd.DataFrame) -> float:
@@ -317,7 +317,7 @@ class TrailingStopManager:
             
             return self.base_trail_percent
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError, ZeroDivisionError):
             return self.base_trail_percent
     
     def _calculate_momentum_multiplier(self, symbol: str, data: Optional[pd.DataFrame]) -> float:
@@ -347,7 +347,7 @@ class TrailingStopManager:
                 # Neutral momentum
                 return 1.0
                 
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return 1.0
     
     def _calculate_time_decay_multiplier(self, days_held: int) -> float:
@@ -365,7 +365,7 @@ class TrailingStopManager:
             
             return max(0.5, multiplier)  # Never go below 50% of base distance
             
-        except Exception:
+        except (ValueError, TypeError, ZeroDivisionError):
             return 1.0
     
     def _calculate_breakeven_distance(self, stop_level: TrailingStopLevel) -> Optional[float]:
@@ -384,7 +384,7 @@ class TrailingStopManager:
             
             return None
             
-        except Exception:
+        except (KeyError, ValueError, TypeError):
             return None
     
     def _combine_stop_distances(self, distances: Dict[str, float], 
@@ -428,7 +428,7 @@ class TrailingStopManager:
             
             return final_distance
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, ZeroDivisionError):
             return self.base_trail_percent
     
     def _check_stop_trigger(self, stop_level: TrailingStopLevel, qty: int) -> None:
@@ -471,7 +471,7 @@ class TrailingStopManager:
             
             return None
             
-        except Exception:
+        except (AttributeError, ValueError, KeyError):
             return None
     
     def _calculate_rsi(self, prices: pd.Series, period: int = 14) -> float:
@@ -492,7 +492,7 @@ class TrailingStopManager:
             
             return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50.0
             
-        except Exception:
+        except (KeyError, ValueError, TypeError, IndexError, ZeroDivisionError):
             return 50.0
     
     def _calculate_days_held(self, position_data: Any) -> int:
@@ -502,5 +502,5 @@ class TrailingStopManager:
             # For now, return a default value
             return 0
             
-        except Exception:
+        except (AttributeError, ValueError, TypeError):
             return 0

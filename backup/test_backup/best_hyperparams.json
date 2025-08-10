@@ -1,6 +1,0 @@
-{
-  "fast_period": 5,
-  "slow_period": 20,
-  "signal_period": 9,
-  "BUY_THRESHOLD": 0.1
-}

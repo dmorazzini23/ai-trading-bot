@@ -363,18 +363,18 @@ def validate_hyperparams_file(file_path: str = "hyperparams.json") -> Dict[str, 
 
 if __name__ == "__main__":
     # Test hyperparams schema
-    print("Testing Hyperparameters Schema...")
+    logging.info("Testing Hyperparameters Schema...")
     
     # Test default hyperparams
     default_params = get_default_hyperparams()
-    print(f"Default schema version: {default_params.schema_version}")
+    logging.info(f"Default schema version: {default_params.schema_version}")
     
     # Test loading (will use defaults if file doesn't exist)
     loaded_params = load_hyperparams()
-    print(f"Loaded params - buy_threshold: {loaded_params.buy_threshold}")
+    logging.info(f"Loaded params - buy_threshold: {loaded_params.buy_threshold}")
     
     # Test validation
     validation_report = validate_hyperparams_file()
-    print(f"Validation report: {validation_report}")
+    logging.info(f"Validation report: {validation_report}")
     
-    print("Hyperparams schema tests completed!")
+    logging.info("Hyperparams schema tests completed!")

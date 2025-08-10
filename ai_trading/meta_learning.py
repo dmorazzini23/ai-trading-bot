@@ -323,7 +323,7 @@ def normalize_score(score: float, cap: float = 1.2) -> float:
     """Clip ``score`` to ``cap`` preserving sign."""
     try:
         score = float(score)
-    except Exception:
+    except (ValueError, TypeError):
         return 0.0
     return max(-cap, min(cap, score))
 
@@ -333,7 +333,7 @@ def adjust_confidence(confidence: float, volatility: float, threshold: float = 1
     try:
         conf = float(confidence)
         vol = float(volatility)
-    except Exception:
+    except (ValueError, TypeError):
         return 0.0
     factor = 1.0 if vol <= threshold else 1.0 / max(vol, 1e-3)
     return max(0.0, min(1.0, conf * factor))

@@ -91,7 +91,7 @@ class SystemDiagnostic:
         
         try:
             # Use ps to find Python processes
-            result = subprocess.run(['ps', 'aux'], capture_output=True, text=True)
+            result = subprocess.run(['ps', 'aux'], capture_output=True, text=True, timeout=30)
             if result.returncode == 0:
                 lines = result.stdout.split('\n')
                 for line in lines[1:]:  # Skip header
@@ -216,7 +216,7 @@ class SystemDiagnostic:
                     attrs = len(module.__dict__)
                     if attrs > 100:  # Arbitrary threshold for "large"
                         large_modules.append((name, attrs))
-            except:
+            except (AttributeError, ImportError):
                 continue
         
         module_info['trading_modules'] = trading_modules
@@ -389,8 +389,8 @@ class SystemDiagnostic:
 
 def main():
     """Main diagnostic function."""
-    print("AI Trading Bot - System Diagnostic Tool")
-    print("=" * 50)
+    logging.info("AI Trading Bot - System Diagnostic Tool")
+    logging.info(str("=" * 50))
     
     diagnostic = SystemDiagnostic()
     results = diagnostic.run_full_diagnostic()
@@ -399,15 +399,15 @@ def main():
     recommendations = diagnostic.generate_recommendations(results)
     
     # Output results
-    print("\nDIAGNOSTIC RESULTS:")
-    print(json.dumps(results, indent=2))
+    logging.info("\nDIAGNOSTIC RESULTS:")
+    logging.info(str(json.dumps(results, indent=2)))
     
-    print("\nRECOMMENDATIONS:")
+    logging.info("\nRECOMMENDATIONS:")
     for i, rec in enumerate(recommendations, 1):
-        print(f"{i}. {rec}")
+        logging.info(f"{i}. {rec}")
     
     # Save results to file
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
     output_file = f"diagnostic_results_{timestamp}.json"
     
     with open(output_file, 'w') as f:
@@ -416,7 +416,7 @@ def main():
             'recommendations': recommendations
         }, f, indent=2)
     
-    print(f"\nResults saved to: {output_file}")
+    logging.info(f"\nResults saved to: {output_file}")
     
     return results
 

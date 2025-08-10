@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Critical Fix Validation - Type Conversion in Order Fill Reconciliation
 
@@ -47,8 +49,8 @@ class MockContext:
 
 def test_production_scenarios():
     """Test the exact scenarios from production logs."""
-    print("🔄 VALIDATING CRITICAL PRODUCTION FIX")
-    print("=" * 60)
+    logging.info("🔄 VALIDATING CRITICAL PRODUCTION FIX")
+    logging.info(str("=" * 60))
     
     ctx = MockContext()
     engine = ExecutionEngine(ctx)
@@ -63,15 +65,15 @@ def test_production_scenarios():
         ("PLTR", "7", 7, "Order example"),
     ]
     
-    print("Testing production crash scenarios:")
-    print("Before fix: ❌ TypeError on every trade")
-    print("After fix:  ✅ All trades complete successfully")
+    logging.info("Testing production crash scenarios:")
+    logging.info("Before fix: ❌ TypeError on every trade")
+    logging.info("After fix:  ✅ All trades complete successfully")
     print()
     
     all_passed = True
     
     for symbol, filled_qty_str, expected_qty, description in scenarios:
-        print(f"🔍 {symbol}: {description}")
+        logging.info(f"🔍 {symbol}: {description}")
         
         # Create order with STRING filled_qty (the production issue)
         order = MockOrder(filled_qty=filled_qty_str)
@@ -85,19 +87,19 @@ def test_production_scenarios():
                 side="buy",
                 last_order=order
             )
-            print(f"   ✅ SUCCESS: String '{filled_qty_str}' → int {expected_qty}")
+            logging.info(str(f"   ✅ SUCCESS: String '{filled_qty_str}' → int {expected_qty}"))
             
         except TypeError as e:
             if "'>' not supported between instances of 'str' and 'int'" in str(e):
-                print(f"   ❌ FAILED: TypeError still occurs - {e}")
+                logging.info(f"   ❌ FAILED: TypeError still occurs - {e}")
                 all_passed = False
             else:
                 raise
         except Exception as e:
-            print(f"   ⚠️  Other exception (acceptable): {type(e).__name__}")
+            logging.info(f"   ⚠️  Other exception (acceptable): {type(e).__name__}")
     
     print()
-    print("🧪 TESTING EDGE CASES:")
+    logging.info("🧪 TESTING EDGE CASES:")
     
     edge_cases = [
         ("", "empty string"),
@@ -112,32 +114,32 @@ def test_production_scenarios():
         order = MockOrder(filled_qty=value)
         try:
             engine._reconcile_partial_fills("TEST", 100, 50, "buy", order)
-            print(f"   ✅ {description}: handled gracefully")
+            logging.info(f"   ✅ {description}: handled gracefully")
         except TypeError as e:
             if "'>' not supported between instances of 'str' and 'int'" in str(e):
-                print(f"   ❌ {description}: TypeError still occurs")
+                logging.info(f"   ❌ {description}: TypeError still occurs")
                 all_passed = False
             else:
                 raise
         except Exception:
-            print(f"   ✅ {description}: handled gracefully")
+            logging.info(f"   ✅ {description}: handled gracefully")
     
     print()
-    print("=" * 60)
+    logging.info(str("=" * 60))
     
     if all_passed:
-        print("🎉 ALL TESTS PASSED - CRITICAL FIX VALIDATED")
+        logging.info("🎉 ALL TESTS PASSED - CRITICAL FIX VALIDATED")
         print()
-        print("✅ Production Issue RESOLVED:")
-        print("   - No more TypeError crashes during trade reconciliation")
-        print("   - String filled_qty values are safely converted to integers")
-        print("   - Invalid values fall back to calculated quantities")
-        print("   - Proper logging for type conversion failures")
+        logging.info("✅ Production Issue RESOLVED:")
+        logging.info("   - No more TypeError crashes during trade reconciliation")
+        logging.info("   - String filled_qty values are safely converted to integers")
+        logging.info("   - Invalid values fall back to calculated quantities")
+        logging.info("   - Proper logging for type conversion failures")
         print()
-        print("🚀 READY FOR PRODUCTION DEPLOYMENT")
+        logging.info("🚀 READY FOR PRODUCTION DEPLOYMENT")
         return True
     else:
-        print("❌ SOME TESTS FAILED - FIX NEEDS REVIEW")
+        logging.info("❌ SOME TESTS FAILED - FIX NEEDS REVIEW")
         return False
 
 if __name__ == "__main__":

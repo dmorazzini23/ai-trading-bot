@@ -1,11 +1,15 @@
 # Core dependencies with graceful error handling
+import logging
+
+logger = logging.getLogger(__name__)
+
 try:
     import numpy as np
 except ImportError:
-    print("WARNING: numpy not available in pipeline.py")
+    logger.warning("numpy not available in pipeline.py")
     np = None
 
-import config
+from ai_trading import config
 
 # ML dependencies with graceful error handling
 try:
@@ -17,7 +21,7 @@ except ImportError:
     class TransformerMixin:
         pass
     
-    print("WARNING: sklearn not available, using basic object inheritance")
+    logger.warning("sklearn not available, using basic object inheritance")
 
 try:
     from sklearn.linear_model import SGDRegressor

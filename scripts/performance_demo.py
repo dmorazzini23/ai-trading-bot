@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Performance Optimization Summary and Demo
 Demonstrates all implemented performance improvements for the AI Trading Bot.
@@ -10,15 +12,15 @@ from datetime import datetime, timezone
 
 def print_header(title):
     """Print a formatted header."""
-    print(f"\n{'='*60}")
-    print(f"  {title}")
-    print(f"{'='*60}")
+    logging.info(str(f"\n{'='*60}"))
+    logging.info(f"  {title}")
+    logging.info(str(f"{'='*60}"))
 
 def print_section(title):
     """Print a formatted section header."""
-    print(f"\n{'-'*40}")
-    print(f"  {title}")
-    print(f"{'-'*40}")
+    logging.info(str(f"\n{'-'*40}"))
+    logging.info(f"  {title}")
+    logging.info(str(f"{'-'*40}"))
 
 def demo_system_diagnostic():
     """Demonstrate system diagnostic capabilities."""
@@ -30,24 +32,24 @@ def demo_system_diagnostic():
         diagnostic = SystemDiagnostic()
         results = diagnostic.run_full_diagnostic()
         
-        print(f"✓ System diagnostic completed in {results['diagnostic_runtime_seconds']:.2f}s")
-        print(f"  - Memory usage: {results['memory_analysis']['system_memory']['usage_percent']:.1f}%")
-        print(f"  - Swap usage: {results['memory_analysis']['system_memory']['swap_used_mb']:.1f}MB")
-        print(f"  - Total objects: {results['garbage_collection']['object_counts']['total_objects']:,}")
-        print(f"  - Open file descriptors: {results['file_handles']['open_file_descriptors']}")
-        print(f"  - Active threads: {results['thread_analysis']['active_threads']}")
+        logging.info(str(f"✓ System diagnostic completed in {results['diagnostic_runtime_seconds']:.2f}s"))
+        logging.info(str(f"  - Memory usage: {results['memory_analysis']['system_memory']['usage_percent']:.1f}%"))
+        logging.info(str(f"  - Swap usage: {results['memory_analysis']['system_memory']['swap_used_mb']:.1f}MB"))
+        logging.info(str(f"  - Total objects: {results['garbage_collection']['object_counts']['total_objects']:,}"))
+        logging.info(str(f"  - Open file descriptors: {results['file_handles']['open_file_descriptors']}"))
+        logging.info(str(f"  - Active threads: {results['thread_analysis']['active_threads']}"))
         
         # Generate recommendations
         recommendations = diagnostic.generate_recommendations(results)
         if recommendations:
-            print(f"  - Recommendations: {len(recommendations)} items")
+            logging.info(f"  - Recommendations: {len(recommendations)} items")
             for rec in recommendations[:2]:  # Show first 2
-                print(f"    • {rec[:80]}...")
+                logging.info(f"    • {rec[:80]}...")
         else:
-            print("  - No performance recommendations needed ✓")
+            logging.info("  - No performance recommendations needed ✓")
             
     except Exception as e:
-        print(f"✗ System diagnostic error: {e}")
+        logging.info(f"✗ System diagnostic error: {e}")
 
 def demo_memory_optimizer():
     """Demonstrate memory optimization capabilities."""
@@ -61,28 +63,28 @@ def demo_memory_optimizer():
         
         # Get initial memory stats
         initial_memory = optimizer.get_memory_usage()
-        print(f"✓ Initial memory: {initial_memory['rss_mb']:.2f}MB")
-        print(f"  - Total objects: {initial_memory['total_objects']:,}")
-        print(f"  - GC thresholds: {initial_memory['gc_threshold']}")
+        logging.info(str(f"✓ Initial memory: {initial_memory['rss_mb']:.2f}MB"))
+        logging.info(str(f"  - Total objects: {initial_memory['total_objects']:,}"))
+        logging.info(str(f"  - GC thresholds: {initial_memory['gc_threshold']}"))
         
         # Force garbage collection
         gc_result = optimizer.force_garbage_collection()
-        print(f"✓ Garbage collection: {gc_result['objects_collected']} objects collected")
-        print(f"  - Collection time: {gc_result['collection_time_ms']:.2f}ms")
+        logging.info(str(f"✓ Garbage collection: {gc_result['objects_collected']} objects collected"))
+        logging.info(str(f"  - Collection time: {gc_result['collection_time_ms']:.2f}ms"))
         
         # Show memory after GC
         final_memory = optimizer.get_memory_usage()
-        print(f"✓ Final memory: {final_memory['rss_mb']:.2f}MB")
-        print(f"  - Objects reduced by: {initial_memory['total_objects'] - final_memory['total_objects']:,}")
+        logging.info(str(f"✓ Final memory: {final_memory['rss_mb']:.2f}MB"))
+        logging.info(str(f"  - Objects reduced by: {initial_memory['total_objects'] - final_memory['total_objects']:,}"))
         
         # Show top object types
         top_objects = final_memory['top_object_types']
-        print("  - Top object types:")
+        logging.info("  - Top object types:")
         for obj_type, count in list(top_objects.items())[:3]:
-            print(f"    • {obj_type}: {count:,}")
+            logging.info(f"    • {obj_type}: {count:,}")
             
     except Exception as e:
-        print(f"✗ Memory optimizer error: {e}")
+        logging.info(f"✗ Memory optimizer error: {e}")
 
 def demo_performance_monitor():
     """Demonstrate performance monitoring capabilities."""
@@ -95,40 +97,40 @@ def demo_performance_monitor():
         
         # Collect system metrics
         metrics = monitor.get_system_metrics()
-        print(f"✓ Metrics collection time: {metrics['collection_time_ms']:.1f}ms")
+        logging.info(str(f"✓ Metrics collection time: {metrics['collection_time_ms']:.1f}ms"))
         
         # Show memory metrics
         if 'memory' in metrics:
             mem = metrics['memory']
-            print(f"  - Memory usage: {mem.get('usage_percent', 0):.1f}%")
-            print(f"  - Available memory: {mem.get('available_mb', 0):.1f}MB")
-            print(f"  - Swap usage: {mem.get('swap_used_mb', 0):.1f}MB")
+            logging.info(str(f"  - Memory usage: {mem.get('usage_percent', 0)):.1f}%")
+            logging.info(str(f"  - Available memory: {mem.get('available_mb', 0)):.1f}MB")
+            logging.info(str(f"  - Swap usage: {mem.get('swap_used_mb', 0)):.1f}MB")
         
         # Show CPU metrics
         if 'cpu' in metrics:
             cpu = metrics['cpu']
-            print(f"  - CPU usage: {cpu.get('usage_percent', 0):.1f}%")
-            print(f"  - Load average: {cpu.get('load_1min', 0):.2f}")
+            logging.info(str(f"  - CPU usage: {cpu.get('usage_percent', 0)):.1f}%")
+            logging.info(str(f"  - Load average: {cpu.get('load_1min', 0)):.2f}")
         
         # Show process metrics
         if 'process' in metrics:
             proc = metrics['process']
-            print(f"  - Process memory: {proc.get('memory_mb', 0):.1f}MB")
-            print(f"  - File descriptors: {proc.get('file_descriptors', 0)}")
-            print(f"  - Thread count: {proc.get('thread_count', 0)}")
-            print(f"  - Python processes: {proc.get('python_processes', 0)}")
+            logging.info(str(f"  - Process memory: {proc.get('memory_mb', 0)):.1f}MB")
+            logging.info(str(f"  - File descriptors: {proc.get('file_descriptors', 0))}")
+            logging.info(str(f"  - Thread count: {proc.get('thread_count', 0))}")
+            logging.info(str(f"  - Python processes: {proc.get('python_processes', 0))}")
         
         # Check for alerts
         alerts = monitor.check_alert_conditions(metrics)
         if alerts:
-            print(f"  - Alerts generated: {len(alerts)}")
+            logging.info(f"  - Alerts generated: {len(alerts)}")
             for alert in alerts[:2]:
-                print(f"    • {alert['type']}: {alert['message']}")
+                logging.info(str(f"    • {alert['type']}: {alert['message']}"))
         else:
-            print("  - No alerts (system healthy) ✓")
+            logging.info("  - No alerts (system healthy) ✓")
             
     except Exception as e:
-        print(f"✗ Performance monitor error: {e}")
+        logging.info(f"✗ Performance monitor error: {e}")
 
 def demo_process_manager():
     """Demonstrate process management capabilities."""
@@ -141,23 +143,23 @@ def demo_process_manager():
         
         # Find Python processes
         processes = manager.find_python_processes()
-        print(f"✓ Found {len(processes)} trading-related Python processes")
+        logging.info(f"✓ Found {len(processes)} trading-related Python processes")
         
         if processes:
             total_memory = sum(p['memory_mb'] for p in processes)
-            print(f"  - Total memory usage: {total_memory:.1f}MB")
+            logging.info(f"  - Total memory usage: {total_memory:.1f}MB")
             
             max_memory_proc = max(processes, key=lambda p: p['memory_mb'])
-            print(f"  - Highest memory process: {max_memory_proc['memory_mb']:.1f}MB")
-            print(f"    Command: {max_memory_proc['command'][:60]}...")
+            logging.info(str(f"  - Highest memory process: {max_memory_proc['memory_mb']:.1f}MB"))
+            logging.info(str(f"    Command: {max_memory_proc['command'][:60]}..."))
         
         # Check for duplicates
         duplicates = manager.find_duplicate_processes()
         if duplicates:
-            print(f"  - Duplicate processes: {len(duplicates)} found")
-            print("    ⚠ Consider running cleanup")
+            logging.info(f"  - Duplicate processes: {len(duplicates)} found")
+            logging.info("    ⚠ Consider running cleanup")
         else:
-            print("  - No duplicate processes ✓")
+            logging.info("  - No duplicate processes ✓")
         
         # Check service status
         service_status = manager.check_service_status()
@@ -165,14 +167,14 @@ def demo_process_manager():
                           if not info.get('active', False)]
         
         if failed_services:
-            print(f"  - Failed services: {len(failed_services)}")
+            logging.info(f"  - Failed services: {len(failed_services)}")
             for service in failed_services[:2]:
-                print(f"    • {service}")
+                logging.info(f"    • {service}")
         else:
-            print("  - All services healthy ✓")
+            logging.info("  - All services healthy ✓")
             
     except Exception as e:
-        print(f"✗ Process manager error: {e}")
+        logging.info(f"✗ Process manager error: {e}")
 
 def demo_integration():
     """Demonstrate integration with trading code."""
@@ -180,60 +182,60 @@ def demo_integration():
     
     try:
         # Test memory optimization integration in bot_engine
-        print("Checking bot_engine.py integration:")
+        logging.info("Checking bot_engine.py integration:")
         with open('bot_engine.py', 'r') as f:
             content = f.read()
             
         if 'MEMORY_OPTIMIZATION_AVAILABLE' in content:
-            print("  ✓ Memory optimization integrated")
+            logging.info("  ✓ Memory optimization integrated")
         if '@memory_profile' in content:
-            print("  ✓ Memory profiling decorators added")
+            logging.info("  ✓ Memory profiling decorators added")
         if 'optimize_memory()' in content:
-            print("  ✓ Periodic memory cleanup added")
+            logging.info("  ✓ Periodic memory cleanup added")
         
         # Test performance monitoring integration in ai_trading/main.py
-        print("Checking ai_trading/main.py integration:")
+        logging.info("Checking ai_trading/main.py integration:")
         with open('ai_trading/main.py', 'r') as f:
             content = f.read()
             
         if 'PERFORMANCE_MONITORING_AVAILABLE' in content:
-            print("  ✓ Performance monitoring integrated")
+            logging.info("  ✓ Performance monitoring integrated")
         if 'start_performance_monitoring' in content:
-            print("  ✓ Monitoring startup added")
+            logging.info("  ✓ Monitoring startup added")
         if 'memory_check_interval' in content:
-            print("  ✓ Periodic memory checks added")
+            logging.info("  ✓ Periodic memory checks added")
             
     except Exception as e:
-        print(f"✗ Integration check error: {e}")
+        logging.info(f"✗ Integration check error: {e}")
 
 def demo_startup_optimization():
     """Demonstrate startup optimization."""
     print_section("Startup Optimization")
     
     try:
-        print("Optimized startup script features:")
-        print("  ✓ Environment variable optimization")
-        print("  ✓ Garbage collection tuning (500, 8, 8)")
-        print("  ✓ Signal handlers for graceful shutdown")
-        print("  ✓ Pre-startup health checks")
-        print("  ✓ Duplicate process cleanup")
-        print("  ✓ Automatic monitoring activation")
-        print("  ✓ Emergency cleanup on exit")
+        logging.info("Optimized startup script features:")
+        logging.info("  ✓ Environment variable optimization")
+        logging.info("  ✓ Garbage collection tuning (500, 8, 8)")
+        logging.info("  ✓ Signal handlers for graceful shutdown")
+        logging.info("  ✓ Pre-startup health checks")
+        logging.info("  ✓ Duplicate process cleanup")
+        logging.info("  ✓ Automatic monitoring activation")
+        logging.info("  ✓ Emergency cleanup on exit")
         
         # Check if startup script exists
         if os.path.exists('optimized_startup.py'):
-            print("  ✓ Optimized startup script ready")
+            logging.info("  ✓ Optimized startup script ready")
         else:
-            print("  ✗ Startup script not found")
+            logging.info("  ✗ Startup script not found")
             
     except Exception as e:
-        print(f"✗ Startup optimization error: {e}")
+        logging.info(f"✗ Startup optimization error: {e}")
 
 def main():
     """Main demo function."""
     print_header("AI Trading Bot - Performance Optimization Demo")
-    print(f"Demo time: {datetime.now(timezone.utc).isoformat()}")
-    print(f"Python version: {sys.version}")
+    logging.info(f"Demo time: {datetime.now(timezone.utc).isoformat()}")
+    logging.info(f"Python version: {sys.version}")
     
     # Run all demonstrations
     demo_system_diagnostic()
@@ -258,19 +260,19 @@ def main():
         "Environment optimization for maximum performance"
     ]
     
-    print("Implemented optimizations:")
+    logging.info("Implemented optimizations:")
     for i, improvement in enumerate(improvements, 1):
-        print(f"  {i:2d}. {improvement}")
+        logging.info(f"  {i:2d}. {improvement}")
     
-    print("\nRecommended usage:")
-    print("  • Use 'python optimized_startup.py' for production")
-    print("  • Run 'python system_diagnostic.py' for health checks")
-    print("  • Use 'python process_manager.py' for process cleanup")
-    print("  • Monitor performance with built-in monitoring system")
+    logging.info("\nRecommended usage:")
+    logging.info(str("  • Use 'python optimized_startup.py' for production"))
+    logging.info(str("  • Run 'python system_diagnostic.py' for health checks"))
+    logging.info(str("  • Use 'python process_manager.py' for process cleanup"))
+    logging.info("  • Monitor performance with built-in monitoring system")
     
-    print(f"\n{'='*60}")
-    print("  Performance optimization implementation complete!")
-    print(f"{'='*60}")
+    logging.info(str(f"\n{'='*60}"))
+    logging.info("  Performance optimization implementation complete!")
+    logging.info(str(f"{'='*60}"))
 
 if __name__ == "__main__":
     main()
