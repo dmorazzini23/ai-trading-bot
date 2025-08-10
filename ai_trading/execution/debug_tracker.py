@@ -199,7 +199,7 @@ class ExecutionDebugTracker:
                           ExecutionPhase.ORDER_FILLED, ExecutionPhase.ORDER_REJECTED]:
                 # Log only key phases in normal mode (but not if already logged in verbose mode)
                 self.logger.info(f"EXEC_EVENT_{phase.value.upper()}", extra=log_data)
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
             # AI-AGENT-REF: Prevent logging errors from cascading
             pass  # Silently ignore logging errors to prevent deadlock
     
@@ -257,7 +257,7 @@ class ExecutionDebugTracker:
                     'correlation_id': correlation_id,
                     'message': 'Attempted to log result for unknown correlation ID'
                 })
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
             # AI-AGENT-REF: Prevent logging errors from cascading
             pass
     

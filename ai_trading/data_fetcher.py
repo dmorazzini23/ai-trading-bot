@@ -99,7 +99,7 @@ def get_session():
             if _session is not None:
                 try:
                     _session.close()
-                except Exception:
+                except (AttributeError, RuntimeError):
                     # Ignore session cleanup errors during error handling
                     pass
                 _session = None
@@ -848,8 +848,9 @@ def get_daily_df(
             if settings.data_cache_disk_enable:
                 try:
                     mcache.put_disk(settings.data_cache_dir, symbol, tf_name, start_s, end_s, df)
-                except Exception:
-                    pass
+                except (OSError, PermissionError, ValueError) as e:
+                    logger.warning(f"Failed to cache data for {symbol}: {e}")
+                    # Continue execution - caching is not critical
         return df
     except KeyError:
         logger.warning(
@@ -1439,7 +1440,8 @@ def get_bars_batch(
         t0 = time.perf_counter()
         try:
             df = _DATA_CLIENT.get_stock_bars(req).df  # multi-indexed by (symbol, timestamp)
-        except Exception:
+        except (AttributeError, ValueError, KeyError, ConnectionError, TimeoutError) as e:
+            logger.warning(f"Primary data fetch failed, falling back to IEX: {e}")
             # Fall back to IEX in one more batched attempt
             try:
                 alt = StockBarsRequest(
@@ -1465,7 +1467,7 @@ def get_bars_batch(
             for sym in to_fetch:
                 try:
                     sub = df.xs(sym, level=0) if hasattr(df.index, "levels") else df[df["symbol"] == sym]
-                except Exception:
+                except (KeyError, ValueError):
                     continue
                 sub = _normalize_df(sub)
                 results[sym] = sub
@@ -1474,9 +1476,10 @@ def get_bars_batch(
                     if settings.data_cache_disk_enable:
                         try:
                             mcache.put_disk(settings.data_cache_dir, sym, tf_name, start_s, end_s, sub)
-                        except Exception:
-                            pass
-        except Exception:
+                        except (OSError, PermissionError, ValueError) as e:
+                            logger.warning(f"Failed to cache data for {sym}: {e}")
+                            # Continue execution - caching is not critical
+        except (AttributeError, KeyError, ValueError):
             # If the structure is not multi-indexed by symbol, quietly return what we can
             logger.warning("Unexpected batch frame structure; partial results returned")
     except ImportError:
@@ -1486,7 +1489,8 @@ def get_bars_batch(
                 df = get_daily_df(sym, start, end)
                 if df is not None and not df.empty:
                     results[sym] = df
-            except Exception:
+            except (ValueError, KeyError, AttributeError, ConnectionError) as e:
+                logger.warning(f"Failed to fetch data for {sym}: {e}")
                 continue
     return results
 

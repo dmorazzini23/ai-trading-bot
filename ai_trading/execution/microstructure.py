@@ -241,7 +241,7 @@ class BidAskSpreadAnalyzer:
             quality_score = spread_score * 0.5 + depth_score * 0.3 + imbalance_score * 0.2
             return max(0, min(1, quality_score))
             
-        except Exception:
+        except (ValueError, TypeError, ZeroDivisionError):
             return 0.5
 
 
