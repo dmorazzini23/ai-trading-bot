@@ -382,7 +382,8 @@ class TaxAwareRebalancer:
 
             return max(0, base_score - gain_magnitude_penalty)
 
-        except (KeyError, ValueError, TypeError, ZeroDivisionError):
+        except (KeyError, ValueError, TypeError, ZeroDivisionError) as e:
+            logger.exception(f"Error calculating tax efficiency score: {e}")
             return 0.5
 
     def _calculate_harvest_priority(
@@ -406,7 +407,8 @@ class TaxAwareRebalancer:
 
             return base_score + loss_bonus - recency_penalty
 
-        except (KeyError, ValueError, TypeError, ZeroDivisionError):
+        except (KeyError, ValueError, TypeError, ZeroDivisionError) as e:
+            logger.exception(f"Error calculating harvest priority: {e}")
             return 0
 
     def _calculate_rebalance_priority(
@@ -426,7 +428,8 @@ class TaxAwareRebalancer:
 
             return deviation_score - tax_penalty + timing_bonus
 
-        except (KeyError, ValueError, TypeError, ZeroDivisionError):
+        except (KeyError, ValueError, TypeError, ZeroDivisionError) as e:
+            logger.exception(f"Error calculating rebalance priority: {e}")
             return 0
 
     def _calculate_portfolio_drift(
@@ -446,7 +449,8 @@ class TaxAwareRebalancer:
 
             return total_drift / 2  # Normalize (sum of absolute differences / 2)
 
-        except (KeyError, ValueError, TypeError, ZeroDivisionError):
+        except (KeyError, ValueError, TypeError, ZeroDivisionError) as e:
+            logger.exception(f"Error calculating portfolio drift: {e}")
             return 0
 
     def _calculate_overall_tax_efficiency(self, rebalance_trades: list[dict]) -> float:
@@ -474,7 +478,8 @@ class TaxAwareRebalancer:
 
             return sum(efficiency_scores) / len(efficiency_scores)
 
-        except (KeyError, ValueError, TypeError, ZeroDivisionError):
+        except (KeyError, ValueError, TypeError, ZeroDivisionError) as e:
+            logger.exception(f"Error calculating overall tax efficiency: {e}")
             return 0.5
 
     def _generate_rebalance_recommendations(

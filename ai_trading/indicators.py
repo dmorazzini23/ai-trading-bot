@@ -49,7 +49,11 @@ except ImportError:
 
     pd = MockPandas()
 
+import logging
 from functools import lru_cache
+from typing import Any
+
+logger = logging.getLogger(__name__)
 
 try:
     from numba import jit
@@ -61,8 +65,6 @@ except ImportError:
 
         return decorator
 
-
-from typing import Any
 
 _INDICATOR_CACHE: dict[tuple[str, Any], Any] = {}
 
@@ -170,7 +172,8 @@ def ema(series: tuple[float, ...], period: int) -> pd.Series:
             raise ValueError("Input series contains only NaN values")
 
         return s.ewm(span=period, adjust=False).mean()
-    except (KeyError, ValueError, TypeError, AttributeError):
+    except (KeyError, ValueError, TypeError, AttributeError) as e:
+        logger.exception(f"Error calculating EMA: {e}")
         # Return empty Series on error
         return pd.Series(dtype=float)
 
