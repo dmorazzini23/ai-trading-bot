@@ -97,15 +97,7 @@ from ai_trading.utils.timefmt import (
 )
 
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
-try:
-    from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
-except ImportError as e:
-    # Fallback if circuit breaker module not available
-    # AI-AGENT-REF: Log circuit breaker import failure with context
-    DrawdownCircuitBreaker = None
-    logger.warning(
-        f"DrawdownCircuitBreaker not available - drawdown protection disabled: {e}"
-    )
+from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
 # AI-AGENT-REF: Import circuit breaker for external service resilience
 try:
     from circuit_breaker import (
