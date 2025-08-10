@@ -1,5 +1,0 @@
-symbol,entry_time,entry_price,exit_time,exit_price,qty,side,strategy,classification,signal_tags,price,regime
-b563f991-5fd4-4417-ab91-da3204b142eb,2025-08-05T16:44:03.951050+00:00,QQQ,buy,5,561.06,,"{'status': <OrderStatus.FILLED: 'filled'>, 'mode': 'LIVE'}",
-QQQ,2025-08-05T16:44:04.023836+00:00,561.02,,,11,buy,momentum+mean_reversion+sentiment+regime+stochrsi+obv+vsa,,momentum+mean_reversion+sentiment+regime+stochrsi+obv+vsa,3.070199773573257,
-62f1d529-4afa-4551-9a5a-6db6e3012389,2025-08-05T16:44:13.944583+00:00,SPY,buy,4,628.56,,"{'status': <OrderStatus.FILLED: 'filled'>, 'mode': 'LIVE'}",
-SPY,2025-08-05T16:44:14.016182+00:00,628.545,,,9,buy,momentum+mean_reversion+sentiment+regime+stochrsi+obv+vsa,,momentum+mean_reversion+sentiment+regime+stochrsi+obv+vsa,2.7201927233839633,
