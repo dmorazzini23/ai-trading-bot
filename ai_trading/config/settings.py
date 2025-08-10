@@ -74,7 +74,6 @@ class Settings(BaseSettings):
     sentiment_api_url: str = Field(
         "https://newsapi.org/v2/everything", env="SENTIMENT_API_URL"
     )
-    finnhub_api_key: str | None = Field(None, env="FINNHUB_API_KEY")
     bot_mode: str = Field("balanced", env="BOT_MODE")
     bot_log_dir: str = Field("logs", env="BOT_LOG_DIR")
     api_port: int = Field(9001, env="API_PORT")
