@@ -729,6 +729,27 @@ if data_quality_score < 0.8:
 
 ## 📝 Logging & Monitoring
 
+The system uses a **centralized logging architecture** to prevent duplicate log entries and ensure consistent formatting:
+
+### Centralized Logging System
+- **Single Point of Configuration**: All logging is managed through `ai_trading.logging` module
+- **No Duplicate Entries**: Thread-safe setup prevents multiple logging initializations
+- **JSON Structured Logs**: Consistent format for monitoring and analysis
+- **Automatic Log Rotation**: Size-based rotation with configurable retention
+
+### Usage
+```python
+# Correct way - use centralized logging
+from ai_trading.logging import get_logger, setup_logging
+
+# Initialize logging (only needed once at application startup)
+setup_logging(debug=True, log_file="logs/bot.log")
+
+# Get named logger for your module
+logger = get_logger(__name__)
+logger.info("Trade executed successfully")
+```
+
 ### Log Structure
 
 ```
@@ -1123,7 +1144,16 @@ memory_usage = Gauge('memory_usage_bytes', 'Current memory usage')
 2. **Add comprehensive tests** for new features
 3. **Update documentation** for API changes
 4. **Use type hints** throughout the codebase
-5. **Follow the existing logging patterns**
+5. **Follow the centralized logging patterns**
+   ```python
+   # ✅ Correct - use centralized logging
+   from ai_trading.logging import get_logger
+   logger = get_logger(__name__)
+   
+   # ❌ Avoid - direct logging imports in new code
+   import logging
+   logging.basicConfig(...)  # Don't do this
+   ```
 
 ### Code Quality Standards
 
