@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Script to complete the short selling logic fix by updating the specific lines
 that couldn't be updated with str_replace due to duplicates.
@@ -26,7 +28,7 @@ def patch_short_selling_logic():
             lines[i+8] = '            else:\n'
             lines[i+9] = '                self.logger.info("SKIP_NO_POSITION | no shares to sell, skipping")\n'
             lines[i+10] = '                return None\n'
-            print(f"Updated sync execute_order at line {i+1}")
+            logging.info(f"Updated sync execute_order at line {i+1}")
             break
     
     # Find and update the second occurrence (async execute_order_async)
@@ -43,14 +45,14 @@ def patch_short_selling_logic():
             lines[i+8] = '            else:\n'
             lines[i+9] = '                self.logger.info("SKIP_NO_POSITION | no shares to sell, skipping")\n'
             lines[i+10] = '                return None\n'
-            print(f"Updated async execute_order_async at line {i+1}")
+            logging.info(f"Updated async execute_order_async at line {i+1}")
             break
     
     # Write the updated file
     with open('trade_execution.py', 'w') as f:
         f.writelines(lines)
     
-    print("Short selling logic patches applied successfully!")
+    logging.info("Short selling logic patches applied successfully!")
 
 if __name__ == '__main__':
     patch_short_selling_logic()

@@ -351,7 +351,7 @@ class ResourceMonitor:
         
         try:
             # Check for established connections
-            result = subprocess.run(['netstat', '-tn'], 
+            result = subprocess.run(timeout=30, ['netstat', '-tn'], 
                                   capture_output=True, text=True)
             if result.returncode == 0:
                 lines = result.stdout.split('\n')
@@ -650,23 +650,23 @@ if __name__ == "__main__":
     # Test the performance monitor
     monitor = ResourceMonitor(monitoring_interval=5)
     
-    print("Performance Monitor Test")
-    print("=" * 30)
+    logging.info("Performance Monitor Test")
+    logging.info(str("=" * 30))
     
     # Get system metrics
     metrics = monitor.get_system_metrics()
-    print(f"Collected metrics in {metrics['collection_time_ms']:.2f}ms")
+    logging.info(str(f"Collected metrics in {metrics['collection_time_ms']:.2f}ms"))
     
     # Check for alerts
     alerts = monitor.check_alert_conditions(metrics)
-    print(f"Generated {len(alerts)} alerts")
+    logging.info(f"Generated {len(alerts)} alerts")
     
     # Print summary
     if 'memory' in metrics:
-        print(f"Memory usage: {metrics['memory'].get('usage_percent', 0):.1f}%")
+        logging.info(str(f"Memory usage: {metrics['memory'].get('usage_percent', 0)):.1f}%")
     if 'cpu' in metrics:
-        print(f"CPU usage: {metrics['cpu'].get('usage_percent', 0):.1f}%")
+        logging.info(str(f"CPU usage: {metrics['cpu'].get('usage_percent', 0)):.1f}%")
     
     # Generate report
     report = monitor.get_performance_report()
-    print(f"Performance report generated with status: {report.get('status', 'ok')}")
+    logging.info(str(f"Performance report generated with status: {report.get('status', 'ok'))}")

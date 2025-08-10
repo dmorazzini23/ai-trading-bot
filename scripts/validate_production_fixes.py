@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Quick validation script to demonstrate critical production fixes.
 
@@ -11,12 +13,12 @@ from datetime import datetime
 
 def validate_sentiment_api_config():
     """Validate sentiment API configuration is properly set up."""
-    print("🔍 Validating Sentiment API Configuration...")
+    logging.info("🔍 Validating Sentiment API Configuration...")
     
     # Check .env file
     env_file_path = '.env'
     if not os.path.exists(env_file_path):
-        print("❌ .env file not found")
+        logging.info("❌ .env file not found")
         return False
     
     with open(env_file_path, 'r') as f:
@@ -30,10 +32,10 @@ def validate_sentiment_api_config():
             missing_vars.append(var)
     
     if missing_vars:
-        print(f"❌ Missing environment variables: {missing_vars}")
+        logging.info(f"❌ Missing environment variables: {missing_vars}")
         return False
     
-    print("✅ All sentiment API environment variables present in .env")
+    logging.info("✅ All sentiment API environment variables present in .env")
     
     # Check config.py has the new variables
     try:
@@ -41,12 +43,12 @@ def validate_sentiment_api_config():
             config_content = f.read()
         
         if 'SENTIMENT_API_KEY' in config_content and 'SENTIMENT_API_URL' in config_content:
-            print("✅ Sentiment API variables added to config.py")
+            logging.info("✅ Sentiment API variables added to config.py")
         else:
-            print("❌ Sentiment API variables missing from config.py")
+            logging.info("❌ Sentiment API variables missing from config.py")
             return False
     except Exception as e:
-        print(f"❌ Error checking config.py: {e}")
+        logging.info(f"❌ Error checking config.py: {e}")
         return False
     
     return True
@@ -54,7 +56,7 @@ def validate_sentiment_api_config():
 
 def validate_process_detection():
     """Validate improved process detection logic."""
-    print("\n🔍 Validating Process Detection Improvements...")
+    logging.info("\n🔍 Validating Process Detection Improvements...")
     
     try:
         from performance_monitor import ResourceMonitor
@@ -63,17 +65,17 @@ def validate_process_detection():
         
         # Check if new method exists
         if not hasattr(monitor, '_count_trading_bot_processes'):
-            print("❌ New _count_trading_bot_processes method not found")
+            logging.info("❌ New _count_trading_bot_processes method not found")
             return False
         
-        print("✅ Enhanced process detection method exists")
+        logging.info("✅ Enhanced process detection method exists")
         
         # Test the method
         try:
             count = monitor._count_trading_bot_processes()
-            print(f"✅ Process detection works, found {count} trading bot processes")
+            logging.info(f"✅ Process detection works, found {count} trading bot processes")
         except Exception as e:
-            print(f"⚠️  Process detection method exists but failed to run: {e}")
+            logging.info(f"⚠️  Process detection method exists but failed to run: {e}")
             # This is not a failure in test environment
         
         # Check alert logic
@@ -85,21 +87,21 @@ def validate_process_detection():
         if process_alerts:
             alert = process_alerts[0]
             if alert.get('threshold', 1) == 2:
-                print("✅ Alert threshold correctly set to 2 (allowing main + backup)")
+                logging.info("✅ Alert threshold correctly set to 2 (allowing main + backup)")
             else:
-                print(f"❌ Alert threshold is {alert.get('threshold')}, should be 2")
+                logging.info(str(f"❌ Alert threshold is {alert.get('threshold'))}, should be 2")
                 return False
         
         return True
         
     except ImportError as e:
-        print(f"❌ Could not import performance_monitor: {e}")
+        logging.info(f"❌ Could not import performance_monitor: {e}")
         return False
 
 
 def validate_data_staleness():
     """Validate market-aware data staleness detection."""
-    print("\n🔍 Validating Data Staleness Improvements...")
+    logging.info("\n🔍 Validating Data Staleness Improvements...")
     
     try:
         # Check if functions exist in data_validation.py
@@ -114,29 +116,29 @@ def validate_data_staleness():
                 missing_functions.append(func)
         
         if missing_functions:
-            print(f"❌ Missing functions: {missing_functions}")
+            logging.info(f"❌ Missing functions: {missing_functions}")
             return False
         
-        print("✅ Market hours and staleness threshold functions added")
+        logging.info("✅ Market hours and staleness threshold functions added")
         
         # Test basic logic without pandas dependency
-        print("✅ Data validation enhancements properly implemented")
+        logging.info("✅ Data validation enhancements properly implemented")
         
         return True
         
     except Exception as e:
-        print(f"❌ Error validating data staleness: {e}")
+        logging.info(f"❌ Error validating data staleness: {e}")
         return False
 
 
 def validate_environment_debugging():
     """Validate enhanced environment debugging capabilities."""
-    print("\n🔍 Validating Environment Debugging Enhancements...")
+    logging.info("\n🔍 Validating Environment Debugging Enhancements...")
     
     try:
         from validate_env import debug_environment, validate_specific_env_var
         
-        print("✅ Enhanced debugging functions imported successfully")
+        logging.info("✅ Enhanced debugging functions imported successfully")
         
         # Test debug_environment
         debug_report = debug_environment()
@@ -151,29 +153,29 @@ def validate_environment_debugging():
                 missing_fields.append(field)
         
         if missing_fields:
-            print(f"❌ Debug report missing fields: {missing_fields}")
+            logging.info(f"❌ Debug report missing fields: {missing_fields}")
             return False
         
-        print("✅ Debug environment function returns proper structure")
+        logging.info("✅ Debug environment function returns proper structure")
         
         # Test specific variable validation
         result = validate_specific_env_var('TEST_VAR')
         if 'variable' in result and 'status' in result:
-            print("✅ Specific environment variable validation works")
+            logging.info("✅ Specific environment variable validation works")
         else:
-            print("❌ Specific environment variable validation failed")
+            logging.info("❌ Specific environment variable validation failed")
             return False
         
         return True
         
     except ImportError as e:
-        print(f"❌ Could not import enhanced debugging functions: {e}")
+        logging.info(f"❌ Could not import enhanced debugging functions: {e}")
         return False
 
 
 def validate_backwards_compatibility():
     """Validate that all changes maintain backwards compatibility."""
-    print("\n🔍 Validating Backwards Compatibility...")
+    logging.info("\n🔍 Validating Backwards Compatibility...")
     
     try:
         # Test that original modules still import
@@ -182,28 +184,28 @@ def validate_backwards_compatibility():
         for module_name in modules_to_test:
             try:
                 __import__(module_name)
-                print(f"✅ {module_name} imports successfully")
+                logging.info(f"✅ {module_name} imports successfully")
             except ImportError as e:
                 # Allow for missing dependencies like pandas
                 if any(dep in str(e).lower() for dep in ['pandas', 'pydantic', 'pytz']):
-                    print(f"✅ {module_name} import blocked by missing dependencies (expected in test env)")
+                    logging.info(f"✅ {module_name} import blocked by missing dependencies (expected in test env)")
                 else:
-                    print(f"❌ {module_name} import failed: {e}")
+                    logging.info(f"❌ {module_name} import failed: {e}")
                     return False
         
         return True
         
     except Exception as e:
-        print(f"❌ Backwards compatibility check failed: {e}")
+        logging.info(f"❌ Backwards compatibility check failed: {e}")
         return False
 
 
 def main():
     """Run validation for all production fixes."""
-    print("=" * 60)
-    print("AI TRADING BOT - PRODUCTION FIXES VALIDATION")
-    print("=" * 60)
-    print(f"Validation Time: {datetime.now().isoformat()}")
+    logging.info(str("=" * 60))
+    logging.info("AI TRADING BOT - PRODUCTION FIXES VALIDATION")
+    logging.info(str("=" * 60))
+    logging.info(f"Validation Time: {datetime.now(datetime.timezone.utc).isoformat()}")
     
     tests = [
         ("Sentiment API Configuration", validate_sentiment_api_config),
@@ -221,19 +223,19 @@ def main():
             if test_func():
                 passed_tests += 1
             else:
-                print(f"❌ {test_name} validation failed")
+                logging.info(f"❌ {test_name} validation failed")
         except Exception as e:
-            print(f"❌ {test_name} validation error: {e}")
+            logging.info(f"❌ {test_name} validation error: {e}")
     
-    print("\n" + "=" * 60)
-    print(f"VALIDATION SUMMARY: {passed_tests}/{total_tests} tests passed")
+    logging.info(str("\n" + "=" * 60))
+    logging.info(f"VALIDATION SUMMARY: {passed_tests}/{total_tests} tests passed")
     
     if passed_tests == total_tests:
-        print("🎉 ALL PRODUCTION FIXES VALIDATED SUCCESSFULLY!")
-        print("✅ Ready for production deployment")
+        logging.info("🎉 ALL PRODUCTION FIXES VALIDATED SUCCESSFULLY!")
+        logging.info("✅ Ready for production deployment")
         return 0
     else:
-        print("⚠️  Some validations failed - review issues above")
+        logging.info("⚠️  Some validations failed - review issues above")
         return 1
 
 

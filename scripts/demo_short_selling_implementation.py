@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import logging
+
 """
 Simple demonstration of the short selling and order monitoring capabilities.
 This script demonstrates the key features implemented.
@@ -21,7 +23,7 @@ sys.path.insert(0, os.getcwd())
 
 def demonstrate_short_selling():
     """Demonstrate the short selling capability."""
-    print("=== Short Selling Capability Demonstration ===")
+    logging.info("=== Short Selling Capability Demonstration ===")
     
     try:
         from trade_execution import ExecutionEngine
@@ -43,13 +45,13 @@ def demonstrate_short_selling():
         engine = ExecutionEngine(mock_ctx)
         engine.logger = Mock()
         
-        print("✓ ExecutionEngine created successfully")
+        logging.info("✓ ExecutionEngine created successfully")
         
         # Test 1: Verify that regular sell orders are blocked when no position exists
         with patch.object(engine, '_available_qty', return_value=0):
             with patch.object(engine, '_select_api', return_value=mock_api):
                 result = engine.execute_order("AAPL", 10, "sell")
-                print(f"✓ Regular sell order with no position: {result} (correctly blocked)")
+                logging.info(f"✓ Regular sell order with no position: {result} (correctly blocked)")
         
         # Test 2: Verify that sell_short orders bypass position checks
         with patch.object(engine, '_available_qty', return_value=0):
@@ -60,7 +62,7 @@ def demonstrate_short_selling():
                             result = engine.execute_order("AAPL", 10, "sell_short")
                         except Exception:
                             pass  # Expected to stop at liquidity check
-                        print("✓ sell_short order bypassed position checks and reached validation")
+                        logging.info("✓ sell_short order bypassed position checks and reached validation")
         
         # Test 3: Demonstrate order tracking
         mock_order = Mock()
@@ -69,24 +71,24 @@ def demonstrate_short_selling():
         
         engine._track_order(mock_order, "AAPL", "sell_short", 10)
         pending_orders = engine.get_pending_orders()
-        print(f"✓ Order tracking: {len(pending_orders)} orders tracked")
+        logging.info(f"✓ Order tracking: {len(pending_orders)} orders tracked")
         
         # Test 4: Demonstrate status update
         engine._update_order_status("demo_order_123", "filled")
         pending_orders = engine.get_pending_orders()
-        print(f"✓ Status update: {len(pending_orders)} orders remaining after fill")
+        logging.info(f"✓ Status update: {len(pending_orders)} orders remaining after fill")
         
-        print("✓ Short selling implementation working correctly!")
+        logging.info("✓ Short selling implementation working correctly!")
         
     except Exception as e:
-        print(f"✗ Error in short selling demonstration: {e}")
+        logging.info(f"✗ Error in short selling demonstration: {e}")
         return False
     
     return True
 
 def demonstrate_order_monitoring():
     """Demonstrate the order monitoring capability."""
-    print("\n=== Order Monitoring Capability Demonstration ===")
+    logging.info("\n=== Order Monitoring Capability Demonstration ===")
     
     try:
         from trade_execution import ExecutionEngine, _active_orders, _order_tracking_lock
@@ -104,7 +106,7 @@ def demonstrate_order_monitoring():
         mock_order.status = "new"
         
         engine._track_order(mock_order, "MSFT", "buy", 5)
-        print("✓ Order added to tracking system")
+        logging.info("✓ Order added to tracking system")
         
         # Simulate order aging
         current_time = time.time()
@@ -115,20 +117,20 @@ def demonstrate_order_monitoring():
         # Test stale order cleanup
         with patch.object(engine, '_cancel_stale_order', return_value=True) as mock_cancel:
             canceled_count = engine.cleanup_stale_orders(max_age_seconds=600)  # 10 minutes
-            print(f"✓ Stale order cleanup: {canceled_count} orders canceled")
+            logging.info(f"✓ Stale order cleanup: {canceled_count} orders canceled")
             mock_cancel.assert_called_once()
         
-        print("✓ Order monitoring implementation working correctly!")
+        logging.info("✓ Order monitoring implementation working correctly!")
         
     except Exception as e:
-        print(f"✗ Error in order monitoring demonstration: {e}")
+        logging.info(f"✗ Error in order monitoring demonstration: {e}")
         return False
     
     return True
 
 def demonstrate_meta_learning():
     """Demonstrate the meta-learning graceful degradation."""
-    print("\n=== Meta-Learning Graceful Degradation Demonstration ===")
+    logging.info("\n=== Meta-Learning Graceful Degradation Demonstration ===")
     
     try:
         from ai_trading.bot_engine import load_global_signal_performance
@@ -136,41 +138,41 @@ def demonstrate_meta_learning():
         # Test with no trade history (new deployment scenario)
         with patch('os.path.exists', return_value=False):
             result = load_global_signal_performance()
-            print(f"✓ No trade history case: {result} (graceful None return)")
+            logging.info(f"✓ No trade history case: {result} (graceful None return)")
         
         # Test with configurable parameters
         result = load_global_signal_performance(min_trades=1, threshold=0.2)
-        print("✓ Configurable parameters: min_trades=1, threshold=0.2")
+        logging.info("✓ Configurable parameters: min_trades=1, threshold=0.2")
         
-        print("✓ Meta-learning graceful degradation working correctly!")
+        logging.info("✓ Meta-learning graceful degradation working correctly!")
         
     except Exception as e:
-        print(f"✗ Error in meta-learning demonstration: {e}")
+        logging.info(f"✗ Error in meta-learning demonstration: {e}")
         return False
     
     return True
 
 def main():
     """Run all demonstrations."""
-    print("Short Selling and Trading System Fixes - Implementation Demonstration")
-    print("=" * 80)
+    logging.info("Short Selling and Trading System Fixes - Implementation Demonstration")
+    logging.info(str("=" * 80))
     
     results = []
     results.append(demonstrate_short_selling())
     results.append(demonstrate_order_monitoring())
     results.append(demonstrate_meta_learning())
     
-    print("\n" + "=" * 80)
+    logging.info(str("\n" + "=" * 80))
     if all(results):
-        print("🎉 ALL IMPLEMENTATIONS WORKING CORRECTLY!")
-        print("\nKey achievements:")
-        print("✅ Short selling capability with sell_short order type")
-        print("✅ Order status monitoring with timeout and cancellation")
-        print("✅ Meta-learning graceful degradation for new deployments")
-        print("✅ Comprehensive order lifecycle management")
-        print("✅ Configurable meta-learning thresholds")
+        logging.info("🎉 ALL IMPLEMENTATIONS WORKING CORRECTLY!")
+        logging.info("\nKey achievements:")
+        logging.info("✅ Short selling capability with sell_short order type")
+        logging.info("✅ Order status monitoring with timeout and cancellation")
+        logging.info("✅ Meta-learning graceful degradation for new deployments")
+        logging.info("✅ Comprehensive order lifecycle management")
+        logging.info("✅ Configurable meta-learning thresholds")
     else:
-        print("❌ Some implementations failed. Check the output above for details.")
+        logging.info("❌ Some implementations failed. Check the output above for details.")
     
     return all(results)
 

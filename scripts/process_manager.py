@@ -42,7 +42,7 @@ class ProcessManager:
         
         try:
             # Use ps to find all Python processes
-            result = subprocess.run(
+            result = subprocess.run(timeout=30, 
                 ['ps', 'aux', '--sort=-rss'],  # Sort by memory usage (descending)
                 capture_output=True, text=True
             )
@@ -283,7 +283,7 @@ class ProcessManager:
         
         for service in services:
             try:
-                result = subprocess.run(
+                result = subprocess.run(timeout=30, 
                     ['systemctl', 'is-active', service],
                     capture_output=True, text=True
                 )
@@ -297,7 +297,7 @@ class ProcessManager:
                 
                 # Get more detailed info for failed services
                 if status != 'active':
-                    detail_result = subprocess.run(
+                    detail_result = subprocess.run(timeout=30, 
                         ['systemctl', 'status', service, '--no-pager', '-l'],
                         capture_output=True, text=True
                     )
@@ -337,7 +337,7 @@ class ProcessManager:
                         
                         if current_uid != target_uid or current_gid != target_gid:
                             # Need to change ownership
-                            subprocess.run(
+                            subprocess.run(timeout=30, 
                                 ['sudo', 'chown', f'{target_user}:{target_user}', path],
                                 check=True
                             )
@@ -531,63 +531,63 @@ class ProcessManager:
 
 def main():
     """Main process management function."""
-    print("AI Trading Bot - Process Management Tool")
-    print("=" * 50)
+    logging.info("AI Trading Bot - Process Management Tool")
+    logging.info(str("=" * 50))
     
     manager = ProcessManager()
     
     # Generate comprehensive report
     report = manager.generate_process_report()
     
-    print("\nPROCESS SUMMARY:")
-    print(f"- Total Python processes: {report['process_summary']['total_python_processes']}")
-    print(f"- Total memory usage: {report['process_summary']['total_memory_mb']:.1f}MB")
-    print(f"- Duplicate processes: {report['process_summary']['duplicate_processes']}")
+    logging.info("\nPROCESS SUMMARY:")
+    logging.info(str(f"- Total Python processes: {report['process_summary']['total_python_processes']}"))
+    logging.info(str(f"- Total memory usage: {report['process_summary']['total_memory_mb']:.1f}MB"))
+    logging.info(str(f"- Duplicate processes: {report['process_summary']['duplicate_processes']}"))
     
     if report['processes']:
-        print("\nACTIVE TRADING PROCESSES:")
+        logging.info("\nACTIVE TRADING PROCESSES:")
         for proc in report['processes']:
-            print(f"- PID {proc['pid']}: {proc['memory_mb']:.1f}MB - {proc['command'][:80]}...")
+            logging.info(str(f"- PID {proc['pid']}: {proc['memory_mb']:.1f}MB - {proc['command'][:80]}..."))
     
     if report['duplicates']:
-        print("\nDUPLICATE PROCESSES DETECTED:")
+        logging.info("\nDUPLICATE PROCESSES DETECTED:")
         for dup in report['duplicates']:
             orig = dup['original_process']
             dupl = dup['duplicate_process']
-            print(f"- Original: PID {orig['pid']} ({orig['memory_mb']:.1f}MB)")
-            print(f"- Duplicate: PID {dupl['pid']} ({dupl['memory_mb']:.1f}MB)")
+            logging.info(str(f"- Original: PID {orig['pid']} ({orig['memory_mb']:.1f}MB))")
+            logging.info(str(f"- Duplicate: PID {dupl['pid']} ({dupl['memory_mb']:.1f}MB))")
     
-    print("\nSERVICE STATUS:")
+    logging.info("\nSERVICE STATUS:")
     for service, status in report['service_status'].items():
         status_str = "✓ ACTIVE" if status['active'] else "✗ FAILED"
-        print(f"- {service}: {status_str}")
+        logging.info(f"- {service}: {status_str}")
     
-    print("\nRECOMMENDATIONS:")
+    logging.info("\nRECOMMENDATIONS:")
     for i, rec in enumerate(report['recommendations'], 1):
-        print(f"{i}. {rec}")
+        logging.info(f"{i}. {rec}")
     
     # Save report
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
     report_file = f"process_report_{timestamp}.json"
     
     import json
     with open(report_file, 'w') as f:
         json.dump(report, f, indent=2)
     
-    print(f"\nReport saved to: {report_file}")
+    logging.info(f"\nReport saved to: {report_file}")
     
     # Interactive cleanup option
     if report['duplicates']:
         response = input(f"\nFound {len(report['duplicates'])} duplicate processes. Clean up? (y/N): ")
         if response.lower() == 'y':
-            print("Performing cleanup (dry run first)...")
+            logging.info("Performing cleanup (dry run first)...")
             dry_run_result = manager.cleanup_duplicate_processes(dry_run=True)
-            print(f"Dry run: Would terminate {len(dry_run_result['processes_killed'])} processes")
+            logging.info(str(f"Dry run: Would terminate {len(dry_run_result['processes_killed']))} processes")
             
             confirm = input("Proceed with actual cleanup? (y/N): ")
             if confirm.lower() == 'y':
                 cleanup_result = manager.cleanup_duplicate_processes(dry_run=False)
-                print(f"Cleanup complete: {len(cleanup_result['processes_killed'])} processes terminated")
+                logging.info(str(f"Cleanup complete: {len(cleanup_result['processes_killed']))} processes terminated")
     
     return report
 

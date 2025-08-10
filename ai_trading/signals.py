@@ -380,9 +380,9 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
     >>> 
     >>> # Generate signals from momentum
     >>> signals = generate_signal(df, 'momentum')
-    >>> print(f"Buy signals: {(signals == 1).sum()}")
-    >>> print(f"Sell signals: {(signals == -1).sum()}")
-    >>> print(f"Neutral signals: {(signals == 0).sum()}")
+    >>> logging.info(f"Buy signals: {(signals == 1).sum()}")
+    >>> logging.info(f"Sell signals: {(signals == -1).sum()}")
+    >>> logging.info(f"Neutral signals: {(signals == 0).sum()}")
     
     >>> # Handle missing data gracefully
     >>> df_with_gaps = df.copy()

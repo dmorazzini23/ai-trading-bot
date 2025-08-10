@@ -210,34 +210,3 @@ def round_to_lot(quantity: Number, lot_size: int) -> int:
     return int(lots * lot_size)
 
 
-# AI-AGENT-REF: Add test functionality
-if __name__ == "__main__":
-    # Test Money class functionality
-    print("Testing Money class...")
-    
-    # Test basic construction and quantization
-    m1 = Money('1.005')
-    m2 = m1.quantize(Decimal('0.01'))
-    print(f"Money('1.005').quantize(Decimal('0.01')) = {m2}")
-    
-    # Test arithmetic operations
-    m3 = Money('10.50')
-    m4 = Money('5.25')
-    print(f"{m3} + {m4} = {m3 + m4}")
-    print(f"{m3} - {m4} = {m3 - m4}")
-    print(f"{m3} * 2 = {m3 * 2}")
-    print(f"{m3} / 2 = {m3 / 2}")
-    
-    # Test comparison
-    print(f"{m3} > {m4} = {m3 > m4}")
-    print(f"{m3} == Money('10.50') = {m3 == Money('10.50')}")
-    
-    # Test utility functions
-    tick_size = Decimal('0.01')
-    price = round_to_tick('15.567', tick_size)
-    print(f"round_to_tick('15.567', Decimal('0.01')) = {price}")
-    
-    lot_qty = round_to_lot(157.8, 100)
-    print(f"round_to_lot(157.8, 100) = {lot_qty}")
-    
-    print("All Money tests passed!")

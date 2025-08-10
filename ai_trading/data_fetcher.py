@@ -581,8 +581,8 @@ def get_historical_data(
     >>> end_date = datetime.now(timezone.utc)  # AI-AGENT-REF: timezone-aware for API compatibility
     >>> start_date = end_date - timedelta(days=30)
     >>> data = get_historical_data('AAPL', start_date, end_date, '1HOUR')
-    >>> print(f"Retrieved {len(data)} bars")
-    >>> print(data.head())
+    >>> logging.info(f"Retrieved {len(data)} bars")
+    >>> logging.info(str(data.head()))
 
     >>> # Get daily data with specific provider
     >>> data = get_historical_data(
@@ -595,7 +595,7 @@ def get_historical_data(
     ...     data = get_historical_data('INVALID', '2024-01-01', '2024-01-02', '1DAY', 
     ...                              raise_on_empty=True)
     ... except DataFetchError:
-    ...     print("No data available for symbol")
+    ...     logging.info("No data available for symbol")
 
     Data Quality Validation
     ----------------------

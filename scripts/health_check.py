@@ -452,7 +452,7 @@ if __name__ == "__main__":
     # CLI health check
     import json
     status = get_health_status()
-    print(json.dumps(status, indent=2))
+    logging.info(str(json.dumps(status, indent=2)))
 
 
 # AI-AGENT-REF: Additional trading-specific health check methods

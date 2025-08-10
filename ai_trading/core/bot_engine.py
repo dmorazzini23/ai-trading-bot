@@ -2039,7 +2039,7 @@ class BotState:
         >>> state.running = True
         >>> state.current_regime = "bull"
         >>> state.position_cache['AAPL'] = 100  # 100 shares long
-        >>> print(f"Bot running: {state.running}, Regime: {state.current_regime}")
+        >>> logging.info(f"Bot running: {state.running}, Regime: {state.current_regime}")
         Bot running: True, Regime: bull
         
     Note:
@@ -9025,8 +9025,8 @@ def run_all_trades_worker(state: BotState, model) -> None:
     >>> run_all_trades_worker(state, model)
     >>> 
     >>> # Check results
-    >>> print(f"Trades executed: {len(state.position_cache)}")
-    >>> print(f"Last loop duration: {state.last_loop_duration:.2f}s")
+    >>> logging.info(f"Trades executed: {len(state.position_cache)}")
+    >>> logging.info(f"Last loop duration: {state.last_loop_duration:.2f}s")
 
     Performance Considerations
     -------------------------

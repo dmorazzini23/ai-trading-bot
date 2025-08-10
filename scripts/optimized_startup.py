@@ -29,14 +29,14 @@ def setup_optimized_environment():
     gc.enable()
     gc.set_threshold(500, 8, 8)  # More aggressive GC
     
-    print("Environment optimized for performance")
+    logging.info("Environment optimized for performance")
 
 
 def setup_signal_handlers():
     """Setup signal handlers for graceful shutdown."""
     
     def signal_handler(signum, frame):
-        print(f"\nReceived signal {signum}, shutting down gracefully...")
+        logging.info(f"\nReceived signal {signum}, shutting down gracefully...")
         
         # Stop performance monitoring
         try:
@@ -61,7 +61,7 @@ def setup_signal_handlers():
         except ImportError:
             pass
         
-        print("Graceful shutdown complete")
+        logging.info("Graceful shutdown complete")
         sys.exit(0)
     
     signal.signal(signal.SIGINT, signal_handler)
@@ -70,7 +70,7 @@ def setup_signal_handlers():
 
 def check_system_health():
     """Perform system health check before startup."""
-    print("Performing system health check...")
+    logging.info("Performing system health check...")
     
     try:
         from system_diagnostic import SystemDiagnostic
@@ -82,29 +82,29 @@ def check_system_health():
         critical_issues = [r for r in recommendations if 'HIGH PRIORITY' in r or 'CRITICAL' in r]
         
         if critical_issues:
-            print("CRITICAL ISSUES DETECTED:")
+            logging.info("CRITICAL ISSUES DETECTED:")
             for issue in critical_issues:
-                print(f"  - {issue}")
+                logging.info(f"  - {issue}")
             
             response = input("Continue startup despite critical issues? (y/N): ")
             if response.lower() != 'y':
-                print("Startup aborted due to critical issues")
+                logging.info("Startup aborted due to critical issues")
                 return False
         
-        print(f"Health check complete: {len(recommendations)} recommendations")
+        logging.info(f"Health check complete: {len(recommendations)} recommendations")
         return True
         
     except ImportError:
-        print("System diagnostic not available, skipping health check")
+        logging.info("System diagnostic not available, skipping health check")
         return True
     except Exception as e:
-        print(f"Health check failed: {e}")
+        logging.info(f"Health check failed: {e}")
         return False
 
 
 def cleanup_duplicate_processes():
     """Clean up any duplicate processes."""
-    print("Checking for duplicate processes...")
+    logging.info("Checking for duplicate processes...")
     
     try:
         from process_manager import ProcessManager
@@ -112,21 +112,21 @@ def cleanup_duplicate_processes():
         
         duplicates = manager.find_duplicate_processes()
         if duplicates:
-            print(f"Found {len(duplicates)} duplicate processes")
+            logging.info(f"Found {len(duplicates)} duplicate processes")
             cleanup_result = manager.cleanup_duplicate_processes(dry_run=False)
-            print(f"Cleaned up {len(cleanup_result['processes_killed'])} processes")
+            logging.info(str(f"Cleaned up {len(cleanup_result['processes_killed']))} processes")
         else:
-            print("No duplicate processes found")
+            logging.info("No duplicate processes found")
             
     except ImportError:
-        print("Process manager not available, skipping duplicate cleanup")
+        logging.info("Process manager not available, skipping duplicate cleanup")
     except Exception as e:
-        print(f"Process cleanup failed: {e}")
+        logging.info(f"Process cleanup failed: {e}")
 
 
 def start_monitoring():
     """Start performance and memory monitoring."""
-    print("Starting performance monitoring...")
+    logging.info("Starting performance monitoring...")
     
     try:
         from performance_monitor import start_performance_monitoring
@@ -138,36 +138,36 @@ def start_monitoring():
         # Initialize memory optimizer
         optimizer = get_memory_optimizer()
         if optimizer:
-            print("Memory optimization enabled")
+            logging.info("Memory optimization enabled")
         
-        print("Monitoring systems active")
+        logging.info("Monitoring systems active")
         return True
         
     except ImportError:
-        print("Monitoring systems not available")
+        logging.info("Monitoring systems not available")
         return False
     except Exception as e:
-        print(f"Failed to start monitoring: {e}")
+        logging.info(f"Failed to start monitoring: {e}")
         return False
 
 
 def cleanup_on_exit():
     """Cleanup function called on exit."""
-    print("Performing cleanup on exit...")
+    logging.info("Performing cleanup on exit...")
     
     try:
         from memory_optimizer import emergency_memory_cleanup
         result = emergency_memory_cleanup()
-        print(f"Emergency cleanup: {result.get('rss_mb', 0):.1f}MB memory")
+        logging.info(str(f"Emergency cleanup: {result.get('rss_mb', 0)):.1f}MB memory")
     except:
         pass
 
 
 def main():
     """Main optimized startup function."""
-    print("AI Trading Bot - Optimized Startup")
-    print("=" * 40)
-    print(f"Startup time: {datetime.now(timezone.utc).isoformat()}")
+    logging.info("AI Trading Bot - Optimized Startup")
+    logging.info(str("=" * 40))
+    logging.info(f"Startup time: {datetime.now(timezone.utc).isoformat()}")
     
     # Register cleanup function
     atexit.register(cleanup_on_exit)
@@ -190,32 +190,32 @@ def main():
     
     # Import and start the main trading application
     try:
-        print("Starting main trading application...")
+        logging.info("Starting main trading application...")
         
         # Choose startup method based on available modules
         if os.path.exists('ai_trading/main.py'):
             # Use new modular approach
             from ai_trading.main import main as trading_main
-            print("Using ai_trading.main module")
+            logging.info("Using ai_trading.main module")
             trading_main()
         elif os.path.exists('bot_engine.py'):
             # Fallback to legacy bot_engine
-            print("Using legacy bot_engine module")
+            logging.info("Using legacy bot_engine module")
             import bot_engine
             if hasattr(bot_engine, 'main'):
                 bot_engine.main()
             else:
-                print("No main function found in bot_engine")
+                logging.info("No main function found in bot_engine")
                 return 1
         else:
-            print("No trading module found")
+            logging.info("No trading module found")
             return 1
             
     except KeyboardInterrupt:
-        print("\nShutdown requested by user")
+        logging.info("\nShutdown requested by user")
         return 0
     except Exception as e:
-        print(f"Trading application failed: {e}")
+        logging.info(f"Trading application failed: {e}")
         logging.exception("Trading application error")
         return 1
     
