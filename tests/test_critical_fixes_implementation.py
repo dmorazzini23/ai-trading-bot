@@ -220,7 +220,7 @@ def test_security_manager():
     
     # Test data masking
     sensitive_data = {
-        'ALPACA_API_KEY': 'PKTEST123456789012345',
+        'ALPACA_API_KEY': 'FAKE_TEST_API_KEY_NOT_REAL_12345',
         'username': 'testuser',
         'password': 'secretpassword123',
         'normal_field': 'normal_value'
@@ -229,7 +229,7 @@ def test_security_manager():
     masked = mask_sensitive_data(sensitive_data)
     
     # API key should be masked
-    assert 'PKTEST123456789012345' not in str(masked)
+    assert 'FAKE_TEST_API_KEY_NOT_REAL_12345' not in str(masked)
     assert 'normal_value' in str(masked)  # Normal fields unchanged
 
 

@@ -58,7 +58,7 @@ class MockConfig:
     TRADE_LOG_FILE = 'logs/trades.csv'
     VERBOSE_LOGGING = True
     SCHEDULER_SLEEP_SECONDS = 30.0
-    NEWS_API_KEY = "test_news_api_key_placeholder"
+    NEWS_API_KEY = "fake_test_news_api_not_real"
     TESTING = True
     REQUIRED_ENV_VARS = []
     SEED = 42
@@ -86,11 +86,11 @@ class MockConfig:
         """Return a default value for any missing attribute."""
         # Common default values for config attributes
         defaults = {
-            'ALPACA_API_KEY': 'PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-            'ALPACA_SECRET_KEY': 'SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD',
+            'ALPACA_API_KEY': 'FAKE_TEST_API_KEY_NOT_REAL_123456789',
+            'ALPACA_SECRET_KEY': 'FAKE_TEST_SECRET_KEY_NOT_REAL_123456789',
             'BOT_MODE': 'balanced',
             'MODEL_PATH': 'trained_model.pkl',
-            'WEBHOOK_SECRET': 'test-webhook-secret',
+            'WEBHOOK_SECRET': 'fake-test-webhook-not-real',
             'FLASK_PORT': 9000,
             'DISABLE_DAILY_RETRAIN': False,
             'SHADOW_MODE': False,
@@ -152,8 +152,8 @@ class MockConfig:
         defaults = {
             "MODELS_DIR": "models",
             "MODEL_PATH": "trained_model.pkl",
-            "ALPACA_API_KEY": "PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-            "ALPACA_SECRET_KEY": "SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD",
+            "ALPACA_API_KEY": "FAKE_TEST_API_KEY_NOT_REAL_123456789",
+            "ALPACA_SECRET_KEY": "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789",
             "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
             "BOT_MODE": "balanced",
         }

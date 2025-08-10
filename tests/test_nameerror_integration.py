@@ -23,10 +23,10 @@ os.environ["PYTEST_RUNNING"] = "1"
 
 # Set minimal required environment variables to prevent hangs/errors
 os.environ.update({
-    "ALPACA_API_KEY": "PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",  # Valid format
-    "ALPACA_SECRET_KEY": "SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD",  # Valid format
+    "ALPACA_API_KEY": "FAKE_TEST_API_KEY_NOT_REAL_123456789",  # Valid format
+    "ALPACA_SECRET_KEY": "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789",  # Valid format
     "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
-    "WEBHOOK_SECRET": "test-webhook-secret",
+    "WEBHOOK_SECRET": "fake-test-webhook-not-real",
     "FLASK_PORT": "9000",
     "BOT_MODE": "balanced",
     "DOLLAR_RISK_LIMIT": "0.05",
