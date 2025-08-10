@@ -3,8 +3,12 @@ set -euo pipefail
 fail=0
 echo "Guard checks…"
 
-# disallow eval/exec (but allow .eval() method calls)
-if git grep -nE '\b(eval|exec)\s*\(' -- 'ai_trading/**/*.py' | grep -v '\.eval\s*(' | tee /dev/stderr; then fail=1; fi
+# Flag raw eval and any exec, but ignore attribute-based .eval( calls (e.g., model.eval())
+# 1) exec is always unsafe
+if git grep -nE '\bexec\s*\(' -- 'ai_trading/**/*.py' | tee /dev/stderr; then fail=1; fi
+
+# 2) eval is unsafe unless it's attribute ".eval(" — the pattern below matches eval( that's NOT preceded by a dot.
+if git grep -nE '(^|[^.])\beval\s*\(' -- 'ai_trading/**/*.py' | tee /dev/stderr; then fail=1; fi
 
 # disallow bare except
 if git grep -nE '^\s*except\s*:\s*$' -- 'ai_trading/**/*.py' | tee /dev/stderr; then fail=1; fi
