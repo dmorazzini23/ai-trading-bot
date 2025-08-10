@@ -47,7 +47,11 @@ def set_random_seeds(seed: int = 42) -> None:
         import tensorflow as tf
 
         tf.random.set_seed(seed)
-    except ImportError:
+    except ImportError as e:
+        # AI-AGENT-REF: TensorFlow not available, skip seed setting
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"TensorFlow not available for seeding: {e}")
         pass
 
     # PyTorch (if available)
@@ -60,7 +64,11 @@ def set_random_seeds(seed: int = 42) -> None:
             torch.cuda.manual_seed_all(seed)
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
-    except ImportError:
+    except ImportError as e:
+        # AI-AGENT-REF: PyTorch not available, skip seed setting
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"PyTorch not available for seeding: {e}")
         pass
 
     # LightGBM (if available)

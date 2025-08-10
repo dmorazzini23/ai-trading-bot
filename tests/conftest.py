@@ -1503,7 +1503,11 @@ def stub_capital_scaling(monkeypatch):
         from ai_trading.core import bot_engine
         # Add the missing function directly to the module
         bot_engine.check_alpaca_available = lambda x: True
-    except ImportError:
+    except ImportError as e:
+        # AI-AGENT-REF: Log bot_engine import failure for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"Could not import bot_engine for mocking: {e}")
         pass
     except Exception:
         # If bot_engine import fails due to config issues, skip it for now
