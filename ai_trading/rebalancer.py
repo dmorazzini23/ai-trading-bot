@@ -6,7 +6,6 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from ai_trading import config
 from ai_trading.config import get_settings
 from ai_trading.portfolio import compute_portfolio_weights
 

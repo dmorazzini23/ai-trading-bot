@@ -9,7 +9,7 @@ except ImportError:
     logger.warning("numpy not available in pipeline.py")
     np = None
 
-from ai_trading import config
+from ai_trading.config import get_settings
 
 # ML dependencies with graceful error handling
 try:
@@ -131,10 +131,20 @@ class FeatureBuilder(BaseEstimator, TransformerMixin):
         return 100 - (100 / (1 + rs))
 
 
+# SGD Parameters - reasonable defaults for financial time series
+SGD_PARAMS = {
+    'learning_rate': 'adaptive',
+    'eta0': 0.01,
+    'alpha': 0.0001,
+    'max_iter': 1000,
+    'tol': 1e-3,
+    'random_state': 42
+}
+
 model_pipeline = Pipeline(
     [
         ("features", FeatureBuilder()),
         ("scaler", StandardScaler()),
-        ("regressor", SGDRegressor(warm_start=True, **config.SGD_PARAMS)),
+        ("regressor", SGDRegressor(warm_start=True, **SGD_PARAMS)),
     ]
 )

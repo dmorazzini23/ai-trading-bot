@@ -229,7 +229,7 @@ if ALPACA_AVAILABLE:
 else:
     logger.warning("Alpaca SDK is not available - using mock classes")
 # Mirror config to maintain historical constant name
-MIN_CYCLE = config.SCHEDULER_SLEEP_SECONDS
+MIN_CYCLE = S.scheduler_sleep_seconds
 # AI-AGENT-REF: guard environment validation with explicit error logging
 # AI-AGENT-REF: Move config validation to runtime to prevent import crashes
 # Config validation moved to init_runtime_config()
@@ -523,7 +523,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 # Set deterministic random seeds for reproducibility
-SEED = config.SEED
+SEED = S.seed
 random.seed(SEED)
 # AI-AGENT-REF: guard numpy random seed for test environments
 if hasattr(np, "random"):
@@ -1190,7 +1190,7 @@ def _require_cfg(value: str | None, name: str) -> str:
         return value
 
     # In testing mode, return a dummy value
-    if config.TESTING:
+    if S.testing:
         dummy_values = {
             "ALPACA_API_KEY": "test_api_key",
             "ALPACA_SECRET_KEY": "test_secret_key",
@@ -1256,7 +1256,7 @@ def init_runtime_config():
     try:
         ALPACA_API_KEY, ALPACA_SECRET_KEY, _ = _ensure_alpaca_env_or_raise()
     except RuntimeError as e:
-        if not config.TESTING:  # Allow missing credentials in test mode
+        if not S.testing:  # Allow missing credentials in test mode
             raise e
         # AI-AGENT-REF: Use environment variables even in test mode to avoid hardcoded secrets
         ALPACA_API_KEY = os.getenv("TEST_ALPACA_API_KEY", "")
@@ -1898,7 +1898,7 @@ def get_git_hash() -> str:
 # Tickers file resides at repo root by convention
 TICKERS_FILE = abspath_repo_root("tickers.csv")
 # AI-AGENT-REF: use centralized trade log path
-TRADE_LOG_FILE = config.TRADE_LOG_FILE
+TRADE_LOG_FILE = S.trade_log_file
 SIGNAL_WEIGHTS_FILE = str(paths.DATA_DIR / "signal_weights.csv")
 EQUITY_FILE = str(paths.DATA_DIR / "last_equity.txt")
 PEAK_EQUITY_FILE = str(paths.DATA_DIR / "peak_equity.txt")
