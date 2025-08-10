@@ -1,0 +1,178 @@
+issue,file,line,snippet
+config_dunder_getattr,ai_trading/__init__.py,24,def __getattr__(name):
+config_dunder_getattr,ai_trading/analysis/sentiment.py,109,"        def __getattr__(self, name):"
+config_dunder_getattr,ai_trading/config/__init__.py,10,def __getattr__(name: str):
+config_dunder_getattr,ai_trading/config/management.py,710,"    def __getattr__(self, name):"
+config_dunder_getattr,ai_trading/core/__init__.py,30,def __getattr__(name):
+config_dunder_getattr,ai_trading/core/bot_engine.py,176,"            def __getattr__(self, name):"
+config_dunder_getattr,ai_trading/core/bot_engine.py,181,"    def __getattr__(self, name):"
+config_dunder_getattr,ai_trading/core/bot_engine.py,334,"    def __getattr__(self, name):"
+config_dunder_getattr,ai_trading/core/bot_engine.py,578,"            def __getattr__(self, name):"
+config_dunder_getattr,ai_trading/core/bot_engine.py,592,"    def __getattr__(self, item):"
+config_dunder_getattr,ai_trading/core/bot_engine.py,4284,"    def __getattr__(self, name):"
+config_dunder_getattr,ai_trading/utils/base.py,929,"                def __getattr__(self, name):"
+import_guard,ai_trading/analysis/sentiment.py,17,try:
+import_guard,ai_trading/config/management.py,843,try:
+import_guard,ai_trading/core/bot_engine.py,191,    try:
+import_guard,ai_trading/core/bot_engine.py,344,    try:
+import_guard,ai_trading/core/bot_engine.py,820,try:
+import_guard,ai_trading/core/bot_engine.py,862,try:
+import_guard,ai_trading/core/bot_engine.py,988,try:
+import_guard,ai_trading/core/bot_engine.py,1005,try:
+import_guard,ai_trading/core/bot_engine.py,1109,try:
+import_guard,ai_trading/core/bot_engine.py,1167,try:
+import_guard,ai_trading/core/bot_engine.py,1288,try:
+import_guard,ai_trading/core/bot_engine.py,1305,try:
+import_guard,ai_trading/core/bot_engine.py,1314,try:
+import_guard,ai_trading/core/bot_engine.py,6813,    try:
+import_guard,ai_trading/core/bot_engine.py,9985,                try:
+import_guard,ai_trading/core/parameter_validator.py,13,try:
+import_guard,ai_trading/data/labels.py,14,try:
+import_guard,ai_trading/data/splits.py,15,try:
+import_guard,ai_trading/data/splits.py,21,try:
+import_guard,ai_trading/data_fetcher.py,206,try:
+import_guard,ai_trading/database/connection.py,15,try:
+import_guard,ai_trading/env.py,5,try:
+import_guard,ai_trading/evaluation/walkforward.py,18,try:
+import_guard,ai_trading/execution/__init__.py,24,try:
+import_guard,ai_trading/execution/algorithms.py,12,try:
+import_guard,ai_trading/execution/engine.py,17,try:
+import_guard,ai_trading/execution/liquidity.py,15,try:
+import_guard,ai_trading/execution/live_trading.py,13,try:
+import_guard,ai_trading/execution/live_trading.py,21,try:
+import_guard,ai_trading/execution/microstructure.py,17,try:
+import_guard,ai_trading/execution/production_engine.py,15,try:
+import_guard,ai_trading/execution/simulator.py,13,try:
+import_guard,ai_trading/features/indicators.py,11,try:
+import_guard,ai_trading/features/indicators.py,26,try:
+import_guard,ai_trading/features/indicators.py,47,try:
+import_guard,ai_trading/features/indicators.py,56,try:
+import_guard,ai_trading/features/pipeline.py,15,try:
+import_guard,ai_trading/indicators.py,6,try:
+import_guard,ai_trading/indicators.py,31,try:
+import_guard,ai_trading/indicators.py,58,try:
+import_guard,ai_trading/logging.py,17,try:
+import_guard,ai_trading/logging.py,28,try:
+import_guard,ai_trading/logging.py,511,    try:
+import_guard,ai_trading/market/calendars.py,14,try:
+import_guard,ai_trading/meta_learning.py,13,try:
+import_guard,ai_trading/meta_learning.py,19,try:
+import_guard,ai_trading/meta_learning.py,24,try:
+import_guard,ai_trading/meta_learning.py,37,try:
+import_guard,ai_trading/meta_learning.py,1718,try:
+import_guard,ai_trading/monitoring/__init__.py,36,try:
+import_guard,ai_trading/monitoring/__init__.py,47,try:
+import_guard,ai_trading/monitoring/__init__.py,55,try:
+import_guard,ai_trading/monitoring/alerting.py,23,try:
+import_guard,ai_trading/monitoring/alerts.py,16,try:
+import_guard,ai_trading/monitoring/dashboard.py,13,try:
+import_guard,ai_trading/monitoring/performance_dashboard.py,16,try:
+import_guard,ai_trading/pipeline.py,6,try:
+import_guard,ai_trading/pipeline.py,15,try:
+import_guard,ai_trading/portfolio/sizing.py,15,try:
+import_guard,ai_trading/position/correlation_analyzer.py,21,try:
+import_guard,ai_trading/position/intelligent_manager.py,27,try:
+import_guard,ai_trading/position/market_regime.py,19,try:
+import_guard,ai_trading/position/profit_taking.py,20,try:
+import_guard,ai_trading/position/technical_analyzer.py,20,try:
+import_guard,ai_trading/position/trailing_stops.py,20,try:
+import_guard,ai_trading/production_system.py,13,try:
+import_guard,ai_trading/risk/__init__.py,39,try:
+import_guard,ai_trading/risk/adaptive_sizing.py,16,try:
+import_guard,ai_trading/risk/circuit_breakers.py,17,try:
+import_guard,ai_trading/risk/kelly.py,14,try:
+import_guard,ai_trading/risk/manager.py,14,try:
+import_guard,ai_trading/risk/metrics.py,13,try:
+import_guard,ai_trading/risk/position_sizing.py,16,try:
+import_guard,ai_trading/risk/pre_trade_validation.py,16,try:
+import_guard,ai_trading/rl_trading/train.py,12,try:
+import_guard,ai_trading/safety/monitoring.py,22,try:
+import_guard,ai_trading/signals.py,13,try:
+import_guard,ai_trading/signals.py,19,try:
+import_guard,ai_trading/signals.py,72,try:
+import_guard,ai_trading/signals.py,78,try:
+import_guard,ai_trading/signals.py,160,try:
+import_guard,ai_trading/strategies/__init__.py,33,try:
+import_guard,ai_trading/strategies/__init__.py,44,try:
+import_guard,ai_trading/strategies/__init__.py,52,try:
+import_guard,ai_trading/strategies/backtest.py,13,try:
+import_guard,ai_trading/strategies/base.py,14,try:
+import_guard,ai_trading/strategies/metalearning.py,15,try:
+import_guard,ai_trading/strategies/metalearning.py,40,try:
+import_guard,ai_trading/strategies/metalearning.py,48,try:
+import_guard,ai_trading/strategies/multi_timeframe.py,18,try:
+import_guard,ai_trading/strategies/regime_detection.py,17,try:
+import_guard,ai_trading/strategies/regime_detector.py,16,try:
+import_guard,ai_trading/strategies/signals.py,17,try:
+import_guard,ai_trading/training/train_ml.py,18,try:
+import_guard,ai_trading/utils/base.py,53,try:
+import_guard,ai_trading/utils/base.py,59,try:
+mock_class,ai_trading/analysis/sentiment.py,54,    class MockWait:
+mock_class,ai_trading/analysis/sentiment.py,105,    class MockFinBERT:
+mock_class,ai_trading/core/bot_engine.py,161,        class MockNumpy:
+mock_class,ai_trading/core/bot_engine.py,312,        class MockPandas:
+mock_class,ai_trading/core/bot_engine.py,352,class MockDataFrame:
+mock_class,ai_trading/core/bot_engine.py,378,class MockSeries:
+mock_class,ai_trading/core/bot_engine.py,410,class MockIndex:
+mock_class,ai_trading/core/bot_engine.py,428,class MockPandas:
+mock_class,ai_trading/core/bot_engine.py,824,    class MockPortalocker:
+mock_class,ai_trading/core/bot_engine.py,866,    class MockSchedule:
+mock_class,ai_trading/core/bot_engine.py,885,    class MockTicker:
+mock_class,ai_trading/core/bot_engine.py,890,    class MockYfinance:
+mock_class,ai_trading/core/bot_engine.py,906,    class MockTradingClient:
+mock_class,ai_trading/core/bot_engine.py,913,    class MockMarketOrderRequest:
+mock_class,ai_trading/core/bot_engine.py,917,    class MockLimitOrderRequest:
+mock_class,ai_trading/core/bot_engine.py,921,    class MockGetOrdersRequest:
+mock_class,ai_trading/core/bot_engine.py,925,    class MockOrder:
+mock_class,ai_trading/core/bot_engine.py,930,    class MockTradingStream:
+mock_class,ai_trading/core/bot_engine.py,992,    class MockBeautifulSoup:
+mock_class,ai_trading/core/bot_engine.py,1009,    class MockFlask:
+mock_class,ai_trading/core/bot_engine.py,1053,    class MockStockHistoricalDataClient:
+mock_class,ai_trading/core/bot_engine.py,1060,    class MockQuote:
+mock_class,ai_trading/core/bot_engine.py,1064,    class MockStockBarsRequest:
+mock_class,ai_trading/core/bot_engine.py,1068,    class MockStockLatestQuoteRequest:
+mock_class,ai_trading/core/bot_engine.py,1072,    class MockTimeFrame:
+mock_class,ai_trading/core/bot_engine.py,1292,    class MockCircuitBreaker:
+mock_class,ai_trading/core/bot_engine.py,1299,    class MockPybreaker:
+mock_class,ai_trading/core/bot_engine.py,1318,    class MockMetric:
+mock_class,ai_trading/core/bot_engine.py,1816,    class MockFinBERT:
+mock_class,ai_trading/data_fetcher.py,212,    class MockDataFrame:
+mock_class,ai_trading/data_fetcher.py,246,    class MockPandas:
+mock_class,ai_trading/features/indicators.py,16,    class MockDataFrame:
+mock_class,ai_trading/features/indicators.py,20,    class MockPandas:
+mock_class,ai_trading/features/indicators.py,30,    class MockNumpy:
+mock_class,ai_trading/imports.py,39,    class MockNumpy:
+mock_class,ai_trading/imports.py,205,    class MockSeries:
+mock_class,ai_trading/imports.py,266,    class MockRolling:
+mock_class,ai_trading/imports.py,289,    class MockDataFrame:
+mock_class,ai_trading/imports.py,387,    class MockPandas:
+mock_class,ai_trading/imports.py,521,    class MockSklearn:
+mock_class,ai_trading/imports.py,584,    class MockTalib:
+mock_class,ai_trading/indicators.py,10,    class MockNumpy:
+mock_class,ai_trading/indicators.py,36,    class MockSeries:
+mock_class,ai_trading/indicators.py,46,    class MockPandas:
+mock_class,ai_trading/market/calendars.py,18,    class MockPandas:
+mock_class,ai_trading/meta_learning.py,28,    class MockMetricsLogger:
+mock_class,ai_trading/position/correlation_analyzer.py,26,    class MockNumpy:
+mock_class,ai_trading/position/correlation_analyzer.py,61,    class MockPandas:
+mock_class,ai_trading/position/intelligent_manager.py,32,    class MockNumpy:
+mock_class,ai_trading/position/intelligent_manager.py,43,    class MockPandas:
+mock_class,ai_trading/position/market_regime.py,24,    class MockNumpy:
+mock_class,ai_trading/position/market_regime.py,41,    class MockPandas:
+mock_class,ai_trading/position/profit_taking.py,25,    class MockNumpy:
+mock_class,ai_trading/position/profit_taking.py,42,    class MockPandas:
+mock_class,ai_trading/position/technical_analyzer.py,25,    class MockNumpy:
+mock_class,ai_trading/position/technical_analyzer.py,45,    class MockPandas:
+mock_class,ai_trading/position/trailing_stops.py,25,    class MockNumpy:
+mock_class,ai_trading/position/trailing_stops.py,42,    class MockPandas:
+mock_class,ai_trading/signals.py,38,        class MockDataFrame:
+mock_class,ai_trading/signals.py,48,        class MockSeries:
+mock_class,ai_trading/signals.py,52,        class MockPandas:
+mock_class,ai_trading/strategies/imports.py,23,    class MockNumpy:
+mock_class,ai_trading/strategies/imports.py,99,        class MockDataFrame:
+mock_class,ai_trading/strategies/imports.py,109,        class MockSeries:
+mock_class,ai_trading/strategies/imports.py,116,        class MockPandas:
+mock_class,ai_trading/strategies/imports.py,142,    class MockSklearn:
+mock_class,ai_trading/strategies/imports.py,192,    class MockTa:
+mock_class,ai_trading/strategies/metalearning.py,83,    class MockClassifier:
+mock_class,ai_trading/utils/base.py,923,            class MockREST:

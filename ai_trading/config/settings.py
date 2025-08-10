@@ -79,6 +79,15 @@ class Settings(BaseSettings):
     api_port: int = Field(9001, env="API_PORT")
     scheduler_sleep_seconds: int = Field(30, env="SCHEDULER_SLEEP_SECONDS")
     scheduler_iterations: int = Field(0, env="SCHEDULER_ITERATIONS")
+    
+    # Random seed for reproducibility
+    seed: int = Field(42, env="SEED")
+    
+    # Testing mode flag
+    testing: bool = Field(False, env="TESTING")
+    
+    # File paths
+    trade_log_file: str = Field("test_trades.csv", env="TRADE_LOG_FILE")
 
     # --- Data cache controls ---
     data_cache_enable: bool = Field(False, env="DATA_CACHE_ENABLE")

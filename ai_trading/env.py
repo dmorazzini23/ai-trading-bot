@@ -2,12 +2,7 @@ from __future__ import annotations
 
 import os
 
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    # Fallback if dotenv is not available
-    def load_dotenv(*args, **kwargs):
-        pass
+from dotenv import load_dotenv
 
 
 _ENV_LOADED = False

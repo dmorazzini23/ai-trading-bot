@@ -15,7 +15,7 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
-from ai_trading import config
+from ai_trading.config import get_settings
 
 # AI-AGENT-REF: Simplified optional import pattern
 try:

@@ -707,40 +707,6 @@ class TradingConfig:
         self.limit_order_slippage = 0.001
         self.pov_slice_pct = 0.1
 
-    def __getattr__(self, name):
-        """Return default values for any missing attributes."""
-        # Common defaults for missing attributes
-        defaults = {
-            "stop_loss_factor": 0.02,
-            "position_scaling": 1.0,
-            "min_trade_size": 1,
-            "max_trade_size": 1000,
-            "risk_factor": 0.1,
-            "volatility_factor": 1.0,
-            "correlation_threshold": 0.7,
-            "rebalance_threshold": 0.05,
-            "slippage_factor": 0.001,
-            "commission_rate": 0.0,
-            "margin_factor": 1.0,
-            "leverage": 1.0,
-        }
-
-        if name in defaults:
-            return defaults[name]
-        elif name.endswith("_factor"):
-            return 1.0
-        elif name.endswith(("_pct", "_percentage")):
-            return 0.1
-        elif name.endswith(("_size", "_quantity")):
-            return 100
-        elif name.endswith(("_days", "_period")):
-            return 30
-        elif name.endswith(("_threshold", "_limit")):
-            return 0.05
-        else:
-            # Return a reasonable default
-            return 0.1
-
     @classmethod
     def from_env(cls, mode="balanced"):
         """Create a TradingConfig from environment variables."""
