@@ -721,9 +721,9 @@ except Exception:  # pragma: no cover - optional dependency
                     else:
                         self._dt = datetime.now(timezone.utc)
                 else:
-                    self._dt = datetime.now()
+                    self._dt = datetime.now(timezone.utc)
             else:
-                self._dt = datetime.now()
+                self._dt = datetime.now(timezone.utc)
                 
         def __str__(self):
             return self.value
@@ -741,7 +741,7 @@ except Exception:  # pragma: no cover - optional dependency
             from datetime import datetime, timezone
             if tz == "UTC" or tz == timezone.utc:
                 return datetime.now(timezone.utc)
-            return datetime.now()
+            return datetime.now(timezone.utc)
             
         def __sub__(self, other):
             # Support timestamp arithmetic for comparisons
