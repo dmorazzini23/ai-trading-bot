@@ -1,0 +1,966 @@
+file,line,issue,severity,snippet
+ai_trading/data_fetcher.py,96,empty_except,medium,"_session.timeout = (10, 30)  # (connect_timeout, read_timeout)
+        except Exception as e:
+            # AI-AGENT-REF: Ensure proper session cleanup on initialization failure"
+ai_trading/data_fetcher.py,169,empty_except,medium,"import pandas as pd
+except ImportError:
+    # AI-AGENT-REF: pandas not available, create minimal fallback"
+ai_trading/data_fetcher.py,387,empty_except,medium,"return result
+    except ImportError as e:
+        # pandas_real not available in test environment - log and continue"
+ai_trading/data_fetcher.py,424,empty_except,medium,"return parsed
+        except ValueError as e:
+            # Date parsing failed with this format, try next format"
+ai_trading/data_fetcher.py,1333,empty_except,medium,"return timeframe
+    except ImportError:
+        # Fallback when alpaca not available"
+ai_trading/data_fetcher.py,1486,empty_except,medium,"logger.warning(""Unexpected batch frame structure; partial results returned"")
+    except ImportError:
+        # Fallback to individual fetches if Alpaca not available"
+ai_trading/env.py,6,empty_except,medium,"from dotenv import load_dotenv
+except ImportError:
+    # Fallback if dotenv is not available"
+ai_trading/health_monitor.py,283,empty_except,medium,"await self._monitor_task
+            except asyncio.CancelledError:
+                pass"
+ai_trading/indicators.py,43,empty_except,medium,"from numba import jit
+except ImportError:
+    # AI-AGENT-REF: numba fallback"
+ai_trading/logging.py,19,empty_except,medium,"from ai_trading.config import management as config
+except ImportError:
+    # Fallback for testing when config module is not available"
+ai_trading/logging.py,29,empty_except,medium,"from ai_trading.monitoring import metrics as metrics_logger
+except ImportError:
+    # Fallback for testing when monitoring module is not available"
+ai_trading/logging.py,195,empty_except,medium,"_listener.stop()
+                except Exception as e:
+                    # Log cleanup errors but don't fail shutdown"
+ai_trading/logging.py,494,empty_except,medium,"import psutil
+    except ImportError:
+        # Fallback when psutil is not available"
+ai_trading/logging.py,515,empty_except,medium,"return context
+        
+    except Exception as e:"
+ai_trading/main.py,23,empty_except,medium,"PERFORMANCE_MONITORING_AVAILABLE = True
+except ImportError:
+    # Fallback if modules not available"
+ai_trading/main.py,169,empty_except,medium,"start_api(api_ready)  # Pass the ready signal to be set before blocking run
+        except Exception as e:
+            # AI-AGENT-REF: Add proper timeout error handling for API startup synchronization"
+ai_trading/main.py,198,empty_except,medium,"raise RuntimeError(""API startup timeout - trading cannot proceed without API ready"")
+    except RuntimeError:
+        # Re-raise runtime errors as-is"
+ai_trading/main.py,201,empty_except,medium,"raise
+    except Exception as e:
+        # Handle any other synchronization errors"
+ai_trading/meta_learning.py,15,empty_except,medium,"import config  # AI-AGENT-REF: access centralized log paths
+except ImportError:
+    # Fallback for testing environments"
+ai_trading/meta_learning.py,26,empty_except,medium,"import metrics_logger
+except ImportError:
+    # Mock metrics_logger for testing"
+ai_trading/meta_learning.py,1461,empty_except,medium,"from portfolio_rl import PortfolioReinforcementLearner
+except ImportError:
+    # Mock for testing environments"
+ai_trading/paths.py,19,empty_except,medium,"path.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        # In restricted environments (e.g., systemd with ProtectSystem/ProtectHome),"
+ai_trading/production_system.py,556,empty_except,medium,"self.account_equity > 0)
+        except Exception:
+            # Any error in health check should return unhealthy status"
+ai_trading/rebalancer.py,822,empty_except,medium,"maybe_rebalance(ctx)
+            except StopIteration:
+                # AI-AGENT-REF: Allow tests to break out of the loop"
+ai_trading/runner.py,92,empty_except,medium,"_maybe_warm_cache(state.ctx)  # best-effort; ignores if disabled or already warmed
+        except Exception as e:
+            # Cache warming failed - log warning but continue execution"
+ai_trading/security.py,222,empty_except,medium,"return True
+        except Exception:
+            # Any decoding error means it's not a valid token"
+ai_trading/signals.py,29,empty_except,medium,"from ai_trading.utils import pd
+    except ImportError:
+        # Create minimal fallback"
+ai_trading/signals.py,84,empty_except,medium,"return df['close'].iloc[-1]
+    except Exception:
+        return 1e-3"
+ai_trading/signals.py,110,empty_except,medium,"logger.info(""Portfolio optimization modules loaded successfully"")
+except ImportError:
+    # Import settings to check if portfolio features are enabled"
+ai_trading/signals.py,130,empty_except,medium,"from ai_trading.position.legacy_manager import PositionManager
+except ImportError:
+    # Fallback if position_manager not available"
+ai_trading/signals.py,304,empty_except,medium,"data.to_parquet(cache_path, engine=""pyarrow"")
+        except OSError as e:
+            # Cache write failed - log but continue execution"
+ai_trading/trade_logic.py,41,empty_except,medium,"recent_gain = (last_price - prev_price) / max(prev_price, 1e-9)
+    except Exception:
+        # if indexing fails return False"
+ai_trading/analysis/sentiment.py,76,eval_exec,high,")
+        _FINBERT_MODEL.eval()
+        _HUGGINGFACE_AVAILABLE = True"
+ai_trading/analysis/sentiment.py,59,empty_except,medium,"SENTIMENT_API_URL = getattr(config, ""SENTIMENT_API_URL"", ""https://newsapi.org/v2/everything"")
+except ImportError:
+    # Fallback for testing environments"
+ai_trading/analysis/sentiment.py,84,empty_except,medium,"_FINBERT_MODEL = None
+except ImportError:
+    # Mock for testing environments without transformers/torch"
+ai_trading/config/management.py,26,empty_except,medium,"return get_settings()
+    except ImportError:
+        return None"
+ai_trading/config/management.py,587,empty_except,medium,"load_dotenv(env_path, override=True)
+        except ImportError as e:
+            # dotenv not available, skip reload"
+ai_trading/config/management.py,621,empty_except,medium,"HALT_FLAG_PATH = os.getenv(""HALT_FLAG_PATH"", str(paths.DATA_DIR / ""halt.flag""))
+except ImportError:
+    # Fallback for when paths module is not available"
+ai_trading/config/management.py,787,empty_except,medium,"from .settings import Settings, get_settings
+except ImportError:
+    # Fallback for missing dependencies - provide basic implementations"
+ai_trading/core/bot_engine.py,1728,subprocess_unsafe,medium,"return (
+            subprocess.run(
+                [""git"", ""rev-parse"", ""--short"", ""HEAD""],"
+ai_trading/core/bot_engine.py,1651,eval_exec,high,")
+        _FINBERT_MODEL.eval()
+        _HUGGINGFACE_AVAILABLE = True"
+ai_trading/core/bot_engine.py,10,empty_except,medium,"return True
+    except Exception:
+        return False"
+ai_trading/core/bot_engine.py,40,empty_except,medium,"MEMORY_OPTIMIZATION_AVAILABLE = True
+except ImportError:
+    # Fallback decorators if memory optimization not available"
+ai_trading/core/bot_engine.py,76,empty_except,medium,"from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
+except ImportError:
+    # Fallback if circuit breaker module not available"
+ai_trading/core/bot_engine.py,83,empty_except,medium,"from circuit_breaker import circuit_breaker, CircuitBreakerConfig, CircuitBreakerOpenError
+except ImportError:
+    # Fallback if circuit_breaker module not available"
+ai_trading/core/bot_engine.py,110,empty_except,medium,"self._loaded = True
+            except ImportError:
+                # Create minimal fallback"
+ai_trading/core/bot_engine.py,149,empty_except,medium,"import numpy as np
+    except ImportError:
+        # Create fallback np object"
+ai_trading/core/bot_engine.py,249,empty_except,medium,"self._loaded = True
+            except ImportError:
+                # Create minimal fallback"
+ai_trading/core/bot_engine.py,290,empty_except,medium,"import pandas as pd
+    except ImportError:
+        # Create fallback pd object"
+ai_trading/core/bot_engine.py,474,empty_except,medium,"torch.manual_seed(SEED)
+except ImportError:
+    # PyTorch not available - continue with deterministic fallback seed"
+ai_trading/core/bot_engine.py,744,empty_except,medium,"import portalocker
+except ImportError:
+    # AI-AGENT-REF: portalocker not available, create minimal fallback"
+ai_trading/core/bot_engine.py,780,empty_except,medium,"import schedule
+except ImportError:
+    # AI-AGENT-REF: schedule not available, create minimal fallback"
+ai_trading/core/bot_engine.py,795,empty_except,medium,"YFINANCE_AVAILABLE = True
+except ImportError:
+    # AI-AGENT-REF: yfinance not available, create minimal fallback"
+ai_trading/core/bot_engine.py,892,empty_except,medium,"from bs4 import BeautifulSoup
+except ImportError:
+    # AI-AGENT-REF: bs4 not available, create minimal fallback"
+ai_trading/core/bot_engine.py,906,empty_except,medium,"from flask import Flask
+except ImportError:
+    # AI-AGENT-REF: flask not available, create minimal fallback"
+ai_trading/core/bot_engine.py,922,empty_except,medium,"from alpaca_api import alpaca_get, start_trade_updates_stream  # type: ignore
+except ImportError:
+    # AI-AGENT-REF: alpaca_api not available, create minimal fallbacks"
+ai_trading/core/bot_engine.py,931,empty_except,medium,"from ai_trading.rebalancer import maybe_rebalance as original_rebalance  # type: ignore
+except ImportError:
+    # AI-AGENT-REF: rebalancer not available, create minimal fallback"
+ai_trading/core/bot_engine.py,1008,empty_except,medium,"from sklearn.linear_model import BayesianRidge, Ridge
+except ImportError:
+    # Provide mock classes for graceful degradation"
+ai_trading/core/bot_engine.py,1165,empty_except,medium,"import pybreaker
+except ImportError:
+    # AI-AGENT-REF: pybreaker not available, create minimal fallback"
+ai_trading/core/bot_engine.py,1179,empty_except,medium,"from finnhub import FinnhubAPIException
+except ImportError:
+    # AI-AGENT-REF: finnhub not available, create minimal fallback"
+ai_trading/core/bot_engine.py,1187,empty_except,medium,"from prometheus_client import Counter, Gauge, Histogram, start_http_server, REGISTRY
+except ImportError:
+    # AI-AGENT-REF: prometheus_client not available, create minimal fallbacks"
+ai_trading/core/bot_engine.py,1242,empty_except,medium,")
+    except ValueError:
+        # Already registered (e.g., prior partial import). Reuse existing."
+ai_trading/core/bot_engine.py,1738,empty_except,medium,")
+    except Exception:
+        return ""unknown"""
+ai_trading/core/bot_engine.py,3264,empty_except,medium,"# The conversion will be handled by the meta-learning system when it reads the log
+            
+        except ImportError:"
+ai_trading/core/bot_engine.py,3269,empty_except,medium,"_convert_audit_to_meta_format = lambda x: x
+        except Exception as e:
+            # Don't fail trade logging if meta-learning conversion fails"
+ai_trading/core/bot_engine.py,3316,empty_except,medium,"remote = {p.symbol: int(p.qty) for p in ctx.api.get_all_positions()}
+    except Exception:
+        return"
+ai_trading/core/bot_engine.py,3385,empty_except,medium,"open_orders = ctx.api.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
+    except Exception:
+        return"
+ai_trading/core/bot_engine.py,3812,empty_except,medium,"strategies = [BaseStrategy(), BaseStrategy()]
+        except ImportError:
+            # AI-AGENT-REF: fallback to base Strategy class for test environments"
+ai_trading/core/bot_engine.py,3873,empty_except,medium,"status = event.order.status
+    except AttributeError:
+        # Fallback for dict-like event objects"
+ai_trading/core/bot_engine.py,4643,empty_except,medium,"reason = ""margin breach""
+            except Exception as e:
+                # Failed to check margin status - log error and treat as potential risk"
+ai_trading/core/bot_engine.py,4824,empty_except,medium,"positions = ctx.api.get_all_positions()
+    except Exception:
+        return {}"
+ai_trading/core/bot_engine.py,6302,empty_except,medium,"from ai_trading.indicators import rsi  # type: ignore
+    except ImportError:
+        # If indicators not available, fallback to simple logic"
+ai_trading/core/bot_engine.py,6312,empty_except,medium,"return close.iloc[-1] > ema_fast > ema_slow and rsi_val >= 55
+    except Exception:
+        return False"
+ai_trading/core/bot_engine.py,6609,empty_except,medium,"return int(pos.qty)
+    except Exception:
+        return 0"
+ai_trading/core/bot_engine.py,7567,empty_except,medium,"df = standardize_ohlcv(df)
+    except Exception as e:
+        # OHLCV standardization failed - log warning but continue with raw data"
+ai_trading/core/bot_engine.py,7593,empty_except,medium,"feat[""atr""] = ta.atr(df[""high""], df[""low""], df[""close""], length=14)
+    except Exception:
+        # Fallback ATR proxy from close-to-close movement"
+ai_trading/core/bot_engine.py,8127,empty_except,medium,"eq = float(ef.read().strip() or 0)
+    except Exception:
+        return 0.0"
+ai_trading/core/bot_engine.py,8428,empty_except,medium,"return
+            except Exception as e:
+                # Metrics server connectivity check failed - continue with port search"
+ai_trading/core/bot_engine.py,9072,empty_except,medium,"ctx.risk_engine.wait_for_exposure_update(0.5)
+        except Exception as e:
+            # Risk engine update failed - log warning but continue"
+ai_trading/core/bot_engine.py,9540,empty_except,medium,"state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
+    except Exception as e:
+        # Failed to refresh position cache - log error but continue"
+ai_trading/core/bot_engine.py,10065,empty_except,medium,"api.submit_order(symbol, 1, side)
+            except Exception as e:
+                # Order submission failed - log error and add to failed orders"
+ai_trading/core/bot_engine.py,3866,time_sleep_in_async,medium,# They will be initialized on-demand by the functions that need them.
+ai_trading/core/hyperparams_schema.py,18,empty_except,medium,"PYDANTIC_AVAILABLE = True
+except ImportError:
+    # Fallback for testing environments"
+ai_trading/data/splits.py,23,empty_except,medium,"from sklearn.model_selection import BaseCrossValidator
+except ImportError:
+    # Fallback base class if sklearn not available"
+ai_trading/data/splits.py,202,empty_except,medium,"purged_train.append(idx)
+                except Exception:
+                    # If there's any issue with the time comparison,"
+ai_trading/execution/__init__.py,26,empty_except,medium,"from .engine import Order, ExecutionAlgorithm
+except ImportError:
+    # Create placeholder classes if not available"
+ai_trading/execution/debug_tracker.py,175,empty_except,medium,"self._active_orders[correlation_id]['status'] = OrderStatus.CANCELLED.value
+        except Exception as e:
+            # AI-AGENT-REF: Graceful error handling for lock operations"
+ai_trading/execution/engine.py,244,empty_except,medium,"return False
+                    
+            except ImportError:"
+ai_trading/execution/engine.py,425,empty_except,medium,"reconcile_positions_and_orders()
+                except ImportError as e:
+                    # Reconciliation module not available - log debug info"
+ai_trading/execution/live_trading.py,23,empty_except,medium,"from ai_trading.config import get_alpaca_config
+except ImportError:
+    # Fallback for development"
+ai_trading/execution/live_trading.py,472,empty_except,medium,"}
+                
+            except ImportError:"
+ai_trading/execution/live_trading.py,514,empty_except,medium,"}
+            except ImportError:
+                return {""id"": order_id, ""status"": ""unknown""}"
+ai_trading/execution/live_trading.py,531,empty_except,medium,"}
+            except ImportError:
+                return {""equity"": ""unknown"", ""buying_power"": ""unknown""}"
+ai_trading/execution/live_trading.py,552,empty_except,medium,"]
+            except ImportError:
+                return []"
+ai_trading/features/pipeline.py,25,empty_except,medium,"sklearn_available = True
+except ImportError:
+    # Fallback classes if sklearn not available"
+ai_trading/integrations/rate_limit.py,197,time_sleep_in_async,medium,"return True, 0.0
+    
+    async def acquire(self, route: str, tokens: int = 1, timeout: Optional[float] = None) -> bool:"
+ai_trading/market/calendars.py,17,empty_except,medium,"import pandas as pd
+except ImportError:
+    # Create mock pandas for test environments"
+ai_trading/monitoring/__init__.py,38,empty_except,medium,"from .metrics import MetricsCollector, PerformanceMonitor
+except ImportError:
+    # Create placeholder classes if not available"
+ai_trading/monitoring/__init__.py,47,empty_except,medium,"from .alerts import AlertType
+except ImportError:
+    # Create placeholder if not available"
+ai_trading/monitoring/__init__.py,54,empty_except,medium,"from .dashboard import RealtimeMetrics
+except ImportError:
+    # Create placeholder if not available"
+ai_trading/portfolio/weights.py,15,empty_except,medium,"from ai_trading.utils import get_latest_close  # local util
+    except Exception:
+        # minimal fallback to avoid hard crash"
+ai_trading/position/correlation_analyzer.py,24,empty_except,medium,"import pandas as pd
+except ImportError:
+    # Use fallback implementations"
+ai_trading/position/correlation_analyzer.py,322,empty_except,medium,"return 1.0  # Normal correlation
+                
+        except Exception:"
+ai_trading/position/correlation_analyzer.py,446,empty_except,medium,"return None
+            
+        except Exception:"
+ai_trading/position/correlation_analyzer.py,464,empty_except,medium,"return aligned_data1, aligned_data2
+            
+        except Exception:"
+ai_trading/position/correlation_analyzer.py,551,empty_except,medium,"return sum(correlations) / len(correlations) if correlations else 0.0
+            
+        except Exception:"
+ai_trading/position/correlation_analyzer.py,693,empty_except,medium,"return 0.0
+            
+        except Exception:"
+ai_trading/position/intelligent_manager.py,30,empty_except,medium,"import pandas as pd
+except ImportError:
+    # Use fallback implementations"
+ai_trading/position/intelligent_manager.py,569,empty_except,medium,"return quantity_to_sell, percentage_to_sell, target_price, stop_price
+            
+        except Exception:"
+ai_trading/position/intelligent_manager.py,619,empty_except,medium,"return 0.0
+            
+        except Exception:"
+ai_trading/position/legacy_manager.py,187,empty_except,medium,"return []
+        except Exception:
+            return []"
+ai_trading/position/legacy_manager.py,350,empty_except,medium,"return 0.0
+            
+        except Exception:"
+ai_trading/position/legacy_manager.py,362,empty_except,medium,"return 0
+        except Exception:
+            return 0"
+ai_trading/position/legacy_manager.py,413,empty_except,medium,"return score
+        
+    except Exception:"
+ai_trading/position/market_regime.py,23,empty_except,medium,"import pandas as pd
+except ImportError:
+    # Use fallback implementations"
+ai_trading/position/market_regime.py,230,empty_except,medium,"return None
+            
+        except Exception:"
+ai_trading/position/market_regime.py,276,empty_except,medium,"}
+            
+        except Exception:"
+ai_trading/position/market_regime.py,314,empty_except,medium,"}
+            
+        except Exception:"
+ai_trading/position/market_regime.py,350,empty_except,medium,"}
+            
+        except Exception:"
+ai_trading/position/market_regime.py,381,empty_except,medium,"return {'score': mean_reversion_score}
+            
+        except Exception:"
+ai_trading/position/market_regime.py,402,empty_except,medium,"return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50.0
+            
+        except Exception:"
+ai_trading/position/market_regime.py,455,empty_except,medium,"return max(0.0, min(1.0, confidence))
+            
+        except Exception:"
+ai_trading/position/market_regime.py,473,empty_except,medium,"return duration
+            
+        except Exception:"
+ai_trading/position/profit_taking.py,23,empty_except,medium,"import pandas as pd
+except ImportError:
+    # Use fallback implementations"
+ai_trading/position/profit_taking.py,267,empty_except,medium,"return velocity
+            
+        except Exception:"
+ai_trading/position/profit_taking.py,426,empty_except,medium,"return False
+            
+        except Exception:"
+ai_trading/position/profit_taking.py,500,empty_except,medium,"return resistance_levels[:3]  # Return top 3 levels
+            
+        except Exception:"
+ai_trading/position/profit_taking.py,529,empty_except,medium,"return target
+            
+        except Exception:"
+ai_trading/position/profit_taking.py,548,empty_except,medium,"return 0.0
+            
+        except Exception:"
+ai_trading/position/profit_taking.py,567,empty_except,medium,"return None
+            
+        except Exception:"
+ai_trading/position/profit_taking.py,588,empty_except,medium,"return rsi.iloc[-1] if not pd.isna(rsi.iloc[-1]) else 50.0
+            
+        except Exception:"
+ai_trading/position/technical_analyzer.py,23,empty_except,medium,"import pandas as pd
+except ImportError:
+    # Use fallback implementations"
+ai_trading/position/trailing_stops.py,23,empty_except,medium,"import pandas as pd
+except ImportError:
+    # Use fallback implementations"
+ai_trading/risk/__init__.py,41,empty_except,medium,"from .metrics import RiskMetricsCalculator, DrawdownAnalyzer
+except ImportError:
+    # Create placeholder classes if metrics module doesn't exist"
+ai_trading/risk/adaptive_sizing.py,242,empty_except,medium,"return normalized_slope * 252  # Annualize
+            
+        except Exception:"
+ai_trading/risk/adaptive_sizing.py,262,empty_except,medium,"return statistics.stdev(recent_returns) * math.sqrt(252)
+            
+        except Exception:"
+ai_trading/risk/adaptive_sizing.py,283,empty_except,medium,"return self._get_percentile_rank(current_vol, historical_vols)
+            
+        except Exception:"
+ai_trading/risk/adaptive_sizing.py,308,empty_except,medium,"return max(-1.0, min(1.0, correlation))  # Clamp to [-1, 1]
+            
+        except Exception:"
+ai_trading/risk/kelly.py,25,empty_except,medium,"_DEFAULT_CONFIG = TradingConfig.from_env()
+except ImportError:
+    # Fallback if config import fails"
+ai_trading/risk/position_sizing.py,394,empty_except,medium,"return min(1.0, risk_estimate)  # Cap at 100%
+            
+        except Exception:"
+ai_trading/risk/pre_trade_validation.py,731,empty_except,medium,")
+            
+        except Exception as e:"
+ai_trading/rl_trading/train.py,24,empty_except,medium,"sb3_available = True
+except Exception as e:
+    # Catch broader failures (e.g., Torch partial installs raising AttributeError during import)"
+ai_trading/rl_trading/train.py,238,empty_except,medium,"return 0.0
+                
+            except Exception:"
+ai_trading/rl_trading/tests/smoke_parity.py,116,empty_except,medium,"logger.info(f""    Postprocessed action: {action_details['action']} (confidence: {action_details['confidence']:.2f})"")
+                
+            except Exception as e:"
+ai_trading/scheduler/aligned_clock.py,90,empty_except,medium,"return utc_now.astimezone(exchange_tz)
+        except ImportError:
+            pass"
+ai_trading/strategies/__init__.py,35,empty_except,medium,"from .base import BaseStrategy, StrategySignal
+except ImportError:
+    # Create placeholder classes if not available"
+ai_trading/strategies/regime_detector.py,425,empty_except,medium,"return None
+            
+        except Exception:"
+ai_trading/strategies/regime_detector.py,447,empty_except,medium,"return max(0.0, min(1.0, confidence))
+            
+        except Exception:"
+ai_trading/utils/base.py,382,empty_except,medium,"return et_time.weekday() >= 5  # Saturday=5, Sunday=6
+    except Exception:
+        # Fallback to UTC weekday"
+ai_trading/utils/base.py,402,empty_except,medium,"return schedule.empty
+        
+    except ImportError:"
+ai_trading/utils/determinism.py,48,empty_except,medium,"tf.random.set_seed(seed)
+    except ImportError:
+        pass"
+ai_trading/utils/determinism.py,60,empty_except,medium,"torch.backends.cudnn.benchmark = False
+    except ImportError:
+        pass"
+scripts/INTEGRATION_GUIDE.py,65,empty_except,medium,"})
+                
+        except Exception as e:"
+scripts/audit.py,9,empty_except,medium,"from validate_env import settings
+except ImportError:
+    # Create minimal fallback for testing"
+scripts/backtest_framework.py,110,empty_except,medium,"self.cleanup()
+        except Exception:
+            pass"
+scripts/config_server.py,41,empty_except,medium,")
+
+    except ValueError as e:"
+scripts/demo_short_selling_implementation.py,63,empty_except,medium,"result = engine.execute_order(""AAPL"", 10, ""sell_short"")
+                        except Exception:
+                            pass  # Expected to stop at liquidity check"
+scripts/error_handling.py,155,empty_except,medium,"trade_monitor.log_periodic_summary()
+    except ImportError:
+        pass"
+scripts/health_check.py,210,empty_except,medium,")
+            
+        except Exception as e:"
+scripts/health_check.py,251,empty_except,medium,")
+            
+        except Exception as e:"
+scripts/health_check.py,291,empty_except,medium,")
+            
+        except Exception as e:"
+scripts/health_check.py,349,empty_except,medium,")
+            
+        except Exception as e:"
+scripts/health_check.py,393,empty_except,medium,")
+            
+        except Exception as e:"
+scripts/health_check.py,521,empty_except,medium,")
+        
+    except Exception as e:"
+scripts/memory_optimizer.py,44,empty_except,medium,"logger = get_logger('memory_optimizer')
+        except ImportError:
+            # Fallback to standard logging if ai_trading module not available"
+scripts/metrics_logger.py,13,empty_except,medium,"import numpy as np
+except ImportError:
+    # AI-AGENT-REF: numpy not available, create minimal fallback"
+scripts/monitoring_dashboard.py,163,empty_except,medium,"return jsonify(get_health_status())
+            except ImportError:
+                return jsonify({'error': 'Health check module not available'})"
+scripts/optimized_startup.py,45,empty_except,medium,"stop_performance_monitoring()
+        except ImportError:
+            pass"
+scripts/optimized_startup.py,54,empty_except,medium,"optimizer.stop_memory_monitoring()
+        except ImportError:
+            pass"
+scripts/optimized_startup.py,61,empty_except,medium,"emergency_memory_cleanup()
+        except ImportError:
+            pass"
+scripts/order_health_monitor.py,23,empty_except,medium,"from trade_execution import _active_orders, _order_tracking_lock, OrderInfo
+except ImportError:
+    # Fallback for testing"
+scripts/performance_monitor.py,253,subprocess_unsafe,medium,"# Get all Python processes with full command line details
+            result = subprocess.run(
+                ['ps', 'aux'],"
+scripts/performance_monitor.py,341,subprocess_unsafe,medium,"try:
+            result = subprocess.run(['pgrep', '-f', 'python'], 
+                                  capture_output=True, text=True, timeout=5)"
+scripts/performance_monitor.py,354,subprocess_unsafe,medium,"# Check for established connections
+            result = subprocess.run(timeout=30, ['netstat', '-tn'], 
+                                  capture_output=True, text=True)"
+scripts/portfolio_optimizer.py,451,empty_except,medium,"return total_cost
+            
+        except Exception:"
+scripts/portfolio_optimizer.py,468,empty_except,medium,"return position_change * avg_return
+            
+        except Exception:"
+scripts/portfolio_optimizer.py,489,empty_except,medium,"return risk_change
+            
+        except Exception:"
+scripts/portfolio_optimizer.py,503,empty_except,medium,"return -trade_value * 0.15  # Assume 15% tax drag
+                
+        except Exception:"
+scripts/portfolio_optimizer.py,527,empty_except,medium,"return max(0.0, min(1.0, confidence))
+            
+        except Exception:"
+scripts/portfolio_rl.py,5,empty_except,medium,"import numpy as np
+except ImportError:
+    # Fallback when numpy not available"
+scripts/portfolio_rl.py,57,empty_except,medium,")
+        except Exception:
+            # AI-AGENT-REF: Handle any PyTorch version compatibility issues during initialization"
+scripts/portfolio_rl.py,76,empty_except,medium,"return self.net(x)
+        except Exception:
+            # AI-AGENT-REF: Fallback if forward pass fails due to version issues"
+scripts/portfolio_rl.py,98,empty_except,medium,"self.optimizer = optim.Adam(self.actor.parameters(), lr=1e-3)
+        except Exception:
+            # AI-AGENT-REF: Handle initialization errors due to version compatibility"
+scripts/portfolio_rl.py,144,empty_except,medium,"return weights / total
+        except Exception:
+            # AI-AGENT-REF: Fallback if PyTorch operations fail"
+scripts/predict.py,13,empty_except,medium,"import joblib
+except ImportError:
+    # Create minimal joblib fallback"
+scripts/predict.py,34,empty_except,medium,"import pandas as pd
+except ImportError:
+    # Import mock pandas from ai_trading.utils"
+scripts/predict.py,64,empty_except,medium,"_CACHETOOLS_AVAILABLE = True
+except ImportError:
+    # Fallback to bounded dict cache if cachetools not available"
+scripts/process_manager.py,45,subprocess_unsafe,medium,"# Use ps to find all Python processes
+            result = subprocess.run(timeout=30, 
+                ['ps', 'aux', '--sort=-rss'],  # Sort by memory usage (descending)"
+scripts/process_manager.py,286,subprocess_unsafe,medium,"try:
+                result = subprocess.run(timeout=30, 
+                    ['systemctl', 'is-active', service],"
+scripts/process_manager.py,300,subprocess_unsafe,medium,"if status != 'active':
+                    detail_result = subprocess.run(timeout=30, 
+                        ['systemctl', 'status', service, '--no-pager', '-l'],"
+scripts/process_manager.py,340,subprocess_unsafe,medium,"# Need to change ownership
+                            subprocess.run(timeout=30, 
+                                ['sudo', 'chown', f'{target_user}:{target_user}', path],"
+scripts/process_manager.py,146,empty_except,medium,"return False  # Process still running
+            except OSError:
+                return True  # Process is gone"
+scripts/process_manager.py,244,empty_except,medium,"return False
+                    except OSError:
+                        # Process doesn't exist, remove stale PID file"
+scripts/process_manager.py,256,empty_except,medium,"os.unlink(pidfile_path)
+                    except OSError:
+                        pass"
+scripts/process_manager.py,458,empty_except,medium,"return False
+                    except OSError:
+                        # Process is dead, remove stale lock file"
+scripts/process_manager.py,467,empty_except,medium,"os.remove(lock_file)
+                    except OSError:
+                        pass"
+scripts/production_integration.py,282,empty_except,medium,"return result
+                
+            except Exception as e:"
+scripts/production_validator.py,421,empty_except,medium,"}
+        except ImportError:
+            # Fallback measurements"
+scripts/production_validator.py,471,empty_except,medium,"return True
+            
+        except Exception:"
+scripts/production_validator.py,792,empty_except,medium,"return 95
+        except ImportError:
+            return 50"
+scripts/production_validator.py,819,empty_except,medium,"return 95
+        except ImportError:
+            return 50"
+scripts/production_validator.py,827,empty_except,medium,"return 90
+        except ImportError:
+            return 40"
+scripts/production_validator.py,836,empty_except,medium,"return 90
+        except ImportError:
+            return 40"
+scripts/production_validator.py,844,empty_except,medium,"return 85
+        except ImportError:
+            return 30"
+scripts/rebalancer.py,29,empty_except,medium,"_import_success = True
+except Exception as e:
+    # Create minimal rebalancer functionality for testing if import fails"
+scripts/retrain.py,159,subprocess_unsafe,medium,"return (
+            subprocess.check_output([""git"", ""rev-parse"", ""--short"", ""HEAD""], timeout=30)
+            .decode()"
+scripts/retrain.py,12,empty_except,medium,"import joblib
+except ImportError:
+    # Create minimal joblib fallback"
+scripts/retrain.py,33,empty_except,medium,"import numpy as np
+except ImportError:
+    # Create minimal numpy fallback"
+scripts/retrain.py,55,empty_except,medium,"import pandas as pd
+except ImportError:
+    # Import mock pandas from utils"
+scripts/retrain.py,75,empty_except,medium,"torch.manual_seed(SEED)
+except ImportError:
+    pass"
+scripts/retrain.py,85,empty_except,medium,"from lightgbm import LGBMClassifier
+except ImportError:
+    # Create minimal LGBMClassifier fallback"
+scripts/retrain.py,102,empty_except,medium,"from sklearn.preprocessing import StandardScaler
+except ImportError:
+    # Create minimal sklearn fallbacks"
+scripts/retrain.py,176,empty_except,medium,"os.makedirs(dir_name, exist_ok=True)
+    except FileExistsError:
+        pass  # Another thread created it"
+scripts/retrain.py,421,empty_except,medium,").astype(float)
+    except Exception as e:
+        # escape the % so logging doesn’t try to interpret %R as a format code"
+scripts/risk_engine.py,10,empty_except,medium,"import numpy as np
+except ImportError:
+    # AI-AGENT-REF: numpy not available, create minimal fallback"
+scripts/risk_engine.py,39,empty_except,medium,"import pandas as pd
+except ImportError:
+    # AI-AGENT-REF: pandas not available, create minimal fallback"
+scripts/risk_engine.py,579,empty_except,medium,"raw_qty = (total_equity * weight) / price
+            except Exception:
+                # AI-AGENT-REF: Fallback for completely invalid signals"
+scripts/risk_engine.py,1124,empty_except,medium,"import pandas_ta as ta
+except ImportError:
+    # AI-AGENT-REF: pandas_ta not available, create minimal fallback"
+scripts/scalability_manager.py,216,empty_except,medium,"return psutil.cpu_percent()
+        except ImportError:
+            # Fallback calculation based on task load"
+scripts/system_diagnostic.py,94,subprocess_unsafe,medium,"# Use ps to find Python processes
+            result = subprocess.run(['ps', 'aux'], capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:"
+scripts/system_health_checker.py,341,empty_except,medium,")
+                
+            except ImportError:"
+scripts/transaction_cost_calculator.py,519,empty_except,medium,"return spread_estimates.get(liquidity_tier, 0.005)
+            
+        except Exception:"
+scripts/transaction_cost_calculator.py,538,empty_except,medium,"return LiquidityTier.ILLIQUID
+                
+        except Exception:"
+scripts/validate_critical_features.py,17,subprocess_unsafe,medium,"try:
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30, cwd=Path(__file__).parent)
+        if result.returncode == 0:"
+scripts/validate_env.py,16,empty_except,medium,"PYDANTIC_AVAILABLE = True
+except ImportError:
+    # Create minimal fallback classes for testing mode"
+scripts/validate_env.py,403,empty_except,medium,"logger.warning(f""Alpaca API may be experiencing issues: {response.status_code}"")
+            
+    except Exception:"
+scripts/validate_env.py,407,empty_except,medium,"logger.warning(""Could not verify API connectivity (this may be temporary)"")
+    except ImportError:
+        # http utilities not available - skip connectivity check"
+scripts/validate_improvements.py,107,subprocess_unsafe,medium,"# Run pytest on a simple test if it exists
+        result = subprocess.run(
+            [sys.executable, '-m', 'pytest', '--collect-only', '-q'],"
+scripts/validate_production_fixes.py,188,empty_except,medium,"logging.info(f""✅ {module_name} imports successfully"")
+            except ImportError as e:
+                # Allow for missing dependencies like pandas"
+scripts/validate_standalone.py,182,empty_except,medium,"np.random.seed(seed)
+        except ImportError:
+            pass"
+scripts/validate_test_environment.py,36,empty_except,medium,"return True, version
+    except ImportError as e:
+        return False, str(e)"
+scripts/verify_config.py,51,empty_except,medium,"return True, ""✅ .env file format looks good""
+        
+    except ImportError:"
+scripts/verify_config.py,54,empty_except,medium,"return False, ""❌ python-dotenv not installed. Run: pip install python-dotenv""
+    except Exception as e:
+        return False, f""❌ Error reading .env file: {e}"""
+scripts/verify_config.py,101,empty_except,medium,"return True, f""✅ API keys configured correctly\n   Environment: {env_type}""
+        
+    except ImportError:"
+scripts/verify_config.py,104,empty_except,medium,"return False, ""❌ python-dotenv not installed. Run: pip install python-dotenv""
+    except Exception as e:
+        return False, f""❌ Error checking API keys: {e}"""
+scripts/verify_config.py,124,empty_except,medium,"return False, ""⚠️  Configuration imports but API keys not properly set""
+        
+    except Exception as e:"
+tests/conftest.py,1480,empty_except,medium,"setattr(config, 'TradingConfig', MockTradingConfig)
+    except ImportError:
+        pass"
+tests/conftest.py,1490,empty_except,medium,"monkeypatch.setattr(cs, ""volatility_parity_position"", lambda *a, **k: 0.01)
+    except ImportError:
+        pass"
+tests/conftest.py,1498,empty_except,medium,"bot_engine.check_alpaca_available = lambda x: True
+    except ImportError:
+        pass"
+tests/conftest.py,1500,empty_except,medium,"pass
+    except Exception:
+        # If bot_engine import fails due to config issues, skip it for now"
+tests/conftest.py,1516,empty_except,medium,"trade_execution.ExecutionEngine = MockExecutionEngine
+    except ImportError:
+        pass"
+tests/conftest.py,1569,empty_except,medium,")
+    except ImportError:
+        # Use mock DataFrame if pandas not available"
+tests/test_additional_coverage.py,288,empty_except,medium,"runpy.run_module(""validate_env"", run_name=""__main__"")
+    except SystemExit as e:
+        # AI-AGENT-REF: Expect exit code 0 (success) or 1 (validation issues) - both are valid test outcomes"
+tests/test_alpaca_import_handling.py,123,empty_except,medium,"raise TypeError(""'function' object is not iterable"")
+        except TypeError:
+            # Service should continue with degraded mode"
+tests/test_alpha_quality.py,259,empty_except,medium,"print(""✓ Feature pipeline leakage test passed"")
+        except Exception as e:
+            # If validation fails due to missing dependencies, that's OK"
+tests/test_audit_column_fix.py,16,empty_except,medium,"getattr(mod, attr_name, None)
+    except Exception:
+        # Fallback to original method if needed for coverage"
+tests/test_audit_smoke.py,16,empty_except,medium,"getattr(mod, attr_name, None)
+    except Exception:
+        # Fallback to original method if needed for coverage"
+tests/test_backtest_smoke.py,14,empty_except,medium,"getattr(mod, attr_name, None)
+    except Exception:
+        # Fallback to original method if needed for coverage"
+tests/test_benchmarks.py,53,empty_except,medium,"benchmark(func, df)
+    except LookupError:
+        # Fallback: just run the function to ensure it works"
+tests/test_bot_engine.py,4,eval_exec,high,"# AI-AGENT-REF: Replaced unsafe exec() with direct import from shim module
+from ai_trading.bot_engine import prepare_indicators"
+tests/test_bot_engine_edge_cases.py,5,eval_exec,high,"# AI-AGENT-REF: Replaced unsafe exec() with direct import from shim module
+from ai_trading.bot_engine import prepare_indicators"
+tests/test_bot_engine_imports.py,76,empty_except,medium,"assert model_pipeline == ""mock_legacy_model_pipeline""
+                except ImportError:
+                    # In test environment, both imports might fail - that's okay"
+tests/test_bot_engine_unit.py,8,eval_exec,high,"# AI-AGENT-REF: Replaced unsafe exec() with proper imports from core module
+from ai_trading.core.bot_engine import ("
+tests/test_capital_scaling_smoke.py,18,empty_except,medium,"getattr(mod, attr_name, None)
+    except Exception:
+        # Fallback to original method if needed for coverage"
+tests/test_centralized_logging_no_duplicates.py,81,empty_except,medium,"assert False, ""logging_config should not be importable after removal""
+    except ImportError:
+        pass  # Expected"
+tests/test_centralized_logging_no_duplicates.py,88,empty_except,medium,"assert False, ""logger should not be importable after removal""
+    except ImportError:
+        pass  # Expected"
+tests/test_cli_smoke.py,8,subprocess_unsafe,medium,"""""""Run command and return exit code.""""""
+    return subprocess.run(
+        cmd,"
+tests/test_config_deadlock_fix.py,19,empty_except,medium,"config.validate_environment()
+    except RuntimeError:
+        pass  # Expected when env vars missing"
+tests/test_config_deadlock_fix.py,32,empty_except,medium,"config.validate_env_vars()
+    except RuntimeError:
+        pass  # Expected when env vars missing"
+tests/test_config_deadlock_fix.py,69,empty_except,medium,"config.validate_environment()
+        except RuntimeError:
+            pass  # Expected when env vars missing"
+tests/test_config_deadlock_fix.py,138,empty_except,medium,"print('Import successful')
+    except Exception as e:
+        # Import might fail due to missing dependencies, but it shouldn't hang"
+tests/test_config_deadlock_fix.py,156,empty_except,medium,"config.validate_env_vars()
+    except RuntimeError:
+        pass  # Expected when env vars are missing"
+tests/test_config_env.py,69,empty_except,medium,"assert result is True
+            except Exception as e:
+                # If import fails due to missing env vars, that's expected in test environment"
+tests/test_coverage_hack.py,16,eval_exec,high,"lines = len(path.read_text().splitlines())
+            # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
+            dummy = ""\n"".join(""pass"" for _ in range(lines))"
+tests/test_critical_datetime_fixes.py,77,empty_except,medium,"self.assertTrue(True, ""get_minute_df should handle naive datetime without errors"")
+                except Exception as e:
+                    # Check if the error is related to timezone issues"
+tests/test_critical_datetime_fixes.py,163,empty_except,medium,"self.assertEqual(score2, 0.0, ""Should return cached neutral score"")
+                    
+        except ImportError as e:"
+tests/test_critical_fixes.py,249,empty_except,medium,"# If it succeeds, that's fine - we're mainly testing the error handling path exists
+    except Exception:
+        # If it fails due to missing dependencies, that's also acceptable for this test"
+tests/test_critical_fixes_validation.py,87,empty_except,medium,"self.assertTrue(all(df[""exit_price""] > 0), ""All exit prices should be positive"")
+            
+        except ImportError:"
+tests/test_critical_issues_resolution.py,22,empty_except,medium,"HAS_FULL_IMPORTS = True
+except ImportError as e:
+    # Continue with minimal testing if imports fail"
+tests/test_critical_trading_fixes.py,735,empty_except,medium,"retrain_meta_learner(trade_log_path=tmp_path, min_samples=1)
+            except Exception as e:
+                # Training may fail due to missing sklearn, but that's OK for this test"
+tests/test_critical_trading_issues.py,336,empty_except,medium,"self.assertTrue(hasattr(emergency_memory_cleanup, '__call__'))
+        except ImportError:
+            # Should have fallback decorators"
+tests/test_data_fetcher.py,238,eval_exec,high,"# AI-AGENT-REF: Replaced unsafe exec() with direct import from core module
+from ai_trading.core.bot_engine import fetch_minute_df_safe"
+tests/test_features.py,16,hardcoded_secret,high,"validate_stub.settings = types.SimpleNamespace(
+    ALPACA_API_KEY=""k"",
+    ALPACA_SECRET_KEY=""s"","
+tests/test_features.py,19,hardcoded_secret,high,"ALPACA_BASE_URL=""http://example.com"",
+    WEBHOOK_SECRET=""w"",
+)"
+tests/test_grid_sanity.py,6,empty_except,medium,"df = pd.read_csv(""logs/grid_results.csv"")
+    except FileNotFoundError:
+        # AI-AGENT-REF: use dummy data when logs are absent"
+tests/test_import_fallbacks.py,17,empty_except,medium,"assert ModelRegistry is not None
+    except ImportError:
+        # If ai_trading import fails, test fallback would work"
+tests/test_import_fallbacks.py,129,empty_except,medium,"__import__(module_name)
+        except ImportError as e:
+            # If import fails, it should be due to missing dependencies,"
+tests/test_import_fallbacks.py,142,empty_except,medium,"assert callable(last_minute_bar_age_seconds)
+    except ImportError:
+        # Try ai_trading prefix"
+tests/test_kelly_confidence_fix.py,59,empty_except,medium,"assert fractional_kelly_size(ctx, balance, price, atr, -0.5) >= 0
+        
+    except ImportError:"
+tests/test_kelly_confidence_fix.py,106,empty_except,medium,"assert result > 0, ""Valid inputs should produce positive position size""
+        
+    except ImportError:"
+tests/test_logger_rotator_smoke.py,16,empty_except,medium,"getattr(mod, attr_name, None)
+    except Exception:
+        # Fallback to original method if needed for coverage"
+tests/test_metrics_logger_smoke.py,13,eval_exec,high,"def force_coverage(mod):
+    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
+    lines = Path(mod.__file__).read_text().splitlines()"
+tests/test_ml_model_loading.py,9,eval_exec,high,"# AI-AGENT-REF: Replaced unsafe exec() with direct imports from core module
+from ai_trading.core.bot_engine import _load_ml_model, _cleanup_ml_model_cache"
+tests/test_ml_model_validation.py,24,empty_except,medium,"model.predict(df)
+    except ValueError:
+        pass"
+tests/test_nameerror_integration.py,82,subprocess_unsafe,medium,"try:
+            result = subprocess.run(
+                [sys.executable, script_path],"
+tests/test_nameerror_integration.py,60,empty_except,medium,"exit_code = 2
+except Exception as e:
+    # Other exceptions are expected due to missing dependencies, incomplete env, etc."
+tests/test_nameerror_integration.py,89,empty_except,medium,")
+        except subprocess.TimeoutExpired as e:
+            # Handle subprocess timeout gracefully"
+tests/test_parameter_optimization.py,109,empty_except,medium,"assert 0.2 <= adjustment <= 2.0, f""Volatility adjustment {adjustment} for {vol_regime} outside safe bounds""
+            
+    except ImportError as e:"
+tests/test_parameter_optimization.py,131,empty_except,medium,"assert 0.05 <= vwap.participation_rate <= 0.30, ""VWAP participation rate outside safe bounds""
+        
+    except ImportError as e:"
+tests/test_peak_performance.py,186,empty_except,medium,"assert all(isinstance(cluster_id, int) for cluster_id in clusters.values())
+    except ImportError:
+        pass  # Skip if clustering dependencies not available"
+tests/test_performance_fixes.py,123,empty_except,medium,"engine._handle_order_result(""AAPL"", ""buy"", mock_order, 150.00, 100, start_time)
+    except Exception as e:
+        # Expected to fail on API calls in test environment"
+tests/test_pipeline_smoke.py,12,eval_exec,high,"def force_coverage(mod):
+    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
+    lines = Path(mod.__file__).read_text().splitlines()"
+tests/test_portfolio_integration.py,247,empty_except,medium,"assert True
+        except Exception as e:
+            # Some failures are expected due to limited test environment"
+tests/test_predict_smoke.py,26,eval_exec,high,"def force_coverage(mod):
+    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
+    lines = Path(mod.__file__).read_text().splitlines()"
+tests/test_problem_statement_validation.py,155,hardcoded_secret,high,"# Should have key placeholders
+    assert 'ALPACA_API_KEY=' in content, ""Should have Alpaca API key placeholder""
+    assert 'ALPACA_SECRET_KEY=' in content, ""Should have Alpaca secret placeholder"""
+tests/test_problem_statement_validation.py,160,hardcoded_secret,high,"# Should not contain real secrets
+    assert len([line for line in content.split('\n') if line.startswith('ALPACA_API_KEY=') and 'your_' not in line]) == 0, ""Should not contain real API keys"""
+tests/test_production_fixes.py,281,empty_except,medium,"__import__(module_name)
+            except ImportError as e:
+                # Allow for missing dependencies in test environment"
+tests/test_pydantic_v2_migration.py,80,empty_except,medium,"pytest.skip(f""Cannot import validate_env module: {e}"")
+    except Exception as e:
+        # Don't fail if there are other validation issues, just check syntax works"
+tests/test_pydantic_v2_migration.py,108,empty_except,medium,"# by validators or set to defaults
+            except Exception as e:
+                # Validation errors are expected with invalid inputs"
+tests/test_rebalancer_additional.py,31,empty_except,medium,"target()
+                except Exception:
+                    # Catch any exceptions from the loop to prevent infinite execution"
+tests/test_retrain_smoke.py,84,eval_exec,high,"def force_coverage(mod):
+    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
+    lines = Path(mod.__file__).read_text().splitlines()"
+tests/test_retry_idempotency_integration.py,98,empty_except,medium,"return result
+    except Exception:
+        # If submission fails, we keep the idempotency mark"
+tests/test_safe_submit_order.py,31,empty_except,medium,"assert order is None  # Acceptable in degraded mode
+    except Exception:
+        # If imports fail due to missing dependencies, the test still passes"
+tests/test_short_selling_implementation.py,102,empty_except,medium,"result = engine.execute_order(""AAPL"", 10, ""sell_short"")
+                        except Exception:
+                            # Expected to reach this point, meaning it passed the initial validation"
+tests/test_strategy_allocator_smoke.py,11,eval_exec,high,"def force_coverage(mod):
+    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
+    lines = Path(mod.__file__).read_text().splitlines()"
+tests/test_stream_subscription_fix.py,111,empty_except,medium,"success = True
+                except Exception:
+                    # Other import errors are expected due to missing dependencies"
+tests/test_systemd_startup.py,72,subprocess_unsafe,medium,"# Run the test script in a clean subprocess
+            result = subprocess.run(
+                [sys.executable, script_path],"
+tests/test_systemd_startup.py,134,subprocess_unsafe,medium,"result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30)  # AI-AGENT-REF: Added timeout for security
+            assert result.returncode == 0, f""ALPACA test failed: {result.stderr}"""
+tests/test_systemd_startup.py,157,subprocess_unsafe,medium,"result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30)  # AI-AGENT-REF: Added timeout for security
+            assert result.returncode == 0, f""APCA test failed: {result.stderr}"""
+tests/test_systemd_startup.py,198,subprocess_unsafe,medium,"try:
+            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30)  # AI-AGENT-REF: Added timeout for security
+            print(""STDOUT:"", result.stdout)"
+tests/test_systemd_startup.py,236,subprocess_unsafe,medium,"try:
+            result = subprocess.run([sys.executable, script_path], capture_output=True, text=True, timeout=30)  # AI-AGENT-REF: Added timeout for security
+            print(""STDOUT:"", result.stdout)"
+tests/test_talib_enforcement.py,60,hardcoded_secret,high,"TRADE_AUDIT_DIR = str(tmp_path / ""audit"")
+        NEWS_API_KEY = ""test_news_api_key"""
+tests/test_talib_enforcement.py,137,hardcoded_secret,high,"TRADE_AUDIT_DIR = str(tmp_path)
+        NEWS_API_KEY = ""test_news_api_key"""
+tests/test_trade_execution_smoke.py,11,eval_exec,high,"def force_coverage(mod):
+    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
+    lines = Path(mod.__file__).read_text().splitlines()"
+tests/test_trade_execution_smoke.py,39,empty_except,medium,"monkeypatch.setattr(""ai_trading.trade_execution.monitor_slippage"", lambda *a, **k: None)
+    except ImportError:
+        # If monitor_slippage doesn't exist or isn't accessible, create a mock"
+tests/test_trigger_meta_learning_conversion.py,61,hardcoded_secret,high,"SCHEDULER_SLEEP_SECONDS = 30.0
+    NEWS_API_KEY = ""test_news_api_key""
+    TESTING = True"
+tests/institutional/framework.py,325,empty_except,medium,"}
+        except Exception as e:
+            return {""status"": ""failed"", ""error"": str(e)}"
+tests/institutional/framework.py,343,empty_except,medium,"}
+        except Exception as e:
+            return {""status"": ""failed"", ""error"": str(e)}"
+tests/institutional/framework.py,365,empty_except,medium,"}
+        except Exception as e:
+            return {""status"": ""failed"", ""error"": str(e)}"
+tests/institutional/framework.py,387,empty_except,medium,"}
+        except Exception as e:
+            return {""status"": ""failed"", ""error"": str(e)}"
+tests/institutional/framework.py,409,empty_except,medium,"}
+        except Exception as e:
+            return {""status"": ""failed"", ""error"": str(e)}"
+tests/institutional/framework.py,429,empty_except,medium,"}
+        except Exception as e:
+            return {""status"": ""failed"", ""error"": str(e)}"
+tests/institutional/test_live_trading.py,176,empty_except,medium,"# Should handle gracefully
+        except Exception:
+            # Error handling is working"
+tools/codemods/codemod_logging_time.py,2,datetime_naive_now,medium,"#!/usr/bin/env python3
+""""""Codemod script to replace print() with logging and make datetime.now() timezone-aware."""""""
+tools/codemods/codemod_logging_time.py,62,datetime_naive_now,medium,"def replace_datetime_now(content: str) -> str:
+    """"""Replace naive datetime.now() with timezone-aware version.""""""
+    # Replace datetime.now() with datetime.now(datetime.timezone.utc)"
+tools/codemods/codemod_logging_time.py,63,datetime_naive_now,medium,"""""""Replace naive datetime.now() with timezone-aware version.""""""
+    # Replace datetime.now() with datetime.now(datetime.timezone.utc)
+    content = re.sub("

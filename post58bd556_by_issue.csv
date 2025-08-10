@@ -1,0 +1,11 @@
+severity,issue,count
+high,eval_exec,14
+high,hardcoded_secret,7
+low,print_call,658
+low,path_data_literal,3
+low,todo_fixme,2
+low,wildcard_import,1
+medium,empty_except,281
+medium,subprocess_unsafe,19
+medium,datetime_naive_now,3
+medium,time_sleep_in_async,2
