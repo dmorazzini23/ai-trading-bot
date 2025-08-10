@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Codemod script to replace print() with logging and make datetime.now() timezone-aware."""
+"""Codemod script to replace print() with logging and make naive datetime timezone-aware."""
 
 import os
 import re
@@ -59,8 +59,8 @@ def replace_print_with_logging(content: str, filepath: str) -> str:
 
 
 def replace_datetime_now(content: str) -> str:
-    """Replace naive datetime.now() with timezone-aware version."""
-    # Replace datetime.now() with datetime.now(datetime.timezone.utc)
+    """Replace naive datetime calls with timezone-aware version."""
+    # Replace naive datetime calls with timezone-aware equivalents
     content = re.sub(
         r'\bdatetime\.now\s*\(\s*\)',
         'datetime.now(datetime.timezone.utc)',

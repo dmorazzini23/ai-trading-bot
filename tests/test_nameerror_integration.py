@@ -84,9 +84,10 @@ sys.exit(exit_code)
                 capture_output=True,
                 text=True,
                 env=env,
-                timeout=15  # AI-AGENT-REF: Increase timeout to 15 seconds for more realistic import time
+                timeout=15,  # AI-AGENT-REF: Increase timeout to 15 seconds for more realistic import time
+                check=True
             )
-        except subprocess.TimeoutExpired as e:
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
             # Handle subprocess timeout gracefully
             print("Subprocess timeout after 5 seconds")
             print(f"Stdout so far: {e.stdout}")

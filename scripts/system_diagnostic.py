@@ -91,7 +91,7 @@ class SystemDiagnostic:
         
         try:
             # Use ps to find Python processes
-            result = subprocess.run(['ps', 'aux'], capture_output=True, text=True, timeout=30)
+            result = subprocess.run(['ps', 'aux'], capture_output=True, text=True, timeout=30, check=True)
             if result.returncode == 0:
                 lines = result.stdout.split('\n')
                 for line in lines[1:]:  # Skip header
