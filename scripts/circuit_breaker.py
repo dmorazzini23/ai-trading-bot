@@ -5,10 +5,11 @@ Implements circuit breaker pattern for external API calls to improve system resi
 
 import logging
 import time
-from enum import Enum
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from functools import wraps
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +37,8 @@ class CircuitBreaker:
     Prevents cascading failures by failing fast when a service is down,
     and periodically checking if the service has recovered.
     """
-    
-    def __init__(self, name: str, config: Optional[CircuitBreakerConfig] = None):
+
+    def __init__(self, name: str, config: CircuitBreakerConfig | None = None):
         self.name = name
         self.config = config or CircuitBreakerConfig()
         self.state = CircuitState.CLOSED
@@ -45,47 +46,47 @@ class CircuitBreaker:
         self.success_count = 0
         self.last_failure_time = 0
         self.last_attempt_time = 0
-        
+
     def _record_success(self):
         """Record a successful operation."""
         self.failure_count = 0
-        
+
         if self.state == CircuitState.HALF_OPEN:
             self.success_count += 1
             if self.success_count >= self.config.success_threshold:
                 self._close_circuit()
         elif self.state == CircuitState.CLOSED:
             self.success_count += 1
-            
+
         logger.debug(f"Circuit breaker {self.name}: Success recorded (state: {self.state.value})")
-    
+
     def _record_failure(self):
         """Record a failed operation."""
         self.failure_count += 1
         self.success_count = 0
         self.last_failure_time = time.time()
-        
+
         if self.state == CircuitState.CLOSED:
             if self.failure_count >= self.config.failure_threshold:
                 self._open_circuit()
         elif self.state == CircuitState.HALF_OPEN:
             self._open_circuit()
-            
+
         logger.warning(f"Circuit breaker {self.name}: Failure recorded (count: {self.failure_count}, state: {self.state.value})")
-    
+
     def _open_circuit(self):
         """Open the circuit breaker."""
         self.state = CircuitState.OPEN
         self.last_failure_time = time.time()
         logger.warning(f"Circuit breaker {self.name}: OPENED after {self.failure_count} failures")
-    
+
     def _close_circuit(self):
         """Close the circuit breaker."""
         self.state = CircuitState.CLOSED
         self.failure_count = 0
         self.success_count = 0
         logger.info(f"Circuit breaker {self.name}: CLOSED - service recovered")
-    
+
     def _should_attempt_call(self) -> bool:
         """Check if we should attempt the call."""
         if self.state == CircuitState.CLOSED:
@@ -100,7 +101,7 @@ class CircuitBreaker:
         elif self.state == CircuitState.HALF_OPEN:
             return True
         return False
-    
+
     def call(self, func: Callable, *args, **kwargs) -> Any:
         """
         Execute function with circuit breaker protection.
@@ -119,9 +120,9 @@ class CircuitBreaker:
         """
         if not self._should_attempt_call():
             raise CircuitBreakerOpenError(f"Circuit breaker {self.name} is OPEN")
-        
+
         self.last_attempt_time = time.time()
-        
+
         try:
             result = func(*args, **kwargs)
             self._record_success()
@@ -129,8 +130,8 @@ class CircuitBreaker:
         except Exception:
             self._record_failure()
             raise
-    
-    def get_stats(self) -> Dict[str, Any]:
+
+    def get_stats(self) -> dict[str, Any]:
         """Get circuit breaker statistics."""
         return {
             "name": self.name,
@@ -150,10 +151,9 @@ class CircuitBreaker:
 
 class CircuitBreakerOpenError(Exception):
     """Raised when circuit breaker is open."""
-    pass
 
 
-def circuit_breaker(name: str, config: Optional[CircuitBreakerConfig] = None):
+def circuit_breaker(name: str, config: CircuitBreakerConfig | None = None):
     """
     Decorator for applying circuit breaker pattern to functions.
     
@@ -170,10 +170,10 @@ def circuit_breaker(name: str, config: Optional[CircuitBreakerConfig] = None):
     # Global registry of circuit breakers
     if not hasattr(circuit_breaker, '_breakers'):
         circuit_breaker._breakers = {}
-    
+
     if name not in circuit_breaker._breakers:
         circuit_breaker._breakers[name] = CircuitBreaker(name, config)
-    
+
     def decorator(func: Callable) -> Callable:
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -183,12 +183,12 @@ def circuit_breaker(name: str, config: Optional[CircuitBreakerConfig] = None):
     return decorator
 
 
-def get_circuit_breaker_stats() -> Dict[str, Dict[str, Any]]:
+def get_circuit_breaker_stats() -> dict[str, dict[str, Any]]:
     """Get statistics for all circuit breakers."""
     if not hasattr(circuit_breaker, '_breakers'):
         return {}
-    
-    return {name: breaker.get_stats() 
+
+    return {name: breaker.get_stats()
             for name, breaker in circuit_breaker._breakers.items()}
 
 
@@ -196,7 +196,7 @@ def reset_circuit_breaker(name: str) -> bool:
     """Reset a specific circuit breaker to closed state."""
     if not hasattr(circuit_breaker, '_breakers'):
         return False
-    
+
     if name in circuit_breaker._breakers:
         breaker = circuit_breaker._breakers[name]
         breaker._close_circuit()
@@ -229,33 +229,33 @@ def enhanced_retry(
         @wraps(func)
         def wrapper(*args, **kwargs):
             import random
-            
+
             last_exception = None
-            
+
             for attempt in range(max_attempts):
                 try:
                     return func(*args, **kwargs)
                 except exceptions as e:
                     last_exception = e
-                    
+
                     if attempt == max_attempts - 1:
                         # Last attempt, re-raise the exception
                         raise
-                    
+
                     # Calculate delay with exponential backoff
                     delay = min(base_delay * (exponential_factor ** attempt), max_delay)
-                    
+
                     # Add jitter to prevent thundering herd
                     if jitter:
                         delay = delay * (0.5 + random.random() * 0.5)
-                    
+
                     logger.debug(f"Retry attempt {attempt + 1}/{max_attempts} for {func.__name__} after {delay:.2f}s delay")
                     time.sleep(delay)
-            
+
             # Should never reach here, but just in case
             if last_exception:
                 raise last_exception
-                
+
         return wrapper
     return decorator
 
@@ -275,21 +275,21 @@ def health_check_service(name: str, check_func: Callable[[], bool], timeout: int
     """
     try:
         import signal
-        
+
         def timeout_handler(signum, frame):
             raise TimeoutError(f"Health check for {name} timed out after {timeout}s")
-        
+
         # Set timeout
         signal.signal(signal.SIGALRM, timeout_handler)
         signal.alarm(timeout)
-        
+
         try:
             result = check_func()
             logger.debug(f"Health check for {name}: {'HEALTHY' if result else 'UNHEALTHY'}")
             return result
         finally:
             signal.alarm(0)  # Disable alarm
-            
+
     except Exception as e:
         logger.warning(f"Health check for {name} failed: {e}")
         return False

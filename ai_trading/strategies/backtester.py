@@ -5,21 +5,23 @@ import os
 import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Dict, List
-
-from ai_trading.logging import get_logger
+from datetime import UTC, datetime
 
 import pandas as pd
 
-from ai_trading import config
-from ai_trading import signals  # noqa: F401
 # AI-AGENT-REF: Removed legacy trade_execution import as part of shim cleanup
 # from ai_trading import trade_execution as execution_api  # type: ignore
 import risk_engine
+
+from ai_trading import (
+    config,
+    signals,  # noqa: F401
+)
 from ai_trading.core import bot_engine
+from ai_trading.logging import get_logger
 
 logger = get_logger(__name__)
+
 
 @dataclass
 class Order:
@@ -41,10 +43,10 @@ class ExecutionModel(ABC):
     """Abstract execution model interface."""
 
     @abstractmethod
-    def on_order(self, order: Order) -> List[Fill]:
+    def on_order(self, order: Order) -> list[Fill]:
         """Handle an order and return resulting fills."""
 
-    def on_bar(self) -> List[Fill]:
+    def on_bar(self) -> list[Fill]:
         """Advance one bar and release pending fills."""
         return []
 
@@ -52,12 +54,12 @@ class ExecutionModel(ABC):
 class ImmediateExecutionModel(ExecutionModel):
     """Fill orders immediately at the order price."""
 
-    def on_order(self, order: Order) -> List[Fill]:
+    def on_order(self, order: Order) -> list[Fill]:
         return [
             Fill(
                 order=order,
                 fill_price=order.price,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
             )
         ]
 
@@ -67,13 +69,13 @@ class CommissionModel(ExecutionModel):
         self.per_share_fee = per_share_fee
         self.inner = inner
 
-    def on_order(self, order: Order) -> List[Fill]:
+    def on_order(self, order: Order) -> list[Fill]:
         fills = self.inner.on_order(order)
         for f in fills:
             f.commission += self.per_share_fee * order.qty
         return fills
 
-    def on_bar(self) -> List[Fill]:
+    def on_bar(self) -> list[Fill]:
         return self.inner.on_bar()
 
 
@@ -82,14 +84,14 @@ class SlippageModel(ExecutionModel):
         self.pips = pips
         self.inner = inner
 
-    def on_order(self, order: Order) -> List[Fill]:
+    def on_order(self, order: Order) -> list[Fill]:
         fills = self.inner.on_order(order)
         adj = self.pips if order.side.lower() == "buy" else -self.pips
         for f in fills:
             f.fill_price += adj
         return fills
 
-    def on_bar(self) -> List[Fill]:
+    def on_bar(self) -> list[Fill]:
         return self.inner.on_bar()
 
 
@@ -97,17 +99,17 @@ class LatencyModel(ExecutionModel):
     def __init__(self, bar_delay: int, inner: ExecutionModel) -> None:
         self.bar_delay = bar_delay
         self.inner = inner
-        self._queue: List[tuple[int, Fill]] = []
+        self._queue: list[tuple[int, Fill]] = []
 
-    def on_order(self, order: Order) -> List[Fill]:
+    def on_order(self, order: Order) -> list[Fill]:
         fills = self.inner.on_order(order)
         for f in fills:
             self._queue.append((self.bar_delay, f))
         return []
 
-    def on_bar(self) -> List[Fill]:
-        ready: List[Fill] = []
-        new_q: List[tuple[int, Fill]] = []
+    def on_bar(self) -> list[Fill]:
+        ready: list[Fill] = []
+        new_q: list[tuple[int, Fill]] = []
         for delay, f in self._queue:
             if delay <= 0:
                 ready.append(f)
@@ -120,16 +122,18 @@ class LatencyModel(ExecutionModel):
 class DefaultExecutionModel(ExecutionModel):
     """Default composition: commission → slippage → latency."""
 
-    def __init__(self, per_share_fee: float = 0.0, slippage_pips: float = 0.0, latency: int = 0) -> None:
+    def __init__(
+        self, per_share_fee: float = 0.0, slippage_pips: float = 0.0, latency: int = 0
+    ) -> None:
         base = ImmediateExecutionModel()
         base = CommissionModel(per_share_fee, base)
         base = SlippageModel(slippage_pips, base)
         self.model = LatencyModel(latency, base)
 
-    def on_order(self, order: Order) -> List[Fill]:
+    def on_order(self, order: Order) -> list[Fill]:
         return self.model.on_order(order)
 
-    def on_bar(self) -> List[Fill]:
+    def on_bar(self) -> list[Fill]:
         return self.model.on_bar()
 
 
@@ -148,24 +152,31 @@ class BacktestResult:
 class BacktestEngine:
     """Historical simulator executing the live trading cycle."""
 
-    def __init__(self, data: Dict[str, pd.DataFrame], execution_model: ExecutionModel, initial_cash: float = 100000.0) -> None:
+    def __init__(
+        self,
+        data: dict[str, pd.DataFrame],
+        execution_model: ExecutionModel,
+        initial_cash: float = 100000.0,
+    ) -> None:
         config.reload_env()
         self.data = data
         self.execution_model = execution_model
         self.initial_cash = initial_cash
         self.cash = initial_cash
-        self.positions: Dict[str, int] = {s: 0 for s in data}
-        self.trades: List[Fill] = []
-        self.equity_curve: List[Dict[str, float]] = []
+        self.positions: dict[str, int] = dict.fromkeys(data, 0)
+        self.trades: list[Fill] = []
+        self.equity_curve: list[dict[str, float]] = []
 
     def reset(self) -> None:
         """Reset internal state for a new symbol run."""
         self.cash = self.initial_cash
-        self.positions = {s: 0 for s in self.data}
+        self.positions = dict.fromkeys(self.data, 0)
         self.trades = []
         self.equity_curve = []
 
-    def run_single_symbol(self, df: pd.DataFrame, risk: risk_engine.RiskEngine) -> BacktestResult:
+    def run_single_symbol(
+        self, df: pd.DataFrame, risk: risk_engine.RiskEngine
+    ) -> BacktestResult:
         """Run the backtest for ``df`` using the live bot cycle."""
         self.data = {"symbol": df}
         self.positions = {"symbol": 0}
@@ -194,19 +205,25 @@ class BacktestEngine:
             if df is not None and ts in df.index:
                 pos_val += qty * float(df.loc[ts, "close"])
         total = self.cash + pos_val
-        self.equity_curve.append({
-            "timestamp": ts,
-            "cash": self.cash,
-            "positions": pos_val,
-            "total_equity": total,
-        })
+        self.equity_curve.append(
+            {
+                "timestamp": ts,
+                "cash": self.cash,
+                "positions": pos_val,
+                "total_equity": total,
+            }
+        )
 
-    def run(self, symbols: List[str]) -> BacktestResult:
+    def run(self, symbols: list[str]) -> BacktestResult:
         combined = sorted(set().union(*(df.index for df in self.data.values())))
         for ts in combined:
             for sym in symbols:
                 df = self.data.get(sym)
-                if df is not None and ts in df.index and hasattr(bot_engine, "update_market_data"):
+                if (
+                    df is not None
+                    and ts in df.index
+                    and hasattr(bot_engine, "update_market_data")
+                ):
                     try:
                         bot_engine.update_market_data(sym, df.loc[ts])
                     except Exception as e:
@@ -224,28 +241,46 @@ class BacktestEngine:
             for fill in self.execution_model.on_bar():
                 self._apply_fill(fill, ts)
             self._snapshot(ts)
-        trades_df = pd.DataFrame([{
-            "symbol": f.order.symbol,
-            "qty": f.order.qty,
-            "side": f.order.side,
-            "price": f.fill_price,
-            "timestamp": f.timestamp,
-            "commission": f.commission,
-        } for f in self.trades])
+        trades_df = pd.DataFrame(
+            [
+                {
+                    "symbol": f.order.symbol,
+                    "qty": f.order.qty,
+                    "side": f.order.side,
+                    "price": f.fill_price,
+                    "timestamp": f.timestamp,
+                    "commission": f.commission,
+                }
+                for f in self.trades
+            ]
+        )
         eq_df = pd.DataFrame(self.equity_curve).set_index("timestamp")
         stats = self._stats(eq_df, trades_df)
         return BacktestResult(trades_df, eq_df, **stats)
 
-    def _stats(self, equity: pd.DataFrame, trades: pd.DataFrame) -> Dict[str, float]:
+    def _stats(self, equity: pd.DataFrame, trades: pd.DataFrame) -> dict[str, float]:
         if equity.empty:
-            return {k: 0.0 for k in ["net_pnl", "cagr", "max_drawdown", "sharpe", "calmar", "turnover"]}
-        net_pnl = float(equity["total_equity"].iloc[-1] - equity["total_equity"].iloc[0])
+            return dict.fromkeys(
+                ["net_pnl", "cagr", "max_drawdown", "sharpe", "calmar", "turnover"], 0.0
+            )
+        net_pnl = float(
+            equity["total_equity"].iloc[-1] - equity["total_equity"].iloc[0]
+        )
         returns = equity["total_equity"].pct_change().dropna()
-        sharpe = returns.mean() / returns.std() * (252 ** 0.5) if returns.std() else float("nan")
+        sharpe = (
+            returns.mean() / returns.std() * (252**0.5)
+            if returns.std()
+            else float("nan")
+        )
         duration_years = len(equity) / 252 if len(equity) else 0
-        cagr = (equity["total_equity"].iloc[-1] / equity["total_equity"].iloc[0]) ** (1 / max(duration_years, 1e-9)) - 1
+        cagr = (equity["total_equity"].iloc[-1] / equity["total_equity"].iloc[0]) ** (
+            1 / max(duration_years, 1e-9)
+        ) - 1
         drawdown = (equity["total_equity"] / equity["total_equity"].cummax() - 1).min()
-        turnover = trades["qty"].abs().mul(trades["price"]).sum() / equity["total_equity"].iloc[0]
+        turnover = (
+            trades["qty"].abs().mul(trades["price"]).sum()
+            / equity["total_equity"].iloc[0]
+        )
         calmar = cagr / abs(drawdown) if drawdown else float("inf")
         return {
             "net_pnl": net_pnl,
@@ -310,9 +345,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    engine = BacktestEngine({}, DefaultExecutionModel(args.commission, args.slippage_pips, args.latency_bars))
-    risk = risk_engine.RiskEngine()
-    results: Dict[str, BacktestResult] = {}
+    engine = BacktestEngine(
+        {},
+        DefaultExecutionModel(args.commission, args.slippage_pips, args.latency_bars),
+    )
+    risk_engine.RiskEngine()
+    results: dict[str, BacktestResult] = {}
 
     for symbol in args.symbols:
         # look for any CSV under data_dir matching SYMBOL*.csv (recursively)

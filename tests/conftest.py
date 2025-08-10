@@ -359,11 +359,11 @@ except Exception:
 
 # AI-AGENT-REF: Set test environment variables early to avoid config import errors
 os.environ.update({
-    "ALPACA_API_KEY": "PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",  # Valid format
-    "ALPACA_SECRET_KEY": "SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD",  # Valid format
+    "ALPACA_API_KEY": "FAKE_TEST_API_KEY_NOT_REAL_123456789",  # Valid format
+    "ALPACA_SECRET_KEY": "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789",  # Valid format
     "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
     "ALPACA_DATA_FEED": "iex",
-    "WEBHOOK_SECRET": "test-webhook-secret",
+    "WEBHOOK_SECRET": "fake-test-webhook-not-real",
     "FLASK_PORT": "9000",
     "TESTING": "1"
 })
@@ -894,15 +894,15 @@ except Exception:  # pragma: no cover - optional dependency
         def __init__(self, **kwargs):
             # Read from environment variables
             import os
-            self.ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-            self.ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD")
+            self.ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "FAKE_TEST_API_KEY_NOT_REAL_123456789")
+            self.ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789")
             self.ALPACA_BASE_URL = os.getenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
             self.ALPACA_DATA_FEED = os.getenv("ALPACA_DATA_FEED", "iex")  # Missing attribute added
             self.FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", None)
             self.FUNDAMENTAL_API_KEY = os.getenv("FUNDAMENTAL_API_KEY", None)
             self.NEWS_API_KEY = os.getenv("NEWS_API_KEY", None)
             self.IEX_API_TOKEN = os.getenv("IEX_API_TOKEN", None)
-            self.WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "test-webhook-secret")
+            self.WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "fake-test-webhook-not-real")
             self.FLASK_PORT = int(os.getenv("FLASK_PORT", "9000"))
             self.BOT_MODE = os.getenv("BOT_MODE", "balanced")
             self.MODEL_PATH = os.getenv("MODEL_PATH", "trained_model.pkl")
@@ -1408,10 +1408,10 @@ def pytest_configure() -> None:
 @pytest.fixture(autouse=True)
 def default_env(monkeypatch):
     """Provide standard environment variables for tests."""
-    monkeypatch.setenv("ALPACA_API_KEY", "PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ")  # Valid format
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD")  # Valid format
+    monkeypatch.setenv("ALPACA_API_KEY", "FAKE_TEST_API_KEY_NOT_REAL_123456789")  # Valid format
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789")  # Valid format
     monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    monkeypatch.setenv("WEBHOOK_SECRET", "fake-test-webhook-not-real")
     monkeypatch.setenv("FLASK_PORT", "9000")
     monkeypatch.setenv("TESTING", "1")
     yield

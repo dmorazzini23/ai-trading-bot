@@ -26,6 +26,7 @@ except ImportError:
     np = MockNumpy()
 
 import logging
+
 from ai_trading.indicators import ema
 
 try:

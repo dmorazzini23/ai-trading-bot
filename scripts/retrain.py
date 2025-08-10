@@ -21,7 +21,7 @@ except ImportError:
                 def predict_proba(self, X):
                     return [[0.5, 0.5]] * len(X)
             return MockModel()
-        
+
         @staticmethod
         def dump(obj, filename):
             pass  # Mock dump
@@ -58,6 +58,7 @@ except ImportError:
 
 import config
 from metrics_logger import log_metrics
+
 from ai_trading.utils.base import safe_to_datetime
 
 logger = logging.getLogger(__name__)
@@ -74,9 +75,9 @@ try:
     torch.manual_seed(SEED)
 except ImportError:
     pass
-from datetime import date, datetime, time, timedelta, timezone
-
 import importlib
+from datetime import UTC, date, datetime, time, timedelta
+
 import requests
 
 # AI-AGENT-REF: graceful lightgbm fallback for testing
@@ -106,10 +107,10 @@ except ImportError:
             pass
         def __iter__(self):
             return iter([{}])
-    
+
     def cross_val_score(*args, **kwargs):
         return [0.5] * 5  # Mock CV scores
-    
+
     def make_pipeline(*args, **kwargs):
         class MockPipeline:
             def fit(self, X, y):
@@ -117,7 +118,7 @@ except ImportError:
             def predict(self, X):
                 return [0] * len(X)
         return MockPipeline()
-    
+
     class StandardScaler:
         def __init__(self, *args, **kwargs):
             pass
@@ -214,7 +215,7 @@ def fetch_sentiment(symbol: str) -> float:
     if not NEWS_API_KEY:
         logger.debug("No NEWS_API_KEY configured, returning neutral sentiment")
         return 0.0
-    
+
     try:
         url = "https://newsapi.org/v2/everything"
         params = {
@@ -224,27 +225,27 @@ def fetch_sentiment(symbol: str) -> float:
             "sortBy": "publishedAt",
             "language": "en",
         }
-        
+
         response = requests.get(url, params=params, timeout=30)
         response.raise_for_status()
-        
+
         data = response.json()
         articles = data.get("articles", [])
-        
+
         if not articles:
             return 0.0
-            
+
         positive_words = ["up", "rise", "gain", "bull", "positive", "growth", "increase"]
         negative_words = ["down", "fall", "drop", "bear", "negative", "decline", "decrease"]
-        
+
         sentiment_score = 0.0
         for article in articles:
             title = article.get("title", "").lower()
             sentiment_score += sum(1 for word in positive_words if word in title)
             sentiment_score -= sum(1 for word in negative_words if word in title)
-        
+
         return max(-1.0, min(1.0, sentiment_score / max(len(articles), 1)))
-        
+
     except Exception as e:
         logger.warning("Failed to fetch sentiment for %s: %s", symbol, e)
         return 0.0
@@ -681,7 +682,7 @@ def log_hyperparam_result(
     regime: str, generation: int, params: dict, score: float
 ) -> None:
     row = [
-        datetime.now(timezone.utc).isoformat(),
+        datetime.now(UTC).isoformat(),
         regime,
         generation,
         json.dumps(params),
@@ -710,7 +711,7 @@ def log_hyperparam_result(
 
 
 def save_model_version(clf, regime: str) -> str:
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     filename = f"model_{regime}_{ts}.pkl"
     path = os.path.join(MODELS_DIR, filename)
     try:
@@ -721,7 +722,7 @@ def save_model_version(clf, regime: str) -> str:
     log_hyperparam_result(regime, -1, {"model_path": filename}, 0.0)
     log_metrics(
         {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "type": "model_checkpoint",
             "regime": regime,
             "model_path": filename,
@@ -774,7 +775,7 @@ def evolutionary_search(
             logger.warning("No successful CV scores in generation %s", gen)
             continue
         ranked = sorted(
-            zip(scores, population_params), key=lambda t: t[0], reverse=True
+            zip(scores, population_params, strict=False), key=lambda t: t[0], reverse=True
         )
         for rank, (scr, pr) in enumerate(ranked):
             log_hyperparam_result("", gen, pr, scr)
@@ -829,7 +830,7 @@ def retrain_meta_learner(
     threshold_pct: float = 0.002,
     force: bool = False,
 ) -> bool:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if not force:
         if now.weekday() >= 5:
             logger.info(
@@ -965,7 +966,7 @@ def retrain_meta_learner(
             )
             imp_df = pd.DataFrame(
                 {
-                    "timestamp": [datetime.now(timezone.utc).isoformat()]
+                    "timestamp": [datetime.now(UTC).isoformat()]
                     * len(importances),
                     "feature": importances.index,
                     "importance": importances.values,
@@ -983,7 +984,7 @@ def retrain_meta_learner(
             logger.info("Saved %s model to %s", regime, path)
             log_metrics(
                 {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "type": "retrain_model",
                     "regime": regime,
                     "metric": metric,

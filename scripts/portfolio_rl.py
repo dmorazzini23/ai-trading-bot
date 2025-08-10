@@ -3,7 +3,7 @@ import types
 try:
     import numpy as np
 except ImportError:
-    # Fallback when numpy not available  
+    # Fallback when numpy not available
     np = None
 
 try:
@@ -12,7 +12,7 @@ try:
     import torch.optim as optim
     # AI-AGENT-REF: Successful import means PyTorch is available
     _TORCH_AVAILABLE = True
-    
+
     # AI-AGENT-REF: Create a safe base class that works with any PyTorch version
     try:
         # Test if we can create a basic Module - this will fail if there are version issues
@@ -20,7 +20,7 @@ try:
         _PYTORCH_WORKS = True
     except Exception:
         _PYTORCH_WORKS = False
-        
+
 except Exception:  # pragma: no cover - optional dependency
     # AI-AGENT-REF: Create comprehensive torch fallback that supports type annotations
     torch = types.ModuleType("torch")
@@ -70,7 +70,7 @@ class Actor(nn.Module if _TORCH_AVAILABLE and _PYTORCH_WORKS else object):
             else:
                 # Fallback to basic list
                 return [1.0 / self.action_dim] * self.action_dim
-        
+
         try:
             return self.net(x)
         except Exception:
@@ -91,7 +91,7 @@ class PortfolioReinforcementLearner:
             self.actor = Actor(state_dim, action_dim)
             self.optimizer = None
             return
-        
+
         try:
             self.actor = Actor(state_dim, action_dim)
             self.optimizer = optim.Adam(self.actor.parameters(), lr=1e-3)
@@ -105,20 +105,20 @@ class PortfolioReinforcementLearner:
             # Basic fallback when numpy not available
             weights = [1.0 / self.action_dim] * self.action_dim
             return weights
-            
+
         # Convert input to numpy array if needed
         if hasattr(state, 'tolist'):
             state = state.tolist()
         if isinstance(state, list):
             state = [0.0] * self.state_dim if np is None else np.array(state)
-        
+
         if len(state) != self.state_dim:
             if np is not None:
                 state = np.pad(state, (0, self.state_dim - len(state)), "constant")
             else:
                 # Fallback padding
                 state = list(state) + [0.0] * (self.state_dim - len(state))
-        
+
         if not _TORCH_AVAILABLE or not _PYTORCH_WORKS:
             # AI-AGENT-REF: Mock weights when PyTorch not available or not working
             weights = self.actor.forward(state)
@@ -133,7 +133,7 @@ class PortfolioReinforcementLearner:
                     total = 1.0
                 return [w / total for w in weights]
             return weights
-            
+
         try:
             state_tensor = torch.tensor(state, dtype=torch.float32)
             weights = self.actor(state_tensor).detach().numpy()

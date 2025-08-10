@@ -9,11 +9,11 @@ that couldn't be updated with str_replace due to duplicates.
 
 def patch_short_selling_logic():
     """Apply the short selling logic patches."""
-    
+
     # Read the current file
-    with open('trade_execution.py', 'r') as f:
+    with open('trade_execution.py') as f:
         lines = f.readlines()
-    
+
     # Find and update the first occurrence (sync execute_order)
     for i, line in enumerate(lines):
         if i == 1799 and 'if side.lower() == "sell" and existing == 0:' in line:
@@ -30,7 +30,7 @@ def patch_short_selling_logic():
             lines[i+10] = '                return None\n'
             logging.info(f"Updated sync execute_order at line {i+1}")
             break
-    
+
     # Find and update the second occurrence (async execute_order_async)
     for i, line in enumerate(lines):
         if i == 2087 and 'if side.lower() == "sell" and existing == 0:' in line:
@@ -47,11 +47,11 @@ def patch_short_selling_logic():
             lines[i+10] = '                return None\n'
             logging.info(f"Updated async execute_order_async at line {i+1}")
             break
-    
+
     # Write the updated file
     with open('trade_execution.py', 'w') as f:
         f.writelines(lines)
-    
+
     logging.info("Short selling logic patches applied successfully!")
 
 if __name__ == '__main__':

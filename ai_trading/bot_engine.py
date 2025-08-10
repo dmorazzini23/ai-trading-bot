@@ -8,11 +8,10 @@ from failing due to unexpected side effects at import.
 
 from __future__ import annotations
 
-from typing import Any
 import importlib
+from typing import Any
 
 import pandas as pd
-
 
 __all__ = ["prepare_indicators"]
 
@@ -63,8 +62,6 @@ def prepare_indicators(df: pd.DataFrame, *args: Any, **kwargs: Any) -> pd.DataFr
     delegate = getattr(core_bot_engine, "prepare_indicators", None)
     if delegate is None:
         # Keep the error type simple for clearer test output
-        raise AttributeError(
-            "ai_trading.core.bot_engine.prepare_indicators not found"
-        )
+        raise AttributeError("ai_trading.core.bot_engine.prepare_indicators not found")
 
     return delegate(df_norm, *args, **kwargs)

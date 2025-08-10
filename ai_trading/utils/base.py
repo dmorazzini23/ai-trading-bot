@@ -3,19 +3,24 @@
 import datetime as dt
 import logging
 import os
+import random
 import socket
 import threading
-import warnings
 import time
-from datetime import date, timezone, datetime, time as dt_time
-from typing import Any
+import warnings
+from datetime import date, datetime
+from datetime import time as dt_time
 from enum import Enum
+from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
+
+from ai_trading import config
 
 # AI-AGENT-REF: Simplified optional import pattern
 try:
     import pandas as pd
+
     HAS_PANDAS = True
     Timestamp = pd.Timestamp
     DataFrame = pd.DataFrame
@@ -25,19 +30,23 @@ except ImportError:
     HAS_PANDAS = False
     pd = None
     from datetime import datetime as Timestamp  # Fallback type for annotations
+
     DataFrame = object  # Fallback for DataFrame type hints
     Series = object  # Fallback for Series type hints
     Index = object  # Fallback for Index type hints
 
+
 def requires_pandas(func):
     """Decorator to ensure pandas is available for a function."""
+
     def wrapper(*args, **kwargs):
         if not HAS_PANDAS:
             raise ImportError(f"pandas required for {func.__name__}")
         return func(*args, **kwargs)
+
     return wrapper
-from ai_trading import config
-import random
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +83,7 @@ class PhaseLoggerAdapter(logging.LoggerAdapter):
     def process(self, msg, kwargs):
         extra = kwargs.setdefault("extra", {})
         extra.setdefault("bot_phase", self.extra.get("bot_phase", "GENERAL"))
-        extra.setdefault("timestamp", dt.datetime.now(timezone.utc))
+        extra.setdefault("timestamp", dt.datetime.now(dt.UTC))
         return msg, kwargs
 
 
@@ -127,6 +136,7 @@ _STALE_CACHE_LOCK = threading.Lock()
 def should_log_stale(symbol: str, last_ts: Timestamp, *, ttl: int = 300) -> bool:
     """Check if stale data warning should be logged for this symbol."""
     import time
+
     current_time = time.time()
 
     # AI-AGENT-REF: Add thread-safe locking for cache operations
@@ -139,7 +149,10 @@ def should_log_stale(symbol: str, last_ts: Timestamp, *, ttl: int = 300) -> bool
         _STALE_CACHE[symbol] = (last_ts, current_time)
         return True
 
-def backoff_delay(attempt: int, base: float = 1.0, cap: float = 30.0, jitter: float = 0.1) -> float:
+
+def backoff_delay(
+    attempt: int, base: float = 1.0, cap: float = 30.0, jitter: float = 0.1
+) -> float:
     """Return exponential backoff delay with jitter."""
     exp = base * (2 ** max(0, attempt - 1))
     delay = min(exp, cap)
@@ -155,13 +168,13 @@ def format_order_for_log(order: Any) -> str:
         return ""
     parts = []
     for k, v in vars(order).items():
-        if isinstance(v, (dt.datetime, date)):
+        if isinstance(v, dt.datetime | date):
             val = v.isoformat()
         elif isinstance(v, Enum):
             val = v.value
         elif isinstance(v, UUID):
             val = str(v)
-        elif isinstance(v, (int, float, bool)) or v is None:
+        elif isinstance(v, int | float | bool) or v is None:
             val = v
         else:
             val = str(v)
@@ -295,7 +308,7 @@ def health_rows_passed(rows):
     global _last_health_log
     now = time.monotonic()
     if _last_health_log == 0.0 or now - _last_health_log >= HEALTH_THROTTLE:
-        count = len(rows) if not isinstance(rows, (int, float)) else rows
+        count = len(rows) if not isinstance(rows, int | float) else rows
         logger.debug("HEALTH_ROWS_PASSED: received %d rows", count)
         _last_health_log = now or 1e-9
     else:
@@ -311,7 +324,7 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
     try:
         import pandas_market_calendars as mcal
 
-        check_time = (now or dt.datetime.now(timezone.utc)).astimezone(EASTERN_TZ)
+        check_time = (now or dt.datetime.now(dt.UTC)).astimezone(EASTERN_TZ)
         cal = getattr(mcal, "get_calendar", None)
         if cal is None:
             raise AttributeError
@@ -324,11 +337,17 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
             # Provide more detailed information about why schedule is empty
             is_weekend = check_time.weekday() >= 5
             is_future = check_time.date() > dt.date.today()
-            
+
             if is_weekend:
-                logger.debug("No market schedule for %s (weekend); returning False.", check_time.date())
+                logger.debug(
+                    "No market schedule for %s (weekend); returning False.",
+                    check_time.date(),
+                )
             elif is_future:
-                logger.debug("No market schedule for %s (future date); returning False.", check_time.date())
+                logger.debug(
+                    "No market schedule for %s (future date); returning False.",
+                    check_time.date(),
+                )
             else:
                 logger.warning(
                     "No market schedule for %s in is_market_open (likely holiday); returning False.",
@@ -340,27 +359,22 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         market_close = sched.iloc[0]["market_close"].tz_convert(EASTERN_TZ).time()
         if check_time.month == 7 and check_time.day == 3:
             july4 = date(check_time.year, 7, 4)
-            if july4.weekday() >= 5:
-                market_close = dt_time(13, 0)
-            else:
-                market_close = MARKET_CLOSE_TIME
+            market_close = dt_time(13, 0) if july4.weekday() >= 5 else MARKET_CLOSE_TIME
         _log_market_hours(
-            "Detected Market Hours today: OPEN from %s to %s"
-            % (market_open.strftime("%H:%M"), market_close.strftime("%H:%M"))
+            "Detected Market Hours today: OPEN from {} to {}".format(market_open.strftime("%H:%M"), market_close.strftime("%H:%M"))
         )
         current = check_time.time()
         return market_open <= current <= market_close
     except Exception as exc:
         logger.debug("market calendar unavailable: %s", exc)
         # Fallback to simple weekday/time check when calendar unavailable
-        now_et = (now or dt.datetime.now(timezone.utc)).astimezone(EASTERN_TZ)
+        now_et = (now or dt.datetime.now(dt.UTC)).astimezone(EASTERN_TZ)
         if now_et.weekday() >= 5:
             _log_market_hours("Detected Market Hours today: CLOSED")
             return False
         current = now_et.time()
         _log_market_hours(
-            "Detected Market Hours today: OPEN from %s to %s"
-            % (
+            "Detected Market Hours today: OPEN from {} to {}".format(
                 MARKET_OPEN_TIME.strftime("%H:%M"),
                 MARKET_CLOSE_TIME.strftime("%H:%M"),
             )
@@ -371,10 +385,10 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
 def is_weekend(timestamp: dt.datetime | Timestamp | None = None) -> bool:
     """Check if the given timestamp (or current time) falls on a weekend."""
     if timestamp is None:
-        timestamp = dt.datetime.now(timezone.utc)
-    elif hasattr(timestamp, 'to_pydatetime'):
+        timestamp = dt.datetime.now(dt.UTC)
+    elif hasattr(timestamp, "to_pydatetime"):
         timestamp = timestamp.to_pydatetime()
-    
+
     # Convert to Eastern Time for market context
     try:
         et_time = timestamp.astimezone(ZoneInfo("America/New_York"))
@@ -387,42 +401,45 @@ def is_weekend(timestamp: dt.datetime | Timestamp | None = None) -> bool:
 def is_market_holiday(date_to_check: date | dt.datetime | None = None) -> bool:
     """Check if the given date is a US market holiday."""
     if date_to_check is None:
-        date_to_check = dt.datetime.now(timezone.utc).date()
+        date_to_check = dt.datetime.now(dt.UTC).date()
     elif isinstance(date_to_check, dt.datetime):
         date_to_check = date_to_check.date()
-    
+
     try:
         # Try to use pandas_market_calendars if available
         import pandas_market_calendars as mcal
-        nyse = mcal.get_calendar('NYSE')
-        
+
+        nyse = mcal.get_calendar("NYSE")
+
         # Check if the date is a trading day
         schedule = nyse.schedule(start_date=date_to_check, end_date=date_to_check)
         return schedule.empty
-        
+
     except ImportError:
         # Fallback to basic holiday detection without pandas_market_calendars
         year = date_to_check.year
-        
+
         # Basic US market holidays (static dates and simple rules)
         holidays = [
-            date(year, 1, 1),   # New Year's Day
-            date(year, 7, 4),   # Independence Day
-            date(year, 12, 25), # Christmas Day
+            date(year, 1, 1),  # New Year's Day
+            date(year, 7, 4),  # Independence Day
+            date(year, 12, 25),  # Christmas Day
         ]
-        
+
         # Memorial Day (last Monday in May)
         may_last_monday = date(year, 5, 31)
         while may_last_monday.weekday() != 0:  # Monday = 0
             may_last_monday = date(year, may_last_monday.month, may_last_monday.day - 1)
         holidays.append(may_last_monday)
-        
+
         # Labor Day (first Monday in September)
         sept_first_monday = date(year, 9, 1)
         while sept_first_monday.weekday() != 0:
-            sept_first_monday = date(year, sept_first_monday.month, sept_first_monday.day + 1)
+            sept_first_monday = date(
+                year, sept_first_monday.month, sept_first_monday.day + 1
+            )
         holidays.append(sept_first_monday)
-        
+
         # Thanksgiving (fourth Thursday in November)
         nov_fourth_thursday = date(year, 11, 1)
         thursdays = 0
@@ -430,13 +447,17 @@ def is_market_holiday(date_to_check: date | dt.datetime | None = None) -> bool:
             if nov_fourth_thursday.weekday() == 3:  # Thursday = 3
                 thursdays += 1
                 if thursdays < 4:
-                    nov_fourth_thursday = date(year, nov_fourth_thursday.month, nov_fourth_thursday.day + 7)
+                    nov_fourth_thursday = date(
+                        year, nov_fourth_thursday.month, nov_fourth_thursday.day + 7
+                    )
             else:
-                nov_fourth_thursday = date(year, nov_fourth_thursday.month, nov_fourth_thursday.day + 1)
+                nov_fourth_thursday = date(
+                    year, nov_fourth_thursday.month, nov_fourth_thursday.day + 1
+                )
         holidays.append(nov_fourth_thursday)
-        
+
         return date_to_check in holidays
-    
+
     except Exception as e:
         logger.debug(f"Holiday check failed for {date_to_check}: {e}")
         return False  # Conservative fallback
@@ -447,13 +468,13 @@ BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 
 def ensure_utc(value: dt.datetime | date) -> dt.datetime:
     """Return a timezone-aware UTC datetime for ``dt``."""
-    assert isinstance(value, (dt.datetime, date)), "dt must be date or datetime"
+    assert isinstance(value, dt.datetime | date), "dt must be date or datetime"
     if isinstance(value, dt.datetime):
         if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+            return value.replace(tzinfo=dt.UTC)
+        return value.astimezone(dt.UTC)
     if isinstance(value, date):
-        return dt.datetime.combine(value, dt.time.min, tzinfo=timezone.utc)
+        return dt.datetime.combine(value, dt.time.min, tzinfo=dt.UTC)
     raise TypeError(f"Unsupported type for ensure_utc: {type(value)!r}")
 
 
@@ -503,7 +524,9 @@ def get_pid_on_port(port: int) -> int | None:
 
 def get_rolling_atr(symbol: str, window: int = 14) -> float:
     """Return normalized ATR over ``window`` days."""
-    from ai_trading.bot_engine import fetch_minute_df_safe  # lazy import to avoid cycles
+    from ai_trading.bot_engine import (
+        fetch_minute_df_safe,  # lazy import to avoid cycles
+    )
 
     df = fetch_minute_df_safe(symbol)
     if df is None or df.empty:
@@ -589,7 +612,7 @@ def to_serializable(obj: Any) -> Any:
         obj = dict(obj)
     if isinstance(obj, dict):
         return {k: to_serializable(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
+    if isinstance(obj, list | tuple):
         return [to_serializable(v) for v in obj]
     return obj
 
@@ -617,10 +640,15 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
             return []
 
     # if someone passed (symbol, Timestamp), extract the Timestamp
-    if HAS_PANDAS and isinstance(arr, tuple) and len(arr) == 2 and isinstance(arr[1], pd.Timestamp):
+    if (
+        HAS_PANDAS
+        and isinstance(arr, tuple)
+        and len(arr) == 2
+        and isinstance(arr[1], pd.Timestamp)
+    ):
         arr = arr[1]
     elif HAS_PANDAS and (
-        isinstance(arr, (list, Index, Series))
+        isinstance(arr, list | Index | Series)
         and len(arr) > 0
         and isinstance(arr[0], tuple)
     ):
@@ -639,9 +667,7 @@ def safe_to_datetime(arr, format="%Y-%m-%d %H:%M:%S", utc=True, *, context: str 
     except (TypeError, ValueError) as exc:
         # Log once per unique context key to avoid log spam; include context if set
         ctx = f" ({context})" if context else ""
-        logger.warning(
-            "safe_to_datetime coercing invalid values%s – %s", ctx, exc
-        )
+        logger.warning("safe_to_datetime coercing invalid values%s – %s", ctx, exc)
         try:
             # Let pandas infer the format and coerce invalid entries to NaT
             return pd.to_datetime(arr, errors="coerce", utc=utc)
@@ -662,7 +688,7 @@ def validate_ohlcv(
     Required columns default to ['timestamp','open','high','low','close','volume'].
     Ensures timestamp is parseable and, if requested, monotonic increasing.
     """
-    required = required or ["timestamp","open","high","low","close","volume"]
+    required = required or ["timestamp", "open", "high", "low", "close", "volume"]
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(f"missing columns: {missing}")
@@ -680,7 +706,7 @@ def validate_ohlcv(
     # Light sanity checks
     if len(df) == 0:
         raise ValueError("no rows")
-    if not {"open","high","low","close"}.issubset(df.columns):
+    if not {"open", "high", "low", "close"}.issubset(df.columns):
         raise ValueError("OHLC columns incomplete")
     # No return; success == no exception
 
@@ -878,32 +904,42 @@ def validate_ohlcv_basic(df: DataFrame) -> bool:
     return True
 
 
-from typing import Dict, List
-
 # Lazy-load Alpaca SDK only when needed
 REST = None
+
 
 def _get_alpaca_rest():
     global REST
     if REST is None:
         try:
             from alpaca_trade_api.rest import REST as _REST
+
             REST = _REST
             logger.debug("Successfully imported alpaca_trade_api.rest.REST")
         except ImportError as e:
             logger.warning("alpaca_trade_api not available, using fallback: %s", e)
+
             # Create a mock REST class for development/testing
             class MockREST:
                 def __init__(self, *args, **kwargs):
-                    logger.info("Using mock Alpaca REST client (alpaca_trade_api not installed)")
+                    logger.info(
+                        "Using mock Alpaca REST client (alpaca_trade_api not installed)"
+                    )
+
                 def __getattr__(self, name):
                     def mock_method(*args, **kwargs):
-                        logger.debug("Mock Alpaca API call: %s(*%s, **%s)", name, args, kwargs)
+                        logger.debug(
+                            "Mock Alpaca API call: %s(*%s, **%s)", name, args, kwargs
+                        )
                         return {}
+
                     return mock_method
+
             REST = MockREST
         except Exception as e:
-            logger.error("alpaca_trade_api import failed with unexpected error", exc_info=e)
+            logger.error(
+                "alpaca_trade_api import failed with unexpected error", exc_info=e
+            )
             raise RuntimeError(f"Failed to import Alpaca SDK: {e}") from e
     return REST
 
@@ -919,7 +955,7 @@ def check_symbol(symbol: str, api: Any) -> bool:
     return health_check(df, "daily")
 
 
-def pre_trade_health_check(symbols: List[str], api: Any) -> Dict[str, bool]:
+def pre_trade_health_check(symbols: list[str], api: Any) -> dict[str, bool]:
     """Check data availability for ``symbols`` prior to trading.
 
     Parameters
@@ -933,7 +969,7 @@ def pre_trade_health_check(symbols: List[str], api: Any) -> Dict[str, bool]:
         Mapping of symbol to health status.
     """
 
-    symbol_health: Dict[str, bool] = {}
+    symbol_health: dict[str, bool] = {}
     for sym in symbols:
         ok = check_symbol(sym, api)
         symbol_health[sym] = ok

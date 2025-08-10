@@ -1,6 +1,7 @@
 import logging
-from validate_env import settings
+
 from metrics_logger import log_metrics
+from validate_env import settings
 
 logger = logging.getLogger(__name__)
 

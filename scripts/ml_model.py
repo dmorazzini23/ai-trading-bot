@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
-import joblib
 import hashlib
 import io
 import logging
 import pickle
 import time
-from datetime import datetime, timezone
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
+
+import joblib
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +96,7 @@ class MLModel:
         return preds
 
     def save(self, path: str | None = None) -> str:
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         model_dir = Path(__file__).parent / "models"
         path = Path(path) if path else model_dir / f"model_{ts}.pkl"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,7 +109,7 @@ class MLModel:
         return str(path)
 
     @classmethod
-    def load(cls, path: str) -> "MLModel":
+    def load(cls, path: str) -> MLModel:
         """Deserialize a saved model from ``path`` and return an ``MLModel``."""
         import joblib
         try:

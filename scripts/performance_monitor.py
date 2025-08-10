@@ -254,7 +254,8 @@ class ResourceMonitor:
                 ['ps', 'aux'], 
                 capture_output=True, 
                 text=True, 
-                timeout=10
+                timeout=10,
+                check=True
             )
             
             if result.returncode != 0:
@@ -325,7 +326,7 @@ class ResourceMonitor:
                         if is_trading_bot and not is_temporary:
                             trading_bot_count += 1
                             
-        except (subprocess.SubprocessError, subprocess.TimeoutExpired) as e:
+        except (subprocess.SubprocessError, subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
             self.logger.warning(f"Error getting process list: {e}")
             return self._count_python_processes_fallback()
         except Exception as e:
@@ -339,10 +340,10 @@ class ResourceMonitor:
         """Fallback method for counting Python processes using simple pgrep."""
         try:
             result = subprocess.run(['pgrep', '-f', 'python'], 
-                                  capture_output=True, text=True, timeout=5)
+                                  capture_output=True, text=True, timeout=5, check=True)
             python_pids = result.stdout.strip().split('\n') if result.stdout.strip() else []
             return len([p for p in python_pids if p])
-        except (subprocess.SubprocessError, subprocess.TimeoutExpired):
+        except (subprocess.SubprocessError, subprocess.TimeoutExpired, subprocess.CalledProcessError):
             return 1  # Assume at least this process is running
     
     def _get_network_metrics(self) -> Dict:
@@ -351,14 +352,14 @@ class ResourceMonitor:
         
         try:
             # Check for established connections
-            result = subprocess.run(timeout=30, ['netstat', '-tn'], 
-                                  capture_output=True, text=True)
+            result = subprocess.run(['netstat', '-tn'], timeout=30,
+                                  capture_output=True, text=True, check=True)
             if result.returncode == 0:
                 lines = result.stdout.split('\n')
                 established = sum(1 for line in lines if 'ESTABLISHED' in line)
                 network_metrics['established_connections'] = established
             
-        except subprocess.SubprocessError:
+        except (subprocess.SubprocessError, subprocess.CalledProcessError):
             network_metrics['established_connections'] = 0
         except Exception as e:
             network_metrics['error'] = str(e)

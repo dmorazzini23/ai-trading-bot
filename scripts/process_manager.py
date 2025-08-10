@@ -42,9 +42,10 @@ class ProcessManager:
         
         try:
             # Use ps to find all Python processes
-            result = subprocess.run(timeout=30, 
+            result = subprocess.run(
                 ['ps', 'aux', '--sort=-rss'],  # Sort by memory usage (descending)
-                capture_output=True, text=True
+                timeout=30,
+                capture_output=True, text=True, check=True
             )
             
             if result.returncode == 0:
@@ -73,7 +74,7 @@ class ProcessManager:
                             if self._is_trading_process(process_info['command']):
                                 processes.append(process_info)
                 
-        except subprocess.SubprocessError as e:
+        except (subprocess.SubprocessError, subprocess.CalledProcessError) as e:
             self.logger.error(f"Failed to get process list: {e}")
         except ValueError as e:
             self.logger.error(f"Failed to parse process information: {e}")
@@ -283,9 +284,10 @@ class ProcessManager:
         
         for service in services:
             try:
-                result = subprocess.run(timeout=30, 
+                result = subprocess.run(
                     ['systemctl', 'is-active', service],
-                    capture_output=True, text=True
+                    timeout=30,
+                    capture_output=True, text=True, check=True
                 )
                 
                 status = result.stdout.strip()
@@ -297,13 +299,14 @@ class ProcessManager:
                 
                 # Get more detailed info for failed services
                 if status != 'active':
-                    detail_result = subprocess.run(timeout=30, 
+                    detail_result = subprocess.run(
                         ['systemctl', 'status', service, '--no-pager', '-l'],
-                        capture_output=True, text=True
+                        timeout=30,
+                        capture_output=True, text=True, check=True
                     )
                     service_status[service]['details'] = detail_result.stdout
                 
-            except subprocess.SubprocessError as e:
+            except (subprocess.SubprocessError, subprocess.CalledProcessError) as e:
                 service_status[service] = {
                     'status': 'error',
                     'error': str(e),
@@ -337,9 +340,12 @@ class ProcessManager:
                         
                         if current_uid != target_uid or current_gid != target_gid:
                             # Need to change ownership
-                            subprocess.run(timeout=30, 
+                            subprocess.run(
                                 ['sudo', 'chown', f'{target_user}:{target_user}', path],
-                                check=True
+                                timeout=30,
+                                check=True,
+                                capture_output=True,
+                                text=True
                             )
                             permission_report['paths_fixed'].append(path)
                             self.logger.info(f"Fixed ownership of {path}")

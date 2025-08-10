@@ -13,10 +13,10 @@ ps_stub.SettingsConfigDict = dict
 sys.modules.setdefault("pydantic_settings", ps_stub)
 validate_stub = types.ModuleType("validate_env")
 validate_stub.settings = types.SimpleNamespace(
-    ALPACA_API_KEY="k",
-    ALPACA_SECRET_KEY="s",
+    ALPACA_API_KEY="fake_test_api_key_not_real",
+    ALPACA_SECRET_KEY="fake_test_secret_not_real", 
     ALPACA_BASE_URL="http://example.com",
-    WEBHOOK_SECRET="w",
+    WEBHOOK_SECRET="fake_test_webhook_not_real",
 )
 sys.modules.setdefault("validate_env", validate_stub)
 

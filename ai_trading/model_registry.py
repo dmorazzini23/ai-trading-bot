@@ -1,35 +1,37 @@
 """
 Clean model registry for storage, versioning, and retrieval with metadata.
 """
+
 from __future__ import annotations
 
+import hashlib
 import json
 import pickle
-import hashlib
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 try:
     from ai_trading.logging import logger  # project logger
 except Exception:  # pragma: no cover
     import logging
+
     logger = logging.getLogger(__name__)
 
 
 class ModelRegistry:
     """Centralized registry for trained models."""
 
-    def __init__(self, base_path: Optional[str] = None):
+    def __init__(self, base_path: str | None = None):
         base = base_path or Path.cwd() / "models"
         self.base_path = Path(base)
         self.base_path.mkdir(parents=True, exist_ok=True)
         self.index_file = self.base_path / "registry_index.json"
-        self.model_index: Dict[str, Dict[str, Any]] = self._load_index()
+        self.model_index: dict[str, dict[str, Any]] = self._load_index()
         logger.info("ModelRegistry initialized at %s", self.base_path)
 
     # ---------- helpers ----------
-    def _load_index(self) -> Dict[str, Dict[str, Any]]:
+    def _load_index(self) -> dict[str, dict[str, Any]]:
         if not self.index_file.exists():
             return {}
         try:
@@ -39,7 +41,9 @@ class ModelRegistry:
             return {}
 
     def _save_index(self) -> None:
-        self.index_file.write_text(json.dumps(self.model_index, indent=2), encoding="utf-8")
+        self.index_file.write_text(
+            json.dumps(self.model_index, indent=2), encoding="utf-8"
+        )
 
     @staticmethod
     def _hash_bytes(data: bytes) -> str:
@@ -51,9 +55,9 @@ class ModelRegistry:
         model: Any,
         strategy: str,
         model_type: str,
-        metadata: Optional[Dict[str, Any]] = None,
-        dataset_fingerprint: Optional[str] = None,
-        tags: Optional[list[str]] = None,
+        metadata: dict[str, Any] | None = None,
+        dataset_fingerprint: str | None = None,
+        tags: list[str] | None = None,
     ) -> str:
         """Store model + metadata and return deterministic ID."""
         try:
@@ -75,13 +79,15 @@ class ModelRegistry:
         meta = {
             "strategy": strategy,
             "model_type": model_type,
-            "registration_time": datetime.now(timezone.utc).isoformat(),
+            "registration_time": datetime.now(UTC).isoformat(),
             "dataset_fingerprint": dataset_fingerprint,
             "tags": tags or [],
         }
         if metadata:
             meta.update(metadata)
-        (model_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        (model_dir / "meta.json").write_text(
+            json.dumps(meta, indent=2), encoding="utf-8"
+        )
 
         self.model_index[model_id] = meta
         self._save_index()
@@ -89,8 +95,11 @@ class ModelRegistry:
         return model_id
 
     def load_model(
-        self, model_id: str, verify_dataset_hash: bool = False, expected_dataset_fingerprint: Optional[str] = None
-    ) -> Tuple[Any, Dict[str, Any]]:
+        self,
+        model_id: str,
+        verify_dataset_hash: bool = False,
+        expected_dataset_fingerprint: str | None = None,
+    ) -> tuple[Any, dict[str, Any]]:
         """Return (model, metadata); optionally verify dataset fingerprint."""
         model_dir = self.base_path / model_id
         model_path = model_dir / "model.pkl"
@@ -102,10 +111,12 @@ class ModelRegistry:
         if verify_dataset_hash and expected_dataset_fingerprint:
             got = meta.get("dataset_fingerprint")
             if got != expected_dataset_fingerprint:
-                raise ValueError(f"Dataset fingerprint mismatch: expected {expected_dataset_fingerprint}, got {got}")
+                raise ValueError(
+                    f"Dataset fingerprint mismatch: expected {expected_dataset_fingerprint}, got {got}"
+                )
         return model, meta
 
-    def latest_for(self, strategy: str, model_type: str) -> Optional[str]:
+    def latest_for(self, strategy: str, model_type: str) -> str | None:
         """Return most recently registered ID for (strategy, model_type)."""
         candidates = [
             (mid, m.get("registration_time", ""))

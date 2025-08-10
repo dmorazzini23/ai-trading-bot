@@ -23,10 +23,10 @@ os.environ["PYTEST_RUNNING"] = "1"
 
 # Set minimal required environment variables to prevent hangs/errors
 os.environ.update({
-    "ALPACA_API_KEY": "PKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ",  # Valid format
-    "ALPACA_SECRET_KEY": "SKTEST1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCD",  # Valid format
+    "ALPACA_API_KEY": "FAKE_TEST_API_KEY_NOT_REAL_123456789",  # Valid format
+    "ALPACA_SECRET_KEY": "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789",  # Valid format
     "ALPACA_BASE_URL": "https://paper-api.alpaca.markets",
-    "WEBHOOK_SECRET": "test-webhook-secret",
+    "WEBHOOK_SECRET": "fake-test-webhook-not-real",
     "FLASK_PORT": "9000",
     "BOT_MODE": "balanced",
     "DOLLAR_RISK_LIMIT": "0.05",
@@ -84,9 +84,10 @@ sys.exit(exit_code)
                 capture_output=True,
                 text=True,
                 env=env,
-                timeout=15  # AI-AGENT-REF: Increase timeout to 15 seconds for more realistic import time
+                timeout=15,  # AI-AGENT-REF: Increase timeout to 15 seconds for more realistic import time
+                check=True
             )
-        except subprocess.TimeoutExpired as e:
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
             # Handle subprocess timeout gracefully
             print("Subprocess timeout after 5 seconds")
             print(f"Stdout so far: {e.stdout}")

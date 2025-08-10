@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import time
 from threading import RLock
 
-import time
 from ai_trading.logging import get_logger
 
 log = get_logger(__name__)
@@ -22,28 +22,29 @@ _bot_state_class = None
 def _load_engine():
     """
     Lazy loader for bot engine components to avoid import-time side effects.
-    
+
     This function defers importing heavy modules until they are actually needed,
     preventing import-time crashes due to missing environment variables or
     circular dependencies.
     """
     global _bot_engine, _bot_state_class
-    
+
     if _bot_engine is None or _bot_state_class is None:
         try:
             # Import only when needed to avoid import-time validation issues
-            from ai_trading.core.bot_engine import run_all_trades_worker, BotState
+            from ai_trading.core.bot_engine import BotState, run_all_trades_worker
+
             _bot_engine = run_all_trades_worker
             _bot_state_class = BotState
             if _bot_engine and _bot_state_class:
                 # Avoid duplicate info spam on repeated lazy loads
                 if not getattr(run_cycle, "_engine_loaded_logged", False):
                     log.info("Bot engine components loaded successfully")
-                    setattr(run_cycle, "_engine_loaded_logged", True)
+                    run_cycle._engine_loaded_logged = True
         except Exception as e:
             log.error("Failed to load bot engine components: %s", e)
             raise RuntimeError(f"Cannot load bot engine: {e}")
-    
+
     return _bot_engine, _bot_state_class
 
 
@@ -77,21 +78,25 @@ def run_cycle() -> None:
         return
     try:
         _last_run_time = current_time
-        
+
         # AI-AGENT-REF: Lazy load bot engine components only when needed
         run_all_trades_worker, BotState = _load_engine()
-        
+
         state = BotState()
-        
+
         # Before invoking engine, give it an opportunity to warm cache exactly once.
         try:
             # Import lazily to avoid import-time penalties if engine not needed
             from ai_trading.core.bot_engine import _maybe_warm_cache
+
             if hasattr(state, "ctx"):
-                _maybe_warm_cache(state.ctx)  # best-effort; ignores if disabled or already warmed
-        except Exception:
-            pass
-        
+                _maybe_warm_cache(
+                    state.ctx
+                )  # best-effort; ignores if disabled or already warmed
+        except Exception as e:
+            # Cache warming failed - log warning but continue execution
+            logger.warning("Failed to warm cache during state setup: %s", e)
+
         # Execute the trading cycle
         run_all_trades_worker(state, None)
     except Exception as e:
