@@ -113,7 +113,7 @@ LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
 logger = logging.getLogger(__name__)  # AI-AGENT-REF: define logger before use
 # AI-AGENT-REF: lazy logger setup to avoid expensive imports during test
 if not logging.getLogger().handlers and not os.getenv("PYTEST_RUNNING"):
-    from logger import setup_logging  # AI-AGENT-REF: lazy logger import
+    from ai_trading.logging import setup_logging  # AI-AGENT-REF: centralized logger import
     setup_logging(log_file=LOG_PATH)
 # Mirror config to maintain historical constant name
 MIN_CYCLE = config.SCHEDULER_SLEEP_SECONDS
