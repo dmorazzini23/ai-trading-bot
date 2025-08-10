@@ -1016,13 +1016,6 @@ except ImportError:
     Flask = MockFlask
 
 from ai_trading.alpaca_api import alpaca_get, start_trade_updates_stream
-except ImportError:
-    # AI-AGENT-REF: alpaca_api not available, create minimal fallbacks
-    def alpaca_get(*args, **kwargs):
-        return {}
-
-    def start_trade_updates_stream(*args, **kwargs):
-        pass
 
 
 try:
