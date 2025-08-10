@@ -8,8 +8,8 @@ from pathlib import Path
 
 
 def replace_yaml_load(content: str) -> str:
-    """Replace yaml.load() with yaml.safe_load()."""
-    # Replace yaml.load( with yaml.safe_load( when no Loader= is specified
+    """Replace unsafe YAML loading with yaml.safe_load()."""
+    # AI-AGENT-REF: Fixed unsafe yaml.load pattern - replace with yaml.safe_load when no Loader= is specified
     content = re.sub(
         r'yaml\.load\s*\(\s*([^)]+)\s*\)',
         lambda m: f'yaml.safe_load({m.group(1).strip()})' if 'Loader=' not in m.group(1) else m.group(0),

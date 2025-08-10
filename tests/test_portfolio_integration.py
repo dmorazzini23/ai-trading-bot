@@ -5,6 +5,7 @@ Tests the complete workflow with realistic signal objects.
 
 import pytest
 import os
+from datetime import datetime, timedelta, timezone
 
 # Set testing environment
 os.environ['TESTING'] = '1'
@@ -39,7 +40,7 @@ class MockDataFetcher:
         from datetime import datetime, timedelta
         
         # Generate mock price data
-        dates = [datetime.now() - timedelta(days=i) for i in range(100, 0, -1)]
+        dates = [datetime.now(timezone.utc) - timedelta(days=i) for i in range(100, 0, -1)]  # AI-AGENT-REF: Use timezone-aware datetime
         prices = [100.0 + (i % 20) - 10 for i in range(100)]  # Simulated price movement
         volumes = [1000000 + (i % 100000) for i in range(100)]
         

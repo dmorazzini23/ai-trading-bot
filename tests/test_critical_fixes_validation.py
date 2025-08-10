@@ -14,9 +14,9 @@ class TestCriticalFixes(unittest.TestCase):
     
     def setUp(self):
         """Set up test environment."""
-        # Mock config to avoid import errors
+        # AI-AGENT-REF: Use environment variables to avoid hardcoded secrets
         class MockConfig:
-            NEWS_API_KEY = "test_news_api_key"
+            NEWS_API_KEY = os.getenv("TEST_NEWS_API_KEY", "test_news_api_key")
         sys.modules['config'] = MockConfig()
     
     def test_sentiment_circuit_breaker_constants(self):

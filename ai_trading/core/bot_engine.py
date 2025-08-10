@@ -1134,9 +1134,9 @@ def init_runtime_config():
     except RuntimeError as e:
         if not config.TESTING:  # Allow missing credentials in test mode
             raise e
-        # In test mode, use dummy credentials
-        ALPACA_API_KEY = "test_api_key"
-        ALPACA_SECRET_KEY = "test_secret_key"
+        # AI-AGENT-REF: Use environment variables even in test mode to avoid hardcoded secrets
+        ALPACA_API_KEY = os.getenv("TEST_ALPACA_API_KEY", "")
+        ALPACA_SECRET_KEY = os.getenv("TEST_ALPACA_SECRET_KEY", "")
     
     BOT_MODE_ENV = _require_cfg(getattr(cfg, 'BOT_MODE', None), "BOT_MODE")
     

@@ -255,8 +255,8 @@ class TestMarketMicrostructure(unittest.TestCase):
         }
         
         trade_history = [
-            {"price": 100.0, "size": 100, "side": "buy", "timestamp": datetime.now()},
-            {"price": 100.02, "size": 200, "side": "sell", "timestamp": datetime.now()},
+            {"price": 100.0, "size": 100, "side": "buy", "timestamp": datetime.now(timezone.utc)},  # AI-AGENT-REF: Use timezone-aware datetime
+            {"price": 100.02, "size": 200, "side": "sell", "timestamp": datetime.now(timezone.utc)},  # AI-AGENT-REF: Use timezone-aware datetime
         ]
         
         features = analyzer.analyze_spread_features(market_data, trade_history)
@@ -273,8 +273,8 @@ class TestMarketMicrostructure(unittest.TestCase):
         analyzer = self.OrderFlowAnalyzer()
         
         trade_data = [
-            {"price": 100.0, "size": 100, "side": "buy", "timestamp": datetime.now()},
-            {"price": 100.02, "size": 200, "side": "sell", "timestamp": datetime.now()},
+            {"price": 100.0, "size": 100, "side": "buy", "timestamp": datetime.now(timezone.utc)},  # AI-AGENT-REF: Use timezone-aware datetime
+            {"price": 100.02, "size": 200, "side": "sell", "timestamp": datetime.now(timezone.utc)},  # AI-AGENT-REF: Use timezone-aware datetime
         ]
         
         quote_data = [
