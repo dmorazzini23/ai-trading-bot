@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     
     # Performance optimizations (optional)
     enable_numba_optimization: bool = Field(False, env="ENABLE_NUMBA_OPTIMIZATION")
+    enable_memory_optimization: bool = Field(False, env="ENABLE_MEMORY_OPTIMIZATION")
 
     # Worker sizing (None/0 => auto)
     executor_workers: int | None = Field(None, env="EXECUTOR_WORKERS")

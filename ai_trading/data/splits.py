@@ -12,18 +12,10 @@ from datetime import datetime, timedelta
 import logging
 
 # Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ai_trading.logging import logger
 
-try:
-    from sklearn.model_selection import BaseCrossValidator
-except ImportError:
-    # Fallback base class if sklearn not available
-    class BaseCrossValidator:
-        pass
+# sklearn is a hard dependency
+from sklearn.model_selection import BaseCrossValidator
 
 
 class PurgedGroupTimeSeriesSplit(BaseCrossValidator):

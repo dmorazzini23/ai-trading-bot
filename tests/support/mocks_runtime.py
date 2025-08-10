@@ -108,3 +108,69 @@ class MockTalib:
     
     def __getattr__(self, name):
         return lambda *args, **kwargs: self
+
+
+class MockPortalocker:
+    """Mock portalocker for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockSchedule:
+    """Mock schedule for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockYfinance:
+    """Mock yfinance for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+        
+    def Ticker(self, symbol):
+        return MockTicker()
+
+
+class MockTicker:
+    """Mock yfinance Ticker for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockBeautifulSoup:
+    """Mock BeautifulSoup for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockFlask:
+    """Mock Flask for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockAlpacaClient:
+    """Mock Alpaca trading client for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockCircuitBreaker:
+    """Mock circuit breaker for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
+
+
+class MockMetric:
+    """Mock prometheus metric for testing."""
+    
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: self
