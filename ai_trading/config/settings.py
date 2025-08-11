@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     pov_slice_pct: float = Field(0.05, env="POV_SLICE_PCT")
     daily_loss_limit: float = Field(0.05, env="DAILY_LOSS_LIMIT")
     
+    # --- entry/exit window knobs ---
+    entry_start_offset_min: int = Field(0, env="ENTRY_START_OFFSET_MIN")
+    entry_end_offset_min: int = Field(0, env="ENTRY_END_OFFSET_MIN")
+    
     # Other risk knobs (align defaults with current behavior)
     capital_cap: float = Field(0.04, env="CAPITAL_CAP")
     dollar_risk_limit: float = Field(0.05, env="DOLLAR_RISK_LIMIT")
