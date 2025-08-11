@@ -14,6 +14,7 @@ from ai_trading.config import get_settings
 
 import numpy as np
 import pandas as pd
+<<<<<<< Updated upstream
 # CSV:17 - Move metrics_logger import to functions that use it
 
 # ai_trading/meta_learning.py:20 - Convert import guard to hard import (torch is in dependencies)
@@ -23,6 +24,19 @@ import torch.nn as _nn
 # ensure torch.nn and Parameter live on the torch module
 torch.nn = _nn
 torch.nn.Parameter = _nn.Parameter
+=======
+from ai_trading.telemetry import metrics_logger
+
+try:
+    import torch
+    import torch.nn as _nn
+
+    # ensure torch.nn and Parameter live on the torch module
+    torch.nn = _nn
+    torch.nn.Parameter = _nn.Parameter
+except ImportError:
+    torch = None
+>>>>>>> Stashed changes
 
 # For type checking only
 if TYPE_CHECKING:
@@ -1701,6 +1715,7 @@ def trigger_rebalance_on_regime(df: "pd.DataFrame") -> None:
     if not settings.enable_reinforcement_learning:
         return
     
+<<<<<<< Updated upstream
     # ai_trading.csv:1701 - Replace import guard with settings-gated import
     from ai_trading.config import get_settings
     settings = get_settings()
@@ -1715,6 +1730,12 @@ def trigger_rebalance_on_regime(df: "pd.DataFrame") -> None:
             f"Reinforcement learning enabled but portfolio_rl module unavailable: {e}. "
             "Set ENABLE_REINFORCEMENT_LEARNING=False to disable"
         )
+=======
+    try:
+        from portfolio_rl import PortfolioReinforcementLearner
+    except ImportError:
+        raise RuntimeError("Reinforcement learning enabled but portfolio_rl module not available")
+>>>>>>> Stashed changes
     
     rl = PortfolioReinforcementLearner()
     if "Regime" in df.columns and len(df) > 2:

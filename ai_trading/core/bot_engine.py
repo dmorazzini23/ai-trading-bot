@@ -667,7 +667,11 @@ from sklearn.linear_model import BayesianRidge, Ridge
 
 from ai_trading.utils import log_warning, model_lock, safe_to_datetime, validate_ohlcv
 
+<<<<<<< Updated upstream
 # ai_trading/core/bot_engine.py:670 - Move retrain_meta_learner import to lazy location
+=======
+from ai_trading.meta_learning import retrain_meta_learner
+>>>>>>> Stashed changes
 
 ALPACA_API_KEY = get_settings().alpaca_api_key
 ALPACA_SECRET_KEY = get_settings().alpaca_secret_key
@@ -9404,12 +9408,28 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 from ai_trading import portfolio
                 from ai_trading.utils import portfolio_lock
                 try:
+<<<<<<< Updated upstream
                     with portfolio_lock:
                         ctx.portfolio_weights = portfolio.compute_portfolio_weights(
                             ctx, [p.symbol for p in positions]
                         )
                 except Exception:
                     logger.warning("weight recompute failed", exc_info=True)
+=======
+                    from ai_trading import portfolio
+                    from ai_trading.utils import portfolio_lock
+                except ImportError:
+                    raise RuntimeError("Portfolio modules are required for bot operation")
+                    # Skip portfolio update if modules unavailable
+                else:
+                    try:
+                        with portfolio_lock:
+                            ctx.portfolio_weights = portfolio.compute_portfolio_weights(
+                                ctx, [p.symbol for p in positions]
+                            )
+                    except Exception:
+                        logger.warning("weight recompute failed", exc_info=True)
+>>>>>>> Stashed changes
                 exposure = (
                     sum(abs(float(p.market_value)) for p in positions) / equity * 100
                     if equity > 0
