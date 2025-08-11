@@ -1,4 +1,5 @@
 file,error
+ai_trading/imports_old.py,"IndentationError('unexpected indent', ('ai_trading/imports_old.py', 52, 12, '            self.int32 = int\n', 52, -1))"
 scripts/validate_env.py,"SyntaxError(""f-string: unmatched ')'"", ('scripts/validate_env.py', 548, 85, '    logging.info(str(f""Validation Status: {debug_report[\'validation_status\'].upper())}"")', 548, 85))"
 scripts/validate_problem_statement_fixes.py,"SyntaxError('invalid syntax. Perhaps you forgot a comma?', ('scripts/validate_problem_statement_fixes.py', 38, 22, '        logging.info(str(f""Failure threshold: {actual_failures} (expected: {expected_failures})) - {\'✓\' if actual_failures == expected_failures else \'✗\'}"")\n', 39, 21))"
 scripts/verify_config.py,"SyntaxError(""'(' was never closed"", ('scripts/verify_config.py', 131, 17, '    logging.info(str(""""""\n', 131, 0))"

@@ -6,13 +6,13 @@ signal combination logic, and timeframe conflict resolution for
 institutional-grade trading strategies.
 """
 
-# AI-AGENT-REF: use centralized import management
+# AI-AGENT-REF: use standard imports for hard dependencies
 import logging
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from .imports import pd
+import pandas as pd
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger

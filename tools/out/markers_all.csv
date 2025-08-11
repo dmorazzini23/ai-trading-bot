@@ -3,14 +3,13 @@ tools/migrate_metrics_logger.py,11,root_metrics_logger,    # 1) from metrics_log
 tools/migrate_metrics_logger.py,18,root_metrics_logger,    # 2) import metrics_logger → from ai_trading.telemetry import metrics_logger
 tools/migrate_metrics_logger.py,18,root_metrics_logger,    # 2) import metrics_logger → from ai_trading.telemetry import metrics_logger
 tools/migrate_metrics_logger.py,22,root_metrics_logger,"        r""\1from ai_trading.telemetry import metrics_logger\2"","
+ai_trading/imports_old.py,204,mock_class,    from datetime import datetime
+ai_trading/imports_old.py,265,mock_class,            return self.data
+ai_trading/imports_old.py,288,mock_class,            )
+ai_trading/imports_old.py,386,mock_class,            ]
+ai_trading/imports_old.py,521,mock_class,    # Mock sklearn module
+ai_trading/imports_old.py,583,mock_class,if not TA_AVAILABLE and not PANDAS_TA_AVAILABLE and not TALIB_AVAILABLE:
 ai_trading/logging.py,33,root_metrics_logger,"    """"""Lazy import metrics_logger to avoid import-time dependencies."""""""
-ai_trading/imports.py,37,mock_class,"    logger.warning(""NumPy not available, using MockNumpy fallback"")"
-ai_trading/imports.py,203,mock_class,    from datetime import datetime
-ai_trading/imports.py,264,mock_class,            return self.data
-ai_trading/imports.py,287,mock_class,            )
-ai_trading/imports.py,385,mock_class,            ]
-ai_trading/imports.py,520,mock_class,    # Mock sklearn module
-ai_trading/imports.py,582,mock_class,if not TA_AVAILABLE and not PANDAS_TA_AVAILABLE and not TALIB_AVAILABLE:
 ai_trading/meta_learning.py,1701,import_guard_block,    try:
 ai_trading/meta_learning.py,17,root_metrics_logger,from ai_trading.telemetry import metrics_logger
 tests/test_retry_idempotency_integration.py,10,mock_class,"from tenacity import retry, stop_after_attempt, wait_exponential"
@@ -137,7 +136,6 @@ ai_trading/core/bot_engine.py,9422,import_guard_block,                try:
 ai_trading/core/bot_engine.py,335,config_dunder_getattr,"            def __getattr__(self, name):"
 ai_trading/core/bot_engine.py,349,config_dunder_getattr,"    def __getattr__(self, item):"
 ai_trading/core/bot_engine.py,3725,config_dunder_getattr,"    def __getattr__(self, name):"
-ai_trading/core/__init__.py,30,config_dunder_getattr,def __getattr__(name):
 tests/mocks/tenacity_mock.py,5,mock_class,    return decorator
 tests/mocks/tenacity_mock.py,27,config_dunder_getattr,def __getattr__(name):
 tests/support/mocks_runtime.py,8,mock_class,""""""""
