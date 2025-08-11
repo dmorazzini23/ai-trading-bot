@@ -30,31 +30,8 @@ from .regime_detection import (
 )
 
 # Import existing strategy components if available
-try:
-    from .base import BaseStrategy, StrategySignal
-except ImportError:
-    # Create placeholder classes if not available
-    class BaseStrategy:
-        pass
-
-    class StrategySignal:
-        pass
-
-
-try:
-    from .ai_trading.signals import TradingSignal
-except ImportError:
-
-    class TradingSignal:
-        pass
-
-
-try:
-    from .backtest import BacktestEngine
-except ImportError:
-
-    class BacktestEngine:
-        pass
+from .base import BaseStrategy, StrategySignal
+from .backtest import BacktestEngine
 
 
 # Export all strategy classes

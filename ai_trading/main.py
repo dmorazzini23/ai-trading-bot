@@ -10,10 +10,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# AI-AGENT-REF: Import Settings AFTER .env is loaded to prevent import-time crashes
-import ai_trading.app as app
+# AI-AGENT-REF: Import only essential modules at top level for import-light entrypoint
 from ai_trading.config import Settings, get_settings
-from ai_trading.runner import run_cycle
 from ai_trading.utils import get_free_port, get_pid_on_port
 
 # AI-AGENT-REF: Import memory optimization and performance monitoring
@@ -130,6 +128,8 @@ def run_bot(*_a, **_k) -> int:
                 logger.info("Performance monitoring started")
 
         logger.info("Bot startup complete - entering main loop")
+        # Defer runner import to avoid import-time side effects
+        from ai_trading.runner import run_cycle
         return run_cycle()
 
     except Exception as e:
@@ -156,6 +156,8 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
             )
         port = free_port
 
+    # Defer app import to avoid import-time side effects
+    import ai_trading.app as app
     application = app.create_app()
 
     # AI-AGENT-REF: Signal ready immediately after Flask app creation for faster startup
@@ -178,6 +180,8 @@ def main() -> None:
     load_dotenv()
     global config
     config = get_settings()
+    # Defer runner import to avoid import-time side effects
+    from ai_trading.runner import run_cycle
     run_cycle()
 
     # Ensure API is ready before starting trading cycles
@@ -246,6 +250,8 @@ def main() -> None:
                         f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects"
                     )
 
+            # Defer runner import to avoid import-time side effects
+            from ai_trading.runner import run_cycle
             run_cycle()
         except Exception:  # pragma: no cover - log unexpected errors
             logger.exception("run_cycle failed")

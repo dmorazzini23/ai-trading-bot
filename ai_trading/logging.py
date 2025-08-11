@@ -14,27 +14,33 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 # AI-AGENT-REF: Handle missing dependencies gracefully for testing
-try:
-    from ai_trading.config import management as config
-except ImportError:
-    # Fallback for testing when config module is not available
-    class _FallbackConfig:
-        @staticmethod
-        def mask_secret(value):
-            return "***MASKED***" if len(str(value)) > 5 else str(value)
+# AI-AGENT-REF: Lazy import config to avoid import-time dependencies
+def _get_config():
+    """Lazy import config management to avoid import-time dependencies."""
+    try:
+        from ai_trading.config import management as config
+        return config
+    except ImportError:
+        # Fallback for testing when config module is not available
+        class _FallbackConfig:
+            @staticmethod
+            def mask_secret(value):
+                return "***MASKED***" if len(str(value)) > 5 else str(value)
+        return _FallbackConfig()
 
-    config = _FallbackConfig()
-
-try:
-    from ai_trading.monitoring import metrics as metrics_logger
-except ImportError:
-    # Fallback for testing when monitoring module is not available
-    class _FallbackMetrics:
-        @staticmethod
-        def compute_max_drawdown(equity_curve):
-            return 0.0
-
-    metrics_logger = _FallbackMetrics()
+# AI-AGENT-REF: Import monitoring metrics (lazy load in functions if needed)
+def _get_metrics_logger():
+    """Lazy import metrics_logger to avoid import-time dependencies."""
+    try:
+        from ai_trading.monitoring import metrics as metrics_logger
+        return metrics_logger
+    except ImportError:
+        # Fallback for testing when monitoring module is not available
+        class _FallbackMetrics:
+            @staticmethod
+            def compute_max_drawdown(equity_curve):
+                return 0.0
+        return _FallbackMetrics()
 
 # AI-AGENT-REF: Configure UTC formatting only, remove import-time basicConfig to prevent duplicates
 logging.Formatter.converter = time.gmtime
@@ -100,7 +106,7 @@ class JSONFormatter(logging.Formatter):
             if k in omit:
                 continue
             if "key" in k.lower() or "secret" in k.lower():
-                v = config.mask_secret(str(v))
+                v = _get_config().mask_secret(str(v))
             payload[k] = v
         if record.exc_info:
             exc_type, exc_value, _exc_tb = record.exc_info
@@ -295,7 +301,7 @@ def log_performance_metrics(
         downside = roll[roll < 0]
         sortino = roll.mean() / (downside.std(ddof=0) or 1e-9) * np.sqrt(252 / 20)
         realized_vol = roll.std(ddof=0) * np.sqrt(252 / 20)
-    max_dd = metrics_logger.compute_max_drawdown(equity_curve)
+    max_dd = _get_metrics_logger().compute_max_drawdown(equity_curve)
     rec = {
         "date": str(as_of),
         "exposure_pct": exposure_pct,

@@ -35,16 +35,8 @@ from .position_sizing import (
     VolatilityPositionSizer,
 )
 
-# Import existing metrics if available
-try:
-    from .metrics import DrawdownAnalyzer, RiskMetricsCalculator
-except ImportError:
-    # Create placeholder classes if metrics module doesn't exist
-    class RiskMetricsCalculator:
-        pass
-
-    class DrawdownAnalyzer:
-        pass
+# Import risk metrics
+from .metrics import DrawdownAnalyzer, RiskMetricsCalculator
 
 
 # Export all risk management classes

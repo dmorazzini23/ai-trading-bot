@@ -14,21 +14,12 @@ from typing import Any
 import numpy as np
 
 # Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
+from ai_trading.logging import logger
 
-    logger = logging.getLogger(__name__)
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import Ridge
 
-try:
-    from sklearn.ensemble import RandomForestRegressor
-    from sklearn.linear_model import Ridge
-
-    sklearn_available = True
-except ImportError:
-    sklearn_available = False
-    logger.warning("sklearn not available - some meta-learning features disabled")
+sklearn_available = True
 
 from .base import StrategySignal
 

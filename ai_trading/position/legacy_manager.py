@@ -5,34 +5,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
 
-# AI-AGENT-REF: Simplified optional import pattern
-try:
-    import numpy as np
+# AI-AGENT-REF: numpy and pandas are hard dependencies
+import numpy as np
+import pandas as pd
 
-    HAS_NUMPY = True
-except ImportError:
-    HAS_NUMPY = False
-    np = None
-
-
-def requires_numpy(func):
-    """Decorator to ensure numpy is available for a function."""
-
-    def wrapper(*args, **kwargs):
-        if not HAS_NUMPY:
-            raise ImportError(f"numpy required for {func.__name__}")
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
-try:
-    import pandas as pd
-
-    HAS_PANDAS = True
-except ImportError:
-    HAS_PANDAS = False
-    pd = None
+HAS_NUMPY = True
+HAS_PANDAS = True
 
 
 def requires_pandas_position(func):

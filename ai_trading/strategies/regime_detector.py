@@ -13,46 +13,16 @@ from enum import Enum
 from typing import Any
 
 # Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
-
-    logger = logging.getLogger(__name__)
+from ai_trading.logging import logger
 
 # Import enhanced features if available
-try:
-    import numpy as np
+import numpy as np
 
-    NUMPY_AVAILABLE = True
-except ImportError:
-    logger.warning("NumPy not available, using fallback implementations")
-    NUMPY_AVAILABLE = False
+NUMPY_AVAILABLE = True
 
-try:
-    from ai_trading.risk.adaptive_sizing import MarketRegime, VolatilityRegime
+from ai_trading.risk.adaptive_sizing import MarketRegime, VolatilityRegime
 
-    ENHANCED_REGIMES_AVAILABLE = True
-except ImportError:
-    logger.warning("Enhanced regime definitions not available")
-    ENHANCED_REGIMES_AVAILABLE = False
-
-    # Fallback regime definitions
-    class MarketRegime(Enum):
-        BULL_TRENDING = "bull_trending"
-        BEAR_TRENDING = "bear_trending"
-        SIDEWAYS_RANGE = "sideways_range"
-        HIGH_VOLATILITY = "high_volatility"
-        LOW_VOLATILITY = "low_volatility"
-        CRISIS = "crisis"
-        NORMAL = "normal"
-
-    class VolatilityRegime(Enum):
-        EXTREMELY_LOW = "extremely_low"
-        LOW = "low"
-        NORMAL = "normal"
-        HIGH = "high"
-        EXTREMELY_HIGH = "extremely_high"
+ENHANCED_REGIMES_AVAILABLE = True
 
 
 class TrendDirection(Enum):

@@ -660,69 +660,14 @@ from ai_trading.telemetry.metrics_logger import log_metrics
 
 from ai_trading.pipeline import model_pipeline  # type: ignore
 
-# ML dependencies with graceful error handling
-try:
-    from sklearn.decomposition import PCA
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.linear_model import BayesianRidge, Ridge
-except ImportError:
-    # Provide mock classes for graceful degradation
-    class PCA:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def fit(self, *args, **kwargs):
-            return self
-
-        def transform(self, X):
-            return X
-
-    class RandomForestClassifier:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def fit(self, *args, **kwargs):
-            return self
-
-        def predict(self, X):
-            return [0] * len(X) if hasattr(X, "__len__") else [0]
-
-        def predict_proba(self, X):
-            return (
-                [[0.33, 0.33, 0.34]] * len(X)
-                if hasattr(X, "__len__")
-                else [[0.33, 0.33, 0.34]]
-            )
-
-    class BayesianRidge:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def fit(self, *args, **kwargs):
-            return self
-
-        def predict(self, X):
-            return [0] * len(X) if hasattr(X, "__len__") else [0]
-
-    class Ridge:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def fit(self, *args, **kwargs):
-            return self
-
-        def predict(self, X):
-            return [0] * len(X) if hasattr(X, "__len__") else [0]
-
-    Ridge = None
-    logger.warning("sklearn not available, ML features will be disabled")
+# ML dependencies - sklearn is a hard dependency
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import BayesianRidge, Ridge
 
 from ai_trading.utils import log_warning, model_lock, safe_to_datetime, validate_ohlcv
 
-try:
-    from ai_trading.meta_learning import retrain_meta_learner
-except ImportError:
-    retrain_meta_learner = None
+from ai_trading.meta_learning import retrain_meta_learner
 
 ALPACA_API_KEY = get_settings().alpaca_api_key
 ALPACA_SECRET_KEY = get_settings().alpaca_secret_key
@@ -1296,44 +1241,30 @@ warnings.filterwarnings(
 )
 
 # ─── FINBERT SENTIMENT MODEL IMPORTS & FALLBACK ─────────────────────────────────
-if not os.environ.get("PYTEST_RUNNING"):
-    # Only load FinBERT when not in tests
-    try:
-        import torch
+# Load FinBERT unless explicitly disabled
+try:
+    import torch
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=".*_register_pytree_node.*",
-                module="transformers.*",
-            )
-            from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-        _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
-        _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
-            "yiyanghkust/finbert-tone"
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=".*_register_pytree_node.*",
+            module="transformers.*",
         )
-        _FINBERT_MODEL.eval()
-        _HUGGINGFACE_AVAILABLE = True
-        logger.info("FinBERT loaded successfully")
-    except Exception as e:
-        _HUGGINGFACE_AVAILABLE = False
-        _FINBERT_TOKENIZER = None
-        _FINBERT_MODEL = None
-        logger.warning(f"FinBERT load failed ({e}); falling back to neutral sentiment")
-else:
-    # Mock FinBERT for tests
-    class MockFinBERT:
-        def __init__(self):
-            pass
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-        def predict(self, text):
-            return 0.5
-
-    _FINBERT_TOKENIZER = MockFinBERT()
-    _FINBERT_MODEL = MockFinBERT()
+    _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
+    _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
+        "yiyanghkust/finbert-tone"
+    )
+    _FINBERT_MODEL.eval()
     _HUGGINGFACE_AVAILABLE = True
-    logger.debug("FinBERT mocks initialized for tests")
+    logger.info("FinBERT loaded successfully")
+except Exception as e:
+    _HUGGINGFACE_AVAILABLE = False
+    _FINBERT_TOKENIZER = None
+    _FINBERT_MODEL = None
+    logger.warning(f"FinBERT load failed ({e}); falling back to neutral sentiment")
 
 
 DISASTER_DD_LIMIT = S.disaster_dd_limit

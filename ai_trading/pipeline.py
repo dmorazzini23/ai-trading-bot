@@ -1,89 +1,16 @@
-# Core dependencies with graceful error handling
+# Core dependencies
 import logging
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
-try:
-    import numpy as np
-except ImportError:
-    logger.warning("numpy not available in pipeline.py")
-    np = None
-
 from ai_trading.config import get_settings
 
-# ML dependencies with graceful error handling
-try:
-    from sklearn.base import BaseEstimator, TransformerMixin
-except ImportError:
-
-    class BaseEstimator:
-        pass
-
-    class TransformerMixin:
-        pass
-
-    logger.warning("sklearn not available, using basic object inheritance")
-
-try:
-    from sklearn.linear_model import SGDRegressor
-except Exception:  # pragma: no cover - optional dependency
-
-    class SGDRegressor:
-        """Minimal stub when scikit-learn is unavailable."""
-
-        def __init__(self, *a, **k):
-            pass
-
-        def fit(self, X, y):
-            return self
-
-        def predict(self, X):
-            if np is None:
-                return [0] * len(X)
-            return np.zeros(len(X))
-
-
-try:
-    from sklearn.pipeline import Pipeline
-except Exception:  # pragma: no cover - optional dependency
-
-    class Pipeline(list):
-        """Simplistic pipeline fallback."""
-
-        def __init__(self, steps):
-            super().__init__(steps)
-
-        def fit(self, X, y=None):
-            for _, step in self:
-                if hasattr(step, "fit"):
-                    step.fit(X, y)
-                if hasattr(step, "transform"):
-                    X = step.transform(X)
-            return self
-
-        def predict(self, X):
-            for _name, step in self:
-                if hasattr(step, "transform"):
-                    X = step.transform(X)
-            return self[-1][1].predict(X)
-
-
-try:
-    from sklearn.preprocessing import StandardScaler
-except Exception:  # pragma: no cover - optional dependency
-
-    class StandardScaler:
-        def fit(self, X, y=None):
-            if np is None:
-                return self
-            self.mean_ = np.mean(X, axis=0)
-            self.std_ = np.std(X, axis=0) + 1e-9
-            return self
-
-        def transform(self, X):
-            if np is None:
-                return X
-            return (X - self.mean_) / self.std_
+# ML dependencies
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.linear_model import SGDRegressor
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 
 class FeatureBuilder(BaseEstimator, TransformerMixin):

@@ -11,12 +11,7 @@ import statistics
 from datetime import UTC, datetime, timedelta
 
 # Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
-
-    logger = logging.getLogger(__name__)
+from ai_trading.logging import logger
 
 # Import centralized configuration
 try:
