@@ -9419,20 +9419,16 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 equity = float(acct.equity)
                 positions = ctx.api.get_all_positions()
                 logger.debug("Raw Alpaca positions: %s", positions)
+                # ai_trading.csv:9422 - Replace import guard with hard import (required dependencies)
+                from ai_trading import portfolio
+                from ai_trading.utils import portfolio_lock
                 try:
-                    from ai_trading import portfolio
-                    from ai_trading.utils import portfolio_lock
-                except ImportError:
-                    raise RuntimeError("Portfolio modules are required for bot operation")
-                    # Skip portfolio update if modules unavailable
-                else:
-                    try:
-                        with portfolio_lock:
-                            ctx.portfolio_weights = portfolio.compute_portfolio_weights(
-                                ctx, [p.symbol for p in positions]
-                            )
-                    except Exception:
-                        logger.warning("weight recompute failed", exc_info=True)
+                    with portfolio_lock:
+                        ctx.portfolio_weights = portfolio.compute_portfolio_weights(
+                            ctx, [p.symbol for p in positions]
+                        )
+                except Exception:
+                    logger.warning("weight recompute failed", exc_info=True)
                 exposure = (
                     sum(abs(float(p.market_value)) for p in positions) / equity * 100
                     if equity > 0
