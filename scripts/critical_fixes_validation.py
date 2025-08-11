@@ -30,15 +30,8 @@ class TestCriticalFixesValidation(unittest.TestCase):
         logging.info("\n🔧 Testing P0 Fix: Quantity Calculation Bug")
 
         from trade_execution import ExecutionEngine
-
-        class MockOrder:
-            def __init__(self, filled_qty):
-                self.filled_qty = filled_qty
-                self.id = "test_order_123"
-
-        class MockContext:
-            def __init__(self):
-                self.api = None
+        # (mocks removed; see tests/mocks/critical_fixes_validation_mocks.py)
+        from tests.mocks.critical_fixes_validation_mocks import MockOrder, MockContext
 
         # Test the fixed _reconcile_partial_fills method
         ctx = MockContext()
@@ -81,11 +74,8 @@ class TestCriticalFixesValidation(unittest.TestCase):
         allocator = self.strategy_allocator.StrategyAllocator()
 
         # Create signals with out-of-range confidence from production logs
-        class MockSignal:
-            def __init__(self, symbol, side, confidence):
-                self.symbol = symbol
-                self.side = side
-                self.confidence = confidence
+        # (mocks removed; see tests/mocks/critical_fixes_validation_mocks.py)
+        from tests.mocks.critical_fixes_validation_mocks import MockSignal
 
         signals_by_strategy = {
             "test_strategy": [
@@ -128,13 +118,10 @@ class TestCriticalFixesValidation(unittest.TestCase):
         logging.info("\n🔧 Testing P2 Fix: Short Selling Validation (Foundation)")
 
         from trade_execution import ExecutionEngine
+        # (mocks removed; see tests/mocks/critical_fixes_validation_mocks.py)
+        from tests.mocks.critical_fixes_validation_mocks import MockContextShortSelling
 
-        class MockContext:
-            def __init__(self):
-                self.api = None
-                self.allow_short_selling = True  # Enable short selling
-
-        ctx = MockContext()
+        ctx = MockContextShortSelling()
         engine = ExecutionEngine(ctx)
 
         # Verify the validation method exists

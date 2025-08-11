@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import io
 import logging
 import pickle
@@ -16,11 +17,11 @@ import joblib
 
 logger = logging.getLogger(__name__)
 
-try:
+# Prefer spec check over ImportError guards
+if importlib.util.find_spec("sklearn") is not None:
     from sklearn.base import BaseEstimator
     from sklearn.metrics import mean_squared_error
-except ImportError:  # pragma: no cover - sklearn optional
-
+else:
     class BaseEstimator:
         def __init__(self, *args, **kwargs) -> None:
             logger.error("scikit-learn is required")
@@ -28,6 +29,8 @@ except ImportError:  # pragma: no cover - sklearn optional
 
     def mean_squared_error(y_true, y_pred):
         return 0.0
+    
+    logger.warning("scikit-learn not available; using fallback implementations")
 
 
 from joblib import parallel_backend
@@ -36,16 +39,18 @@ from joblib import parallel_backend
 with parallel_backend("loky", n_jobs=1):
     pass
 
-try:
+# Prefer spec check over ImportError guards
+if importlib.util.find_spec("sklearn") is not None and importlib.util.find_spec("sklearn.linear_model") is not None:
     from sklearn.linear_model import LinearRegression
-except ImportError:  # pragma: no cover - allow tests without sklearn
-
+else:
     class LinearRegression:
         def fit(self, X, y):
             return self
 
         def predict(self, X):
             return [0] * len(X)
+    
+    logger.warning("sklearn.linear_model not available; using fallback LinearRegression")
 
 
 class MLModel:
