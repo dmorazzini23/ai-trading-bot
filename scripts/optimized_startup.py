@@ -114,7 +114,7 @@ def cleanup_duplicate_processes():
         if duplicates:
             logging.info(f"Found {len(duplicates)} duplicate processes")
             cleanup_result = manager.cleanup_duplicate_processes(dry_run=False)
-            logging.info(str(f"Cleaned up {len(cleanup_result['processes_killed'])} processes")
+            logging.info(f"Cleaned up {len(cleanup_result['processes_killed'])} processes")
         else:
             logging.info("No duplicate processes found")
             
@@ -158,7 +158,7 @@ def cleanup_on_exit():
     try:
         from memory_optimizer import emergency_memory_cleanup
         result = emergency_memory_cleanup()
-        logging.info(str(f"Emergency cleanup: {result.get('rss_mb', 0)):.1f}MB memory")
+        logging.info(f"Emergency cleanup: {result.get('rss_mb', 0):.1f}MB memory")
     except ImportError:
         logging.debug("Memory optimizer not available, skipping emergency cleanup")
     except Exception as e:

@@ -142,7 +142,7 @@ def demonstrate_parameter_optimizations():
             validation_result = validate_trading_parameters()
             
             logging.info(str(f"  Overall Status: {validation_result['overall_status']}"))
-            logging.info(str(f"  Violations: {len(validation_result['violations'])}"))
+            logging.info(f"  Violations: {len(validation_result['violations'])}")
             logging.info(str(f"  Warnings: {len(validation_result['warnings'])}"))
             
             if validation_result['violations']:

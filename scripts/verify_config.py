@@ -143,7 +143,7 @@ def print_setup_instructions():
    → Run this script again: python verify_config.py
 
 📖 For detailed instructions, see: docs/API_KEY_SETUP.md
-""")
+"""))
 
 
 def main():

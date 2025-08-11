@@ -544,34 +544,34 @@ def print_environment_debug() -> None:
     logging.info(str("\n" + "="*60))
     logging.info("AI TRADING BOT - ENVIRONMENT DEBUG REPORT")
     logging.info(str("="*60))
-    logging.info(str(f"Timestamp: {debug_report['timestamp']}"))
-    logging.info(str(f"Validation Status: {debug_report['validation_status'].upper()}")
+    logging.info(f"Timestamp: {debug_report['timestamp']}")
+    logging.info(f"Validation Status: {debug_report['validation_status'].upper()}")
     
     if debug_report['critical_issues']:
-        logging.info(str(f"\n🚨 CRITICAL ISSUES ({len(debug_report['critical_issues']))}):")
+        logging.info(f"\n🚨 CRITICAL ISSUES ({len(debug_report['critical_issues'])}):")
         for issue in debug_report['critical_issues']:
             logging.info(f"  - {issue}")
     
     if debug_report['warnings']:
-        logging.info(str(f"\n⚠️  WARNINGS ({len(debug_report['warnings']))}):")
+        logging.info(f"\n⚠️  WARNINGS ({len(debug_report['warnings'])}):")
         for warning in debug_report['warnings']:
             logging.info(f"  - {warning}")
     
     logging.info("\n📋 ENVIRONMENT VARIABLES:")
     for var, info in debug_report['environment_vars'].items():
         status_emoji = "✅" if info['status'] == 'set' else "❌"
-        logging.info(str(f"  {status_emoji} {var}: {info.get('value', 'NOT SET'))}")
+        logging.info(f"  {status_emoji} {var}: {info.get('value', 'NOT SET')}")
     
     if debug_report['recommendations']:
-        logging.info(str(f"\n💡 RECOMMENDATIONS ({len(debug_report['recommendations']))}):")
+        logging.info(f"\n💡 RECOMMENDATIONS ({len(debug_report['recommendations'])}):")
         for rec in debug_report['recommendations']:
             logging.info(f"  - {rec}")
     
     logging.info("\n📁 .ENV FILE:")
     env_info = debug_report.get('env_file', {})
-    logging.info(str(f"  Exists: {'✅' if env_info.get('exists')) else '❌'}")
-    logging.info(str(f"  Readable: {'✅' if env_info.get('readable')) else '❌'}")
-    logging.info(str(f"  Size: {env_info.get('size_bytes', 0))} bytes")
+    logging.info(f"  Exists: {'✅' if env_info.get('exists') else '❌'}")
+    logging.info(f"  Readable: {'✅' if env_info.get('readable') else '❌'}")
+    logging.info(f"  Size: {env_info.get('size_bytes', 0)} bytes")
     
     logging.info(str("\n" + "="*60))
 
@@ -648,12 +648,12 @@ def _main() -> None:  # pragma: no cover - enhanced CLI helper
     
     if args.check:
         result = validate_specific_env_var(args.check)
-        logging.info(str(f"\nVariable: {result['variable']}"))
-        logging.info(str(f"Status: {result['status']}"))
+        logging.info(f"\nVariable: {result['variable']}")
+        logging.info(f"Status: {result['status']}")
         if result['value'] and 'KEY' not in result['variable'].upper():
-            logging.info(str(f"Value: {result['value']}"))
+            logging.info(f"Value: {result['value']}")
         elif result['value']:
-            logging.info(str(f"Value: [MASKED - {len(result['value']))} characters]")
+            logging.info(f"Value: [MASKED - {len(result['value'])} characters]")
         
         if result['issues']:
             logging.info("Issues:")

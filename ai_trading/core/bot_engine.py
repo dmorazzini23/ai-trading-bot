@@ -667,7 +667,7 @@ from sklearn.linear_model import BayesianRidge, Ridge
 
 from ai_trading.utils import log_warning, model_lock, safe_to_datetime, validate_ohlcv
 
-from ai_trading.meta_learning import retrain_meta_learner
+# ai_trading/core/bot_engine.py:670 - Move retrain_meta_learner import to lazy location
 
 ALPACA_API_KEY = get_settings().alpaca_api_key
 ALPACA_SECRET_KEY = get_settings().alpaca_secret_key
@@ -2956,8 +2956,10 @@ class TradeLogger:
                 },
             )
 
-        # AI-AGENT-REF: Trigger audit-to-meta conversion after trade exit logging
-        try:
+        # AI-AGENT-REF: ai_trading/core/bot_engine.py:2960 - Convert import guard to settings-gated import
+        from ai_trading.config import get_settings
+        settings = get_settings()
+        if settings.enable_sklearn:  # Meta-learning requires sklearn
             from ai_trading.meta_learning import (
                 _convert_audit_to_meta_format,
                 validate_trade_data_quality,
@@ -2971,16 +2973,8 @@ class TradeLogger:
                     "METALEARN_TRIGGER_CONVERSION: Converting audit format to meta-learning format"
                 )
                 # The conversion will be handled by the meta-learning system when it reads the log
-
-        except ImportError:
-            # Meta-learning module not available, use safe defaults
-            def validate_trade_data_quality(*_a, **_k):
-                return True
-            def _convert_audit_to_meta_format(x):
-                return x
-        except Exception as e:
-            # Don't fail trade logging if meta-learning conversion fails
-            logger.debug(f"Meta-learning conversion trigger failed: {e}")
+        else:
+            logger.debug("Meta-learning disabled, skipping conversion")
 
 
 def _parse_local_positions() -> dict[str, int]:
@@ -3552,18 +3546,11 @@ def get_allocator():
 def get_strategies():
     global strategies
     if strategies is None:
-        # AI-AGENT-REF: guard strategy imports for test environments
-        try:
-            from ai_trading.strategies import BaseStrategy
+        # AI-AGENT-REF: ai_trading/core/bot_engine.py:3556 - Convert import guard to hard import (internal module)
+        from ai_trading.strategies import BaseStrategy
 
-            # Use BaseStrategy as fallback for test environments
-            strategies = [BaseStrategy(), BaseStrategy()]
-        except ImportError:
-            # AI-AGENT-REF: fallback to base Strategy class for test environments
-            from ai_trading.strategies import BaseStrategy
-
-            # Create minimal strategy instances for test compatibility
-            strategies = [BaseStrategy(), BaseStrategy()]
+        # Use BaseStrategy as fallback for test environments
+        strategies = [BaseStrategy(), BaseStrategy()]
     return strategies
 
 
@@ -7334,13 +7321,10 @@ def _add_basic_indicators(
 
 def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
     """Add MACD indicators using the defensive helper."""
-    try:
-        from ai_trading.signals import (
-            calculate_macd as signals_calculate_macd,  # type: ignore
-        )
-    except ImportError:
-        logger.warning("signals module not available for MACD calculation")
-        return
+    # ai_trading/core/bot_engine.py:7337 - Convert import guard to hard import (internal module)
+    from ai_trading.signals import (
+        calculate_macd as signals_calculate_macd,  # type: ignore
+    )
 
     try:
         if "close" not in df.columns:
@@ -8585,14 +8569,11 @@ def run_multi_strategy(ctx: BotContext) -> None:
         current_positions = ctx.api.get_all_positions()
 
         # Generate hold signals for existing positions
-        try:
-            from ai_trading.signals import (  # type: ignore
-                enhance_signals_with_position_logic,
-                generate_position_hold_signals,
-            )
-        except ImportError:
-            logger.warning("Position signals module not available")
-            return
+        # ai_trading/core/bot_engine.py:8588 - Convert import guard to hard import (internal module)
+        from ai_trading.signals import (  # type: ignore
+            enhance_signals_with_position_logic,
+            generate_position_hold_signals,
+        )
 
         hold_signals = generate_position_hold_signals(ctx, current_positions)
 
@@ -9782,17 +9763,23 @@ def main() -> None:
             lambda: Thread(target=on_market_close, daemon=True).start()
         )
 
-        # ⮕ Only now import retrain_meta_learner when not disabled
-        if not config.DISABLE_DAILY_RETRAIN:
-            try:
-                from retrain import retrain_meta_learner as _tmp_retrain
-
-                globals()["retrain_meta_learner"] = _tmp_retrain
-            except ImportError:
+        # ai_trading/core/bot_engine.py:9768 - Convert import guard to settings-gated import
+        from ai_trading.config import get_settings
+        settings = get_settings()
+        if not settings.disable_daily_retrain:
+            if settings.enable_sklearn:  # Meta-learning requires sklearn
+                try:
+                    from ai_trading.meta_learning import retrain_meta_learner as _tmp_retrain
+                    globals()["retrain_meta_learner"] = _tmp_retrain
+                except ImportError as e:
+                    globals()["retrain_meta_learner"] = None
+                    raise RuntimeError(
+                        f"Meta-learning enabled but retrain_meta_learner unavailable: {e}. "
+                        "Install sklearn or set ENABLE_SKLEARN=False"
+                    )
+            else:
                 globals()["retrain_meta_learner"] = None
-                logger.warning(
-                    "retrain.py not found or retrain_meta_learner missing. Daily retraining disabled."
-                )
+                logger.info("Daily retraining disabled: sklearn not enabled")
         else:
             logger.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
 
