@@ -1286,31 +1286,59 @@ warnings.filterwarnings(
     "ignore", message=".*valid feature names.*", category=UserWarning
 )
 
-# ─── FINBERT SENTIMENT MODEL IMPORTS & FALLBACK ─────────────────────────────────
-# Load FinBERT unless explicitly disabled
-try:
-    import torch
+# ─── FINBERT SENTIMENT MODEL: LAZY SINGLETON LOADER ─────────────────────────────────
+# FinBERT: lazy singleton loader to avoid startup RAM spike
+import importlib.util
+_finbert_tokenizer = None
+_finbert_model = None
 
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message=".*_register_pytree_node.*",
-            module="transformers.*",
-        )
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+def ensure_finbert(cfg=None):
+    """
+    Load FinBERT on first use, if enabled in config.
+    Returns (tokenizer, model) or (None, None) if disabled/unavailable.
+    """
+    global _finbert_tokenizer, _finbert_model
+    # If already loaded (or deliberately disabled), short-circuit
+    if _finbert_tokenizer is not None and _finbert_model is not None:
+        return _finbert_tokenizer, _finbert_model
+    try:
+        # config gate: disable by default on low-RAM machines
+        if cfg is not None:
+            enabled = bool(getattr(cfg, "enable_finbert", False))
+        else:
+            # best-effort: try to read a default TradingConfig if none provided
+            try:
+                from ai_trading.config.management import TradingConfig
+                enabled = bool(getattr(TradingConfig.from_env(), "enable_finbert", False))
+            except Exception:
+                enabled = False
+        if not enabled:
+            logger.info("FinBERT disabled by config; skipping model load.")
+            return None, None
 
-    _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
-    _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
-        "yiyanghkust/finbert-tone"
-    )
-    _FINBERT_MODEL.eval()
-    _HUGGINGFACE_AVAILABLE = True
-    logger.info("FinBERT loaded successfully")
-except Exception as e:
-    _HUGGINGFACE_AVAILABLE = False
-    _FINBERT_TOKENIZER = None
-    _FINBERT_MODEL = None
-    logger.warning(f"FinBERT load failed ({e}); falling back to neutral sentiment")
+        # dependency presence check without ImportError guards
+        if importlib.util.find_spec("transformers") is None or importlib.util.find_spec("torch") is None:
+            logger.warning("FinBERT requested but transformers/torch not installed; returning neutral sentiment.")
+            return None, None
+
+        import transformers  # type: ignore
+        import torch  # type: ignore
+        
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=".*_register_pytree_node.*",
+                module="transformers.*",
+            )
+            tok = transformers.AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
+            mdl = transformers.AutoModelForSequenceClassification.from_pretrained("yiyanghkust/finbert-tone")
+            mdl.eval()
+        _finbert_tokenizer, _finbert_model = tok, mdl
+        logger.info("FinBERT loaded on first use.")
+        return _finbert_tokenizer, _finbert_model
+    except Exception as e:
+        logger.error("FinBERT lazy-load failed: %s", e)
+        return None, None
 
 
 DISASTER_DD_LIMIT = S.disaster_dd_limit
@@ -4356,31 +4384,53 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
         return 0.0
 
 
-def predict_text_sentiment(text: str) -> float:
+def predict_text_sentiment(text: str, cfg=None) -> float:
     """
     Uses FinBERT (if available) to assign a sentiment score ∈ [–1, +1].
-    If FinBERT is unavailable, return 0.0.
+    FinBERT-backed sentiment; neutral fallback if disabled/unavailable.
+    Returns positive probability (or 0.0 neutral when disabled/missing).
     """
-    if _HUGGINGFACE_AVAILABLE and _FINBERT_MODEL and _FINBERT_TOKENIZER:
-        try:
-            inputs = _FINBERT_TOKENIZER(
-                text,
-                return_tensors="pt",
-                truncation=True,
-                max_length=128,
-            )
-            with torch.no_grad():
-                outputs = _FINBERT_MODEL(**inputs)
-                logits = outputs.logits[0]  # shape = (3,)
-                probs = torch.softmax(logits, dim=0)  # [p_neg, p_neu, p_pos]
+    pair = ensure_finbert(cfg)
+    if not pair or pair[0] is None or pair[1] is None:
+        return 0.0  # neutral fallback
+    tokenizer, model = pair
+    import torch  # safe: ensure_finbert verified presence
+    try:
+        inputs = tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=128,
+        )
+        with torch.no_grad():
+            outputs = model(**inputs)
+            logits = outputs.logits[0]  # shape = (3,)
+            probs = torch.softmax(logits, dim=0)  # [p_neg, p_neu, p_pos]
 
-            neg, neu, pos = probs.tolist()
-            return float(pos - neg)
-        except Exception as e:
-            logger.warning(
-                f"[predict_text_sentiment] FinBERT inference failed ({e}); returning neutral"
-            )
-    return 0.0
+        neg, neu, pos = probs.tolist()
+        return float(pos - neg)
+    except Exception as e:
+        logger.warning(
+            f"[predict_text_sentiment] FinBERT inference failed ({e}); returning neutral"
+        )
+        return 0.0
+
+
+def analyze_sentiment(text: str, cfg=None) -> float:
+    """
+    FinBERT-backed sentiment; neutral fallback if disabled/unavailable.
+    Returns positive probability or a sentiment score.
+    """
+    pair = ensure_finbert(cfg)
+    if not pair or pair[0] is None or pair[1] is None:
+        return 0.0  # neutral fallback
+    tok, mdl = pair
+    import torch  # safe: ensure_finbert verified presence
+    inputs = tok(text, return_tensors="pt", truncation=True, max_length=256)
+    with torch.no_grad():
+        logits = mdl(**inputs).logits
+    # assuming index 2 = positive per finbert-tone convention
+    return float(logits.softmax(dim=-1)[0, 2].item())
 
 
 def fetch_form4_filings(ticker: str) -> list[dict]:
