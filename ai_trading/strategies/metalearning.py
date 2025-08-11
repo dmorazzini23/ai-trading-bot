@@ -19,22 +19,14 @@ except ImportError:
 
     logger = logging.getLogger(__name__)
 
-# AI-AGENT-REF: Import dependencies with fallbacks
-try:
-    import numpy as np
+# AI-AGENT-REF: Import dependencies - sklearn is a hard dependency
+import numpy as np
 
-    NUMPY_AVAILABLE = True
-except ImportError:
-    NUMPY_AVAILABLE = False
-    logger.warning("NumPy not available, using fallback implementations")
+NUMPY_AVAILABLE = True
 
-try:
-    import pandas as pd
+import pandas as pd
 
-    PANDAS_AVAILABLE = True
-except ImportError:
-    PANDAS_AVAILABLE = False
-    logger.warning("Pandas not available, using fallback implementations")
+PANDAS_AVAILABLE = True
 
 # AI-AGENT-REF: Use centralized logger as per AGENTS.md
 try:
@@ -58,37 +50,13 @@ except ImportError:
 from ..core.enums import OrderSide, RiskLevel
 from .base import BaseStrategy, StrategySignal
 
-# Machine learning imports
-try:
-    from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
-    from sklearn.metrics import accuracy_score, classification_report
-    from sklearn.model_selection import train_test_split
-    from sklearn.preprocessing import StandardScaler
+# Machine learning imports - sklearn is a hard dependency
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 
-    ML_AVAILABLE = True
-except ImportError:
-    logger.warning(
-        "scikit-learn not available, MetaLearning strategy will use fallback"
-    )
-    ML_AVAILABLE = False
-
-    # Create fallback classes
-    class StandardScaler:
-        def fit_transform(self, X):
-            return X
-
-        def transform(self, X):
-            return X
-
-    class MockClassifier:
-        def fit(self, X, y, sample_weight=None):
-            pass
-
-        def predict(self, X):
-            return [0] * len(X)
-
-        def predict_proba(self, X):
-            return [[0.5, 0.5]] * len(X)
+ML_AVAILABLE = True
 
 
 class MetaLearning(BaseStrategy):
