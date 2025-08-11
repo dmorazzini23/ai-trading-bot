@@ -3,10 +3,7 @@ import pytest
 
 def test_validate_ohlcv_detects_missing():
     """Test that validate_ohlcv detects missing columns."""
-    try:
-        from ai_trading.utils.base import validate_ohlcv
-    except ImportError:
-        pytest.skip("ai_trading.utils.base not available")
+    from ai_trading.utils.base import validate_ohlcv
     
     bad = pd.DataFrame({"timestamp": pd.date_range("2024-01-01", periods=3, freq="D"), "close":[1,2,3]})
     with pytest.raises(ValueError) as exc_info:
@@ -15,10 +12,7 @@ def test_validate_ohlcv_detects_missing():
 
 def test_validate_ohlcv_passes_valid():
     """Test that validate_ohlcv passes valid OHLCV data."""
-    try:
-        from ai_trading.utils.base import validate_ohlcv
-    except ImportError:
-        pytest.skip("ai_trading.utils.base not available")
+    from ai_trading.utils.base import validate_ohlcv
     
     # Valid DataFrame with all required columns
     valid_df = pd.DataFrame({
@@ -35,10 +29,7 @@ def test_validate_ohlcv_passes_valid():
 
 def test_pretrade_lookback_days_setting():
     """Test that the new pretrade_lookback_days setting is available."""
-    try:
-        from ai_trading.config.settings import get_settings
-    except ImportError:
-        pytest.skip("ai_trading.config.settings not available")
+    from ai_trading.config.settings import get_settings
     
     settings = get_settings()
     assert hasattr(settings, 'pretrade_lookback_days')

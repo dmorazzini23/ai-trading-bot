@@ -18,10 +18,7 @@ from .framework import (
     ComplianceTestSuite
 )
 
-try:
-    from ai_trading.execution.live_trading import AlpacaExecutionEngine
-except ImportError:
-    AlpacaExecutionEngine = None
+from ai_trading.execution.live_trading import AlpacaExecutionEngine
 
 
 class TestLiveTradingBot:

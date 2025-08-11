@@ -13,28 +13,10 @@ from enum import Enum
 from typing import Any
 
 # Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ai_trading.logging import logger
 
 # Import configuration if available
-try:
-    from ai_trading.core.constants import EXECUTION_PARAMETERS, RISK_PARAMETERS
-    ENHANCED_CONFIG_AVAILABLE = True
-except ImportError:
-    logger.warning("Enhanced configuration not available, using defaults")
-    ENHANCED_CONFIG_AVAILABLE = False
-    # Default parameters
-    EXECUTION_PARAMETERS = {
-        'LIMIT_ORDER_SLIPPAGE': 0.005,
-        'MAX_MARKET_IMPACT': 0.01,
-        'MIN_LIQUIDITY_THRESHOLD': 1000000
-    }
-    RISK_PARAMETERS = {
-        'SAFETY_MARGIN_MULTIPLIER': 2.0
-    }
+from ai_trading.core.constants import EXECUTION_PARAMETERS, RISK_PARAMETERS
 
 
 class TradeType(Enum):

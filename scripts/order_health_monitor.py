@@ -16,23 +16,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 # AI-AGENT-REF: Import configuration and execution modules
-try:
-    import config
-    from trade_execution import OrderInfo, _active_orders, _order_tracking_lock
-except ImportError:
-    # Fallback for testing
-    config = None
-    _active_orders = {}
-    _order_tracking_lock = threading.Lock()
-
-    @dataclass
-    class OrderInfo:
-        order_id: str
-        symbol: str
-        side: str
-        qty: int
-        submitted_time: float
-        last_status: str = "new"
+import config
+from trade_execution import OrderInfo, _active_orders, _order_tracking_lock
 
 logger = logging.getLogger(__name__)
 

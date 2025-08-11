@@ -9,28 +9,7 @@ from collections.abc import Sequence
 from typing import Any
 
 # AI-AGENT-REF: guard numpy import for test environments
-try:
-    import numpy as np
-except ImportError:
-    # AI-AGENT-REF: numpy not available, create minimal fallback
-    class MockNumpy:
-        def __init__(self):
-            self.nan = float('nan')
-        def array(self, *args, **kwargs):
-            return []
-        def mean(self, *args, **kwargs):
-            return 0.0
-        def std(self, *args, **kwargs):
-            return 1.0
-        def max(self, *args, **kwargs):
-            return 0.0
-        def min(self, *args, **kwargs):
-            return 0.0
-        def cummax(self, *args, **kwargs):
-            return []
-        def isfinite(self, *args, **kwargs):
-            return True
-    np = MockNumpy()
+import numpy as np
 
 logger = logging.getLogger(__name__)
 

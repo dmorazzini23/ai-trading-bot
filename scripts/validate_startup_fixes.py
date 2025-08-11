@@ -138,11 +138,7 @@ def test_utc_timestamp_format():
     
     # Load the functions into local scope
     # Import functions from timefmt module instead of using exec
-    try:
-        from ai_trading.utils.timefmt import utc_now_iso, format_datetime_utc, ensure_utc_format
-    except ImportError:
-        print("❌ Could not import timefmt functions")
-        return
+    from ai_trading.utils.timefmt import utc_now_iso, format_datetime_utc, ensure_utc_format
     
     # Test utc_now_iso
     timestamp = utc_now_iso()
