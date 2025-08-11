@@ -807,14 +807,6 @@ def _warn_duplicate_env_keys() -> None:
 # Re-export settings components for direct import
 from .settings import Settings, get_settings
 
-        def require_alpaca_or_raise(self):
-            """Fallback method."""
-
-    @functools.lru_cache(maxsize=1)
-    def get_settings():
-        """Fallback get_settings when dependencies are missing."""
-        return Settings()
-
 
 def validate_alpaca_credentials() -> None:
     """Ensure required Alpaca credentials are present (settings-driven)."""
