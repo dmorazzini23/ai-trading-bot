@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     capital_cap: float = Field(0.04, env="CAPITAL_CAP")
     dollar_risk_limit: float = Field(0.05, env="DOLLAR_RISK_LIMIT")
     max_position_size: int = Field(8000, env="MAX_POSITION_SIZE")
+    daily_loss_limit: float = Field(0.05, env="DAILY_LOSS_LIMIT")
 
     # Additional environment variables commonly used
     news_api_key: str | None = Field(None, env="NEWS_API_KEY")

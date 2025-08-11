@@ -22,6 +22,7 @@ from .base import (
     # Re-exported from base
     safe_to_datetime,
     validate_ohlcv,
+    validate_ohlcv_basic,
 )
 from .determinism import (
     ensure_deterministic_training,
@@ -32,4 +33,4 @@ from .determinism import (
 )
 from .time import now_utc
 
-__all__ = ["log_warning", "model_lock", "safe_to_datetime", "validate_ohlcv", "portfolio_lock", "is_market_open", "is_weekend", "is_market_holiday", "get_free_port", "get_pid_on_port", "log_health_row_check", "pd", "HAS_PANDAS", "requires_pandas", "set_random_seeds", "ensure_deterministic_training", "get_model_spec", "lock_model_spec", "unlock_model_spec", "now_utc"]
+__all__ = ["log_warning", "model_lock", "safe_to_datetime", "validate_ohlcv", "validate_ohlcv_basic", "portfolio_lock", "is_market_open", "is_weekend", "is_market_holiday", "get_free_port", "get_pid_on_port", "log_health_row_check", "pd", "HAS_PANDAS", "requires_pandas", "set_random_seeds", "ensure_deterministic_training", "get_model_spec", "lock_model_spec", "unlock_model_spec", "now_utc"]
