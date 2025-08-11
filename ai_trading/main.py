@@ -15,32 +15,60 @@ from ai_trading.config import Settings, get_settings
 from ai_trading.utils import get_free_port, get_pid_on_port
 
 # AI-AGENT-REF: Import memory optimization and performance monitoring
-try:
-    from memory_optimizer import get_memory_optimizer, optimize_memory
-    from performance_monitor import (
-        get_performance_monitor,
-        start_performance_monitoring,
-    )
-
-    PERFORMANCE_MONITORING_AVAILABLE = True
-except ImportError as e:
-    # Fallback if modules not available
-    # AI-AGENT-REF: Log performance monitoring unavailability for debugging
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.debug(f"Performance monitoring not available: {e}")
-    PERFORMANCE_MONITORING_AVAILABLE = False
-
-    def get_memory_optimizer():
+def get_memory_optimizer():
+    from ai_trading.config import get_settings
+    S = get_settings()
+    if not S.enable_memory_optimization:
+        return None
+    
+    import sys
+    sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot/scripts')
+    try:
+        from memory_optimizer import get_memory_optimizer as _get_memory_optimizer
+        return _get_memory_optimizer()
+    except ImportError:
         return None
 
-    def optimize_memory():
+def optimize_memory():
+    from ai_trading.config import get_settings
+    S = get_settings()
+    if not S.enable_memory_optimization:
+        return {}
+    
+    import sys
+    sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot/scripts')
+    try:
+        from memory_optimizer import optimize_memory as _optimize_memory
+        return _optimize_memory()
+    except ImportError:
         return {}
 
-    def get_performance_monitor():
+def get_performance_monitor():
+    from ai_trading.config import get_settings  
+    S = get_settings()
+    if not S.enable_memory_optimization:  # Reuse same flag for both features
+        return None
+    
+    import sys
+    sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot/scripts')
+    try:
+        from performance_monitor import get_performance_monitor as _get_performance_monitor
+        return _get_performance_monitor()
+    except ImportError:
         return None
 
-    def start_performance_monitoring():
+def start_performance_monitoring():
+    from ai_trading.config import get_settings
+    S = get_settings()
+    if not S.enable_memory_optimization:
+        return
+    
+    import sys
+    sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot/scripts')
+    try:
+        from performance_monitor import start_performance_monitoring as _start_performance_monitoring
+        _start_performance_monitoring()
+    except ImportError:
         pass
 
 
@@ -116,16 +144,15 @@ def run_bot(*_a, **_k) -> int:
         validate_environment()
 
         # Memory optimization and performance monitoring
-        if PERFORMANCE_MONITORING_AVAILABLE:
-            memory_optimizer = get_memory_optimizer()
-            performance_monitor = get_performance_monitor()
+        memory_optimizer = get_memory_optimizer()
+        performance_monitor = get_performance_monitor()
 
-            if memory_optimizer and memory_optimizer.enable_monitoring:
-                logger.info("Memory optimization enabled")
+        if memory_optimizer and memory_optimizer.enable_monitoring:
+            logger.info("Memory optimization enabled")
 
-            if performance_monitor:
-                start_performance_monitoring()
-                logger.info("Performance monitoring started")
+        if performance_monitor:
+            start_performance_monitoring()
+            logger.info("Performance monitoring started")
 
         logger.info("Bot startup complete - entering main loop")
         # Defer runner import to avoid import-time side effects
@@ -243,7 +270,7 @@ def main() -> None:
     while iterations <= 0 or count < iterations:
         try:
             # AI-AGENT-REF: Periodic memory optimization
-            if PERFORMANCE_MONITORING_AVAILABLE and count % memory_check_interval == 0:
+            if count % memory_check_interval == 0:
                 gc_result = optimize_memory()
                 if gc_result.get("objects_collected", 0) > 100:
                     logger.info(
