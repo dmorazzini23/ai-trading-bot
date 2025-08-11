@@ -545,7 +545,7 @@ def print_environment_debug() -> None:
     logging.info("AI TRADING BOT - ENVIRONMENT DEBUG REPORT")
     logging.info(str("="*60))
     logging.info(str(f"Timestamp: {debug_report['timestamp']}"))
-    logging.info(str(f"Validation Status: {debug_report['validation_status'].upper())}")
+    logging.info(str(f"Validation Status: {debug_report['validation_status'].upper()}")
     
     if debug_report['critical_issues']:
         logging.info(str(f"\n🚨 CRITICAL ISSUES ({len(debug_report['critical_issues']))}):")

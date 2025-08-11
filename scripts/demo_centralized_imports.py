@@ -70,7 +70,7 @@ def main():
     price_series = df['price'] if hasattr(df, '__getitem__') else pd.Series([100, 102, 101, 105])
     rolling_mean = price_series.rolling(3).mean() if hasattr(price_series, 'rolling') else price_series
     logging.info(f"   Price series mean: {price_series.mean()}")
-    logging.info(str(f"   Rolling mean calculated: {hasattr(rolling_mean, 'data')) or hasattr(rolling_mean, '__len__')}")
+    logging.info(str(f"   Rolling mean calculated: {hasattr(rolling_mean, 'data') or hasattr(rolling_mean, '__len__')}"))
     
     logging.info("\n🤖 Testing Machine Learning:")
     # Prepare sample data
@@ -88,7 +88,7 @@ def main():
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     logging.info("   Standard scaling completed")
-    logging.info(str(f"   Scaled data shape: {len(X_scaled)) if hasattr(X_scaled, '__len__') else 'N/A'}")
+    logging.info(str(f"   Scaled data shape: {len(X_scaled) if hasattr(X_scaled, '__len__') else 'N/A'}"))
     
     logging.info("\n📊 Testing Technical Analysis:")
     # Prepare price data
@@ -101,7 +101,7 @@ def main():
     # Test SMA
     sma_5 = ta_lib.SMA(price_data, timeperiod=5)
     logging.info(f"   SMA(5) calculated: {len(sma_5)} values")
-    logging.info(str(f"   SMA(5)) last 3 values: {sma_5[-3:] if hasattr(sma_5, '__getitem__') else 'Mock result'}")
+    logging.info(str(f"   SMA(5) last 3 values: {sma_5[-3:] if hasattr(sma_5, '__getitem__') else 'Mock result'}"))
     
     # Test EMA
     ema_5 = ta_lib.EMA(price_data, timeperiod=5)

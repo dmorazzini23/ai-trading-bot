@@ -560,7 +560,7 @@ def main():
         for dup in report['duplicates']:
             orig = dup['original_process']
             dupl = dup['duplicate_process']
-            logging.info(str(f"- Original: PID {orig['pid']} ({orig['memory_mb']:.1f}MB))")
+            logging.info(str(f"- Original: PID {orig['pid']} ({orig['memory_mb']:.1f}MB)")
             logging.info(str(f"- Duplicate: PID {dupl['pid']} ({dupl['memory_mb']:.1f}MB))")
     
     logging.info("\nSERVICE STATUS:")

@@ -270,7 +270,7 @@ def main():
         logging.info("✓ Service no longer crashes at import")
         logging.info("✓ Bot starts with either ALPACA_* or APCA_* credentials")
         logging.info("✓ Credentials are handled securely with redacted logging")
-        logging.info(str("✓ UTC timestamps have single trailing Z (no 'ZZ'))")
+        logging.info(str("✓ UTC timestamps have single trailing Z (no 'ZZ')")
         logging.info("✓ Lazy imports prevent import-time side effects")
         logging.info("✓ Backward compatibility maintained")
         logging.info("\n🚀 Ready for systemd deployment!")

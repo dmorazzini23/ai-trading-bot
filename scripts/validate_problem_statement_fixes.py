@@ -35,8 +35,8 @@ def validate_sentiment_circuit_breaker():
         actual_failures = sentiment.SENTIMENT_FAILURE_THRESHOLD
         actual_recovery = sentiment.SENTIMENT_RECOVERY_TIMEOUT
         
-        logging.info(str(f"Failure threshold: {actual_failures} (expected: {expected_failures})) - {'✓' if actual_failures == expected_failures else '✗'}")
-        logging.info(str(f"Recovery timeout: {actual_recovery}s (expected: {expected_recovery}s)) - {'✓' if actual_recovery == expected_recovery else '✗'}")
+        logging.info(str(f"Failure threshold: {actual_failures} (expected: {expected_failures}) - {'✓' if actual_failures == expected_failures else '✗'}")
+        logging.info(str(f"Recovery timeout: {actual_recovery}s (expected: {expected_recovery}s) - {'✓' if actual_recovery == expected_recovery else '✗'}")
         
         # Also check bot_engine.py for consistency
         with open('bot_engine.py', 'r') as f:

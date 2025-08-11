@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import logging
+from unittest.mock import patch
 
 """
 COMPREHENSIVE VALIDATION - Critical Trading Bot Fixes

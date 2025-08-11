@@ -46,4 +46,5 @@ for p in ROOT.rglob("*.py"):
 rows.sort()
 print("issue,file,line,snippet")
 for issue, file, line, snip in rows:
-    print(f"{issue},{file},{line},\"{snip.replace('\"','\"\"')}\"")
+    escaped_snip = snip.replace('"', '""')
+    print(f"{issue},{file},{line},\"{escaped_snip}\"")

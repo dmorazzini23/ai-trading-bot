@@ -89,7 +89,7 @@ def validate_process_detection():
             if alert.get('threshold', 1) == 2:
                 logging.info("✅ Alert threshold correctly set to 2 (allowing main + backup)")
             else:
-                logging.info(str(f"❌ Alert threshold is {alert.get('threshold'))}, should be 2")
+                logging.info(str(f"❌ Alert threshold is {alert.get('threshold')}, should be 2")
                 return False
         
         return True
