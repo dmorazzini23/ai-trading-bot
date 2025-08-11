@@ -678,6 +678,7 @@ class TradingConfig:
         self.scaling_factor = 1.0
         self.limit_order_slippage = 0.001
         self.pov_slice_pct = 0.1
+        self.daily_loss_limit = 0.05
 
     @classmethod
     def from_env(cls, mode="balanced"):
@@ -701,6 +702,7 @@ class TradingConfig:
             "take_profit": self.take_profit,
             "lookback_days": self.lookback_days,
             "min_signal_strength": self.min_signal_strength,
+            "daily_loss_limit": self.daily_loss_limit,
         }
 
 

@@ -1763,7 +1763,9 @@ MAX_POSITION_SIZE = state.mode_obj.config.max_position_size
 SLICE_THRESHOLD = 50
 POV_SLICE_PCT = params.get("POV_SLICE_PCT", state.mode_obj.config.pov_slice_pct)
 DAILY_LOSS_LIMIT = params.get(
-    "DAILY_LOSS_LIMIT", state.mode_obj.config.daily_loss_limit
+    "DAILY_LOSS_LIMIT",
+    getattr(state.mode_obj.config, "daily_loss_limit",
+            getattr(S, "daily_loss_limit", 0.05))
 )
 # AI-AGENT-REF: Increase default position limit from 10 to 20 for better portfolio utilization
 MAX_PORTFOLIO_POSITIONS = S.max_portfolio_positions
