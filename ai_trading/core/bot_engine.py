@@ -1749,24 +1749,49 @@ params.update(load_hyperparams())
 NEWS_API_KEY = CONFIG_NEWS_API_KEY  # Keep for backwards compatibility
 SENTIMENT_API_KEY = CONFIG_SENTIMENT_API_KEY  # New preferred API key
 SENTIMENT_API_URL = CONFIG_SENTIMENT_API_URL  # Configurable API URL
-TRAILING_FACTOR = params.get("TRAILING_FACTOR", state.mode_obj.config.trailing_factor)
+TRAILING_FACTOR = params.get("TRAILING_FACTOR", 
+                           getattr(S, "trailing_factor",
+                                   getattr(state.mode_obj.config, "trailing_factor", 1.0)))
 SECONDARY_TRAIL_FACTOR = 1.0
 TAKE_PROFIT_FACTOR = params.get(
-    "TAKE_PROFIT_FACTOR", state.mode_obj.config.take_profit_factor
+    "TAKE_PROFIT_FACTOR", getattr(S, "take_profit_factor",
+                                  getattr(state.mode_obj.config, "take_profit_factor", 2.0))
 )
-SCALING_FACTOR = params.get("SCALING_FACTOR", state.mode_obj.config.scaling_factor)
+SCALING_FACTOR = params.get("SCALING_FACTOR", 
+                        getattr(S, "scaling_factor",
+                                getattr(state.mode_obj.config, "scaling_factor", 1.0)))
 ORDER_TYPE = "market"
 LIMIT_ORDER_SLIPPAGE = params.get(
-    "LIMIT_ORDER_SLIPPAGE", state.mode_obj.config.limit_order_slippage
+    "LIMIT_ORDER_SLIPPAGE", getattr(S, "limit_order_slippage",
+                                    getattr(state.mode_obj.config, "limit_order_slippage", 0.001))
 )
-MAX_POSITION_SIZE = state.mode_obj.config.max_position_size
+MAX_POSITION_SIZE = getattr(S, "max_position_size",
+                           getattr(state.mode_obj.config, "max_position_size", 1.0))
 SLICE_THRESHOLD = 50
-POV_SLICE_PCT = params.get("POV_SLICE_PCT", state.mode_obj.config.pov_slice_pct)
+POV_SLICE_PCT = params.get("POV_SLICE_PCT", 
+                       getattr(S, "pov_slice_pct",
+                               getattr(state.mode_obj.config, "pov_slice_pct", 0.05)))
 DAILY_LOSS_LIMIT = params.get(
     "DAILY_LOSS_LIMIT",
     getattr(state.mode_obj.config, "daily_loss_limit",
             getattr(S, "daily_loss_limit", 0.05))
 )
+# Additional risk/sizing knobs aligned with Settings
+KELLY_FRACTION = params.get("KELLY_FRACTION",
+                           getattr(S, "kelly_fraction",
+                                   getattr(state.mode_obj.config, "kelly_fraction", 0.0)))
+STOP_LOSS = params.get("STOP_LOSS",
+                       getattr(S, "stop_loss",
+                               getattr(state.mode_obj.config, "stop_loss", 0.05)))
+TAKE_PROFIT = params.get("TAKE_PROFIT",
+                         getattr(S, "take_profit",
+                                 getattr(state.mode_obj.config, "take_profit", 0.10)))
+LOOKBACK_DAYS = params.get("LOOKBACK_DAYS",
+                          getattr(S, "lookback_days",
+                                  getattr(state.mode_obj.config, "lookback_days", 60)))
+MIN_SIGNAL_STRENGTH = params.get("MIN_SIGNAL_STRENGTH",
+                                 getattr(S, "min_signal_strength",
+                                         getattr(state.mode_obj.config, "min_signal_strength", 0.1)))
 # AI-AGENT-REF: Increase default position limit from 10 to 20 for better portfolio utilization
 MAX_PORTFOLIO_POSITIONS = S.max_portfolio_positions
 CORRELATION_THRESHOLD = 0.60
@@ -1798,7 +1823,9 @@ CONF_THRESHOLD = params.get("CONF_THRESHOLD", state.mode_obj.config.conf_thresho
 CONFIRMATION_COUNT = params.get(
     "CONFIRMATION_COUNT", state.mode_obj.config.confirmation_count
 )
-CAPITAL_CAP = params.get("CAPITAL_CAP", state.mode_obj.config.capital_cap)
+CAPITAL_CAP = params.get("CAPITAL_CAP", 
+                     getattr(S, "capital_cap",
+                             getattr(state.mode_obj.config, "capital_cap", 0.04)))
 DOLLAR_RISK_LIMIT = S.dollar_risk_limit
 BUY_THRESHOLD = params.get("BUY_THRESHOLD", state.mode_obj.config.buy_threshold)
 
