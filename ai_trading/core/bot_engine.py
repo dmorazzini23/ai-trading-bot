@@ -3885,8 +3885,7 @@ class LazyBotContext:
     def __init__(self):
         self._initialized = False
         self._context = None
-        # Initialize eagerly to avoid __getattr__ magic
-        self._ensure_initialized()
+        # Do NOT initialize eagerly - that's the whole point of being lazy
 
     def _ensure_initialized(self):
         """Ensure the context is initialized."""
@@ -4063,13 +4062,17 @@ class LazyBotContext:
             setattr(self._context, name, value)
 
 
-# Create the lazy context that will initialize on first use
-ctx = LazyBotContext()
+# AI-AGENT-REF: No module-level context creation to prevent import-time side effects
+# Context will be created when first accessed via get_ctx() or _get_bot_context()
+_global_ctx = None
 
 
 def get_ctx():
     """Get the global bot context (backwards compatibility)."""
-    return ctx
+    global _global_ctx
+    if _global_ctx is None:
+        _global_ctx = LazyBotContext()
+    return _global_ctx
 
 
 # AI-AGENT-REF: Defer context initialization to prevent expensive operations during import
