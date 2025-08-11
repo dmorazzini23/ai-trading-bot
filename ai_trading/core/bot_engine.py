@@ -6251,11 +6251,7 @@ def _model_feature_names(model) -> list[str]:
 
 def _should_hold_position(df: pd.DataFrame) -> bool:
     """Return True if trend indicators favor staying in the trade."""
-    try:
-        from ai_trading.indicators import rsi  # type: ignore
-    except ImportError:
-        # If indicators not available, fallback to simple logic
-        return True
+    from ai_trading.indicators import rsi  # type: ignore
 
     try:
         close = df["close"].astype(float)
@@ -9427,7 +9423,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     from ai_trading import portfolio
                     from ai_trading.utils import portfolio_lock
                 except ImportError:
-                    logger.warning("Portfolio modules not available")
+                    raise RuntimeError("Portfolio modules are required for bot operation")
                     # Skip portfolio update if modules unavailable
                 else:
                     try:

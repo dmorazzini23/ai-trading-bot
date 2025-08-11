@@ -3,16 +3,7 @@ tools/migrate_metrics_logger.py,11,root_metrics_logger,    # 1) from metrics_log
 tools/migrate_metrics_logger.py,18,root_metrics_logger,    # 2) import metrics_logger → from ai_trading.telemetry import metrics_logger
 tools/migrate_metrics_logger.py,18,root_metrics_logger,    # 2) import metrics_logger → from ai_trading.telemetry import metrics_logger
 tools/migrate_metrics_logger.py,22,root_metrics_logger,"        r""\1from ai_trading.telemetry import metrics_logger\2"","
-ai_trading/logging.py,517,import_guard_block,    try:
 ai_trading/logging.py,33,root_metrics_logger,"    """"""Lazy import metrics_logger to avoid import-time dependencies."""""""
-ai_trading/signals.py,13,import_guard_block,try:
-ai_trading/signals.py,19,import_guard_block,try:
-ai_trading/signals.py,72,import_guard_block,try:
-ai_trading/signals.py,78,import_guard_block,try:
-ai_trading/signals.py,160,import_guard_block,try:
-ai_trading/signals.py,36,mock_class,        from datetime import datetime
-ai_trading/signals.py,46,mock_class,                return True
-ai_trading/signals.py,50,mock_class,                pass
 ai_trading/imports.py,37,mock_class,"    logger.warning(""NumPy not available, using MockNumpy fallback"")"
 ai_trading/imports.py,203,mock_class,    from datetime import datetime
 ai_trading/imports.py,264,mock_class,            return self.data
@@ -20,16 +11,8 @@ ai_trading/imports.py,287,mock_class,            )
 ai_trading/imports.py,385,mock_class,            ]
 ai_trading/imports.py,520,mock_class,    # Mock sklearn module
 ai_trading/imports.py,582,mock_class,if not TA_AVAILABLE and not PANDAS_TA_AVAILABLE and not TALIB_AVAILABLE:
-ai_trading/meta_learning.py,13,import_guard_block,try:
-ai_trading/meta_learning.py,19,import_guard_block,try:
-ai_trading/meta_learning.py,24,import_guard_block,try:
-ai_trading/meta_learning.py,37,import_guard_block,try:
-ai_trading/meta_learning.py,1718,import_guard_block,try:
-ai_trading/meta_learning.py,27,mock_class,    # Mock metrics_logger for testing
-ai_trading/meta_learning.py,25,root_metrics_logger,from ai_trading.telemetry import metrics_logger
-ai_trading/data_fetcher.py,206,import_guard_block,try:
-ai_trading/data_fetcher.py,210,mock_class,    from datetime import datetime
-ai_trading/data_fetcher.py,244,mock_class,            pass
+ai_trading/meta_learning.py,1701,import_guard_block,    try:
+ai_trading/meta_learning.py,17,root_metrics_logger,from ai_trading.telemetry import metrics_logger
 tests/test_retry_idempotency_integration.py,10,mock_class,"from tenacity import retry, stop_after_attempt, wait_exponential"
 tests/test_bot_engine.py,4,raw_exec,# AI-AGENT-REF: Replaced unsafe exec() with direct import from shim module
 tests/conftest.py,6,mock_class,# AI-AGENT-REF: Mock yfinance module for deterministic tests
@@ -114,7 +97,7 @@ scripts/predict.py,18,mock_class,            # Return a minimal mock model
 scripts/backtest_framework.py,72,mock_class,    def test_position_sizing(self):
 scripts/validate_env.py,237,config_dunder_getattr,"        def __getattr__(self, name):"
 scripts/portfolio_optimizer.py,17,import_guard_block,try:
-scripts/production_validator.py,843,root_metrics_logger,from ai_trading.telemetry import metrics_logger
+scripts/production_validator.py,843,root_metrics_logger,            from ai_trading.telemetry import metrics_logger
 scripts/ml_model.py,19,import_guard_block,try:
 scripts/ml_model.py,39,import_guard_block,try:
 scripts/metrics_logger.py,12,import_guard_block,try:
@@ -150,8 +133,7 @@ scripts/audit.py,7,import_guard_block,try:
 scripts/demonstrate_optimization.py,19,import_guard_block,try:
 tools/ci/guard_ast.py,20,raw_exec,"        FAILURES.append((self.path, node.lpar[0].start.line if node.lpar else node.func.start.line, ""exec()""))"
 tools/ci/guard_ast.py,16,raw_eval,"        FAILURES.append((self.path, node.lpar[0].start.line if node.lpar else node.func.start.line, ""raw eval()""))"
-ai_trading/core/bot_engine.py,6254,import_guard_block,    try:
-ai_trading/core/bot_engine.py,9426,import_guard_block,                try:
+ai_trading/core/bot_engine.py,9422,import_guard_block,                try:
 ai_trading/core/bot_engine.py,335,config_dunder_getattr,"            def __getattr__(self, name):"
 ai_trading/core/bot_engine.py,349,config_dunder_getattr,"    def __getattr__(self, item):"
 ai_trading/core/bot_engine.py,3725,config_dunder_getattr,"    def __getattr__(self, name):"

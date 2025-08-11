@@ -92,7 +92,7 @@ def simulate_trading_session():
     final_status = breaker.get_status()
     logging.info(str(f"Peak Equity: ${final_status['peak_equity']:,.0f}"))
     logging.info(f"Final Equity: ${equity:,.0f}")
-    logging.info(str(f"Max Drawdown Experienced: {max([s['current_drawdown'] for _, e, _ in trading_session for s in [breaker.get_status())]]):.1%}")
+    logging.info(str(f"Max Drawdown Experienced: {max([s['current_drawdown'] for _, e, _ in trading_session for s in [breaker.get_status()]]):.1%}"))
     logging.info(str(f"Final Status: {'🟢 Trading Allowed' if final_status['trading_allowed'] else '🔴 Trading Halted'}"))
     
     logging.info("\n🛡️  Protection Summary:")

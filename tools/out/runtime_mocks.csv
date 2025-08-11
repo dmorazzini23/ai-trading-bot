@@ -1,7 +1,4 @@
 file,line,marker,snippet
-ai_trading/signals.py,36,mock_class,        from datetime import datetime
-ai_trading/signals.py,46,mock_class,                return True
-ai_trading/signals.py,50,mock_class,                pass
 ai_trading/imports.py,37,mock_class,"    logger.warning(""NumPy not available, using MockNumpy fallback"")"
 ai_trading/imports.py,203,mock_class,    from datetime import datetime
 ai_trading/imports.py,264,mock_class,            return self.data
@@ -9,9 +6,6 @@ ai_trading/imports.py,287,mock_class,            )
 ai_trading/imports.py,385,mock_class,            ]
 ai_trading/imports.py,520,mock_class,    # Mock sklearn module
 ai_trading/imports.py,582,mock_class,if not TA_AVAILABLE and not PANDAS_TA_AVAILABLE and not TALIB_AVAILABLE:
-ai_trading/meta_learning.py,27,mock_class,    # Mock metrics_logger for testing
-ai_trading/data_fetcher.py,210,mock_class,    from datetime import datetime
-ai_trading/data_fetcher.py,244,mock_class,            pass
 tests/test_retry_idempotency_integration.py,10,mock_class,"from tenacity import retry, stop_after_attempt, wait_exponential"
 tests/conftest.py,6,mock_class,# AI-AGENT-REF: Mock yfinance module for deterministic tests
 tests/conftest.py,1448,mock_class,"        if not hasattr(config, 'TradingConfig'):"

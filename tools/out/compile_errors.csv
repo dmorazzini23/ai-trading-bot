@@ -1,9 +1,6 @@
 file,error
-ai_trading/meta_learning.py,"IndentationError(""expected an indented block after 'try' statement on line 24"", ('ai_trading/meta_learning.py', 25, 1, 'from ai_trading.telemetry import metrics_logger\n', 25, 5))"
-scripts/demo_drawdown_protection.py,"SyntaxError(""closing parenthesis ')' does not match opening parenthesis '['"", ('scripts/demo_drawdown_protection.py', 95, 139, '    logging.info(str(f""Max Drawdown Experienced: {max([s[\'current_drawdown\'] for _, e, _ in trading_session for s in [breaker.get_status())]]):.1%}"")', 95, 139))"
 scripts/validate_env.py,"SyntaxError(""f-string: unmatched ')'"", ('scripts/validate_env.py', 548, 85, '    logging.info(str(f""Validation Status: {debug_report[\'validation_status\'].upper())}"")', 548, 85))"
 scripts/validate_problem_statement_fixes.py,"SyntaxError('invalid syntax. Perhaps you forgot a comma?', ('scripts/validate_problem_statement_fixes.py', 38, 22, '        logging.info(str(f""Failure threshold: {actual_failures} (expected: {expected_failures})) - {\'✓\' if actual_failures == expected_failures else \'✗\'}"")\n', 39, 21))"
-scripts/production_validator.py,"IndentationError(""expected an indented block after 'try' statement on line 842"", ('scripts/production_validator.py', 843, 0, 'from ai_trading.telemetry import metrics_logger\n', 843, -1))"
 scripts/verify_config.py,"SyntaxError(""'(' was never closed"", ('scripts/verify_config.py', 131, 17, '    logging.info(str(""""""\n', 131, 0))"
 scripts/demo_grid_search.py,"SyntaxError(""f-string: unmatched ')'"", ('scripts/demo_grid_search.py', 57, 51, '    logging.info(str(f""Testing {len(grid[\'kelly\'])) * len(grid[\'atr_mult\']) * len(grid[\'lookback\'])} parameter combinations..."")', 57, 51))"
 scripts/debug_cli.py,"SyntaxError(""f-string: unmatched ')'"", ('scripts/debug_cli.py', 328, 83, '        logging.info(str(f""  PnL events tracked: {pnl_stats.get(\'total_events\', 0))}"")', 328, 83))"
