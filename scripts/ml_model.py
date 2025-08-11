@@ -40,7 +40,7 @@ with parallel_backend("loky", n_jobs=1):
     pass
 
 # Prefer spec check over ImportError guards
-if importlib.util.find_spec("sklearn.linear_model") is not None:
+if importlib.util.find_spec("sklearn") is not None and importlib.util.find_spec("sklearn.linear_model") is not None:
     from sklearn.linear_model import LinearRegression
 else:
     class LinearRegression:
