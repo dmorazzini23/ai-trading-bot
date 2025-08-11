@@ -42,8 +42,6 @@ tests/support/mocks_runtime.py,259,config_dunder_getattr,"    def __getattr__(se
 tests/support/mocks_runtime.py,266,config_dunder_getattr,"    def __getattr__(self, name):"
 tests/test_trigger_meta_learning_conversion.py,85,config_dunder_getattr,"    def __getattr__(cls, name):"
 tests/unit/test_alpaca_api.py,33,config_dunder_getattr,"        def __getattr__(self, name):"
-ai_trading/core/bot_engine.py,9422,import_guard_block,                try:
-ai_trading/meta_learning.py,1701,import_guard_block,    try:
 scripts/audit.py,7,import_guard_block,try:
 scripts/demonstrate_optimization.py,19,import_guard_block,try:
 scripts/features.py,2,import_guard_block,try:
@@ -184,7 +182,7 @@ tests/test_strategy_allocator_smoke.py,11,raw_exec,    # AI-AGENT-REF: Replaced 
 tests/test_trade_execution_smoke.py,11,raw_exec,    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
 tools/ci/guard_ast.py,20,raw_exec,"        FAILURES.append((self.path, node.lpar[0].start.line if node.lpar else node.func.start.line, ""exec()""))"
 ai_trading/logging.py,33,root_metrics_logger,"    """"""Lazy import metrics_logger to avoid import-time dependencies."""""""
-ai_trading/meta_learning.py,17,root_metrics_logger,from ai_trading.telemetry import metrics_logger
+ai_trading/meta_learning.py,372,root_metrics_logger,    from ai_trading.telemetry import metrics_logger  # CSV:17 - Local import
 scripts/production_validator.py,843,root_metrics_logger,            from ai_trading.telemetry import metrics_logger
 scripts/risk_engine.py,54,root_metrics_logger,from ai_trading.telemetry import metrics_logger
 tools/migrate_metrics_logger.py,11,root_metrics_logger,    # 1) from metrics_logger import X → from ai_trading.telemetry.metrics_logger import X

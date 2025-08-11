@@ -1,6 +1,4 @@
 file,line,marker,snippet
-ai_trading/core/bot_engine.py,9422,import_guard_block,                try:
-ai_trading/meta_learning.py,1701,import_guard_block,    try:
 scripts/audit.py,7,import_guard_block,try:
 scripts/demonstrate_optimization.py,19,import_guard_block,try:
 scripts/features.py,2,import_guard_block,try:

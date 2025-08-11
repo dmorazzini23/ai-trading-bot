@@ -1,7 +1,7 @@
 marker,count
 mock_class,96
 config_dunder_getattr,43
-import_guard_block,31
+import_guard_block,29
 raw_exec,13
 root_metrics_logger,8
 raw_eval,1
