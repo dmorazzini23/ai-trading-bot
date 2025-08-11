@@ -1,0 +1,44 @@
+file,line,marker,snippet
+ai_trading/logging.py,517,import_guard_block,    try:
+ai_trading/signals.py,13,import_guard_block,try:
+ai_trading/signals.py,19,import_guard_block,try:
+ai_trading/signals.py,72,import_guard_block,try:
+ai_trading/signals.py,78,import_guard_block,try:
+ai_trading/signals.py,160,import_guard_block,try:
+ai_trading/meta_learning.py,13,import_guard_block,try:
+ai_trading/meta_learning.py,19,import_guard_block,try:
+ai_trading/meta_learning.py,24,import_guard_block,try:
+ai_trading/meta_learning.py,37,import_guard_block,try:
+ai_trading/meta_learning.py,1718,import_guard_block,try:
+ai_trading/data_fetcher.py,206,import_guard_block,try:
+tests/test_regime_and_schema_guard.py,6,import_guard_block,    try:
+tests/test_regime_and_schema_guard.py,18,import_guard_block,    try:
+tests/test_regime_and_schema_guard.py,38,import_guard_block,    try:
+scripts/transaction_cost_calculator.py,16,import_guard_block,try:
+scripts/features.py,2,import_guard_block,try:
+scripts/features.py,14,import_guard_block,try:
+scripts/features.py,32,import_guard_block,try:
+scripts/predict.py,11,import_guard_block,try:
+scripts/predict.py,32,import_guard_block,try:
+scripts/portfolio_optimizer.py,17,import_guard_block,try:
+scripts/ml_model.py,19,import_guard_block,try:
+scripts/ml_model.py,39,import_guard_block,try:
+scripts/metrics_logger.py,12,import_guard_block,try:
+scripts/order_health_monitor.py,19,import_guard_block,try:
+scripts/risk_engine.py,9,import_guard_block,try:
+scripts/risk_engine.py,38,import_guard_block,try:
+scripts/risk_engine.py,1123,import_guard_block,try:
+scripts/portfolio_rl.py,3,import_guard_block,try:
+scripts/validate_startup_fixes.py,141,import_guard_block,    try:
+scripts/retrain.py,10,import_guard_block,try:
+scripts/retrain.py,31,import_guard_block,try:
+scripts/retrain.py,53,import_guard_block,try:
+scripts/retrain.py,84,import_guard_block,try:
+scripts/retrain.py,99,import_guard_block,try:
+scripts/audit.py,7,import_guard_block,try:
+scripts/demonstrate_optimization.py,19,import_guard_block,try:
+ai_trading/core/bot_engine.py,6254,import_guard_block,    try:
+ai_trading/core/bot_engine.py,9426,import_guard_block,                try:
+tests/unit/test_health_check.py,8,import_guard_block,    try:
+tests/institutional/framework.py,18,import_guard_block,try:
+tests/institutional/test_live_trading.py,21,import_guard_block,try:
