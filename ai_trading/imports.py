@@ -26,24 +26,8 @@ PANDAS_AVAILABLE = True
 SKLEARN_AVAILABLE = True
 
 # Optional dependencies with feature flags
-try:
-    import talib
-    TALIB_AVAILABLE = True
-    logger.debug("TA-Lib imported successfully")
-except ImportError:
-    talib = None
-    TALIB_AVAILABLE = False
-    logger.debug("TA-Lib not available")
-
-try:
-    import pandas_ta as ta
-    PANDAS_TA_AVAILABLE = True
-    logger.debug("pandas_ta imported successfully")  
-except ImportError:
-    ta = None
-    PANDAS_TA_AVAILABLE = False
-    logger.debug("pandas_ta not available")
-
+import talib
+import pandas_ta as ta
 TA_AVAILABLE = TALIB_AVAILABLE or PANDAS_TA_AVAILABLE
 
 def get_ta_lib():

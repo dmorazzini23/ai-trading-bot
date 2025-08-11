@@ -14,26 +14,7 @@ from datetime import UTC, datetime, timedelta
 from ai_trading.logging import logger
 
 # Import centralized configuration
-try:
-    from ai_trading.config.management import TradingConfig
-
-    _DEFAULT_CONFIG = TradingConfig.from_env()
-except ImportError:
-    # Fallback if config import fails
-    logger.warning("Could not import centralized config, using defaults")
-
-    class _DefaultConfig:
-        min_sample_size = 20
-        kelly_fraction_max = 0.25
-        confidence_level = 0.90
-        lookback_periods = 252
-        rebalance_frequency = 21
-
-    _DEFAULT_CONFIG = _DefaultConfig()
-    # Create a dummy TradingConfig for type hints
-    TradingConfig = type("TradingConfig", (), {})
-
-
+from ai_trading.config.management import TradingConfig
 class KellyCriterion:
     """
     Kelly Criterion calculator for optimal position sizing.

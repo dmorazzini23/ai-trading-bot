@@ -20,16 +20,8 @@ def _import_clustering():
     if not S.ENABLE_PORTFOLIO_FEATURES:
         return None, None, None, False
     
-    try:
-        from scipy.cluster.hierarchy import fcluster, linkage
-        from scipy.spatial.distance import squareform
-        return fcluster, linkage, squareform, True
-    except ImportError:
-        raise RuntimeError(
-            "scipy is required for portfolio clustering features. "
-            "Install with: pip install scipy"
-        )
-
+    from scipy.cluster.hierarchy import fcluster, linkage
+    from scipy.spatial.distance import squareform
 # Lazy load clustering components when needed
 
 

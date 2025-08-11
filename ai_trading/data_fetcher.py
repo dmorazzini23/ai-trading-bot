@@ -392,26 +392,7 @@ def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime
         raise ValueError("datetime value cannot be None")
 
     # Handle pandas availability check
-    try:
-        import pandas as pd_real
-
-        if dt is pd_real.NaT or (
-            isinstance(dt, pd_real.Timestamp) and pd_real.isna(dt)
-        ):
-            logger.error("ensure_datetime received NaT", stack_info=True)
-            raise ValueError("datetime value cannot be NaT")
-
-        if isinstance(dt, pd_real.Timestamp):
-            logger.debug("ensure_datetime using pandas.Timestamp %r", dt)
-            result = dt.to_pydatetime()
-            # Ensure timezone-aware
-            if result.tzinfo is None:
-                result = result.replace(tzinfo=UTC)
-            return result
-    except ImportError as e:
-        # pandas_real not available in test environment - log and continue
-        logger.debug("pandas_real not available: %s", e)
-
+    import pandas as pd_real
     if isinstance(dt, datetime):
         logger.debug("ensure_datetime received datetime %r", dt)
         # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
@@ -1382,25 +1363,7 @@ def _resolve_timeframe(
     timeframe: Union[str, "TimeFrame", "TimeFrameUnit"],
 ) -> "TimeFrame":
     """Resolve timeframe parameter to TimeFrame object."""
-    try:
-        from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-
-        if isinstance(timeframe, str):
-            tf_map = {
-                "1MIN": TimeFrame.Minute,
-                "1Min": TimeFrame.Minute,
-                "5MIN": TimeFrame(5, TimeFrameUnit.Minute),
-                "1HOUR": TimeFrame.Hour,
-                "1DAY": TimeFrame.Day,
-                "1D": TimeFrame.Day,
-            }
-            return tf_map.get(timeframe.upper(), TimeFrame.Day)
-        return timeframe
-    except ImportError:
-        # Fallback when alpaca not available
-        return timeframe
-
-
+    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 def _to_dt(dt_input: date | datetime | str) -> datetime:
     """Convert date/datetime/string to datetime."""
     if isinstance(dt_input, str):
@@ -1505,94 +1468,7 @@ def get_bars_batch(
         return results
 
     # Perform one batched request
-    try:
-        from alpaca.data.requests import StockBarsRequest
-
-        req = StockBarsRequest(
-            symbol_or_symbols=to_fetch,
-            start=start_dt,
-            end=end_dt,
-            timeframe=tf,
-            feed=feed or _DEFAULT_FEED,
-        )
-        t0 = time.perf_counter()
-        try:
-            df = _DATA_CLIENT.get_stock_bars(
-                req
-            ).df  # multi-indexed by (symbol, timestamp)
-        except (
-            AttributeError,
-            ValueError,
-            KeyError,
-            ConnectionError,
-            TimeoutError,
-        ) as e:
-            logger.warning(f"Primary data fetch failed, falling back to IEX: {e}")
-            # Fall back to IEX in one more batched attempt
-            try:
-                alt = StockBarsRequest(
-                    symbol_or_symbols=to_fetch,
-                    start=start_dt,
-                    end=end_dt,
-                    timeframe=tf,
-                    feed="iex",
-                )
-                df = _DATA_CLIENT.get_stock_bars(alt).df
-            except Exception as exc:
-                logger.exception(
-                    "Batched fetch failed for %s symbols: %s", len(to_fetch), exc
-                )
-                raise
-        finally:
-            _MET_LAT.labels("alpaca", tf_name, "miss", "batch").observe(
-                time.perf_counter() - t0
-            )
-            _MET_REQS.labels("alpaca", tf_name, "miss", "batch").inc()
-
-        # Split df by symbol, normalize, and cache
-        if df is None or getattr(df, "empty", True):
-            return results
-        # Expect df index to include "symbol" level
-        try:
-            for sym in to_fetch:
-                try:
-                    sub = (
-                        df.xs(sym, level=0)
-                        if hasattr(df.index, "levels")
-                        else df[df["symbol"] == sym]
-                    )
-                except (KeyError, ValueError):
-                    continue
-                sub = _normalize_df(sub)
-                results[sym] = sub
-                if settings.data_cache_enable:
-                    mcache.put_mem(sym, tf_name, start_s, end_s, sub)
-                    if settings.data_cache_disk_enable:
-                        try:
-                            mcache.put_disk(
-                                settings.data_cache_dir,
-                                sym,
-                                tf_name,
-                                start_s,
-                                end_s,
-                                sub,
-                            )
-                        except (OSError, PermissionError, ValueError) as e:
-                            logger.warning(f"Failed to cache data for {sym}: {e}")
-                            # Continue execution - caching is not critical
-        except (AttributeError, KeyError, ValueError):
-            # If the structure is not multi-indexed by symbol, quietly return what we can
-            logger.warning("Unexpected batch frame structure; partial results returned")
-    except ImportError:
-        # Fallback to individual fetches if Alpaca not available
-        for sym in to_fetch:
-            try:
-                df = get_daily_df(sym, start, end)
-                if df is not None and not df.empty:
-                    results[sym] = df
-            except (ValueError, KeyError, AttributeError, ConnectionError) as e:
-                logger.warning(f"Failed to fetch data for {sym}: {e}")
-                continue
+    from alpaca.data.requests import StockBarsRequest
     return results
 
 

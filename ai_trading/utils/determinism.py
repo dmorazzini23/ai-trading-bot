@@ -16,15 +16,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-try:
-    import numpy as np
-
-    HAS_NUMPY = True
-except ImportError:
-    HAS_NUMPY = False
-    np = None
-
-
+import numpy as np
 logger = logging.getLogger(__name__)
 
 
@@ -43,43 +35,11 @@ def set_random_seeds(seed: int = 42) -> None:
         np.random.seed(seed)
 
     # TensorFlow (if available)
-    try:
-        import tensorflow as tf
-
-        tf.random.set_seed(seed)
-    except ImportError as e:
-        # AI-AGENT-REF: TensorFlow not available, skip seed setting
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f"TensorFlow not available for seeding: {e}")
-        pass
-
+    import tensorflow as tf
     # PyTorch (if available)
-    try:
-        import torch
-
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(seed)
-            torch.cuda.manual_seed_all(seed)
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
-    except ImportError as e:
-        # AI-AGENT-REF: PyTorch not available, skip seed setting
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f"PyTorch not available for seeding: {e}")
-        pass
-
+    import torch
     # LightGBM (if available)
-    try:
-        import lightgbm as lgb
-
-        # LightGBM determinism is handled via parameters
-        logger.debug("LightGBM available for deterministic training")
-    except ImportError:
-        logger.debug("LightGBM not available, skipping determinism setup")
-
+    import lightgbm as lgb
     # Set environment variables for additional determinism
     os.environ["PYTHONHASHSEED"] = str(seed)
 

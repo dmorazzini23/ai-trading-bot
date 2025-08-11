@@ -320,13 +320,7 @@ class _LazyModule(types.ModuleType):
 
     def _load(self):
         if self._module is None and not self._failed:
-            try:
-                self._module = importlib.import_module(self.__name__)
-            except ImportError:
-                logger.warning(f"Module {self.__name__} not available - using fallback")
-                self._failed = True
-                # Create a fallback module
-                self._module = self._create_fallback()
+            self._module = importlib.import_module(self.__name__)
 
     def _create_fallback(self):
         """Create a fallback module object with common methods."""
@@ -9768,15 +9762,7 @@ def main() -> None:
         settings = get_settings()
         if not settings.disable_daily_retrain:
             if settings.enable_sklearn:  # Meta-learning requires sklearn
-                try:
-                    from ai_trading.meta_learning import retrain_meta_learner as _tmp_retrain
-                    globals()["retrain_meta_learner"] = _tmp_retrain
-                except ImportError as e:
-                    globals()["retrain_meta_learner"] = None
-                    raise RuntimeError(
-                        f"Meta-learning enabled but retrain_meta_learner unavailable: {e}. "
-                        "Install sklearn or set ENABLE_SKLEARN=False"
-                    )
+                from ai_trading.meta_learning import retrain_meta_learner as _tmp_retrain
             else:
                 globals()["retrain_meta_learner"] = None
                 logger.info("Daily retraining disabled: sklearn not enabled")
