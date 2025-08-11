@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     enable_bs4: bool = Field(False, env="ENABLE_BS4")
     enable_retry: bool = Field(False, env="ENABLE_RETRY")
     enable_sklearn: bool = Field(True, env="ENABLE_SKLEARN")  # Default True since it's in hard deps
+    enable_reinforcement_learning: bool = Field(False, env="ENABLE_REINFORCEMENT_LEARNING")
 
     # Worker sizing (None/0 => auto)
     executor_workers: int | None = Field(None, env="EXECUTOR_WORKERS")

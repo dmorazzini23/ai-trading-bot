@@ -514,11 +514,7 @@ def _get_system_context() -> dict[str, any]:
     Dict[str, any]
         System context information including performance metrics
     """
-    try:
-        import psutil
-    except ImportError:
-        # Fallback when psutil is not available
-        return {"context_error": "psutil not available"}
+    import psutil
 
     try:
         # Basic system metrics

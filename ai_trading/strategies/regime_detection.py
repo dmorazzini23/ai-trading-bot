@@ -5,13 +5,14 @@ Identifies and classifies market regimes (bull, bear, sideways, crisis)
 using multiple indicators and statistical models for adaptive trading strategies.
 """
 
-# AI-AGENT-REF: use centralized import management
+# AI-AGENT-REF: use standard imports for hard dependencies
 import logging
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from .imports import np, pd
+import numpy as np
+import pandas as pd
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger

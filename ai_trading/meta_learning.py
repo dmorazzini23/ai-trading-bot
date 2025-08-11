@@ -10,34 +10,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-try:
-    import config  # AI-AGENT-REF: access centralized log paths
-except ImportError:
-    # Fallback for testing environments
-    config = None
+from ai_trading.config import get_settings
 
-try:
-    import numpy as np
-except ImportError:
-    np = None
-
-try:
+import numpy as np
+import pandas as pd
 from ai_trading.telemetry import metrics_logger
-except ImportError:
-    # Mock metrics_logger for testing
-    class MockMetricsLogger:
-        def log_volatility(self, *args):
-            pass
-
-        def log_regime_toggle(self, *args):
-            pass
-
-    metrics_logger = MockMetricsLogger()
-
-try:
-    import pandas as pd
-except ImportError:
-    pd = None
 
 try:
     import torch
@@ -1715,17 +1692,17 @@ def optimize_signals(
         return signal_data if signal_data is not None else []
 
 
-try:
-    from portfolio_rl import PortfolioReinforcementLearner
-except ImportError:
-    # Mock for testing environments
-    class PortfolioReinforcementLearner:
-        def rebalance_portfolio(self, *args):
-            return [1.0]  # Return mock result
-
-
 def trigger_rebalance_on_regime(df: "pd.DataFrame") -> None:
     """Invoke the RL rebalancer when the market regime changes."""
+    settings = get_settings()
+    if not settings.enable_reinforcement_learning:
+        return
+    
+    try:
+        from portfolio_rl import PortfolioReinforcementLearner
+    except ImportError:
+        raise RuntimeError("Reinforcement learning enabled but portfolio_rl module not available")
+    
     rl = PortfolioReinforcementLearner()
     if "Regime" in df.columns and len(df) > 2:
         if df["Regime"].iloc[-1] != df["Regime"].iloc[-2]:

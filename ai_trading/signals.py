@@ -9,58 +9,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Core dependencies with graceful error handling
-try:
-    import numpy as np
-except ImportError:
-    logger.warning("numpy not available, some features will be disabled")
-    np = None
-
-try:
-    import pandas as pd
-except ImportError:
-    logger.warning("pandas not available, some features will be disabled")
-    # Import the mock pandas from utils
-    import os
-    import sys
-
-    sys.path.insert(0, os.path.dirname(__file__))
-    try:
-        from ai_trading.utils import pd
-    except ImportError as e:
-        # Create minimal fallback
-        # AI-AGENT-REF: Log utils import failure for debugging
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f"Could not import utils.pd, using fallback: {e}")
-        from datetime import datetime
-
-        class MockDataFrame:
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def __len__(self):
-                return 0
-
-            def empty(self):
-                return True
-
-        class MockSeries:
-            def __init__(self, *args, **kwargs):
-                pass
-
-        class MockPandas:
-            DataFrame = MockDataFrame
-            Series = MockSeries
-            Timestamp = datetime
-
-            def read_csv(self, *args, **kwargs):
-                return MockDataFrame()
-
-            def concat(self, *args, **kwargs):
-                return MockDataFrame()
-
-        pd = MockPandas()
+# Core dependencies
+import numpy as np
+import pandas as pd
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -69,17 +20,10 @@ from pathlib import Path
 import requests
 
 # Optional ML dependencies
-try:
-    from hmmlearn.hmm import GaussianHMM
-except ImportError:  # pragma: no cover - optional dependency
-    GaussianHMM = None
+from hmmlearn.hmm import GaussianHMM
 
-# Import indicators with error handling
-try:
-    from ai_trading.indicators import atr, mean_reversion_zscore, rsi
-except ImportError:
-    logger.warning("indicators module not available, some features will be disabled")
-    rsi = atr = mean_reversion_zscore = None
+# Import indicators
+from ai_trading.indicators import atr, mean_reversion_zscore, rsi
 
 # Cache the last computed signal matrix to avoid recomputation
 _LAST_SIGNAL_BAR = None
@@ -157,11 +101,7 @@ _transaction_cost_calculator = None
 _regime_detector = None
 
 # AI-AGENT-REF: Import position management for hold signals
-try:
-    from ai_trading.position.legacy_manager import PositionManager
-except ImportError:
-    # Fallback if position_manager not available
-    PositionManager = None
+from ai_trading.position.legacy_manager import PositionManager
 
 
 def load_module(name):
