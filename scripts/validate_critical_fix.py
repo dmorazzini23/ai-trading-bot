@@ -28,26 +28,10 @@ os.environ.update({
 
 sys.path.append('.')
 
-from unittest.mock import MagicMock
+# (mocks removed; see tests/mocks/validate_critical_fix_mocks.py)
+from tests.mocks.validate_critical_fix_mocks import MockOrder, MockContext
 
 from ai_trading.trade_execution import ExecutionEngine
-
-
-class MockOrder:
-    """Simulates Alpaca order response with various filled_qty data types."""
-    def __init__(self, filled_qty=None, status="filled", order_id="test-order"):
-        self.filled_qty = filled_qty  # String from API (the bug cause)
-        self.status = status
-        self.id = order_id
-        self.symbol = "TEST"
-
-class MockContext:
-    """Mock trading context."""
-    def __init__(self):
-        self.api = MagicMock()
-        self.data_client = MagicMock()
-        self.data_fetcher = MagicMock()
-        self.capital_band = "small"
 
 def test_production_scenarios():
     """Test the exact scenarios from production logs."""
