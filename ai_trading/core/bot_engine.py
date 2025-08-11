@@ -3827,6 +3827,44 @@ class LazyBotContext:
     def confirmation_count(self):
         self._ensure_initialized()
         return self._context.confirmation_count
+    
+    @property
+    def symbols(self):
+        self._ensure_initialized()
+        return getattr(self._context, 'symbols', [])
+    
+    @property
+    def sem(self):
+        self._ensure_initialized()
+        return self._context.sem
+    
+    @property
+    def volume_threshold(self):
+        self._ensure_initialized()
+        return self._context.volume_threshold
+    
+    @property
+    def kelly_fraction(self):
+        self._ensure_initialized()
+        return self._context.kelly_fraction
+    
+    @property
+    def max_position_dollars(self):
+        self._ensure_initialized()
+        return self._context.max_position_dollars
+    
+    @property
+    def trailing_extremes(self):
+        self._ensure_initialized()
+        return self._context.trailing_extremes
+    
+    # Allow setting attributes by delegating to context
+    def __setattr__(self, name, value):
+        if name.startswith("_") or name in ("_initialized", "_context"):
+            super().__setattr__(name, value)
+        else:
+            self._ensure_initialized()
+            setattr(self._context, name, value)
 
 
 # Create the lazy context that will initialize on first use
