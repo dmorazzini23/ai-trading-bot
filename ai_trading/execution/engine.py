@@ -260,6 +260,22 @@ class OrderManager:
 
             # AI-AGENT-REF: Wire idempotency checking before submission
             from .idempotency import get_idempotency_cache, is_duplicate_order
+
+            # Generate idempotency key
+            cache = get_idempotency_cache()
+            key = cache.generate_key(
+                order.symbol, order.side, order.quantity, datetime.now(UTC)
+            )
+
+            # Check if this is a duplicate order
+            if is_duplicate_order(key):
+                logger.warning(
+                    f"ORDER_DUPLICATE_SKIPPED: {order.symbol} {order.side} {order.quantity}"
+                )
+                order.status = OrderStatus.REJECTED
+                order.notes += " | Rejected: Duplicate order detected"
+                return False
+
             # Check capacity
             if len(self.active_orders) >= self.max_concurrent_orders:
                 logger.error(
@@ -456,8 +472,6 @@ class OrderManager:
                 # AI-AGENT-REF: Run reconciliation after order processing
                 from .reconcile import reconcile_positions_and_orders
                 reconcile_positions_and_orders()
-            except Exception as e:
-                    logger.error(f"Error during reconciliation: {e}")
 
                 time.sleep(1)  # Check every second
 
