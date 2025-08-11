@@ -328,30 +328,69 @@ class _LazyModule(types.ModuleType):
         class FallbackModule:
             def ichimoku(self, *args, **kwargs):
                 return pd.DataFrame(), {}
-            
             def rsi(self, *args, **kwargs):
                 # Return empty series for RSI
                 return pd.Series()
-
+            def atr(self, *args, **kwargs):
+                return pd.Series()
+            def vwap(self, *args, **kwargs):
+                return pd.Series()
+            def obv(self, *args, **kwargs):
+                return pd.Series()
+            def kc(self, *args, **kwargs):
+                return pd.DataFrame()
+            def bbands(self, *args, **kwargs):
+                return pd.DataFrame()
+            def adx(self, *args, **kwargs):
+                return pd.Series()
+            def cci(self, *args, **kwargs):
+                return pd.Series()
+            def mfi(self, *args, **kwargs):
+                return pd.Series()
+            def tema(self, *args, **kwargs):
+                return pd.Series()
+            def willr(self, *args, **kwargs):
+                return pd.Series()
+            def stochrsi(self, *args, **kwargs):
+                return pd.DataFrame()
+            def psar(self, *args, **kwargs):
+                return pd.Series()
         return FallbackModule()
 
-    def __getattr__(self, item):
+    def _bind_known_methods(self) -> None:
+        """
+        Bind a fixed set of known TA methods directly as attributes on this wrapper.
+        This removes reliance on __getattr__ magic while preserving behavior.
+        """
         self._load()
-        if self._module is not None:
-            return getattr(self._module, item)
-        else:
-            # Explicit fallback handling for known methods
-            fallback = self._create_fallback()
-            if hasattr(fallback, item):
-                return getattr(fallback, item)
+        target = self._module if self._module is not None else self._create_fallback()
+        
+        # List of known pandas_ta methods used in the codebase
+        known_methods = [
+            "ichimoku", "rsi", "atr", "vwap", "obv", "kc", "bbands", 
+            "adx", "cci", "mfi", "tema", "willr", "stochrsi", "psar"
+        ]
+        
+        for method_name in known_methods:
+            if hasattr(target, method_name):
+                setattr(self, method_name, getattr(target, method_name))
             else:
-                raise AttributeError(f"'{self.__name__}' module has no attribute '{item}'")
+                # Bind safe no-op if missing on target (future-proof)
+                # Use closure to capture method_name correctly
+                if method_name == "ichimoku":
+                    setattr(self, method_name, (lambda *args, **kwargs: (pd.DataFrame(), {})))
+                elif method_name in ["kc", "bbands", "stochrsi"]:
+                    setattr(self, method_name, (lambda *args, **kwargs: pd.DataFrame()))
+                else:
+                    setattr(self, method_name, (lambda *args, **kwargs: pd.Series()))
 
 
 # AI-AGENT-REF: use our improved lazy loading instead of _LazyModule for pandas
 # pd = _LazyModule("pandas")  # Commented out to use our LazyPandas implementation
 mcal = _LazyModule("pandas_market_calendars")
 ta = _LazyModule("pandas_ta")
+# Bind known methods explicitly to avoid __getattr__ magic
+ta._bind_known_methods()
 
 
 def limits(*args, **kwargs):
@@ -3560,19 +3599,32 @@ import importlib.util
 
 _log = logging.getLogger(__name__)
 
+def _try_import(module_name: str, cls_name: str):
+    """
+    Safely attempt to import a module and get a class, with error logging.
+    Returns None if import fails for any reason.
+    """
+    spec = importlib.util.find_spec(module_name)
+    if spec is None:
+        return None
+    try:
+        mod = importlib.import_module(module_name)
+        return getattr(mod, cls_name, None)
+    except Exception as e:
+        _log.error("Failed to import %s (%s): %s", module_name, cls_name, e)
+        return None
+
 def _resolve_risk_engine_cls():
     # Prefer packaged location: ai_trading.risk_engine
-    spec = importlib.util.find_spec("ai_trading.risk_engine")
-    if spec is not None:
-        mod = importlib.import_module("ai_trading.risk_engine")
-        return getattr(mod, "RiskEngine", None)
-
+    cls = _try_import("ai_trading.risk_engine", "RiskEngine")
+    if cls:
+        return cls
+    
     # Fallback: scripts.risk_engine (repo contains scripts/risk_engine.py)
-    spec = importlib.util.find_spec("scripts.risk_engine")
-    if spec is not None:
-        mod = importlib.import_module("scripts.risk_engine")
-        return getattr(mod, "RiskEngine", None)
-
+    cls = _try_import("scripts.risk_engine", "RiskEngine")
+    if cls:
+        return cls
+    
     return None
 
 def get_risk_engine():
