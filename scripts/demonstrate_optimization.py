@@ -165,9 +165,9 @@ def demonstrate_parameter_optimizations():
         
         # Display configuration summary for all modes
         logging.info("\n  📊 Configuration Summary:")
-        logging.info(str(f"    CONSERVATIVE Mode: {len([k for k in conservative_config.__dict__ if not k.startswith('_'))])} parameters")
-        logging.info(str(f"    BALANCED Mode:     {len([k for k in balanced_config.__dict__ if not k.startswith('_'))])} parameters")
-        logging.info(str(f"    AGGRESSIVE Mode:   {len([k for k in aggressive_config.__dict__ if not k.startswith('_'))])} parameters")
+        logging.info(str(f"    CONSERVATIVE Mode: {len([k for k in conservative_config.__dict__ if not k.startswith('_')])} parameters"))
+        logging.info(str(f"    BALANCED Mode:     {len([k for k in balanced_config.__dict__ if not k.startswith('_')])} parameters"))
+        logging.info(str(f"    AGGRESSIVE Mode:   {len([k for k in aggressive_config.__dict__ if not k.startswith('_')])} parameters"))
         
         logging.info("\n  ✅ Features Implemented:")
         logging.info("    • Single source of truth for all trading parameters")

@@ -29,14 +29,14 @@ def main():
 {'='*80}
 Addressing all 5 critical issues identified from August 7, 2025 trading logs:
 
-1. ❌ Sentiment Analysis Rate Limiting (All fetches rate-limited → neutral))
+1. ❌ Sentiment Analysis Rate Limiting (All fetches rate-limited → neutral)
 2. ❌ Aggressive Liquidity Management (50% quantity halving consistently)  
 3. ❌ Meta-Learning System Failure (Insufficient trades < 3 minimum)
 4. ❌ Partial Order Management (36% fill rates, poor handling)
 5. ❌ Order Status Monitoring (Orders stuck in "NEW" indefinitely)
 
 VALIDATION RESULTS:
-{'='*80}""")
+{'='*80}"""))
     
     with patch.dict(os.environ, test_env):
         import config
@@ -90,21 +90,20 @@ VALIDATION RESULTS:
         # System Health Overview
         health_checker = SystemHealthChecker()
         health_report = health_checker.get_current_health()
-        
-        logging.info(str(f"\n🏥 SYSTEM HEALTH STATUS: {health_report['overall_status'].upper())}")
+        logging.info(str(f"\n🏥 SYSTEM HEALTH STATUS: {health_report['overall_status'].upper()}"))
         for comp_name, comp_data in health_report['components'].items():
             status_emoji = {"healthy": "✅", "warning": "⚠️", "critical": "❌"}.get(comp_data['status'], "❓")
-            logging.info(str(f"   {status_emoji} {comp_name.title())}: {comp_data['status']} ({comp_data['success_rate']:.1%})")
+            logging.info(str(f"   {status_emoji} {comp_name.title()}: {comp_data['status']} ({comp_data['success_rate']:.1%})"))
         
         logging.info("\n📊 PERFORMANCE IMPACT MATRIX:")
         logging.info(str("-" * 80))
         logging.info(str(f"{'Component':<25} {'Before':<20} {'After':<20} {'Improvement'}"))
         logging.info(str("-" * 80))
-        logging.info(str(f"{'Sentiment Success':<25} {'~0% (rate limited))':<20} {'>90%':<20} {'MASSIVE'}")
-        logging.info(str(f"{'Order Fill Rates':<25} {'36% (JPM example))':<20} {'>80%':<20} {'120%+'}")
-        logging.info(str(f"{'Meta-Learning Start':<25} {'20+ trades':<20} {'10 trades':<20} {'50% faster'}"))
-        logging.info(str(f"{'Capital Lockup':<25} {'Indefinite pending':<20} {'5 min timeout':<20} {'ELIMINATED'}"))
-        logging.info(str(f"{'System Monitoring':<25} {'Basic logging':<20} {'4-component':<20} {'COMPLETE'}"))
+        logging.info(str(f"{'Sentiment Success':<25} {'~0% (rate limited)':<20} {'>90%':<20} {'MASSIVE'}")
+        logging.info(str(f"{'Order Fill Rates':<25} {'36% (JPM example)':<20} {'>80%':<20} {'120%+'}")
+        logging.info(str(f"{'Meta-Learning Start':<25} {'20+ trades':<20} {'10 trades':<20} {'50% faster'}")
+        logging.info(str(f"{'Capital Lockup':<25} {'Indefinite pending':<20} {'5 min timeout':<20} {'ELIMINATED'}")
+        logging.info(str(f"{'System Monitoring':<25} {'Basic logging':<20} {'4-component':<20} {'COMPLETE'}")
         
         logging.info("\n🎯 SUCCESS CRITERIA - ALL ACHIEVED:")
         logging.info("   ✅ Sentiment analysis success rate >90%")
@@ -130,7 +129,7 @@ VALIDATION RESULTS:
         
         logging.info(str(f"\n{'='*80}"))
         logging.info("🎉 IMPLEMENTATION COMPLETE - ALL CRITICAL ISSUES RESOLVED")
-        logging.info(str(f"📅 Completed: {datetime.now(timezone.utc)).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+        logging.info(str(f"📅 Completed: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"))
         logging.info("🔥 Ready for production deployment with enhanced reliability")
         logging.info(str(f"{'='*80}"))
 

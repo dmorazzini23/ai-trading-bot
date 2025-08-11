@@ -114,7 +114,7 @@ def cleanup_duplicate_processes():
         if duplicates:
             logging.info(f"Found {len(duplicates)} duplicate processes")
             cleanup_result = manager.cleanup_duplicate_processes(dry_run=False)
-            logging.info(str(f"Cleaned up {len(cleanup_result[processes_killed'])} processes")
+            logging.info(str(f"Cleaned up {len(cleanup_result['processes_killed'])} processes")
         else:
             logging.info("No duplicate processes found")
             
