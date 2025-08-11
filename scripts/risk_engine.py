@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 
 from ai_trading.config.management import TradingConfig, SEED
-CONFIG = TradingConfig()
 from ai_trading.telemetry import metrics_logger
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
@@ -42,8 +41,8 @@ class RiskEngine:
 
     def __init__(self, cfg: TradingConfig | None = None) -> None:
         """Initialize the engine with an optional trading config."""
-        # AI-AGENT-REF: fix param shadowing bug when ``config`` is None
-        self.config = cfg if cfg is not None else config.CONFIG
+        # Use explicit packaged config; no reliance on a global `config` symbol.
+        self.config = cfg if cfg is not None else TradingConfig()
 
         # AI-AGENT-REF: Add comprehensive validation for risk parameters
         try:
