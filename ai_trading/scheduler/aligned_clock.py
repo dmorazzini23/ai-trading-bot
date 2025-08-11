@@ -10,14 +10,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-try:
-    import pandas_market_calendars as mcal
-
-    MARKET_CALENDAR_AVAILABLE = True
-except ImportError:
-    MARKET_CALENDAR_AVAILABLE = False
-
-
+import pandas_market_calendars as mcal
 logger = logging.getLogger(__name__)
 
 
@@ -83,18 +76,7 @@ class AlignedClock:
                 self.logger.warning(f"Failed to get exchange time: {e}")
 
         # Fallback to EST/EDT for NYSE
-        try:
-            import pytz
-
-            if self.exchange in ("NYSE", "NASDAQ"):
-                exchange_tz = pytz.timezone("America/New_York")
-                return utc_now.astimezone(exchange_tz)
-        except ImportError as e:
-            logger = logging.getLogger(__name__)
-            logger.exception(
-                "aligned_clock: pytz import failed, falling back to UTC", exc_info=e
-            )
-
+        import pytz
         # Final fallback to UTC
         return utc_now
 

@@ -259,29 +259,22 @@ class OrderManager:
                 return False
 
             # AI-AGENT-REF: Wire idempotency checking before submission
-            try:
-                from .idempotency import get_idempotency_cache, is_duplicate_order
+            from .idempotency import get_idempotency_cache, is_duplicate_order
 
-                # Generate idempotency key
-                cache = get_idempotency_cache()
-                key = cache.generate_key(
-                    order.symbol, order.side, order.quantity, datetime.now(UTC)
+            # Generate idempotency key
+            cache = get_idempotency_cache()
+            key = cache.generate_key(
+                order.symbol, order.side, order.quantity, datetime.now(UTC)
+            )
+
+            # Check if this is a duplicate order
+            if is_duplicate_order(key):
+                logger.warning(
+                    f"ORDER_DUPLICATE_SKIPPED: {order.symbol} {order.side} {order.quantity}"
                 )
-
-                # Check if this is a duplicate order
-                if is_duplicate_order(key):
-                    logger.warning(
-                        f"ORDER_DUPLICATE_SKIPPED: {order.symbol} {order.side} {order.quantity}"
-                    )
-                    order.status = OrderStatus.REJECTED
-                    order.notes += " | Rejected: Duplicate order detected"
-                    return False
-
-            except ImportError:
-                # Idempotency module not available, continue without checking
-                logger.debug(
-                    "Idempotency module not available, skipping duplicate check"
-                )
+                order.status = OrderStatus.REJECTED
+                order.notes += " | Rejected: Duplicate order detected"
+                return False
 
             # Check capacity
             if len(self.active_orders) >= self.max_concurrent_orders:
@@ -477,15 +470,8 @@ class OrderManager:
                         self._notify_callbacks(order, "expired")
 
                 # AI-AGENT-REF: Run reconciliation after order processing
-                try:
-                    from .reconcile import reconcile_positions_and_orders
-
-                    reconcile_positions_and_orders()
-                except ImportError as e:
-                    # Reconciliation module not available - log debug info
-                    logger.debug("Reconciliation module not available: %s", e)
-                except Exception as e:
-                    logger.error(f"Error during reconciliation: {e}")
+                from .reconcile import reconcile_positions_and_orders
+                reconcile_positions_and_orders()
 
                 time.sleep(1)  # Check every second
 

@@ -23,12 +23,7 @@ def get_memory_optimizer():
     
     import sys
     sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot/scripts')
-    try:
-        from memory_optimizer import get_memory_optimizer as _get_memory_optimizer
-        return _get_memory_optimizer()
-    except ImportError:
-        return None
-
+    from memory_optimizer import get_memory_optimizer as _get_memory_optimizer
 def optimize_memory():
     from ai_trading.config import get_settings
     S = get_settings()
@@ -37,12 +32,7 @@ def optimize_memory():
     
     import sys
     sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot/scripts')
-    try:
-        from memory_optimizer import optimize_memory as _optimize_memory
-        return _optimize_memory()
-    except ImportError:
-        return {}
-
+    from memory_optimizer import optimize_memory as _optimize_memory
 def get_performance_monitor():
     from ai_trading.config import get_settings  
     S = get_settings()
@@ -51,12 +41,7 @@ def get_performance_monitor():
     
     import sys
     sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot/scripts')
-    try:
-        from performance_monitor import get_performance_monitor as _get_performance_monitor
-        return _get_performance_monitor()
-    except ImportError:
-        return None
-
+    from performance_monitor import get_performance_monitor as _get_performance_monitor
 def start_performance_monitoring():
     from ai_trading.config import get_settings
     S = get_settings()
@@ -65,13 +50,7 @@ def start_performance_monitoring():
     
     import sys
     sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot/scripts')
-    try:
-        from performance_monitor import start_performance_monitoring as _start_performance_monitoring
-        _start_performance_monitoring()
-    except ImportError:
-        pass
-
-
+    from performance_monitor import start_performance_monitoring as _start_performance_monitoring
 # AI-AGENT-REF: Create global config AFTER .env loading and Settings import
 config: Settings | None = None
 
@@ -87,22 +66,8 @@ def validate_environment() -> None:
         raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
 
     # Check optional but important dependencies
-    try:
-        import alpaca_trade_api
-
-        logger.debug("alpaca_trade_api dependency available")
-    except ImportError:
-        logger.warning(
-            "alpaca_trade_api not available - some features may use fallbacks"
-        )
-
-    try:
-        import alpaca
-
-        logger.debug("alpaca-py dependency available")
-    except ImportError:
-        logger.warning("alpaca-py not available - some features may be limited")
-
+    import alpaca_trade_api
+    import alpaca
     # Validate data directories exist
     import os
 

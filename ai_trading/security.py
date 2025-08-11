@@ -20,16 +20,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-try:
-    from cryptography.fernet import Fernet
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-
-    _CRYPTOGRAPHY_AVAILABLE = True
-except ImportError:
-    _CRYPTOGRAPHY_AVAILABLE = False
-
-
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 logger = logging.getLogger(__name__)
 
 

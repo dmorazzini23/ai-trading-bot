@@ -54,25 +54,19 @@ class BacktestEngine:
         self.enable_partial_fills = enable_partial_fills
         self.slippage_model = slippage_model
 
-        # Import microstructure helpers
-        try:
-            from ..execution.microstructure import (
-                calculate_partial_fill_probability,
-                calculate_slippage,
-                estimate_half_spread,
-                simulate_execution_with_latency,
-            )
+        # Import microstructure helpers - fail fast approach
+        from ..execution.microstructure import (
+            calculate_partial_fill_probability,
+            calculate_slippage,
+            estimate_half_spread,
+            simulate_execution_with_latency,
+        )
 
-            self.microstructure_available = True
-            self.estimate_half_spread = estimate_half_spread
-            self.calculate_slippage = calculate_slippage
-            self.calculate_partial_fill_probability = calculate_partial_fill_probability
-            self.simulate_execution_with_latency = simulate_execution_with_latency
-        except ImportError:
-            self.microstructure_available = False
-            logger.warning(
-                "Microstructure module not available - using simplified execution"
-            )
+        self.microstructure_available = True
+        self.estimate_half_spread = estimate_half_spread
+        self.calculate_slippage = calculate_slippage
+        self.calculate_partial_fill_probability = calculate_partial_fill_probability
+        self.simulate_execution_with_latency = simulate_execution_with_latency
 
         logger.info("BacktestEngine initialized with realistic execution modeling")
 

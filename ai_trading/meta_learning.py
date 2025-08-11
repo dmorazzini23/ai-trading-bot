@@ -1,3 +1,6 @@
+from ai_trading.config import get_settings
+from importlib.util import find_spec
+
 S = get_settings()
 """Utility helpers for meta-learning weight management."""
 
@@ -10,9 +13,6 @@ import random
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from importlib.util import find_spec
-
-from ai_trading.config import get_settings
 
 import numpy as np
 import pandas as pd

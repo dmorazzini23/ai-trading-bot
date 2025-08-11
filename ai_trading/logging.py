@@ -17,31 +17,11 @@ from typing import Any
 # AI-AGENT-REF: Lazy import config to avoid import-time dependencies
 def _get_config():
     """Lazy import config management to avoid import-time dependencies."""
-    try:
-        from ai_trading.config import management as config
-        return config
-    except ImportError:
-        # Fallback for testing when config module is not available
-        class _FallbackConfig:
-            @staticmethod
-            def mask_secret(value):
-                return "***MASKED***" if len(str(value)) > 5 else str(value)
-        return _FallbackConfig()
-
+    from ai_trading.config import management as config
 # AI-AGENT-REF: Import monitoring metrics (lazy load in functions if needed)
 def _get_metrics_logger():
     """Lazy import metrics_logger to avoid import-time dependencies."""
-    try:
-        from ai_trading.monitoring import metrics as metrics_logger
-        return metrics_logger
-    except ImportError:
-        # Fallback for testing when monitoring module is not available
-        class _FallbackMetrics:
-            @staticmethod
-            def compute_max_drawdown(equity_curve):
-                return 0.0
-        return _FallbackMetrics()
-
+    from ai_trading.monitoring import metrics as metrics_logger
 # AI-AGENT-REF: Configure UTC formatting only, remove import-time basicConfig to prevent duplicates
 logging.Formatter.converter = time.gmtime
 from logging.handlers import (
