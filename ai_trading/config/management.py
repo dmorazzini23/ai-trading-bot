@@ -676,6 +676,10 @@ class TradingConfig:
                  conf_threshold: float = 0.55,
                  buy_threshold: float = 0.50,
                  confirmation_count: int = 2,
+                 # strategy/allocator knobs (added)
+                 signal_confirmation_bars: int = 2,
+                 delta_threshold: float = 0.02,
+                 min_confidence: float = 0.60,
                  **kwargs):
         self.mode = mode
         self.trailing_factor = trailing_factor
@@ -695,6 +699,10 @@ class TradingConfig:
         self.conf_threshold = conf_threshold
         self.buy_threshold = buy_threshold
         self.confirmation_count = confirmation_count
+        # strategy/allocator knobs
+        self.signal_confirmation_bars = signal_confirmation_bars
+        self.delta_threshold = delta_threshold
+        self.min_confidence = min_confidence
 
         # Basic validation for new fields
         if not (0.0 <= self.conf_threshold <= 1.0):
@@ -704,7 +712,9 @@ class TradingConfig:
         if not isinstance(self.confirmation_count, int) or self.confirmation_count < 1:
             raise ValueError(f"confirmation_count must be >= 1, got {self.confirmation_count}")
 
-    @classmethod
+        # Apply kwargs fallbacks into attributes if present
+        for k, v in kwargs.items():
+            setattr(self, k, v)
     def from_env(cls, mode="balanced"):
         """Create a TradingConfig from environment variables."""
         instance = cls(mode=mode)

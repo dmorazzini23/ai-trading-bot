@@ -10,6 +10,7 @@ _REGIME_INSUFFICIENT_DATA_WARNED = {"done": False}
 import asyncio
 import atexit
 import io
+import inspect
 import logging
 import math
 import os
@@ -3653,14 +3654,69 @@ def get_allocator():
     return allocator
 
 
-def get_strategies():
-    global strategies
-    if strategies is None:
-        # AI-AGENT-REF: ai_trading/core/bot_engine.py:3556 - Convert import guard to hard import (internal module)
-        from ai_trading.strategies import BaseStrategy
+def _is_concrete_strategy(obj, BaseStrategy):
+    return inspect.isclass(obj) and issubclass(obj, BaseStrategy) and obj is not BaseStrategy and not inspect.isabstract(obj)
 
-        # Use BaseStrategy as fallback for test environments
-        strategies = [BaseStrategy(), BaseStrategy()]
+def get_strategies():
+    """
+    Discover and instantiate concrete strategy classes.
+    Preference: ai_trading.strategies (packaged). If none found, provide a safe fallback.
+    If config.strategy_names exists (iterable of class names), use it to filter.
+    """
+    try:
+        strat_mod = importlib.import_module("ai_trading.strategies")
+    except Exception as e:
+        _log.error("Failed to import ai_trading.strategies: %s", e)
+        strat_mod = None
+
+    strategies = []
+    if strat_mod is not None:
+        try:
+            BaseStrategy = getattr(strat_mod, "BaseStrategy")
+        except AttributeError:
+            BaseStrategy = None
+        if BaseStrategy is not None:
+            # discover concrete subclasses in the module namespace
+            concrete = []
+            for name, obj in vars(strat_mod).items():
+                try:
+                    if _is_concrete_strategy(obj, BaseStrategy):
+                        concrete.append(obj)
+                except Exception:
+                    continue
+            # optional filtering by configured list of class names
+            try:
+                from ai_trading.config.management import TradingConfig
+                cfg = TradingConfig()
+                wanted = getattr(cfg, "strategy_names", None)
+            except Exception:
+                cfg = None
+                wanted = None
+
+            if wanted:
+                selected = [cls for cls in concrete if cls.__name__ in set(wanted)]
+            else:
+                selected = concrete
+
+            for cls in selected:
+                try:
+                    strategies.append(cls())
+                except Exception as e:
+                    _log.error("Failed to instantiate strategy %s: %s", cls.__name__, e)
+
+    if not strategies:
+        _log.warning("No concrete strategies found; using FallbackStrategy (no-op).")
+        class FallbackStrategy:
+            """
+            Minimal no-op strategy implementing the expected API so the engine can run.
+            """
+            name = "FallbackStrategy"
+            def generate_signals(self, *args, **kwargs):
+                return []  # no signals
+            def calculate_position_size(self, *args, **kwargs):
+                return 0   # no positions
+        strategies = [FallbackStrategy()]
+
     return strategies
 
 
