@@ -660,69 +660,14 @@ from ai_trading.telemetry.metrics_logger import log_metrics
 
 from ai_trading.pipeline import model_pipeline  # type: ignore
 
-# ML dependencies with graceful error handling
-try:
-    from sklearn.decomposition import PCA
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.linear_model import BayesianRidge, Ridge
-except ImportError:
-    # Provide mock classes for graceful degradation
-    class PCA:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def fit(self, *args, **kwargs):
-            return self
-
-        def transform(self, X):
-            return X
-
-    class RandomForestClassifier:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def fit(self, *args, **kwargs):
-            return self
-
-        def predict(self, X):
-            return [0] * len(X) if hasattr(X, "__len__") else [0]
-
-        def predict_proba(self, X):
-            return (
-                [[0.33, 0.33, 0.34]] * len(X)
-                if hasattr(X, "__len__")
-                else [[0.33, 0.33, 0.34]]
-            )
-
-    class BayesianRidge:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def fit(self, *args, **kwargs):
-            return self
-
-        def predict(self, X):
-            return [0] * len(X) if hasattr(X, "__len__") else [0]
-
-    class Ridge:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def fit(self, *args, **kwargs):
-            return self
-
-        def predict(self, X):
-            return [0] * len(X) if hasattr(X, "__len__") else [0]
-
-    Ridge = None
-    logger.warning("sklearn not available, ML features will be disabled")
+# ML dependencies - sklearn is a hard dependency
+from sklearn.decomposition import PCA
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import BayesianRidge, Ridge
 
 from ai_trading.utils import log_warning, model_lock, safe_to_datetime, validate_ohlcv
 
-try:
-    from ai_trading.meta_learning import retrain_meta_learner
-except ImportError:
-    retrain_meta_learner = None
+from ai_trading.meta_learning import retrain_meta_learner
 
 ALPACA_API_KEY = get_settings().alpaca_api_key
 ALPACA_SECRET_KEY = get_settings().alpaca_secret_key
