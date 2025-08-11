@@ -98,22 +98,6 @@ from ai_trading.utils.timefmt import (
 
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
 from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
-# AI-AGENT-REF: Import circuit breaker for external service resilience
-try:
-    from circuit_breaker import (
-        CircuitBreakerConfig,
-        CircuitBreakerOpenError,
-        circuit_breaker,
-    )
-except ImportError:
-    # Fallback if circuit_breaker module not available
-    def circuit_breaker(name, config=None):
-        def decorator(func):
-            return func
-
-        return decorator
-
-    CircuitBreakerOpenError = Exception
 # AI-AGENT-REF: lazy import expensive modules to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
     from ai_trading.model_loader import ML_MODELS  # AI-AGENT-REF: preloaded models
@@ -267,17 +251,8 @@ class LazyPandas:
         return getattr(self._load(), name)
 
 
-# AI-AGENT-REF: use lazy loading for pandas to improve import performance
-if os.getenv("PYTEST_RUNNING"):
-    # In test mode, use lazy loader
-    pd = LazyPandas()
-else:
-    # In production, import normally but only when not in test mode
-    try:
-        import pandas as pd
-    except ImportError:
-        # Create fallback pd object
-        pd = LazyPandas()
+# Import pandas directly as it's a hard dependency
+import pandas as pd
 
 
 # AI-AGENT-REF: pandas not available - create minimal fallbacks for import compatibility
@@ -366,9 +341,7 @@ class MockPandas:
     Index = MockIndex  # AI-AGENT-REF: add missing Index attribute
 
 
-# Only use MockPandas in test environments where pandas is not available
-if os.getenv("PYTEST_RUNNING") and not hasattr(pd, "_pandas"):
-    pd = MockPandas()
+
 
 from ai_trading import utils
 
@@ -464,15 +437,9 @@ if hasattr(np, "random"):
 # AI-AGENT-REF: throttle SKIP_COOLDOWN logs
 _LAST_SKIP_CD_TIME = 0.0
 _LAST_SKIP_SYMBOLS: frozenset[str] = frozenset()
-try:
-    import torch
+import torch
 
-    torch.manual_seed(SEED)
-except ImportError:
-    # PyTorch not available - continue with deterministic fallback seed
-    import random
-
-    random.seed(SEED)
+torch.manual_seed(SEED)
 
 _DEFAULT_FEED = get_settings().alpaca_data_feed or "iex"
 
@@ -648,17 +615,8 @@ def get_market_calendar():
     """Lazy-load the NYSE calendar itself (but not its full schedule)."""
     global _MARKET_CALENDAR
     if _MARKET_CALENDAR is None:
-        try:
-            import pandas_market_calendars as mcal
-
-            _MARKET_CALENDAR = mcal.get_calendar("NYSE")
-        except ImportError:  # pragma: no cover - test environment fallback
-            # AI-AGENT-REF: Fallback for test environments without pandas_market_calendars
-            import types
-
-            _MARKET_CALENDAR = types.SimpleNamespace()
-            _MARKET_CALENDAR.is_session_open = lambda dt: True  # Always open for tests
-            _MARKET_CALENDAR.sessions_in_range = lambda start, end: []
+        import pandas_market_calendars as mcal
+        _MARKET_CALENDAR = mcal.get_calendar("NYSE")
     return _MARKET_CALENDAR
 
 
@@ -878,14 +836,9 @@ from flask import Flask
 
 from ai_trading.alpaca_api import alpaca_get, start_trade_updates_stream
 
-try:
-    from ai_trading.rebalancer import (
-        maybe_rebalance as original_rebalance,  # type: ignore
-    )
-except ImportError:
-    # AI-AGENT-REF: rebalancer not available, create minimal fallback
-    def original_rebalance(*args, **kwargs):
-        pass
+from ai_trading.rebalancer import (
+    maybe_rebalance as original_rebalance,  # type: ignore
+)
 
 
 # Use base URL from configuration
