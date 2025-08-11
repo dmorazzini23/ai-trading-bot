@@ -666,8 +666,8 @@ if __name__ == "__main__":
     if 'memory' in metrics:
         logging.info(f"Memory usage: {metrics['memory'].get('usage_percent', 0):.1f}%")
     if 'cpu' in metrics:
-        logging.info(str(f"CPU usage: {metrics['cpu'].get('usage_percent', 0)):.1f}%")
+        logging.info(f"CPU usage: {metrics['cpu'].get('usage_percent', 0):.1f}%")
     
     # Generate report
     report = monitor.get_performance_report()
-    logging.info(str(f"Performance report generated with status: {report.get('status', 'ok'))}")
+    logging.info(f"Performance report generated with status: {report.get('status', 'ok')}")

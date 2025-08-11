@@ -103,22 +103,22 @@ def demo_performance_monitor():
         if 'memory' in metrics:
             mem = metrics['memory']
             logging.info(f"  - Memory usage: {mem.get('usage_percent', 0):.1f}%")
-            logging.info(str(f"  - Available memory: {mem.get('available_mb', 0)):.1f}MB")
-            logging.info(str(f"  - Swap usage: {mem.get('swap_used_mb', 0)):.1f}MB")
+            logging.info(f"  - Available memory: {mem.get('available_mb', 0):.1f}MB")
+            logging.info(f"  - Swap usage: {mem.get('swap_used_mb', 0):.1f}MB")
         
         # Show CPU metrics
         if 'cpu' in metrics:
             cpu = metrics['cpu']
-            logging.info(str(f"  - CPU usage: {cpu.get('usage_percent', 0)):.1f}%")
-            logging.info(str(f"  - Load average: {cpu.get('load_1min', 0)):.2f}")
+            logging.info(f"  - CPU usage: {cpu.get('usage_percent', 0):.1f}%")
+            logging.info(f"  - Load average: {cpu.get('load_1min', 0):.2f}")
         
         # Show process metrics
         if 'process' in metrics:
             proc = metrics['process']
-            logging.info(str(f"  - Process memory: {proc.get('memory_mb', 0)):.1f}MB")
-            logging.info(str(f"  - File descriptors: {proc.get('file_descriptors', 0))}")
-            logging.info(str(f"  - Thread count: {proc.get('thread_count', 0))}")
-            logging.info(str(f"  - Python processes: {proc.get('python_processes', 0))}")
+            logging.info(f"  - Process memory: {proc.get('memory_mb', 0):.1f}MB")
+            logging.info(f"  - File descriptors: {proc.get('file_descriptors', 0)}")
+            logging.info(f"  - Thread count: {proc.get('thread_count', 0)}")
+            logging.info(f"  - Python processes: {proc.get('python_processes', 0)}")
         
         # Check for alerts
         alerts = monitor.check_alert_conditions(metrics)

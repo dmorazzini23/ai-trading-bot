@@ -588,12 +588,12 @@ def main():
         if response.lower() == 'y':
             logging.info("Performing cleanup (dry run first)...")
             dry_run_result = manager.cleanup_duplicate_processes(dry_run=True)
-            logging.info(str(f"Dry run: Would terminate {len(dry_run_result['processes_killed']))} processes")
+            logging.info(f"Dry run: Would terminate {len(dry_run_result['processes_killed'])} processes")
             
             confirm = input("Proceed with actual cleanup? (y/N): ")
             if confirm.lower() == 'y':
                 cleanup_result = manager.cleanup_duplicate_processes(dry_run=False)
-                logging.info(str(f"Cleanup complete: {len(cleanup_result['processes_killed']))} processes terminated")
+                logging.info(f"Cleanup complete: {len(cleanup_result['processes_killed'])} processes terminated")
     
     return report
 
