@@ -17,6 +17,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
+from ai_trading.config import management as config
+from ai_trading.config.management import TradingConfig
+CONFIG = TradingConfig()
 
 
 def demonstrate_parameter_optimizations():
@@ -29,16 +32,6 @@ def demonstrate_parameter_optimizations():
     logging.info("maintaining institutional-grade safety standards.")
     
     try:
-        # Import centralized configuration
-        from ai_trading.config import management as config
-        if not hasattr(config, "CONFIG"):
-            try:
-                config.CONFIG = config.TradingConfig()
-            except Exception:
-                class _Cfg: pass
-                config.CONFIG = _Cfg()
-        TradingConfig = config.TradingConfig
-        
         # Get configurations for all three modes
         conservative_config = TradingConfig.from_env("conservative")
         balanced_config = TradingConfig.from_env("balanced")

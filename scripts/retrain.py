@@ -16,12 +16,8 @@ import numpy as np
 import pandas as pd
 
 from ai_trading.config import management as config
-if not hasattr(config, "CONFIG"):
-    try:
-        config.CONFIG = config.TradingConfig()
-    except Exception:
-        class _Cfg: pass
-        config.CONFIG = _Cfg()
+from ai_trading.config.management import TradingConfig
+CONFIG = TradingConfig()
 from ai_trading.telemetry.metrics_logger import log_metrics
 
 from ai_trading.utils.base import safe_to_datetime
