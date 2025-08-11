@@ -17,39 +17,9 @@ from enum import Enum
 from typing import Any
 
 # AI-AGENT-REF: graceful imports with fallbacks
-try:
-    import numpy as np
-    import pandas as pd
-except ImportError:
-    # Use fallback implementations
-    class MockNumpy:
-        nan = float("nan")
-
-        def array(self, data):
-            return list(data) if data else []
-
-        def mean(self, arr):
-            return sum(arr) / len(arr) if arr else 0
-
-        def std(self, arr):
-            if not arr:
-                return 0
-            mean_val = sum(arr) / len(arr)
-            return (sum((x - mean_val) ** 2 for x in arr) / len(arr)) ** 0.5
-
-    np = MockNumpy()
-
-    class MockPandas:
-        def DataFrame(self, data=None):
-            return data or {}
-
-        def Series(self, data=None):
-            return data or []
-
-        def isna(self, val):
-            return val is None or (isinstance(val, float) and val != val)
-
-    pd = MockPandas()
+# Use hard imports since numpy and pandas are dependencies
+import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 

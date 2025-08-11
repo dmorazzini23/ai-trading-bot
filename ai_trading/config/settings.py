@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     
     # Visualization features (optional)
     enable_plotting: bool = Field(False, env="ENABLE_PLOTTING")
+    
+    # Optional feature flags for import dependencies
+    enable_streaming: bool = Field(False, env="ENABLE_STREAMING")
+    enable_nlp: bool = Field(False, env="ENABLE_NLP")
+    enable_bs4: bool = Field(False, env="ENABLE_BS4")
+    enable_retry: bool = Field(False, env="ENABLE_RETRY")
+    enable_sklearn: bool = Field(True, env="ENABLE_SKLEARN")  # Default True since it's in hard deps
 
     # Worker sizing (None/0 => auto)
     executor_workers: int | None = Field(None, env="EXECUTOR_WORKERS")

@@ -97,15 +97,7 @@ from ai_trading.utils.timefmt import (
 )
 
 # AI-AGENT-REF: Import drawdown circuit breaker for real-time portfolio protection
-try:
-    from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
-except ImportError as e:
-    # Fallback if circuit breaker module not available
-    # AI-AGENT-REF: Log circuit breaker import failure with context
-    DrawdownCircuitBreaker = None
-    logger.warning(
-        f"DrawdownCircuitBreaker not available - drawdown protection disabled: {e}"
-    )
+from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
 # AI-AGENT-REF: Import circuit breaker for external service resilience
 try:
     from circuit_breaker import (
@@ -131,64 +123,8 @@ else:
 
 
 # AI-AGENT-REF: lazy numpy loader for improved import performance
-class LazyNumpy:
-    """Lazy loader for numpy that only imports when first accessed."""
-
-    def __init__(self):
-        self._numpy = None
-        self._loaded = False
-
-    def _load(self):
-        if not self._loaded:
-            try:
-                import numpy as np_module
-
-                self._numpy = np_module
-                self._loaded = True
-            except ImportError:
-                # Create minimal fallback
-                self._numpy = self._create_fallback()
-                self._loaded = True
-        return self._numpy
-
-    def _create_fallback(self):
-        """Create minimal numpy fallback for testing environments."""
-
-        class MockNumpy:
-            def __init__(self):
-                self.nan = float("nan")
-                self.NaN = float("nan")
-                self.random = self
-
-            def array(self, data):
-                return list(data) if data else []
-
-            def mean(self, data):
-                return sum(data) / len(data) if data else 0
-
-            def std(self, data):
-                return 1.0  # Mock standard deviation
-
-            def __getattr__(self, name):
-                return lambda *args, **kwargs: 0
-
-        return MockNumpy()
-
-    def __getattr__(self, name):
-        return getattr(self._load(), name)
-
-
-# AI-AGENT-REF: use lazy loading for numpy to improve import performance
-if os.getenv("PYTEST_RUNNING"):
-    # In test mode, use lazy loader
-    np = LazyNumpy()
-else:
-    # In production, import normally
-    try:
-        import numpy as np
-    except ImportError:
-        # Create fallback np object
-        np = LazyNumpy()
+# AI-AGENT-REF: numpy is a hard dependency - import directly
+import numpy as np
 
 LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
 # Set up logging only once
@@ -812,23 +748,8 @@ else:
 
 # FutureWarning now filtered globally in pytest.ini
 
-# AI-AGENT-REF: guard portalocker import for test environments
-try:
-    import portalocker
-except ImportError:
-    # AI-AGENT-REF: portalocker not available, create minimal fallback
-    class MockPortalocker:
-        def __init__(self):
-            self.LOCK_EX = 1
-            self.LOCK_NB = 2
-
-        def lock(self, *args, **kwargs):
-            pass
-
-        def unlock(self, *args, **kwargs):
-            pass
-
-    portalocker = MockPortalocker()
+# AI-AGENT-REF: portalocker is a hard dependency in pyproject.toml
+import portalocker
 # The `requests` library and its exceptions may be monkeypatched or absent in some
 # test environments.  Attempt to import them normally but fall back to simple
 # stand-ins when unavailable.  Without this guard an ImportError here would
@@ -854,44 +775,13 @@ except (
     Session = requests.Session  # type: ignore[assignment]
     HTTPError = Exception  # type: ignore[assignment]
 
-# AI-AGENT-REF: guard schedule import for test environments
-try:
-    import schedule
-except ImportError:
-    # AI-AGENT-REF: schedule not available, create minimal fallback
-    class MockSchedule:
-        def every(self, *args, **kwargs):
-            return self
+# AI-AGENT-REF: schedule is a hard dependency in pyproject.toml
+import schedule
 
-        def minutes(self):
-            return self
+# AI-AGENT-REF: yfinance is a hard dependency in pyproject.toml
+import yfinance as yf
 
-        def do(self, *args, **kwargs):
-            return self
-
-    schedule = MockSchedule()
-
-# AI-AGENT-REF: guard yfinance import for test environments
-try:
-    import yfinance as yf
-
-    YFINANCE_AVAILABLE = True
-except ImportError:
-    # AI-AGENT-REF: yfinance not available, create minimal fallback
-    class MockTicker:
-        def __init__(self, symbol):
-            self.symbol = symbol
-            self.info = {"sector": "Unknown"}
-
-    class MockYfinance:
-        def download(self, *args, **kwargs):
-            return pd.DataFrame()
-
-        def Ticker(self, symbol):
-            return MockTicker(symbol)
-
-    yf = MockYfinance()
-    YFINANCE_AVAILABLE = False
+YFINANCE_AVAILABLE = True
 
 # AI-AGENT-REF: Clean separation of production and test Alpaca imports
 # Use try/except instead of environment flags for better reliability
@@ -980,39 +870,11 @@ else:
 
         APIError = Exception
 
-# AI-AGENT-REF: guard bs4 import for test environments
-try:
-    from bs4 import BeautifulSoup
-except ImportError:
-    # AI-AGENT-REF: bs4 not available, create minimal fallback
-    class MockBeautifulSoup:
-        def __init__(self, *args, **kwargs):
-            self.text = ""
+# AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
+from bs4 import BeautifulSoup
 
-        def find(self, *args, **kwargs):
-            return self
-
-        def get_text(self):
-            return ""
-
-    BeautifulSoup = MockBeautifulSoup
-
-# AI-AGENT-REF: guard flask import for test environments
-try:
-    from flask import Flask
-except ImportError:
-    # AI-AGENT-REF: flask not available, create minimal fallback
-    class MockFlask:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def route(self, *args, **kwargs):
-            def decorator(func):
-                return func
-
-            return decorator
-
-    Flask = MockFlask
+# AI-AGENT-REF: flask is a hard dependency in pyproject.toml  
+from flask import Flask
 
 from ai_trading.alpaca_api import alpaca_get, start_trade_updates_stream
 
@@ -1280,60 +1142,15 @@ BOT_MODE_ENV = "development"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# AI-AGENT-REF: guard pybreaker import for test environments
-try:
-    import pybreaker
-except ImportError:
-    # AI-AGENT-REF: pybreaker not available, create minimal fallback
-    class MockCircuitBreaker:
-        def __init__(self, *args, **kwargs):
-            pass
+# AI-AGENT-REF: pybreaker is a hard dependency in pyproject.toml
+import pybreaker
 
-        def __call__(self, func):
-            return func
-
-    class MockPybreaker:
-        CircuitBreaker = MockCircuitBreaker
-
-    pybreaker = MockPybreaker()
-
-# AI-AGENT-REF: guard finnhub import for test environments
-try:
-    from finnhub import FinnhubAPIException
-except ImportError:
-    # AI-AGENT-REF: finnhub not available, create minimal fallback
-    class FinnhubAPIException(Exception):
-        pass
+# AI-AGENT-REF: finnhub is a hard dependency in pyproject.toml
+from finnhub import FinnhubAPIException
 
 
-# AI-AGENT-REF: guard prometheus_client import for test environments
-try:
-    from prometheus_client import REGISTRY, Counter, Gauge, Histogram, start_http_server
-except ImportError:
-    # AI-AGENT-REF: prometheus_client not available, create minimal fallbacks
-    class MockMetric:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def inc(self, *args, **kwargs):
-            pass
-
-        def set(self, *args, **kwargs):
-            pass
-
-        def observe(self, *args, **kwargs):
-            pass
-
-        def labels(self, *args, **kwargs):
-            return self
-
-    Counter = MockMetric
-    Gauge = MockMetric
-    Histogram = MockMetric
-    REGISTRY = None
-
-    def start_http_server(*args, **kwargs):
-        pass
+# AI-AGENT-REF: prometheus-client is a hard dependency in pyproject.toml
+from prometheus_client import REGISTRY, Counter, Gauge, Histogram, start_http_server
 
 
 # Prometheus metrics - lazy initialization to prevent duplicates
