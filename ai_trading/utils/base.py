@@ -1,3 +1,5 @@
+from ai_trading.config import get_settings
+
 S = get_settings()
 """Utility functions for common operations across the bot."""
 
@@ -15,8 +17,6 @@ from enum import Enum
 from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
-
-from ai_trading.config import get_settings
 
 # AI-AGENT-REF: Pandas is a hard dependency
 import pandas as pd
