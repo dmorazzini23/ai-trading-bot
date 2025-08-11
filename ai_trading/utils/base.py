@@ -1,3 +1,4 @@
+S = get_settings()
 """Utility functions for common operations across the bot."""
 
 import datetime as dt
@@ -258,7 +259,7 @@ def _log_market_hours(message: str) -> None:
     now = time.time()
     state = "OPEN" if "OPEN" in message else "CLOSED"
     if state != _LAST_MARKET_STATE or now - _LAST_MARKET_HOURS_LOG >= 3600:
-        if config.VERBOSE_LOGGING:
+        if S.verbose_logging:
             logger.info(message)
         else:
             logger.debug(message)
@@ -276,7 +277,7 @@ def log_health_row_check(rows: int, passed: bool) -> None:
         or passed != _LAST_HEALTH_STATUS
         or now - _LAST_HEALTH_ROW_LOG >= 10
     ):
-        level = logger.info if config.VERBOSE_LOGGING or not passed else logger.debug
+        level = logger.info if S.verbose_logging or not passed else logger.debug
         status = "PASSED" if passed else "FAILED"
         level("HEALTH_ROWS_%s: received %d rows", status, rows)
         _LAST_HEALTH_ROW_LOG = now
@@ -571,7 +572,7 @@ def get_ml_confidence(symbol: str) -> float:
         logger.error("load_model failed", exc_info=e)
         return 0.5
 
-    model_path = config.MODEL_PATH
+    model_path = S.model_path
     model = load_model(model_path)
     if model is None:
         return 0.5

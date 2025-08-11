@@ -81,9 +81,9 @@ logger = logging.getLogger(__name__)
 def validate_environment() -> None:
     """Ensure required environment variables are present and dependencies are available."""
     # Check critical environment variables
-    if not config.WEBHOOK_SECRET:
+    if not S.webhook_secret:
         raise RuntimeError("WEBHOOK_SECRET is required")
-    if not config.ALPACA_API_KEY or not config.ALPACA_SECRET_KEY:
+    if not S.alpaca_api_key or not S.alpaca_secret_key:
         raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
 
     # Check optional but important dependencies

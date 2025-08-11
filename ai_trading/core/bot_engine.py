@@ -1974,7 +1974,7 @@ def _log_health_diagnostics(ctx: BotContext, reason: str) -> None:
         positions = -1
     try:
         df = ctx.data_fetcher.get_minute_df(
-            ctx, REGIME_SYMBOLS[0], lookback_minutes=config.MIN_HEALTH_ROWS
+            ctx, REGIME_SYMBOLS[0], lookback_minutes=S.min_health_rows
         )
         rows = len(df)
         last_time = df.index[-1].isoformat() if not df.empty else "n/a"
@@ -3685,7 +3685,7 @@ class LazyBotContext:
             # AI-AGENT-REF: Initialize drawdown circuit breaker for real-time protection
             drawdown_circuit_breaker=(
                 DrawdownCircuitBreaker(
-                    max_drawdown=config.MAX_DRAWDOWN_THRESHOLD, recovery_threshold=0.8
+                    max_drawdown=S.max_drawdown_threshold, recovery_threshold=0.8
                 )
                 if DrawdownCircuitBreaker
                 else None
@@ -4413,7 +4413,7 @@ def set_halt_flag(reason: str) -> None:
 
 
 def check_halt_flag(ctx: BotContext | None = None) -> bool:
-    if config.FORCE_TRADES:
+    if S.force_trades:
         logger.warning("FORCE_TRADES override active: ignoring halt flag.")
         return False
 
@@ -6008,7 +6008,7 @@ def signal_and_confirm(
 def pre_trade_checks(
     ctx: BotContext, state: BotState, symbol: str, balance: float, regime_ok: bool
 ) -> bool:
-    if config.FORCE_TRADES:
+    if S.force_trades:
         logger.warning("FORCE_TRADES override active: ignoring all pre-trade halts.")
         return True
     # Streak kill-switch check
@@ -8280,7 +8280,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
     marker = RETRAIN_MARKER_FILE
 
     need_to_retrain = True
-    if config.DISABLE_DAILY_RETRAIN:
+    if S.disable_daily_retrain:
         logger.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
         need_to_retrain = False
     if os.path.isfile(marker):
@@ -8403,7 +8403,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 "timestamp": utc_now_iso(),
                 "type": "daily_retrain",
                 "batch_mse": batch_mse,
-                "hyperparams": json.dumps(utils.to_serializable(config.SGD_PARAMS)),
+                "hyperparams": json.dumps(utils.to_serializable(S.sgd_params)),
                 "seed": SEED,
                 "model": "SGDRegressor",
                 "git_hash": get_git_hash(),
@@ -8514,13 +8514,13 @@ def run_multi_strategy(ctx: BotContext) -> None:
         except Exception as e:
             logger.warning(f"Strategy {strat.name} failed: {e}")
     # Optionally augment strategy signals with reinforcement learning signals.
-    if config.USE_RL_AGENT:
+    if S.use_rl_agent:
         try:
             # Lazy load the RL policy and cache it on the context
             from ai_trading.rl_trading.inference import load_policy
 
             if not hasattr(ctx, "rl_agent"):
-                ctx.rl_agent = load_policy(config.RL_MODEL_PATH)
+                ctx.rl_agent = load_policy(S.rl_model_path)
             # Determine the set of symbols that currently have signals from other strategies
             all_symbols: list[str] = []
             for sigs in signals_by_strategy.values():
@@ -8969,10 +8969,10 @@ def manage_position_risk(ctx: BotContext, position) -> None:
         volume_factor = utils.get_volume_spike_factor(symbol)
         ml_conf = utils.get_ml_confidence(symbol)
         if (
-            volume_factor > config.VOLUME_SPIKE_THRESHOLD
-            and ml_conf > config.ML_CONFIDENCE_THRESHOLD
+            volume_factor > S.volume_spike_threshold
+            and ml_conf > S.ml_confidence_threshold
         ) and side == "long" and price > vwap and pnl > 0.02:
-            pyramid_add_position(ctx, symbol, config.PYRAMID_LEVELS["low"], side)
+            pyramid_add_position(ctx, symbol, S.pyramid_levels["low"], side)
         logger.info(
             f"HALT_MANAGE {symbol} stop={new_stop:.2f} vwap={vwap:.2f} vol={volume_factor:.2f} ml={ml_conf:.2f}"
         )
@@ -9179,7 +9179,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             if any(o.status in ("new", "pending_new") for o in open_orders):
                 logger.warning("Detected pending orders; skipping this trade cycle")
                 return
-            if config.VERBOSE:
+            if S.verbose:
                 logger.info(
                     "RUN_ALL_TRADES_START",
                     extra={"timestamp": utc_now_iso()},
@@ -9464,7 +9464,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     extra={
                         "loop_id": loop_id,
                         "pnl": pnl,
-                        "mode": "SHADOW" if config.SHADOW_MODE else "LIVE",
+                        "mode": "SHADOW" if S.shadow_mode else "LIVE",
                     },
                 )
             except Exception as e:
@@ -9827,7 +9827,7 @@ def main() -> None:
             for sym in initial_list:
                 try:
                     ctx.data_fetcher.get_minute_df(
-                        ctx, sym, lookback_minutes=config.MIN_HEALTH_ROWS
+                        ctx, sym, lookback_minutes=S.min_health_rows
                     )
                 except Exception as exc:
                     logger.warning(
@@ -9858,7 +9858,7 @@ def main() -> None:
         def gather_minute_data_with_delay():
             try:
                 # delay can be configured via env SCHEDULER_SLEEP_SECONDS
-                time.sleep(config.SCHEDULER_SLEEP_SECONDS)
+                time.sleep(S.scheduler_sleep_seconds)
                 schedule_run_all_trades(model)
             except Exception as e:
                 logger.exception(f"gather_minute_data_with_delay failed: {e}")
@@ -9888,7 +9888,7 @@ def main() -> None:
                 target=adaptive_risk_scaling, args=(ctx,), daemon=True
             ).start()
         )
-        schedule.every(config.REBALANCE_INTERVAL_MIN).minutes.do(
+        schedule.every(S.rebalance_interval_min).minutes.do(
             lambda: Thread(target=maybe_rebalance, args=(ctx,), daemon=True).start()
         )
         schedule.every().day.at("23:55").do(
@@ -10225,4 +10225,4 @@ if __name__ == "__main__":
             schedule.run_pending()
         except Exception as exc:
             logger.exception("Scheduler loop error: %s", exc)
-        time.sleep(config.SCHEDULER_SLEEP_SECONDS)
+        time.sleep(S.scheduler_sleep_seconds)

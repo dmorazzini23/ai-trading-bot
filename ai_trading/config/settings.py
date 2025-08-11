@@ -10,6 +10,18 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    force_trades: str | None = Field(default=None, env='FORCE_TRADES')
+    max_drawdown_threshold: str | None = Field(default=None, env='MAX_DRAWDOWN_THRESHOLD')
+    min_health_rows: str | None = Field(default=None, env='MIN_HEALTH_ROWS')
+    ml_confidence_threshold: str | None = Field(default=None, env='ML_CONFIDENCE_THRESHOLD')
+    portfolio_drift_threshold: str | None = Field(default=None, env='PORTFOLIO_DRIFT_THRESHOLD')
+    pyramid_levels: str | None = Field(default=None, env='PYRAMID_LEVELS')
+    rl_model_path: str | None = Field(default=None, env='RL_MODEL_PATH')
+    sgd_params: str | None = Field(default=None, env='SGD_PARAMS')
+    use_rl_agent: str | None = Field(default=None, env='USE_RL_AGENT')
+    verbose: str | None = Field(default=None, env='VERBOSE')
+    verbose_logging: str | None = Field(default=None, env='VERBOSE_LOGGING')
+    volume_spike_threshold: str | None = Field(default=None, env='VOLUME_SPIKE_THRESHOLD')
     # Runtime toggles
     trading_mode: str = Field("balanced", env="TRADING_MODE")
     shadow_mode: bool = Field(False, env="SHADOW_MODE")

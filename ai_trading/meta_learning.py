@@ -1,3 +1,4 @@
+S = get_settings()
 """Utility helpers for meta-learning weight management."""
 
 import csv
@@ -579,7 +580,7 @@ def retrain_meta_learner(
 
     # Set default trade log path
     if trade_log_path is None:
-        trade_log_path = config.TRADE_LOG_FILE if config else "trades.csv"
+        trade_log_path = S.trade_log_file if config else "trades.csv"
 
     logger.info(
         "META_RETRAIN_START",
