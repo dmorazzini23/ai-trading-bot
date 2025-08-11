@@ -3630,10 +3630,9 @@ def get_allocator():
             class StrategyAllocator:
                 def __init__(self, *args, **kwargs):
                     pass
-                # Provide a minimal API surface to keep upstream code alive
-                def select(self, *args, **kwargs):
-                    return []
-                def rebalance(self, *args, **kwargs):
+                # Provide the main API method expected by the trading system
+                def allocate(self, signals_by_strategy, *args, **kwargs):
+                    """No-op fallback that returns empty list when no allocator is available."""
                     return []
             allocator = StrategyAllocator()
         else:
