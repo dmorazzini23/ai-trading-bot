@@ -1,0 +1,97 @@
+file,line,marker,snippet
+scripts/backtest_framework.py,72,mock_class,    def test_position_sizing(self):
+scripts/critical_fixes_validation.py,32,mock_class,        from trade_execution import ExecutionEngine
+scripts/critical_fixes_validation.py,37,mock_class,"                self.id = ""test_order_123"""
+scripts/critical_fixes_validation.py,83,mock_class,        # Create signals with out-of-range confidence from production logs
+scripts/critical_fixes_validation.py,130,mock_class,        from trade_execution import ExecutionEngine
+scripts/features.py,5,mock_class,    from datetime import datetime
+scripts/features.py,8,mock_class,            pass
+scripts/features.py,16,mock_class,except ImportError:
+scripts/metrics_logger.py,15,mock_class,"    # AI-AGENT-REF: numpy not available, create minimal fallback"
+scripts/predict.py,14,mock_class,    # Create minimal joblib fallback
+scripts/predict.py,18,mock_class,            # Return a minimal mock model
+scripts/retrain.py,13,mock_class,    # Create minimal joblib fallback
+scripts/retrain.py,17,mock_class,            # Return a minimal mock model
+scripts/retrain.py,34,mock_class,    # Create minimal numpy fallback
+scripts/retrain.py,114,mock_class,"    def make_pipeline(*args, **kwargs):"
+scripts/risk_engine.py,12,mock_class,"    # AI-AGENT-REF: numpy not available, create minimal fallback"
+scripts/risk_engine.py,15,mock_class,            pass
+scripts/risk_engine.py,42,mock_class,    from datetime import datetime
+scripts/risk_engine.py,47,mock_class,            return 0
+scripts/risk_engine.py,1126,mock_class,"    # AI-AGENT-REF: pandas_ta not available, create minimal fallback"
+scripts/validate_critical_fix.py,33,mock_class,from ai_trading.trade_execution import ExecutionEngine
+scripts/validate_critical_fix.py,42,mock_class,"        self.symbol = ""TEST"""
+tests/conftest.py,6,mock_class,# AI-AGENT-REF: Mock yfinance module for deterministic tests
+tests/conftest.py,1448,mock_class,"        if not hasattr(config, 'TradingConfig'):"
+tests/conftest.py,1519,mock_class,"        if not hasattr(trade_execution, 'ExecutionEngine'):"
+tests/institutional/framework.py,22,mock_class,    logger = logging.getLogger(__name__)
+tests/mocks.py,6,mock_class,""""""""
+tests/mocks.py,19,mock_class,        return {'status': 'filled'}
+tests/mocks.py,26,mock_class,        pass
+tests/mocks.py,33,mock_class,        pass
+tests/mocks.py,40,mock_class,        pass
+tests/mocks.py,50,mock_class,        pass
+tests/mocks.py,59,mock_class,        pass
+tests/mocks.py,69,mock_class,        pass
+tests/mocks.py,79,mock_class,        pass
+tests/mocks.py,86,mock_class,        pass
+tests/mocks/tenacity_mock.py,5,mock_class,    return decorator
+tests/support/mocks_runtime.py,8,mock_class,""""""""
+tests/support/mocks_runtime.py,35,mock_class,        return []
+tests/support/mocks_runtime.py,45,mock_class,        return MockDataFrame()
+tests/support/mocks_runtime.py,66,mock_class,        return self
+tests/support/mocks_runtime.py,84,mock_class,# Add more mock classes as needed when moving them from runtime code
+tests/support/mocks_runtime.py,96,mock_class,"        return [0.33, 0.34, 0.33]  # neutral sentiment"
+tests/support/mocks_runtime.py,103,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,110,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,117,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,124,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,134,mock_class,        return MockTicker()
+tests/support/mocks_runtime.py,141,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,148,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,155,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,162,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,169,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,176,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,183,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,190,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,197,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,204,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,211,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,218,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,225,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,232,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,239,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,246,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,253,mock_class,"        return lambda *args, **kwargs: self"
+tests/support/mocks_runtime.py,260,mock_class,"        return lambda *args, **kwargs: self"
+tests/test_additional_coverage.py,84,mock_class,    # AI-AGENT-REF: Mock the config object directly to ensure environment validation passes
+tests/test_alpaca_contract.py,2,mock_class,import alpaca_api
+tests/test_alpaca_import_handling.py,45,mock_class,                # Mock classes should be created
+tests/test_alpaca_import_handling.py,97,mock_class,        # Test mock trading client
+tests/test_alpaca_import_handling.py,105,mock_class,        # Test mock enums
+tests/test_critical_fixes_focused.py,44,mock_class,        # Create mock signal with out-of-range confidence
+tests/test_critical_fixes_focused.py,89,mock_class,        # Create a mock context
+tests/test_critical_fixes_focused.py,105,mock_class,        from trade_execution import ExecutionEngine
+tests/test_critical_fixes_implementation.py,250,mock_class,    # Mock implementation
+tests/test_critical_fixes_validation.py,17,mock_class,        # AI-AGENT-REF: Use environment variables to avoid hardcoded secrets
+tests/test_fill_rate_calculation_fix.py,16,mock_class,from ai_trading import ExecutionEngine
+tests/test_fill_rate_calculation_fix.py,26,mock_class,"        self.symbol = ""TEST"""
+tests/test_intelligent_position_management.py,44,mock_class,@dataclass
+tests/test_kelly_confidence_fix.py,17,mock_class,    # Mock BotContext for testing
+tests/test_kelly_confidence_fix.py,23,mock_class,            # Mock capital scaler
+tests/test_kelly_confidence_fix.py,82,mock_class,    # Mock BotContext for testing
+tests/test_kelly_confidence_fix.py,86,mock_class,            self.max_position_dollars = 10000
+tests/test_parameter_optimization.py,121,mock_class,        # Mock order manager for testing
+tests/test_portfolio_integration.py,13,mock_class,from ai_trading.signals import filter_signals_with_portfolio_optimization
+tests/test_portfolio_integration.py,21,mock_class,        self.quantity = quantity
+tests/test_portfolio_integration.py,32,mock_class,        self.data_fetcher = MockDataFetcher()
+tests/test_portfolio_integration.py,47,mock_class,        # Create a simple mock DataFrame-like object
+tests/test_portfolio_integration.py,71,mock_class,                return self.data['close']
+tests/test_position_intelligence.py,41,mock_class,        # Test RSI calculation with mock data
+tests/test_position_intelligence.py,55,mock_class,                return MockIloc(self.data)
+tests/test_position_intelligence.py,69,mock_class,                return MockSeries(result)
+tests/test_retry_idempotency_integration.py,10,mock_class,"from tenacity import retry, stop_after_attempt, wait_exponential"
+tests/test_talib_enforcement.py,56,mock_class,    # Create mock config module
+tests/test_talib_enforcement.py,132,mock_class,"    trade_log_path = tmp_path / ""trades.csv"""
+tests/test_trigger_meta_learning_conversion.py,53,mock_class,        }
