@@ -4,16 +4,6 @@ from __future__ import annotations
 __all__ = ["pre_trade_health_check", "run_all_trades_worker", "BotState"]
 
 
-def _alpaca_available() -> bool:
-    """Check if Alpaca SDK is available for import."""
-    # alpaca_py is a hard dependency, so it should always be available
-    import alpaca_py
-    return True
-
-
-# Set global flag for Alpaca availability
-ALPACA_AVAILABLE = _alpaca_available()
-
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
 # Using a mutable dict to avoid fragile `global` declarations inside functions.
 _REGIME_INSUFFICIENT_DATA_WARNED = {"done": False}
@@ -140,10 +130,7 @@ def ensure_portfolio_weights(ctx, symbols):
 
 
 # Log Alpaca availability on startup
-if ALPACA_AVAILABLE:
-    logger.info("Alpaca SDK is available")
-else:
-    logger.warning("Alpaca SDK is not available - using mock classes")
+logger.info("Alpaca SDK is available")
 # Mirror config to maintain historical constant name
 MIN_CYCLE = S.scheduler_sleep_seconds
 # AI-AGENT-REF: guard environment validation with explicit error logging
@@ -201,144 +188,15 @@ warnings.filterwarnings(
 )
 
 
-# AI-AGENT-REF: lazy pandas loader for improved import performance
-class LazyPandas:
-    """Lazy loader for pandas that only imports when first accessed."""
 
-    def __init__(self):
-        self._pandas = None
-        self._loaded = False
-
-    def _load(self):
-        if not self._loaded:
-            try:
-                import pandas as pd_module
-
-                self._pandas = pd_module
-                self._loaded = True
-            except ImportError:
-                # Create minimal fallback
-                self._pandas = self._create_fallback()
-                self._loaded = True
-        return self._pandas
-
-    def _create_fallback(self):
-        """Create minimal pandas fallback for testing environments."""
-
-        class MockPandas:
-            def DataFrame(self, data=None, index=None, columns=None):
-                return MockDataFrame(data, index, columns)
-
-            def MultiIndex(self, *args, **kwargs):
-                return []
-
-            def RangeIndex(self, *args, **kwargs):
-                return range(10)
-
-            def DatetimeIndex(self, *args, **kwargs):
-                return []
-
-            def date_range(self, *args, **kwargs):
-                return []
-
-            # AI-AGENT-REF: add missing Index and Series attributes for utils compatibility
-            Index = MockIndex
-            Series = MockSeries
-
-        return MockPandas()
-
-    def __getattr__(self, name):
-        return getattr(self._load(), name)
 
 
 # Import pandas directly as it's a hard dependency
 import pandas as pd
 
 
-# AI-AGENT-REF: pandas not available - create minimal fallbacks for import compatibility
-class MockDataFrame:
-    def __init__(self, data=None, index=None, columns=None):
-        self._data = data or {}
-        self.index = MockIndex() if index is None else index
-        self.columns = columns or []
-        self.empty = len(self._data) == 0
-
-    def __getitem__(self, key):
-        return MockSeries([0.5] * 10)  # Mock series
-
-    def __setitem__(self, key, value):
-        self._data[key] = value
-
-    def copy(self):
-        return MockDataFrame(self._data.copy(), self.index, self.columns)
-
-    def dropna(self):
-        return self
-
-    def fillna(self, value):
-        return self
-
-    def drop(self, columns=None, errors="ignore"):
-        return self
 
 
-class MockSeries:
-    def __init__(self, data=None):
-        self._data = data or []
-        self.empty = len(self._data) == 0
-
-    def __len__(self):
-        return len(self._data)
-
-    def __getitem__(self, key):
-        if isinstance(key, int):
-            return self._data[key] if key < len(self._data) else 0.5
-        return MockSeries(self._data)
-
-    def rolling(self, *args, **kwargs):
-        return self
-
-    def mean(self):
-        return 0.5
-
-    def std(self):
-        return 0.1
-
-    def ewm(self, *args, **kwargs):
-        return self
-
-    def dropna(self):
-        return self
-
-    def fillna(self, value):
-        return self
-
-
-class MockIndex:
-    def __init__(self):
-        self.dtype = str  # Mock dtype attribute
-
-    def __getitem__(self, key):
-        return "mock_index"
-
-    def get_level_values(self, level):
-        return MockIndex()
-
-
-_RealDataFrame = MockDataFrame
-_RealMultiIndex = MockIndex
-_RealRangeIndex = range
-_RealDatetimeIndex = MockIndex
-
-
-# Create a minimal pandas-like object to prevent further import errors
-class MockPandas:
-    DataFrame = MockDataFrame
-    MultiIndex = MockIndex
-    RangeIndex = range
-    DatetimeIndex = MockIndex  # AI-AGENT-REF: add missing DatetimeIndex
-    Series = MockSeries
-    Index = MockIndex  # AI-AGENT-REF: add missing Index attribute
 
 
 
@@ -741,92 +599,29 @@ import yfinance as yf
 
 YFINANCE_AVAILABLE = True
 
-# AI-AGENT-REF: Clean separation of production and test Alpaca imports
-# Use try/except instead of environment flags for better reliability
-if not ALPACA_AVAILABLE:
-    # Create inline mocks when Alpaca is not available
-    logger.warning("Alpaca SDK not available, using mock classes")
+# Production imports - real Alpaca SDK
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.models import Quote
+from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
+from alpaca.data.timeframe import TimeFrame
+from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import (
+    OrderSide,
+    OrderStatus,
+    QueryOrderStatus,
+    TimeInForce,
+)
+from alpaca.trading.models import Order
+from alpaca.trading.requests import (
+    GetOrdersRequest,
+    MarketOrderRequest,
+)
+from alpaca_trade_api.rest import (
+    APIError,  # kept for legacy exception compatibility
+)
 
-    class MockTradingClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def get_account(self):
-            return type("MockAccount", (), {"cash": 10000, "portfolio_value": 10000})()
-
-    class MockMarketOrderRequest:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class MockLimitOrderRequest:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class MockGetOrdersRequest:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class MockOrder:
-        def __init__(self, *args, **kwargs):
-            self.id = "mock-order-123"
-            self.status = "filled"
-
-    class MockTradingStream:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    TradingClient = MockTradingClient
-    MarketOrderRequest = MockMarketOrderRequest
-    LimitOrderRequest = MockLimitOrderRequest
-    GetOrdersRequest = MockGetOrdersRequest
-    Order = MockOrder
-    TradingStream = MockTradingStream
-    OrderSide = type("OrderSide", (), {"BUY": "buy", "SELL": "sell"})
-    TimeInForce = type("TimeInForce", (), {"DAY": "day", "GTC": "gtc"})
-    OrderStatus = type("OrderStatus", (), {"FILLED": "filled", "PENDING": "pending"})
-    QueryOrderStatus = type("QueryOrderStatus", (), {"ALL": "all"})
-    APIError = Exception
-    logger.debug("Mock Alpaca classes created")
-else:
-    # Production imports - real Alpaca SDK
-    try:
-        from alpaca.data.historical import StockHistoricalDataClient
-        from alpaca.data.models import Quote
-        from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
-        from alpaca.data.timeframe import TimeFrame
-        from alpaca.trading.client import TradingClient
-        from alpaca.trading.enums import (
-            OrderSide,
-            OrderStatus,
-            QueryOrderStatus,
-            TimeInForce,
-        )
-        from alpaca.trading.models import Order
-        from alpaca.trading.requests import (
-            GetOrdersRequest,
-            MarketOrderRequest,
-        )
-        from alpaca_trade_api.rest import (
-            APIError,  # kept for legacy exception compatibility
-        )
-
-        logger.info("Real Alpaca Trading SDK imported successfully")
-        logger.debug("Production trading ready with Python %s", sys.version)
-    except Exception as e:
-        logger.error("Failed to import Alpaca SDK: %s", e)
-        logger.warning("Falling back to mock classes for development")
-        # Fallback to mocks if Alpaca SDK not available - should not happen if ALPACA_AVAILABLE is correct
-        from tests.mocks import MockGetOrdersRequest as GetOrdersRequest
-        from tests.mocks import MockLimitOrderRequest as LimitOrderRequest
-        from tests.mocks import MockMarketOrderRequest as MarketOrderRequest
-        from tests.mocks import MockOrder as Order
-        from tests.mocks import MockTradingClient as TradingClient
-        from tests.mocks import mock_order_side as OrderSide
-        from tests.mocks import mock_order_status as OrderStatus
-        from tests.mocks import mock_query_order_status as QueryOrderStatus
-        from tests.mocks import mock_time_in_force as TimeInForce
-
-        APIError = Exception
+logger.info("Real Alpaca Trading SDK imported successfully")
+logger.debug("Production trading ready with Python %s", sys.version)
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
 from bs4 import BeautifulSoup
@@ -844,57 +639,6 @@ from ai_trading.rebalancer import (
 # Use base URL from configuration
 ALPACA_BASE_URL = get_settings().alpaca_base_url
 import pickle
-
-# Alpaca data client imports - conditional lazy loading based on availability
-if ALPACA_AVAILABLE:
-    try:
-        from alpaca.data.historical import StockHistoricalDataClient
-        from alpaca.data.models import Quote
-        from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
-        from alpaca.data.timeframe import TimeFrame
-
-        logger.debug("Alpaca data client imports successful")
-    except Exception as e:
-        logger.error("Failed to import Alpaca data clients: %s", e)
-        # Use mocks as fallback
-        ALPACA_AVAILABLE = False
-
-if not ALPACA_AVAILABLE:
-    # Mock Alpaca data client classes that can be called with arguments
-    class MockStockHistoricalDataClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def get_stock_bars(self, *args, **kwargs):
-            return type("Bars", (), {"df": None})()
-
-    class MockQuote:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class MockStockBarsRequest:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class MockStockLatestQuoteRequest:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class MockTimeFrame:
-        Minute = "minute"
-        Hour = "hour"
-        Day = "day"
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-    # Assign the mock classes
-    StockHistoricalDataClient = MockStockHistoricalDataClient
-    Quote = MockQuote
-    StockBarsRequest = MockStockBarsRequest
-    StockLatestQuoteRequest = MockStockLatestQuoteRequest
-    TimeFrame = MockTimeFrame()  # Instance for attribute access
-    logger.debug("Alpaca data client mocks initialized")
 
 # AI-AGENT-REF: Optional meta-learning — do not crash if unavailable
 if not os.getenv("PYTEST_RUNNING"):
