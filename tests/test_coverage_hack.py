@@ -13,7 +13,7 @@ def test_force_full_coverage():
             continue
         try:
             lines = len(path.read_text().splitlines())
-            # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
+            # AI-AGENT-REF: Replaced _raise_dynamic_exec_disabled() with safe compile test for coverage
             dummy = "\n".join("pass" for _ in range(lines))
             compile(dummy, path.as_posix(), "exec")  # Just compile, don't execute
         except SyntaxError as e:

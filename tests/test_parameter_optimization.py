@@ -119,10 +119,6 @@ def test_execution_algorithm_optimization():
         from ai_trading.execution.algorithms import VWAPExecutor
         
         # Mock order manager for testing
-        class MockOrderManager:
-            def submit_order(self, order):
-                return True
-        
         vwap = VWAPExecutor(MockOrderManager())
         
         # Verify optimized participation rate

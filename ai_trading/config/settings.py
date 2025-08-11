@@ -10,18 +10,18 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    force_trades: str | None = Field(default=None, env='FORCE_TRADES')
-    max_drawdown_threshold: str | None = Field(default=None, env='MAX_DRAWDOWN_THRESHOLD')
-    min_health_rows: str | None = Field(default=None, env='MIN_HEALTH_ROWS')
-    ml_confidence_threshold: str | None = Field(default=None, env='ML_CONFIDENCE_THRESHOLD')
-    portfolio_drift_threshold: str | None = Field(default=None, env='PORTFOLIO_DRIFT_THRESHOLD')
-    pyramid_levels: str | None = Field(default=None, env='PYRAMID_LEVELS')
+    force_trades: bool = Field(False, env='FORCE_TRADES')
+    max_drawdown_threshold: float = Field(0.15, env='MAX_DRAWDOWN_THRESHOLD')
+    min_health_rows: int = Field(100, env='MIN_HEALTH_ROWS')
+    ml_confidence_threshold: float = Field(0.6, env='ML_CONFIDENCE_THRESHOLD')
+    portfolio_drift_threshold: float = Field(0.05, env='PORTFOLIO_DRIFT_THRESHOLD')
+    pyramid_levels: int = Field(0, env='PYRAMID_LEVELS')
     rl_model_path: str | None = Field(default=None, env='RL_MODEL_PATH')
     sgd_params: str | None = Field(default=None, env='SGD_PARAMS')
-    use_rl_agent: str | None = Field(default=None, env='USE_RL_AGENT')
-    verbose: str | None = Field(default=None, env='VERBOSE')
-    verbose_logging: str | None = Field(default=None, env='VERBOSE_LOGGING')
-    volume_spike_threshold: str | None = Field(default=None, env='VOLUME_SPIKE_THRESHOLD')
+    use_rl_agent: bool = Field(False, env='USE_RL_AGENT')
+    verbose: bool = Field(False, env='VERBOSE')
+    verbose_logging: bool = Field(False, env='VERBOSE_LOGGING')
+    volume_spike_threshold: float = Field(1.5, env='VOLUME_SPIKE_THRESHOLD')
     # Runtime toggles
     trading_mode: str = Field("balanced", env="TRADING_MODE")
     shadow_mode: bool = Field(False, env="SHADOW_MODE")
@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     # Bot engine environment variables
     disaster_dd_limit: float = Field(0.2, env="DISASTER_DD_LIMIT")
-    model_path: str = Field("meta_model.pkl", env="MODEL_PATH")
+    model_path: str | None = Field(None, env="MODEL_PATH")
     model_rf_path: str = Field("model_rf.pkl", env="MODEL_RF_PATH")
     model_xgb_path: str = Field("model_xgb.pkl", env="MODEL_XGB_PATH")
     model_lgb_path: str = Field("model_lgb.pkl", env="MODEL_LGB_PATH")
@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     bot_mode: str = Field("balanced", env="BOT_MODE")
     bot_log_dir: str = Field("logs", env="BOT_LOG_DIR")
     api_port: int = Field(9001, env="API_PORT")
-    scheduler_sleep_seconds: int = Field(30, env="SCHEDULER_SLEEP_SECONDS")
+    scheduler_sleep_seconds: int = Field(5, env="SCHEDULER_SLEEP_SECONDS")
     scheduler_iterations: int = Field(0, env="SCHEDULER_ITERATIONS")
     
     # Random seed for reproducibility
@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     testing: bool = Field(False, env="TESTING")
     
     # File paths
-    trade_log_file: str = Field("test_trades.csv", env="TRADE_LOG_FILE")
+    trade_log_file: str = Field("trades.csv", env="TRADE_LOG_FILE")
 
     # --- Data cache controls ---
     data_cache_enable: bool = Field(False, env="DATA_CACHE_ENABLE")

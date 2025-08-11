@@ -42,12 +42,6 @@ class TestCriticalFixes(unittest.TestCase):
         allocator = self.strategy_allocator.StrategyAllocator()
         
         # Create mock signal with out-of-range confidence
-        class MockSignal:
-            def __init__(self, symbol, side, confidence):
-                self.symbol = symbol
-                self.side = side
-                self.confidence = confidence
-        
         # This would simulate signals with confidence > 1
         signals_by_strategy = {
             "test_strategy": [
@@ -87,10 +81,6 @@ class TestCriticalFixes(unittest.TestCase):
         from trade_execution import ExecutionEngine
         
         # Create a mock context
-        class MockContext:
-            def __init__(self):
-                self.api = None
-                
         ctx = MockContext()
         engine = ExecutionEngine(ctx)
         
@@ -104,10 +94,6 @@ class TestCriticalFixes(unittest.TestCase):
         # P2 Fix: Short selling validation
         from trade_execution import ExecutionEngine
         
-        class MockContext:
-            def __init__(self):
-                self.api = None
-                
         ctx = MockContext()
         engine = ExecutionEngine(ctx)
         

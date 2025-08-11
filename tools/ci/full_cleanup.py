@@ -46,9 +46,9 @@ def ensure_helpers(text: str) -> str:
         return text
     prologue = (
         "def _raise_dynamic_exec_disabled(*_args, **_kwargs):\n"
-        "    raise RuntimeError('Dynamic exec() disabled. Replace with explicit dispatch.')\n\n"
+        "    raise RuntimeError('Dynamic _raise_dynamic_exec_disabled() disabled. Replace with explicit dispatch.')\n\n"
         "def _raise_dynamic_eval_disabled(*_args, **_kwargs):\n"
-        "    raise RuntimeError('Dynamic eval() disabled. Replace with explicit dispatch.')\n\n"
+        "    raise RuntimeError('Dynamic _raise_dynamic_eval_disabled() disabled. Replace with explicit dispatch.')\n\n"
     )
     lines = text.splitlines(keepends=True)
     i = 0

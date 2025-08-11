@@ -10,34 +10,6 @@ sys.path.insert(0, '/tmp')
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 
-class MockBrokerAPI:
-    """Mock broker API that fails N times then succeeds."""
-    
-    def __init__(self, fail_count=2):
-        self.fail_count = fail_count
-        self.call_count = 0
-        self.submitted_orders = []
-    
-    def submit_order(self, order_data):
-        """Mock order submission that fails first N times."""
-        self.call_count += 1
-        
-        if self.call_count <= self.fail_count:
-            raise ConnectionError(f"Network error on attempt {self.call_count}")
-        
-        # Success case - record the order
-        order_id = f"order_{len(self.submitted_orders) + 1}"
-        order_record = {
-            "id": order_id,
-            "symbol": order_data["symbol"],
-            "quantity": order_data["quantity"],
-            "submitted_at": datetime.now(timezone.utc),
-            "status": "submitted"
-        }
-        self.submitted_orders.append(order_record)
-        return order_record
-
-
 class OrderIdempotencyManager:
     """Mock idempotency manager to prevent duplicate orders."""
     

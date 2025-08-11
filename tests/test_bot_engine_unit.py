@@ -5,7 +5,7 @@ import joblib
 import logging
 import types
 
-# AI-AGENT-REF: Replaced unsafe exec() with proper imports from core module
+# AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with proper imports from core module
 from ai_trading.core.bot_engine import (
     initialize_bot,
     run_trading_cycle,

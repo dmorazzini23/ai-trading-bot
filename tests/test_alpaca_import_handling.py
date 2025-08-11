@@ -43,10 +43,6 @@ class TestAlpacaImportHandling(unittest.TestCase):
                 self.assertIn("'function' object is not iterable", str(e))
                 
                 # Mock classes should be created
-                class MockTradingClient:
-                    def __init__(self, *args, **kwargs):
-                        pass
-                
                 TradingClient = MockTradingClient
             
             # Verify graceful degradation
@@ -95,18 +91,10 @@ class TestAlpacaImportHandling(unittest.TestCase):
     def test_mock_classes_functionality(self):
         """Test that mock classes provide minimal required functionality."""
         # Test mock trading client
-        class MockTradingClient:
-            def __init__(self, *args, **kwargs):
-                pass
-        
         client = MockTradingClient("key", "secret", paper=True)
         self.assertIsInstance(client, MockTradingClient)
         
         # Test mock enums
-        class MockOrderSide:
-            BUY = "buy"
-            SELL = "sell"
-        
         order_side = MockOrderSide()
         self.assertEqual(order_side.BUY, "buy")
         self.assertEqual(order_side.SELL, "sell")

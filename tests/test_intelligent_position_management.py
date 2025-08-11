@@ -42,14 +42,6 @@ except ImportError as e:
 
 
 @dataclass
-class MockPosition:
-    """Mock position data for testing."""
-    symbol: str
-    qty: int
-    avg_entry_price: float
-    market_value: float
-
-
 class TestIntelligentPositionManager:
     """Test the main IntelligentPositionManager orchestrator."""
     

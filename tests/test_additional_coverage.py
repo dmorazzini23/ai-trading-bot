@@ -82,12 +82,6 @@ def test_main_starts_api_thread(monkeypatch):
     monkeypatch.setenv("TEST_ALPACA_SECRET_KEY", "test_secret_key")
     
     # AI-AGENT-REF: Mock the config object directly to ensure environment validation passes
-    class MockConfig:
-        WEBHOOK_SECRET = os.getenv("TEST_WEBHOOK_SECRET", "test_secret")
-        ALPACA_API_KEY = os.getenv("TEST_ALPACA_API_KEY", "test_key")
-        ALPACA_SECRET_KEY = os.getenv("TEST_ALPACA_SECRET_KEY", "test_secret_key")
-        NEWS_API_KEY = os.getenv("TEST_NEWS_API_KEY", "test_news_api_key")
-    
     monkeypatch.setattr(main, "config", MockConfig())
     
     called = {}

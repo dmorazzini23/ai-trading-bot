@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 import types
 
-# AI-AGENT-REF: Replaced unsafe exec() with direct imports from core module
+# AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with direct imports from core module
 from ai_trading.core.bot_engine import _load_ml_model, _cleanup_ml_model_cache
 
 # Setup stub for model loader dependency

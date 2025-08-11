@@ -4,25 +4,6 @@ import sys
 import os
 
 # AI-AGENT-REF: Mock yfinance module for deterministic tests
-class MockYfinance:
-    """Mock yfinance module to avoid network calls in tests."""
-    
-    @staticmethod
-    def download(*args, **kwargs):
-        import pandas as pd
-        return pd.DataFrame()
-    
-    class Ticker:
-        def __init__(self, *args):
-            pass
-        
-        def history(self, *args, **kwargs):
-            import pandas as pd
-            return pd.DataFrame()
-    
-    def __getattr__(self, name):
-        return lambda *args, **kwargs: None
-
 # Inject yfinance mock into sys.modules before any imports
 sys.modules["yfinance"] = MockYfinance()
 
@@ -1446,31 +1427,6 @@ def stub_capital_scaling(monkeypatch):
     try:
         import config
         if not hasattr(config, 'TradingConfig'):
-            class MockTradingConfig:
-                # Risk Management Parameters
-                max_drawdown_threshold = 0.15
-                daily_loss_limit = 0.03
-                dollar_risk_limit = 0.05
-                max_portfolio_risk = 0.025
-                max_correlation_exposure = 0.15
-                max_sector_concentration = 0.15
-                min_liquidity_threshold = 1000000
-                position_size_min_usd = 100.0
-                max_position_size = 8000
-                max_position_size_pct = 0.25
-                
-                # Kelly Criterion Parameters
-                kelly_fraction = 0.6
-                kelly_fraction_max = 0.25
-                min_sample_size = 20
-                confidence_level = 0.90
-                lookback_periods = 252
-                rebalance_frequency = 21
-                
-                @classmethod
-                def from_env(cls, mode="balanced"):
-                    return cls()
-            
             # Set the attribute on the config module instance, not the class
             if hasattr(config, '__dict__'):
                 config.TradingConfig = MockTradingConfig
@@ -1517,13 +1473,6 @@ def stub_capital_scaling(monkeypatch):
     try:
         import trade_execution
         if not hasattr(trade_execution, 'ExecutionEngine'):
-            class MockExecutionEngine:
-                def __init__(self, ctx):
-                    self.ctx = ctx
-                def execute_order(self, *args, **kwargs):
-                    return "ok"
-                def _execute_sliced(self, *args, **kwargs):
-                    return "ok"
             trade_execution.ExecutionEngine = MockExecutionEngine
     except ImportError:
         pass
