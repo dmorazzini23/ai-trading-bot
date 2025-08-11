@@ -15,50 +15,29 @@ import numpy as np
 import pandas as pd
 
 # Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
+from ai_trading.logging import logger
 
-    logger = logging.getLogger(__name__)
+# ML libraries are hard dependencies as per pyproject.toml
+import lightgbm as lgb
 
-# Optional imports for ML libraries
-try:
-    import lightgbm as lgb
+lgb_available = True
 
-    lgb_available = True
-except ImportError:
-    lgb_available = False
-    logger.warning("LightGBM not available")
+import xgboost as xgb
 
-try:
-    import xgboost as xgb
+xgb_available = True
 
-    xgb_available = True
-except ImportError:
-    xgb_available = False
-    logger.warning("XGBoost not available")
+from sklearn.linear_model import Ridge
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    mean_squared_error,
+)
 
-try:
-    from sklearn.linear_model import Ridge
-    from sklearn.metrics import (
-        accuracy_score,
-        classification_report,
-        mean_squared_error,
-    )
+sklearn_available = True
 
-    sklearn_available = True
-except ImportError:
-    sklearn_available = False
-    logger.warning("scikit-learn not available")
+import optuna
 
-try:
-    import optuna
-
-    optuna_available = True
-except ImportError:
-    optuna_available = False
-    logger.warning("Optuna not available")
+optuna_available = True
 
 from ..data.splits import PurgedGroupTimeSeriesSplit
 

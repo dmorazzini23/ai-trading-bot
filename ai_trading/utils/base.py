@@ -17,23 +17,14 @@ from zoneinfo import ZoneInfo
 
 from ai_trading.config import get_settings
 
-# AI-AGENT-REF: Simplified optional import pattern
-try:
-    import pandas as pd
+# AI-AGENT-REF: Pandas is a hard dependency
+import pandas as pd
 
-    HAS_PANDAS = True
-    Timestamp = pd.Timestamp
-    DataFrame = pd.DataFrame
-    Series = pd.Series
-    Index = pd.Index
-except ImportError:
-    HAS_PANDAS = False
-    pd = None
-    from datetime import datetime as Timestamp  # Fallback type for annotations
-
-    DataFrame = object  # Fallback for DataFrame type hints
-    Series = object  # Fallback for Series type hints
-    Index = object  # Fallback for Index type hints
+HAS_PANDAS = True
+Timestamp = pd.Timestamp
+DataFrame = pd.DataFrame
+Series = pd.Series
+Index = pd.Index
 
 
 def requires_pandas(func):
@@ -50,19 +41,9 @@ def requires_pandas(func):
 
 logger = logging.getLogger(__name__)
 
-try:
-    import psutil
-except ImportError:
-    psutil = None
-    logger.warning("psutil import failed — memory stats disabled")
+import psutil
 
-try:
-    from tzlocal import get_localzone
-except ImportError:  # pragma: no cover - optional dependency
-    logging.warning("tzlocal not installed; defaulting to UTC")
-
-    def get_localzone() -> ZoneInfo:
-        return ZoneInfo("UTC")
+from tzlocal import get_localzone
 
 
 # AI-AGENT-REF: throttle noisy logs
@@ -917,25 +898,8 @@ def _get_alpaca_rest():
             REST = _REST
             logger.debug("Successfully imported alpaca_trade_api.rest.REST")
         except ImportError as e:
-            logger.warning("alpaca_trade_api not available, using fallback: %s", e)
-
-            # Create a mock REST class for development/testing
-            class MockREST:
-                def __init__(self, *args, **kwargs):
-                    logger.info(
-                        "Using mock Alpaca REST client (alpaca_trade_api not installed)"
-                    )
-
-                def __getattr__(self, name):
-                    def mock_method(*args, **kwargs):
-                        logger.debug(
-                            "Mock Alpaca API call: %s(*%s, **%s)", name, args, kwargs
-                        )
-                        return {}
-
-                    return mock_method
-
-            REST = MockREST
+            logger.error("alpaca_trade_api import failed: %s", e)
+            raise RuntimeError(f"Required dependency alpaca_trade_api not available: {e}") from e
         except Exception as e:
             logger.error(
                 "alpaca_trade_api import failed with unexpected error", exc_info=e

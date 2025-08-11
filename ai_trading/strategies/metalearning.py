@@ -12,12 +12,7 @@ from typing import Any
 warnings.filterwarnings("ignore")
 
 # AI-AGENT-REF: Use centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
-
-    logger = logging.getLogger(__name__)
+from ai_trading.logging import logger
 
 # AI-AGENT-REF: Import dependencies - sklearn is a hard dependency
 import numpy as np
@@ -28,22 +23,8 @@ import pandas as pd
 
 PANDAS_AVAILABLE = True
 
-# AI-AGENT-REF: Use centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
-
-    logger = logging.getLogger(__name__)
-
 # AI-AGENT-REF: Import data fetcher for historical data
-try:
-    from ai_trading.data_fetcher import get_minute_df  # type: ignore
-except ImportError:
-    logger.warning("data_fetcher not available, using mock function")
-
-    def get_minute_df(symbol, start_date, end_date, limit=None):
-        return None
+from ai_trading.data_fetcher import get_minute_df  # type: ignore
 
 
 # AI-AGENT-REF: Import base strategy framework

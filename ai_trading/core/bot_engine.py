@@ -1296,44 +1296,30 @@ warnings.filterwarnings(
 )
 
 # ─── FINBERT SENTIMENT MODEL IMPORTS & FALLBACK ─────────────────────────────────
-if not os.environ.get("PYTEST_RUNNING"):
-    # Only load FinBERT when not in tests
-    try:
-        import torch
+# Load FinBERT unless explicitly disabled
+try:
+    import torch
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=".*_register_pytree_node.*",
-                module="transformers.*",
-            )
-            from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-        _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
-        _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
-            "yiyanghkust/finbert-tone"
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=".*_register_pytree_node.*",
+            module="transformers.*",
         )
-        _FINBERT_MODEL.eval()
-        _HUGGINGFACE_AVAILABLE = True
-        logger.info("FinBERT loaded successfully")
-    except Exception as e:
-        _HUGGINGFACE_AVAILABLE = False
-        _FINBERT_TOKENIZER = None
-        _FINBERT_MODEL = None
-        logger.warning(f"FinBERT load failed ({e}); falling back to neutral sentiment")
-else:
-    # Mock FinBERT for tests
-    class MockFinBERT:
-        def __init__(self):
-            pass
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-        def predict(self, text):
-            return 0.5
-
-    _FINBERT_TOKENIZER = MockFinBERT()
-    _FINBERT_MODEL = MockFinBERT()
+    _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
+    _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
+        "yiyanghkust/finbert-tone"
+    )
+    _FINBERT_MODEL.eval()
     _HUGGINGFACE_AVAILABLE = True
-    logger.debug("FinBERT mocks initialized for tests")
+    logger.info("FinBERT loaded successfully")
+except Exception as e:
+    _HUGGINGFACE_AVAILABLE = False
+    _FINBERT_TOKENIZER = None
+    _FINBERT_MODEL = None
+    logger.warning(f"FinBERT load failed ({e}); falling back to neutral sentiment")
 
 
 DISASTER_DD_LIMIT = S.disaster_dd_limit
