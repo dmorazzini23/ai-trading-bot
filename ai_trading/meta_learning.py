@@ -16,15 +16,13 @@ import numpy as np
 import pandas as pd
 # CSV:17 - Move metrics_logger import to functions that use it
 
-try:
-    import torch
-    import torch.nn as _nn
+# ai_trading/meta_learning.py:20 - Convert import guard to hard import (torch is in dependencies)
+import torch
+import torch.nn as _nn
 
-    # ensure torch.nn and Parameter live on the torch module
-    torch.nn = _nn
-    torch.nn.Parameter = _nn.Parameter
-except ImportError:
-    torch = None
+# ensure torch.nn and Parameter live on the torch module
+torch.nn = _nn
+torch.nn.Parameter = _nn.Parameter
 
 # For type checking only
 if TYPE_CHECKING:
@@ -890,13 +888,16 @@ def retrain_meta_learner(
     y = df["outcome"].values
     sample_w = df["pnl"].abs() + 1e-3
 
-    try:
-        from sklearn.linear_model import Ridge
-
-        model = Ridge(alpha=1.0, fit_intercept=True)
-    except ImportError:
-        logger.warning("sklearn not available, meta-learning disabled")
+    # ai_trading/meta_learning.py:891 - Convert import guard to settings-gated import
+    from ai_trading.config import get_settings
+    settings = get_settings()
+    if not settings.enable_sklearn:
+        logger.info("sklearn disabled, meta-learning disabled")
         return False
+
+    from sklearn.linear_model import Ridge
+
+    model = Ridge(alpha=1.0, fit_intercept=True)
 
     try:
         model.fit(X, y, sample_weight=sample_w)
@@ -1706,7 +1707,14 @@ def trigger_rebalance_on_regime(df: "pd.DataFrame") -> None:
     if not settings.enable_reinforcement_learning:
         return
     
-    from portfolio_rl import PortfolioReinforcementLearner
+    # ai_trading/meta_learning.py:1710 - Add error handling for RL import
+    try:
+        from portfolio_rl import PortfolioReinforcementLearner
+    except ImportError as e:
+        raise RuntimeError(
+            f"Reinforcement learning enabled but portfolio_rl module unavailable: {e}. "
+            "Set ENABLE_REINFORCEMENT_LEARNING=False to disable"
+        )
     
     rl = PortfolioReinforcementLearner()
     if "Regime" in df.columns and len(df) > 2:
