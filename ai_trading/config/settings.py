@@ -90,11 +90,23 @@ class Settings(BaseSettings):
     # Webhook secret for API security
     webhook_secret: str | None = Field(None, env="WEBHOOK_SECRET")
 
-    # Risk knobs (align defaults with current behavior)
+    # --- risk & sizing knobs (env-coerced) ---
+    trailing_factor: float = Field(1.0, env="TRAILING_FACTOR")
+    kelly_fraction: float = Field(0.0, env="KELLY_FRACTION")
+    max_position_size: float = Field(1.0, env="MAX_POSITION_SIZE")
+    stop_loss: float = Field(0.05, env="STOP_LOSS")
+    take_profit: float = Field(0.10, env="TAKE_PROFIT")
+    take_profit_factor: float = Field(2.0, env="TAKE_PROFIT_FACTOR")
+    lookback_days: int = Field(60, env="LOOKBACK_DAYS")
+    min_signal_strength: float = Field(0.1, env="MIN_SIGNAL_STRENGTH")
+    scaling_factor: float = Field(1.0, env="SCALING_FACTOR")
+    limit_order_slippage: float = Field(0.001, env="LIMIT_ORDER_SLIPPAGE")
+    pov_slice_pct: float = Field(0.05, env="POV_SLICE_PCT")
+    daily_loss_limit: float = Field(0.05, env="DAILY_LOSS_LIMIT")
+    
+    # Other risk knobs (align defaults with current behavior)
     capital_cap: float = Field(0.04, env="CAPITAL_CAP")
     dollar_risk_limit: float = Field(0.05, env="DOLLAR_RISK_LIMIT")
-    max_position_size: int = Field(8000, env="MAX_POSITION_SIZE")
-    daily_loss_limit: float = Field(0.05, env="DAILY_LOSS_LIMIT")
 
     # Additional environment variables commonly used
     news_api_key: str | None = Field(None, env="NEWS_API_KEY")

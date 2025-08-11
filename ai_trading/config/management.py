@@ -665,26 +665,31 @@ MAX_DRAWDOWN_THRESHOLD = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.2"))
 
 # TradingConfig class for compatibility
 class TradingConfig:
-    def __init__(self):
-        # Add default trading configuration attributes
-        self.trailing_factor = 0.05
-        self.kelly_fraction = 0.25
-        self.max_position_size = 0.1
-        self.stop_loss = 0.02
-        self.take_profit = 0.06
-        self.take_profit_factor = 0.06
-        self.lookback_days = 30
-        self.min_signal_strength = 0.6
-        self.scaling_factor = 1.0
-        self.limit_order_slippage = 0.001
-        self.pov_slice_pct = 0.1
-        self.daily_loss_limit = 0.05
+    def __init__(self, mode: str = "balanced", trailing_factor: float = 1.0, kelly_fraction: float = 0.0,
+                 max_position_size: float = 1.0, stop_loss: float = 0.05, take_profit: float = 0.10,
+                 take_profit_factor: float = 2.0, lookback_days: int = 60,
+                 min_signal_strength: float = 0.1, scaling_factor: float = 1.0,
+                 limit_order_slippage: float = 0.001, pov_slice_pct: float = 0.05,
+                 daily_loss_limit: float = 0.05,
+                 **kwargs):
+        self.mode = mode
+        self.trailing_factor = trailing_factor
+        self.kelly_fraction = kelly_fraction
+        self.max_position_size = max_position_size
+        self.stop_loss = stop_loss
+        self.take_profit = take_profit
+        self.take_profit_factor = take_profit_factor
+        self.lookback_days = lookback_days
+        self.min_signal_strength = min_signal_strength
+        self.scaling_factor = scaling_factor
+        self.limit_order_slippage = limit_order_slippage
+        self.pov_slice_pct = pov_slice_pct
+        self.daily_loss_limit = daily_loss_limit
 
     @classmethod
     def from_env(cls, mode="balanced"):
         """Create a TradingConfig from environment variables."""
-        instance = cls()
-        instance.mode = mode
+        instance = cls(mode=mode)
         instance.ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "test_key")
         instance.ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "test_secret")
         return instance
@@ -700,8 +705,12 @@ class TradingConfig:
             "max_position_size": self.max_position_size,
             "stop_loss": self.stop_loss,
             "take_profit": self.take_profit,
+            "take_profit_factor": self.take_profit_factor,
             "lookback_days": self.lookback_days,
             "min_signal_strength": self.min_signal_strength,
+            "scaling_factor": self.scaling_factor,
+            "limit_order_slippage": self.limit_order_slippage,
+            "pov_slice_pct": self.pov_slice_pct,
             "daily_loss_limit": self.daily_loss_limit,
         }
 
