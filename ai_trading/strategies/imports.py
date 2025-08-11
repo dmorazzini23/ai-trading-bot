@@ -21,22 +21,10 @@ NUMPY_AVAILABLE = True
 PANDAS_AVAILABLE = True
 SKLEARN_AVAILABLE = True
 
-# TA library for optimized technical analysis
-try:
-    import ta
-    TA_AVAILABLE = True
-    logger.info("TA library loaded successfully for enhanced technical analysis")
-except ImportError:
-    TA_AVAILABLE = False
-    logger.warning(
-        "TA library not available - using fallback implementation. "
-        "For enhanced technical analysis, install with `pip install ta==0.11.0`."
-    )
-
-    if not TA_AVAILABLE:
-        # If ta library not available, features that depend on it should be disabled
-        # via settings flags rather than using fallback implementations
-        ta = None
+# TA library for optimized technical analysis - hard dependency
+import ta
+TA_AVAILABLE = True
+logger.info("TA library loaded successfully for enhanced technical analysis")
 
 
 # Export commonly used items
