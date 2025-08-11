@@ -64,7 +64,7 @@ def demo_market_regime_adaptation():
     
     for regime in regimes:
         params = detector.get_regime_parameters(regime)
-        logging.info(str(f"🔹 {regime.value.upper().replace('_', ' ')}:"))
+        logging.info(f"🔹 {regime.value.upper().replace('_', ' ')}:")
         logging.info(str(f"   • Stop Distance: {params['stop_distance_multiplier']:.1f}x base"))
         logging.info(str(f"   • Profit Patience: {params['profit_taking_patience']:.1f}x"))
         logging.info(str(f"   • Position Size: {params['position_size_multiplier']:.1f}x"))

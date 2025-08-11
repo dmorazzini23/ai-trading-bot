@@ -102,7 +102,7 @@ def demo_performance_monitor():
         # Show memory metrics
         if 'memory' in metrics:
             mem = metrics['memory']
-            logging.info(str(f"  - Memory usage: {mem.get('usage_percent', 0:.1f}%")
+            logging.info(f"  - Memory usage: {mem.get('usage_percent', 0):.1f}%")
             logging.info(str(f"  - Available memory: {mem.get('available_mb', 0)):.1f}MB")
             logging.info(str(f"  - Swap usage: {mem.get('swap_used_mb', 0)):.1f}MB")
         

@@ -54,7 +54,7 @@ def main():
         "lookback": [50, 100, 150],
     }
     
-    logging.info(str(f"Testing {len(grid['kelly']) * len(grid['atr_mult']) * len(grid['lookback'])} parameter combinations..."))
+    logging.info(f"Testing {len(grid['kelly']) * len(grid['atr_mult']) * len(grid['lookback'])} parameter combinations...")
     logging.info(f"Grid: {grid}\n")
     
     # Run parallel grid search

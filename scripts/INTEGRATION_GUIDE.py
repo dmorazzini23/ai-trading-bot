@@ -198,7 +198,7 @@ def setup_error_alerting():
         if len(recent_failures) > 3:  # Alert if more than 3 failures recently
             logging.info(f"🚨 ALERT: {len(recent_failures)} failed executions recently")
             for failure in recent_failures:
-                logging.info(str(f"  {failure['symbol']} {failure['side']}: {failure.get('error', 'Unknown error')}"))
+                logging.info(f"  {failure['symbol']} {failure['side']}: {failure.get('error', 'Unknown error')}")
         
         # Check for stuck orders
         active_orders = tracker.get_active_orders()

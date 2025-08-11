@@ -70,7 +70,7 @@ def main():
     price_series = df['price'] if hasattr(df, '__getitem__') else pd.Series([100, 102, 101, 105])
     rolling_mean = price_series.rolling(3).mean() if hasattr(price_series, 'rolling') else price_series
     logging.info(f"   Price series mean: {price_series.mean()}")
-    logging.info(str(f"   Rolling mean calculated: {hasattr(rolling_mean, 'data') or hasattr(rolling_mean, '__len__')}"))
+    logging.info(f"   Rolling mean calculated: {hasattr(rolling_mean, 'data') or hasattr(rolling_mean, '__len__')}")
     
     logging.info("\n🤖 Testing Machine Learning:")
     # Prepare sample data

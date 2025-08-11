@@ -664,7 +664,7 @@ if __name__ == "__main__":
     
     # Print summary
     if 'memory' in metrics:
-        logging.info(str(f"Memory usage: {metrics['memory'].get('usage_percent', 0:.1f}%")
+        logging.info(f"Memory usage: {metrics['memory'].get('usage_percent', 0):.1f}%")
     if 'cpu' in metrics:
         logging.info(str(f"CPU usage: {metrics['cpu'].get('usage_percent', 0)):.1f}%")
     
