@@ -1,191 +1,35 @@
 file,line,marker,snippet
-ai_trading/core/bot_engine.py,335,config_dunder_getattr,"            def __getattr__(self, name):"
-ai_trading/core/bot_engine.py,349,config_dunder_getattr,"    def __getattr__(self, item):"
-ai_trading/core/bot_engine.py,3725,config_dunder_getattr,"    def __getattr__(self, name):"
-scripts/validate_env.py,237,config_dunder_getattr,"        def __getattr__(self, name):"
-tests/conftest.py,23,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/conftest.py,125,config_dunder_getattr,"        def __getattr__(self, name):"
-tests/conftest.py,219,config_dunder_getattr,"        def __getattr__(self, name):"
-tests/conftest.py,407,config_dunder_getattr,"        def __getattr__(self, name):"
-tests/conftest.py,587,config_dunder_getattr,"        def __getattr__(self, name):"
-tests/conftest.py,692,config_dunder_getattr,"        def __getattr__(self, name):"
-tests/conftest.py,1033,config_dunder_getattr,"        def __getattr__(self, name):"
-tests/conftest.py,1085,config_dunder_getattr,"        def __getattr__(self, name):"
-tests/conftest.py,1115,config_dunder_getattr,"        def __getattr__(self, name):"
-tests/conftest.py,1189,config_dunder_getattr,"        def __getattr__(self, name):"
-tests/conftest.py,1291,config_dunder_getattr,"        def __getattr__(self, name):"
-tests/mocks/tenacity_mock.py,27,config_dunder_getattr,def __getattr__(name):
-tests/support/mocks_runtime.py,92,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,102,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,109,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,116,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,123,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,130,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,140,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,147,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,154,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,161,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,168,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,175,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,182,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,189,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,196,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,203,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,210,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,217,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,224,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,231,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,238,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,245,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,252,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,259,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/support/mocks_runtime.py,266,config_dunder_getattr,"    def __getattr__(self, name):"
-tests/test_trigger_meta_learning_conversion.py,85,config_dunder_getattr,"    def __getattr__(cls, name):"
-tests/unit/test_alpaca_api.py,33,config_dunder_getattr,"        def __getattr__(self, name):"
-scripts/audit.py,7,import_guard_block,try:
-scripts/demonstrate_optimization.py,19,import_guard_block,try:
-scripts/features.py,2,import_guard_block,try:
-scripts/features.py,14,import_guard_block,try:
-scripts/features.py,32,import_guard_block,try:
-scripts/metrics_logger.py,12,import_guard_block,try:
-scripts/ml_model.py,19,import_guard_block,try:
-scripts/ml_model.py,39,import_guard_block,try:
-scripts/order_health_monitor.py,19,import_guard_block,try:
-scripts/portfolio_optimizer.py,17,import_guard_block,try:
-scripts/portfolio_rl.py,3,import_guard_block,try:
-scripts/predict.py,11,import_guard_block,try:
-scripts/predict.py,32,import_guard_block,try:
-scripts/retrain.py,10,import_guard_block,try:
-scripts/retrain.py,31,import_guard_block,try:
-scripts/retrain.py,53,import_guard_block,try:
-scripts/retrain.py,84,import_guard_block,try:
-scripts/retrain.py,99,import_guard_block,try:
-scripts/risk_engine.py,9,import_guard_block,try:
-scripts/risk_engine.py,38,import_guard_block,try:
-scripts/risk_engine.py,1123,import_guard_block,try:
-scripts/transaction_cost_calculator.py,16,import_guard_block,try:
-scripts/validate_startup_fixes.py,141,import_guard_block,    try:
-tests/institutional/framework.py,18,import_guard_block,try:
-tests/institutional/test_live_trading.py,21,import_guard_block,try:
-tests/test_regime_and_schema_guard.py,6,import_guard_block,    try:
-tests/test_regime_and_schema_guard.py,18,import_guard_block,    try:
-tests/test_regime_and_schema_guard.py,38,import_guard_block,    try:
-tests/unit/test_health_check.py,8,import_guard_block,    try:
-scripts/backtest_framework.py,72,mock_class,    def test_position_sizing(self):
-scripts/critical_fixes_validation.py,32,mock_class,        from trade_execution import ExecutionEngine
-scripts/critical_fixes_validation.py,37,mock_class,"                self.id = ""test_order_123"""
-scripts/critical_fixes_validation.py,83,mock_class,        # Create signals with out-of-range confidence from production logs
-scripts/critical_fixes_validation.py,130,mock_class,        from trade_execution import ExecutionEngine
-scripts/features.py,5,mock_class,    from datetime import datetime
-scripts/features.py,8,mock_class,            pass
-scripts/features.py,16,mock_class,except ImportError:
-scripts/metrics_logger.py,15,mock_class,"    # AI-AGENT-REF: numpy not available, create minimal fallback"
-scripts/predict.py,14,mock_class,    # Create minimal joblib fallback
-scripts/predict.py,18,mock_class,            # Return a minimal mock model
-scripts/retrain.py,13,mock_class,    # Create minimal joblib fallback
-scripts/retrain.py,17,mock_class,            # Return a minimal mock model
-scripts/retrain.py,34,mock_class,    # Create minimal numpy fallback
-scripts/retrain.py,114,mock_class,"    def make_pipeline(*args, **kwargs):"
-scripts/risk_engine.py,12,mock_class,"    # AI-AGENT-REF: numpy not available, create minimal fallback"
-scripts/risk_engine.py,15,mock_class,            pass
-scripts/risk_engine.py,42,mock_class,    from datetime import datetime
-scripts/risk_engine.py,47,mock_class,            return 0
-scripts/risk_engine.py,1126,mock_class,"    # AI-AGENT-REF: pandas_ta not available, create minimal fallback"
-scripts/validate_critical_fix.py,33,mock_class,from ai_trading.trade_execution import ExecutionEngine
-scripts/validate_critical_fix.py,42,mock_class,"        self.symbol = ""TEST"""
-tests/conftest.py,6,mock_class,# AI-AGENT-REF: Mock yfinance module for deterministic tests
-tests/conftest.py,1448,mock_class,"        if not hasattr(config, 'TradingConfig'):"
-tests/conftest.py,1519,mock_class,"        if not hasattr(trade_execution, 'ExecutionEngine'):"
-tests/institutional/framework.py,22,mock_class,    logger = logging.getLogger(__name__)
-tests/mocks.py,6,mock_class,""""""""
-tests/mocks.py,19,mock_class,        return {'status': 'filled'}
-tests/mocks.py,26,mock_class,        pass
-tests/mocks.py,33,mock_class,        pass
-tests/mocks.py,40,mock_class,        pass
-tests/mocks.py,50,mock_class,        pass
-tests/mocks.py,59,mock_class,        pass
-tests/mocks.py,69,mock_class,        pass
-tests/mocks.py,79,mock_class,        pass
-tests/mocks.py,86,mock_class,        pass
-tests/mocks/tenacity_mock.py,5,mock_class,    return decorator
-tests/support/mocks_runtime.py,8,mock_class,""""""""
-tests/support/mocks_runtime.py,35,mock_class,        return []
-tests/support/mocks_runtime.py,45,mock_class,        return MockDataFrame()
-tests/support/mocks_runtime.py,66,mock_class,        return self
-tests/support/mocks_runtime.py,84,mock_class,# Add more mock classes as needed when moving them from runtime code
-tests/support/mocks_runtime.py,96,mock_class,"        return [0.33, 0.34, 0.33]  # neutral sentiment"
-tests/support/mocks_runtime.py,103,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,110,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,117,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,124,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,134,mock_class,        return MockTicker()
-tests/support/mocks_runtime.py,141,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,148,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,155,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,162,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,169,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,176,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,183,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,190,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,197,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,204,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,211,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,218,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,225,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,232,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,239,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,246,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,253,mock_class,"        return lambda *args, **kwargs: self"
-tests/support/mocks_runtime.py,260,mock_class,"        return lambda *args, **kwargs: self"
-tests/test_additional_coverage.py,84,mock_class,    # AI-AGENT-REF: Mock the config object directly to ensure environment validation passes
-tests/test_alpaca_contract.py,2,mock_class,import alpaca_api
-tests/test_alpaca_import_handling.py,45,mock_class,                # Mock classes should be created
-tests/test_alpaca_import_handling.py,97,mock_class,        # Test mock trading client
-tests/test_alpaca_import_handling.py,105,mock_class,        # Test mock enums
-tests/test_critical_fixes_focused.py,44,mock_class,        # Create mock signal with out-of-range confidence
-tests/test_critical_fixes_focused.py,89,mock_class,        # Create a mock context
-tests/test_critical_fixes_focused.py,105,mock_class,        from trade_execution import ExecutionEngine
-tests/test_critical_fixes_implementation.py,250,mock_class,    # Mock implementation
-tests/test_critical_fixes_validation.py,17,mock_class,        # AI-AGENT-REF: Use environment variables to avoid hardcoded secrets
-tests/test_fill_rate_calculation_fix.py,16,mock_class,from ai_trading import ExecutionEngine
-tests/test_fill_rate_calculation_fix.py,26,mock_class,"        self.symbol = ""TEST"""
-tests/test_intelligent_position_management.py,44,mock_class,@dataclass
-tests/test_kelly_confidence_fix.py,17,mock_class,    # Mock BotContext for testing
-tests/test_kelly_confidence_fix.py,23,mock_class,            # Mock capital scaler
-tests/test_kelly_confidence_fix.py,82,mock_class,    # Mock BotContext for testing
-tests/test_kelly_confidence_fix.py,86,mock_class,            self.max_position_dollars = 10000
-tests/test_parameter_optimization.py,121,mock_class,        # Mock order manager for testing
-tests/test_portfolio_integration.py,13,mock_class,from ai_trading.signals import filter_signals_with_portfolio_optimization
-tests/test_portfolio_integration.py,21,mock_class,        self.quantity = quantity
-tests/test_portfolio_integration.py,32,mock_class,        self.data_fetcher = MockDataFetcher()
-tests/test_portfolio_integration.py,47,mock_class,        # Create a simple mock DataFrame-like object
-tests/test_portfolio_integration.py,71,mock_class,                return self.data['close']
-tests/test_position_intelligence.py,41,mock_class,        # Test RSI calculation with mock data
-tests/test_position_intelligence.py,55,mock_class,                return MockIloc(self.data)
-tests/test_position_intelligence.py,69,mock_class,                return MockSeries(result)
-tests/test_retry_idempotency_integration.py,10,mock_class,"from tenacity import retry, stop_after_attempt, wait_exponential"
-tests/test_talib_enforcement.py,56,mock_class,    # Create mock config module
-tests/test_talib_enforcement.py,132,mock_class,"    trade_log_path = tmp_path / ""trades.csv"""
-tests/test_trigger_meta_learning_conversion.py,53,mock_class,        }
-tools/ci/guard_ast.py,16,raw_eval,"        FAILURES.append((self.path, node.lpar[0].start.line if node.lpar else node.func.start.line, ""raw eval()""))"
-tests/test_bot_engine.py,4,raw_exec,# AI-AGENT-REF: Replaced unsafe exec() with direct import from shim module
-tests/test_bot_engine_edge_cases.py,5,raw_exec,# AI-AGENT-REF: Replaced unsafe exec() with direct import from shim module
-tests/test_bot_engine_unit.py,8,raw_exec,# AI-AGENT-REF: Replaced unsafe exec() with proper imports from core module
-tests/test_coverage_hack.py,16,raw_exec,            # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
-tests/test_data_fetcher.py,238,raw_exec,# AI-AGENT-REF: Replaced unsafe exec() with direct import from core module
-tests/test_metrics_logger_smoke.py,13,raw_exec,    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
-tests/test_ml_model_loading.py,9,raw_exec,# AI-AGENT-REF: Replaced unsafe exec() with direct imports from core module
-tests/test_pipeline_smoke.py,12,raw_exec,    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
-tests/test_predict_smoke.py,26,raw_exec,    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
-tests/test_retrain_smoke.py,84,raw_exec,    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
-tests/test_strategy_allocator_smoke.py,11,raw_exec,    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
-tests/test_trade_execution_smoke.py,11,raw_exec,    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
-tools/ci/guard_ast.py,20,raw_exec,"        FAILURES.append((self.path, node.lpar[0].start.line if node.lpar else node.func.start.line, ""exec()""))"
-ai_trading/logging.py,33,root_metrics_logger,"    """"""Lazy import metrics_logger to avoid import-time dependencies."""""""
-ai_trading/meta_learning.py,372,root_metrics_logger,    from ai_trading.telemetry import metrics_logger  # CSV:17 - Local import
-scripts/production_validator.py,843,root_metrics_logger,            from ai_trading.telemetry import metrics_logger
-scripts/risk_engine.py,54,root_metrics_logger,from ai_trading.telemetry import metrics_logger
 tools/migrate_metrics_logger.py,11,root_metrics_logger,    # 1) from metrics_logger import X → from ai_trading.telemetry.metrics_logger import X
 tools/migrate_metrics_logger.py,18,root_metrics_logger,    # 2) import metrics_logger → from ai_trading.telemetry import metrics_logger
 tools/migrate_metrics_logger.py,18,root_metrics_logger,    # 2) import metrics_logger → from ai_trading.telemetry import metrics_logger
 tools/migrate_metrics_logger.py,22,root_metrics_logger,"        r""\1from ai_trading.telemetry import metrics_logger\2"","
+ai_trading/trade_logic.py,9,root_metrics_logger,from ai_trading.telemetry import metrics_logger
+ai_trading/logging.py,23,root_metrics_logger,"    """"""Lazy import metrics_logger to avoid import-time dependencies."""""""
+ai_trading/logging.py,24,root_metrics_logger,    from ai_trading.telemetry import metrics_logger
+ai_trading/meta_learning.py,372,root_metrics_logger,    from ai_trading.telemetry import metrics_logger  # CSV:17 - Local import
+tests/conftest.py,106,config_dunder_getattr,"        def __getattr__(self, name):"
+tests/conftest.py,200,config_dunder_getattr,"        def __getattr__(self, name):"
+tests/conftest.py,388,config_dunder_getattr,"        def __getattr__(self, name):"
+tests/conftest.py,568,config_dunder_getattr,"        def __getattr__(self, name):"
+tests/conftest.py,673,config_dunder_getattr,"        def __getattr__(self, name):"
+tests/conftest.py,1014,config_dunder_getattr,"        def __getattr__(self, name):"
+tests/conftest.py,1066,config_dunder_getattr,"        def __getattr__(self, name):"
+tests/conftest.py,1096,config_dunder_getattr,"        def __getattr__(self, name):"
+tests/conftest.py,1170,config_dunder_getattr,"        def __getattr__(self, name):"
+tests/conftest.py,1272,config_dunder_getattr,"        def __getattr__(self, name):"
+scripts/backtest_framework.py,72,mock_class,    def test_position_sizing(self):
+scripts/validate_env.py,237,config_dunder_getattr,"        def __getattr__(self, name):"
+scripts/production_validator.py,844,root_metrics_logger,            from ai_trading.telemetry import metrics_logger
+scripts/ml_model.py,19,import_guard_block,try:
+scripts/ml_model.py,39,import_guard_block,try:
+scripts/risk_engine.py,25,root_metrics_logger,from ai_trading.telemetry import metrics_logger
+scripts/critical_fixes_validation.py,32,mock_class,        from trade_execution import ExecutionEngine
+scripts/critical_fixes_validation.py,37,mock_class,"                self.id = ""test_order_123"""
+scripts/critical_fixes_validation.py,83,mock_class,        # Create signals with out-of-range confidence from production logs
+scripts/critical_fixes_validation.py,130,mock_class,        from trade_execution import ExecutionEngine
+scripts/validate_critical_fix.py,33,mock_class,from ai_trading.trade_execution import ExecutionEngine
+scripts/validate_critical_fix.py,42,mock_class,"        self.symbol = ""TEST"""
+tools/ci/sweep_tests_tools.py,13,root_metrics_logger,"                  r'\1from ai_trading.telemetry import metrics_logger\2', text)"
+tools/ci/full_cleanup.py,12,root_metrics_logger,"                  r'\1from ai_trading.telemetry import metrics_logger\2', text)"
+tests/mocks/tenacity_mock.py,23,config_dunder_getattr,def __getattr__(name):
+tests/unit/test_alpaca_api.py,33,config_dunder_getattr,"        def __getattr__(self, name):"

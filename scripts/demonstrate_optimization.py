@@ -30,7 +30,14 @@ def demonstrate_parameter_optimizations():
     
     try:
         # Import centralized configuration
-        from config import TradingConfig
+        from ai_trading.config import management as config
+        if not hasattr(config, "CONFIG"):
+            try:
+                config.CONFIG = config.TradingConfig()
+            except Exception:
+                class _Cfg: pass
+                config.CONFIG = _Cfg()
+        TradingConfig = config.TradingConfig
         
         # Get configurations for all three modes
         conservative_config = TradingConfig.from_env("conservative")

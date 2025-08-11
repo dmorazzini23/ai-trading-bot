@@ -4,29 +4,14 @@ Strategy allocation with proper signal confirmation and hold protection.
 import logging
 from typing import Any
 
-try:
-    from config import CONFIG
-except (ImportError, RuntimeError, TypeError, AttributeError):
-    # Fallback config for testing environments
-    from dataclasses import dataclass
-
-    @dataclass
-    class FallbackConfig:
-        signal_confirmation_bars: int = 2
-        delta_threshold: float = 0.02
-        min_confidence: float = 0.6  # AI-AGENT-REF: add missing min_confidence to fallback config
-
-        def __post_init__(self):
-            """Ensure all attributes are properly initialized."""
-            # Defensive initialization to prevent attribute access issues
-            if not hasattr(self, 'signal_confirmation_bars') or self.signal_confirmation_bars is None:
-                self.signal_confirmation_bars = 2
-            if not hasattr(self, 'delta_threshold') or self.delta_threshold is None:
-                self.delta_threshold = 0.02
-            if not hasattr(self, 'min_confidence') or self.min_confidence is None:
-                self.min_confidence = 0.6
-
-    CONFIG = FallbackConfig()
+from ai_trading.config import management as config
+if not hasattr(config, "CONFIG"):
+    try:
+        config.CONFIG = config.TradingConfig()
+    except Exception:
+        class _Cfg: pass
+        config.CONFIG = _Cfg()
+CONFIG = config.CONFIG
 
 import copy
 

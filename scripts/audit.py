@@ -7,7 +7,13 @@ from validate_env import settings
 
 import json
 
-import config
+from ai_trading.config import management as config
+if not hasattr(config, "CONFIG"):
+    try:
+        config.CONFIG = config.TradingConfig()
+    except Exception:
+        class _Cfg: pass
+        config.CONFIG = _Cfg()
 
 TRADE_LOG_FILE = config.TRADE_LOG_FILE
 
