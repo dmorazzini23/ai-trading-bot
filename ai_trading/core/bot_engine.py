@@ -22,6 +22,46 @@ import uuid
 import warnings
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
+
+_log = logging.getLogger(__name__)
+
+def _initialize_bot_context_post_setup(ctx: Any) -> None:
+    """
+    Optional, non-fatal finishing steps after LazyBotContext builds its services.
+    Never raise: any failure logs a warning and returns.
+    """
+    try:
+        if "data_source_health_check" in globals() and "REGIME_SYMBOLS" in globals():
+            try:
+                data_source_health_check(ctx, REGIME_SYMBOLS)  # type: ignore[name-defined]
+                _log.info("Post-setup data source health check completed.")
+            except Exception as e:
+                _log.warning("Post-setup health check skipped: %s", e)
+        else:
+            _log.debug("Post-setup health check not available; skipping.")
+    except Exception as e:
+        _log.warning("Post-setup hook encountered a non-fatal error: %s", e)
+
+
+# AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
+# Using a mutable dict to avoid fragile `global` declarations inside functions.
+_REGIME_INSUFFICIENT_DATA_WARNED = {"done": False}
+import asyncio
+import atexit
+import io
+import inspect
+import logging
+import math
+import os
+import sys
+import time
+import traceback
+import types
+import uuid
+import warnings
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 # AI-AGENT-REF: Memory optimization as optional feature
 # (settings will be imported below with other config imports)
@@ -307,7 +347,7 @@ _DEFAULT_FEED = get_settings().alpaca_data_feed or "iex"
 if hasattr(np, "nan"):
     np.NaN = np.nan
 
-import importlib
+import importlib, pkgutil
 from functools import cache
 
 
@@ -3685,17 +3725,30 @@ def get_allocator():
 def _is_concrete_strategy(obj, BaseStrategy):
     return inspect.isclass(obj) and issubclass(obj, BaseStrategy) and obj is not BaseStrategy and not inspect.isabstract(obj)
 
+def _import_all_strategy_submodules(pkg_name: str):
+    """Import all submodules under pkg_name to expose concrete strategies without requiring __init__ re-exports."""
+    try:
+        pkg = importlib.import_module(pkg_name)
+    except Exception as e:
+        _log.error("Failed to import %s: %s", pkg_name, e)
+        return None
+    path = getattr(pkg, "__path__", None)
+    if not path:
+        return pkg
+    for modinfo in pkgutil.walk_packages(path, pkg_name + "."):
+        try:
+            importlib.import_module(modinfo.name)
+        except Exception as e:
+            _log.error("Failed to import strategy module %s: %s", modinfo.name, e)
+    return pkg
+
 def get_strategies():
     """
     Discover and instantiate concrete strategy classes.
     Preference: ai_trading.strategies (packaged). If none found, provide a safe fallback.
     If config.strategy_names exists (iterable of class names), use it to filter.
     """
-    try:
-        strat_mod = importlib.import_module("ai_trading.strategies")
-    except Exception as e:
-        _log.error("Failed to import ai_trading.strategies: %s", e)
-        strat_mod = None
+    strat_mod = _import_all_strategy_submodules("ai_trading.strategies")
 
     strategies = []
     if strat_mod is not None:
@@ -3704,7 +3757,7 @@ def get_strategies():
         except AttributeError:
             BaseStrategy = None
         if BaseStrategy is not None:
-            # discover concrete subclasses in the module namespace
+            # discover concrete subclasses in the now-populated package namespace
             concrete = []
             for name, obj in vars(strat_mod).items():
                 try:
@@ -3726,11 +3779,15 @@ def get_strategies():
             else:
                 selected = concrete
 
+            names = []
             for cls in selected:
                 try:
                     strategies.append(cls())
+                    names.append(cls.__name__)
                 except Exception as e:
                     _log.error("Failed to instantiate strategy %s: %s", cls.__name__, e)
+            if names:
+                _log.info("Loaded strategies: %s", ", ".join(sorted(names)))
 
     if not strategies:
         _log.warning("No concrete strategies found; using FallbackStrategy (no-op).")
@@ -3900,7 +3957,10 @@ class LazyBotContext:
 
         # Complete context setup (only in non-test environments)
         if not (os.getenv("PYTEST_RUNNING") or os.getenv("TESTING")):
-            _initialize_bot_context_post_setup(self._context)
+            try:
+                _initialize_bot_context_post_setup(self._context)
+            except NameError:
+                _log.debug("_initialize_bot_context_post_setup not present; skipping.")
 
         _ctx = self._context
         self._initialized = True
@@ -4016,8 +4076,8 @@ def get_ctx():
 # The context will be created when first accessed via get_ctx() or _get_bot_context()
 
 
-def _initialize_bot_context_post_setup(ctx):
-    """Complete bot context setup after creation."""
+def _initialize_bot_context_post_setup_legacy(ctx):
+    """Complete bot context setup after creation - legacy version."""
     try:
         equity_init = float(ctx.api.get_account().equity)
     except Exception:
