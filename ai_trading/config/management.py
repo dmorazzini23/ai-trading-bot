@@ -680,6 +680,9 @@ class TradingConfig:
                  signal_confirmation_bars: int = 2,
                  delta_threshold: float = 0.02,
                  min_confidence: float = 0.60,
+                 # allocator-related defaults (silence warnings; explicit behavior)
+                 signal_confirm_bars: int = 2,
+                 delta_hold: float = 0.02,
                  **kwargs):
         self.mode = mode
         self.trailing_factor = trailing_factor
@@ -703,6 +706,9 @@ class TradingConfig:
         self.signal_confirmation_bars = signal_confirmation_bars
         self.delta_threshold = delta_threshold
         self.min_confidence = min_confidence
+        # allocator/strategy knobs
+        self.signal_confirm_bars = signal_confirm_bars
+        self.delta_hold = delta_hold
 
         # Basic validation for new fields
         if not (0.0 <= self.conf_threshold <= 1.0):
@@ -715,12 +721,47 @@ class TradingConfig:
         # Apply kwargs fallbacks into attributes if present
         for k, v in kwargs.items():
             setattr(self, k, v)
-    def from_env(cls, mode="balanced"):
-        """Create a TradingConfig from environment variables."""
-        instance = cls(mode=mode)
-        instance.ALPACA_API_KEY = os.getenv("ALPACA_API_KEY", "test_key")
-        instance.ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY", "test_secret")
-        return instance
+    @classmethod
+    def from_env(cls, mode=None, **overrides):
+        """
+        Build a TradingConfig from environment variables and optional overrides.
+        Must be a classmethod so callers can use TradingConfig.from_env(...).
+        """
+        # read env safely; example pattern (adapt to your existing keys):
+        import os
+        getenv = os.getenv
+        # extract values (preserve your current logic; below is a template)
+        conf_threshold = float(getenv("CONF_THRESHOLD", overrides.get("conf_threshold", 0.55)))
+        buy_threshold  = float(getenv("BUY_THRESHOLD",  overrides.get("buy_threshold",  0.60)))
+        confirmation_count = int(getenv("CONFIRMATION_COUNT", overrides.get("confirmation_count", 2)))
+        # allocator/strategy fields (use overrides > env > defaults)
+        signal_confirm_bars = int(getenv("SIGNAL_CONFIRM_BARS", overrides.get("signal_confirm_bars", 2)))
+        delta_hold          = float(getenv("DELTA_HOLD",         overrides.get("delta_hold",          0.02)))
+        min_confidence      = float(getenv("MIN_CONFIDENCE",     overrides.get("min_confidence",      0.60)))
+
+        # include any other fields you already parse in from_env
+        # and propagate remaining overrides into kwargs
+        cfg = cls(
+            mode=mode,
+            conf_threshold=conf_threshold,
+            buy_threshold=buy_threshold,
+            confirmation_count=confirmation_count,
+            signal_confirm_bars=signal_confirm_bars,
+            delta_hold=delta_hold,
+            min_confidence=min_confidence,
+            **{k: v for k, v in overrides.items()
+               if k not in {"conf_threshold","buy_threshold","confirmation_count",
+                            "signal_confirm_bars","delta_hold","min_confidence"}}
+        )
+        # set mode last so downstream logic sees it
+        if mode is not None:
+            setattr(cfg, "mode", mode)
+        
+        # Set legacy API keys for compatibility
+        cfg.ALPACA_API_KEY = getenv("ALPACA_API_KEY", "test_key")
+        cfg.ALPACA_SECRET_KEY = getenv("ALPACA_SECRET_KEY", "test_secret")
+        
+        return cfg
 
     def get_legacy_params(self):
         """Return legacy parameters for backward compatibility."""
