@@ -1,5 +1,5 @@
 marker,count
-mock_class,102
+mock_class,96
 config_dunder_getattr,43
 import_guard_block,31
 raw_exec,13

@@ -1,10 +1,4 @@
 file,line,marker,snippet
-ai_trading/imports_old.py,204,mock_class,    from datetime import datetime
-ai_trading/imports_old.py,265,mock_class,            return self.data
-ai_trading/imports_old.py,288,mock_class,            )
-ai_trading/imports_old.py,386,mock_class,            ]
-ai_trading/imports_old.py,521,mock_class,    # Mock sklearn module
-ai_trading/imports_old.py,583,mock_class,if not TA_AVAILABLE and not PANDAS_TA_AVAILABLE and not TALIB_AVAILABLE:
 tests/test_retry_idempotency_integration.py,10,mock_class,"from tenacity import retry, stop_after_attempt, wait_exponential"
 tests/conftest.py,6,mock_class,# AI-AGENT-REF: Mock yfinance module for deterministic tests
 tests/conftest.py,1448,mock_class,"        if not hasattr(config, 'TradingConfig'):"
