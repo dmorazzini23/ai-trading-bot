@@ -27,7 +27,7 @@ def test_money_math():
     result = m.quantize(Decimal('0.01'))
     result_str = str(result)
     
-    logging.info(str(f"Money('1.005')).quantize(Decimal('0.01')) = {result_str}")
+    logging.info(str(f"Money('1.005').quantize(Decimal('0.01') = {result_str}")
     
     # Should be either 1.00 or 1.01 due to banker's rounding
     assert result_str in ('1.00', '1.01'), f"Expected 1.00 or 1.01, got {result_str}"

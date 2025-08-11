@@ -142,8 +142,8 @@ def demonstrate_parameter_optimizations():
             validation_result = validate_trading_parameters()
             
             logging.info(str(f"  Overall Status: {validation_result['overall_status']}"))
-            logging.info(str(f"  Violations: {len(validation_result['violations']))}")
-            logging.info(str(f"  Warnings: {len(validation_result['warnings']))}")
+            logging.info(str(f"  Violations: {len(validation_result['violations'])}"))
+            logging.info(str(f"  Warnings: {len(validation_result['warnings'])}"))
             
             if validation_result['violations']:
                 logging.info("  ⚠️  VIOLATIONS FOUND:")
@@ -165,9 +165,9 @@ def demonstrate_parameter_optimizations():
         
         # Display configuration summary for all modes
         logging.info("\n  📊 Configuration Summary:")
-        logging.info(str(f"    CONSERVATIVE Mode: {len([k for k in conservative_config.__dict__ if not k.startswith('_'))])} parameters")
-        logging.info(str(f"    BALANCED Mode:     {len([k for k in balanced_config.__dict__ if not k.startswith('_'))])} parameters")
-        logging.info(str(f"    AGGRESSIVE Mode:   {len([k for k in aggressive_config.__dict__ if not k.startswith('_'))])} parameters")
+        logging.info(str(f"    CONSERVATIVE Mode: {len([k for k in conservative_config.__dict__ if not k.startswith('_')])} parameters"))
+        logging.info(str(f"    BALANCED Mode:     {len([k for k in balanced_config.__dict__ if not k.startswith('_')])} parameters"))
+        logging.info(str(f"    AGGRESSIVE Mode:   {len([k for k in aggressive_config.__dict__ if not k.startswith('_')])} parameters"))
         
         logging.info("\n  ✅ Features Implemented:")
         logging.info("    • Single source of truth for all trading parameters")

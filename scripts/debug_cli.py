@@ -325,7 +325,7 @@ def cmd_health():
         logging.info(str(f"  Execution success rate: {exec_stats['success_rate']:.1%}"))
         logging.info(str(f"  Active orders: {exec_stats['active_orders']}"))
         logging.info(f"  Position discrepancies: {len(discrepancies)}")
-        logging.info(str(f"  PnL events tracked: {pnl_stats.get('total_events', 0))}")
+        logging.info(str(f"  PnL events tracked: {pnl_stats.get('total_events', 0)}"))
         
     except Exception as e:
         logging.info(f"❌ Error running health check: {e}")

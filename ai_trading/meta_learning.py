@@ -14,7 +14,7 @@ from ai_trading.config import get_settings
 
 import numpy as np
 import pandas as pd
-from ai_trading.telemetry import metrics_logger
+# CSV:17 - Move metrics_logger import to functions that use it
 
 try:
     import torch
@@ -369,6 +369,8 @@ def adjust_confidence(
 
 def volatility_regime_filter(atr: float, sma100: float) -> str:
     """Return volatility regime string based on ATR and SMA."""
+    from ai_trading.telemetry import metrics_logger  # CSV:17 - Local import
+    
     if sma100 == 0:
         return "unknown"
     ratio = atr / sma100
@@ -1698,10 +1700,13 @@ def trigger_rebalance_on_regime(df: "pd.DataFrame") -> None:
     if not settings.enable_reinforcement_learning:
         return
     
-    try:
-        from portfolio_rl import PortfolioReinforcementLearner
-    except ImportError:
-        raise RuntimeError("Reinforcement learning enabled but portfolio_rl module not available")
+    # ai_trading.csv:1701 - Replace import guard with settings-gated import
+    from ai_trading.config import get_settings
+    settings = get_settings()
+    if not settings.enable_reinforcement_learning:
+        return
+    
+    from portfolio_rl import PortfolioReinforcementLearner
     
     rl = PortfolioReinforcementLearner()
     if "Regime" in df.columns and len(df) > 2:
