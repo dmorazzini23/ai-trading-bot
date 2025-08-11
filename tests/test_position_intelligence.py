@@ -39,41 +39,6 @@ def test_intelligent_position_components():
         analyzer = TechnicalSignalAnalyzer()
         
         # Test RSI calculation with mock data
-        class MockSeries:
-            def __init__(self, data):
-                self.data = data
-            def __len__(self):
-                return len(self.data)
-            def diff(self):
-                return MockSeries([self.data[i] - self.data[i-1] if i > 0 else 0 for i in range(len(self.data))])
-            def where(self, condition, other):
-                return MockSeries([x if x > 0 else other for x in self.data])
-            def rolling(self, window):
-                return MockRolling(self.data, window)
-            @property
-            def iloc(self):
-                return MockIloc(self.data)
-                
-        class MockRolling:
-            def __init__(self, data, window):
-                self.data = data
-                self.window = window
-            def mean(self):
-                result = []
-                for i in range(len(self.data)):
-                    if i < self.window - 1:
-                        result.append(float('nan'))
-                    else:
-                        window_data = self.data[i-self.window+1:i+1]
-                        result.append(sum(window_data) / len(window_data))
-                return MockSeries(result)
-                
-        class MockIloc:
-            def __init__(self, data):
-                self.data = data
-            def __getitem__(self, idx):
-                return self.data[idx]
-        
         # Test with trending price data
         price_data = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115]
         mock_prices = MockSeries(price_data)

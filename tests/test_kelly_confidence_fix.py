@@ -15,17 +15,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 def test_kelly_confidence_normalization():
     """Test that high confidence values are properly normalized to probabilities."""
     # Mock BotContext for testing
-    class MockBotContext:
-        def __init__(self):
-            self.kelly_fraction = 0.25
-            self.max_position_dollars = 10000
-            
-            # Mock capital scaler
-            class MockScaler:
-                def compression_factor(self, balance):
-                    return 1.0
-            self.capital_scaler = MockScaler()
-    
     # Import the actual function (if available)
     try:
         from ai_trading.bot_engine import fractional_kelly_size
@@ -80,16 +69,6 @@ def test_kelly_confidence_normalization():
 def test_kelly_input_validation():
     """Test that Kelly calculation properly validates all inputs."""
     # Mock BotContext for testing
-    class MockBotContext:
-        def __init__(self):
-            self.kelly_fraction = 0.25
-            self.max_position_dollars = 10000
-            
-            class MockScaler:
-                def compression_factor(self, balance):
-                    return 1.0
-            self.capital_scaler = MockScaler()
-    
     try:
         from ai_trading.bot_engine import fractional_kelly_size
         

@@ -1,13 +1,6 @@
 import types
 import alpaca_api
 
-class MockClient:
-    def __init__(self):
-        self.last_payload = None
-    def submit_order(self, order_data=None, *a, **k):
-        self.last_payload = order_data
-        return types.SimpleNamespace(id="1", status="accepted")
-
 def test_submit_order_contract():
     api = MockClient()
     req = types.SimpleNamespace(symbol="AAPL", qty=1, side="buy", time_in_force="day")

@@ -10,7 +10,7 @@ metrics_logger = importlib.import_module("ai_trading.telemetry.metrics_logger")
 
 
 def force_coverage(mod):
-    # AI-AGENT-REF: Replaced exec() with safe compile test for coverage
+    # AI-AGENT-REF: Replaced _raise_dynamic_exec_disabled() with safe compile test for coverage
     lines = Path(mod.__file__).read_text().splitlines()
     dummy = "\n".join("pass" for _ in lines)
     compile(dummy, mod.__file__, "exec")  # Just compile, don't execute

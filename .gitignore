@@ -63,3 +63,6 @@ backup/
 # Security audit CSV files (temporary analysis files)
 post*.csv
 reorg_deletes.csv
+
+# audit artifacts
+/tools/out/

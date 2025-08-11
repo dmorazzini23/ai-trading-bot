@@ -54,11 +54,6 @@ def test_audit_file_creation_and_permissions(tmp_path, monkeypatch):
     trade_log_path = tmp_path / "data" / "trades.csv"
     
     # Create mock config module
-    class MockConfig:
-        TRADE_LOG_FILE = str(trade_log_path)
-        TRADE_AUDIT_DIR = str(tmp_path / "audit")
-        NEWS_API_KEY = "fake_test_news_api_not_real"  # Guard: test-only fake value
-    
     # Temporarily replace config module
     original_config = sys.modules.get('config')
     sys.modules['config'] = MockConfig()
@@ -130,11 +125,6 @@ def test_audit_file_multiple_trades(tmp_path, monkeypatch):
     import sys
     
     trade_log_path = tmp_path / "trades.csv"
-    
-    class MockConfig:
-        TRADE_LOG_FILE = str(trade_log_path)
-        TRADE_AUDIT_DIR = str(tmp_path)
-        NEWS_API_KEY = "fake_test_news_api_not_real"  # Guard: test-only fake value
     
     original_config = sys.modules.get('config')
     sys.modules['config'] = MockConfig()

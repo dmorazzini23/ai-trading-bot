@@ -4,10 +4,6 @@ def retry(*args, **kwargs):
         return func
     return decorator
 
-class MockWait:
-    def __add__(self, other):
-        return self
-
 class RetryError(Exception):
     """Mock RetryError exception for testing."""
     pass

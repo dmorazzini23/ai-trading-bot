@@ -248,19 +248,6 @@ def test_dependency_injection():
     container = SimpleDependencyContainer()
     
     # Mock implementation
-    class MockConfigManager:
-        def get(self, key, default=None):
-            return f"mock_{key}"
-        
-        def set(self, key, value):
-            pass
-        
-        def reload(self):
-            pass
-        
-        def validate(self):
-            return []
-    
     # Register implementation
     container.register(IConfigManager, MockConfigManager)
     

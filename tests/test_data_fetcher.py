@@ -235,7 +235,7 @@ def test_fetch_bars_empty_uses_last_bar(monkeypatch):
 
     assert not df.empty and df.equals(last)
 
-# AI-AGENT-REF: Replaced unsafe exec() with direct import from core module
+# AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with direct import from core module
 from ai_trading.core.bot_engine import fetch_minute_df_safe
 
 

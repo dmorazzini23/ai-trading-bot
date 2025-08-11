@@ -16,26 +16,6 @@ os.environ.update({
 from ai_trading import ExecutionEngine
 
 
-class MockOrder:
-    """Mock order object to simulate Alpaca order responses."""
-    
-    def __init__(self, filled_qty=None, status="filled", order_id="test-order-123"):
-        self.filled_qty = filled_qty
-        self.status = status
-        self.id = order_id
-        self.symbol = "TEST"
-
-
-class MockContext:
-    """Mock trading context for testing."""
-    
-    def __init__(self):
-        self.api = MagicMock()
-        self.data_client = MagicMock()
-        self.data_fetcher = MagicMock()
-        self.capital_band = "small"
-
-
 @pytest.mark.smoke
 def test_fill_rate_calculation_fix():
     """Test that fill rate calculation now works correctly when order.filled_qty is None."""

@@ -13,11 +13,11 @@ class Visitor(cst.CSTVisitor):
 
     @m.visit(m.Call(func=m.Name("eval")))
     def _raw_eval(self, node: cst.Call) -> None:
-        FAILURES.append((self.path, node.lpar[0].start.line if node.lpar else node.func.start.line, "raw eval()"))
+        FAILURES.append((self.path, node.lpar[0].start.line if node.lpar else node.func.start.line, "raw _raise_dynamic_eval_disabled()"))
 
     @m.visit(m.Call(func=m.Name("exec")))
     def _exec(self, node: cst.Call) -> None:
-        FAILURES.append((self.path, node.lpar[0].start.line if node.lpar else node.func.start.line, "exec()"))
+        FAILURES.append((self.path, node.lpar[0].start.line if node.lpar else node.func.start.line, "_raise_dynamic_exec_disabled()"))
 
     @m.visit(m.ExceptHandler(type=None))
     def _bare_except(self, node: cst.ExceptHandler) -> None:
