@@ -17,12 +17,8 @@ from datetime import UTC, datetime
 
 # AI-AGENT-REF: Import configuration and execution modules
 from ai_trading.config import management as config
-if not hasattr(config, "CONFIG"):
-    try:
-        config.CONFIG = config.TradingConfig()
-    except Exception:
-        class _Cfg: pass
-        config.CONFIG = _Cfg()
+from ai_trading.config.management import TradingConfig
+CONFIG = TradingConfig()
 from trade_execution import OrderInfo, _active_orders, _order_tracking_lock
 
 logger = logging.getLogger(__name__)

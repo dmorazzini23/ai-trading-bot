@@ -14,12 +14,8 @@ os.environ["TESTING"] = "1"
 
 from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
 from ai_trading.config import management as config
-if not hasattr(config, "CONFIG"):
-    try:
-        config.CONFIG = config.TradingConfig()
-    except Exception:
-        class _Cfg: pass
-        config.CONFIG = _Cfg()
+from ai_trading.config.management import TradingConfig
+CONFIG = TradingConfig()
 
 def simulate_trading_session():
     """Simulate a volatile trading session with drawdown protection."""

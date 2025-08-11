@@ -8,12 +8,8 @@ from validate_env import settings
 import json
 
 from ai_trading.config import management as config
-if not hasattr(config, "CONFIG"):
-    try:
-        config.CONFIG = config.TradingConfig()
-    except Exception:
-        class _Cfg: pass
-        config.CONFIG = _Cfg()
+from ai_trading.config.management import TradingConfig
+CONFIG = TradingConfig()
 
 TRADE_LOG_FILE = config.TRADE_LOG_FILE
 

@@ -12,6 +12,10 @@ import os
 import sys
 from pathlib import Path
 
+from ai_trading.config import management as config
+from ai_trading.config.management import TradingConfig
+CONFIG = TradingConfig()
+
 
 def check_env_file():
     """Check if .env file exists and has proper format."""
@@ -110,14 +114,6 @@ def check_config_import():
     try:
         # Set test environment to avoid validation errors
         os.environ['TESTING'] = '1'
-        
-        from ai_trading.config import management as config
-        if not hasattr(config, "CONFIG"):
-            try:
-                config.CONFIG = config.TradingConfig()
-            except Exception:
-                class _Cfg: pass
-                config.CONFIG = _Cfg()
         
         # Check if keys are accessible
         has_api_key = bool(config.ALPACA_API_KEY and config.ALPACA_API_KEY != 'YOUR_ALPACA_API_KEY_HERE')

@@ -1,12 +1,8 @@
 import logging
 
 from ai_trading.config import management as config
-if not hasattr(config, "CONFIG"):
-    try:
-        config.CONFIG = config.TradingConfig()
-    except Exception:
-        class _Cfg: pass
-        config.CONFIG = _Cfg()
+from ai_trading.config.management import TradingConfig
+CONFIG = TradingConfig()
 
 # Map old names if needed
 set_runtime_config = getattr(config, "set_runtime_config", None)
