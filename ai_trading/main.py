@@ -253,3 +253,12 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+from importlib.util import find_spec
+from ai_trading.config import get_settings
+S = get_settings()
+if getattr(S, "enable_performance_monitoring", False):
+    if find_spec("performance_monitor") is None:
+        raise RuntimeError("Feature enabled but module 'performance_monitor' not installed")
+    from performance_monitor import *  # noqa: F401
