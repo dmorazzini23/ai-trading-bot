@@ -66,3 +66,9 @@ reorg_deletes.csv
 
 # audit artifacts
 /tools/out/
+compile_errors.csv
+import_guards.csv
+runtime_mocks.csv
+markers_all.csv
+summary.csv
+patch_full_cleanup.patch

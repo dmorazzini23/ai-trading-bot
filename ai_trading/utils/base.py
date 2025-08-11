@@ -941,3 +941,12 @@ def pre_trade_health_check(symbols: list[str], api: Any) -> dict[str, bool]:
         if not ok:
             logging.warning(f"Health check skipped for {sym}: insufficient data")
     return symbol_health
+
+
+from importlib.util import find_spec
+from ai_trading.config import get_settings
+S = get_settings()
+if getattr(S, "use_market_calendar_lib", False):
+    if find_spec("pandas_market_calendars") is None:
+        raise RuntimeError("Feature enabled but module 'pandas_market_calendars' not installed")
+    from pandas_market_calendars import *  # noqa: F401
