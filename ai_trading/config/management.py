@@ -676,6 +676,8 @@ class TradingConfig:
                  conf_threshold: float = 0.55,
                  buy_threshold: float = 0.50,
                  confirmation_count: int = 2,
+                 # model/feature toggles
+                 enable_finbert: bool = False,
                  # strategy/allocator knobs (added)
                  signal_confirmation_bars: int = 2,
                  delta_threshold: float = 0.02,
@@ -702,6 +704,8 @@ class TradingConfig:
         self.conf_threshold = conf_threshold
         self.buy_threshold = buy_threshold
         self.confirmation_count = confirmation_count
+        # feature toggles
+        self.enable_finbert = bool(enable_finbert)
         # strategy/allocator knobs
         self.signal_confirmation_bars = signal_confirmation_bars
         self.delta_threshold = delta_threshold
@@ -734,6 +738,11 @@ class TradingConfig:
         conf_threshold = float(getenv("CONF_THRESHOLD", overrides.get("conf_threshold", 0.55)))
         buy_threshold  = float(getenv("BUY_THRESHOLD",  overrides.get("buy_threshold",  0.60)))
         confirmation_count = int(getenv("CONFIRMATION_COUNT", overrides.get("confirmation_count", 2)))
+        # feature toggles
+        def _as_bool(x):
+            s = str(x).strip().lower()
+            return s in ("1", "true", "yes", "y", "on")
+        enable_finbert = _as_bool(getenv("ENABLE_FINBERT", overrides.get("enable_finbert", False)))
         # allocator/strategy fields (use overrides > env > defaults)
         signal_confirm_bars = int(getenv("SIGNAL_CONFIRM_BARS", overrides.get("signal_confirm_bars", 2)))
         delta_hold          = float(getenv("DELTA_HOLD",         overrides.get("delta_hold",          0.02)))
@@ -746,12 +755,13 @@ class TradingConfig:
             conf_threshold=conf_threshold,
             buy_threshold=buy_threshold,
             confirmation_count=confirmation_count,
+            enable_finbert=enable_finbert,
             signal_confirm_bars=signal_confirm_bars,
             delta_hold=delta_hold,
             min_confidence=min_confidence,
             **{k: v for k, v in overrides.items()
                if k not in {"conf_threshold","buy_threshold","confirmation_count",
-                            "signal_confirm_bars","delta_hold","min_confidence"}}
+                            "enable_finbert","signal_confirm_bars","delta_hold","min_confidence"}}
         )
         # set mode last so downstream logic sees it
         if mode is not None:
