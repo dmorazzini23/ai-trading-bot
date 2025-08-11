@@ -14,14 +14,24 @@ import pandas as pd
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
 
-try:
-    from scipy.cluster.hierarchy import fcluster, linkage
-    from scipy.spatial.distance import squareform
+# Clustering features controlled by ENABLE_PORTFOLIO_FEATURES setting  
+def _import_clustering():
+    from ai_trading.config import get_settings
+    S = get_settings()
+    if not S.ENABLE_PORTFOLIO_FEATURES:
+        return None, None, None, False
+    
+    try:
+        from scipy.cluster.hierarchy import fcluster, linkage
+        from scipy.spatial.distance import squareform
+        return fcluster, linkage, squareform, True
+    except ImportError:
+        raise RuntimeError(
+            "scipy is required for portfolio clustering features. "
+            "Install with: pip install scipy"
+        )
 
-    scipy_available = True
-except ImportError:
-    scipy_available = False
-    logger.warning("scipy not available - some clustering features disabled")
+# Lazy load clustering components when needed
 
 
 class VolatilityTargetingSizer:
@@ -578,7 +588,8 @@ class CorrelationClusterSizer:
     ) -> dict[int, list[str]]:
         """Perform hierarchical clustering based on correlations."""
         try:
-            if not scipy_available:
+            fcluster, linkage, squareform, clustering_available = _import_clustering()
+            if not clustering_available:
                 # Simple clustering fallback
                 n = len(symbols)
                 clusters = {}

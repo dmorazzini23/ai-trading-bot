@@ -13,13 +13,24 @@ from datetime import UTC, datetime
 import numpy as np
 import pandas as pd
 
-try:
-    from scipy.cluster.hierarchy import fcluster, linkage
-    from scipy.spatial.distance import squareform
+# Clustering features controlled by ENABLE_PORTFOLIO_FEATURES setting
+def _import_clustering():
+    from ai_trading.config import get_settings
+    S = get_settings()
+    if not S.ENABLE_PORTFOLIO_FEATURES:
+        return None, None, None, False
+    
+    try:
+        from scipy.cluster.hierarchy import fcluster, linkage
+        from scipy.spatial.distance import squareform
+        return fcluster, linkage, squareform, True
+    except ImportError:
+        raise RuntimeError(
+            "scipy is required for portfolio clustering features. "
+            "Install with: pip install scipy"
+        )
 
-    CLUSTERING_AVAILABLE = True
-except ImportError:
-    CLUSTERING_AVAILABLE = False
+# Lazy load clustering components when needed
 
 
 logger = logging.getLogger(__name__)
@@ -177,7 +188,8 @@ class AdaptiveRiskController:
         Returns:
             Dict of symbol -> cluster_id
         """
-        if not CLUSTERING_AVAILABLE:
+        fcluster, linkage, squareform, clustering_available = _import_clustering()
+        if not clustering_available:
             self.logger.warning("Clustering not available, using single cluster")
             return dict.fromkeys(returns_data.columns, 0)
 
