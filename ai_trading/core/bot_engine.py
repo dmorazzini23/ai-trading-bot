@@ -326,23 +326,26 @@ class _LazyModule(types.ModuleType):
         """Create a fallback module object with common methods."""
 
         class FallbackModule:
-            def __getattr__(self, name):
-                # Return a dummy function that returns sensible defaults
-                def dummy_func(*args, **kwargs):
-                    if "dataframe" in name.lower() or "df" in name.lower():
-                        return pd.DataFrame()  # Return empty DataFrame
-                    return None
-
-                return dummy_func
-
             def ichimoku(self, *args, **kwargs):
                 return pd.DataFrame(), {}
+            
+            def rsi(self, *args, **kwargs):
+                # Return empty series for RSI
+                return pd.Series()
 
         return FallbackModule()
 
     def __getattr__(self, item):
         self._load()
-        return getattr(self._module, item)
+        if self._module is not None:
+            return getattr(self._module, item)
+        else:
+            # Explicit fallback handling for known methods
+            fallback = self._create_fallback()
+            if hasattr(fallback, item):
+                return getattr(fallback, item)
+            else:
+                raise AttributeError(f"'{self.__name__}' module has no attribute '{item}'")
 
 
 # AI-AGENT-REF: use our improved lazy loading instead of _LazyModule for pandas

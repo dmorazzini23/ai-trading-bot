@@ -673,6 +673,9 @@ class TradingConfig:
                  daily_loss_limit: float = 0.05,
                  entry_start_offset_min: int = 0,
                  entry_end_offset_min: int = 0,
+                 conf_threshold: float = 0.55,
+                 buy_threshold: float = 0.50,
+                 confirmation_count: int = 2,
                  **kwargs):
         self.mode = mode
         self.trailing_factor = trailing_factor
@@ -689,6 +692,17 @@ class TradingConfig:
         self.daily_loss_limit = daily_loss_limit
         self.entry_start_offset_min = entry_start_offset_min
         self.entry_end_offset_min = entry_end_offset_min
+        self.conf_threshold = conf_threshold
+        self.buy_threshold = buy_threshold
+        self.confirmation_count = confirmation_count
+
+        # Basic validation for new fields
+        if not (0.0 <= self.conf_threshold <= 1.0):
+            raise ValueError(f"conf_threshold must be in [0,1], got {self.conf_threshold}")
+        if not (0.0 <= self.buy_threshold <= 1.0):
+            raise ValueError(f"buy_threshold must be in [0,1], got {self.buy_threshold}")
+        if not isinstance(self.confirmation_count, int) or self.confirmation_count < 1:
+            raise ValueError(f"confirmation_count must be >= 1, got {self.confirmation_count}")
 
     @classmethod
     def from_env(cls, mode="balanced"):

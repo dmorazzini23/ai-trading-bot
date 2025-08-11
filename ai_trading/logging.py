@@ -21,7 +21,7 @@ def _get_config():
 # AI-AGENT-REF: Import monitoring metrics (lazy load in functions if needed)
 def _get_metrics_logger():
     """Lazy import metrics_logger to avoid import-time dependencies."""
-    from ai_trading.monitoring import metrics as metrics_logger
+    from ai_trading.telemetry import metrics_logger
 # AI-AGENT-REF: Configure UTC formatting only, remove import-time basicConfig to prevent duplicates
 logging.Formatter.converter = time.gmtime
 from logging.handlers import (

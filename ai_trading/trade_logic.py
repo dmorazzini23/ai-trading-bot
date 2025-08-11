@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ai_trading.logging import get_logger
-from ai_trading.monitoring import metrics as metrics_logger
+from ai_trading.telemetry import metrics_logger
 
 try:
     from ai_trading.capital_scaling import (
