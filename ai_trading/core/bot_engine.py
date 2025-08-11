@@ -3555,12 +3555,40 @@ allocator = None
 strategies = None
 
 
+import importlib
+import importlib.util
+
+_log = logging.getLogger(__name__)
+
+def _resolve_risk_engine_cls():
+    # Prefer packaged location: ai_trading.risk_engine
+    spec = importlib.util.find_spec("ai_trading.risk_engine")
+    if spec is not None:
+        mod = importlib.import_module("ai_trading.risk_engine")
+        return getattr(mod, "RiskEngine", None)
+
+    # Fallback: scripts.risk_engine (repo contains scripts/risk_engine.py)
+    spec = importlib.util.find_spec("scripts.risk_engine")
+    if spec is not None:
+        mod = importlib.import_module("scripts.risk_engine")
+        return getattr(mod, "RiskEngine", None)
+
+    return None
+
 def get_risk_engine():
     global risk_engine
     if risk_engine is None:
-        from risk_engine import RiskEngine
-
-        risk_engine = RiskEngine()
+        cls = _resolve_risk_engine_cls()
+        if cls is None:
+            _log.error("RiskEngine not found in ai_trading.risk_engine or scripts.risk_engine; using no-op fallback.")
+            class RiskEngine:  # minimal stub to keep service alive
+                def __init__(self, *args, **kwargs):
+                    pass
+                def assess(self, *args, **kwargs):
+                    return {"risk": "unknown", "score": 0.0}
+            risk_engine = RiskEngine()
+        else:
+            risk_engine = cls()
     return risk_engine
 
 
@@ -3664,6 +3692,8 @@ class LazyBotContext:
     def __init__(self):
         self._initialized = False
         self._context = None
+        # Initialize eagerly to avoid __getattr__ magic
+        self._ensure_initialized()
 
     def _ensure_initialized(self):
         """Ensure the context is initialized."""
@@ -3739,11 +3769,6 @@ class LazyBotContext:
         _ctx = self._context
         self._initialized = True
 
-    def __getattr__(self, name):
-        """Delegate attribute access to the underlying context."""
-        self._ensure_initialized()
-        return getattr(self._context, name)
-
     def __setattr__(self, name, value):
         """Delegate attribute setting to the underlying context."""
         if name.startswith("_") or name in ("_initialized", "_context"):
@@ -3751,6 +3776,57 @@ class LazyBotContext:
         else:
             self._ensure_initialized()
             setattr(self._context, name, value)
+    
+    # Explicit properties for commonly accessed attributes
+    @property
+    def api(self):
+        self._ensure_initialized()
+        return self._context.api
+    
+    @property
+    def data_client(self):
+        self._ensure_initialized()
+        return self._context.data_client
+    
+    @property
+    def data_fetcher(self):
+        self._ensure_initialized()
+        return self._context.data_fetcher
+    
+    @property
+    def signal_manager(self):
+        self._ensure_initialized()
+        return self._context.signal_manager
+    
+    @property
+    def risk_engine(self):
+        self._ensure_initialized()
+        return self._context.risk_engine
+    
+    @property
+    def capital_scaler(self):
+        self._ensure_initialized()
+        return self._context.capital_scaler
+    
+    @property
+    def execution_engine(self):
+        self._ensure_initialized()
+        return self._context.execution_engine
+    
+    @property
+    def stop_targets(self):
+        self._ensure_initialized()
+        return self._context.stop_targets
+    
+    @property
+    def take_profit_targets(self):
+        self._ensure_initialized()
+        return self._context.take_profit_targets
+    
+    @property
+    def confirmation_count(self):
+        self._ensure_initialized()
+        return self._context.confirmation_count
 
 
 # Create the lazy context that will initialize on first use
