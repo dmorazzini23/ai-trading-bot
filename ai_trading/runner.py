@@ -80,7 +80,14 @@ def run_cycle() -> None:
         _last_run_time = current_time
 
         # AI-AGENT-REF: Lazy load bot engine components only when needed
-        run_all_trades_worker, BotState = _load_engine()
+        try:
+            run_all_trades_worker, BotState = _load_engine()
+        except RuntimeError as e:
+            log.error("Trading cycle failed: %s", e)
+            # Backoff a touch to avoid immediate duplicate startup spam
+            import time
+            time.sleep(1.0)
+            raise
 
         state = BotState()
 
