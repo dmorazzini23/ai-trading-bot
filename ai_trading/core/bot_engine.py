@@ -3572,6 +3572,12 @@ def _try_import(module_name: str, class_name: str):
         The class if found, None otherwise
     """
     try:
+        # Check if module exists first
+        spec = importlib.util.find_spec(module_name)
+        if spec is None:
+            _log.debug(f"Module {module_name} not found")
+            return None
+        
         mod = importlib.import_module(module_name)
         return getattr(mod, class_name, None)
     except Exception as exc:
