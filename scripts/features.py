@@ -1,40 +1,13 @@
 # AI-AGENT-REF: guard pandas/numpy imports for test environments
-try:
-    import pandas as pd
-except ImportError:
-    from datetime import datetime
-    class MockDataFrame:
-        def __init__(self, *args, **kwargs):
-            pass
-    class MockPandas:
-        DataFrame = MockDataFrame
-        Timestamp = datetime
-    pd = MockPandas()
+import pandas as pd
 
-try:
-    import numpy as np
-except ImportError:
-    class MockNumpy:
-        def array(self, *args, **kwargs):
-            return []
-        def mean(self, *args, **kwargs):
-            return 0.0
-        def std(self, *args, **kwargs):
-            return 1.0
-        def nan(self):
-            return float('nan')
-    np = MockNumpy()
+import numpy as np
 
 import logging
 
 from ai_trading.indicators import ema
 
-try:
-    from ai_trading.indicators import atr
-except ImportError:
-
-    def atr(high, low, close, period=14):
-        return pd.Series(0.0, index=close.index)
+from ai_trading.indicators import atr
 
 
 logger = logging.getLogger(__name__)

@@ -1,10 +1,6 @@
 import types
 
-try:
-    import numpy as np
-except ImportError:
-    # Fallback when numpy not available
-    np = None
+import numpy as np
 
 try:
     import torch

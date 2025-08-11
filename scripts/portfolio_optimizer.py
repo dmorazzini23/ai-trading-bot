@@ -14,21 +14,12 @@ from enum import Enum
 from typing import Any
 
 # Use the centralized logger as per AGENTS.md
-try:
-    from ai_trading.logging import logger
-except ImportError:
-    import logging
-    logger = logging.getLogger(__name__)
+from ai_trading.logging import logger
 
 # Import existing sophisticated infrastructure
-try:
-    from ai_trading.core.constants import RISK_PARAMETERS
-    from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer, MarketRegime
-    from ai_trading.risk.kelly import KellyCalculator, KellyCriterion
-    ENHANCED_FEATURES_AVAILABLE = True
-except ImportError:
-    logger.warning("Enhanced features not available, using fallback implementations")
-    ENHANCED_FEATURES_AVAILABLE = False
+from ai_trading.core.constants import RISK_PARAMETERS
+from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer, MarketRegime
+from ai_trading.risk.kelly import KellyCalculator, KellyCriterion
 
 
 class PortfolioDecision(Enum):
@@ -94,22 +85,11 @@ class PortfolioOptimizer:
         self.rebalance_drift_threshold = rebalance_drift_threshold
 
         # Initialize enhanced components if available
-        if ENHANCED_FEATURES_AVAILABLE:
-            self.kelly_calculator = KellyCriterion()
-            self.adaptive_sizer = AdaptivePositionSizer()
-            # Use late import to avoid circular import
-            try:
-                from ai_trading.rebalancer import TaxAwareRebalancer
-                self.tax_rebalancer = TaxAwareRebalancer()
-            except ImportError:
-                self.tax_rebalancer = None
-            logger.info("PortfolioOptimizer initialized with enhanced features")
-        else:
-            # Fallback implementations
-            self.kelly_calculator = None
-            self.adaptive_sizer = None
-            self.tax_rebalancer = None
-            logger.warning("PortfolioOptimizer initialized with fallback features")
+        self.kelly_calculator = KellyCriterion()
+        self.adaptive_sizer = AdaptivePositionSizer()
+        # Use late import to avoid circular import
+        from ai_trading.rebalancer import TaxAwareRebalancer
+        self.tax_rebalancer = TaxAwareRebalancer()
 
         # Portfolio state tracking
         self.current_metrics: PortfolioMetrics | None = None
@@ -154,14 +134,7 @@ class PortfolioOptimizer:
             avg_win = statistics.mean(positive_returns)
             avg_loss = statistics.mean(negative_returns)
 
-            if ENHANCED_FEATURES_AVAILABLE and self.kelly_calculator:
-                optimal_fraction = self.kelly_calculator.calculate_kelly_fraction(win_rate, avg_win, avg_loss)
-            else:
-                # Fallback Kelly calculation
-                if avg_loss == 0:
-                    return 0.0
-                b = avg_win / avg_loss
-                optimal_fraction = max(0, min(0.25, (b * win_rate - (1 - win_rate)) / b))
+            optimal_fraction = self.kelly_calculator.calculate_kelly_fraction(win_rate, avg_win, avg_loss)
 
             # Calculate current leverage vs optimal
             current_leverage = sum(abs(pos) for pos in positions.values())
@@ -493,13 +466,8 @@ class PortfolioOptimizer:
     def _estimate_tax_impact(self, symbol: str, position_change: float, current_prices: dict[str, float]) -> float:
         """Estimate tax impact of trade."""
         try:
-            if ENHANCED_FEATURES_AVAILABLE and self.tax_rebalancer:
-                # Use sophisticated tax calculation if available
-                return 0.0  # Placeholder for actual tax calculation
-            else:
-                # Simplified tax impact
-                trade_value = abs(position_change) * current_prices.get(symbol, 100.0)
-                return -trade_value * 0.15  # Assume 15% tax drag
+            # Use sophisticated tax calculation if available
+            return 0.0  # Placeholder for actual tax calculation
 
         except Exception:
             return 0.0

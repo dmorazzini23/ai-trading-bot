@@ -8,32 +8,10 @@ import logging
 import os
 
 # AI-AGENT-REF: graceful joblib fallback for testing
-try:
-    import joblib
-except ImportError:
-    # Create minimal joblib fallback
-    class MockJoblib:
-        @staticmethod
-        def load(filename):
-            # Return a minimal mock model
-            class MockModel:
-                def predict(self, X):
-                    return [0] * len(X)
-                def predict_proba(self, X):
-                    return [[0.5, 0.5]] * len(X)
-            return MockModel()
-
-        @staticmethod
-        def dump(obj, filename):
-            pass  # Mock dump
-    joblib = MockJoblib()
+import joblib
 
 # AI-AGENT-REF: graceful pandas fallback for testing
-try:
-    import pandas as pd
-except ImportError:
-    # Import mock pandas from ai_trading.utils
-    from ai_trading.utils import pd
+import pandas as pd
 
 # AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
 import config
@@ -56,15 +34,10 @@ import threading
 import time
 
 # AI-AGENT-REF: Memory leak prevention with TTLCache
-try:
-    from cachetools import TTLCache
-    # TTLCache with 5 min TTL and 1000 items max to prevent memory leaks
-    _sentiment_cache = TTLCache(maxsize=1000, ttl=300)
-    _CACHETOOLS_AVAILABLE = True
-except ImportError:
-    # Fallback to bounded dict cache if cachetools not available
-    _sentiment_cache = {}
-    _CACHETOOLS_AVAILABLE = False
+from cachetools import TTLCache
+
+# TTLCache with 5 min TTL and 1000 items max to prevent memory leaks
+_sentiment_cache = TTLCache(maxsize=1000, ttl=300)
 
 _sentiment_lock = threading.Lock()
 _last_request_time = {}

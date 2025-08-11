@@ -3,14 +3,7 @@ import logging
 import os
 import uuid
 
-# AI-AGENT-REF: graceful import with fallback for testing
-try:
-    from validate_env import settings
-except ImportError:
-    # Create minimal fallback for testing
-    class Settings:
-        TRADE_AUDIT_DIR = os.getenv("TRADE_AUDIT_DIR", "logs/audit")
-    settings = Settings()
+from validate_env import settings
 
 import json
 

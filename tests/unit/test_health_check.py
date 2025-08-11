@@ -5,10 +5,7 @@ import pytest
 def test_pre_trade_health_resolves_min_rows_without_ctx_attr(dummy_data_fetcher):
     """Test that pre_trade_health_check handles missing ctx.min_rows gracefully."""
     # Try to import the function, but skip if not available
-    try:
-        from ai_trading.core.bot_engine import pre_trade_health_check
-    except ImportError:
-        pytest.skip("bot_engine not importable - testing health check logic separately")
+    from ai_trading.core.bot_engine import pre_trade_health_check
     
     ctx = types.SimpleNamespace()
     ctx.data_fetcher = dummy_data_fetcher
