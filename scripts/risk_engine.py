@@ -11,7 +11,17 @@ import numpy as np
 # AI-AGENT-REF: guard pandas import for test environments
 import pandas as pd
 
-import config
+from ai_trading.config import management as config
+
+# Ensure compatibility with existing references to config.CONFIG
+if not hasattr(config, "CONFIG"):
+    try:
+        config.CONFIG = config.TradingConfig()
+    except Exception:
+        # Minimal fallback if TradingConfig signature changes unexpectedly
+        class _Cfg:
+            pass
+        config.CONFIG = _Cfg()
 from ai_trading.telemetry import metrics_logger
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
