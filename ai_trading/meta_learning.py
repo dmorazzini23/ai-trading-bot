@@ -10,6 +10,7 @@ import random
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from importlib.util import find_spec
 
 from ai_trading.config import get_settings
 
@@ -1702,21 +1703,14 @@ def trigger_rebalance_on_regime(df: "pd.DataFrame") -> None:
     if not settings.enable_reinforcement_learning:
         return
     
-    # ai_trading.csv:1701 - Replace import guard with settings-gated import
-    from ai_trading.config import get_settings
-    settings = get_settings()
-    if not settings.enable_reinforcement_learning:
-        return
-    
-    # ai_trading/meta_learning.py:1710 - Add error handling for RL import
-    try:
-        from portfolio_rl import PortfolioReinforcementLearner
-    except ImportError as e:
+    # Check if portfolio_rl module is available using find_spec
+    if find_spec("portfolio_rl") is None:
         raise RuntimeError(
-            f"Reinforcement learning enabled but portfolio_rl module unavailable: {e}. "
+            "Reinforcement learning enabled but portfolio_rl module unavailable. "
             "Set ENABLE_REINFORCEMENT_LEARNING=False to disable"
         )
     
+    from portfolio_rl import PortfolioReinforcementLearner
     rl = PortfolioReinforcementLearner()
     if "Regime" in df.columns and len(df) > 2:
         if df["Regime"].iloc[-1] != df["Regime"].iloc[-2]:
