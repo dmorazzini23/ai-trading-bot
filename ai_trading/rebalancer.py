@@ -593,7 +593,7 @@ def enhanced_maybe_rebalance(ctx) -> None:
             )
 
             # Dynamic threshold based on market volatility if available
-            drift_threshold = config.PORTFOLIO_DRIFT_THRESHOLD
+            drift_threshold = S.portfolio_drift_threshold
 
             # Use portfolio-first rebalancing if available
             if PORTFOLIO_FIRST_AVAILABLE:
@@ -927,7 +927,7 @@ def maybe_rebalance(ctx) -> None:
                 if current
                 else 0.0
             )
-            if drift > config.PORTFOLIO_DRIFT_THRESHOLD:
+            if drift > S.portfolio_drift_threshold:
                 rebalance_portfolio(ctx)
                 _last_rebalance = now
 
