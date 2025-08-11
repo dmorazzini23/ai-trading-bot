@@ -18,60 +18,9 @@ from enum import Enum
 from typing import Any
 
 # AI-AGENT-REF: graceful imports with fallbacks
-try:
-    import numpy as np
-    import pandas as pd
-except ImportError:
-    # Use fallback implementations
-    class MockNumpy:
-        nan = float("nan")
-
-        def array(self, data):
-            return list(data) if data else []
-
-        def mean(self, arr):
-            return sum(arr) / len(arr) if arr else 0
-
-        def std(self, arr):
-            if not arr:
-                return 0
-            mean_val = sum(arr) / len(arr)
-            return (sum((x - mean_val) ** 2 for x in arr) / len(arr)) ** 0.5
-
-        def corrcoef(self, x, y):
-            # Simple correlation calculation
-            if len(x) != len(y) or len(x) < 2:
-                return [[1.0, 0.0], [0.0, 1.0]]
-
-            mean_x = sum(x) / len(x)
-            mean_y = sum(y) / len(y)
-
-            num = sum((x[i] - mean_x) * (y[i] - mean_y) for i in range(len(x)))
-            den_x = sum((x[i] - mean_x) ** 2 for i in range(len(x)))
-            den_y = sum((y[i] - mean_y) ** 2 for i in range(len(y)))
-
-            if den_x == 0 or den_y == 0:
-                return [[1.0, 0.0], [0.0, 1.0]]
-
-            corr = num / (den_x * den_y) ** 0.5
-            return [[1.0, corr], [corr, 1.0]]
-
-    np = MockNumpy()
-
-    class MockPandas:
-        def DataFrame(self, data=None):
-            return data or {}
-
-        def Series(self, data=None):
-            return data or []
-
-        def isna(self, val):
-            return val is None or (isinstance(val, float) and val != val)
-
-        def concat(self, dfs, **kwargs):
-            return dfs[0] if dfs else {}
-
-    pd = MockPandas()
+# Use hard imports since numpy and pandas are dependencies
+import numpy as np
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 

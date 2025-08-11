@@ -123,64 +123,8 @@ else:
 
 
 # AI-AGENT-REF: lazy numpy loader for improved import performance
-class LazyNumpy:
-    """Lazy loader for numpy that only imports when first accessed."""
-
-    def __init__(self):
-        self._numpy = None
-        self._loaded = False
-
-    def _load(self):
-        if not self._loaded:
-            try:
-                import numpy as np_module
-
-                self._numpy = np_module
-                self._loaded = True
-            except ImportError:
-                # Create minimal fallback
-                self._numpy = self._create_fallback()
-                self._loaded = True
-        return self._numpy
-
-    def _create_fallback(self):
-        """Create minimal numpy fallback for testing environments."""
-
-        class MockNumpy:
-            def __init__(self):
-                self.nan = float("nan")
-                self.NaN = float("nan")
-                self.random = self
-
-            def array(self, data):
-                return list(data) if data else []
-
-            def mean(self, data):
-                return sum(data) / len(data) if data else 0
-
-            def std(self, data):
-                return 1.0  # Mock standard deviation
-
-            def __getattr__(self, name):
-                return lambda *args, **kwargs: 0
-
-        return MockNumpy()
-
-    def __getattr__(self, name):
-        return getattr(self._load(), name)
-
-
-# AI-AGENT-REF: use lazy loading for numpy to improve import performance
-if os.getenv("PYTEST_RUNNING"):
-    # In test mode, use lazy loader
-    np = LazyNumpy()
-else:
-    # In production, import normally
-    try:
-        import numpy as np
-    except ImportError:
-        # Create fallback np object
-        np = LazyNumpy()
+# AI-AGENT-REF: numpy is a hard dependency - import directly
+import numpy as np
 
 LOG_PATH = os.getenv("BOT_LOG_FILE", "logs/scheduler.log")
 # Set up logging only once
