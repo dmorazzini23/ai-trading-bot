@@ -1876,6 +1876,15 @@ DOLLAR_RISK_LIMIT = S.dollar_risk_limit
 BUY_THRESHOLD = params.get("BUY_THRESHOLD", state.mode_obj.config.buy_threshold)
 
 
+# Coerce MAX_*SIZE to bounded integers to avoid noisy "invalid" logs
+def _as_int(v, default, min_v=1, max_v=1_000_000):
+    try:
+        x = int(float(v))
+        return min(max(x, min_v), max_v)
+    except Exception:
+        return default
+
+
 # AI-AGENT-REF: Add comprehensive validation for critical trading parameters
 def validate_trading_parameters():
     """Validate critical trading parameters and log warnings for invalid values."""
@@ -1896,11 +1905,7 @@ def validate_trading_parameters():
         DOLLAR_RISK_LIMIT = 0.05
 
     # Validate MAX_POSITION_SIZE (should be between 1 and 10000)
-    if not isinstance(MAX_POSITION_SIZE, int) or not (1 <= MAX_POSITION_SIZE <= 10000):
-        logger.error(
-            "Invalid MAX_POSITION_SIZE %s, using default 8000", MAX_POSITION_SIZE
-        )
-        MAX_POSITION_SIZE = 8000
+    MAX_POSITION_SIZE = _as_int(MAX_POSITION_SIZE, 8000, min_v=1, max_v=10000)
 
     # Validate CONF_THRESHOLD (should be between 0.5 and 0.95)
     if not isinstance(CONF_THRESHOLD, int | float) or not (
@@ -3093,7 +3098,7 @@ def audit_positions(ctx: BotContext) -> None:
         logger.exception("bot_engine: failed to fetch remote positions from broker", exc_info=e)
         return
 
-    max_order_size = int(os.getenv("MAX_ORDER_SIZE", "1000"))
+    max_order_size = _as_int(os.getenv("MAX_ORDER_SIZE", "1000"), 1000)
 
     # 3) For any symbol in remote whose remote_qty != local_qty, correct via market order
     for sym, rq in remote.items():
@@ -3594,43 +3599,18 @@ allocator = None
 strategies = None
 
 
-import importlib
-import importlib.util
+from ai_trading.utils.imports import (
+    _try_import,
+    resolve_risk_engine_cls,
+    resolve_strategy_allocator_cls,
+)
 
 _log = logging.getLogger(__name__)
-
-def _try_import(module_name: str, cls_name: str):
-    """
-    Safely attempt to import a module and get a class, with error logging.
-    Returns None if import fails for any reason.
-    """
-    try:
-        spec = importlib.util.find_spec(module_name)
-        if spec is None:
-            return None
-        mod = importlib.import_module(module_name)
-        return getattr(mod, cls_name, None)
-    except Exception as e:
-        _log.error("Failed to import %s (%s): %s", module_name, cls_name, e)
-        return None
-
-def _resolve_risk_engine_cls():
-    # Prefer packaged location: ai_trading.risk_engine
-    cls = _try_import("ai_trading.risk_engine", "RiskEngine")
-    if cls:
-        return cls
-    
-    # Fallback: scripts.risk_engine (repo contains scripts/risk_engine.py)
-    cls = _try_import("scripts.risk_engine", "RiskEngine")
-    if cls:
-        return cls
-    
-    return None
 
 def get_risk_engine():
     global risk_engine
     if risk_engine is None:
-        cls = _resolve_risk_engine_cls()
+        cls = resolve_risk_engine_cls()
         if cls is None:
             _log.error("RiskEngine not found in ai_trading.risk_engine or scripts.risk_engine; using no-op fallback.")
             class RiskEngine:  # minimal stub to keep service alive
@@ -3644,21 +3624,10 @@ def get_risk_engine():
     return risk_engine
 
 
-def _resolve_strategy_allocator_cls():
-    # Prefer packaged allocator if present
-    cls = _try_import("ai_trading.strategy_allocator", "StrategyAllocator")
-    if cls:
-        return cls
-    # Fallback to scripts.strategy_allocator
-    cls = _try_import("scripts.strategy_allocator", "StrategyAllocator")
-    if cls:
-        return cls
-    return None
-
 def get_allocator():
     global allocator
     if allocator is None:
-        cls = _resolve_strategy_allocator_cls()
+        cls = resolve_strategy_allocator_cls()
         if cls is None:
             _log.error("StrategyAllocator not found (ai_trading.strategy_allocator, scripts.strategy_allocator). Using no-op fallback.")
             class StrategyAllocator:

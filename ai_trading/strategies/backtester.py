@@ -6,12 +6,15 @@ import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 import pandas as pd
 
 # AI-AGENT-REF: Removed legacy trade_execution import as part of shim cleanup
 # from ai_trading import trade_execution as execution_api  # type: ignore
-import risk_engine
+from ai_trading.core.bot_engine import get_risk_engine
+# Instantiate if needed:
+risk_engine_instance = get_risk_engine()
 
 from ai_trading import (
     config,
@@ -175,7 +178,7 @@ class BacktestEngine:
         self.equity_curve = []
 
     def run_single_symbol(
-        self, df: pd.DataFrame, risk: risk_engine.RiskEngine
+        self, df: pd.DataFrame, risk: Any
     ) -> BacktestResult:
         """Run the backtest for ``df`` using the live bot cycle."""
         self.data = {"symbol": df}
@@ -349,7 +352,7 @@ def main(argv: list[str] | None = None) -> None:
         {},
         DefaultExecutionModel(args.commission, args.slippage_pips, args.latency_bars),
     )
-    risk_engine.RiskEngine()
+    risk_engine_instance = get_risk_engine()
     results: dict[str, BacktestResult] = {}
 
     for symbol in args.symbols:

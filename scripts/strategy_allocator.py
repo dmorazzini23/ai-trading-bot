@@ -4,14 +4,8 @@ Strategy allocation with proper signal confirmation and hold protection.
 import logging
 from typing import Any
 
-from ai_trading.config import management as config
-if not hasattr(config, "CONFIG"):
-    try:
-        config.CONFIG = config.TradingConfig()
-    except Exception:
-        class _Cfg: pass
-        config.CONFIG = _Cfg()
-CONFIG = config.CONFIG
+from ai_trading.config.management import TradingConfig
+CONFIG = TradingConfig()
 
 import copy
 

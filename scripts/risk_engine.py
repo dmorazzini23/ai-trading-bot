@@ -11,17 +11,8 @@ import numpy as np
 # AI-AGENT-REF: guard pandas import for test environments
 import pandas as pd
 
-from ai_trading.config import management as config
-
-# Ensure compatibility with existing references to config.CONFIG
-if not hasattr(config, "CONFIG"):
-    try:
-        config.CONFIG = config.TradingConfig()
-    except Exception:
-        # Minimal fallback if TradingConfig signature changes unexpectedly
-        class _Cfg:
-            pass
-        config.CONFIG = _Cfg()
+from ai_trading.config.management import TradingConfig, SEED
+CONFIG = TradingConfig()
 from ai_trading.telemetry import metrics_logger
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
@@ -31,8 +22,8 @@ from ai_trading.utils.base import get_phase_logger
 logger = get_phase_logger(__name__, "RISK_CHECK")
 
 # Set deterministic seed from configuration
-random.seed(config.SEED)
-np.random.seed(config.SEED)
+random.seed(SEED)
+np.random.seed(SEED)
 # AI-AGENT-REF: compatibility with pandas_ta expecting numpy.NaN constant
 if not hasattr(np, "NaN"):
     np.NaN = np.nan
@@ -49,7 +40,7 @@ CURRENT_TRADES = 0
 class RiskEngine:
     """Cross-strategy risk manager."""
 
-    def __init__(self, cfg: config.TradingConfig | None = None) -> None:
+    def __init__(self, cfg: TradingConfig | None = None) -> None:
         """Initialize the engine with an optional trading config."""
         # AI-AGENT-REF: fix param shadowing bug when ``config`` is None
         self.config = cfg if cfg is not None else config.CONFIG
@@ -924,7 +915,7 @@ def calculate_position_size(*args, **kwargs) -> int:
     >>> logging.info(f"Buy {shares} shares")
     
     >>> # Advanced position sizing with signal
-    >>> from risk_engine import TradeSignal
+    >>> from ai_trading.strategies.base import StrategySignal as TradeSignal
     >>> signal = TradeSignal(symbol='AAPL', side='buy', confidence=0.8, strategy='momentum')
     >>> shares = calculate_position_size(signal, 10000, 150.0)
     >>> logging.info(f"Buy {shares} shares based on {signal.confidence:.1%} confidence")
