@@ -14,21 +14,16 @@ import joblib
 import pandas as pd
 
 # AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
-from ai_trading.config import management as config
-if not hasattr(config, "CONFIG"):
-    try:
-        config.CONFIG = config.TradingConfig()
-    except Exception:
-        class _Cfg: pass
-        config.CONFIG = _Cfg()
+from ai_trading.config.management import TradingConfig, reload_env
 from ai_trading.telemetry.metrics_logger import log_metrics
 from scripts.retrain import prepare_indicators
+CONFIG = TradingConfig()
 
 from ai_trading.utils import http
 
 logger = logging.getLogger(__name__)
 
-config.reload_env()
+reload_env()
 # FutureWarning now filtered globally in pytest.ini
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
