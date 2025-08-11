@@ -20,32 +20,15 @@ logger = logging.getLogger(__name__)
 
 # Helper functions to get settings without triggering import cascade
 def _get_settings_safe():
-    """Get settings without triggering import-time failures."""
-    try:
-        from ai_trading.config import get_settings
-
-        return get_settings()
-    except ImportError as e:
-        # AI-AGENT-REF: Log import failures for debugging
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.debug(f"Could not import get_settings: {e}")
-        return None
+    """Get settings instance."""
+    from ai_trading.config import get_settings
+    return get_settings()
 
 
 def _get_secret_filter_safe():
-    """Get SecretFilter without triggering import-time failures."""
-    try:
-        from ai_trading.logging_filters import SecretFilter
-
-        return SecretFilter()
-    except ImportError:
-
-        class FallbackFilter:
-            def filter(self, record):
-                return True
-
-        return FallbackFilter()
+    """Get SecretFilter."""
+    from ai_trading.logging_filters import SecretFilter
+    return SecretFilter()
 
 
 # Ensure secrets are masked across all handlers attached to this logger.
@@ -626,15 +609,11 @@ def get_env(
     from pathlib import Path
 
     if reload:
-        try:
-            from dotenv import load_dotenv
+        from dotenv import load_dotenv
 
-            env_path = Path(".env")
-            if env_path.exists():
-                load_dotenv(env_path, override=True)
-        except ImportError as e:
-            # dotenv not available, skip reload
-            logger.debug("python-dotenv not available for env reload: %s", e)
+        env_path = Path(".env")
+        if env_path.exists():
+            load_dotenv(env_path, override=True)
 
     value = os.environ.get(key, default)
     if required and value is None:
@@ -660,23 +639,16 @@ REQUIRED_ENV_VARS = [
 
 # Additional compatibility attributes
 # AI-AGENT-REF: Use proper runtime paths for default file locations
-try:
-    from ai_trading import paths
+from ai_trading import paths
 
-    TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", str(paths.LOG_DIR / "trades.csv"))
-    MODEL_PATH = os.getenv(
-        "MODEL_PATH", str(paths.DATA_DIR / "models" / "trained_model.pkl")
-    )
-    RL_MODEL_PATH = os.getenv(
-        "RL_MODEL_PATH", str(paths.DATA_DIR / "models" / "rl_model.pkl")
-    )
-    HALT_FLAG_PATH = os.getenv("HALT_FLAG_PATH", str(paths.DATA_DIR / "halt.flag"))
-except ImportError:
-    # Fallback for when paths module is not available
-    TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", "test_trades.csv")
-    MODEL_PATH = os.getenv("MODEL_PATH", "models/trained_model.pkl")
-    RL_MODEL_PATH = os.getenv("RL_MODEL_PATH", "models/rl_model.pkl")
-    HALT_FLAG_PATH = os.getenv("HALT_FLAG_PATH", "halt.flag")
+TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", str(paths.LOG_DIR / "trades.csv"))
+MODEL_PATH = os.getenv(
+    "MODEL_PATH", str(paths.DATA_DIR / "models" / "trained_model.pkl")
+)
+RL_MODEL_PATH = os.getenv(
+    "RL_MODEL_PATH", str(paths.DATA_DIR / "models" / "rl_model.pkl")
+)
+HALT_FLAG_PATH = os.getenv("HALT_FLAG_PATH", str(paths.DATA_DIR / "halt.flag"))
 
 USE_RL_AGENT = os.getenv("USE_RL_AGENT", "false").lower() in ("true", "1", "yes")
 BOT_MODE = os.getenv("BOT_MODE", "balanced")
@@ -806,14 +778,6 @@ def _warn_duplicate_env_keys() -> None:
 
 # Re-export settings components for direct import
 from .settings import Settings, get_settings
-
-        def require_alpaca_or_raise(self):
-            """Fallback method."""
-
-    @functools.lru_cache(maxsize=1)
-    def get_settings():
-        """Fallback get_settings when dependencies are missing."""
-        return Settings()
 
 
 def validate_alpaca_credentials() -> None:
