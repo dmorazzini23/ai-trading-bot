@@ -3604,10 +3604,10 @@ def _try_import(module_name: str, cls_name: str):
     Safely attempt to import a module and get a class, with error logging.
     Returns None if import fails for any reason.
     """
-    spec = importlib.util.find_spec(module_name)
-    if spec is None:
-        return None
     try:
+        spec = importlib.util.find_spec(module_name)
+        if spec is None:
+            return None
         mod = importlib.import_module(module_name)
         return getattr(mod, cls_name, None)
     except Exception as e:
@@ -3644,12 +3644,34 @@ def get_risk_engine():
     return risk_engine
 
 
+def _resolve_strategy_allocator_cls():
+    # Prefer packaged allocator if present
+    cls = _try_import("ai_trading.strategy_allocator", "StrategyAllocator")
+    if cls:
+        return cls
+    # Fallback to scripts.strategy_allocator
+    cls = _try_import("scripts.strategy_allocator", "StrategyAllocator")
+    if cls:
+        return cls
+    return None
+
 def get_allocator():
     global allocator
     if allocator is None:
-        from strategy_allocator import StrategyAllocator
-
-        allocator = StrategyAllocator()
+        cls = _resolve_strategy_allocator_cls()
+        if cls is None:
+            _log.error("StrategyAllocator not found (ai_trading.strategy_allocator, scripts.strategy_allocator). Using no-op fallback.")
+            class StrategyAllocator:
+                def __init__(self, *args, **kwargs):
+                    pass
+                # Provide a minimal API surface to keep upstream code alive
+                def select(self, *args, **kwargs):
+                    return []
+                def rebalance(self, *args, **kwargs):
+                    return []
+            allocator = StrategyAllocator()
+        else:
+            allocator = cls()
     return allocator
 
 
