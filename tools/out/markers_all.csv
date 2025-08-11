@@ -19,7 +19,7 @@ tests/conftest.py,1170,config_dunder_getattr,"        def __getattr__(self, name
 tests/conftest.py,1272,config_dunder_getattr,"        def __getattr__(self, name):"
 scripts/backtest_framework.py,72,mock_class,    def test_position_sizing(self):
 scripts/validate_env.py,237,config_dunder_getattr,"        def __getattr__(self, name):"
-scripts/production_validator.py,843,root_metrics_logger,            from ai_trading.telemetry import metrics_logger
+scripts/production_validator.py,844,root_metrics_logger,            from ai_trading.telemetry import metrics_logger
 scripts/ml_model.py,19,import_guard_block,try:
 scripts/ml_model.py,39,import_guard_block,try:
 scripts/risk_engine.py,25,root_metrics_logger,from ai_trading.telemetry import metrics_logger

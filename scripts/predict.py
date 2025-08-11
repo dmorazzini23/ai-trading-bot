@@ -14,9 +14,15 @@ import joblib
 import pandas as pd
 
 # AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
-import config
+from ai_trading.config import management as config
+if not hasattr(config, "CONFIG"):
+    try:
+        config.CONFIG = config.TradingConfig()
+    except Exception:
+        class _Cfg: pass
+        config.CONFIG = _Cfg()
 from ai_trading.telemetry.metrics_logger import log_metrics
-from retrain import prepare_indicators
+from scripts.retrain import prepare_indicators
 
 from ai_trading.utils import http
 

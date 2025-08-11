@@ -111,7 +111,13 @@ def check_config_import():
         # Set test environment to avoid validation errors
         os.environ['TESTING'] = '1'
         
-        import config
+        from ai_trading.config import management as config
+        if not hasattr(config, "CONFIG"):
+            try:
+                config.CONFIG = config.TradingConfig()
+            except Exception:
+                class _Cfg: pass
+                config.CONFIG = _Cfg()
         
         # Check if keys are accessible
         has_api_key = bool(config.ALPACA_API_KEY and config.ALPACA_API_KEY != 'YOUR_ALPACA_API_KEY_HERE')

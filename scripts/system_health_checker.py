@@ -241,7 +241,13 @@ class SystemHealthChecker:
     def _check_meta_learning_health(self) -> ComponentHealth:
         """Check meta-learning system health."""
         try:
-            import config
+            from ai_trading.config import management as config
+            if not hasattr(config, "CONFIG"):
+                try:
+                    config.CONFIG = config.TradingConfig()
+                except Exception:
+                    class _Cfg: pass
+                    config.CONFIG = _Cfg()
 
             from ai_trading import meta_learning
 
@@ -385,7 +391,13 @@ class SystemHealthChecker:
             # This would ideally track liquidity management metrics
             # For now, provide basic health assessment
 
-            import config
+            from ai_trading.config import management as config
+            if not hasattr(config, "CONFIG"):
+                try:
+                    config.CONFIG = config.TradingConfig()
+                except Exception:
+                    class _Cfg: pass
+                    config.CONFIG = _Cfg()
 
             # Check if liquidity parameters are reasonable
             spread_threshold = getattr(config, 'LIQUIDITY_SPREAD_THRESHOLD', 0.10)

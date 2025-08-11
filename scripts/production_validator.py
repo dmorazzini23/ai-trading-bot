@@ -823,7 +823,8 @@ class ProductionValidator:
     def _test_risk_management(self) -> float:
         """Test risk management functionality."""
         try:
-            import risk_engine
+            from ai_trading.core.bot_engine import get_risk_engine
+            RiskEngine = get_risk_engine()
             return 90
         except ImportError:
             return 40

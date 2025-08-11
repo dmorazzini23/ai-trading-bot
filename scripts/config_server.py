@@ -1,6 +1,15 @@
 import logging
 
-from config import set_runtime_config
+from ai_trading.config import management as config
+if not hasattr(config, "CONFIG"):
+    try:
+        config.CONFIG = config.TradingConfig()
+    except Exception:
+        class _Cfg: pass
+        config.CONFIG = _Cfg()
+
+# Map old names if needed
+set_runtime_config = getattr(config, "set_runtime_config", None)
 from flask import Flask, jsonify, request
 
 app = Flask(__name__)

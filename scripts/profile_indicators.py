@@ -7,14 +7,8 @@ import time
 import numpy as np
 import pandas as pd
 
-try:
-    import ai_trading.signals as signals  # type: ignore
-except Exception:  # pragma: no cover
-    import signals
-try:
-    import ai_trading.indicators as indicators  # type: ignore
-except Exception:  # pragma: no cover
-    import indicators
+from ai_trading import signals
+from ai_trading import indicators
 
 def profile(func, *args, **kwargs):
     start = time.perf_counter()

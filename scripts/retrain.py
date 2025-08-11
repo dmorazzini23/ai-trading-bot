@@ -15,7 +15,13 @@ import numpy as np
 # AI-AGENT-REF: graceful pandas fallback for testing
 import pandas as pd
 
-import config
+from ai_trading.config import management as config
+if not hasattr(config, "CONFIG"):
+    try:
+        config.CONFIG = config.TradingConfig()
+    except Exception:
+        class _Cfg: pass
+        config.CONFIG = _Cfg()
 from ai_trading.telemetry.metrics_logger import log_metrics
 
 from ai_trading.utils.base import safe_to_datetime
@@ -52,8 +58,6 @@ try:
 except Exception as e:  # pragma: no cover - optional dependency
     logger.warning("Optuna import failed: %s", e)
     optuna = None
-
-import config
 
 NEWS_API_KEY = config.NEWS_API_KEY
 
