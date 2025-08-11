@@ -671,6 +671,8 @@ class TradingConfig:
                  min_signal_strength: float = 0.1, scaling_factor: float = 1.0,
                  limit_order_slippage: float = 0.001, pov_slice_pct: float = 0.05,
                  daily_loss_limit: float = 0.05,
+                 entry_start_offset_min: int = 0,
+                 entry_end_offset_min: int = 0,
                  **kwargs):
         self.mode = mode
         self.trailing_factor = trailing_factor
@@ -685,6 +687,8 @@ class TradingConfig:
         self.limit_order_slippage = limit_order_slippage
         self.pov_slice_pct = pov_slice_pct
         self.daily_loss_limit = daily_loss_limit
+        self.entry_start_offset_min = entry_start_offset_min
+        self.entry_end_offset_min = entry_end_offset_min
 
     @classmethod
     def from_env(cls, mode="balanced"):
@@ -712,6 +716,8 @@ class TradingConfig:
             "limit_order_slippage": self.limit_order_slippage,
             "pov_slice_pct": self.pov_slice_pct,
             "daily_loss_limit": self.daily_loss_limit,
+            "entry_start_offset_min": self.entry_start_offset_min,
+            "entry_end_offset_min": self.entry_end_offset_min,
         }
 
 

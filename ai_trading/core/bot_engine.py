@@ -1803,12 +1803,16 @@ MARKET_CLOSE = dt_time(13, 0)
 VOLUME_THRESHOLD = S.volume_threshold
 ENTRY_START_OFFSET = timedelta(
     minutes=params.get(
-        "ENTRY_START_OFFSET_MIN", state.mode_obj.config.entry_start_offset_min
+        "ENTRY_START_OFFSET_MIN",
+        getattr(S, "entry_start_offset_min",
+                getattr(state.mode_obj.config, "entry_start_offset_min", 0))
     )
 )
 ENTRY_END_OFFSET = timedelta(
     minutes=params.get(
-        "ENTRY_END_OFFSET_MIN", state.mode_obj.config.entry_end_offset_min
+        "ENTRY_END_OFFSET_MIN",
+        getattr(S, "entry_end_offset_min",
+                getattr(state.mode_obj.config, "entry_end_offset_min", 0))
     )
 )
 REGIME_LOOKBACK = 14
