@@ -3560,6 +3560,24 @@ import importlib.util
 
 _log = logging.getLogger(__name__)
 
+def _try_import(module_name: str, class_name: str):
+    """
+    Try to import a class from a module, with exception logging.
+    
+    Args:
+        module_name: Name of the module to import (e.g. 'ai_trading.strategy_allocator')
+        class_name: Name of the class to get from the module (e.g. 'StrategyAllocator')
+    
+    Returns:
+        The class if found, None otherwise
+    """
+    try:
+        mod = importlib.import_module(module_name)
+        return getattr(mod, class_name, None)
+    except Exception as exc:
+        _log.debug(f"Import failed for {module_name}.{class_name}: {exc}")
+        return None
+
 def _resolve_risk_engine_cls():
     # Prefer packaged location: ai_trading.risk_engine
     spec = importlib.util.find_spec("ai_trading.risk_engine")
@@ -3573,6 +3591,17 @@ def _resolve_risk_engine_cls():
         mod = importlib.import_module("scripts.risk_engine")
         return getattr(mod, "RiskEngine", None)
 
+    return None
+
+def _resolve_strategy_allocator_cls():
+    # Prefer packaged allocator if present
+    cls = _try_import("ai_trading.strategy_allocator", "StrategyAllocator")
+    if cls:
+        return cls
+    # Fallback to scripts.strategy_allocator
+    cls = _try_import("scripts.strategy_allocator", "StrategyAllocator")
+    if cls:
+        return cls
     return None
 
 def get_risk_engine():
@@ -3595,9 +3624,20 @@ def get_risk_engine():
 def get_allocator():
     global allocator
     if allocator is None:
-        from strategy_allocator import StrategyAllocator
-
-        allocator = StrategyAllocator()
+        cls = _resolve_strategy_allocator_cls()
+        if cls is None:
+            _log.error("StrategyAllocator not found (ai_trading.strategy_allocator, scripts.strategy_allocator). Using no-op fallback.")
+            class StrategyAllocator:
+                def __init__(self, *args, **kwargs):
+                    pass
+                # Provide a minimal API surface to keep upstream code alive
+                def select(self, *args, **kwargs):
+                    return []
+                def rebalance(self, *args, **kwargs):
+                    return []
+            allocator = StrategyAllocator()
+        else:
+            allocator = cls()
     return allocator
 
 
