@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     enable_sklearn: bool = Field(True, env="ENABLE_SKLEARN")  # Default True since it's in hard deps
     enable_reinforcement_learning: bool = Field(False, env="ENABLE_REINFORCEMENT_LEARNING")
 
+    # Logging configuration flags
+    log_compact_json: bool = Field(False, env="LOG_COMPACT_JSON")
+    log_market_fetch: bool = Field(False, env="LOG_MARKET_FETCH")
+
     # Worker sizing (None/0 => auto)
     executor_workers: int | None = Field(None, env="EXECUTOR_WORKERS")
     prediction_workers: int | None = Field(None, env="PREDICTION_WORKERS")
