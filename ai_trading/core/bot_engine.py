@@ -26,6 +26,30 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
+# AI-AGENT-REF: Guard for tickers.csv warning to avoid spamming logs
+_TICKERS_WARN_EMITTED = False
+
+
+def _is_market_open_now(cfg=None) -> bool:
+    """Check if market is currently open. Returns True if unable to determine (conservative)."""
+    try:
+        import pandas_market_calendars as mcal
+        import pandas as pd
+        market_calendar = "XNYS"  # Default to NYSE
+        if cfg is not None:
+            market_calendar = getattr(cfg, "market_calendar", "XNYS")
+        cal = mcal.get_calendar(market_calendar)
+        now = pd.Timestamp.utcnow().tz_convert("UTC")
+        schedule = cal.schedule(start_date=now.date(), end_date=now.date())
+        if schedule.empty:
+            return False
+        open_, close_ = schedule.iloc[0]["market_open"], schedule.iloc[0]["market_close"]
+        return (open_ <= now <= close_)
+    except Exception:
+        # if calendar not available, default to True (remain conservative)
+        return True
+
+
 # Import emit-once logger for startup banners
 from ai_trading.logging import logger_once
 
@@ -8526,7 +8550,7 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
 
 def screen_universe(
     candidates: Sequence[str],
-    ctx: BotContext,
+    runtime,
     lookback: str = "1mo",
     interval: str = "1d",
     top_n: int = 20,
@@ -8544,7 +8568,7 @@ def screen_universe(
     filtered_out = {}  # Track reasons for filtering
 
     for sym in new_syms:
-        df = ctx.data_fetcher.get_daily_df(ctx, sym)
+        df = runtime.data_fetcher.get_daily_df(runtime, sym)
 
         # AI-AGENT-REF: Enhanced market data validation for critical trading decisions
         validation_result = _validate_market_data_quality(df, sym)
@@ -8588,10 +8612,10 @@ def screen_universe(
     return selected
 
 
-def screen_candidates() -> list[str]:
+def screen_candidates(runtime, *, fallback_symbols=None) -> list[str]:
     """Load tickers and apply universe screening."""
-    candidates = load_tickers(TICKERS_FILE)
-    return screen_universe(candidates, ctx)
+    candidates = load_tickers(TICKERS_FILE) if fallback_symbols is None else fallback_symbols
+    return screen_universe(candidates, runtime)
 
 
 # Fix for handling missing tickers.csv file
@@ -8606,11 +8630,14 @@ def get_stock_bars_safe(api, symbol, timeframe):
 
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
     """Load tickers from file with fallback to default tickers."""
+    global _TICKERS_WARN_EMITTED
     tickers: list[str] = []
 
     # Check if file exists and handle gracefully
     if not os.path.exists(path):
-        _log.warning(f"Tickers file {path} not found. Using default tickers.")
+        if not _TICKERS_WARN_EMITTED:
+            _log.warning(f"Tickers file {path} not found. Using default tickers.")
+            _TICKERS_WARN_EMITTED = True
         # Fallback: define default tickers
         return ["AAPL", "GOOG", "AMZN"]
 
@@ -8639,7 +8666,10 @@ def daily_summary() -> None:
             usecols=["entry_price", "exit_price", "side"],
         ).dropna(subset=["entry_price", "exit_price"])
         if df.empty:
-            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+            if _is_market_open_now():
+                _log.warning("Loaded DataFrame is empty after parsing/fallback")
+            else:
+                _log.info("Loaded DataFrame is empty (market closed)")
         direction = np.where(df["side"] == "buy", 1, -1)
         df["pnl"] = (df.exit_price - df.entry_price) * direction
         total_trades = len(df)
@@ -9319,7 +9349,7 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     compute_spy_vol_stats(runtime)
 
     full_watchlist = load_tickers(TICKERS_FILE)
-    symbols = screen_candidates()
+    symbols = screen_candidates(runtime)
     _log.info(
         "Number of screened candidates: %s", len(symbols)
     )  # AI-AGENT-REF: log candidate count
