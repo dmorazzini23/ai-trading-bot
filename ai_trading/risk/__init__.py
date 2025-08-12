@@ -26,6 +26,7 @@ from .circuit_breakers import (
     TradingHaltManager,
     VolatilityCircuitBreaker,
 )
+from .engine import RiskEngine
 from .kelly import KellyCalculator, KellyCriterion
 from .manager import PortfolioRiskAssessor, RiskManager
 from .position_sizing import (
@@ -41,6 +42,8 @@ from .metrics import DrawdownAnalyzer, RiskMetricsCalculator
 
 # Export all risk management classes
 __all__ = [
+    # Main risk engine
+    "RiskEngine",
     # Kelly Criterion position sizing
     "KellyCriterion",
     "KellyCalculator",

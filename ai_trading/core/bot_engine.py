@@ -4198,14 +4198,10 @@ def _update_risk_engine_exposure():
             return
             
         try:
-            sig = inspect.signature(re.update_exposure)
-            if len(sig.parameters) >= 1:
-                re.update_exposure(runtime)
-            else:
-                setattr(re, "ctx", runtime)
-                re.update_exposure()
-        except NameError as e:
-            _log.warning("Risk engine exposure update failed (NameError): %s", e)
+            re.update_exposure(context=runtime)
+            re.wait_for_exposure_update(timeout=0.5)
+        except RuntimeError as e:
+            _log.warning("Risk engine exposure update failed (context): %s", e)
         except Exception as e:
             _log.warning("Risk engine exposure update failed: %s", e)
     except Exception as e:
