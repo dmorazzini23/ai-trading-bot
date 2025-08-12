@@ -1171,3 +1171,285 @@ def _check_portfolio_rebalancing(
     except Exception as e:
         logger.error(f"Error checking portfolio rebalancing: {e}")
         return False, f"Error: {str(e)}"
+
+
+# AI-AGENT-REF: Cost-aware signal evaluation and ensemble gating
+class SignalDecisionPipeline:
+    """
+    Enhanced signal decision pipeline with cost-awareness, regime detection,
+    and ensemble gating for robust live trading.
+    """
+    
+    def __init__(self, config: dict = None):
+        """Initialize signal decision pipeline."""
+        self.config = config or {}
+        
+        # Cost-aware thresholds
+        self.min_edge_threshold = self.config.get("min_edge_threshold", 0.001)  # 0.1% minimum edge
+        self.transaction_cost_buffer = self.config.get("transaction_cost_buffer", 0.0005)  # 0.05% buffer
+        
+        # Ensemble gating
+        self.ensemble_min_agree = self.config.get("ensemble_min_agree", 2)
+        self.ensemble_total = self.config.get("ensemble_total", 3)
+        
+        # ATR-based exit scaling
+        self.atr_stop_multiplier = self.config.get("atr_stop_multiplier", 2.0)
+        self.atr_target_multiplier = self.config.get("atr_target_multiplier", 3.0)
+        
+        # Regime awareness
+        self.regime_volatility_threshold = self.config.get("regime_volatility_threshold", 0.02)  # 2% threshold
+        
+        logger.info("SignalDecisionPipeline initialized with cost-aware settings")
+    
+    def evaluate_signal_with_costs(self, symbol: str, df: pd.DataFrame, 
+                                 predicted_edge: float, quantity: float = 1000) -> dict:
+        """
+        Evaluate a trading signal with comprehensive cost analysis.
+        
+        Returns decision with reason code and metrics.
+        """
+        try:
+            # Get current price and ATR
+            current_price = robust_signal_price(df)
+            current_atr = self._calculate_current_atr(df)
+            
+            # Estimate transaction costs
+            estimated_costs = self._estimate_transaction_costs(symbol, current_price, quantity)
+            
+            # Calculate regime characteristics
+            regime_info = self._analyze_market_regime(df)
+            
+            # Calculate score = predicted_edge - costs - buffer
+            total_cost = estimated_costs["total_cost_pct"] + self.transaction_cost_buffer
+            signal_score = predicted_edge - total_cost
+            
+            # Decision logic with reason codes
+            decision = {
+                "symbol": symbol,
+                "timestamp": get_utcnow(),
+                "predicted_edge": predicted_edge,
+                "estimated_costs": estimated_costs,
+                "signal_score": signal_score,
+                "regime": regime_info,
+                "atr": current_atr,
+                "current_price": current_price,
+                "decision": "REJECT",
+                "reason": "UNKNOWN"
+            }
+            
+            # Apply decision criteria
+            if signal_score <= 0:
+                decision["decision"] = "REJECT"
+                decision["reason"] = "REJECT_COST_UNPROFITABLE"
+            elif signal_score < self.min_edge_threshold:
+                decision["decision"] = "REJECT" 
+                decision["reason"] = "REJECT_EDGE_TOO_LOW"
+            elif regime_info["is_high_volatility"] and signal_score < self.min_edge_threshold * 2:
+                decision["decision"] = "REJECT"
+                decision["reason"] = "REJECT_REGIME_HIGH_VOL"
+            elif not self._passes_ensemble_gating(df):
+                decision["decision"] = "REJECT"
+                decision["reason"] = "REJECT_ENSEMBLE_DISAGREEMENT"
+            else:
+                decision["decision"] = "ACCEPT"
+                decision["reason"] = "ACCEPT_OK"
+                
+                # Calculate ATR-scaled exits
+                decision["stop_loss"] = current_price - (current_atr * self.atr_stop_multiplier)
+                decision["take_profit"] = current_price + (current_atr * self.atr_target_multiplier)
+            
+            # Log decision with structured context
+            log_level = logging.INFO if decision["decision"] == "ACCEPT" else logging.DEBUG
+            logger.log(log_level, "SIGNAL_DECISION: %s for %s - %s (score=%.4f, edge=%.4f, cost=%.4f)", 
+                      decision["decision"], symbol, decision["reason"], 
+                      signal_score, predicted_edge, total_cost,
+                      extra={
+                          "component": "signal_decision",
+                          "symbol": symbol,
+                          "decision": decision["decision"],
+                          "reason": decision["reason"],
+                          "score": signal_score,
+                          "edge": predicted_edge,
+                          "cost": total_cost
+                      })
+            
+            return decision
+            
+        except (KeyError, ValueError, IndexError) as e:
+            logger.warning("Signal evaluation failed - data error: %s", e,
+                          extra={"component": "signal_decision", "symbol": symbol, "error_type": "data"})
+            return {"decision": "REJECT", "reason": "REJECT_DATA_ERROR", "symbol": symbol}
+        except Exception as e:
+            logger.error("Signal evaluation failed - unexpected error: %s", e,
+                        extra={"component": "signal_decision", "symbol": symbol, "error_type": "unexpected"})
+            return {"decision": "REJECT", "reason": "REJECT_SYSTEM_ERROR", "symbol": symbol}
+    
+    def _estimate_transaction_costs(self, symbol: str, price: float, quantity: float) -> dict:
+        """Estimate transaction costs for a trade."""
+        # Basic cost model - can be enhanced with real broker costs
+        notional = price * quantity
+        
+        # Typical costs: commission + spread + slippage + market impact
+        commission_pct = 0.0001  # 0.01% commission
+        spread_bp = 2  # 2 basis points spread
+        slippage_bp = 1  # 1 basis point slippage
+        
+        spread_cost = (spread_bp / 10000) * notional
+        slippage_cost = (slippage_bp / 10000) * notional
+        commission = commission_pct * notional
+        
+        total_cost = commission + spread_cost + slippage_cost
+        total_cost_pct = total_cost / notional
+        
+        return {
+            "commission": commission,
+            "spread_cost": spread_cost,
+            "slippage_cost": slippage_cost,
+            "total_cost": total_cost,
+            "total_cost_pct": total_cost_pct,
+            "notional": notional
+        }
+    
+    def _calculate_current_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+        """Calculate current ATR value."""
+        try:
+            if len(df) < period:
+                return df["close"].iloc[-1] * 0.02  # 2% fallback
+            
+            # Use the ATR function from indicators if available
+            atr_values = atr(df, period)
+            return atr_values.iloc[-1] if not atr_values.empty else df["close"].iloc[-1] * 0.02
+            
+        except Exception:
+            return df["close"].iloc[-1] * 0.02  # 2% fallback
+    
+    def _analyze_market_regime(self, df: pd.DataFrame) -> dict:
+        """Analyze current market regime characteristics."""
+        try:
+            # Calculate recent volatility
+            returns = df["close"].pct_change().dropna()
+            recent_vol = returns.tail(20).std() * np.sqrt(252)  # Annualized volatility
+            
+            # Determine if high volatility regime
+            is_high_vol = recent_vol > self.regime_volatility_threshold
+            
+            # Calculate trend strength
+            short_ma = df["close"].rolling(5).mean().iloc[-1]
+            long_ma = df["close"].rolling(20).mean().iloc[-1]
+            trend_strength = abs(short_ma - long_ma) / long_ma if long_ma > 0 else 0
+            
+            return {
+                "recent_volatility": recent_vol,
+                "is_high_volatility": is_high_vol,
+                "trend_strength": trend_strength,
+                "regime_type": "trending" if trend_strength > 0.02 else "ranging"
+            }
+            
+        except Exception as e:
+            logger.debug("Regime analysis failed: %s", e)
+            return {
+                "recent_volatility": 0.02,
+                "is_high_volatility": False,
+                "trend_strength": 0.0,
+                "regime_type": "unknown"
+            }
+    
+    def _passes_ensemble_gating(self, df: pd.DataFrame) -> bool:
+        """Check if signal passes ensemble gating requirements."""
+        try:
+            # Generate multiple signals
+            signals = []
+            
+            # Signal 1: EMA crossover
+            if "EMA_5" in df.columns and "EMA_20" in df.columns:
+                ema_signal = 1 if df["EMA_5"].iloc[-1] > df["EMA_20"].iloc[-1] else -1
+                signals.append(ema_signal)
+            
+            # Signal 2: RSI momentum
+            if "RSI" in df.columns:
+                rsi_val = df["RSI"].iloc[-1]
+                if rsi_val < 30:
+                    signals.append(1)  # Oversold, buy signal
+                elif rsi_val > 70:
+                    signals.append(-1)  # Overbought, sell signal
+                else:
+                    signals.append(0)
+            
+            # Signal 3: Mean reversion
+            if "close" in df.columns:
+                zscore = mean_reversion_zscore(df["close"], window=20)
+                if zscore.iloc[-1] > 2:
+                    signals.append(-1)  # Revert down
+                elif zscore.iloc[-1] < -2:
+                    signals.append(1)  # Revert up
+                else:
+                    signals.append(0)
+            
+            # Count agreements
+            positive_signals = sum(1 for s in signals if s > 0)
+            negative_signals = sum(1 for s in signals if s < 0)
+            max_agreement = max(positive_signals, negative_signals)
+            
+            # Require minimum agreement
+            return max_agreement >= self.ensemble_min_agree
+            
+        except Exception as e:
+            logger.debug("Ensemble gating failed: %s", e)
+            return False  # Fail safe - reject if can't evaluate
+
+
+# Enhanced signal generation with cost-awareness
+def generate_cost_aware_signals(ctx, symbols: list[str]) -> list[dict]:
+    """
+    Generate trading signals with comprehensive cost-awareness and ensemble gating.
+    
+    Returns list of signal decisions with reason codes and metrics.
+    """
+    try:
+        # Initialize decision pipeline
+        pipeline_config = getattr(ctx, 'signal_pipeline_config', {})
+        decision_pipeline = SignalDecisionPipeline(pipeline_config)
+        
+        signal_decisions = []
+        
+        for symbol in symbols:
+            try:
+                # Get market data for symbol
+                df = ctx.data_fetcher.get_data(symbol)
+                if df is None or len(df) < 50:  # Need sufficient history
+                    logger.warning("Insufficient data for %s - skipping", symbol)
+                    continue
+                
+                # Get model prediction (predicted edge)
+                predicted_edge = 0.0
+                try:
+                    if hasattr(ctx, 'model') and ctx.model:
+                        features = ctx.feature_generator.generate_features(df)
+                        predicted_edge = ctx.model.predict_edge(features)
+                except Exception as e:
+                    logger.debug("Model prediction failed for %s: %s", symbol, e)
+                
+                # Evaluate signal with costs
+                decision = decision_pipeline.evaluate_signal_with_costs(
+                    symbol, df, predicted_edge
+                )
+                signal_decisions.append(decision)
+                
+            except Exception as e:
+                logger.warning("Signal generation failed for %s: %s", symbol, e,
+                              extra={"component": "signal_generation", "symbol": symbol, "error_type": "processing"})
+        
+        # Log summary
+        accepted = sum(1 for d in signal_decisions if d.get("decision") == "ACCEPT")
+        rejected = len(signal_decisions) - accepted
+        
+        logger.info("Signal generation complete: %d accepted, %d rejected from %d symbols",
+                   accepted, rejected, len(symbols),
+                   extra={"component": "signal_generation", "accepted": accepted, "rejected": rejected})
+        
+        return signal_decisions
+        
+    except Exception as e:
+        logger.error("Cost-aware signal generation failed: %s", e,
+                    extra={"component": "signal_generation", "error_type": "unexpected"})
+        return []

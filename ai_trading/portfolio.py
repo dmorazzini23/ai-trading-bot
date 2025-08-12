@@ -84,7 +84,10 @@ def log_portfolio_summary(ctx) -> None:
         )
         try:
             adaptive_cap = ctx.risk_engine._adaptive_global_cap()
-        except (AttributeError, Exception):
+        except AttributeError:
+            adaptive_cap = 0.0  # Risk engine not available or method missing
+        except (TypeError, ValueError) as e:
+            logger.debug("Risk engine calculation error: %s", e)
             adaptive_cap = 0.0
         logger.info(
             "Portfolio summary: cash=$%.2f, equity=$%.2f, exposure=%.2f%%, positions=%d",
@@ -101,6 +104,14 @@ def log_portfolio_summary(ctx) -> None:
         )
         logger.info("CYCLE SUMMARY adaptive_cap=%.1f", adaptive_cap)
     except TimeoutError:
-        logger.error("Portfolio summary timed out")
-    except Exception as exc:  # pragma: no cover - best effort
-        logger.warning("SUMMARY_FAIL %s", exc)
+        logger.error("Portfolio summary timed out", 
+                    extra={"component": "portfolio_summary", "error_type": "timeout"})
+    except (AttributeError, KeyError) as exc:
+        logger.warning("Portfolio summary failed - missing attribute/key: %s", exc,
+                      extra={"component": "portfolio_summary", "error_type": "attribute"})
+    except (ValueError, TypeError) as exc:
+        logger.warning("Portfolio summary failed - data conversion error: %s", exc,
+                      extra={"component": "portfolio_summary", "error_type": "data"})
+    except Exception as exc:  # Final safety net for unexpected errors
+        logger.warning("Portfolio summary failed - unexpected error: %s", exc,
+                      extra={"component": "portfolio_summary", "error_type": "unexpected"})
