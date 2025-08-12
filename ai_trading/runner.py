@@ -103,8 +103,12 @@ def run_cycle() -> None:
             # Cache warming failed - log warning but continue execution
             logger.warning("Failed to warm cache during state setup: %s", e)
 
+        # Get runtime context instead of passing None
+        from ai_trading.core.bot_engine import get_ctx
+        runtime = get_ctx()
+        
         # Execute the trading cycle
-        run_all_trades_worker(state, None)
+        run_all_trades_worker(state, runtime)
     except Exception as e:
         log.exception("Trading cycle failed: %s", e)
     finally:
