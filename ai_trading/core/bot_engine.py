@@ -9358,6 +9358,8 @@ def start_metrics_server(default_port: int = 9200) -> None:
 
 def run_multi_strategy(runtime) -> None:
     """Execute all modular strategies via allocator and risk engine."""
+    # Local alias for legacy references; do not export or rely on globals.
+    ctx = runtime  # AI-AGENT-REF: local alias for legacy ctx usage
     signals_by_strategy: dict[str, list[TradeSignal]] = {}
     for strat in ctx.strategies:
         try:
@@ -9802,6 +9804,8 @@ def _send_heartbeat() -> None:
 
 def manage_position_risk(runtime, position) -> None:
     """Adjust trailing stops and position size while halted."""
+    # Local alias for legacy references; do not export or rely on globals.
+    ctx = runtime  # AI-AGENT-REF: local alias for legacy ctx usage
     symbol = position.symbol
     try:
         atr = utils.get_rolling_atr(symbol)
@@ -9990,6 +9994,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     BotContext : Global context and configuration
     trade_execution : Order execution and monitoring
     """
+    # Local alias for legacy references; do not export or rely on globals.
+    ctx = runtime  # AI-AGENT-REF: local alias for legacy ctx usage
     _init_metrics()
     import uuid
 
