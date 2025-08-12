@@ -93,7 +93,7 @@ class JSONFormatter(logging.Formatter):
             payload["exc"] = "".join(
                 traceback.format_exception_only(exc_type, exc_value)
             ).strip()
-        return json.dumps(payload, default=self._json_default)
+        return json.dumps(payload, default=self._json_default, ensure_ascii=False)
 
 
 _configured = False
@@ -431,7 +431,7 @@ def log_trading_event(
 
     # Convert to JSON for structured logging
     try:
-        json_message = json.dumps(log_entry, default=str, separators=(",", ":"))
+        json_message = json.dumps(log_entry, default=str, separators=(",", ":"), ensure_ascii=False)
     except (TypeError, ValueError) as e:
         logger.error("Failed to serialize log entry: %s", e)
         json_message = f"SERIALIZATION_ERROR: {event_type} {symbol}"

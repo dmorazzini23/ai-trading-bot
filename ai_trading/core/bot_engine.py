@@ -4093,6 +4093,35 @@ def get_ctx():
 # The context will be created when first accessed via get_ctx() or _get_bot_context()
 
 
+# Central place to acquire the runtime context from the lazy singleton
+def _get_runtime_context_or_none():
+    try:
+        # If LazyBotContext is the accessor we standardized on:
+        lbc = get_ctx()
+        lbc._ensure_initialized()
+        return lbc._context
+    except Exception as e:
+        _log.warning("Runtime context unavailable for risk exposure update: %s", e)
+        return None
+
+
+def _update_risk_engine_exposure():
+    """
+    Called by the scheduler/loop. Must not assume module-scope ctx.
+    """
+    runtime = _get_runtime_context_or_none()
+    if runtime is None:
+        # single warn line; return quietly to avoid spam
+        return
+    try:
+        if hasattr(runtime, "risk_engine") and runtime.risk_engine:
+            runtime.risk_engine.update_exposure(runtime)
+        else:
+            _log.debug("No risk_engine on runtime context; skipping exposure update.")
+    except Exception as e:
+        _log.warning("Risk engine exposure update failed: %s", e)
+
+
 def _initialize_bot_context_post_setup_legacy(ctx):
     """Complete bot context setup after creation - legacy version."""
     try:
@@ -10246,6 +10275,9 @@ def main() -> None:
             lambda: Thread(
                 target=validate_open_orders, args=(ctx,), daemon=True
             ).start()
+        )
+        schedule.every(1).minutes.do(
+            lambda: Thread(target=_update_risk_engine_exposure, daemon=True).start()
         )
         schedule.every(6).hours.do(
             lambda: Thread(target=update_signal_weights, daemon=True).start()
