@@ -22,7 +22,7 @@ from alpaca.trading.requests import (
     LimitOrderRequest,
     MarketOrderRequest,
 )
-from alpaca.common.exceptions import APIError
+from alpaca_trade_api.rest import APIError
 
 
 class AlpacaExecutionEngine:
@@ -255,10 +255,24 @@ class AlpacaExecutionEngine:
                 return False
 
         except (ValueError, KeyError) as e:
-            logger.error(f"Invalid order data for cancellation {order_id}: {e}")
+            logger.error(
+                "INVALID_ORDER_DATA",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order_id,
+                },
+            )
             return False
-        except (ConnectionError, TimeoutError) as e:
-            logger.error(f"Network error cancelling order {order_id}: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_CANCEL_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order_id,
+                },
+            )  # AI-AGENT-REF: log cancellation failure cause
             return False
 
     def get_order_status(self, order_id: str) -> dict | None:
@@ -278,8 +292,15 @@ class AlpacaExecutionEngine:
             result = self._execute_with_retry(self._get_order_status_alpaca, order_id)
             return result
 
-        except Exception as e:
-            logger.error(f"Error getting order status for {order_id}: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_STATUS_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order_id,
+                },
+            )  # AI-AGENT-REF: capture order status failure cause
             return None
 
     def get_account_info(self) -> dict | None:
@@ -296,8 +317,11 @@ class AlpacaExecutionEngine:
             result = self._execute_with_retry(self._get_account_alpaca)
             return result
 
-        except Exception as e:
-            logger.error(f"Error getting account info: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ACCOUNT_INFO_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: log account info fetch failure
             return None
 
     def get_positions(self) -> list[dict] | None:
@@ -314,8 +338,11 @@ class AlpacaExecutionEngine:
             result = self._execute_with_retry(self._get_positions_alpaca)
             return result
 
-        except Exception as e:
-            logger.error(f"Error getting positions: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "POSITIONS_FETCH_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: log positions fetch failure
             return None
 
     def get_execution_stats(self) -> dict:
@@ -367,8 +394,11 @@ class AlpacaExecutionEngine:
                 logger.error("Failed to get account info during validation")
                 return False
 
-        except Exception as e:
-            logger.error(f"Connection validation failed: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "CONNECTION_VALIDATION_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: log connection validation failure
             return False
 
     def _execute_with_retry(self, func, *args, **kwargs):
@@ -386,17 +416,30 @@ class AlpacaExecutionEngine:
 
                 return result
 
-            except Exception as e:
+            except (APIError, TimeoutError, ConnectionError) as e:
                 attempt += 1
                 self.stats["retry_count"] += 1
 
                 if attempt >= self.retry_config["max_attempts"]:
-                    logger.error(f"Max retry attempts reached for {func.__name__}: {e}")
+                    logger.error(
+                        "RETRY_MAX_ATTEMPTS",
+                        extra={
+                            "cause": e.__class__.__name__,
+                            "detail": str(e),
+                            "func": func.__name__,
+                        },
+                    )  # AI-AGENT-REF: log retry exhaustion
                     self._handle_execution_failure(e)
                     return None
 
                 logger.warning(
-                    f"Attempt {attempt} failed for {func.__name__}: {e}, retrying in {delay}s"
+                    "RETRY_ATTEMPT_FAILED",
+                    extra={
+                        "cause": e.__class__.__name__,
+                        "detail": str(e),
+                        "func": func.__name__,
+                        "attempt": attempt,
+                    },
                 )
                 time.sleep(delay)
                 delay = min(
