@@ -229,8 +229,8 @@ def ensure_portfolio_weights(ctx, symbols):
             )
             # Placeholder fallback: Evenly distribute portfolio weights
             return {symbol: 1.0 / len(symbols) for symbol in symbols}
-    except Exception as e:
-        _log.error(f"Error computing portfolio weights: {e}, using fallback")
+    except (ZeroDivisionError, ValueError, KeyError) as e:  # AI-AGENT-REF: tighten portfolio sizing errors
+        _log.error("PORTFOLIO_WEIGHT_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
         return {symbol: 1.0 / len(symbols) for symbol in symbols if symbols}
 
 
@@ -6883,10 +6883,8 @@ def _safe_trade(
                 elif side == OrderSide.SELL and symbol not in live_positions:
                     _log.info(f"REALTIME_SKIP | {symbol} not held. Skipping SELL.")
                     return False
-            except Exception as e:
-                _log.warning(
-                    f"REALTIME_CHECK_FAIL | Could not check live positions for {symbol}: {e}"
-                )
+            except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten live position check errors
+                _log.warning("REALTIME_CHECK_FAIL", extra={"symbol": symbol, "cause": e.__class__.__name__, "detail": str(e)})
         return trade_logic(ctx, state, symbol, balance, model, regime_ok)
     except RetryError as e:
         _log.warning(
@@ -6905,8 +6903,8 @@ def _safe_trade(
         else:
             _log.exception(f"[trade_logic] APIError for {symbol}: {e}")
             return False
-    except Exception:
-        _log.exception(f"[trade_logic] unhandled exception for {symbol}")
+    except (APIError, TimeoutError, ConnectionError, ValueError, KeyError, TypeError) as e:  # AI-AGENT-REF: tighten trade_logic errors
+        _log.exception("[trade_logic] unhandled exception", extra={"symbol": symbol, "cause": e.__class__.__name__, "detail": str(e)})
         return False
 
 
@@ -9603,7 +9601,8 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     try:
         acct = safe_alpaca_get_account(runtime)
         equity = float(acct.equity) if acct else 0.0
-    except Exception:
+    except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: narrow account fetch errors
+        _log.warning("ACCOUNT_INFO_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
         equity = 0.0
     runtime.capital_scaler.update(runtime, equity)
     params["CAPITAL_CAP"] = _param(runtime, "CAPITAL_CAP", 0.04)
@@ -9734,8 +9733,8 @@ def _process_symbols(
             )
             try:
                 submit_order(ctx, symbol, abs(pos), "buy")
-            except Exception as exc:
-                _log.warning("SHORT_CLOSE_FAIL | %s %s", symbol, exc)
+            except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten order close errors
+                _log.warning("SHORT_CLOSE_FAIL", extra={"symbol": symbol, "cause": e.__class__.__name__, "detail": str(e)})
             continue
         # AI-AGENT-REF: Add thread-safe locking for trade cooldown access
         with trade_cooldowns_lock:
@@ -9772,8 +9771,8 @@ def _process_symbols(
                 return  # AI-AGENT-REF: skip symbol with open position
             processed.append(symbol)
             _safe_trade(ctx, state, symbol, current_cash, model, regime_ok)
-        except Exception as exc:
-            _log.error(f"Error processing {symbol}: {exc}", exc_info=True)
+        except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: tighten symbol processing errors
+            _log.error("PROCESS_SYMBOL_FAILED", extra={"symbol": symbol, "cause": e.__class__.__name__, "detail": str(e)}, exc_info=True)
 
     futures = [prediction_executor.submit(process_symbol, s) for s in symbols]
     for f in futures:
@@ -10002,9 +10001,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     try:  # AI-AGENT-REF: ensure lock released on every exit
         try:
             runtime.risk_engine.wait_for_exposure_update(0.5)
-        except Exception as e:
-            # Risk engine update failed - log warning but continue
-            _log.warning("Risk engine exposure update failed: %s", e)
+        except (TimeoutError, ConnectionError, RuntimeError) as e:  # AI-AGENT-REF: tighten risk update errors
+            _log.warning(
+                "RISK_EXPOSURE_UPDATE_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
         if not hasattr(state, "trade_cooldowns"):
             state.trade_cooldowns = {}
         if not hasattr(state, "last_trade_direction"):
@@ -10038,8 +10039,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
             try:
                 open_orders = runtime.api.list_orders(status="open")
-            except Exception as exc:  # pragma: no cover - network issues
-                _log.debug(f"order check failed: {exc}")
+            except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten order check errors
+                _log.debug(
+                    "ORDER_CHECK_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e)},
+                )
                 open_orders = []
             if any(o.status in ("new", "pending_new") for o in open_orders):
                 _log.warning("Detected pending orders; skipping this trade cycle")
@@ -10080,8 +10084,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         ):  # 1GB threshold
                             _log.critical("EMERGENCY_MEMORY_CLEANUP_TRIGGERED")
                             emergency_memory_cleanup()
-                except Exception as exc:
-                    _log.debug(f"Memory optimization check failed: {exc}")
+                except (RuntimeError, ValueError, TypeError) as e:  # AI-AGENT-REF: tighten memory optimization errors
+                    _log.debug(
+                        "MEMORY_OPTIMIZATION_FAILED",
+                        extra={"cause": e.__class__.__name__, "detail": str(e)},
+                    )
 
             # AI-AGENT-REF: Update drawdown circuit breaker with current equity
             if runtime.drawdown_circuit_breaker:
@@ -10110,8 +10117,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                             portfolio = runtime.api.get_all_positions()
                             for pos in portfolio:
                                 manage_position_risk(runtime, pos)
-                        except Exception as exc:
-                            _log.warning(f"HALT_MANAGE_FAIL: {exc}")
+                        except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten halt manage errors
+                            _log.warning(
+                                "HALT_MANAGE_FAIL",
+                                extra={"cause": e.__class__.__name__, "detail": str(e)},
+                            )
                         return
                     else:
                         # Log drawdown status for monitoring
@@ -10123,8 +10133,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                                 "trading_allowed": status["trading_allowed"],
                             },
                         )
-                except Exception as exc:
-                    _log.error(f"Drawdown circuit breaker update failed: {exc}")
+                except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten circuit breaker update errors
+                    _log.error(
+                        "DRAWDOWN_CHECK_FAILED",
+                        extra={"cause": e.__class__.__name__, "detail": str(e)},
+                    )
                     # Continue trading but log the error for investigation
 
             # AI-AGENT-REF: honor global halt flag before processing symbols
@@ -10137,8 +10150,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     portfolio = runtime.api.get_all_positions()
                     for pos in portfolio:
                         manage_position_risk(runtime, pos)
-                except Exception as exc:  # pragma: no cover - network issues
-                    _log.warning(f"HALT_MANAGE_FAIL: {exc}")
+                except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten halt manage errors
+                    _log.warning(
+                        "HALT_MANAGE_FAIL",
+                        extra={"cause": e.__class__.__name__, "detail": str(e)},
+                    )
                 _log.info("HALT_SKIP_NEW_TRADES")
                 _send_heartbeat()
                 # log summary even when halted
@@ -10180,8 +10196,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                             "cash": cash,
                         },
                     )
-                except Exception as exc:  # pragma: no cover - network issues
-                    _log.warning(f"SUMMARY_FAIL: {exc}")
+                except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten summary fetch errors
+                    _log.warning("SUMMARY_FAIL", extra={"cause": e.__class__.__name__, "detail": str(e)})
                 return
 
             alpha_model = _load_primary_model(runtime)  # AI-AGENT-REF: load model once per runtime
@@ -10268,8 +10284,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 }
                 if runtime.execution_engine:
                     runtime.execution_engine.check_trailing_stops()
-            except Exception as exc:  # pragma: no cover - safety
-                _log.warning("refresh_positions failed: %s", exc)
+            except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten refresh errors
+                _log.warning(
+                    "REFRESH_POSITIONS_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e)},
+                )
             _log.info(
                 f"RUN_ALL_TRADES_COMPLETE | processed={len(row_counts)} symbols, total_rows={sum(row_counts.values())}"
             )
@@ -10287,8 +10306,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         runtime.portfolio_weights = portfolio.compute_portfolio_weights(
                             runtime, [p.symbol for p in positions]
                         )
-                except Exception:
-                    _log.warning("weight recompute failed", exc_info=True)
+                except (ZeroDivisionError, ValueError, KeyError) as e:  # AI-AGENT-REF: tighten portfolio sizing errors
+                        _log.warning("WEIGHT_RECOMPUTE_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)}, exc_info=True)
                 exposure = (
                     sum(abs(float(p.market_value)) for p in positions) / equity * 100
                     if equity > 0
@@ -10321,7 +10340,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 )
                 try:
                     adaptive_cap = ctx.risk_engine._adaptive_global_cap()
-                except Exception:
+                except (ZeroDivisionError, ValueError, KeyError) as e:  # AI-AGENT-REF: tighten adaptive cap errors
+                    _log.warning(
+                        "ADAPTIVE_CAP_FAILED",
+                        extra={"cause": e.__class__.__name__, "detail": str(e)},
+                    )
                     adaptive_cap = 0.0
                 _log.info(
                     "CYCLE SUMMARY: cash=$%.0f equity=$%.0f exposure=%.0f%% positions=%d adaptive_cap=%.1f",
@@ -10331,8 +10354,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     len(positions),
                     adaptive_cap,
                 )
-            except Exception as exc:  # pragma: no cover - network issues
-                _log.warning(f"SUMMARY_FAIL: {exc}")
+            except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten summary fetch errors
+                _log.warning("SUMMARY_FAIL", extra={"cause": e.__class__.__name__, "detail": str(e)})
             try:
                 acct = ctx.api.get_account()
                 # Handle case where account object might not have last_equity attribute
@@ -10346,10 +10369,18 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         "mode": "SHADOW" if S.shadow_mode else "LIVE",
                     },
                 )
-            except Exception as e:
-                _log.warning(f"Failed P&L retrieval: {e}")
-        except Exception as e:
-            _log.error(f"Exception in trading loop: {e}", exc_info=True)
+            except (APIError, TimeoutError, ConnectionError, ValueError) as e:  # AI-AGENT-REF: tighten PnL retrieval errors
+                _log.warning(
+                    "PNL_RETRIEVAL_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e)},
+                )
+        except (APIError, TimeoutError, ConnectionError, ValueError, KeyError, TypeError) as e:  # AI-AGENT-REF: tighten trading cycle boundary
+            _log.error(
+                "TRADING_CYCLE_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+                exc_info=True,
+            )
+            raise
         finally:
             # Always reset running flag
             state.running = False
@@ -10364,8 +10395,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         _log.info(
                             f"Post-cycle GC: {gc_result['objects_collected']} objects collected"
                         )
-                except Exception as e:
-                    _log.warning(f"Memory optimization failed: {e}")
+                except (RuntimeError, ValueError, TypeError) as e:  # AI-AGENT-REF: tighten memory optimization errors
+                    _log.warning(
+                        "MEMORY_OPTIMIZATION_FAILED",
+                        extra={"cause": e.__class__.__name__, "detail": str(e)},
+                    )
     finally:
         if acquired:
             run_lock.release()
@@ -10410,8 +10444,8 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
         if n == 0 or cash <= 0 or buying_power <= 0:
             _log.info("INITIAL_REBALANCE_NO_SYMBOLS_OR_NO_CASH")
             return
-    except Exception as exc:
-        _log.warning("Failed to get account info for initial rebalance: %s", exc)
+    except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten rebalance account fetch errors
+        _log.warning("INITIAL_REBALANCE_ACCOUNT_FAIL", extra={"cause": e.__class__.__name__, "detail": str(e)})
         return
 
     # Determine current UTC time
@@ -10474,10 +10508,8 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
                             _log.error(
                                 f"INITIAL_REBALANCE: Buy failed for {sym}: order not placed"
                             )
-                    except Exception as e:
-                        _log.error(
-                            f"INITIAL_REBALANCE: Buy failed for {sym}: {repr(e)}"
-                        )
+                    except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten rebalance buy errors
+                        _log.error("INITIAL_REBALANCE_BUY_FAILED", extra={"symbol": sym, "cause": e.__class__.__name__, "detail": str(e)})
                 elif current_qty > target_qty:
                     qty_to_sell = current_qty - target_qty
                     if qty_to_sell < 1:
@@ -10485,10 +10517,8 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
                     try:
                         submit_order(ctx, sym, qty_to_sell, "sell")
                         _log.info(f"INITIAL_REBALANCE: Sold {qty_to_sell} {sym}")
-                    except Exception as e:
-                        _log.error(
-                            f"INITIAL_REBALANCE: Sell failed for {sym}: {repr(e)}"
-                        )
+                    except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten rebalance sell errors
+                        _log.error("INITIAL_REBALANCE_SELL_FAILED", extra={"symbol": sym, "cause": e.__class__.__name__, "detail": str(e)})
 
     ctx.initial_rebalance_done = True
     try:
@@ -10496,9 +10526,8 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
         state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
         state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
         state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
-    except Exception as e:
-        # Failed to refresh position cache - log error but continue
-        _log.error("Failed to refresh position cache after rebalance: %s", e)
+    except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten rebalance position refresh errors
+        _log.error("Failed to refresh position cache after rebalance", extra={"cause": e.__class__.__name__, "detail": str(e)})
         # Initialize empty cache to prevent AttributeError
         state.position_cache = {}
         state.long_positions = set()
