@@ -155,7 +155,20 @@ class AlpacaExecutionEngine:
         logger.info(f"Submitting market order: {side} {quantity} {symbol}")
 
         # Execute with retry logic
-        result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
+        try:
+            result = self._execute_with_retry(
+                self._submit_order_to_alpaca, order_data
+            )
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_API_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "op": "submit",
+                },
+            )  # AI-AGENT-REF: log submission failure
+            raise
 
         # Update statistics
         execution_time = time.time() - start_time
@@ -210,7 +223,20 @@ class AlpacaExecutionEngine:
         )
 
         # Execute with retry logic
-        result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
+        try:
+            result = self._execute_with_retry(
+                self._submit_order_to_alpaca, order_data
+            )
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_API_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "op": "submit",
+                },
+            )  # AI-AGENT-REF: log submission failure
+            raise
 
         # Update statistics
         execution_time = time.time() - start_time
@@ -431,7 +457,7 @@ class AlpacaExecutionEngine:
                         },
                     )  # AI-AGENT-REF: log retry exhaustion
                     self._handle_execution_failure(e)
-                    return None
+                    raise
 
                 logger.warning(
                     "RETRY_ATTEMPT_FAILED",
