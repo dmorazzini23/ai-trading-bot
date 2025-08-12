@@ -103,9 +103,37 @@ def run_cycle() -> None:
             # Cache warming failed - log warning but continue execution
             logger.warning("Failed to warm cache during state setup: %s", e)
 
-        # Get runtime context instead of passing None
+        # Get runtime context and ensure it has proper parameter hydration
         from ai_trading.core.bot_engine import get_ctx
-        runtime = get_ctx()
+        from ai_trading.core.runtime import build_runtime, REQUIRED_PARAM_DEFAULTS
+        from ai_trading.config.management import TradingConfig
+        
+        lazy_ctx = get_ctx()
+        
+        # Build a proper runtime with guaranteed parameter hydration
+        cfg = TradingConfig.from_env()  # Load config from environment
+        runtime = build_runtime(cfg)
+        
+        # One-time validation & log as specified in problem statement
+        missing = [k for k in REQUIRED_PARAM_DEFAULTS if k not in runtime.params]
+        if missing:
+            log.error(
+                "PARAMS_VALIDATE: missing keys in runtime.params; defaults will be applied",
+                extra={"missing": missing}
+            )
+
+        log.info(
+            "PARAMS_EFFECTIVE",
+            extra={
+                "CAPITAL_CAP": runtime.params["CAPITAL_CAP"],
+                "DOLLAR_RISK_LIMIT": runtime.params["DOLLAR_RISK_LIMIT"],
+                "MAX_POSITION_SIZE": runtime.params["MAX_POSITION_SIZE"],
+            },
+        )
+        
+        # Enhance runtime with lazy context attributes after initialization
+        from ai_trading.core.runtime import enhance_runtime_with_context
+        runtime = enhance_runtime_with_context(runtime, lazy_ctx)
         
         # Execute the trading cycle
         run_all_trades_worker(state, runtime)
