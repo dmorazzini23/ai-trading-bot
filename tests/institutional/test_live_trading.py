@@ -8,9 +8,12 @@ capabilities, including end-to-end workflows, risk management, and compliance.
 import pytest
 import asyncio
 import os
+import datetime as dt
+import pytz
 
 # Set test environment
 os.environ['PYTEST_RUNNING'] = '1'
+pytest.importorskip('alpaca_trade_api', reason='alpaca not installed')
 
 from .framework import (
     MockMarketDataProvider,
@@ -251,6 +254,7 @@ class TestLiveTradingBot:
 
 
 @pytest.mark.integration
+@pytest.mark.broker
 class TestTradingBotIntegration:
     """
     Integration tests for the complete trading bot system.
@@ -262,6 +266,11 @@ class TestTradingBotIntegration:
     @pytest.mark.asyncio
     async def test_full_system_integration(self):
         """Test full system integration with all components."""
+        if not (os.getenv('ALPACA_API_KEY_ID') and os.getenv('ALPACA_API_SECRET_KEY')):
+            pytest.skip('ALPACA credentials required for integration test')
+        now = dt.datetime.now(pytz.timezone('US/Eastern'))
+        if now.weekday() >= 5 or not (dt.time(9, 30) <= now.time() <= dt.time(16, 0)):
+            pytest.skip('Market closed')
         # This would test the integration of:
         # - Market data feeds
         # - Signal generation
