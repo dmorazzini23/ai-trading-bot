@@ -3726,7 +3726,11 @@ def _is_concrete_strategy(obj, BaseStrategy):
     return inspect.isclass(obj) and issubclass(obj, BaseStrategy) and obj is not BaseStrategy and not inspect.isabstract(obj)
 
 def _import_all_strategy_submodules(pkg_name: str):
-    """Import all submodules under pkg_name to expose concrete strategies without requiring __init__ re-exports."""
+    """
+    Import all submodules under pkg_name so strategy classes defined anywhere under
+    ai_trading/strategies become visible without manual re-exports.
+    Never raises: logs errors and returns best-effort imported package.
+    """
     try:
         pkg = importlib.import_module(pkg_name)
     except Exception as e:
@@ -3736,10 +3740,20 @@ def _import_all_strategy_submodules(pkg_name: str):
     if not path:
         return pkg
     for modinfo in pkgutil.walk_packages(path, pkg_name + "."):
+        name = modinfo.name
         try:
-            importlib.import_module(modinfo.name)
+            submodule = importlib.import_module(name)
+            # After importing submodule, scan it for strategy classes and add them to pkg namespace
+            for attr_name, attr_obj in vars(submodule).items():
+                if (inspect.isclass(attr_obj) and 
+                    hasattr(attr_obj, '__module__') and 
+                    attr_obj.__module__ == name and
+                    attr_name not in ['BaseStrategy']):  # Don't re-add BaseStrategy
+                    # Add strategy classes to the main package namespace
+                    setattr(pkg, attr_name, attr_obj)
         except Exception as e:
-            _log.error("Failed to import strategy module %s: %s", modinfo.name, e)
+            # Keep going; one bad module shouldn't hide others.
+            _log.error("Failed to import strategy module %s: %s", name, e)
     return pkg
 
 def get_strategies():
