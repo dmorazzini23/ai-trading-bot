@@ -4842,7 +4842,10 @@ def count_day_trades() -> int:
         usecols=["entry_time", "exit_time"],
     )
     if df.empty:
-        _log.warning("Loaded DataFrame is empty after parsing/fallback")
+        if _is_market_open_now():
+            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+        else:
+            _log.info("Loaded DataFrame is empty (market closed)")
     df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
     df["exit_time"] = pd.to_datetime(df["exit_time"], errors="coerce")
     df = df.dropna(subset=["entry_time", "exit_time"])
@@ -5037,7 +5040,10 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
         usecols=["symbol", "exit_time"],
     )
     if df.empty:
-        _log.warning("Loaded DataFrame is empty after parsing/fallback")
+        if _is_market_open_now():
+            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+        else:
+            _log.info("Loaded DataFrame is empty (market closed)")
     if "exit_time" not in df.columns or "symbol" not in df.columns:
         return False
     open_syms = df.loc[df.exit_time == "", "symbol"].unique().tolist() + [sym]
@@ -8764,7 +8770,10 @@ def _average_reward(n: int = 20) -> float:
         usecols=["reward"],
     ).tail(n)
     if df.empty:
-        _log.warning("Loaded DataFrame is empty after parsing/fallback")
+        if _is_market_open_now():
+            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+        else:
+            _log.info("Loaded DataFrame is empty (market closed)")
     if df.empty or "reward" not in df.columns:
         return 0.0
     return float(df["reward"].mean())
