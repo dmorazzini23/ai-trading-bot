@@ -19,6 +19,8 @@ from alpaca_trade_api.rest import APIError
 from ai_trading.market.symbol_specs import TICK_BY_SYMBOL, get_lot_size, get_tick_size
 from ai_trading.math.money import Money, round_to_lot, round_to_tick
 
+from .idempotency import OrderIdempotencyCache
+
 from ..core.constants import EXECUTION_PARAMETERS
 from ..core.enums import OrderSide, OrderStatus, OrderType
 
@@ -241,7 +243,16 @@ class OrderManager:
         self._monitor_thread = None
         self._monitor_running = False
 
+        self._idempotency_cache: OrderIdempotencyCache | None = None
+
         logger.info("OrderManager initialized")
+
+    def _ensure_idempotency_cache(self) -> OrderIdempotencyCache:
+        """Ensure idempotency cache is instantiated."""
+        if self._idempotency_cache is None:
+            # AI-AGENT-REF: instantiate idempotency cache
+            self._idempotency_cache = OrderIdempotencyCache()
+        return self._idempotency_cache
 
     def submit_order(self, order: Order) -> bool:
         """
@@ -259,16 +270,15 @@ class OrderManager:
                 return False
 
             # AI-AGENT-REF: Wire idempotency checking before submission
-            from .idempotency import get_idempotency_cache, is_duplicate_order
+            cache = self._ensure_idempotency_cache()
 
             # Generate idempotency key
-            cache = get_idempotency_cache()
             key = cache.generate_key(
                 order.symbol, order.side, order.quantity, datetime.now(UTC)
             )
 
             # Check if this is a duplicate order
-            if is_duplicate_order(key):
+            if cache.is_duplicate(key):
                 logger.warning(
                     f"ORDER_DUPLICATE_SKIPPED: {order.symbol} {order.side} {order.quantity}"
                 )
@@ -290,14 +300,7 @@ class OrderManager:
             self.active_orders[order.id] = order
 
             # AI-AGENT-REF: Mark order as submitted in idempotency cache
-            try:
-                from .idempotency import get_idempotency_cache
-
-                cache = get_idempotency_cache()
-                cache.mark_submitted(key, order.id)
-            except (ImportError, NameError) as e:
-                # Idempotency module not available - log debug info
-                logger.debug("Idempotency cache not available: %s", e)
+            cache.mark_submitted(key, order.id)
 
             # Start monitoring if not already running
             if not self._monitor_running:
