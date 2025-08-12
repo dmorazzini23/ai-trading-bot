@@ -1296,7 +1296,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     return df
 
 
-def cancel_all_open_orders(ctx: BotContext) -> None:
+def cancel_all_open_orders(runtime) -> None:
     """
     On startup or each run, cancel every Alpaca order whose status is 'open'.
     """
@@ -2142,7 +2142,7 @@ if not os.path.exists(SLIPPAGE_LOG_FILE):
 _SECTOR_CACHE: dict[str, str] = {}
 
 
-def _log_health_diagnostics(ctx: BotContext, reason: str) -> None:
+def _log_health_diagnostics(runtime, reason: str) -> None:
     """Log detailed diagnostics used for halt decisions."""
     try:
         cash = float(ctx.api.get_account().cash)
@@ -2278,7 +2278,7 @@ def asset_class_for(symbol: str) -> str:
     return "equity"
 
 
-def compute_spy_vol_stats(ctx: BotContext) -> None:
+def compute_spy_vol_stats(runtime) -> None:
     """Compute daily ATR mean/std on SPY for the past 1 year."""
     today = date.today()
     with vol_lock:
@@ -3187,7 +3187,7 @@ def _parse_local_positions() -> dict[str, int]:
     return positions
 
 
-def audit_positions(ctx: BotContext) -> None:
+def audit_positions(runtime) -> None:
     """
     Fetch local vs. broker positions and submit market orders to correct any mismatch.
     """
@@ -4814,13 +4814,13 @@ def count_day_trades() -> int:
     wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
     retry=retry_if_exception_type(APIError),
 )
-def check_pdt_rule(ctx: BotContext) -> bool:
+def check_pdt_rule(runtime) -> bool:
     """Check PDT rule with graceful degradation when Alpaca is unavailable.
 
     Returns False when Alpaca is unavailable, allowing the bot to continue
     operating in simulation mode.
     """
-    acct = safe_alpaca_get_account(ctx)
+    acct = safe_alpaca_get_account(runtime)
 
     # If account is unavailable (Alpaca not available), assume no PDT blocking
     if acct is None:
@@ -4905,7 +4905,7 @@ def set_halt_flag(reason: str) -> None:
         _log.error(f"Failed to write halt flag: {exc}")
 
 
-def check_halt_flag(ctx: BotContext | None = None) -> bool:
+def check_halt_flag(runtime=None) -> bool:
     if S.force_trades:
         _log.warning("FORCE_TRADES override active: ignoring halt flag.")
         return False
@@ -9040,7 +9040,7 @@ def start_metrics_server(default_port: int = 9200) -> None:
         _log.warning("Failed to start metrics server on %d: %s", default_port, exc)
 
 
-def run_multi_strategy(ctx: BotContext) -> None:
+def run_multi_strategy(runtime) -> None:
     """Execute all modular strategies via allocator and risk engine."""
     signals_by_strategy: dict[str, list[TradeSignal]] = {}
     for strat in ctx.strategies:
@@ -9266,21 +9266,21 @@ def run_multi_strategy(ctx: BotContext) -> None:
         _log.error("TRAILING_STOP_CHECK_FAILED", extra={"exc": str(exc)})
 
 
-def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[str]]:
+def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     from ai_trading import portfolio
     from ai_trading.utils import portfolio_lock
 
     """Prepare trading run by syncing positions and generating symbols."""
-    cancel_all_open_orders(ctx)
-    audit_positions(ctx)
+    cancel_all_open_orders(runtime)
+    audit_positions(runtime)
     try:
-        acct = safe_alpaca_get_account(ctx)
+        acct = safe_alpaca_get_account(runtime)
         equity = float(acct.equity) if acct else 0.0
     except Exception:
         equity = 0.0
-    ctx.capital_scaler.update(ctx, equity)
-    params["CAPITAL_CAP"] = ctx.params["CAPITAL_CAP"]
-    compute_spy_vol_stats(ctx)
+    runtime.capital_scaler.update(runtime, equity)
+    params["CAPITAL_CAP"] = runtime.params["CAPITAL_CAP"]
+    compute_spy_vol_stats(runtime)
 
     full_watchlist = load_tickers(TICKERS_FILE)
     symbols = screen_candidates()
@@ -9463,7 +9463,7 @@ def _send_heartbeat() -> None:
     )
 
 
-def manage_position_risk(ctx: BotContext, position) -> None:
+def manage_position_risk(runtime, position) -> None:
     """Adjust trailing stops and position size while halted."""
     symbol = position.symbol
     try:
@@ -9534,7 +9534,7 @@ def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
 
 
 @memory_profile  # AI-AGENT-REF: Monitor memory usage of main trading function
-def run_all_trades_worker(state: BotState, model) -> None:
+def run_all_trades_worker(state: BotState, runtime) -> None:
     """
     Execute the complete trading cycle for all candidate symbols.
 
@@ -9672,7 +9672,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
         return
     try:  # AI-AGENT-REF: ensure lock released on every exit
         try:
-            ctx.risk_engine.wait_for_exposure_update(0.5)
+            runtime.risk_engine.wait_for_exposure_update(0.5)
         except Exception as e:
             # Risk engine update failed - log warning but continue
             _log.warning("Risk engine exposure update failed: %s", e)
@@ -9699,7 +9699,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
         if not is_market_open():
             _log.info("MARKET_CLOSED_NO_FETCH")
             return  # FIXED: skip work when market closed
-        state.pdt_blocked = check_pdt_rule(ctx)
+        state.pdt_blocked = check_pdt_rule(runtime)
         if state.pdt_blocked:
             return
         state.running = True
@@ -9708,7 +9708,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
         try:
             # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
             try:
-                open_orders = ctx.api.list_orders(status="open")
+                open_orders = runtime.api.list_orders(status="open")
             except Exception as exc:  # pragma: no cover - network issues
                 _log.debug(f"order check failed: {exc}")
                 open_orders = []
@@ -9727,7 +9727,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             else:
                 _log.debug("MARKET_FETCH")
 
-            current_cash, regime_ok, symbols = _prepare_run(ctx, state)
+            current_cash, regime_ok, symbols = _prepare_run(runtime, state)
 
             # AI-AGENT-REF: Add memory monitoring and cleanup to prevent resource issues
             if MEMORY_OPTIMIZATION_AVAILABLE:
@@ -9755,16 +9755,16 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     _log.debug(f"Memory optimization check failed: {exc}")
 
             # AI-AGENT-REF: Update drawdown circuit breaker with current equity
-            if ctx.drawdown_circuit_breaker:
+            if runtime.drawdown_circuit_breaker:
                 try:
-                    acct = ctx.api.get_account()
+                    acct = runtime.api.get_account()
                     current_equity = float(acct.equity) if acct else 0.0
-                    trading_allowed = ctx.drawdown_circuit_breaker.update_equity(
+                    trading_allowed = runtime.drawdown_circuit_breaker.update_equity(
                         current_equity
                     )
 
                     # AI-AGENT-REF: Get status once to avoid UnboundLocalError in else block
-                    status = ctx.drawdown_circuit_breaker.get_status()
+                    status = runtime.drawdown_circuit_breaker.get_status()
 
                     if not trading_allowed:
                         _log.critical(
@@ -9778,9 +9778,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
                         )
                         # Manage existing positions but skip new trades
                         try:
-                            portfolio = ctx.api.get_all_positions()
+                            portfolio = runtime.api.get_all_positions()
                             for pos in portfolio:
-                                manage_position_risk(ctx, pos)
+                                manage_position_risk(runtime, pos)
                         except Exception as exc:
                             _log.warning(f"HALT_MANAGE_FAIL: {exc}")
                         return
@@ -9799,25 +9799,25 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     # Continue trading but log the error for investigation
 
             # AI-AGENT-REF: honor global halt flag before processing symbols
-            if check_halt_flag(ctx):
-                _log_health_diagnostics(ctx, "halt_flag_loop")
+            if check_halt_flag(runtime):
+                _log_health_diagnostics(runtime, "halt_flag_loop")
                 _log.info(
                     "TRADING_HALTED_VIA_FLAG: Managing existing positions only."
                 )
                 try:
-                    portfolio = ctx.api.get_all_positions()
+                    portfolio = runtime.api.get_all_positions()
                     for pos in portfolio:
-                        manage_position_risk(ctx, pos)
+                        manage_position_risk(runtime, pos)
                 except Exception as exc:  # pragma: no cover - network issues
                     _log.warning(f"HALT_MANAGE_FAIL: {exc}")
                 _log.info("HALT_SKIP_NEW_TRADES")
                 _send_heartbeat()
                 # log summary even when halted
                 try:
-                    acct = ctx.api.get_account()
+                    acct = runtime.api.get_account()
                     cash = float(acct.cash)
                     equity = float(acct.equity)
-                    positions = ctx.api.get_all_positions()
+                    positions = runtime.api.get_all_positions()
                     _log.debug("Raw Alpaca positions: %s", positions)
                     exposure = (
                         sum(abs(float(p.market_value)) for p in positions)
@@ -9846,7 +9846,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     _log.info(
                         "WEIGHTS_VS_POSITIONS",
                         extra={
-                            "weights": ctx.portfolio_weights,
+                            "weights": runtime.portfolio_weights,
                             "positions": {p.symbol: int(p.qty) for p in positions},
                             "cash": cash,
                         },
@@ -9874,7 +9874,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             if sum(row_counts.values()) == 0:
                 last_ts = None
                 for sym in symbols:
-                    ts = ctx.data_fetcher._minute_timestamps.get(sym)
+                    ts = runtime.data_fetcher._minute_timestamps.get(sym)
                     if last_ts is None or (ts and ts > last_ts):
                         last_ts = ts
                 _log.critical(
@@ -9918,10 +9918,10 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     },
                 )
 
-            run_multi_strategy(ctx)
+            run_multi_strategy(runtime)
             try:
-                ctx.risk_engine.refresh_positions(ctx.api)
-                pos_list = ctx.api.get_all_positions()
+                runtime.risk_engine.refresh_positions(runtime.api)
+                pos_list = runtime.api.get_all_positions()
                 state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
                 state.long_positions = {
                     s for s, q in state.position_cache.items() if q > 0
@@ -9929,26 +9929,26 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 state.short_positions = {
                     s for s, q in state.position_cache.items() if q < 0
                 }
-                if ctx.execution_engine:
-                    ctx.execution_engine.check_trailing_stops()
+                if runtime.execution_engine:
+                    runtime.execution_engine.check_trailing_stops()
             except Exception as exc:  # pragma: no cover - safety
                 _log.warning("refresh_positions failed: %s", exc)
             _log.info(
                 f"RUN_ALL_TRADES_COMPLETE | processed={len(row_counts)} symbols, total_rows={sum(row_counts.values())}"
             )
             try:
-                acct = ctx.api.get_account()
+                acct = runtime.api.get_account()
                 cash = float(acct.cash)
                 equity = float(acct.equity)
-                positions = ctx.api.get_all_positions()
+                positions = runtime.api.get_all_positions()
                 _log.debug("Raw Alpaca positions: %s", positions)
                 # ai_trading.csv:9422 - Replace import guard with hard import (required dependencies)
                 from ai_trading import portfolio
                 from ai_trading.utils import portfolio_lock
                 try:
                     with portfolio_lock:
-                        ctx.portfolio_weights = portfolio.compute_portfolio_weights(
-                            ctx, [p.symbol for p in positions]
+                        runtime.portfolio_weights = portfolio.compute_portfolio_weights(
+                            runtime, [p.symbol for p in positions]
                         )
                 except Exception:
                     _log.warning("weight recompute failed", exc_info=True)
@@ -9977,7 +9977,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 _log.info(
                     "WEIGHTS_VS_POSITIONS",
                     extra={
-                        "weights": ctx.portfolio_weights,
+                        "weights": runtime.portfolio_weights,
                         "positions": {p.symbol: int(p.qty) for p in positions},
                         "cash": cash,
                     },
