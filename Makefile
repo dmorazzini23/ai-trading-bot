@@ -90,3 +90,10 @@ run-backtest:
 	  --latency-bars 1
 
 .PHONY: install install-dev test-all test-fast test-ci clean coverage benchmark lint mypy-check check run-backtest
+
+.PHONY: verify test
+verify:
+	bash scripts/quick_verify.sh
+
+test:
+	pytest -q

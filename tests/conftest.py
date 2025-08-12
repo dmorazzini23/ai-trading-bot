@@ -1,13 +1,50 @@
-
-
 import sys
 import os
+import datetime as dt
+import pandas as pd
+import pytest
+import pytz
 
-# AI-AGENT-REF: Mock yfinance module for deterministic tests
-# Inject yfinance mock into sys.modules before any imports
-sys.modules["yfinance"] = MockYfinance()
+# AI-AGENT-REF: Minimal yfinance stub and fixtures
+class MockYfinance:
+    @staticmethod
+    def download(*args, **kwargs):
+        raise RuntimeError("Use monkeypatch_yfinance() fixture in tests")
+
+sys.modules.setdefault("yfinance", MockYfinance())
+
+@pytest.fixture
+def mock_yfinance():
+    return MockYfinance
+
+@pytest.fixture
+def mock_ohlcv_df():
+    tz = pytz.UTC
+    idx = pd.date_range(end=dt.datetime.now(tz), periods=30, freq="1D", tz=tz)
+    df = pd.DataFrame({
+        "Open": 100 + pd.Series(range(30)).astype(float),
+        "High": 101 + pd.Series(range(30)).astype(float),
+        "Low": 99 + pd.Series(range(30)).astype(float),
+        "Close": 100 + pd.Series(range(30)).astype(float),
+        "Volume": 1_000
+    }, index=idx)
+    return df
+
+@pytest.fixture
+def monkeypatch_yfinance(monkeypatch, mock_ohlcv_df):
+    try:
+        import yfinance as yf  # type: ignore
+    except Exception:
+        yf = MockYfinance()
+    def _apply():
+        def _dl(*args, **kwargs):
+            return mock_ohlcv_df
+        monkeypatch.setattr(yf, "download", _dl, raising=False)
+        return yf
+    return _apply
 
 # AI-AGENT-REF: Add dotenv stub early to prevent import errors
+
 try:
     from dotenv import load_dotenv
 except Exception:
