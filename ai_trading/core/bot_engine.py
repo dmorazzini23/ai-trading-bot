@@ -4158,9 +4158,8 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
     logger.debug("Data freshness OK [UTC now=%s]", now_utc)
 
 
-# AI-AGENT-REF: Skip expensive health checks during test imports to improve performance
-if not os.getenv("PYTEST_RUNNING"):
-    data_source_health_check(ctx, REGIME_SYMBOLS)
+# AI-AGENT-REF: Module-level health check removed to prevent NameError: ctx
+# Health check now happens safely in _initialize_bot_context_post_setup() after context creation
 
 
 @memory_profile  # AI-AGENT-REF: Monitor memory usage during health checks
