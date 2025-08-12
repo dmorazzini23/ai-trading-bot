@@ -8,7 +8,7 @@ access to trading parameters and configuration across the system.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, List
 
 if TYPE_CHECKING:
     from ai_trading.config.management import TradingConfig
@@ -49,6 +49,7 @@ class BotRuntime:
     """
     cfg: "TradingConfig"
     params: dict[str, Any] = field(default_factory=dict)
+    tickers: List[str] = field(default_factory=list)  # AI-AGENT-REF: runtime-selected tickers
     
     # Additional runtime attributes will be set by _ensure_initialized
     # These are forwarded from the underlying LazyBotContext

@@ -26,7 +26,8 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
-# AI-AGENT-REF: Guard for tickers.csv warning to avoid spamming logs
+# Warn once per process about missing tickers file
+# AI-AGENT-REF: guard to avoid spamming tickers.csv warnings
 _TICKERS_WARN_EMITTED = False
 
 
@@ -1506,6 +1507,7 @@ def get_git_hash() -> str:
 
 # Tickers file resides at repo root by convention
 TICKERS_FILE = abspath_repo_root("tickers.csv")
+DEFAULT_TICKERS = ["AAPL", "GOOG", "AMZN"]  # AI-AGENT-REF: fallback tickers
 # AI-AGENT-REF: use centralized trade log path
 TRADE_LOG_FILE = S.trade_log_file
 SIGNAL_WEIGHTS_FILE = str(paths.DATA_DIR / "signal_weights.csv")
@@ -8557,10 +8559,8 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
 def screen_universe(
     candidates: Sequence[str],
     runtime,
-    lookback: str = "1mo",
-    interval: str = "1d",
-    top_n: int = 20,
 ) -> list[str]:
+    top_n = 20  # AI-AGENT-REF: maintain top N selection
     cand_set = set(candidates)
     _log.info(
         f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}"
@@ -8619,8 +8619,9 @@ def screen_universe(
 
 
 def screen_candidates(runtime, *, fallback_symbols=None) -> list[str]:
-    """Load tickers and apply universe screening."""
-    candidates = load_tickers(TICKERS_FILE) if fallback_symbols is None else fallback_symbols
+    """Build candidate universe and run screening using runtime."""
+    # AI-AGENT-REF: explicit runtime for screening
+    candidates = load_candidate_universe(runtime, fallback_symbols=fallback_symbols)
     return screen_universe(candidates, runtime)
 
 
@@ -8644,8 +8645,7 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
         if not _TICKERS_WARN_EMITTED:
             _log.warning(f"Tickers file {path} not found. Using default tickers.")
             _TICKERS_WARN_EMITTED = True
-        # Fallback: define default tickers
-        return ["AAPL", "GOOG", "AMZN"]
+        return DEFAULT_TICKERS
 
     try:
         with open(path, newline="") as f:
@@ -8658,6 +8658,25 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
     except Exception as e:
         _log.exception(f"[load_tickers] Failed to read {path}: {e}")
     return tickers
+
+
+def load_candidate_universe(runtime, *, fallback_symbols=None) -> list[str]:
+    """Load tickers for screening with runtime-aware path and fallback."""
+    # AI-AGENT-REF: runtime-aware tickers loader
+    tickers_path = (
+        os.path.join(runtime.cfg.repo_root, "tickers.csv")
+        if hasattr(runtime.cfg, "repo_root")
+        else "tickers.csv"
+    )
+    if not os.path.exists(tickers_path):
+        global _TICKERS_WARN_EMITTED
+        if not _TICKERS_WARN_EMITTED:
+            _log.warning(
+                "Tickers file %s not found. Using default tickers.", tickers_path
+            )
+            _TICKERS_WARN_EMITTED = True
+        return fallback_symbols or DEFAULT_TICKERS
+    return load_tickers(tickers_path)
 
 
 def daily_summary() -> None:
@@ -9357,7 +9376,7 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     params["CAPITAL_CAP"] = _param(runtime, "CAPITAL_CAP", 0.04)
     compute_spy_vol_stats(runtime)
 
-    full_watchlist = load_tickers(TICKERS_FILE)
+    full_watchlist = load_candidate_universe(runtime)
     symbols = screen_candidates(runtime)
     _log.info(
         "Number of screened candidates: %s", len(symbols)
@@ -9368,15 +9387,15 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
         )
         symbols = full_watchlist[:5]
     _log.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
-    ctx.tickers = symbols
+    runtime.tickers = symbols  # AI-AGENT-REF: store screened tickers on runtime
     try:
-        summary = pre_trade_health_check(ctx, symbols)
+        summary = pre_trade_health_check(runtime, symbols)
         _log.info("PRE_TRADE_HEALTH", extra=summary)
     except Exception as exc:
         _log.warning(f"pre_trade_health_check failure: {exc}")
     with portfolio_lock:
-        ctx.portfolio_weights = portfolio.compute_portfolio_weights(ctx, symbols)
-    acct = safe_alpaca_get_account(ctx)
+        runtime.portfolio_weights = portfolio.compute_portfolio_weights(runtime, symbols)
+    acct = safe_alpaca_get_account(runtime)
     if acct:
         current_cash = float(getattr(acct, "buying_power", acct.cash))
     else:
