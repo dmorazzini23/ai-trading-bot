@@ -1,3 +1,45 @@
+# Migration Notes
+
+## Portfolio Optimizer & Transaction Costs Migration (Latest)
+
+### Summary
+Moved portfolio optimization and transaction cost modules from `scripts/` to the main `ai_trading/` package to fix production import errors.
+
+### What Changed
+
+**1. Portfolio Optimizer**
+- **Moved from:** `scripts/portfolio_optimizer.py`
+- **Moved to:** `ai_trading/portfolio/optimizer.py`
+- **Updated:** `ai_trading/portfolio/__init__.py` to export `PortfolioDecision`, `PortfolioOptimizer`, `create_portfolio_optimizer`
+
+**2. Transaction Cost Calculator**
+- **Moved from:** `scripts/transaction_cost_calculator.py` 
+- **Moved to:** `ai_trading/execution/transaction_costs.py`
+- **Updated:** `ai_trading/signals.py` to import from new location
+
+**3. Backward Compatibility**
+- Both `scripts/` files are now compatibility shims that re-export from new locations
+- No breaking changes for existing code
+
+**4. Bug Fixes**
+- Fixed `ENHANCED_CONFIG_AVAILABLE` reference in transaction cost calculator
+- Improved exception handling in signals.py portfolio decision path
+- Added specific `ValueError`/`KeyError` handling with better error messages
+
+### Production Impact
+- ✅ Fixes `ImportError: PortfolioDecision` in production
+- ✅ No production modules import from `scripts/*` anymore
+- ✅ Better error reporting for portfolio decision rejections
+- ✅ Maintains all existing functionality
+
+### Testing
+```bash
+python scripts/smoke_imports.py  # Should show all green checkmarks
+python -c "import ai_trading.signals"  # Should succeed
+```
+
+---
+
 # Migration Notes: Import Guards Removal & TradingConfig Enhancement
 
 This document summarizes the changes made to eliminate import guards, unify TradingConfig, and harden execution/risk paths for production reliability.

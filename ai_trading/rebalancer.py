@@ -33,7 +33,7 @@ from ai_trading.core.constants import RISK_PARAMETERS
 from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer
 
 # AI-AGENT-REF: Portfolio-first trading integration  
-from scripts.transaction_cost_calculator import (
+from ai_trading.execution.transaction_costs import (
     TransactionCostCalculator,
     create_transaction_cost_calculator,
 )

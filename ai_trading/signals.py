@@ -64,7 +64,7 @@ def rolling_mean(arr, window: int):
 logger = logging.getLogger(__name__)
 
 # AI-AGENT-REF: Portfolio-level optimization integration
-from scripts.transaction_cost_calculator import (
+from ai_trading.execution.transaction_costs import (
     TradeType,
     TransactionCostCalculator,
     create_transaction_cost_calculator,
@@ -873,29 +873,40 @@ def filter_signals_with_portfolio_optimization(
 
                 # Apply decision logic
                 if decision == PortfolioDecision.APPROVE:
-                    # Validate transaction costs with safety margin
-                    expected_profit = _estimate_signal_profit(signal, market_data)
-                    position_change = abs(proposed_position - current_position)
+                    try:
+                        # Validate transaction costs with safety margin
+                        expected_profit = _estimate_signal_profit(signal, market_data)
+                        position_change = abs(proposed_position - current_position)
 
-                    profitability = (
-                        _transaction_cost_calculator.validate_trade_profitability(
-                            symbol,
-                            position_change,
-                            expected_profit,
-                            market_data,
-                            TradeType.LIMIT_ORDER,
+                        profitability = (
+                            _transaction_cost_calculator.validate_trade_profitability(
+                                symbol,
+                                position_change,
+                                expected_profit,
+                                market_data,
+                                TradeType.LIMIT_ORDER,
+                            )
                         )
-                    )
 
-                    if profitability.is_profitable:
-                        filtered_signals.append(signal)
-                        logger.info(
-                            f"SIGNAL_APPROVED_PORTFOLIO | {symbol} {side} - {reasoning}"
+                        if profitability.is_profitable:
+                            filtered_signals.append(signal)
+                            logger.info(
+                                f"SIGNAL_APPROVED_PORTFOLIO | {symbol} {side} - {reasoning}"
+                            )
+                        else:
+                            logger.info(
+                                f"SIGNAL_REJECTED_COSTS | {symbol} {side} - "
+                                f"profit={expected_profit:.2f}, cost={profitability.transaction_cost:.2f}"
+                            )
+                    except (ValueError, KeyError) as e:
+                        logger.warning(
+                            f"SIGNAL_REJECTED_COSTS | {symbol} {side} - Cost calculation error: {e}"
                         )
-                    else:
+                    except Exception as e:
+                        logger.error(f"Unexpected error in cost validation for {symbol}: {e}")
+                        # Default to rejection on unexpected errors for safety
                         logger.info(
-                            f"SIGNAL_REJECTED_COSTS | {symbol} {side} - "
-                            f"profit={expected_profit:.2f}, cost={profitability.transaction_cost:.2f}"
+                            f"SIGNAL_REJECTED_COSTS | {symbol} {side} - Validation error"
                         )
 
                 elif decision == PortfolioDecision.BATCH:
