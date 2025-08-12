@@ -266,14 +266,15 @@ class AlpacaExecutionEngine:
             return False
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error(
-                "ORDER_CANCEL_FAILED",
+                "ORDER_API_FAILED",
                 extra={
                     "cause": e.__class__.__name__,
                     "detail": str(e),
+                    "op": "cancel",
                     "order_id": order_id,
                 },
             )  # AI-AGENT-REF: log cancellation failure cause
-            return False
+            raise
 
     def get_order_status(self, order_id: str) -> dict | None:
         """

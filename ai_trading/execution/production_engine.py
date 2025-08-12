@@ -434,25 +434,15 @@ class ProductionExecutionCoordinator:
 
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error(
-                "ORDER_REQUEST_FAILED",
+                "ORDER_API_FAILED",
                 extra={
                     "cause": e.__class__.__name__,
                     "detail": str(e),
+                    "op": "submit",
                     "order_id": order_request.client_order_id,
                 },
             )  # AI-AGENT-REF: log order request failure
-            return ExecutionResult(
-                status="error",
-                order_id=order_request.client_order_id,
-                symbol=order_request.symbol,
-                side=(
-                    order_request.side.value
-                    if isinstance(order_request.side, OrderSide)
-                    else order_request.side
-                ),
-                quantity=order_request.quantity,
-                message=f"Submission error: {e}",
-            )
+            raise
 
     async def submit_order(
         self,
@@ -536,22 +526,15 @@ class ProductionExecutionCoordinator:
 
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error(
-                "ORDER_SUBMISSION_FAILED",
+                "ORDER_API_FAILED",
                 extra={
                     "cause": e.__class__.__name__,
                     "detail": str(e),
+                    "op": "submit",
                     "order_id": "unknown",
                 },
             )  # AI-AGENT-REF: log submission failure
-            return ExecutionResult(
-                status="error",
-                order_id="unknown",
-                symbol=symbol,
-                side=side.value if isinstance(side, OrderSide) else side,
-                quantity=quantity,
-                message=f"Submission error: {e}",
-                error_code="submission_error",
-            )
+            raise
 
     async def _comprehensive_safety_check(self, order: Order) -> dict[str, Any]:
         """Perform comprehensive safety checks before execution."""
@@ -1097,17 +1080,12 @@ class ProductionExecutionCoordinator:
 
         except (APIError, TimeoutError, ConnectionError) as e:
             logger.error(
-                "ORDER_CANCEL_FAILED",
+                "ORDER_API_FAILED",
                 extra={
                     "cause": e.__class__.__name__,
                     "detail": str(e),
+                    "op": "cancel",
                     "order_id": order_id,
                 },
             )
-            return ExecutionResult(
-                status="error",
-                order_id=order_id,
-                symbol="unknown",
-                message=f"Cancellation error: {e}",
-                error_code="cancellation_error",
-            )
+            raise

@@ -1111,11 +1111,8 @@ def check_exposure_caps(portfolio, exposure, cap):
     # Original exposure logic continues here...
 
 
-# AI-AGENT-REF: guard pandas_ta import for test environments
-try:
-    import pandas_ta as ta
-except ImportError:
-    ta = None
+# AI-AGENT-REF: direct pandas_ta import without guard
+import pandas_ta as ta
 
 
 def apply_trailing_atr_stop(
@@ -1132,9 +1129,6 @@ def apply_trailing_atr_stop(
             logger.warning(
                 "apply_trailing_atr_stop invalid entry price: %.2f", entry_price
             )
-            return
-        if ta is None:
-            logger.warning("pandas_ta not available, skipping ATR calculation")
             return
         atr = df.ta.atr()
         trailing_stop = entry_price - 2 * atr
