@@ -1284,6 +1284,116 @@ def _load_ml_model(symbol: str):
     return model
 
 
+# AI-AGENT-REF: centralized loader for primary ML model
+def _load_primary_model(runtime):
+    """
+    Load and cache the primary ML model for predictions.
+    Resolution order:
+      1) If runtime.model already set -> return it.
+      2) If cfg has an explicit path (cfg.ml_model_path or cfg.model_path) and it exists:
+           - .joblib/.pkl -> joblib.load / pickle.load
+      3) If cfg has a python module path (cfg.ml_model_module or cfg.model_module):
+           - import module, use get_model() or Model() to construct.
+    On success: cache to runtime.model and return it.
+    On failure: log and return None.
+    """
+    # 0) Return cached
+    existing = getattr(runtime, "model", None)
+    if existing is not None:
+        return existing
+
+    # 1) Candidate sources from config
+    cfg = runtime.cfg
+    candidates = []
+    # file paths first
+    for attr in ("ml_model_path", "model_path"):
+        p = getattr(cfg, attr, None)
+        if isinstance(p, str) and p.strip():
+            candidates.append(("path", p.strip()))
+    # module paths next
+    for attr in ("ml_model_module", "model_module"):
+        m = getattr(cfg, attr, None)
+        if isinstance(m, str) and m.strip():
+            candidates.append(("module", m.strip()))
+
+    model = None
+    last_error = None
+
+    for kind, value in candidates:
+        try:
+            if kind == "path":
+                path = Path(value)
+                if not path.exists():
+                    raise FileNotFoundError(str(path))
+                # prefer joblib when available for sklearn-like artifacts
+                if path.suffix in (".joblib", ".pkl"):
+                    try:
+                        import joblib  # noqa: F401
+                        model = joblib.load(str(path))
+                    except ModuleNotFoundError:
+                        import pickle
+                        with open(path, "rb") as fh:
+                            model = pickle.load(fh)
+                else:
+                    # Unknown extension; try pickle as a best effort
+                    import pickle
+                    with open(path, "rb") as fh:
+                        model = pickle.load(fh)
+
+                _log.info(
+                    "MODEL_LOADED",
+                    extra={
+                        "source": "path",
+                        "value": str(path),
+                        "model_type": type(model).__name__,
+                    },
+                )
+                runtime.model = model
+                return model
+
+            elif kind == "module":
+                mod = importlib.import_module(value)
+                if hasattr(mod, "get_model") and callable(getattr(mod, "get_model")):
+                    model = mod.get_model(cfg)
+                elif hasattr(mod, "Model"):
+                    model = getattr(mod, "Model")(cfg)
+                else:
+                    raise AttributeError(f"No get_model() or Model in {value}")
+                _log.info(
+                    "MODEL_LOADED",
+                    extra={
+                        "source": "module",
+                        "value": value,
+                        "model_type": type(model).__name__,
+                    },
+                )
+                runtime.model = model
+                return model
+
+        except (
+            FileNotFoundError,
+            OSError,
+            ValueError,
+            AttributeError,
+            ModuleNotFoundError,
+            ImportError,
+        ) as e:
+            last_error = str(e)
+            continue
+
+    if last_error:
+        _log.error(
+            "MODEL_LOAD_FAILED",
+            extra={"candidates": candidates, "error": last_error},
+        )
+    else:
+        _log.error(
+            "MODEL_LOAD_FAILED",
+            extra={"candidates": candidates, "error": "no_candidates"},
+        )
+    return None
+
+
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     """Fetch the last day of minute bars and raise on empty."""
     # AI-AGENT-REF: raise on empty DataFrame
@@ -9656,10 +9766,6 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         Current bot state containing position information, risk metrics,
         trading history, and operational flags. This object is modified
         during execution to track state changes.
-    model : object
-        Machine learning model instance for signal generation and prediction.
-        Can be any trained model with a predict() method compatible with
-        the bot's feature engineering pipeline.
 
     Returns
     -------
@@ -9729,14 +9835,9 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     --------
     >>> import asyncio
     >>> from bot_engine import BotState, run_all_trades_worker
-    >>> from ml_model import load_trained_model
     >>>
-    >>> # Initialize bot state and model
     >>> state = BotState()
-    >>> model = load_trained_model('models/trading_model.pkl')
-    >>>
-    >>> # Execute trading cycle
-    >>> run_all_trades_worker(state, model)
+    >>> run_all_trades_worker(state, runtime)
     >>>
     >>> # Check results
     >>> logging.info(f"Trades executed: {len(state.position_cache)}")
@@ -9958,11 +10059,19 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     _log.warning(f"SUMMARY_FAIL: {exc}")
                 return
 
+            alpha_model = _load_primary_model(runtime)  # AI-AGENT-REF: load model once per runtime
+            if alpha_model is None:
+                _log.warning(
+                    "SKIP_TRADE_NO_MODEL",
+                    extra={"reason": "model_not_available"},
+                )
+                return
+
             retries = 3
             processed, row_counts = [], {}
             for attempt in range(retries):
                 processed, row_counts = _process_symbols(
-                    symbols, current_cash, model, regime_ok
+                    symbols, current_cash, alpha_model, regime_ok
                 )
                 if processed:
                     if attempt:
@@ -10137,14 +10246,14 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             run_lock.release()
 
 
-def schedule_run_all_trades(model):
+def schedule_run_all_trades(runtime):
     """Spawn run_all_trades_worker if market is open."""  # FIXED
     if is_market_open():
         t = threading.Thread(
             target=run_all_trades_worker,
             args=(
                 state,
-                model,
+                runtime,
             ),
             daemon=True,
         )
@@ -10153,9 +10262,9 @@ def schedule_run_all_trades(model):
         _log.info("Market closed—skipping run_all_trades.")
 
 
-def schedule_run_all_trades_with_delay(model):
+def schedule_run_all_trades_with_delay(runtime):
     time.sleep(30)
-    schedule_run_all_trades(model)
+    schedule_run_all_trades(runtime)
 
 
 def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
@@ -10420,11 +10529,6 @@ def main() -> None:
         else:
             _log.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
 
-        try:
-            model = load_model(MODEL_PATH)
-        except Exception as e:
-            _log.fatal("Could not load model", exc_info=e)
-            sys.exit(1)
         _log.info("BOT_LAUNCHED")
         cancel_all_open_orders(ctx)
         audit_positions(ctx)
@@ -10496,7 +10600,7 @@ def main() -> None:
             try:
                 # delay can be configured via env SCHEDULER_SLEEP_SECONDS
                 time.sleep(S.scheduler_sleep_seconds)
-                schedule_run_all_trades(model)
+                schedule_run_all_trades(ctx)  # AI-AGENT-REF: runtime-based scheduling
             except Exception as e:
                 _log.exception(f"gather_minute_data_with_delay failed: {e}")
 
