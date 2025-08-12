@@ -23,12 +23,7 @@ def resolve_risk_engine_cls():
     cls = _try_import("ai_trading.risk.engine", "RiskEngine")
     if cls:
         return cls
-    # Optional dev fallback (off by default)
-    if os.getenv("DEV_ALLOW_SCRIPTS", "0") in ("1","true","True","yes"):
-        cls = _try_import("scripts.risk_engine", "RiskEngine")
-        if cls:
-            return cls
-    return None
+    return None  # no scripts fallback
 
 
 def resolve_strategy_allocator_cls():

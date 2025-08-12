@@ -3733,7 +3733,7 @@ def get_risk_engine():
                         pass
                 risk_engine = RiskEngine()
         else:
-            _emit_once(_log, "risk_engine_resolved", logging.INFO, f"Risk engine: {cls.__name__}")
+            _emit_once(_log, "risk_engine_resolved", logging.INFO, f"Risk engine: {cls.__module__}.{cls.__name__}")
             risk_engine = cls()
     return risk_engine
 
