@@ -705,6 +705,10 @@ class TradingConfig:
                  capacity: int = 100,
                  refill_rate: float = 10.0,
                  queue_timeout: float = 30.0,
+                 # AI-AGENT-REF: optional model configuration
+                 ml_model_path: str | None = None,
+                 ml_model_module: str | None = None,
+                 halt_file: str | None = None,
                  **kwargs):
         self.mode = mode
         self.trailing_factor = trailing_factor
@@ -756,6 +760,10 @@ class TradingConfig:
         self.capacity = capacity
         self.refill_rate = refill_rate
         self.queue_timeout = queue_timeout
+        # AI-AGENT-REF: ML model configuration and halt file
+        self.ml_model_path = ml_model_path
+        self.ml_model_module = ml_model_module
+        self.halt_file = halt_file
 
         # Basic validation for new fields
         if not (0.0 <= self.conf_threshold <= 1.0):
@@ -814,6 +822,10 @@ class TradingConfig:
         capacity = int(getenv("CAPACITY", overrides.get("capacity", 100)))
         refill_rate = float(getenv("REFILL_RATE", overrides.get("refill_rate", 10.0)))
         queue_timeout = float(getenv("QUEUE_TIMEOUT", overrides.get("queue_timeout", 30.0)))
+        # AI-AGENT-REF: ML model configuration and halt file from env
+        ml_model_path = getenv("AI_TRADER_MODEL_PATH", overrides.get("ml_model_path"))
+        ml_model_module = getenv("AI_TRADER_MODEL_MODULE", overrides.get("ml_model_module"))
+        halt_file = getenv("HALT_FILE", overrides.get("halt_file"))
 
         # include any other fields you already parse in from_env
         # and propagate remaining overrides into kwargs
@@ -824,7 +836,7 @@ class TradingConfig:
             "alpaca_base_url", "sleep_interval", "max_retries", "backoff_factor",
             "max_backoff_interval", "pct", "MODEL_PATH", "scheduler_iterations",
             "scheduler_sleep_seconds", "window", "enabled", "capacity", "refill_rate",
-            "queue_timeout"
+            "queue_timeout", "ml_model_path", "ml_model_module", "halt_file"
         }
         cfg = cls(
             mode=mode,
@@ -853,6 +865,9 @@ class TradingConfig:
             capacity=capacity,
             refill_rate=refill_rate,
             queue_timeout=queue_timeout,
+            ml_model_path=ml_model_path,
+            ml_model_module=ml_model_module,
+            halt_file=halt_file,
             **{k: v for k, v in overrides.items() if k not in excluded_keys}
         )
         # set mode last so downstream logic sees it

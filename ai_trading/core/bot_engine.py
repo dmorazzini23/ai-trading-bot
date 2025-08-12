@@ -26,9 +26,9 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
-# Warn once per process about missing tickers file
-# AI-AGENT-REF: guard to avoid spamming tickers.csv warnings
-_TICKERS_WARN_EMITTED = False
+# AI-AGENT-REF: warn-once flags for config/tickers issues
+_warned_missing_tickers = False
+_warned_no_model_candidates = False
 
 
 def _is_market_open_now(cfg=None) -> bool:
@@ -1315,6 +1315,30 @@ def _load_primary_model(runtime):
         m = getattr(cfg, attr, None)
         if isinstance(m, str) and m.strip():
             candidates.append(("module", m.strip()))
+
+    # AI-AGENT-REF: warn once when no model configuration is provided
+    global _warned_no_model_candidates
+    if not candidates:
+        if not _warned_no_model_candidates:
+            _warned_no_model_candidates = True
+            _log.error(
+                "MODEL_CONFIG_MISSING",
+                extra={
+                    "hint_paths": [
+                        "AI_TRADER_MODEL_PATH",
+                        "TradingConfig.ml_model_path",
+                    ],
+                    "hint_modules": [
+                        "AI_TRADER_MODEL_MODULE",
+                        "TradingConfig.ml_model_module",
+                    ],
+                    "action": (
+                        "Set one of the above to a valid model path (.joblib/.pkl)"
+                        " or module with get_model()/Model()."
+                    ),
+                },
+            )
+        return None
 
     model = None
     last_error = None
@@ -8754,14 +8778,17 @@ def get_stock_bars_safe(api, symbol, timeframe):
 
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
     """Load tickers from file with fallback to default tickers."""
-    global _TICKERS_WARN_EMITTED
+    global _warned_missing_tickers
     tickers: list[str] = []
 
     # Check if file exists and handle gracefully
     if not os.path.exists(path):
-        if not _TICKERS_WARN_EMITTED:
-            _log.warning(f"Tickers file {path} not found. Using default tickers.")
-            _TICKERS_WARN_EMITTED = True
+        if not _warned_missing_tickers:
+            _warned_missing_tickers = True
+            _log.warning(
+                "TICKERS_FILE_MISSING",
+                extra={"path": str(path), "fallback": "defaults"},
+            )
         return DEFAULT_TICKERS
 
     try:
@@ -8786,12 +8813,13 @@ def load_candidate_universe(runtime, *, fallback_symbols=None) -> list[str]:
         else "tickers.csv"
     )
     if not os.path.exists(tickers_path):
-        global _TICKERS_WARN_EMITTED
-        if not _TICKERS_WARN_EMITTED:
+        global _warned_missing_tickers
+        if not _warned_missing_tickers:
+            _warned_missing_tickers = True
             _log.warning(
-                "Tickers file %s not found. Using default tickers.", tickers_path
+                "TICKERS_FILE_MISSING",
+                extra={"path": str(tickers_path), "fallback": "defaults"},
             )
-            _TICKERS_WARN_EMITTED = True
         return fallback_symbols or DEFAULT_TICKERS
     return load_tickers(tickers_path)
 
