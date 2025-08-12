@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     log_compact_json: bool = Field(False, env="LOG_COMPACT_JSON")
     log_market_fetch: bool = Field(False, env="LOG_MARKET_FETCH")
 
+    # Keeper integration flags (all disabled by default for behavioral compatibility)
+    liquidity_checks_enabled: bool = Field(False, env="LIQUIDITY_CHECKS_ENABLED")
+    sizing_enabled: bool = Field(False, env="SIZING_ENABLED")
+    data_sanitize_enabled: bool = Field(False, env="DATA_SANITIZE_ENABLED")
+    corp_actions_enabled: bool = Field(False, env="CORP_ACTIONS_ENABLED")
+    market_cache_enabled: bool = Field(False, env="MARKET_CACHE_ENABLED")
+    market_cache_ttl: int = Field(900, env="MARKET_CACHE_TTL")
+    metrics_enabled: bool = Field(False, env="METRICS_ENABLED")
+
     # Worker sizing (None/0 => auto)
     executor_workers: int | None = Field(None, env="EXECUTOR_WORKERS")
     prediction_workers: int | None = Field(None, env="PREDICTION_WORKERS")
