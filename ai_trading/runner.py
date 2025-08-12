@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import time
+import time as _time
 from threading import RLock
 
 from ai_trading.logging import get_logger
@@ -68,7 +68,7 @@ def run_cycle() -> None:
     """Execute a single trading cycle with basic re-entrancy protection."""
     global _last_run_time
 
-    current_time = time.time()
+    current_time = _time.time()
     if current_time - _last_run_time < _min_interval:
         log.debug("RUN_CYCLE_SKIPPED_TOO_FREQUENT")
         return
@@ -85,8 +85,7 @@ def run_cycle() -> None:
         except RuntimeError as e:
             log.error("Trading cycle failed: %s", e)
             # Backoff a touch to avoid immediate duplicate startup spam
-            import time
-            time.sleep(1.0)
+            _time.sleep(1.0)
             raise
 
         state = BotState()
