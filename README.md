@@ -1239,3 +1239,29 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 *Happy Trading! 🎯📈*
+
+## Agent & Dev Quickstart
+
+### Environment
+- Python 3.12 + venv
+- Systemd service: `ai-trading.service` on a DigitalOcean droplet
+
+### Runbook
+```bash
+python -m py_compile $(git ls-files '*.py') || exit 1
+sudo systemctl restart ai-trading.service
+journalctl -u ai-trading.service -f | sed -n '1,200p'
+```
+
+Conventions (must follow)
+• Use runtime (instance of BotRuntime) across core paths; do not introduce ctx.
+• No shims; no try/except ImportError; no broad except Exception.
+• Structured JSON logging only; no print().
+• Models: use _load_primary_model(runtime); cache at runtime.model.
+
+Common Pitfalls
+• tickers.csv missing → a single warning per process (defaults are used).
+• Off-hours data empties are expected; don’t escalate severity.
+
+*(If `README.md` is long, add this as a new section without removing existing content.)*
+
