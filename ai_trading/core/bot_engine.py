@@ -3541,9 +3541,10 @@ class SignalManager:
         return s, weight, "sentiment"
 
     def signal_regime(
-        self, state: BotState, df: pd.DataFrame, model=None
+        self, runtime: BotContext, state: BotState, df: pd.DataFrame, model=None
     ) -> tuple[int, float, str]:
-        ok = check_market_regime(state)
+        # AI-AGENT-REF: propagate runtime into regime signal evaluation
+        ok = check_market_regime(runtime, state)
         s = 1 if ok else -1
         return s, 1.0, "regime"
 
@@ -3663,7 +3664,7 @@ class SignalManager:
             self.signal_mean_reversion(df, model),
             self.signal_ml(df, model, ticker),
             self.signal_sentiment(ctx, ticker, df, model),
-            self.signal_regime(state, df, model),
+            self.signal_regime(ctx, state, df, model),
             self.signal_stochrsi(df, model),
             self.signal_obv(df, model),
             self.signal_vsa(df, model),
@@ -8352,7 +8353,13 @@ def _market_breadth(ctx: BotContext) -> float:
     return up / total if total else 0.5
 
 
-def detect_regime_state(ctx: BotContext) -> str:
+def detect_regime_state(runtime: BotContext) -> str:
+    """
+    Inspect recent returns/volatility/volume breadth to classify the regime.
+    NOTE: Previously this used a free/global `ctx`. We now pass the explicit
+    runtime. To minimize churn, we alias it locally.
+    """
+    ctx = runtime  # AI-AGENT-REF: local alias to avoid global context
     df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
     if df is None or len(df) < 200:
         return "sideways"
@@ -8374,9 +8381,14 @@ def detect_regime_state(ctx: BotContext) -> str:
     return "sideways"
 
 
-def check_market_regime(state: BotState) -> bool:
-    state.current_regime = detect_regime_state(ctx)
-    return True
+def check_market_regime(runtime: BotContext, state: BotState) -> bool:
+    """
+    Evaluate the current market regime and update state.current_regime.
+    Returns True/False indicating whether trading is allowed under this regime.
+    """
+    # AI-AGENT-REF: pass runtime explicitly into regime detection
+    state.current_regime = detect_regime_state(runtime)
+    return bool(getattr(state.current_regime, "allow_trading", True))
 
 
 _SCREEN_CACHE: dict[str, float] = {}
@@ -9401,7 +9413,7 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     else:
         _log.error("Failed to get account information from Alpaca")
         return 0.0, False, []
-    regime_ok = check_market_regime(state)
+    regime_ok = check_market_regime(runtime, state)  # AI-AGENT-REF: runtime flows into regime check
     return current_cash, regime_ok, symbols
 
 
