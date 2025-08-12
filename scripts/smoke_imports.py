@@ -54,7 +54,10 @@ def main():
     tests.append(test_import("alpaca.trading.enums", "- Alpaca enums"))
     tests.append(test_import("alpaca.trading.requests", "- Alpaca requests"))
     tests.append(test_import("alpaca_trade_api.rest", "- Alpaca legacy API"))
-    tests.append(test_import("scripts.transaction_cost_calculator", "- transaction cost calculator"))
+    tests.append(test_import("ai_trading.portfolio.optimizer", "- portfolio optimizer"))
+    tests.append(test_import("ai_trading.execution.transaction_costs", "- transaction costs"))
+    tests.append(test_import("scripts.transaction_cost_calculator", "- transaction cost calculator shim"))
+    tests.append(test_import("scripts.portfolio_optimizer", "- portfolio optimizer shim"))
     tests.append(test_import("scripts.strategy_allocator", "- strategy allocator"))
     
     # Key class instantiations
