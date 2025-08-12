@@ -13,6 +13,7 @@ import pandas as pd
 
 from ai_trading.config.management import TradingConfig, SEED
 from ai_trading.telemetry import metrics_logger
+from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: narrow Alpaca exceptions
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
 from ai_trading.strategies.base import StrategySignal as TradeSignal
@@ -157,8 +158,14 @@ class RiskEngine:
             from datetime import datetime
             self._atr_cache[symbol] = (datetime.now(UTC), atr)
             return atr
-        except Exception as exc:
-            logger.warning("ATR calculation error for %s: %s", symbol, exc)
+        except (APIError, ValueError, KeyError, TypeError) as exc:
+            # AI-AGENT-REF: narrow data and API errors
+            logger.warning(
+                "ATR calculation error for %s: %s",
+                symbol,
+                exc,
+                extra={"cause": exc.__class__.__name__},
+            )
             return None
 
     def _adaptive_global_cap(self) -> float:
@@ -219,8 +226,12 @@ class RiskEngine:
                 weight = qty * price / equity if equity > 0 else 0.0
                 exposure[asset] = exposure.get(asset, 0.0) + weight
             self.exposure = exposure
-        except Exception as exc:  # pragma: no cover - best effort
-            logger.warning("refresh_positions failed: %s", exc)
+        except (AttributeError, APIError) as exc:  # AI-AGENT-REF: narrow API errors
+            logger.warning(
+                "refresh_positions failed: %s",
+                exc,
+                extra={"cause": exc.__class__.__name__},
+            )
 
     def position_exists(self, api, symbol: str) -> bool:
         """Return True if ``symbol`` exists in current Alpaca positions."""
@@ -228,8 +239,13 @@ class RiskEngine:
             for p in api.get_all_positions():
                 if getattr(p, "symbol", "") == symbol:
                     return True
-        except Exception as exc:  # pragma: no cover - best effort
-            logger.warning("position_exists failed for %s: %s", symbol, exc)
+        except (AttributeError, APIError) as exc:  # AI-AGENT-REF: narrow API errors
+            logger.warning(
+                "position_exists failed for %s: %s",
+                symbol,
+                exc,
+                extra={"cause": exc.__class__.__name__},
+            )
         return False
 
     def can_trade(

@@ -1472,14 +1472,21 @@ def cancel_all_open_orders(runtime) -> None:
             if getattr(od, "status", "").lower() == "open":
                 try:
                     runtime.api.cancel_order_by_id(od.id)
-                except Exception as exc:
+                except APIError as exc:
+                    # AI-AGENT-REF: narrow Alpaca API exceptions
                     _log.exception(
                         "Failed to cancel order %s",
                         getattr(od, "id", "unknown"),
                         exc_info=exc,
+                        extra={"cause": exc.__class__.__name__},
                     )
-    except Exception as exc:
-        _log.warning("Failed to cancel open orders: %s", exc, exc_info=True)
+    except APIError as exc:
+        _log.warning(
+            "Failed to cancel open orders: %s",
+            exc,
+            exc_info=True,
+            extra={"cause": exc.__class__.__name__},
+        )
 
 
 def reconcile_positions(ctx: BotContext) -> None:
@@ -2307,18 +2314,26 @@ def _log_health_diagnostics(runtime, reason: str) -> None:
     try:
         cash = float(runtime.api.get_account().cash)
         positions = len(runtime.api.get_all_positions())
-    except Exception:
+    except (AttributeError, APIError) as e:
         cash = -1.0
         positions = -1
+        _log.debug(
+            "health_diagnostics_account_error",
+            extra={"cause": e.__class__.__name__},
+        )
     try:
         df = runtime.data_fetcher.get_minute_df(
             runtime, REGIME_SYMBOLS[0], lookback_minutes=S.min_health_rows
         )
         rows = len(df)
         last_time = df.index[-1].isoformat() if not df.empty else "n/a"
-    except Exception:
+    except (AttributeError, ValueError, KeyError, APIError) as e:
         rows = 0
         last_time = "n/a"
+        _log.debug(
+            "health_diagnostics_data_error",
+            extra={"cause": e.__class__.__name__},
+        )
     vol = _VOL_STATS.get("last")
     sentiment = getattr(runtime, "last_sentiment", 0.0)
     _log.debug(
@@ -3373,15 +3388,21 @@ def audit_positions(runtime) -> None:
     """
     Fetch local vs. broker positions and submit market orders to correct any mismatch.
     """
+    # Local alias for legacy references; do not export or rely on globals.
+    ctx = runtime
     # 1) Read local open positions from the trade log
     local = _parse_local_positions()
 
     # 2) Fetch remote (broker) positions
     try:
         remote = {p.symbol: int(p.qty) for p in runtime.api.get_all_positions()}
-    except Exception as e:
+    except APIError as e:
         logger = logging.getLogger(__name__)
-        _log.exception("bot_engine: failed to fetch remote positions from broker", exc_info=e)
+        _log.exception(
+            "bot_engine: failed to fetch remote positions from broker",
+            exc_info=e,
+            extra={"cause": e.__class__.__name__},
+        )
         return
 
     max_order_size = _as_int(os.getenv("MAX_ORDER_SIZE", "1000"), 1000)
@@ -3401,8 +3422,12 @@ def audit_positions(runtime) -> None:
                         time_in_force=TimeInForce.DAY,
                     )
                     safe_submit_order(runtime.api, req)
-                except Exception as exc:
-                    _log.exception("bot.py unexpected", exc_info=exc)
+                except APIError as exc:
+                    _log.exception(
+                        "bot.py unexpected",
+                        exc_info=exc,
+                        extra={"cause": exc.__class__.__name__},
+                    )
                     raise
             else:
                 # Broker has fewer shares than local: buy back the missing shares
@@ -3414,8 +3439,12 @@ def audit_positions(runtime) -> None:
                         time_in_force=TimeInForce.DAY,
                     )
                     safe_submit_order(runtime.api, req)
-                except Exception as exc:
-                    _log.exception("bot.py unexpected", exc_info=exc)
+                except APIError as exc:
+                    _log.exception(
+                        "bot.py unexpected",
+                        exc_info=exc,
+                        extra={"cause": exc.__class__.__name__},
+                    )
                     raise
 
     # 4) For any symbol in local that is not in remote, submit order matching the local side
@@ -3439,8 +3468,12 @@ def audit_positions(runtime) -> None:
                     time_in_force=TimeInForce.DAY,
                 )
                 safe_submit_order(ctx.api, req)
-            except Exception as exc:
-                _log.exception("bot.py unexpected", exc_info=exc)
+            except APIError as exc:
+                _log.exception(
+                    "bot.py unexpected",
+                    exc_info=exc,
+                    extra={"cause": exc.__class__.__name__},
+                )
                 raise
 
 
