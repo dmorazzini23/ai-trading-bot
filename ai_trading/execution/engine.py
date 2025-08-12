@@ -552,17 +552,6 @@ class ExecutionEngine:
 
         logger.info("ExecutionEngine initialized")
 
-    # --- Back-compat shim for tests ---
-    def _execute_sliced(self, *args, **kwargs):  # pragma: no cover
-        """
-        Back-compat wrapper so tests can monkeypatch this private hook.
-        Delegates to whichever sliced-exec implementation exists.
-        """
-        for name in ("execute_sliced", "execute_twap_slice", "_execute_twap_slice"):
-            impl = getattr(self, name, None)
-            if callable(impl):
-                return impl(*args, **kwargs)
-        raise NotImplementedError("_execute_sliced delegate not found")
 
     def execute_order(
         self,
@@ -609,9 +598,9 @@ class ExecutionEngine:
                 side = quantity_or_side
                 quantity = side_or_quantity
 
-            # If method is "twap" and we have a _execute_sliced method, use it
-            if method == "twap" and hasattr(self, "_execute_sliced"):
-                return self._execute_sliced(symbol, quantity, side, **kwargs)
+            # AI-AGENT-REF: call sliced execution directly for TWAP
+            if method == "twap":
+                return self.execute_sliced(symbol, quantity, side, **kwargs)
 
             # Create order
             order = Order(symbol, side, quantity, order_type, **kwargs)

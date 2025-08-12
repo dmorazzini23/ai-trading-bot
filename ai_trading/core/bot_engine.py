@@ -79,31 +79,31 @@ def _initialize_bot_context_post_setup(ctx: Any) -> None:
                 data_source_health_check(ctx, REGIME_SYMBOLS)  # type: ignore[name-defined]
                 _log.info("Post-setup data source health check completed.")
             except (
-                FileNotFoundError,
-                OSError,
+                APIError,
+                TimeoutError,
+                ConnectionError,
                 KeyError,
                 ValueError,
                 TypeError,
-                TimeoutError,
-                ConnectionError,
+                OSError,
             ) as e:  # AI-AGENT-REF: tighten health probe error handling
                 _log.warning(
-                    "HEALTH_DATA_PROBE_FAILED",
+                    "HEALTH_CHECK_FAILED",
                     extra={"cause": e.__class__.__name__, "detail": str(e)},
                 )
         else:
             _log.debug("Post-setup health check not available; skipping.")
     except (
-        FileNotFoundError,
-        OSError,
+        APIError,
+        TimeoutError,
+        ConnectionError,
         KeyError,
         ValueError,
         TypeError,
-        TimeoutError,
-        ConnectionError,
+        OSError,
     ) as e:  # AI-AGENT-REF: tighten health probe error handling
         _log.warning(
-            "HEALTH_DATA_PROBE_FAILED",
+            "HEALTH_CHECK_FAILED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
 
@@ -1363,8 +1363,6 @@ def _load_primary_model(runtime):
         return None
 
     model = None
-    last_error = None
-
     for kind, value in candidates:
         try:
             if kind == "path":
@@ -1418,25 +1416,20 @@ def _load_primary_model(runtime):
 
         except (
             FileNotFoundError,
-            OSError,
-            ValueError,
-            AttributeError,
             ModuleNotFoundError,
-            ImportError,
+            AttributeError,
+            ValueError,
         ) as e:
-            last_error = str(e)
-            continue
+            _log.error(
+                "MODEL_LOAD_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
+            raise
 
-    if last_error:
-        _log.error(
-            "MODEL_LOAD_FAILED",
-            extra={"candidates": candidates, "error": last_error},
-        )
-    else:
-        _log.error(
-            "MODEL_LOAD_FAILED",
-            extra={"candidates": candidates, "error": "no_candidates"},
-        )
+    _log.error(
+        "MODEL_LOAD_FAILED",
+        extra={"candidates": candidates, "error": "unresolved"},
+    )
     return None
 
 
@@ -6000,10 +5993,16 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
 
     try:
         return _exec_engine.execute_order(symbol, qty, side)
-    except Exception as e:
+    except (APIError, TimeoutError, ConnectionError) as e:
         _log.error(
-            "ORDER_EXECUTION_FAILED",
-            extra={"symbol": symbol, "qty": qty, "side": side, "error": str(e)},
+            "BROKER_OP_FAILED",
+            extra={
+                "symbol": symbol,
+                "qty": qty,
+                "side": side,
+                "cause": e.__class__.__name__,
+                "detail": str(e),
+            },
         )
         raise
 
@@ -6019,7 +6018,7 @@ def safe_submit_order(api: TradingClient, req) -> Order | None:
         try:
             try:
                 acct = api.get_account()
-            except Exception:
+            except (APIError, TimeoutError, ConnectionError):
                 acct = None
             if acct and getattr(req, "side", "").lower() == "buy":
                 price = getattr(req, "limit_price", None)
@@ -6037,7 +6036,7 @@ def safe_submit_order(api: TradingClient, req) -> Order | None:
             if getattr(req, "side", "").lower() == "sell":
                 try:
                     positions = api.get_all_positions()
-                except Exception:
+                except (APIError, TimeoutError, ConnectionError):
                     positions = []
                 avail = next(
                     (float(p.qty) for p in positions if p.symbol == req.symbol), 0.0
@@ -6111,13 +6110,29 @@ def safe_submit_order(api: TradingClient, req) -> Order | None:
                 return None
             time.sleep(1)
             if attempt == 1:
-                _log.warning(f"submit_order failed for {req.symbol}: {e}")
-                return None
-        except Exception as e:
+                _log.error(
+                    "BROKER_OP_FAILED",
+                    extra={
+                        "cause": e.__class__.__name__,
+                        "detail": str(e),
+                        "op": "submit",
+                        "symbol": getattr(req, "symbol", ""),
+                    },
+                )
+                raise
+        except (TimeoutError, ConnectionError) as e:
             time.sleep(1)
             if attempt == 1:
-                _log.warning(f"submit_order failed for {req.symbol}: {e}")
-                return None
+                _log.error(
+                    "BROKER_OP_FAILED",
+                    extra={
+                        "cause": e.__class__.__name__,
+                        "detail": str(e),
+                        "op": "submit",
+                        "symbol": getattr(req, "symbol", ""),
+                    },
+                )
+                raise
     return None
 
 
@@ -6245,10 +6260,17 @@ def send_exit_order(
                     time_in_force=TimeInForce.DAY,
                 ),
             )
-    except Exception as e:
-        _log.warning(
-            f"[send_exit_order] couldn\u2019t check/cancel order {getattr(limit_order, 'id', '')}: {e}"
+    except (APIError, TimeoutError, ConnectionError) as e:
+        _log.error(
+            "BROKER_OP_FAILED",
+            extra={
+                "cause": e.__class__.__name__,
+                "detail": str(e),
+                "op": "cancel",
+                "order_id": getattr(limit_order, "id", ""),
+            },
         )
+        raise
 
 
 def twap_submit(
@@ -6264,9 +6286,12 @@ def twap_submit(
     for i in range(n_slices):
         try:
             submit_order(ctx, symbol, slice_qty, side)
-        except Exception as e:
-            _log.exception(f"[TWAP] slice {i+1}/{n_slices} failed: {e}")
-            break
+        except (APIError, TimeoutError, ConnectionError) as e:
+            _log.error(
+                "BROKER_OP_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
+            raise
         pytime.sleep(wait_secs)
 
 
@@ -8344,16 +8369,6 @@ def prepare_indicators(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 # --- Back-compat shim for tests that expect this symbol at module scope ---
-# This is a thin wrapper to ensure AST-based tests can find prepare_indicators
-# at module scope even if the implementation changes.
-def prepare_indicators_compat(*args, **kwargs):
-    """
-    Back-compat wrapper. Delegates to the current implementation.
-    Kept at module scope so AST-based tests can find it.
-    """
-    return prepare_indicators(*args, **kwargs)
-
-
 def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     """Compute regime features; tolerate proxy bars that only include 'close'."""
     # 1) Canonicalize columns (o/h/l/c/v mapping, lowercase)
@@ -8560,26 +8575,33 @@ def detect_regime_state(runtime: BotContext) -> str:
     NOTE: Previously this used a free/global `ctx`. We now pass the explicit
     runtime. To minimize churn, we alias it locally.
     """
-    ctx = runtime  # AI-AGENT-REF: local alias to avoid global context
-    df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
-    if df is None or len(df) < 200:
+    try:
+        ctx = runtime  # AI-AGENT-REF: local alias to avoid global context
+        df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
+        if df is None or len(df) < 200:
+            return "sideways"
+        atr14 = ta.atr(df["high"], df["low"], df["close"], length=14).iloc[-1]
+        atr50 = ta.atr(df["high"], df["low"], df["close"], length=50).iloc[-1]
+        high_vol = atr50 > 0 and atr14 / atr50 > 1.5
+        sma50 = df["close"].rolling(50).mean().iloc[-1]
+        sma200 = df["close"].rolling(200).mean().iloc[-1]
+        trend = sma50 - sma200
+        breadth = _market_breadth(ctx)
+        if high_vol:
+            return "high_volatility"
+        if abs(trend) / sma200 < 0.005:
+            return "sideways"
+        if trend > 0 and breadth > 0.55:
+            return "trending"
+        if trend < 0 and breadth < 0.45:
+            return "mean_reversion"
         return "sideways"
-    atr14 = ta.atr(df["high"], df["low"], df["close"], length=14).iloc[-1]
-    atr50 = ta.atr(df["high"], df["low"], df["close"], length=50).iloc[-1]
-    high_vol = atr50 > 0 and atr14 / atr50 > 1.5
-    sma50 = df["close"].rolling(50).mean().iloc[-1]
-    sma200 = df["close"].rolling(200).mean().iloc[-1]
-    trend = sma50 - sma200
-    breadth = _market_breadth(ctx)
-    if high_vol:
-        return "high_volatility"
-    if abs(trend) / sma200 < 0.005:
+    except (KeyError, ValueError, TypeError) as e:
+        _log.warning(
+            "REGIME_DETECT_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
         return "sideways"
-    if trend > 0 and breadth > 0.55:
-        return "trending"
-    if trend < 0 and breadth < 0.45:
-        return "mean_reversion"
-    return "sideways"
 
 
 def check_market_regime(runtime: BotContext, state: BotState) -> bool:
@@ -8587,9 +8609,16 @@ def check_market_regime(runtime: BotContext, state: BotState) -> bool:
     Evaluate the current market regime and update state.current_regime.
     Returns True/False indicating whether trading is allowed under this regime.
     """
-    # AI-AGENT-REF: pass runtime explicitly into regime detection
-    state.current_regime = detect_regime_state(runtime)
-    return bool(getattr(state.current_regime, "allow_trading", True))
+    try:
+        # AI-AGENT-REF: pass runtime explicitly into regime detection
+        state.current_regime = detect_regime_state(runtime)
+        return bool(getattr(state.current_regime, "allow_trading", True))
+    except (KeyError, ValueError, TypeError) as e:
+        _log.warning(
+            "REGIME_DETECT_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
+        return False
 
 
 _SCREEN_CACHE: dict[str, float] = {}
@@ -8773,69 +8802,83 @@ def screen_universe(
     candidates: Sequence[str],
     runtime,
 ) -> list[str]:
-    top_n = 20  # AI-AGENT-REF: maintain top N selection
-    cand_set = set(candidates)
-    _log.info(
-        f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}"
-    )
+    try:
+        top_n = 20  # AI-AGENT-REF: maintain top N selection
+        cand_set = set(candidates)
+        _log.info(
+            f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}"
+        )
 
-    for sym in list(_SCREEN_CACHE):
-        if sym not in cand_set:
-            _SCREEN_CACHE.pop(sym, None)
+        for sym in list(_SCREEN_CACHE):
+            if sym not in cand_set:
+                _SCREEN_CACHE.pop(sym, None)
 
-    new_syms = cand_set - _SCREEN_CACHE.keys()
-    filtered_out = {}  # Track reasons for filtering
+        new_syms = cand_set - _SCREEN_CACHE.keys()
+        filtered_out = {}  # Track reasons for filtering
 
-    for sym in new_syms:
-        df = runtime.data_fetcher.get_daily_df(runtime, sym)
+        for sym in new_syms:
+            df = runtime.data_fetcher.get_daily_df(runtime, sym)
 
-        # AI-AGENT-REF: Enhanced market data validation for critical trading decisions
-        validation_result = _validate_market_data_quality(df, sym)
-        if not validation_result["valid"]:
-            filtered_out[sym] = validation_result["reason"]
-            _log.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
-            continue
+            # AI-AGENT-REF: Enhanced market data validation for critical trading decisions
+            validation_result = _validate_market_data_quality(df, sym)
+            if not validation_result["valid"]:
+                filtered_out[sym] = validation_result["reason"]
+                _log.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
+                continue
 
-        original_len = len(df)
-        df = df[df["volume"] > 100_000]
-        if df.empty:
-            filtered_out[sym] = "low_volume"
-            _log.debug(
-                f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
-            )
-            continue
+            original_len = len(df)
+            df = df[df["volume"] > 100_000]
+            if df.empty:
+                filtered_out[sym] = "low_volume"
+                _log.debug(
+                    f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
+                )
+                continue
 
-        series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH)
-        if series is None or not hasattr(series, "empty") or series.empty:
-            filtered_out[sym] = "atr_calculation_failed"
-            _log.warning(f"[SCREEN_UNIVERSE] {sym}: ATR calculation failed")
-            continue
-        atr_val = series.iloc[-1]
-        if not pd.isna(atr_val):
-            _SCREEN_CACHE[sym] = float(atr_val)
-            _log.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
-        else:
-            filtered_out[sym] = "atr_nan"
-            _log.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
+            series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH)
+            if series is None or not hasattr(series, "empty") or series.empty:
+                filtered_out[sym] = "atr_calculation_failed"
+                _log.warning(f"[SCREEN_UNIVERSE] {sym}: ATR calculation failed")
+                continue
+            atr_val = series.iloc[-1]
+            if not pd.isna(atr_val):
+                _SCREEN_CACHE[sym] = float(atr_val)
+                _log.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
+            else:
+                filtered_out[sym] = "atr_nan"
+                _log.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
 
-    atrs = {sym: _SCREEN_CACHE[sym] for sym in cand_set if sym in _SCREEN_CACHE}
-    ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
-    selected = [sym for sym, _ in ranked[:top_n]]
+        atrs = {sym: _SCREEN_CACHE[sym] for sym in cand_set if sym in _SCREEN_CACHE}
+        ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
+        selected = [sym for sym, _ in ranked[:top_n]]
 
-    _log.info(
-        f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates. "
-        f"Selected: {selected}. "
-        f"Filtered out: {len(filtered_out)} symbols: {filtered_out}"
-    )
+        _log.info(
+            f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates. "
+            f"Selected: {selected}. "
+            f"Filtered out: {len(filtered_out)} symbols: {filtered_out}"
+        )
 
-    return selected
+        return selected
+    except (KeyError, ValueError, TypeError) as e:
+        _log.error(
+            "SCREENING_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
+        raise
 
 
 def screen_candidates(runtime, *, fallback_symbols=None) -> list[str]:
     """Build candidate universe and run screening using runtime."""
     # AI-AGENT-REF: explicit runtime for screening
-    candidates = load_candidate_universe(runtime, fallback_symbols=fallback_symbols)
-    return screen_universe(candidates, runtime)
+    try:
+        candidates = load_candidate_universe(runtime, fallback_symbols=fallback_symbols)
+        return screen_universe(candidates, runtime)
+    except (KeyError, ValueError, TypeError) as e:
+        _log.error(
+            "SCREENING_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
+        raise
 
 
 # Fix for handling missing tickers.csv file
@@ -9626,18 +9669,19 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
         summary = pre_trade_health_check(runtime, symbols)
         _log.info("PRE_TRADE_HEALTH", extra=summary)
     except (
-        FileNotFoundError,
-        OSError,
+        APIError,
+        TimeoutError,
+        ConnectionError,
         KeyError,
         ValueError,
         TypeError,
-        TimeoutError,
-        ConnectionError,
+        OSError,
     ) as e:  # AI-AGENT-REF: explicit error logging for data health
         _log.warning(
-            "HEALTH_DATA_PROBE_FAILED",
+            "HEALTH_CHECK_FAILED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
+        return 0.0, False, []
     with portfolio_lock:
         runtime.portfolio_weights = portfolio.compute_portfolio_weights(runtime, symbols)
     acct = safe_alpaca_get_account(runtime)

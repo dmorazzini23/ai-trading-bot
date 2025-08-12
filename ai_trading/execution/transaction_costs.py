@@ -15,14 +15,8 @@ from typing import Any
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
 
-# Import configuration if available
-try:
-    from ai_trading.core.constants import EXECUTION_PARAMETERS, RISK_PARAMETERS
-    ENHANCED_CONFIG_AVAILABLE = True
-except ImportError:
-    ENHANCED_CONFIG_AVAILABLE = False
-    EXECUTION_PARAMETERS = {}
-    RISK_PARAMETERS = {}
+# Import configuration directly; fail fast on missing dependency
+from ai_trading.core.constants import EXECUTION_PARAMETERS, RISK_PARAMETERS  # AI-AGENT-REF: direct import without shim
 
 
 class TradeType(Enum):
@@ -101,14 +95,10 @@ class TransactionCostCalculator:
         self.max_commission = max_commission
         self.safety_margin_multiplier = safety_margin_multiplier
 
-        # Load enhanced parameters if available
-        if ENHANCED_CONFIG_AVAILABLE:
-            self.limit_slippage = EXECUTION_PARAMETERS.get('LIMIT_ORDER_SLIPPAGE', 0.005)
-            self.max_market_impact = EXECUTION_PARAMETERS.get('MAX_MARKET_IMPACT', 0.01)
-            self.safety_margin_multiplier = RISK_PARAMETERS.get('SAFETY_MARGIN_MULTIPLIER', 2.0)
-        else:
-            self.limit_slippage = 0.005
-            self.max_market_impact = 0.01
+        # Load enhanced parameters
+        self.limit_slippage = EXECUTION_PARAMETERS.get('LIMIT_ORDER_SLIPPAGE', 0.005)
+        self.max_market_impact = EXECUTION_PARAMETERS.get('MAX_MARKET_IMPACT', 0.01)
+        self.safety_margin_multiplier = RISK_PARAMETERS.get('SAFETY_MARGIN_MULTIPLIER', 2.0)
 
         # Market impact model parameters
         self.impact_model_params = {
