@@ -5,7 +5,6 @@ Provides order lifecycle management, execution algorithms,
 and real-time execution monitoring with institutional controls.
 """
 
-import logging
 import threading
 import time
 import uuid
@@ -15,6 +14,7 @@ from enum import Enum
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
+from alpaca_trade_api.rest import APIError
 
 from ai_trading.market.symbol_specs import TICK_BY_SYMBOL, get_lot_size, get_tick_size
 from ai_trading.math.money import Money, round_to_lot, round_to_tick
@@ -312,8 +312,15 @@ class OrderManager:
 
             return True
 
-        except Exception as e:
-            logger.error(f"Error submitting order {order.id}: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_SUBMIT_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order.id,
+                },
+            )  # AI-AGENT-REF: log submit failure cause
             order.status = OrderStatus.REJECTED
             order.notes += f" | Error: {e}"
             return False
@@ -335,8 +342,15 @@ class OrderManager:
 
             return success
 
-        except Exception as e:
-            logger.error(f"Error cancelling order {order_id}: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_CANCEL_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order_id,
+                },
+            )  # AI-AGENT-REF: log cancel failure cause
             return False
 
     def get_order_status(self, order_id: str) -> dict | None:
@@ -431,8 +445,11 @@ class OrderManager:
 
             return True
 
-        except Exception as e:
-            logger.error(f"Error validating order: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_VALIDATION_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: log order validation failure
             return False
 
     def _monitor_orders(self):
@@ -475,8 +492,11 @@ class OrderManager:
 
                 time.sleep(1)  # Check every second
 
-            except Exception as e:
-                logger.error(f"Error in order monitoring: {e}")
+            except (APIError, TimeoutError, ConnectionError) as e:
+                logger.error(
+                    "ORDER_MONITOR_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e)},
+                )
                 time.sleep(5)  # Back off on error
 
     def _notify_callbacks(self, order: Order, event_type: str):
@@ -485,10 +505,24 @@ class OrderManager:
             for callback in self.execution_callbacks:
                 try:
                     callback(order, event_type)
-                except Exception as e:
-                    logger.error(f"Error in execution callback: {e}")
-        except Exception as e:
-            logger.error(f"Error notifying callbacks: {e}")
+                except (APIError, TimeoutError, ConnectionError) as e:
+                    logger.error(
+                        "CALLBACK_FAILED",
+                        extra={
+                            "cause": e.__class__.__name__,
+                            "detail": str(e),
+                            "order_id": order.id,
+                        },
+                    )
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "CALLBACK_NOTIFICATION_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order.id,
+                },
+            )
 
 
 class ExecutionEngine:
@@ -595,8 +629,11 @@ class ExecutionEngine:
                 self.execution_stats["rejected_orders"] += 1
                 return None
 
-        except Exception as e:
-            logger.error(f"Error executing order: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_EXECUTION_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: log execution failure
             self.execution_stats["rejected_orders"] += 1
             return None
 
@@ -631,8 +668,15 @@ class ExecutionEngine:
                     + fill_time
                 ) / self.execution_stats["filled_orders"]
 
-        except Exception as e:
-            logger.error(f"Error simulating execution for order {order.id}: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "SIMULATION_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order.id,
+                },
+            )
 
     def get_execution_stats(self) -> dict:
         """Get execution engine statistics."""

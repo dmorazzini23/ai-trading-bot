@@ -10,7 +10,6 @@ AI-AGENT-REF: Graceful shutdown for position safety in production
 from __future__ import annotations
 
 import asyncio
-import logging
 import signal
 import threading
 from collections.abc import Callable
@@ -20,7 +19,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from ai_trading.logging import logger
+from alpaca_trade_api.rest import APIError
 
 
 class ShutdownReason(Enum):
@@ -70,7 +70,7 @@ class ShutdownHandler:
     """Comprehensive shutdown handler for trading system."""
 
     def __init__(self):
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger
         self._status = ShutdownStatus(
             is_shutting_down=False,
             reason=None,
@@ -130,8 +130,11 @@ class ShutdownHandler:
                 f"Signal handlers registered for: {[s.name for s in signals_to_handle]}"
             )
 
-        except Exception as e:
-            self.logger.error(f"Failed to setup signal handlers: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            self.logger.error(
+                "SIGNAL_HANDLER_SETUP_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: narrow exception for signal handler setup
 
     def _signal_handler(self, signum: int, frame) -> None:
         """Handle shutdown signals."""
@@ -220,11 +223,14 @@ class ShutdownHandler:
 
             return success
 
-        except Exception as e:
+        except (APIError, TimeoutError, ConnectionError) as e:
             self._status.phase = ShutdownPhase.FAILED
             self._status.current_action = f"Shutdown error: {str(e)}"
             self._status.errors.append(str(e))
-            self.logger.error(f"Shutdown error: {e}")
+            self.logger.error(
+                "SHUTDOWN_ERROR",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             return False
         finally:
             self._shutdown_event.set()
@@ -284,8 +290,11 @@ class ShutdownHandler:
 
             return True
 
-        except Exception as e:
-            self.logger.error(f"Graceful shutdown failed: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            self.logger.error(
+                "GRACEFUL_SHUTDOWN_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             self._status.errors.append(str(e))
             return False
 
@@ -314,8 +323,11 @@ class ShutdownHandler:
 
             return True
 
-        except Exception as e:
-            self.logger.error(f"Emergency shutdown failed: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            self.logger.error(
+                "EMERGENCY_SHUTDOWN_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             self._status.errors.append(str(e))
             return False
 
@@ -327,8 +339,11 @@ class ShutdownHandler:
                     await hook()
                 else:
                     hook()
-            except Exception as e:
-                self.logger.error(f"Pre-shutdown hook failed: {e}")
+            except (APIError, TimeoutError, ConnectionError) as e:
+                self.logger.error(
+                    "PRE_SHUTDOWN_HOOK_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e)},
+                )
                 self._status.errors.append(f"Pre-shutdown hook error: {e}")
 
     async def _stop_new_orders(self) -> None:
@@ -347,8 +362,11 @@ class ShutdownHandler:
                     orders = handler()
                     if orders:
                         all_orders.extend(orders)
-                except Exception as e:
-                    self.logger.error(f"Order handler failed: {e}")
+                except (APIError, TimeoutError, ConnectionError) as e:
+                    self.logger.error(
+                        "ORDER_HANDLER_FAILED",
+                        extra={"cause": e.__class__.__name__, "detail": str(e)},
+                    )
                     self._status.errors.append(f"Order handler error: {e}")
 
             self._status.orders_to_cancel = len(all_orders)
@@ -368,11 +386,17 @@ class ShutdownHandler:
                     await self._cancel_single_order(order)
                     self._status.orders_canceled += 1
 
-                except Exception as e:
-                    self.logger.error(
-                        f"Failed to cancel order {order.get('id', 'unknown')}: {e}"
-                    )
+                except (APIError, TimeoutError, ConnectionError) as e:
+                    self.logger.warning(
+                        "SHUTDOWN_CANCEL_FAILED",
+                        extra={
+                            "cause": e.__class__.__name__,
+                            "detail": str(e),
+                            "order_id": order.get("id", "unknown"),
+                        },
+                    )  # AI-AGENT-REF: best-effort cancel logging
                     self._status.errors.append(f"Order cancel error: {e}")
+                    continue
 
             success_rate = self._status.orders_canceled / max(
                 self._status.orders_to_cancel, 1
@@ -383,8 +407,11 @@ class ShutdownHandler:
 
             return success_rate >= 0.9  # 90% success rate required
 
-        except Exception as e:
-            self.logger.error(f"Order cancellation failed: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            self.logger.error(
+                "ORDER_CANCELLATION_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             return False
 
     async def _close_positions(self) -> bool:
@@ -397,8 +424,11 @@ class ShutdownHandler:
                     positions = handler()
                     if positions:
                         all_positions.extend(positions)
-                except Exception as e:
-                    self.logger.error(f"Position handler failed: {e}")
+                except (APIError, TimeoutError, ConnectionError) as e:
+                    self.logger.error(
+                        "POSITION_HANDLER_FAILED",
+                        extra={"cause": e.__class__.__name__, "detail": str(e)},
+                    )
                     self._status.errors.append(f"Position handler error: {e}")
 
             self._status.positions_to_close = len(all_positions)
@@ -418,11 +448,17 @@ class ShutdownHandler:
                     await self._close_single_position(position)
                     self._status.positions_closed += 1
 
-                except Exception as e:
-                    self.logger.error(
-                        f"Failed to close position {position.get('symbol', 'unknown')}: {e}"
-                    )
+                except (APIError, TimeoutError, ConnectionError) as e:
+                    self.logger.warning(
+                        "SHUTDOWN_CLOSE_POSITION_FAILED",
+                        extra={
+                            "cause": e.__class__.__name__,
+                            "detail": str(e),
+                            "order_id": position.get("symbol", "unknown"),
+                        },
+                    )  # AI-AGENT-REF: best-effort position close logging
                     self._status.errors.append(f"Position close error: {e}")
+                    continue
 
             success_rate = self._status.positions_closed / max(
                 self._status.positions_to_close, 1
@@ -433,8 +469,11 @@ class ShutdownHandler:
 
             return success_rate >= 0.9  # 90% success rate required
 
-        except Exception as e:
-            self.logger.error(f"Position closing failed: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            self.logger.error(
+                "POSITION_CLOSING_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             return False
 
     async def _cancel_single_order(self, order: dict[str, Any]) -> None:
@@ -486,8 +525,11 @@ class ShutdownHandler:
 
             self.logger.info(f"System state saved to: {state_file}")
 
-        except Exception as e:
-            self.logger.error(f"Failed to save system state: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            self.logger.error(
+                "STATE_SAVE_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             self._status.errors.append(f"State save error: {e}")
 
     async def _save_critical_state(self) -> None:
@@ -514,8 +556,11 @@ class ShutdownHandler:
 
             self.logger.info(f"Critical state saved to: {state_file}")
 
-        except Exception as e:
-            self.logger.error(f"Failed to save critical state: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            self.logger.error(
+                "CRITICAL_STATE_SAVE_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
 
     async def _run_cleanup_hooks(self) -> None:
         """Run cleanup hooks."""
@@ -525,8 +570,11 @@ class ShutdownHandler:
                     await hook()
                 else:
                     hook()
-            except Exception as e:
-                self.logger.error(f"Cleanup hook failed: {e}")
+            except (APIError, TimeoutError, ConnectionError) as e:
+                self.logger.error(
+                    "CLEANUP_HOOK_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e)},
+                )
                 self._status.errors.append(f"Cleanup hook error: {e}")
 
     async def _emergency_cleanup(self) -> None:
@@ -542,8 +590,11 @@ class ShutdownHandler:
                     await hook()
                 else:
                     hook()
-            except Exception as e:
-                self.logger.error(f"Post-shutdown hook failed: {e}")
+            except (APIError, TimeoutError, ConnectionError) as e:
+                self.logger.error(
+                    "POST_SHUTDOWN_HOOK_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e)},
+                )
 
     def get_shutdown_status(self) -> ShutdownStatus:
         """Get current shutdown status."""

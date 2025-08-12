@@ -6,13 +6,13 @@ real-time monitoring, and advanced risk management capabilities.
 """
 
 import asyncio
-import logging
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
+from alpaca_trade_api.rest import APIError
 
 from ..core.constants import EXECUTION_PARAMETERS
 from ..core.enums import OrderSide, OrderType, RiskLevel
@@ -432,8 +432,15 @@ class ProductionExecutionCoordinator:
                 },
             )
 
-        except Exception as e:
-            logger.error(f"Error submitting order request: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_REQUEST_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order_request.client_order_id,
+                },
+            )  # AI-AGENT-REF: log order request failure
             return ExecutionResult(
                 status="error",
                 order_id=order_request.client_order_id,
@@ -527,8 +534,15 @@ class ProductionExecutionCoordinator:
 
             return execution_result
 
-        except Exception as e:
-            logger.error(f"Error in order submission: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_SUBMISSION_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": "unknown",
+                },
+            )  # AI-AGENT-REF: log submission failure
             return ExecutionResult(
                 status="error",
                 order_id="unknown",
@@ -579,8 +593,11 @@ class ProductionExecutionCoordinator:
 
             return {"approved": True, "reason": "All safety checks passed"}
 
-        except Exception as e:
-            logger.error(f"Error in safety check: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "SAFETY_CHECK_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: log safety check failure
             return {"approved": False, "reason": f"Safety check error: {e}"}
 
     async def _optimize_order_size(self, order: Order) -> dict[str, Any]:
@@ -624,8 +641,11 @@ class ProductionExecutionCoordinator:
                 "sizing_warnings": sizing_result.get("warnings", []),
             }
 
-        except Exception as e:
-            logger.error(f"Error optimizing order size: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_SIZING_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: log sizing failure
             return {"final_quantity": 0}
 
     async def _analyze_market_impact(self, order: Order) -> dict[str, Any]:
@@ -655,8 +675,11 @@ class ProductionExecutionCoordinator:
                 ),
             }
 
-        except Exception as e:
-            logger.error(f"Error analyzing market impact: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "MARKET_IMPACT_ANALYSIS_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: log impact analysis failure
             return {"impact_level": "unknown", "estimated_slippage_bps": 0}
 
     async def _execute_order_with_monitoring(
@@ -713,8 +736,15 @@ class ProductionExecutionCoordinator:
                 notional_value=order.quantity * fill_price,
             )
 
-        except Exception as e:
-            logger.error(f"Error executing order {order.id}: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_EXECUTION_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order.id,
+                },
+            )
             order.status = OrderStatus.REJECTED
             self.rejected_orders[order.id] = order
             if order.id in self.pending_orders:
@@ -793,8 +823,15 @@ class ProductionExecutionCoordinator:
                     f"Order {order.id} execution failed: {execution_result.get('message')}"
                 )
 
-        except Exception as e:
-            logger.error(f"Error in post-execution processing: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "POST_EXECUTION_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order.id,
+                },
+            )  # AI-AGENT-REF: log post-execution failure
 
     async def _handle_order_rejection(self, order: Order, reason: str):
         """Handle order rejection with proper logging and alerts."""
@@ -812,8 +849,15 @@ class ProductionExecutionCoordinator:
 
             logger.warning(f"Order {order.id} rejected: {reason}")
 
-        except Exception as e:
-            logger.error(f"Error handling order rejection: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_REJECTION_HANDLER_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order.id,
+                },
+            )
 
     def _create_order_result(
         self, order: Order, status: str, message: str
@@ -865,8 +909,15 @@ class ProductionExecutionCoordinator:
                         "last_updated": datetime.now(UTC),
                     }
 
-        except Exception as e:
-            logger.error(f"Error updating position tracking: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "POSITION_UPDATE_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order.id,
+                },
+            )
 
     async def _update_execution_statistics(
         self, execution_result: dict, execution_time_ms: float
@@ -898,8 +949,11 @@ class ProductionExecutionCoordinator:
             else:
                 self.execution_stats["rejected_orders"] += 1
 
-        except Exception as e:
-            logger.error(f"Error updating execution statistics: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "EXECUTION_STATS_UPDATE_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
 
     def _recommend_execution_algorithm(self, impact_level: str) -> ExecutionAlgorithm:
         """Recommend execution algorithm based on impact analysis."""
@@ -926,8 +980,11 @@ class ProductionExecutionCoordinator:
 
             return False
 
-        except Exception as e:
-            logger.error(f"Error checking for similar orders: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "SIMILAR_ORDER_CHECK_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             return False
 
     def _get_symbol_history(self, symbol: str) -> list[dict]:
@@ -967,8 +1024,11 @@ class ProductionExecutionCoordinator:
                 "last_updated": datetime.now(UTC),
             }
 
-        except Exception as e:
-            logger.error(f"Error getting execution summary: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "EXECUTION_SUMMARY_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             return {"error": str(e)}
 
     def get_current_positions(self) -> dict[str, dict]:
@@ -996,8 +1056,11 @@ class ProductionExecutionCoordinator:
             self.account_equity = new_equity
             self.halt_manager.update_equity(new_equity)
             logger.debug(f"Account equity updated to ${new_equity:,.2f}")
-        except Exception as e:
-            logger.error(f"Error updating account equity: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ACCOUNT_EQUITY_UPDATE_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
 
     async def cancel_order(self, order_id: str) -> ExecutionResult:
         """Cancel a pending order."""
@@ -1032,8 +1095,15 @@ class ProductionExecutionCoordinator:
                 message="Order cancelled successfully",
             )
 
-        except Exception as e:
-            logger.error(f"Error cancelling order {order_id}: {e}")
+        except (APIError, TimeoutError, ConnectionError) as e:
+            logger.error(
+                "ORDER_CANCEL_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "order_id": order_id,
+                },
+            )
             return ExecutionResult(
                 status="error",
                 order_id=order_id,
