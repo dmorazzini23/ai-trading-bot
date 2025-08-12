@@ -1,6 +1,89 @@
 # Migration Notes
 
-## Portfolio Optimizer & Transaction Costs Migration (Latest)
+## Monitoring API Unification & Cost-Aware Strategy Enhancement (Latest)
+
+### Summary
+Unified monitoring API to fix startup `ImportError` for `MetricsCollector`, replaced broad exception handling with specific exception types, and implemented cost-aware signal acceptance with ensemble gating for robust live trading.
+
+### What Changed
+
+**1. Monitoring API Unification**
+- **Fixed:** `ImportError: MetricsCollector` from `ai_trading.monitoring.metrics`
+- **Added:** Complete `MetricsCollector` class implementation in `ai_trading/monitoring/metrics.py`
+- **Enhanced:** `PerformanceMonitor` class with unified interface combining metrics collection and performance analysis
+- **Standardized:** All monitoring imports now use `PerformanceMonitor` as the primary monitoring interface
+- **No shims:** All changes land in the package with single, canonical imports
+
+**2. Exception Handling Hygiene**
+- **Replaced:** Broad `except Exception:` patterns with specific exception types in production code
+- **Enhanced:** Error logging with structured context (`component`, `error_type`, `symbol`)
+- **Improved:** Entry points (`ai_trading/__main__.py`) with specific exception handling for:
+  - `KeyboardInterrupt` → graceful exit
+  - `ImportError`/`ModuleNotFoundError` → module import errors
+  - `OSError`/`IOError` → I/O errors
+  - Final `Exception` catch with structured logging
+- **Updated:** Portfolio summary logging with specific exception types (`AttributeError`, `KeyError`, `ValueError`, `TypeError`)
+
+**3. Cost-Aware Signal Enhancement**
+- **Added:** `SignalDecisionPipeline` class for comprehensive signal evaluation
+- **Implemented:** Cost-aware acceptance logic: reject signals where `expected_edge ≤ expected_transaction_cost + buffer`
+- **Added:** Transaction cost estimation with commission, spread, and slippage modeling
+- **Enhanced:** Decision pipeline with reason codes:
+  - `ACCEPT_OK` → Signal passes all criteria
+  - `REJECT_COST_UNPROFITABLE` → Costs exceed expected edge
+  - `REJECT_EDGE_TOO_LOW` → Edge below minimum threshold
+  - `REJECT_REGIME_HIGH_VOL` → High volatility regime with insufficient edge
+  - `REJECT_ENSEMBLE_DISAGREEMENT` → Ensemble models disagree
+  - `REJECT_DATA_ERROR` → Data quality issues
+  - `REJECT_SYSTEM_ERROR` → System errors
+
+**4. Strategy Logic Enhancements**
+- **Added:** ATR-scaled exits with configurable stop/target multipliers
+- **Implemented:** Market regime detection (trending vs ranging, volatility analysis)
+- **Added:** Ensemble gating requiring N-of-M model agreement before trading
+- **Enhanced:** Signal scoring with `score = predicted_edge - transaction_costs - buffer`
+- **Added:** Per-signal logging with comprehensive metrics and context
+
+**5. Walk-Forward Validation**
+- **Created:** Enhanced WFA runner script (`scripts/run_wfa.py`)
+- **Integrated:** Cost-aware strategy validation
+- **Added:** Comprehensive performance grading system
+- **Implemented:** Artifact generation for validation results
+
+### Production Impact
+- ✅ **Fixes startup failure:** No more `ImportError: MetricsCollector`
+- ✅ **Improved observability:** Structured logging with reason codes and metrics
+- ✅ **Enhanced resilience:** Specific exception handling prevents silent failures
+- ✅ **Better risk management:** Cost-aware signal acceptance reduces unprofitable trades
+- ✅ **Regime awareness:** Adaptive thresholds based on market conditions
+- ✅ **Quality control:** Ensemble gating and validation harness for strategy changes
+
+### Breaking Changes
+**None** - All changes are additive or enhance existing functionality without breaking existing interfaces.
+
+### Validation Steps
+1. **Import smoke test:** `python scripts/smoke_imports.py` → validates monitoring imports
+2. **Service restart:** `systemctl restart ai-trading.service` → no ImportError, clean startup logs
+3. **Paper trading:** First cycle logs show `ACCEPT_OK`/`REJECT_*` reason codes with metrics
+4. **Walk-forward validation:** `python scripts/run_wfa.py --dry-run` → validates setup
+
+### Configuration
+New signal pipeline configuration options:
+```python
+{
+    "min_edge_threshold": 0.001,        # 0.1% minimum edge requirement
+    "transaction_cost_buffer": 0.0005,  # 0.05% safety buffer
+    "ensemble_min_agree": 2,            # Minimum models that must agree
+    "ensemble_total": 3,                # Total ensemble models
+    "atr_stop_multiplier": 2.0,         # Stop loss ATR multiplier
+    "atr_target_multiplier": 3.0,       # Take profit ATR multiplier
+    "regime_volatility_threshold": 0.02 # 2% volatility regime threshold
+}
+```
+
+---
+
+## Portfolio Optimizer & Transaction Costs Migration (Previous)
 
 ### Summary
 Moved portfolio optimization and transaction cost modules from `scripts/` to the main `ai_trading/` package to fix production import errors.

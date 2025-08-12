@@ -47,9 +47,21 @@ try:
     _FINBERT_MODEL.eval()
     _HUGGINGFACE_AVAILABLE = True
     logger.info("FinBERT loaded successfully")
+except (ImportError, ModuleNotFoundError) as e:
+    logger.warning("FinBERT load failed - transformers not available: %s", e)
+    from tests.support.mocks_runtime import MockFinBERT
+    _FINBERT_TOKENIZER = MockFinBERT()
+    _FINBERT_MODEL = MockFinBERT()
+    _HUGGINGFACE_AVAILABLE = False
+except (OSError, IOError) as e:
+    logger.warning("FinBERT load failed - model download/IO error: %s", e)
+    from tests.support.mocks_runtime import MockFinBERT
+    _FINBERT_TOKENIZER = MockFinBERT()
+    _FINBERT_MODEL = MockFinBERT()
+    _HUGGINGFACE_AVAILABLE = False
 except Exception as e:
-    logger.warning(f"FinBERT load failed ({e}); falling back to mock FinBERT")
-    # Import mock from test support
+    logger.warning("FinBERT load failed - unexpected error: %s", e,
+                  extra={"component": "sentiment", "error_type": "model_load"})
     from tests.support.mocks_runtime import MockFinBERT
     _FINBERT_TOKENIZER = MockFinBERT()
     _FINBERT_MODEL = MockFinBERT()
@@ -237,10 +249,13 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             for filing in form4:
                 if filing["type"] == "buy" and filing["dollar_amount"] > 50_000:
                     form4_score += 0.1
+        except (requests.RequestException, requests.HTTPError) as e:
+            logger.debug("Form4 fetch failed for %s - network error: %s", ticker, e)
+        except (KeyError, ValueError, TypeError) as e:
+            logger.debug("Form4 fetch failed for %s - data parsing error: %s", ticker, e)
         except Exception as e:
-            logger.debug(
-                f"Form4 fetch failed for {ticker}: {e}"
-            )  # Reduced to debug level
+            logger.debug("Form4 fetch failed for %s - unexpected error: %s", ticker, e,
+                        extra={"component": "sentiment", "ticker": ticker, "error_type": "form4_fetch"})
 
         final_score = 0.8 * news_score + 0.2 * form4_score
         final_score = max(-1.0, min(1.0, final_score))

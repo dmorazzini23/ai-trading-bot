@@ -39,6 +39,8 @@ def main():
     
     # Core package imports
     tests.append(test_import("ai_trading", "- core package"))
+    tests.append(test_import("ai_trading.monitoring", "- monitoring module"))
+    tests.append(test_import("ai_trading.execution.production_engine", "- production engine"))
     tests.append(test_import("ai_trading.config.management", "- config management"))
     tests.append(test_import("ai_trading.config.settings", "- settings"))
     tests.append(test_import("ai_trading.core.bot_engine", "- bot engine"))
@@ -47,6 +49,23 @@ def main():
     tests.append(test_import("ai_trading.signals", "- signals"))
     tests.append(test_import("ai_trading.utils.base", "- utils"))
     tests.append(test_import("ai_trading.integrations.rate_limit", "- rate limiter"))
+    
+    # Monitoring classes - critical for startup
+    try:
+        from ai_trading.monitoring import MetricsCollector, PerformanceMonitor
+        tests.append((True, "✅ MetricsCollector and PerformanceMonitor imported successfully"))
+    except ImportError as e:
+        tests.append((False, f"❌ Failed to import monitoring classes: {e}"))
+    
+    # Test monitoring class instantiation
+    tests.append(test_class_instantiation(
+        "ai_trading.monitoring", "MetricsCollector",
+        description="- metrics collector instantiation"
+    ))
+    tests.append(test_class_instantiation(
+        "ai_trading.monitoring", "PerformanceMonitor", 
+        description="- performance monitor instantiation"
+    ))
     
     # Previously optional dependencies now required
     tests.append(test_import("pandas_market_calendars", "- market calendars"))
