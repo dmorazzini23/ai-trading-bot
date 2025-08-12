@@ -626,6 +626,13 @@ class ExecutionEngine:
             self.execution_stats["rejected_orders"] += 1
             return None
 
+    def execute_sliced(
+        self, symbol: str, quantity: int, side: OrderSide, **kwargs
+    ):
+        """Execute order slices by delegating to execute_order."""
+        # AI-AGENT-REF: delegate sliced execution to unified path
+        return self.execute_order(symbol, side, quantity, **kwargs)
+
     def _simulate_market_execution(self, order: Order):
         """Simulate market order execution (demo purposes)."""
         try:

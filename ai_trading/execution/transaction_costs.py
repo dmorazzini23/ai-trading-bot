@@ -18,6 +18,9 @@ from ai_trading.logging import logger
 # Import configuration directly; fail fast on missing dependency
 from ai_trading.core.constants import EXECUTION_PARAMETERS, RISK_PARAMETERS  # AI-AGENT-REF: direct import without shim
 
+# AI-AGENT-REF: mark enhanced config availability without optional guard
+ENHANCED_CONFIG_AVAILABLE = True
+
 
 class TradeType(Enum):
     """Type of trade for cost calculation."""

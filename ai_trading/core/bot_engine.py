@@ -4580,17 +4580,17 @@ def pre_trade_health_check(
             )
             _validate_timezones(df, results, sym)
         except (
-            FileNotFoundError,
-            OSError,
+            APIError,
+            TimeoutError,
+            ConnectionError,
             KeyError,
             ValueError,
             TypeError,
-            TimeoutError,
-            ConnectionError,
-        ) as e:  # AI-AGENT-REF: explicit error logging for data health
+            OSError,
+        ) as e:  # AI-AGENT-REF: tighten health probe error handling
             results["failures"].append((sym, str(e)))
             _log.warning(
-                "HEALTH_DATA_PROBE_FAILED",
+                "HEALTH_CHECK_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )
     return results
@@ -9326,17 +9326,17 @@ def health() -> str:
         pre_trade_health_check(runtime, runtime.tickers or REGIME_SYMBOLS)
         status = "ok"
     except (
-        FileNotFoundError,
-        OSError,
+        APIError,
+        TimeoutError,
+        ConnectionError,
         KeyError,
         ValueError,
         TypeError,
-        TimeoutError,
-        ConnectionError,
-    ) as e:  # AI-AGENT-REF: explicit error logging for data health
+        OSError,
+    ) as e:  # AI-AGENT-REF: tighten health probe error handling
         status = f"degraded: {e}"
         _log.warning(
-            "HEALTH_DATA_PROBE_FAILED",
+            "HEALTH_CHECK_FAILED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
     summary = {
@@ -9356,8 +9356,18 @@ def start_healthcheck() -> None:
         _log.warning(
             f"Healthcheck port {port} in use: {e}. Skipping health-endpoint."
         )
-    except Exception as e:
-        _log.exception(f"start_healthcheck failed: {e}")
+    except (
+        APIError,
+        TimeoutError,
+        ConnectionError,
+        KeyError,
+        ValueError,
+        TypeError,
+    ) as e:  # AI-AGENT-REF: tighten health probe error handling
+        _log.warning(
+            "HEALTH_CHECK_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
 
 
 def start_metrics_server(default_port: int = 9200) -> None:
