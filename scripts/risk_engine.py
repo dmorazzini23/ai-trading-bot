@@ -401,6 +401,22 @@ class RiskEngine:
         self._update_event.wait(timeout)
         self._update_event.clear()
 
+    def update_exposure(self, context=None, *args, **kwargs):
+        """
+        Recalculate/update exposure. Prefer the provided context.
+        Backward compatible: if context is None, fall back to self.ctx (if set).
+        """
+        ctx = context if context is not None else getattr(self, "ctx", None)
+        if ctx is None:
+            raise RuntimeError("RiskEngine.update_exposure: context is required")
+        
+        # Update exposure based on current positions
+        try:
+            self.refresh_positions(ctx.api)
+            logger.debug("Exposure updated successfully")
+        except Exception as exc:
+            logger.warning("Failed to update exposure: %s", exc)
+
     def apply_risk_scaling(
         self,
         signal: TradeSignal,
