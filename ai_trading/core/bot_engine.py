@@ -1300,19 +1300,19 @@ def cancel_all_open_orders(runtime) -> None:
     """
     On startup or each run, cancel every Alpaca order whose status is 'open'.
     """
-    if ctx.api is None:
-        _log.warning("ctx.api is None - cannot cancel orders")
+    if runtime.api is None:
+        _log.warning("runtime.api is None - cannot cancel orders")
         return
 
     try:
         req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
-        open_orders = ctx.api.get_orders(req)
+        open_orders = runtime.api.get_orders(req)
         if not open_orders:
             return
         for od in open_orders:
             if getattr(od, "status", "").lower() == "open":
                 try:
-                    ctx.api.cancel_order_by_id(od.id)
+                    runtime.api.cancel_order_by_id(od.id)
                 except Exception as exc:
                     _log.exception(
                         "Failed to cancel order %s",
@@ -2145,14 +2145,14 @@ _SECTOR_CACHE: dict[str, str] = {}
 def _log_health_diagnostics(runtime, reason: str) -> None:
     """Log detailed diagnostics used for halt decisions."""
     try:
-        cash = float(ctx.api.get_account().cash)
-        positions = len(ctx.api.get_all_positions())
+        cash = float(runtime.api.get_account().cash)
+        positions = len(runtime.api.get_all_positions())
     except Exception:
         cash = -1.0
         positions = -1
     try:
-        df = ctx.data_fetcher.get_minute_df(
-            ctx, REGIME_SYMBOLS[0], lookback_minutes=S.min_health_rows
+        df = runtime.data_fetcher.get_minute_df(
+            runtime, REGIME_SYMBOLS[0], lookback_minutes=S.min_health_rows
         )
         rows = len(df)
         last_time = df.index[-1].isoformat() if not df.empty else "n/a"
@@ -2160,7 +2160,7 @@ def _log_health_diagnostics(runtime, reason: str) -> None:
         rows = 0
         last_time = "n/a"
     vol = _VOL_STATS.get("last")
-    sentiment = getattr(ctx, "last_sentiment", 0.0)
+    sentiment = getattr(runtime, "last_sentiment", 0.0)
     _log.debug(
         "Health diagnostics: rows=%s, last_time=%s, vol=%s, sent=%s, cash=%s, positions=%s, reason=%s",
         rows,
@@ -2285,7 +2285,7 @@ def compute_spy_vol_stats(runtime) -> None:
         if _VOL_STATS["last_update"] == today:
             return
 
-    df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
+    df = runtime.data_fetcher.get_daily_df(runtime, REGIME_SYMBOLS[0])
     if df is None or len(df) < 252 + ATR_LENGTH:
         return True
 
@@ -3196,7 +3196,7 @@ def audit_positions(runtime) -> None:
 
     # 2) Fetch remote (broker) positions
     try:
-        remote = {p.symbol: int(p.qty) for p in ctx.api.get_all_positions()}
+        remote = {p.symbol: int(p.qty) for p in runtime.api.get_all_positions()}
     except Exception as e:
         logger = logging.getLogger(__name__)
         _log.exception("bot_engine: failed to fetch remote positions from broker", exc_info=e)
@@ -3218,7 +3218,7 @@ def audit_positions(runtime) -> None:
                         side=OrderSide.SELL,
                         time_in_force=TimeInForce.DAY,
                     )
-                    safe_submit_order(ctx.api, req)
+                    safe_submit_order(runtime.api, req)
                 except Exception as exc:
                     _log.exception("bot.py unexpected", exc_info=exc)
                     raise
@@ -3231,7 +3231,7 @@ def audit_positions(runtime) -> None:
                         side=OrderSide.BUY,
                         time_in_force=TimeInForce.DAY,
                     )
-                    safe_submit_order(ctx.api, req)
+                    safe_submit_order(runtime.api, req)
                 except Exception as exc:
                     _log.exception("bot.py unexpected", exc_info=exc)
                     raise
