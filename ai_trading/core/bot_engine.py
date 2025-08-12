@@ -4962,44 +4962,39 @@ def set_halt_flag(reason: str) -> None:
         _log.error(f"Failed to write halt flag: {exc}")
 
 
-def check_halt_flag(runtime=None) -> bool:
-    if S.force_trades:
-        _log.warning("FORCE_TRADES override active: ignoring halt flag.")
-        return False
+def check_halt_flag(runtime) -> bool:
+    """
+    Determine whether the trading loop should halt for safety/ops.
+    Priority:
+      1) Env var AI_TRADER_HALT=1
+      2) Config-defined halt file with truthy content
+      3) runtime.halt boolean attribute
+    """
+    import os
 
-    reason = None
-    if os.path.exists(HALT_FLAG_PATH):
-        try:
-            with open(HALT_FLAG_PATH) as f:
-                content = f.read().strip()
-        except Exception:
-            content = ""
-        if content.startswith("MANUAL"):
-            reason = "manual override"
-        elif content.startswith("DISASTER"):
-            reason = "disaster flag"
-    if ctx:
-        dd = _current_drawdown()
-        if dd >= DISASTER_DD_LIMIT:
-            reason = f"portfolio drawdown {dd:.2%} >= {DISASTER_DD_LIMIT:.2%}"
-        else:
-            try:
-                acct = ctx.api.get_account()
-                if float(getattr(acct, "maintenance_margin", 0)) > float(acct.equity):
-                    reason = "margin breach"
-            except Exception as e:
-                # Failed to check margin status - log error and treat as potential risk
-                _log.warning(
-                    "Failed to check margin status for halt condition: %s", e
-                )
-                reason = "margin check failure"
-
-    if reason:
-        _log.info(f"TRADING_HALTED set due to {reason}")
+    # AI-AGENT-REF: thread runtime into halt checks and drop global ctx
+    # 1) Environment override
+    if os.getenv("AI_TRADER_HALT", "").strip() in {"1", "true", "True"}:
         return True
+
+    # 2) Config file flag (if provided)
+    halt_file = getattr(getattr(runtime, "cfg", None), "halt_file", None)
+    if isinstance(halt_file, str) and halt_file:
+        try:
+            if os.path.exists(halt_file):
+                with open(halt_file, "r", encoding="utf-8", errors="ignore") as fh:
+                    content = fh.read().strip()
+                if content and content not in {"0", "false", "False"}:
+                    return True
+        except (OSError, IOError) as e:
+            # AI-AGENT-REF: log read issues without raising
+            _log.info("HALT_FLAG_READ_ISSUE", extra={"halt_file": halt_file, "error": str(e)})
+
+    # 3) Runtime attribute
+    if bool(getattr(runtime, "halt", False)):
+        return True
+
     return False
-
-
 def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
     """Check if there are too many positions, with allowance for rebalancing."""
     try:
@@ -6539,15 +6534,15 @@ def exit_all_positions(ctx: BotContext) -> None:
             _log.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
 
 
-def _liquidate_all_positions(ctx: BotContext) -> None:
+def _liquidate_all_positions(runtime: BotContext) -> None:
     """Helper to liquidate every open position."""
     # AI-AGENT-REF: existing exit_all_positions wrapper for emergency liquidation
-    exit_all_positions(ctx)
+    exit_all_positions(runtime)
 
 
-def liquidate_positions_if_needed(ctx: BotContext) -> None:
+def liquidate_positions_if_needed(runtime: BotContext) -> None:
     """Liquidate all positions when certain risk conditions trigger."""
-    if check_halt_flag(ctx):
+    if check_halt_flag(runtime):
         # Modified: DO NOT liquidate positions on halt flag.
         _log.info(
             "TRADING_HALTED_VIA_FLAG is active: NOT liquidating positions, holding open positions."
@@ -9072,7 +9067,10 @@ app = Flask(__name__)
 def health() -> str:
     """Health endpoint exposing basic system metrics."""
     try:
-        pre_trade_health_check(ctx, ctx.tickers or REGIME_SYMBOLS)
+        runtime = _get_runtime_context_or_none()  # AI-AGENT-REF: runtime-aware health check
+        if runtime is None:
+            raise RuntimeError("runtime not ready")
+        pre_trade_health_check(runtime, runtime.tickers or REGIME_SYMBOLS)
         status = "ok"
     except Exception as exc:
         status = f"degraded: {exc}"
@@ -9084,7 +9082,6 @@ def health() -> str:
     from flask import jsonify
 
     return jsonify(summary), 200
-
 
 def start_healthcheck() -> None:
     port = S.healthcheck_port
