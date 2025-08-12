@@ -26,6 +26,9 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
+# Import emit-once logger for startup banners
+from ai_trading.logging import logger_once
+
 def _initialize_bot_context_post_setup(ctx: Any) -> None:
     """
     Optional, non-fatal finishing steps after LazyBotContext builds its services.
@@ -170,8 +173,8 @@ def ensure_portfolio_weights(ctx, symbols):
         return {symbol: 1.0 / len(symbols) for symbol in symbols if symbols}
 
 
-# Log Alpaca availability on startup
-logger.info("Alpaca SDK is available")
+# Log Alpaca availability on startup (only once per process)
+logger_once.info("Alpaca SDK is available")
 # Mirror config to maintain historical constant name
 MIN_CYCLE = S.scheduler_sleep_seconds
 # AI-AGENT-REF: guard environment validation with explicit error logging
@@ -1374,7 +1377,7 @@ def ensure_finbert(cfg=None):
             mdl = transformers.AutoModelForSequenceClassification.from_pretrained("yiyanghkust/finbert-tone")
             mdl.eval()
         _finbert_tokenizer, _finbert_model = tok, mdl
-        logger.info("FinBERT loaded on first use.")
+        logger_once.info("FinBERT loaded successfully")
         return _finbert_tokenizer, _finbert_model
     except Exception as e:
         logger.error("FinBERT lazy-load failed: %s", e)
@@ -3804,7 +3807,11 @@ def get_strategies():
                 _log.info("Loaded strategies: %s", ", ".join(sorted(names)))
 
     if not strategies:
-        _log.warning("No concrete strategies found; using FallbackStrategy (no-op).")
+        # Only warn if strategy_names was explicitly provided but none were found
+        if wanted:
+            _log.warning("No concrete strategies found from configured strategy_names %s; using FallbackStrategy (no-op).", wanted)
+        else:
+            _log.debug("No concrete strategies found; using FallbackStrategy (no-op).")
         class FallbackStrategy:
             """
             Minimal no-op strategy implementing the expected API so the engine can run.
@@ -4101,7 +4108,7 @@ def _get_runtime_context_or_none():
         lbc._ensure_initialized()
         return lbc._context
     except Exception as e:
-        _log.warning("Runtime context unavailable for risk exposure update: %s", e)
+        _log.debug("Runtime context unavailable for risk exposure update: %s", e)
         return None
 
 
@@ -4125,13 +4132,13 @@ def _update_risk_engine_exposure():
                     setattr(re, "ctx", runtime)
                     re.update_exposure()
             except NameError as e:
-                _log.warning("Risk engine exposure update failed (NameError): %s", e)
+                _log.debug("Risk engine exposure update failed (NameError): %s", e)
             except Exception as e:
-                _log.warning("Risk engine exposure update failed: %s", e)
+                _log.debug("Risk engine exposure update failed: %s", e)
         else:
             _log.debug("No risk_engine on runtime context; skipping exposure update.")
     except Exception as e:
-        _log.warning("Risk engine exposure update failed: %s", e)
+        _log.debug("Risk engine exposure update failed: %s", e)
 
 
 def _initialize_bot_context_post_setup_legacy(ctx):
@@ -9604,8 +9611,11 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     extra={"timestamp": utc_now_iso()},
                 )
 
-            # Log standardized market fetch heartbeat
-            logger.info("MARKET_FETCH")
+            # Log standardized market fetch heartbeat (configurable)
+            if S.log_market_fetch:
+                logger.info("MARKET_FETCH")
+            else:
+                logger.debug("MARKET_FETCH")
 
             current_cash, regime_ok, symbols = _prepare_run(ctx, state)
 
@@ -10068,13 +10078,13 @@ def main() -> None:
         )
         sys.exit(2)
 
-    # Log masked config for verification
-    logger.info("Config: ALPACA_API_KEY=***MASKED***", extra={"present": bool(api_key)})
-    logger.info(
+    # Log masked config for verification (only once per process)
+    logger_once.info("Config: ALPACA_API_KEY=***MASKED***", extra={"present": bool(api_key)})
+    logger_once.info(
         "Config: ALPACA_SECRET_KEY=***MASKED***", extra={"present": bool(api_secret)}
     )
-    logger.info(f"Config: ALPACA_BASE_URL={cfg.alpaca_base_url}")
-    logger.info(f"Config: TRADING_MODE={cfg.trading_mode}")
+    logger_once.info(f"Config: ALPACA_BASE_URL={cfg.alpaca_base_url}")
+    logger_once.info(f"Config: TRADING_MODE={cfg.trading_mode}")
 
     config.reload_env()
 

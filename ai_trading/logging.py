@@ -96,6 +96,82 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(payload, default=self._json_default, ensure_ascii=False)
 
 
+class CompactJsonFormatter(JSONFormatter):
+    """Compact JSON log formatter that drops large extra payloads."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record, self.datefmt),
+            "level": record.levelname,
+            "name": record.name,
+            "msg": record.getMessage(),
+        }
+        
+        # In compact mode, only include essential extra fields
+        essential_fields = {
+            "bot_phase",
+            "present",  # For config verification logs
+            "timestamp",  # For trading events
+        }
+        
+        for k, v in record.__dict__.items():
+            if k in essential_fields and k not in {
+                "msg", "message", "args", "levelname", "levelno", "name",
+                "created", "msecs", "relativeCreated", "asctime", "pathname",
+                "filename", "module", "exc_info", "exc_text", "stack_info",
+                "lineno", "funcName", "thread", "threadName", "processName",
+                "process", "taskName"
+            }:
+                if "key" in k.lower() or "secret" in k.lower():
+                    v = _get_config().mask_secret(str(v))
+                payload[k] = v
+        
+        if record.exc_info:
+            exc_type, exc_value, _exc_tb = record.exc_info
+            payload["exc"] = "".join(
+                traceback.format_exception_only(exc_type, exc_value)
+            ).strip()
+        
+        return json.dumps(payload, default=self._json_default, ensure_ascii=False, separators=(',', ':'))
+
+
+class EmitOnceLogger:
+    """Logger wrapper that tracks emitted messages to prevent duplicates."""
+    
+    def __init__(self, base_logger: logging.Logger):
+        self._logger = base_logger
+        self._emitted_keys: set[str] = set()
+        self._lock = threading.Lock()
+    
+    def _emit_if_new(self, level: str, key: str, msg: str, *args, **kwargs) -> None:
+        """Emit log message only if key hasn't been seen before."""
+        with self._lock:
+            if key not in self._emitted_keys:
+                self._emitted_keys.add(key)
+                log_method = getattr(self._logger, level.lower())
+                log_method(msg, *args, **kwargs)
+    
+    def info(self, msg: str, key: str | None = None, *args, **kwargs) -> None:
+        """Log info message once per key (defaults to message text as key)."""
+        emit_key = key or msg
+        self._emit_if_new("info", emit_key, msg, *args, **kwargs)
+    
+    def debug(self, msg: str, key: str | None = None, *args, **kwargs) -> None:
+        """Log debug message once per key (defaults to message text as key)."""
+        emit_key = key or msg
+        self._emit_if_new("debug", emit_key, msg, *args, **kwargs)
+    
+    def warning(self, msg: str, key: str | None = None, *args, **kwargs) -> None:
+        """Log warning message once per key (defaults to message text as key)."""
+        emit_key = key or msg
+        self._emit_if_new("warning", emit_key, msg, *args, **kwargs)
+    
+    def error(self, msg: str, key: str | None = None, *args, **kwargs) -> None:
+        """Log error message once per key (defaults to message text as key)."""
+        emit_key = key or msg
+        self._emit_if_new("error", emit_key, msg, *args, **kwargs)
+
+
 _configured = False
 _loggers: dict[str, logging.Logger] = {}
 _log_queue: queue.Queue | None = None
@@ -145,7 +221,17 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
 
         logger.setLevel(logging.DEBUG)
 
-        formatter = JSONFormatter("%(asctime)sZ")
+        # Choose formatter based on LOG_COMPACT_JSON setting
+        try:
+            from ai_trading.config import get_settings
+            S = get_settings()
+            if S.log_compact_json:
+                formatter = CompactJsonFormatter("%(asctime)sZ")
+            else:
+                formatter = JSONFormatter("%(asctime)sZ")
+        except Exception:
+            # Fallback to regular formatter if config not available
+            formatter = JSONFormatter("%(asctime)sZ")
 
         class _PhaseFilter(logging.Filter):
             def filter(self, record: logging.LogRecord) -> bool:
@@ -216,6 +302,9 @@ def get_logger(name: str) -> logging.Logger:
 
 
 logger = logging.getLogger(__name__)
+
+# Create emit-once logger instance for preventing duplicate startup messages  
+logger_once = EmitOnceLogger(logger)
 
 
 def get_phase_logger(name: str, phase: str | None = None) -> logging.Logger:
@@ -694,8 +783,11 @@ __all__ = [
     "get_phase_logger",
     "init_logger",
     "logger",
+    "logger_once",
     "log_performance_metrics",
     "log_trading_event",
     "setup_enhanced_logging",
     "validate_logging_setup",
+    "EmitOnceLogger",
+    "CompactJsonFormatter",
 ]
