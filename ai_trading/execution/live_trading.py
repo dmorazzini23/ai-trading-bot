@@ -22,6 +22,7 @@ from alpaca.trading.requests import (
     LimitOrderRequest,
     MarketOrderRequest,
 )
+from alpaca.common.exceptions import APIError
 
 
 class AlpacaExecutionEngine:
@@ -111,8 +112,14 @@ class AlpacaExecutionEngine:
                 logger.error("Failed to validate Alpaca connection")
                 return False
 
-        except Exception as e:
-            logger.error(f"Failed to initialize Alpaca execution engine: {e}")
+        except (ValueError, KeyError, AttributeError) as e:
+            logger.error(f"Configuration error initializing Alpaca execution engine: {e}")
+            return False
+        except (ConnectionError, TimeoutError) as e:
+            logger.error(f"Network error initializing Alpaca execution engine: {e}")
+            return False
+        except APIError as e:
+            logger.error(f"Alpaca API error initializing execution engine: {e}")
             return False
 
     def submit_market_order(
@@ -247,8 +254,11 @@ class AlpacaExecutionEngine:
                 logger.error(f"Failed to cancel order: {order_id}")
                 return False
 
-        except Exception as e:
-            logger.error(f"Error cancelling order {order_id}: {e}")
+        except (ValueError, KeyError) as e:
+            logger.error(f"Invalid order data for cancellation {order_id}: {e}")
+            return False
+        except (ConnectionError, TimeoutError) as e:
+            logger.error(f"Network error cancelling order {order_id}: {e}")
             return False
 
     def get_order_status(self, order_id: str) -> dict | None:

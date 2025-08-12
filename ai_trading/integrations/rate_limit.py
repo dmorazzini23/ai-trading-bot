@@ -103,18 +103,27 @@ class RateLimiter:
     queuing with deadlines, and metrics collection.
     """
 
-    def __init__(self, global_capacity: int = 1000, global_rate: float = 100.0):
+    def __init__(self, config=None, global_capacity: int = 1000, global_rate: float = 100.0):
         """
         Initialize rate limiter.
 
         Args:
-            global_capacity: Global burst capacity across all routes
-            global_rate: Global refill rate (tokens per second)
+            config: TradingConfig instance for default values
+            global_capacity: Global burst capacity across all routes (override)
+            global_rate: Global refill rate (tokens per second) (override)
         """
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        
+        # Use config values if provided, otherwise use defaults
+        if config is not None:
+            capacity = getattr(config, 'capacity', global_capacity)
+            rate = getattr(config, 'refill_rate', global_rate)
+        else:
+            capacity = global_capacity
+            rate = global_rate
 
         # Global rate limiting
-        self._global_bucket = TokenBucket(global_capacity, global_rate)
+        self._global_bucket = TokenBucket(capacity, rate)
 
         # Per-route buckets
         self._route_buckets: dict[str, TokenBucket] = {}

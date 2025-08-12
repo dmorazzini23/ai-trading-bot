@@ -36,7 +36,7 @@ def _emit_once(logger: logging.Logger, key: str, level: int, msg: str) -> None:
     if key in _EMITTED_KEYS:
         return
     _EMITTED_KEYS.add(key)
-    logger.log(level, msg)
+    _log.log(level, msg)
 
 _RUNTIME_READY: bool = False
 def is_runtime_ready() -> bool:
@@ -177,13 +177,13 @@ def ensure_portfolio_weights(ctx, symbols):
         if hasattr(portfolio, "compute_portfolio_weights"):
             return portfolio.compute_portfolio_weights(ctx, symbols)
         else:
-            logger.warning(
+            _log.warning(
                 "compute_portfolio_weights not found, using fallback method."
             )
             # Placeholder fallback: Evenly distribute portfolio weights
             return {symbol: 1.0 / len(symbols) for symbol in symbols}
     except Exception as e:
-        logger.error(f"Error computing portfolio weights: {e}, using fallback")
+        _log.error(f"Error computing portfolio weights: {e}, using fallback")
         return {symbol: 1.0 / len(symbols) for symbol in symbols if symbols}
 
 
@@ -202,7 +202,7 @@ try:
 
     _emit_once(logger, "config_loaded", logging.INFO, "Config settings loaded, validation deferred to runtime")
 except Exception as e:
-    logger.warning("Config settings import failed: %s", e)
+    _log.warning("Config settings import failed: %s", e)
 
 # Provide a no-op ``profile`` decorator when line_profiler is not active.
 try:
@@ -230,7 +230,7 @@ def handle_exception(exc_type, exc_value, exc_traceback):
             h.close()
         except (AttributeError, OSError) as e:
             # Log handler cleanup issues but continue shutdown process
-            logger.warning("Failed to close logging handler: %s", e)
+            _log.warning("Failed to close logging handler: %s", e)
     logging.shutdown()
 
 
@@ -715,7 +715,7 @@ from alpaca_trade_api.rest import (
 )
 
 _emit_once(logger, "real_alpaca_imported", logging.INFO, "Real Alpaca Trading SDK imported successfully")
-logger.debug("Production trading ready with Python %s", sys.version)
+_log.debug("Production trading ready with Python %s", sys.version)
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
 from bs4 import BeautifulSoup
@@ -739,7 +739,7 @@ if not os.getenv("PYTEST_RUNNING"):
     try:
         from ai_trading.meta_learning import optimize_signals  # type: ignore
     except Exception as _e:
-        logger.warning(
+        _log.warning(
             "Meta-learning unavailable (%s); proceeding without signal optimization", _e
         )
 
@@ -794,7 +794,7 @@ def _require_cfg(value: str | None, name: str) -> str:
 
     if BOT_MODE_ENV == "production":
         while not value:
-            logger.critical("Missing %s; retrying in 60s", name)
+            _log.critical("Missing %s; retrying in 60s", name)
             time.sleep(60)
             config.reload_env()
             import importlib
@@ -832,7 +832,7 @@ def _ensure_alpaca_env_or_raise():
     if shadow_mode:
         return k, s, b
     if not (k and s):
-        logger.critical("Alpaca credentials missing – aborting client initialization")
+        _log.critical("Alpaca credentials missing – aborting client initialization")
         raise RuntimeError("Missing Alpaca API credentials")
     return k, s, b
 
@@ -861,7 +861,7 @@ def init_runtime_config():
     if not callable(validate_alpaca_credentials):
         raise RuntimeError("validate_alpaca_credentials not found in config")
 
-    logger.info(
+    _log.info(
         "Runtime config initialized",
         extra={
             "alpaca_key_set": bool(ALPACA_API_KEY and len(ALPACA_API_KEY) > 8),
@@ -1081,7 +1081,7 @@ def _cleanup_ml_model_cache():
         keys_to_remove = list(_ML_MODEL_CACHE.keys())[:items_to_remove]
         for key in keys_to_remove:
             _ML_MODEL_CACHE.pop(key, None)
-        logger.info("Cleaned up ML model cache, removed %d items", items_to_remove)
+        _log.info("Cleaned up ML model cache, removed %d items", items_to_remove)
 
 
 logger = logging.getLogger(__name__)
@@ -1096,7 +1096,7 @@ def log_skip_cooldown(
     now = time.monotonic()
     sym_set = frozenset([symbols]) if isinstance(symbols, str) else frozenset(symbols)
     if sym_set != _LAST_SKIP_SYMBOLS or now - _LAST_SKIP_CD_TIME >= 15:
-        logger.info("SKIP_COOLDOWN | %s", ", ".join(sorted(sym_set)))
+        _log.info("SKIP_COOLDOWN | %s", ", ".join(sorted(sym_set)))
         _LAST_SKIP_CD_TIME = now
         _LAST_SKIP_SYMBOLS = sym_set
 
@@ -1108,16 +1108,16 @@ def market_is_open(now: datetime | None = None) -> bool:
     try:
         with timeout_protection(10):
             if os.getenv("FORCE_MARKET_OPEN", "false").lower() == "true":
-                logger.info(
+                _log.info(
                     "FORCE_MARKET_OPEN is enabled; overriding market hours checks."
                 )
                 return True
             return utils_market_open(now)
     except TimeoutError:
-        logger.error("Market status check timed out, assuming market closed")
+        _log.error("Market status check timed out, assuming market closed")
         return False
     except Exception as e:
-        logger.error("Market status check failed: %s", e)
+        _log.error("Market status check failed: %s", e)
         return False
 
 
@@ -1149,10 +1149,10 @@ def load_portfolio_snapshot() -> dict[str, int]:
 def compute_current_positions(ctx: BotContext) -> dict[str, int]:
     try:
         positions = ctx.api.get_all_positions()
-        logger.debug("Raw Alpaca positions: %s", positions)
+        _log.debug("Raw Alpaca positions: %s", positions)
         return {p.symbol: int(p.qty) for p in positions}
     except (AttributeError, ValueError, ConnectionError, TimeoutError) as e:
-        logger.warning("compute_current_positions failed: %s", e, exc_info=True)
+        _log.warning("compute_current_positions failed: %s", e, exc_info=True)
         return {}
 
 
@@ -1165,11 +1165,11 @@ def maybe_rebalance(ctx):
 def get_latest_close(df: pd.DataFrame) -> float:
     """Return the last closing price or ``0.0`` if unavailable."""
     # AI-AGENT-REF: debug output to understand test failure
-    logger.debug("get_latest_close called with df: %s", type(df).__name__)
+    _log.debug("get_latest_close called with df: %s", type(df).__name__)
 
     # AI-AGENT-REF: More robust check that works with different pandas instances
     if df is None:
-        logger.debug("get_latest_close early return: df is None")
+        _log.debug("get_latest_close early return: df is None")
         return 0.0
 
     # Check if df has empty attribute and columns attribute (duck typing)
@@ -1177,11 +1177,11 @@ def get_latest_close(df: pd.DataFrame) -> float:
         is_empty = df.empty
         has_close = "close" in df.columns
     except (AttributeError, TypeError) as e:
-        logger.debug("get_latest_close: DataFrame methods failed: %s", e)
+        _log.debug("get_latest_close: DataFrame methods failed: %s", e)
         return 0.0
 
     if is_empty or not has_close:
-        logger.debug(
+        _log.debug(
             "get_latest_close early return: empty: %s, close in columns: %s",
             is_empty,
             has_close,
@@ -1190,32 +1190,32 @@ def get_latest_close(df: pd.DataFrame) -> float:
 
     try:
         last_valid_close = df["close"].dropna()
-        logger.debug(
+        _log.debug(
             "get_latest_close last_valid_close length: %d", len(last_valid_close)
         )
 
         if not last_valid_close.empty:
             price = last_valid_close.iloc[-1]
-            logger.debug(
+            _log.debug(
                 "get_latest_close price from iloc[-1]: %s (type: %s)",
                 price,
                 type(price).__name__,
             )
         else:
-            logger.critical("All NaNs in close column for get_latest_close")
+            _log.critical("All NaNs in close column for get_latest_close")
             price = 0.0
 
         # More robust NaN check that works with different pandas instances
         if price is None or (hasattr(price, "__ne__") and price != price) or price <= 0:
-            logger.debug("get_latest_close price is NaN or <= 0: price=%s", price)
+            _log.debug("get_latest_close price is NaN or <= 0: price=%s", price)
             return 0.0
 
         result = float(price)
-        logger.debug("get_latest_close returning: %s", result)
+        _log.debug("get_latest_close returning: %s", result)
         return result
 
     except Exception as e:
-        logger.warning("get_latest_close exception: %s", e)
+        _log.warning("get_latest_close exception: %s", e)
         return 0.0
 
 
@@ -1238,7 +1238,7 @@ def assert_row_integrity(
     before_len: int, after_len: int, func_name: str, symbol: str
 ) -> None:
     if after_len < before_len:
-        logger.warning(
+        _log.warning(
             f"Row count dropped in {func_name} for {symbol}: {before_len} -> {after_len}"
         )
 
@@ -1282,7 +1282,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         df = get_minute_df(symbol, start_dt, now_utc)
     
     if df.empty:
-        logger.error(f"Fetch failed: empty DataFrame for {symbol}")
+        _log.error(f"Fetch failed: empty DataFrame for {symbol}")
         raise DataFetchError(f"No data for {symbol}")
 
     # Check data freshness before proceeding with trading logic
@@ -1290,7 +1290,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
         # Allow data up to 10 minutes old during market hours (600 seconds)
         _ensure_data_fresh(symbols=[symbol], max_age_seconds=600)
     except RuntimeError as e:
-        logger.warning(f"Data staleness check failed for {symbol}: {e}")
+        _log.warning(f"Data staleness check failed for {symbol}: {e}")
         # Still return the data but log the staleness issue
 
     return df
@@ -1301,7 +1301,7 @@ def cancel_all_open_orders(ctx: BotContext) -> None:
     On startup or each run, cancel every Alpaca order whose status is 'open'.
     """
     if ctx.api is None:
-        logger.warning("ctx.api is None - cannot cancel orders")
+        _log.warning("ctx.api is None - cannot cancel orders")
         return
 
     try:
@@ -1314,13 +1314,13 @@ def cancel_all_open_orders(ctx: BotContext) -> None:
                 try:
                     ctx.api.cancel_order_by_id(od.id)
                 except Exception as exc:
-                    logger.exception(
+                    _log.exception(
                         "Failed to cancel order %s",
                         getattr(od, "id", "unknown"),
                         exc_info=exc,
                     )
     except Exception as exc:
-        logger.warning("Failed to cancel open orders: %s", exc, exc_info=True)
+        _log.warning("Failed to cancel open orders: %s", exc, exc_info=True)
 
 
 def reconcile_positions(ctx: BotContext) -> None:
@@ -1338,7 +1338,7 @@ def reconcile_positions(ctx: BotContext) -> None:
                     ctx.stop_targets.pop(symbol, None)
                     ctx.take_profit_targets.pop(symbol, None)
     except Exception as exc:
-        logger.exception("reconcile_positions failed", exc_info=exc)
+        _log.exception("reconcile_positions failed", exc_info=exc)
 
 
 import warnings
@@ -1383,12 +1383,12 @@ def ensure_finbert(cfg=None):
             except Exception:
                 enabled = False
         if not enabled:
-            logger.info("FinBERT disabled by config; skipping model load.")
+            _log.info("FinBERT disabled by config; skipping model load.")
             return None, None
 
         # dependency presence check without ImportError guards
         if importlib.util.find_spec("transformers") is None or importlib.util.find_spec("torch") is None:
-            logger.warning("FinBERT requested but transformers/torch not installed; returning neutral sentiment.")
+            _log.warning("FinBERT requested but transformers/torch not installed; returning neutral sentiment.")
             return None, None
 
         import transformers  # type: ignore
@@ -1407,7 +1407,7 @@ def ensure_finbert(cfg=None):
         _emit_once(_log, "finbert_loaded", logging.INFO, "FinBERT loaded successfully")
         return _finbert_tokenizer, _finbert_model
     except Exception as e:
-        logger.error("FinBERT lazy-load failed: %s", e)
+        _log.error("FinBERT lazy-load failed: %s", e)
         return None, None
 
 
@@ -1506,13 +1506,13 @@ def load_hyperparams() -> dict:
         else HYPERPARAMS_FILE
     )
     if not os.path.exists(path):
-        logger.warning(f"Hyperparameter file {path} not found; using defaults")
+        _log.warning(f"Hyperparameter file {path} not found; using defaults")
         return {}
     try:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Failed to load hyperparameters from %s: %s", path, exc)
+        _log.warning("Failed to load hyperparameters from %s: %s", path, exc)
         return {}
 
 
@@ -1540,7 +1540,7 @@ def _maybe_warm_cache(ctx: BotContext) -> None:
                 feed=getattr(ctx, "data_feed", None),
             )
     except Exception as exc:
-        logger.warning("Cache warm-up failed: %s", exc)
+        _log.warning("Cache warm-up failed: %s", exc)
 
 
 def _fetch_universe_bars(
@@ -1560,7 +1560,7 @@ def _fetch_universe_bars(
     try:
         batch = get_bars_batch(symbols, timeframe, start, end, feed=feed)
     except Exception as exc:
-        logger.warning("Universe batch failed: %s", exc)
+        _log.warning("Universe batch failed: %s", exc)
         batch = {}
 
     remaining = [
@@ -1578,7 +1578,7 @@ def _fetch_universe_bars(
             try:
                 return sym, get_bars(sym, timeframe, start, end)
             except Exception as one_exc:
-                logger.warning("Per-symbol fetch failed for %s: %s", sym, one_exc)
+                _log.warning("Per-symbol fetch failed for %s: %s", sym, one_exc)
                 return sym, None
 
         with ThreadPoolExecutor(
@@ -1640,7 +1640,7 @@ def _fetch_intraday_bars_chunked(
         try:
             got = get_minute_bars_batch(chunk, start, end, feed=feed)
         except Exception as exc:
-            logger.warning(
+            _log.warning(
                 "Intraday batch failed for chunk size %d: %s; falling back",
                 len(chunk),
                 exc,
@@ -1660,7 +1660,7 @@ def _fetch_intraday_bars_chunked(
                 try:
                     return sym, get_minute_bars(sym, start, end, feed=feed)
                 except Exception as one_exc:
-                    logger.warning(
+                    _log.warning(
                         "Intraday per-symbol fallback failed for %s: %s", sym, one_exc
                     )
                     return sym, None
@@ -1698,7 +1698,7 @@ def _build_regime_dataset(ctx: BotContext) -> pd.DataFrame:
     Build regime dataset using a configurable basket via batched fetch.
     Returns a *wide* DataFrame: columns are symbols, rows are aligned by timestamp (index reset).
     """
-    logger.info("Building regime dataset (batched)")
+    _log.info("Building regime dataset (batched)")
     try:
         end_dt = datetime.now(UTC)
         start_dt = end_dt - timedelta(
@@ -1718,7 +1718,7 @@ def _build_regime_dataset(ctx: BotContext) -> pd.DataFrame:
             )
             cols.append(s)
         if not cols:
-            logger.warning(
+            _log.warning(
                 "Regime dataset empty after normalization; attempting SPY-only fallback"
             )
             try:
@@ -1733,8 +1733,8 @@ def _build_regime_dataset(ctx: BotContext) -> pd.DataFrame:
                 else:
                     raise Exception("SPY data not available")
             except Exception as e:
-                logger.error("SPY fallback failed: %s", e)
-                logger.error(
+                _log.error("SPY fallback failed: %s", e)
+                _log.error(
                     "Not enough valid rows (0) to train regime model; using dummy fallback"
                 )
                 return pd.DataFrame()
@@ -1745,7 +1745,7 @@ def _build_regime_dataset(ctx: BotContext) -> pd.DataFrame:
         out.columns.name = None
         return out
     except Exception as exc:
-        logger.warning("REGIME bootstrap failed: %s", exc)
+        _log.warning("REGIME bootstrap failed: %s", exc)
         return pd.DataFrame()
 
 
@@ -1891,7 +1891,7 @@ class BotState:
 
 
 state = BotState()
-logger.info(f"Trading mode is set to '{state.mode_obj.mode}'")
+_log.info(f"Trading mode is set to '{state.mode_obj.mode}'")
 params = state.mode_obj.get_config()
 params.update(load_hyperparams())
 
@@ -2000,14 +2000,14 @@ def validate_trading_parameters():
 
     # Validate CAPITAL_CAP (should be between 0.01 and 0.5)
     if not isinstance(CAPITAL_CAP, int | float) or not (0.01 <= CAPITAL_CAP <= 0.5):
-        logger.error("Invalid CAPITAL_CAP %s, using default 0.25", CAPITAL_CAP)
+        _log.error("Invalid CAPITAL_CAP %s, using default 0.25", CAPITAL_CAP)
         CAPITAL_CAP = 0.25
 
     # Validate DOLLAR_RISK_LIMIT (should be between 0.005 and 0.1)
     if not isinstance(DOLLAR_RISK_LIMIT, int | float) or not (
         0.005 <= DOLLAR_RISK_LIMIT <= 0.1
     ):
-        logger.error(
+        _log.error(
             "Invalid DOLLAR_RISK_LIMIT %s, using default 0.05", DOLLAR_RISK_LIMIT
         )
         DOLLAR_RISK_LIMIT = 0.05
@@ -2019,12 +2019,12 @@ def validate_trading_parameters():
     if not isinstance(CONF_THRESHOLD, int | float) or not (
         0.5 <= CONF_THRESHOLD <= 0.95
     ):
-        logger.error("Invalid CONF_THRESHOLD %s, using default 0.75", CONF_THRESHOLD)
+        _log.error("Invalid CONF_THRESHOLD %s, using default 0.75", CONF_THRESHOLD)
         CONF_THRESHOLD = 0.75
 
     # Validate BUY_THRESHOLD (should be between 0.1 and 0.9)
     if not isinstance(BUY_THRESHOLD, int | float) or not (0.1 <= BUY_THRESHOLD <= 0.9):
-        logger.error("Invalid BUY_THRESHOLD %s, using default 0.2", BUY_THRESHOLD)
+        _log.error("Invalid BUY_THRESHOLD %s, using default 0.2", BUY_THRESHOLD)
         BUY_THRESHOLD = 0.2
 
     _emit_once(logger, "params_validated", logging.INFO, 
@@ -2091,16 +2091,16 @@ def cleanup_executors():
     try:
         if executor:
             executor.shutdown(wait=True, cancel_futures=True)
-            logger.debug("Main executor shutdown successfully")
+            _log.debug("Main executor shutdown successfully")
     except Exception as e:
-        logger.warning("Error shutting down main executor: %s", e)
+        _log.warning("Error shutting down main executor: %s", e)
 
     try:
         if prediction_executor:
             prediction_executor.shutdown(wait=True, cancel_futures=True)
-            logger.debug("Prediction executor shutdown successfully")
+            _log.debug("Prediction executor shutdown successfully")
     except Exception as e:
-        logger.warning("Error shutting down prediction executor: %s", e)
+        _log.warning("Error shutting down prediction executor: %s", e)
 
 
 atexit.register(cleanup_executors)
@@ -2136,7 +2136,7 @@ if not os.path.exists(SLIPPAGE_LOG_FILE):
                 ["timestamp", "symbol", "expected", "actual", "slippage_cents"]
             )
     except Exception as e:
-        logger.warning(f"Could not create slippage log {SLIPPAGE_LOG_FILE}: {e}")
+        _log.warning(f"Could not create slippage log {SLIPPAGE_LOG_FILE}: {e}")
 
 # Sector cache for portfolio exposure calculations
 _SECTOR_CACHE: dict[str, str] = {}
@@ -2161,7 +2161,7 @@ def _log_health_diagnostics(ctx: BotContext, reason: str) -> None:
         last_time = "n/a"
     vol = _VOL_STATS.get("last")
     sentiment = getattr(ctx, "last_sentiment", 0.0)
-    logger.debug(
+    _log.debug(
         "Health diagnostics: rows=%s, last_time=%s, vol=%s, sent=%s, cash=%s, positions=%s, reason=%s",
         rows,
         last_time,
@@ -2202,7 +2202,7 @@ def log_circuit_breaker_status():
 
         for name, cb in breakers.items():
             if hasattr(cb, "state") and hasattr(cb, "fail_counter"):
-                logger.info(
+                _log.info(
                     "CIRCUIT_BREAKER_STATUS",
                     extra={
                         "breaker": name,
@@ -2212,7 +2212,7 @@ def log_circuit_breaker_status():
                     },
                 )
     except Exception as e:
-        logger.debug(f"Circuit breaker status logging failed: {e}")
+        _log.debug(f"Circuit breaker status logging failed: {e}")
 
 
 def get_circuit_breaker_health() -> dict:
@@ -2238,7 +2238,7 @@ def get_circuit_breaker_health() -> dict:
 
         return health
     except Exception as e:
-        logger.error(f"Failed to get circuit breaker health: {e}")
+        _log.error(f"Failed to get circuit breaker health: {e}")
         return {}
 
 
@@ -2251,7 +2251,7 @@ def get_circuit_breaker_health() -> dict:
 def safe_alpaca_get_account(ctx: BotContext):
     """Safely get account information."""
     if ctx.api is None:
-        logger.warning("ctx.api is None - Alpaca trading client unavailable")
+        _log.warning("ctx.api is None - Alpaca trading client unavailable")
         return None
     return ctx.api.get_account()
 
@@ -2305,7 +2305,7 @@ def compute_spy_vol_stats(ctx: BotContext) -> None:
         _VOL_STATS["last_update"] = today
         _VOL_STATS["last"] = last_val
 
-    logger.info(
+    _log.info(
         "SPY_VOL_STATS_UPDATED",
         extra={"mean": mean_val, "std": std_val, "atr": last_val},
     )
@@ -2359,7 +2359,7 @@ class FinnhubFetcherLegacy:
                 self._timestamps.append(now_ts)
                 return
             wait_secs = 60 - (now_ts - self._timestamps[0]) + random.uniform(0.1, 0.5)
-            logger.debug(f"[FH] rate-limit reached; sleeping {wait_secs:.2f}s")
+            _log.debug(f"[FH] rate-limit reached; sleeping {wait_secs:.2f}s")
             pytime.sleep(wait_secs)
 
     def _parse_period(self, period: str) -> int:
@@ -2389,7 +2389,7 @@ class FinnhubFetcherLegacy:
             self._throttle()
             resp = self.client.stock_candles(sym, resolution, _from=start_ts, to=now_ts)
             if resp.get("s") != "ok":
-                logger.warning(f"[FH] no data for {sym}: status={resp.get('s')}")
+                _log.warning(f"[FH] no data for {sym}: status={resp.get('s')}")
                 frames.append(pd.DataFrame())
                 continue
             idx = safe_to_datetime(resp["t"], context=f"Finnhub {sym}")
@@ -2420,21 +2420,21 @@ def safe_get_stock_bars(client, request, symbol: str, context: str = ""):
     try:
         response = client.get_stock_bars(request)
         if response is None:
-            logger.error(
+            _log.error(
                 f"ALPACA {context} FETCH ERROR for {symbol}: get_stock_bars returned None"
             )
             return None
         if not hasattr(response, "df"):
-            logger.error(
+            _log.error(
                 f"ALPACA {context} FETCH ERROR for {symbol}: response missing 'df' attribute"
             )
             return None
         return response.df
     except AttributeError as e:
-        logger.error(f"ALPACA {context} FETCH ERROR for {symbol}: AttributeError: {e}")
+        _log.error(f"ALPACA {context} FETCH ERROR for {symbol}: AttributeError: {e}")
         return None
     except Exception as e:
-        logger.error(
+        _log.error(
             f"ALPACA {context} FETCH ERROR for {symbol}: {type(e).__name__}: {e}"
         )
         return None
@@ -2460,14 +2460,14 @@ class DataFetcher:
                     try:
                         daily_cache_hit.inc()
                     except Exception as exc:
-                        logger.exception("bot.py unexpected", exc_info=exc)
+                        _log.exception("bot.py unexpected", exc_info=exc)
                         raise
                 return self._daily_cache[symbol]
 
         api_key = get_settings().alpaca_api_key
         api_secret = get_settings().alpaca_secret_key
         if not api_key or not api_secret:
-            logger.error(f"Missing Alpaca credentials for {symbol}")
+            _log.error(f"Missing Alpaca credentials for {symbol}")
             return None
 
         client = StockHistoricalDataClient(api_key, api_secret)
@@ -2488,7 +2488,7 @@ class DataFetcher:
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             if bars.empty:
-                logger.warning(
+                _log.warning(
                     f"No daily bars returned for {symbol}. Possible market holiday or API outage"
                 )
                 return None
@@ -2500,7 +2500,7 @@ class DataFetcher:
                 idx = safe_to_datetime(idx_vals, context=f"daily {symbol}")
             except ValueError as e:
                 reason = "empty data" if bars.empty else "unparseable timestamps"
-                logger.warning(
+                _log.warning(
                     f"Invalid daily index for {symbol}; skipping. {reason} | {e}"
                 )
                 return None
@@ -2511,8 +2511,8 @@ class DataFetcher:
         except APIError as e:
             err_msg = str(e).lower()
             if "subscription does not permit querying recent sip data" in err_msg:
-                logger.warning(f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
-                logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
+                _log.warning(f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
+                _log.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
                     req.feed = "iex"
                     df_iex = safe_get_stock_bars(client, req, symbol, "IEX DAILY")
@@ -2532,15 +2532,15 @@ class DataFetcher:
                         reason = (
                             "empty data" if df_iex.empty else "unparseable timestamps"
                         )
-                        logger.warning(
+                        _log.warning(
                             f"Invalid IEX daily index for {symbol}; skipping. {reason} | {e}"
                         )
                         return None
                     df_iex.index = idx
                     df = df_iex.rename(columns=lambda c: c.lower())
                 except Exception as iex_err:
-                    logger.warning(f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
-                    logger.info(
+                    _log.warning(f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
+                    _log.info(
                         f"INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}"
                     )
                     ts = pd.to_datetime(end_ts, utc=True, errors="coerce")
@@ -2560,7 +2560,7 @@ class DataFetcher:
                         index=[dummy_date],
                     )
             else:
-                logger.warning(f"ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
+                _log.warning(f"ALPACA DAILY FETCH ERROR for {symbol}: {repr(e)}")
                 ts2 = pd.to_datetime(end_ts, utc=True, errors="coerce")
                 if ts2 is None:
                     ts2 = pd.Timestamp.now(tz="UTC")
@@ -2570,7 +2570,7 @@ class DataFetcher:
                     index=[dummy_date],
                 )
         except Exception as e:
-            logger.error(f"Failed to fetch daily data for {symbol}: {repr(e)}")
+            _log.error(f"Failed to fetch daily data for {symbol}: {repr(e)}")
             return None
 
         with cache_lock:
@@ -2594,7 +2594,7 @@ class DataFetcher:
                     try:
                         minute_cache_hit.inc()
                     except Exception as exc:
-                        logger.exception("bot.py unexpected", exc_info=exc)
+                        _log.exception("bot.py unexpected", exc_info=exc)
                         raise
                 return self._minute_cache[symbol]
 
@@ -2602,7 +2602,7 @@ class DataFetcher:
             try:
                 minute_cache_miss.inc()
             except Exception as exc:
-                logger.exception("bot.py unexpected", exc_info=exc)
+                _log.exception("bot.py unexpected", exc_info=exc)
                 raise
         api_key = get_settings().alpaca_api_key
         api_secret = get_settings().alpaca_secret_key
@@ -2628,7 +2628,7 @@ class DataFetcher:
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
             if bars.empty:
-                logger.warning(
+                _log.warning(
                     f"No minute bars returned for {symbol}. Possible market holiday or API outage"
                 )
                 return None
@@ -2640,7 +2640,7 @@ class DataFetcher:
                 idx = safe_to_datetime(idx_vals, context=f"minute {symbol}")
             except ValueError as e:
                 reason = "empty data" if bars.empty else "unparseable timestamps"
-                logger.warning(
+                _log.warning(
                     f"Invalid minute index for {symbol}; skipping. {reason} | {e}"
                 )
                 return None
@@ -2654,8 +2654,8 @@ class DataFetcher:
                 "subscription does not permit querying recent sip data"
                 in err_msg.lower()
             ):
-                logger.warning(f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
-                logger.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
+                _log.warning(f"ALPACA SUBSCRIPTION ERROR for {symbol}: {repr(e)}")
+                _log.info(f"ATTEMPTING IEX-DELAYERED DATA FOR {symbol}")
                 try:
                     req.feed = "iex"
                     df_iex = safe_get_stock_bars(client, req, symbol, "IEX MINUTE")
@@ -2675,7 +2675,7 @@ class DataFetcher:
                         reason = (
                             "empty data" if df_iex.empty else "unparseable timestamps"
                         )
-                        logger.warning(
+                        _log.warning(
                             f"Invalid IEX minute index for {symbol}; skipping. {reason} | {_e}"
                         )
                         df = pd.DataFrame()
@@ -2685,14 +2685,14 @@ class DataFetcher:
                             "open", "high", "low", "close", "volume"
                         ]
                 except Exception as iex_err:
-                    logger.warning(f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
-                    logger.info(f"NO ALTERNATIVE MINUTE DATA FOR {symbol}")
+                    _log.warning(f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
+                    _log.info(f"NO ALTERNATIVE MINUTE DATA FOR {symbol}")
                     df = pd.DataFrame()
             else:
-                logger.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
+                _log.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
                 df = pd.DataFrame()
         except Exception as e:
-            logger.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
+            _log.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
             df = pd.DataFrame()
 
         with cache_lock:
@@ -2743,7 +2743,7 @@ class DataFetcher:
                         "subscription does not permit" in str(e).lower()
                         and _DEFAULT_FEED != "iex"
                     ):
-                        logger.warning(
+                        _log.warning(
                             (
                                 "[historic_minute] subscription error for %s %s-%s: %s; "
                                 "retrying with IEX"
@@ -2766,7 +2766,7 @@ class DataFetcher:
                 else:
                     bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
             except Exception as e:
-                logger.warning(
+                _log.warning(
                     f"[historic_minute] failed for {symbol} {day_start}-{day_end}: {e}"
                 )
                 bars_day = None
@@ -2783,7 +2783,7 @@ class DataFetcher:
                     reason = (
                         "empty data" if bars_day.empty else "unparseable timestamps"
                     )
-                    logger.warning(
+                    _log.warning(
                         f"Invalid minute index for {symbol}; skipping day {day_start}. {reason} | {e}"
                     )
                     bars_day = None
@@ -2843,7 +2843,7 @@ def prefetch_daily_data(
             try:
                 idx = safe_to_datetime(df.index, context=f"bulk {sym}")
             except ValueError as e:
-                logger.warning(f"Invalid bulk index for {sym}; skipping | {e}")
+                _log.warning(f"Invalid bulk index for {sym}; skipping | {e}")
                 continue
             df.index = idx
             df = df.rename(columns=lambda c: c.lower())
@@ -2852,10 +2852,10 @@ def prefetch_daily_data(
     except APIError as e:
         err_msg = str(e).lower()
         if "subscription does not permit querying recent sip data" in err_msg:
-            logger.warning(
+            _log.warning(
                 f"ALPACA SUBSCRIPTION ERROR in bulk for {symbols}: {repr(e)}"
             )
-            logger.info(f"ATTEMPTING IEX-DELAYERED BULK FETCH FOR {symbols}")
+            _log.info(f"ATTEMPTING IEX-DELAYERED BULK FETCH FOR {symbols}")
             try:
                 req.feed = "iex"
                 bars_iex = safe_get_stock_bars(
@@ -2877,7 +2877,7 @@ def prefetch_daily_data(
                     try:
                         idx = safe_to_datetime(df.index, context=f"IEX bulk {sym}")
                     except ValueError as e:
-                        logger.warning(
+                        _log.warning(
                             f"Invalid IEX bulk index for {sym}; skipping | {e}"
                         )
                         continue
@@ -2886,7 +2886,7 @@ def prefetch_daily_data(
                     grouped[sym] = df
                 return grouped
             except Exception as iex_err:
-                logger.warning(f"ALPACA IEX BULK ERROR for {symbols}: {repr(iex_err)}")
+                _log.warning(f"ALPACA IEX BULK ERROR for {symbols}: {repr(iex_err)}")
                 daily_dict = {}
                 for sym in symbols:
                     try:
@@ -2908,7 +2908,7 @@ def prefetch_daily_data(
                                 df_sym.index, context=f"fallback bulk {sym}"
                             )
                         except ValueError as _e:
-                            logger.warning(
+                            _log.warning(
                                 f"Invalid fallback bulk index for {sym}; skipping | {_e}"
                             )
                             continue
@@ -2916,8 +2916,8 @@ def prefetch_daily_data(
                         df_sym = df_sym.rename(columns=lambda c: c.lower())
                         daily_dict[sym] = df_sym
                     except Exception as indiv_err:
-                        logger.warning(f"ALPACA IEX ERROR for {sym}: {repr(indiv_err)}")
-                        logger.info(
+                        _log.warning(f"ALPACA IEX ERROR for {sym}: {repr(indiv_err)}")
+                        _log.info(
                             f"INSERTING DUMMY DAILY FOR {sym} ON {end_date.isoformat()}"
                         )
                         tsd = pd.to_datetime(end_date, utc=True, errors="coerce")
@@ -2939,7 +2939,7 @@ def prefetch_daily_data(
                         daily_dict[sym] = dummy_df
                 return daily_dict
         else:
-            logger.warning(f"ALPACA BULK FETCH UNKNOWN ERROR for {symbols}: {repr(e)}")
+            _log.warning(f"ALPACA BULK FETCH UNKNOWN ERROR for {symbols}: {repr(e)}")
             daily_dict = {}
             for sym in symbols:
                 t2 = pd.to_datetime(end_date, utc=True, errors="coerce")
@@ -2953,7 +2953,7 @@ def prefetch_daily_data(
                 daily_dict[sym] = dummy_df
             return daily_dict
     except Exception as e:
-        logger.warning(f"ALPACA BULK FETCH EXCEPTION for {symbols}: {repr(e)}")
+        _log.warning(f"ALPACA BULK FETCH EXCEPTION for {symbols}: {repr(e)}")
         daily_dict = {}
         for sym in symbols:
             t3 = pd.to_datetime(end_date, utc=True, errors="coerce")
@@ -2996,7 +2996,7 @@ class TradeLogger:
                     finally:
                         portalocker.unlock(f)
             except PermissionError:
-                logger.debug("TradeLogger init path not writable: %s", path)
+                _log.debug("TradeLogger init path not writable: %s", path)
         if not os.path.exists(REWARD_LOG_FILE):
             try:
                 os.makedirs(os.path.dirname(REWARD_LOG_FILE) or ".", exist_ok=True)
@@ -3012,7 +3012,7 @@ class TradeLogger:
                         ]
                     )
             except Exception as e:
-                logger.warning(f"Failed to create reward log: {e}")
+                _log.warning(f"Failed to create reward log: {e}")
 
     def log_entry(
         self,
@@ -3048,7 +3048,7 @@ class TradeLogger:
                 finally:
                     portalocker.unlock(f)
         except PermissionError:
-            logger.debug("TradeLogger entry log skipped; path not writable")
+            _log.debug("TradeLogger entry log skipped; path not writable")
 
     def log_exit(self, state: BotState, symbol: str, exit_price: float) -> None:
         try:
@@ -3097,7 +3097,7 @@ class TradeLogger:
                 finally:
                     portalocker.unlock(f)
         except PermissionError:
-            logger.debug("TradeLogger exit log skipped; path not writable")
+            _log.debug("TradeLogger exit log skipped; path not writable")
             return
 
         # log reward
@@ -3114,7 +3114,7 @@ class TradeLogger:
                     ]
                 )
         except Exception as exc:
-            logger.exception("bot.py unexpected", exc_info=exc)
+            _log.exception("bot.py unexpected", exc_info=exc)
             raise
 
         # Update streak-based kill-switch
@@ -3126,7 +3126,7 @@ class TradeLogger:
             state.streak_halt_until = datetime.now(UTC).astimezone(PACIFIC) + timedelta(
                 minutes=60
             )
-            logger.warning(
+            _log.warning(
                 "STREAK_HALT_TRIGGERED",
                 extra={
                     "loss_streak": state.loss_streak,
@@ -3147,12 +3147,12 @@ class TradeLogger:
 
             # If we have audit format rows, trigger conversion for meta-learning
             if quality_report.get("audit_format_rows", 0) > 0:
-                logger.info(
+                _log.info(
                     "METALEARN_TRIGGER_CONVERSION: Converting audit format to meta-learning format"
                 )
                 # The conversion will be handled by the meta-learning system when it reads the log
         else:
-            logger.debug("Meta-learning disabled, skipping conversion")
+            _log.debug("Meta-learning disabled, skipping conversion")
 
 
 def _parse_local_positions() -> dict[str, int]:
@@ -3170,7 +3170,7 @@ def _parse_local_positions() -> dict[str, int]:
             dtype=str,
         )
         if df.empty:
-            logger.warning("Loaded DataFrame is empty after parsing/fallback")
+            _log.warning("Loaded DataFrame is empty after parsing/fallback")
     except pd.errors.ParserError as e:
         logging.getLogger(__name__).warning(
             "Failed to parse TRADE_LOG_FILE (malformed row): %s; returning empty set",
@@ -3199,7 +3199,7 @@ def audit_positions(ctx: BotContext) -> None:
         remote = {p.symbol: int(p.qty) for p in ctx.api.get_all_positions()}
     except Exception as e:
         logger = logging.getLogger(__name__)
-        logger.exception("bot_engine: failed to fetch remote positions from broker", exc_info=e)
+        _log.exception("bot_engine: failed to fetch remote positions from broker", exc_info=e)
         return
 
     max_order_size = _as_int(os.getenv("MAX_ORDER_SIZE", "1000"), 1000)
@@ -3220,7 +3220,7 @@ def audit_positions(ctx: BotContext) -> None:
                     )
                     safe_submit_order(ctx.api, req)
                 except Exception as exc:
-                    logger.exception("bot.py unexpected", exc_info=exc)
+                    _log.exception("bot.py unexpected", exc_info=exc)
                     raise
             else:
                 # Broker has fewer shares than local: buy back the missing shares
@@ -3233,7 +3233,7 @@ def audit_positions(ctx: BotContext) -> None:
                     )
                     safe_submit_order(ctx.api, req)
                 except Exception as exc:
-                    logger.exception("bot.py unexpected", exc_info=exc)
+                    _log.exception("bot.py unexpected", exc_info=exc)
                     raise
 
     # 4) For any symbol in local that is not in remote, submit order matching the local side
@@ -3241,7 +3241,7 @@ def audit_positions(ctx: BotContext) -> None:
         if sym not in remote:
             # AI-AGENT-REF: prevent oversize orders on unmatched locals
             if abs(lq) > max_order_size:
-                logger.warning(
+                _log.warning(
                     "Order size %d exceeds maximum %d for %s",
                     abs(lq),
                     max_order_size,
@@ -3258,7 +3258,7 @@ def audit_positions(ctx: BotContext) -> None:
                 )
                 safe_submit_order(ctx.api, req)
             except Exception as exc:
-                logger.exception("bot.py unexpected", exc_info=exc)
+                _log.exception("bot.py unexpected", exc_info=exc)
                 raise
 
 
@@ -3273,7 +3273,7 @@ def validate_open_orders(ctx: BotContext) -> None:
         open_orders = ctx.api.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
     except Exception as e:
         logger = logging.getLogger(__name__)
-        logger.exception("bot_engine: failed to fetch open orders from broker", exc_info=e)
+        _log.exception("bot_engine: failed to fetch open orders from broker", exc_info=e)
         return
 
     now = datetime.now(UTC)
@@ -3295,7 +3295,7 @@ def validate_open_orders(ctx: BotContext) -> None:
                     )
                     safe_submit_order(ctx.api, req)
             except Exception as exc:
-                logger.exception("bot.py unexpected", exc_info=exc)
+                _log.exception("bot.py unexpected", exc_info=exc)
                 raise
 
     # After canceling/replacing any stuck orders, fix any position mismatches
@@ -3343,7 +3343,7 @@ class SignalManager:
             w = min(abs(val) * 10, 1.0)
             return s, w, "momentum"
         except (KeyError, ValueError, TypeError, IndexError):
-            logger.exception("Error in signal_momentum")
+            _log.exception("Error in signal_momentum")
             return -1, 0.0, "momentum"
 
     def signal_mean_reversion(
@@ -3364,7 +3364,7 @@ class SignalManager:
             w = min(abs(val) / 3, 1.0)
             return s, w, "mean_reversion"
         except (KeyError, ValueError, TypeError, IndexError):
-            logger.exception("Error in signal_mean_reversion")
+            _log.exception("Error in signal_mean_reversion")
             return -1, 0.0, "mean_reversion"
 
     def signal_stochrsi(self, df: pd.DataFrame, model=None) -> tuple[int, float, str]:
@@ -3375,7 +3375,7 @@ class SignalManager:
             s = 1 if val < 0.2 else -1 if val > 0.8 else -1
             return s, 0.3, "stochrsi"
         except (KeyError, ValueError, TypeError, IndexError):
-            logger.exception("Error in signal_stochrsi")
+            _log.exception("Error in signal_stochrsi")
             return -1, 0.0, "stochrsi"
 
     def signal_obv(self, df: pd.DataFrame, model=None) -> tuple[int, float, str]:
@@ -3390,7 +3390,7 @@ class SignalManager:
             w = min(abs(slope) / 1e6, 1.0)
             return s, w, "obv"
         except (KeyError, ValueError, TypeError, IndexError):
-            logger.exception("Error in signal_obv")
+            _log.exception("Error in signal_obv")
             return -1, 0.0, "obv"
 
     def signal_vsa(self, df: pd.DataFrame, model=None) -> tuple[int, float, str]:
@@ -3414,7 +3414,7 @@ class SignalManager:
                 w = 0.0  # Safe fallback when average is zero
             return s, w, "vsa"
         except Exception:
-            logger.exception("Error in signal_vsa")
+            _log.exception("Error in signal_vsa")
             return -1, 0.0, "vsa"
 
     def signal_ml(
@@ -3436,15 +3436,15 @@ class SignalManager:
                 pred = model.predict(X)[0]
                 proba = float(model.predict_proba(X)[0][pred])
             except Exception as e:
-                logger.error("signal_ml predict failed: %s", e)
+                _log.error("signal_ml predict failed: %s", e)
                 return -1, 0.0, "ml"
             s = 1 if pred == 1 else -1
-            logger.info(
+            _log.info(
                 "ML_SIGNAL", extra={"prediction": int(pred), "probability": proba}
             )
             return s, proba, "ml"
         except Exception as e:
-            logger.exception(f"signal_ml failed: {e}")
+            _log.exception(f"signal_ml failed: {e}")
             return -1, 0.0, "ml"
 
     def signal_sentiment(
@@ -3477,7 +3477,7 @@ class SignalManager:
             try:
                 score = fetch_sentiment(ctx, ticker)
             except Exception as e:
-                logger.warning(f"[signal_sentiment] {ticker} error: {e}")
+                _log.warning(f"[signal_sentiment] {ticker} error: {e}")
                 score = 0.0
 
         # Update last‐seen price & cache
@@ -3510,12 +3510,12 @@ class SignalManager:
                 usecols=["signal_name", "weight"],
             )
             if df.empty:
-                logger.warning("Loaded DataFrame is empty after parsing/fallback")
+                _log.warning("Loaded DataFrame is empty after parsing/fallback")
                 return {}
             return {row["signal_name"]: row["weight"] for _, row in df.iterrows()}
         except ValueError as e:
             if "usecols" in str(e).lower():
-                logger.warning(
+                _log.warning(
                     "Signal weights CSV missing expected columns, trying fallback read"
                 )
                 try:
@@ -3535,18 +3535,18 @@ class SignalManager:
                             for _, row in df.iterrows()
                         }
                     else:
-                        logger.error(
+                        _log.error(
                             "Signal weights CSV has unexpected format: %s",
                             df.columns.tolist(),
                         )
                         return {}
                 except Exception as fallback_e:
-                    logger.error(
+                    _log.error(
                         "Failed to load signal weights with fallback: %s", fallback_e
                     )
                     return {}
             else:
-                logger.error("Failed to load signal weights: %s", e)
+                _log.error("Failed to load signal weights: %s", e)
                 return {}
 
     def evaluate(
@@ -3583,14 +3583,14 @@ class SignalManager:
         # AI-AGENT-REF: Graceful degradation when no meta-learning data exists
         if performance_data is None:
             # For new deployments, allow all signal types with warning
-            logger.info(
+            _log.info(
                 "METALEARN_FALLBACK | No trade history - allowing all signals for new deployment"
             )
             allowed_tags = None  # None means allow all tags
         else:
             allowed_tags = set(performance_data.keys())
             if not allowed_tags:
-                logger.warning(
+                _log.warning(
                     "METALEARN_NO_QUALIFIED_SIGNALS | No signals meet performance criteria - using basic signals"
                 )
                 # Use a basic set of reliable signal types as fallback
@@ -3603,7 +3603,7 @@ class SignalManager:
             try:
                 signals_evaluated.inc()
             except Exception as exc:
-                logger.exception("bot.py unexpected", exc_info=exc)
+                _log.exception("bot.py unexpected", exc_info=exc)
                 raise
 
         # simple moving averages
@@ -3884,7 +3884,7 @@ def _initialize_alpaca_clients():
     key, secret, base_url = _ensure_alpaca_env_or_raise()
     if not (key and secret):
         # In SHADOW_MODE we may not have creds; skip client init
-        logger.info(
+        _log.info(
             "Shadow mode or missing credentials: skipping Alpaca client initialization"
         )
         return
@@ -3893,14 +3893,14 @@ def _initialize_alpaca_clients():
         from alpaca.data.historical import StockHistoricalDataClient
         from alpaca.trading.client import TradingClient
 
-        logger.debug("Successfully imported Alpaca SDK classes")
+        _log.debug("Successfully imported Alpaca SDK classes")
     except Exception as e:
-        logger.error(
+        _log.error(
             "alpaca_trade_api import failed; cannot initialize clients", exc_info=e
         )
         # In test environments, don't raise - just skip initialization
         if os.getenv("PYTEST_RUNNING") or os.getenv("TESTING"):
-            logger.info(
+            _log.info(
                 "Test environment detected, skipping Alpaca client initialization"
             )
             return
@@ -3925,7 +3925,7 @@ async def on_trade_update(event):
         # Fallback for dict-like event objects
         symbol = event.order.get("symbol") if isinstance(event.order, dict) else "?"
         status = event.order.get("status") if isinstance(event.order, dict) else "?"
-    logger.info(f"Trade update for {symbol}: {status}")
+    _log.info(f"Trade update for {symbol}: {status}")
 
 
 # AI-AGENT-REF: Global context and engine will be initialized lazily
@@ -3957,7 +3957,7 @@ class LazyBotContext:
             try:
                 stream.subscribe_trade_updates(on_trade_update)
             except Exception as e:
-                logger.warning("Failed to subscribe to trade updates: %s", e)
+                _log.warning("Failed to subscribe to trade updates: %s", e)
 
         self._context = BotContext(
             api=trading_client,
@@ -4225,7 +4225,7 @@ def _initialize_bot_context_post_setup_legacy(ctx):
     try:
         ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
     except Exception as e:
-        logger.warning(f"[warm_cache] failed to seed regime history: {e}")
+        _log.warning(f"[warm_cache] failed to seed regime history: {e}")
 
     return ctx
 
@@ -4240,11 +4240,11 @@ def data_source_health_check(ctx: BotContext, symbols: Sequence[str]) -> None:
     if not symbols:
         return
     if len(missing) == len(symbols):
-        logger.error(
+        _log.error(
             "DATA_SOURCE_HEALTH_CHECK: No data for any symbol. Possible API outage or market holiday."
         )
     elif missing:
-        logger.warning(
+        _log.warning(
             "DATA_SOURCE_HEALTH_CHECK: missing data for %s",
             ", ".join(missing),
         )
@@ -4260,7 +4260,7 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
             last_minute_bar_age_seconds,
         )  # type: ignore
     except Exception as e:
-        logger.warning("Data freshness check unavailable; skipping", exc_info=e)
+        _log.warning("Data freshness check unavailable; skipping", exc_info=e)
         return
     now_utc = utc_now_iso()
     stale = []
@@ -4272,9 +4272,9 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
             stale.append((sym, f"age={int(age)}s"))
     if stale:
         details = ", ".join([f"{s}({r})" for s, r in stale])
-        logger.warning("Data staleness detected [UTC now=%s]: %s", now_utc, details)
+        _log.warning("Data staleness detected [UTC now=%s]: %s", now_utc, details)
         raise RuntimeError(f"Stale minute-cache for symbols: {details}")
-    logger.debug("Data freshness OK [UTC now=%s]", now_utc)
+    _log.debug("Data freshness OK [UTC now=%s]", now_utc)
 
 
 # AI-AGENT-REF: Module-level health check removed to prevent NameError: ctx
@@ -4363,14 +4363,14 @@ def _validate_timezones(df, results, symbol):
 
 def in_trading_hours(ts: pd.Timestamp) -> bool:
     if is_holiday(ts):
-        logger.warning(
+        _log.warning(
             f"No NYSE market schedule for {ts.date()}; skipping market open/close check."
         )
         return False
     try:
         return NY.open_at_time(get_market_schedule(), ts)
     except ValueError as exc:
-        logger.warning(f"Invalid schedule time {ts}: {exc}; assuming market closed")
+        _log.warning(f"Invalid schedule time {ts}: {exc}; assuming market closed")
         return False
 
 
@@ -4402,7 +4402,7 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
                 texts.append(tds[-1].get_text(strip=True))
         return " ".join(texts)
     except Exception as e:
-        logger.warning(f"[get_sec_headlines] parse failed for {ticker}: {e}")
+        _log.warning(f"[get_sec_headlines] parse failed for {ticker}: {e}")
         return ""
 
 
@@ -4415,7 +4415,7 @@ def _check_sentiment_circuit_breaker() -> bool:
     if cb["state"] == "open":
         if now - cb["last_failure"] > SENTIMENT_RECOVERY_TIMEOUT:
             cb["state"] = "half-open"
-            logger.info("Sentiment circuit breaker moved to half-open state")
+            _log.info("Sentiment circuit breaker moved to half-open state")
             return True
         return False
     return True
@@ -4427,7 +4427,7 @@ def _record_sentiment_success():
     _SENTIMENT_CIRCUIT_BREAKER["failures"] = 0
     if _SENTIMENT_CIRCUIT_BREAKER["state"] == "half-open":
         _SENTIMENT_CIRCUIT_BREAKER["state"] = "closed"
-        logger.info("Sentiment circuit breaker closed - service recovered")
+        _log.info("Sentiment circuit breaker closed - service recovered")
 
 
 def _record_sentiment_failure():
@@ -4439,7 +4439,7 @@ def _record_sentiment_failure():
 
     if cb["failures"] >= SENTIMENT_FAILURE_THRESHOLD:
         cb["state"] = "open"
-        logger.warning(
+        _log.warning(
             f"Sentiment circuit breaker opened after {cb['failures']} failures"
         )
 
@@ -4460,7 +4460,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     # Use new SENTIMENT_API_KEY or fallback to NEWS_API_KEY for backwards compatibility
     api_key = SENTIMENT_API_KEY or NEWS_API_KEY
     if not api_key:
-        logger.debug(
+        _log.debug(
             "No sentiment API key configured (checked SENTIMENT_API_KEY and NEWS_API_KEY)"
         )
         return 0.0
@@ -4479,7 +4479,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
                 else SENTIMENT_TTL_SEC
             )
             if now_ts - last_ts < cache_ttl:
-                logger.debug(
+                _log.debug(
                     f"Sentiment cache hit for {ticker} (age: {(now_ts - last_ts)/60:.1f}m)"
                 )
                 return last_score
@@ -4487,7 +4487,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     # Cache miss or stale → fetch fresh
     # AI-AGENT-REF: Circuit breaker pattern for graceful degradation
     if not _check_sentiment_circuit_breaker():
-        logger.info(
+        _log.info(
             f"Sentiment circuit breaker open, returning cached/neutral for {ticker}"
         )
         with sentiment_lock:
@@ -4495,7 +4495,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
             cached = _SENTIMENT_CACHE.get(ticker)
             if cached:
                 _, last_score = cached
-                logger.debug(f"Using stale cached sentiment {last_score} for {ticker}")
+                _log.debug(f"Using stale cached sentiment {last_score} for {ticker}")
                 return last_score
             # No cache available, store and return neutral
             _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
@@ -4512,7 +4512,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
 
         if resp.status_code == 429:
             # AI-AGENT-REF: Enhanced rate limiting handling
-            logger.warning(
+            _log.warning(
                 f"fetch_sentiment({ticker}) rate-limited → caching neutral with extended TTL"
             )
             _record_sentiment_failure()
@@ -4542,7 +4542,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
                 if filing["type"] == "buy" and filing["dollar_amount"] > 50_000:
                     form4_score += 0.1
         except Exception as e:
-            logger.debug(
+            _log.debug(
                 f"Form4 fetch failed for {ticker}: {e}"
             )  # Reduced to debug level
 
@@ -4556,7 +4556,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
         return final_score
 
     except requests.exceptions.RequestException as e:
-        logger.warning(f"Sentiment API request failed for {ticker}: {e}")
+        _log.warning(f"Sentiment API request failed for {ticker}: {e}")
         _record_sentiment_failure()
 
         # AI-AGENT-REF: Fallback to cached data or neutral if no cache
@@ -4564,7 +4564,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
             cached = _SENTIMENT_CACHE.get(ticker)
             if cached:
                 _, last_score = cached
-                logger.debug(
+                _log.debug(
                     f"Using cached sentiment fallback {last_score} for {ticker}"
                 )
                 return last_score
@@ -4572,7 +4572,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
             _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
             return 0.0
     except Exception as e:
-        logger.error(f"Unexpected error fetching sentiment for {ticker}: {e}")
+        _log.error(f"Unexpected error fetching sentiment for {ticker}: {e}")
         _record_sentiment_failure()
         with sentiment_lock:
             _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
@@ -4605,7 +4605,7 @@ def predict_text_sentiment(text: str, cfg=None) -> float:
         neg, neu, pos = probs.tolist()
         return float(pos - neg)
     except Exception as e:
-        logger.warning(
+        _log.warning(
             f"[predict_text_sentiment] FinBERT inference failed ({e}); returning neutral"
         )
         return 0.0
@@ -4676,7 +4676,7 @@ def _can_fetch_events(symbol: str) -> bool:
             try:
                 event_cooldown_hits.inc()
             except Exception as exc:
-                logger.exception("bot.py unexpected", exc_info=exc)
+                _log.exception("bot.py unexpected", exc_info=exc)
                 raise
         return False
     _LAST_EVENT_TS[symbol] = now_ts
@@ -4694,10 +4694,10 @@ def get_calendar_safe(symbol: str) -> pd.DataFrame:
     try:
         cal = yf.Ticker(symbol).calendar
     except HTTPError:
-        logger.warning(f"[Events] Rate limited for {symbol}; skipping events.")
+        _log.warning(f"[Events] Rate limited for {symbol}; skipping events.")
         cal = pd.DataFrame()
     except Exception as e:
-        logger.error(f"[Events] Error fetching calendar for {symbol}: {e}")
+        _log.error(f"[Events] Error fetching calendar for {symbol}: {e}")
         cal = pd.DataFrame()
     _calendar_cache[symbol] = cal
     _calendar_last_fetch[symbol] = today_date
@@ -4718,7 +4718,7 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
                 raw = raw[0]
             dates.append(pd.to_datetime(raw))
     except Exception:
-        logger.debug(
+        _log.debug(
             f"[Events] Malformed calendar for {symbol}, columns={getattr(cal, 'columns', None)}"
         )
         return False
@@ -4740,7 +4740,7 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
 def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
     acct = safe_alpaca_get_account(ctx)
     if acct is None:
-        logger.warning("Daily loss check skipped - Alpaca account unavailable")
+        _log.warning("Daily loss check skipped - Alpaca account unavailable")
         return False
     equity = float(acct.equity)
     today_date = date.today()
@@ -4761,7 +4761,7 @@ def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
     loss = (state.day_start_equity[1] - equity) / state.day_start_equity[1]
     daily_drawdown.set(loss)
     if loss > 0.05:
-        logger.warning("[WARNING] Daily drawdown = %.2f%%", loss * 100)
+        _log.warning("[WARNING] Daily drawdown = %.2f%%", loss * 100)
     return loss >= limit
 
 
@@ -4769,7 +4769,7 @@ def check_weekly_loss(ctx: BotContext, state: BotState) -> bool:
     """Weekly portfolio drawdown guard."""
     acct = safe_alpaca_get_account(ctx)
     if acct is None:
-        logger.warning("Weekly loss check skipped - Alpaca account unavailable")
+        _log.warning("Weekly loss check skipped - Alpaca account unavailable")
         return False
     equity = float(acct.equity)
     today_date = date.today()
@@ -4795,7 +4795,7 @@ def count_day_trades() -> int:
         usecols=["entry_time", "exit_time"],
     )
     if df.empty:
-        logger.warning("Loaded DataFrame is empty after parsing/fallback")
+        _log.warning("Loaded DataFrame is empty after parsing/fallback")
     df["entry_time"] = pd.to_datetime(df["entry_time"], errors="coerce")
     df["exit_time"] = pd.to_datetime(df["exit_time"], errors="coerce")
     df = df.dropna(subset=["entry_time", "exit_time"])
@@ -4828,7 +4828,7 @@ def check_pdt_rule(ctx: BotContext) -> bool:
 
     # If account is unavailable (Alpaca not available), assume no PDT blocking
     if acct is None:
-        logger.info(
+        _log.info(
             "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions"
         )
         return False
@@ -4836,7 +4836,7 @@ def check_pdt_rule(ctx: BotContext) -> bool:
     try:
         equity = float(acct.equity)
     except (AttributeError, TypeError, ValueError):
-        logger.warning(
+        _log.warning(
             "PDT_CHECK_FAILED - Invalid equity value, assuming no PDT restrictions"
         )
         return False
@@ -4858,7 +4858,7 @@ def check_pdt_rule(ctx: BotContext) -> bool:
     try:
         api_day_trades = int(api_day_trades) if api_day_trades is not None else 0
     except (ValueError, TypeError):
-        logger.warning(
+        _log.warning(
             "Invalid day_trades value from API: %s, defaulting to 0", api_day_trades
         )
         api_day_trades = 0
@@ -4866,12 +4866,12 @@ def check_pdt_rule(ctx: BotContext) -> bool:
     try:
         api_buying_pw = float(api_buying_pw) if api_buying_pw is not None else 0.0
     except (ValueError, TypeError):
-        logger.warning(
+        _log.warning(
             "Invalid buying_power value from API: %s, defaulting to 0", api_buying_pw
         )
         api_buying_pw = 0.0
 
-    logger.info(
+    _log.info(
         "PDT_CHECK",
         extra={
             "equity": equity,
@@ -4881,16 +4881,16 @@ def check_pdt_rule(ctx: BotContext) -> bool:
     )
 
     if api_day_trades is not None and api_day_trades >= PDT_DAY_TRADE_LIMIT:
-        logger.info("SKIP_PDT_RULE", extra={"api_day_trades": api_day_trades})
+        _log.info("SKIP_PDT_RULE", extra={"api_day_trades": api_day_trades})
         return True
 
     if equity < PDT_EQUITY_THRESHOLD:
         if api_buying_pw and float(api_buying_pw) > 0:
-            logger.warning(
+            _log.warning(
                 "PDT_EQUITY_LOW", extra={"equity": equity, "buying_pw": api_buying_pw}
             )
         else:
-            logger.warning(
+            _log.warning(
                 "PDT_EQUITY_LOW_NO_BP",
                 extra={"equity": equity, "buying_pw": api_buying_pw},
             )
@@ -4904,14 +4904,14 @@ def set_halt_flag(reason: str) -> None:
     try:
         with open(HALT_FLAG_PATH, "w") as f:
             f.write(f"{reason} " + dt_.now(UTC).isoformat())
-        logger.info(f"TRADING_HALTED set due to {reason}")
+        _log.info(f"TRADING_HALTED set due to {reason}")
     except Exception as exc:  # pragma: no cover - disk issues
-        logger.error(f"Failed to write halt flag: {exc}")
+        _log.error(f"Failed to write halt flag: {exc}")
 
 
 def check_halt_flag(ctx: BotContext | None = None) -> bool:
     if S.force_trades:
-        logger.warning("FORCE_TRADES override active: ignoring halt flag.")
+        _log.warning("FORCE_TRADES override active: ignoring halt flag.")
         return False
 
     reason = None
@@ -4936,13 +4936,13 @@ def check_halt_flag(ctx: BotContext | None = None) -> bool:
                     reason = "margin breach"
             except Exception as e:
                 # Failed to check margin status - log error and treat as potential risk
-                logger.warning(
+                _log.warning(
                     "Failed to check margin status for halt condition: %s", e
                 )
                 reason = "margin check failure"
 
     if reason:
-        logger.info(f"TRADING_HALTED set due to {reason}")
+        _log.info(f"TRADING_HALTED set due to {reason}")
         return True
     return False
 
@@ -4962,21 +4962,21 @@ def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
             # Allow trades for symbols we already have positions in (rebalancing)
             existing_symbols = {pos.symbol for pos in current_positions}
             if symbol in existing_symbols:
-                logger.info(
+                _log.info(
                     f"ALLOW_REBALANCING | symbol={symbol} existing_positions={position_count}"
                 )
                 return False
 
             # For new symbols at position limit, check if we can close underperforming positions
             # This implements intelligent position management
-            logger.info(
+            _log.info(
                 f"POSITION_LIMIT_REACHED | current={position_count} max={MAX_PORTFOLIO_POSITIONS} new_symbol={symbol}"
             )
 
         return position_count >= MAX_PORTFOLIO_POSITIONS
 
     except Exception as e:
-        logger.warning(f"[too_many_positions] Could not fetch positions: {e}")
+        _log.warning(f"[too_many_positions] Could not fetch positions: {e}")
         return False
 
 
@@ -4990,7 +4990,7 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
         usecols=["symbol", "exit_time"],
     )
     if df.empty:
-        logger.warning("Loaded DataFrame is empty after parsing/fallback")
+        _log.warning("Loaded DataFrame is empty after parsing/fallback")
     if "exit_time" not in df.columns or "symbol" not in df.columns:
         return False
     open_syms = df.loc[df.exit_time == "", "symbol"].unique().tolist() + [sym]
@@ -5157,7 +5157,7 @@ def get_sector(symbol: str) -> str:
     if symbol in SECTOR_MAPPINGS:
         sector = SECTOR_MAPPINGS[symbol]
         _SECTOR_CACHE[symbol] = sector
-        logger.debug(f"Using fallback sector mapping for {symbol}: {sector}")
+        _log.debug(f"Using fallback sector mapping for {symbol}: {sector}")
         return sector
 
     # Then try yfinance if available
@@ -5167,15 +5167,15 @@ def get_sector(symbol: str) -> str:
             sector = ticker_info.get("sector", "Unknown")
             if sector and sector != "Unknown":
                 _SECTOR_CACHE[symbol] = sector
-                logger.debug(f"Retrieved sector from yfinance for {symbol}: {sector}")
+                _log.debug(f"Retrieved sector from yfinance for {symbol}: {sector}")
                 return sector
         except Exception as e:
-            logger.debug(f"yfinance sector lookup failed for {symbol}: {e}")
+            _log.debug(f"yfinance sector lookup failed for {symbol}: {e}")
 
     # Default to Unknown if all methods fail
     sector = "Unknown"
     _SECTOR_CACHE[symbol] = sector
-    logger.warning(f"Could not determine sector for {symbol}, using Unknown")
+    _log.warning(f"Could not determine sector for {symbol}, using Unknown")
     return sector
 
 
@@ -5210,7 +5210,7 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
     try:
         total = float(ctx.api.get_account().portfolio_value)
     except Exception as e:
-        logger.warning(
+        _log.warning(
             f"SECTOR_EXPOSURE_PORTFOLIO_ERROR: Failed to get portfolio value for {symbol}: {e}"
         )
         total = 0.0
@@ -5226,7 +5226,7 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
     # AI-AGENT-REF: Enhanced sector cap logic with clear reasoning
     if total <= 0:
         # For empty portfolios, allow initial positions as they can't exceed sector caps
-        logger.info(
+        _log.info(
             f"SECTOR_EXPOSURE_EMPTY_PORTFOLIO: Allowing initial position for {symbol} (sector: {sec})"
         )
         return True
@@ -5238,7 +5238,7 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
         unknown_cap = min(
             cap * 2.0, 0.8
         )  # Allow up to 2x normal cap or 80%, whichever is lower
-        logger.debug(
+        _log.debug(
             f"SECTOR_EXPOSURE_UNKNOWN: Using relaxed cap {unknown_cap:.1%} for Unknown sector"
         )
         cap = unknown_cap
@@ -5249,7 +5249,7 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
     cap_pct = cap * 100
 
     # AI-AGENT-REF: Enhanced debugging for sector exposure analysis
-    logger.info(
+    _log.info(
         f"SECTOR_EXPOSURE_DEBUG: {symbol} analysis - "
         f"Sector: {sec}, Trade Value: ${trade_value:,.2f}, "
         f"Portfolio Value: ${total:,.2f}, "
@@ -5258,20 +5258,20 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
         f"Sector Cap: {cap_pct:.1f}%"
     )
 
-    logger.debug(
+    _log.debug(
         f"SECTOR_EXPOSURE_ANALYSIS: {symbol} (sector: {sec}) - "
         f"Current: {exposure_pct:.1f}%, Projected: {projected_pct:.1f}%, Cap: {cap_pct:.1f}%"
     )
 
     if projected_exposure <= cap:
-        logger.debug(
+        _log.debug(
             f"SECTOR_EXPOSURE_OK: {symbol} trade approved - projected exposure {projected_pct:.1f}% within {cap_pct:.1f}% cap"
         )
         return True
     else:
         # Provide clear reasoning for sector cap rejection
         excess_pct = (projected_exposure - cap) * 100
-        logger.warning(
+        _log.warning(
             f"SECTOR_EXPOSURE_EXCEEDED: {symbol} trade rejected - "
             f"projected exposure {projected_pct:.1f}% exceeds {cap_pct:.1f}% cap by {excess_pct:.1f}%",
             extra={
@@ -5296,7 +5296,7 @@ def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
     start = dt_time(9, 30)
     end = dt_time(16, 0)
     if not (start <= now_et.time() <= end):
-        logger.info(
+        _log.info(
             "SKIP_ENTRY_WINDOW",
             extra={"start": start, "end": end, "now": now_et.time()},
         )
@@ -5305,7 +5305,7 @@ def is_within_entry_window(ctx: BotContext, state: BotState) -> bool:
         state.streak_halt_until
         and datetime.now(UTC).astimezone(PACIFIC) < state.streak_halt_until
     ):
-        logger.info("SKIP_STREAK_HALT", extra={"until": state.streak_halt_until})
+        _log.info("SKIP_STREAK_HALT", extra={"until": state.streak_halt_until})
         return False
     return True
 
@@ -5325,7 +5325,7 @@ def scaled_atr_stop(
 
         # Validate entry price
         if not isinstance(entry_price, int | float) or entry_price <= 0:
-            logger.error("Invalid entry price for ATR stop: %s", entry_price)
+            _log.error("Invalid entry price for ATR stop: %s", entry_price)
             return (
                 entry_price * 0.95,
                 entry_price * 1.05,
@@ -5333,36 +5333,36 @@ def scaled_atr_stop(
 
         # Validate ATR
         if not isinstance(atr, int | float) or atr < 0:
-            logger.error("Invalid ATR for stop calculation: %s", atr)
+            _log.error("Invalid ATR for stop calculation: %s", atr)
             return entry_price * 0.95, entry_price * 1.05
 
         if atr == 0:
-            logger.warning("ATR is zero, using 1% stop/take levels")
+            _log.warning("ATR is zero, using 1% stop/take levels")
             return entry_price * 0.99, entry_price * 1.01
 
         # Validate datetime inputs
         if not all(isinstance(dt, datetime) for dt in [now, market_open, market_close]):
-            logger.error("Invalid datetime inputs for ATR stop calculation")
+            _log.error("Invalid datetime inputs for ATR stop calculation")
             return entry_price * 0.95, entry_price * 1.05
 
         # Validate market times make sense
         if market_close <= market_open:
-            logger.error(
+            _log.error(
                 "Invalid market times: close=%s <= open=%s", market_close, market_open
             )
             return entry_price * 0.95, entry_price * 1.05
 
         # Validate factors
         if not isinstance(max_factor, int | float) or max_factor <= 0:
-            logger.warning("Invalid max_factor %s, using default 2.0", max_factor)
+            _log.warning("Invalid max_factor %s, using default 2.0", max_factor)
             max_factor = 2.0
 
         if not isinstance(min_factor, int | float) or min_factor < 0:
-            logger.warning("Invalid min_factor %s, using default 0.5", min_factor)
+            _log.warning("Invalid min_factor %s, using default 0.5", min_factor)
             min_factor = 0.5
 
         if min_factor > max_factor:
-            logger.warning(
+            _log.warning(
                 "min_factor %s > max_factor %s, swapping", min_factor, max_factor
             )
             min_factor, max_factor = max_factor, min_factor
@@ -5373,7 +5373,7 @@ def scaled_atr_stop(
 
         # Handle edge cases
         if total <= 0:
-            logger.warning("Invalid market session duration: %s seconds", total)
+            _log.warning("Invalid market session duration: %s seconds", total)
             α = 0.5  # Use middle factor
         else:
             α = max(0, min(1, 1 - elapsed / total))
@@ -5382,7 +5382,7 @@ def scaled_atr_stop(
 
         # Validate factor is reasonable
         if factor <= 0 or factor > 10:  # Sanity check - no more than 10x ATR
-            logger.warning("Calculated factor %s out of bounds, capping", factor)
+            _log.warning("Calculated factor %s out of bounds, capping", factor)
             factor = max(0.1, min(factor, 10.0))
 
         stop = entry_price - factor * atr
@@ -5390,11 +5390,11 @@ def scaled_atr_stop(
 
         # Validate calculated levels are reasonable
         if stop < 0:
-            logger.warning("Calculated stop price %s is negative, adjusting", stop)
+            _log.warning("Calculated stop price %s is negative, adjusting", stop)
             stop = entry_price * 0.5  # Minimum 50% stop
 
         if take <= entry_price:
-            logger.warning(
+            _log.warning(
                 "Calculated take profit %s <= entry price %s, adjusting",
                 take,
                 entry_price,
@@ -5403,18 +5403,18 @@ def scaled_atr_stop(
 
         # Ensure stop is below entry and take is above entry
         if stop >= entry_price:
-            logger.warning(
+            _log.warning(
                 "Stop price %s >= entry price %s, adjusting", stop, entry_price
             )
             stop = entry_price * 0.95
 
         if take <= entry_price:
-            logger.warning(
+            _log.warning(
                 "Take profit %s <= entry price %s, adjusting", take, entry_price
             )
             take = entry_price * 1.05
 
-        logger.debug(
+        _log.debug(
             "ATR stop calculation: entry=%s, atr=%s, factor=%s, stop=%s, take=%s",
             entry_price,
             atr,
@@ -5426,7 +5426,7 @@ def scaled_atr_stop(
         return stop, take
 
     except Exception as e:
-        logger.error("Error in ATR stop calculation: %s", e)
+        _log.error("Error in ATR stop calculation: %s", e)
         # Return conservative defaults on error
         return entry_price * 0.95, entry_price * 1.05
 
@@ -5435,7 +5435,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     try:
         df = fetch_minute_df_safe(symbol)
     except DataFetchError:
-        logger.warning("[liquidity_factor] no data for %s", symbol)
+        _log.warning("[liquidity_factor] no data for %s", symbol)
         return 0.0
     if df is None or df.empty:
         return 0.0
@@ -5451,7 +5451,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
             else 0.0
         )
     except APIError as e:
-        logger.warning(f"[liquidity_factor] Alpaca quote failed for {symbol}: {e}")
+        _log.warning(f"[liquidity_factor] Alpaca quote failed for {symbol}: {e}")
         spread = 0.0
     except Exception:
         spread = 0.0
@@ -5488,52 +5488,52 @@ def fractional_kelly_size(
     try:
         # Validate inputs
         if not isinstance(balance, int | float) or balance <= 0:
-            logger.error("Invalid balance for Kelly calculation: %s", balance)
+            _log.error("Invalid balance for Kelly calculation: %s", balance)
             return 0
 
         if not isinstance(price, int | float) or price <= 0:
-            logger.error("Invalid price for Kelly calculation: %s", price)
+            _log.error("Invalid price for Kelly calculation: %s", price)
             return 0
 
         if not isinstance(atr, int | float) or atr < 0:
-            logger.warning(
+            _log.warning(
                 "Invalid ATR for Kelly calculation: %s, using minimum position", atr
             )
             return 1
 
         # AI-AGENT-REF: Normalize confidence values to valid probability range
         if not isinstance(win_prob, int | float):
-            logger.error(
+            _log.error(
                 "Invalid win probability type for Kelly calculation: %s", win_prob
             )
             return 0
 
         # Handle confidence values that exceed 1.0 by normalizing them
         if win_prob > 1.0:
-            logger.debug("Normalizing confidence value %s to probability", win_prob)
+            _log.debug("Normalizing confidence value %s to probability", win_prob)
             # Use sigmoid function to map confidence to probability range [0,1]
             # This preserves the relative ordering while constraining to valid range
             win_prob = 1.0 / (1.0 + math.exp(-win_prob + 1.0))
-            logger.debug("Normalized win probability: %s", win_prob)
+            _log.debug("Normalized win probability: %s", win_prob)
         elif win_prob < 0:
-            logger.warning("Negative confidence value %s, using 0.0", win_prob)
+            _log.warning("Negative confidence value %s, using 0.0", win_prob)
             win_prob = 0.0
 
         if not isinstance(payoff_ratio, int | float) or payoff_ratio <= 0:
-            logger.error("Invalid payoff ratio for Kelly calculation: %s", payoff_ratio)
+            _log.error("Invalid payoff ratio for Kelly calculation: %s", payoff_ratio)
             return 0
 
         # Validate ctx object and its attributes
         if not hasattr(ctx, "kelly_fraction") or not isinstance(
             ctx.kelly_fraction, int | float
         ):
-            logger.error("Invalid kelly_fraction in context")
+            _log.error("Invalid kelly_fraction in context")
             return 0
 
         if not hasattr(ctx, "max_position_dollars") or not isinstance(
             ctx.max_position_dollars, int | float
         ):
-            logger.error("Invalid max_position_dollars in context")
+            _log.error("Invalid max_position_dollars in context")
             return 0
 
         # AI-AGENT-REF: adaptive kelly fraction based on historical peak equity
@@ -5545,13 +5545,13 @@ def fractional_kelly_size(
                         try:
                             data = lock.read()
                         except io.UnsupportedOperation:
-                            logger.warning(
+                            _log.warning(
                                 "Cannot read peak equity file, using current balance"
                             )
                             return 0
                         prev_peak = float(data) if data else balance
                         if prev_peak <= 0:
-                            logger.warning(
+                            _log.warning(
                                 "Invalid peak equity %s, using current balance",
                                 prev_peak,
                             )
@@ -5559,7 +5559,7 @@ def fractional_kelly_size(
                     finally:
                         portalocker.unlock(lock)
             except (OSError, ValueError) as e:
-                logger.warning(
+                _log.warning(
                     "Error reading peak equity file: %s, using current balance", e
                 )
                 prev_peak = balance
@@ -5570,7 +5570,7 @@ def fractional_kelly_size(
 
         # Validate base_frac
         if not isinstance(base_frac, int | float) or base_frac < 0 or base_frac > 1:
-            logger.error("Invalid base fraction calculated: %s", base_frac)
+            _log.error("Invalid base fraction calculated: %s", base_frac)
             return 0
 
         drawdown = (prev_peak - balance) / prev_peak if prev_peak > 0 else 0
@@ -5588,14 +5588,14 @@ def fractional_kelly_size(
             if is_high_vol_thr_spy():
                 frac *= 0.5
         except Exception as e:
-            logger.warning("Error checking SPY volatility: %s", e)
+            _log.warning("Error checking SPY volatility: %s", e)
 
         cap_scale = frac / base_frac if base_frac > 0 else 1.0
 
         # Calculate Kelly edge with validation
         # AI-AGENT-REF: Fix division by zero in Kelly criterion calculation
         if payoff_ratio <= 0:
-            logger.warning(
+            _log.warning(
                 "Invalid payoff_ratio %s for Kelly calculation, using zero position",
                 payoff_ratio,
             )
@@ -5607,13 +5607,13 @@ def fractional_kelly_size(
 
         # Validate Kelly fraction is reasonable
         if kelly < 0 or kelly > 1:
-            logger.warning("Kelly fraction %s out of bounds, capping", kelly)
+            _log.warning("Kelly fraction %s out of bounds, capping", kelly)
             kelly = max(0, min(kelly, 1))
 
         dollars_to_risk = kelly * balance
 
         if atr <= 0:
-            logger.warning("ATR is zero or negative, using minimum position size")
+            _log.warning("ATR is zero or negative, using minimum position size")
             try:
                 new_peak = max(balance, prev_peak)
                 with open(PEAK_EQUITY_FILE, "w") as lock:
@@ -5623,7 +5623,7 @@ def fractional_kelly_size(
                     finally:
                         portalocker.unlock(lock)
             except OSError as e:
-                logger.warning("Error updating peak equity file: %s", e)
+                _log.warning("Error updating peak equity file: %s", e)
             return 1
 
         # Calculate position sizes with multiple caps
@@ -5640,7 +5640,7 @@ def fractional_kelly_size(
 
         # Validate final size is reasonable
         if size > MAX_POSITION_SIZE:
-            logger.warning("Position size %s exceeds maximum, capping", size)
+            _log.warning("Position size %s exceeds maximum, capping", size)
             size = MAX_POSITION_SIZE
 
         # Update peak equity
@@ -5653,9 +5653,9 @@ def fractional_kelly_size(
                 finally:
                     portalocker.unlock(lock)
         except OSError as e:
-            logger.warning("Error updating peak equity file: %s", e)
+            _log.warning("Error updating peak equity file: %s", e)
 
-        logger.debug(
+        _log.debug(
             "Kelly calculation: balance=%s, price=%s, atr=%s, win_prob=%s, size=%s",
             balance,
             price,
@@ -5667,7 +5667,7 @@ def fractional_kelly_size(
         return size
 
     except Exception as e:
-        logger.error("Error in Kelly calculation: %s", e)
+        _log.error("Error in Kelly calculation: %s", e)
         return 0
 
     return size
@@ -5699,12 +5699,12 @@ def adjust_position_size(position, scale: float) -> None:
     try:
         position.qty = str(int(int(position.qty) * scale))
     except Exception:
-        logger.debug("adjust_position_size no-op")
+        _log.debug("adjust_position_size no-op")
 
 
 def adjust_trailing_stop(position, new_stop: float) -> None:
     """Placeholder for adjusting trailing stop price."""
-    logger.debug("adjust_trailing_stop %s -> %.2f", position.symbol, new_stop)
+    _log.debug("adjust_trailing_stop %s -> %.2f", position.symbol, new_stop)
 
 
 @retry(
@@ -5715,12 +5715,12 @@ def adjust_trailing_stop(position, new_stop: float) -> None:
 def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | None:
     """Submit an order using the institutional execution engine."""
     if not market_is_open():
-        logger.warning("MARKET_CLOSED_ORDER_SKIP", extra={"symbol": symbol})
+        _log.warning("MARKET_CLOSED_ORDER_SKIP", extra={"symbol": symbol})
         return None
 
     # AI-AGENT-REF: Add validation for execution engine initialization
     if _exec_engine is None:
-        logger.error(
+        _log.error(
             "EXEC_ENGINE_NOT_INITIALIZED",
             extra={"symbol": symbol, "qty": qty, "side": side},
         )
@@ -5742,7 +5742,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
     try:
         return _exec_engine.execute_order(symbol, qty, side)
     except Exception as e:
-        logger.error(
+        _log.error(
             "ORDER_EXECUTION_FAILED",
             extra={"symbol": symbol, "qty": qty, "side": side, "error": str(e)},
         )
@@ -5752,7 +5752,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
 def safe_submit_order(api: TradingClient, req) -> Order | None:
     config.reload_env()
     if not market_is_open():
-        logger.warning(
+        _log.warning(
             "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, "symbol", "")}
         )
         return None
@@ -5768,7 +5768,7 @@ def safe_submit_order(api: TradingClient, req) -> Order | None:
                     price = getattr(req, "notional", 0)
                 need = float(price or 0) * float(getattr(req, "qty", 0))
                 if need > float(getattr(acct, "buying_power", 0)):
-                    logger.warning(
+                    _log.warning(
                         "insufficient buying power for %s: requested %s, available %s",
                         req.symbol,
                         req.qty,
@@ -5784,7 +5784,7 @@ def safe_submit_order(api: TradingClient, req) -> Order | None:
                     (float(p.qty) for p in positions if p.symbol == req.symbol), 0.0
                 )
                 if float(getattr(req, "qty", 0)) > avail:
-                    logger.warning(
+                    _log.warning(
                         f"insufficient qty available for {req.symbol}: requested {req.qty}, available {avail}"
                     )
                     return None
@@ -5797,7 +5797,7 @@ def safe_submit_order(api: TradingClient, req) -> Order | None:
                         getattr(e, "_raw_errors", [{}])[0].get("available", 0)
                     )
                     if available > 0:
-                        logger.info(
+                        _log.info(
                             f"Adjusting order for {req.symbol} to available qty={available}"
                         )
                         if isinstance(req, dict):
@@ -5806,7 +5806,7 @@ def safe_submit_order(api: TradingClient, req) -> Order | None:
                             req.qty = available
                         order = api.submit_order(order_data=req)
                     else:
-                        logger.warning(f"Skipping {req.symbol}, no available qty")
+                        _log.warning(f"Skipping {req.symbol}, no available qty")
                         continue
                 else:
                     raise
@@ -5814,50 +5814,50 @@ def safe_submit_order(api: TradingClient, req) -> Order | None:
             start_ts = time.monotonic()
             while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
                 if time.monotonic() - start_ts > 1:
-                    logger.warning(
+                    _log.warning(
                         f"Order stuck in PENDING_NEW: {req.symbol}, retrying or monitoring required."
                     )
                     break
                 time.sleep(0.1)  # AI-AGENT-REF: avoid busy polling
                 order = api.get_order_by_id(order.id)
-            logger.info(
+            _log.info(
                 f"Order status for {req.symbol}: {getattr(order, 'status', '')}"
             )
             status = getattr(order, "status", "")
             filled_qty = getattr(order, "filled_qty", "0")
             if status == "filled":
-                logger.info(
+                _log.info(
                     "ORDER_ACK",
                     extra={"symbol": req.symbol, "order_id": getattr(order, "id", "")},
                 )
             elif status == "partially_filled":
-                logger.warning(
+                _log.warning(
                     f"Order partially filled for {req.symbol}: {filled_qty}/{getattr(req, 'qty', 0)}"
                 )
             elif status in ("rejected", "canceled"):
-                logger.error(
+                _log.error(
                     f"Order for {req.symbol} was {status}: {getattr(order, 'reject_reason', '')}"
                 )
                 raise OrderExecutionError(f"Buy failed for {req.symbol}: {status}")
             elif status == OrderStatus.NEW:
-                logger.info(f"Order for {req.symbol} is NEW; awaiting fill")
+                _log.info(f"Order for {req.symbol} is NEW; awaiting fill")
             else:
-                logger.error(
+                _log.error(
                     f"Order for {req.symbol} status={status}: {getattr(order, 'reject_reason', '')}"
                 )
             return order
         except APIError as e:
             if "insufficient qty" in str(e).lower():
-                logger.warning(f"insufficient qty available for {req.symbol}: {e}")
+                _log.warning(f"insufficient qty available for {req.symbol}: {e}")
                 return None
             time.sleep(1)
             if attempt == 1:
-                logger.warning(f"submit_order failed for {req.symbol}: {e}")
+                _log.warning(f"submit_order failed for {req.symbol}: {e}")
                 return None
         except Exception as e:
             time.sleep(1)
             if attempt == 1:
-                logger.warning(f"submit_order failed for {req.symbol}: {e}")
+                _log.warning(f"submit_order failed for {req.symbol}: {e}")
                 return None
     return None
 
@@ -5871,7 +5871,7 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
             status = getattr(od, "status", "")
             filled = getattr(od, "filled_qty", "0")
             if status not in {"new", "accepted", "partially_filled"}:
-                logger.info(
+                _log.info(
                     "ORDER_FINAL_STATUS",
                     extra={
                         "order_id": order_id,
@@ -5881,7 +5881,7 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
                 )
                 return
         except Exception as e:
-            logger.warning(f"[poll_order_fill_status] failed for {order_id}: {e}")
+            _log.warning(f"[poll_order_fill_status] failed for {order_id}: {e}")
             return
         pytime.sleep(3)
 
@@ -5894,13 +5894,13 @@ def send_exit_order(
     reason: str,
     raw_positions: list | None = None,
 ) -> None:
-    logger.info(
+    _log.info(
         f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price}"
     )
     if raw_positions is not None and not any(
         getattr(p, "symbol", "") == symbol for p in raw_positions
     ):
-        logger.info("SKIP_NO_POSITION", extra={"symbol": symbol})
+        _log.info("SKIP_NO_POSITION", extra={"symbol": symbol})
         return
     try:
         pos = ctx.api.get_open_position(symbol)
@@ -5909,7 +5909,7 @@ def send_exit_order(
         held_qty = 0
 
     if held_qty < exit_qty:
-        logger.warning(
+        _log.warning(
             f"No shares available to exit for {symbol} (requested {exit_qty}, have {held_qty})"
         )
         return
@@ -5940,7 +5940,7 @@ def send_exit_order(
                     )
                 )
             except Exception:
-                logger.debug("register_fill exit failed", exc_info=True)
+                _log.debug("register_fill exit failed", exc_info=True)
         return
 
     limit_order = safe_submit_order(
@@ -5971,7 +5971,7 @@ def send_exit_order(
                 )
             )
         except Exception:
-            logger.debug("register_fill exit failed", exc_info=True)
+            _log.debug("register_fill exit failed", exc_info=True)
     pytime.sleep(5)
     try:
         o2 = ctx.api.get_order_by_id(limit_order.id)
@@ -5987,7 +5987,7 @@ def send_exit_order(
                 ),
             )
     except Exception as e:
-        logger.warning(
+        _log.warning(
             f"[send_exit_order] couldn\u2019t check/cancel order {getattr(limit_order, 'id', '')}: {e}"
         )
 
@@ -6006,7 +6006,7 @@ def twap_submit(
         try:
             submit_order(ctx, symbol, slice_qty, side)
         except Exception as e:
-            logger.exception(f"[TWAP] slice {i+1}/{n_slices} failed: {e}")
+            _log.exception(f"[TWAP] slice {i+1}/{n_slices} failed: {e}")
             break
         pytime.sleep(wait_secs)
 
@@ -6020,10 +6020,10 @@ def vwap_pegged_submit(
         try:
             df = fetch_minute_df_safe(symbol)
         except DataFetchError:
-            logger.error("[VWAP] no minute data for %s", symbol)
+            _log.error("[VWAP] no minute data for %s", symbol)
             break
         if df is None or df.empty:
-            logger.warning(
+            _log.warning(
                 "[VWAP] missing bars, aborting VWAP slice", extra={"symbol": symbol}
             )
             break
@@ -6037,7 +6037,7 @@ def vwap_pegged_submit(
                 else 0.0
             )
         except APIError as e:
-            logger.warning(f"[vwap_slice] Alpaca quote failed for {symbol}: {e}")
+            _log.warning(f"[vwap_slice] Alpaca quote failed for {symbol}: {e}")
             spread = 0.0
         except Exception:
             spread = 0.0
@@ -6048,7 +6048,7 @@ def vwap_pegged_submit(
         order = None
         for attempt in range(3):
             try:
-                logger.info(
+                _log.info(
                     "ORDER_SENT",
                     extra={
                         "timestamp": utc_now_iso(),
@@ -6068,7 +6068,7 @@ def vwap_pegged_submit(
                         limit_price=round(vwap_price, 2),
                     ),
                 )
-                logger.info(
+                _log.info(
                     "ORDER_ACK",
                     extra={
                         "symbol": symbol,
@@ -6088,13 +6088,13 @@ def vwap_pegged_submit(
                         try:
                             slippage_total.inc(abs(slip))
                         except Exception as exc:
-                            logger.exception("bot.py unexpected", exc_info=exc)
+                            _log.exception("bot.py unexpected", exc_info=exc)
                             raise
                     if slippage_count:
                         try:
                             slippage_count.inc()
                         except Exception as exc:
-                            logger.exception("bot.py unexpected", exc_info=exc)
+                            _log.exception("bot.py unexpected", exc_info=exc)
                             raise
                     _slippage_log.append(
                         (
@@ -6117,19 +6117,19 @@ def vwap_pegged_submit(
                                     ]
                                 )
                         except Exception as e:
-                            logger.warning(f"Failed to append slippage log: {e}")
+                            _log.warning(f"Failed to append slippage log: {e}")
                 if orders_total:
                     try:
                         orders_total.inc()
                     except Exception as exc:
-                        logger.exception("bot.py unexpected", exc_info=exc)
+                        _log.exception("bot.py unexpected", exc_info=exc)
                         raise
                 break
             except APIError as e:
-                logger.warning(f"[VWAP] APIError attempt {attempt+1} for {symbol}: {e}")
+                _log.warning(f"[VWAP] APIError attempt {attempt+1} for {symbol}: {e}")
                 pytime.sleep(attempt + 1)
             except Exception as e:
-                logger.exception(f"[VWAP] slice attempt {attempt+1} failed: {e}")
+                _log.exception(f"[VWAP] slice attempt {attempt+1} failed: {e}")
                 pytime.sleep(attempt + 1)
         if order is None:
             break
@@ -6171,12 +6171,12 @@ def pov_submit(
         except DataFetchError:
             retries += 1
             if retries > cfg.max_retries:
-                logger.warning(
+                _log.warning(
                     f"[pov_submit] no minute data after {cfg.max_retries} retries, aborting",
                     extra={"symbol": symbol},
                 )
                 return False
-            logger.warning(
+            _log.warning(
                 f"[pov_submit] missing bars, retry {retries}/{cfg.max_retries} in {interval:.1f}s",
                 extra={"symbol": symbol},
             )
@@ -6187,12 +6187,12 @@ def pov_submit(
         if df is None or df.empty:
             retries += 1
             if retries > cfg.max_retries:
-                logger.warning(
+                _log.warning(
                     f"[pov_submit] no minute data after {cfg.max_retries} retries, aborting",
                     extra={"symbol": symbol},
                 )
                 return False
-            logger.warning(
+            _log.warning(
                 f"[pov_submit] missing bars, retry {retries}/{cfg.max_retries} in {interval:.1f}s",
                 extra={"symbol": symbol},
             )
@@ -6212,7 +6212,7 @@ def pov_submit(
                 else 0.0
             )
         except APIError as e:
-            logger.warning(f"[pov_submit] Alpaca quote failed for {symbol}: {e}")
+            _log.warning(f"[pov_submit] Alpaca quote failed for {symbol}: {e}")
             spread = 0.0
         except Exception:
             spread = 0.0
@@ -6226,7 +6226,7 @@ def pov_submit(
         if spread > dynamic_spread_threshold:
             # Less aggressive reduction - only 25% instead of 50%
             slice_qty = min(int(vol * cfg.pct * 0.75), total_qty - placed)
-            logger.debug(
+            _log.debug(
                 "[pov_submit] High spread detected, reducing slice by 25%",
                 extra={
                     "symbol": symbol,
@@ -6239,7 +6239,7 @@ def pov_submit(
             slice_qty = min(int(vol * cfg.pct), total_qty - placed)
 
         if slice_qty < 1:
-            logger.debug(
+            _log.debug(
                 f"[pov_submit] slice_qty<1 (vol={vol}), waiting",
                 extra={"symbol": symbol},
             )
@@ -6249,7 +6249,7 @@ def pov_submit(
             # AI-AGENT-REF: Fix order slicing to track actual filled quantities
             order = submit_order(ctx, symbol, slice_qty, side)
             if order is None:
-                logger.warning(
+                _log.warning(
                     "[pov_submit] submit_order returned None for slice, skipping",
                     extra={"symbol": symbol, "slice_qty": slice_qty},
                 )
@@ -6260,7 +6260,7 @@ def pov_submit(
 
             # For partially filled orders, the filled_qty might be less than slice_qty
             if actual_filled < slice_qty:
-                logger.warning(
+                _log.warning(
                     "POV_SLICE_PARTIAL_FILL",
                     extra={
                         "symbol": symbol,
@@ -6274,13 +6274,13 @@ def pov_submit(
             placed += actual_filled  # Use actual filled, not intended
 
         except Exception as e:
-            logger.exception(
+            _log.exception(
                 f"[pov_submit] submit_order failed on slice, aborting: {e}",
                 extra={"symbol": symbol},
             )
             return False
 
-        logger.info(
+        _log.info(
             "POV_SLICE_PLACED",
             extra={
                 "symbol": symbol,
@@ -6292,7 +6292,7 @@ def pov_submit(
             },
         )
         pytime.sleep(cfg.sleep_interval * (0.8 + 0.4 * random.random()))
-    logger.info("POV_SUBMIT_COMPLETE", extra={"symbol": symbol, "placed": placed})
+    _log.info("POV_SUBMIT_COMPLETE", extra={"symbol": symbol, "placed": placed})
     return True
 
 
@@ -6312,9 +6312,9 @@ def maybe_pyramid(
             qty = int(abs(int(pos.qty)) * 0.5)
             if qty > 0:
                 submit_order(ctx, symbol, qty, "buy")
-                logger.info("PYRAMIDED", extra={"symbol": symbol, "qty": qty})
+                _log.info("PYRAMIDED", extra={"symbol": symbol, "qty": qty})
         except Exception as e:
-            logger.exception(f"[maybe_pyramid] failed for {symbol}: {e}")
+            _log.exception(f"[maybe_pyramid] failed for {symbol}: {e}")
 
 
 def update_trailing_stop(
@@ -6345,13 +6345,13 @@ def calculate_entry_size(
     """Calculate entry size based on account balance and risk parameters."""
 
     if ctx.api is None:
-        logger.warning("ctx.api is None - using default entry size")
+        _log.warning("ctx.api is None - using default entry size")
         return 1
 
     try:
         cash = float(ctx.api.get_account().cash)
     except Exception as exc:
-        logger.warning("Failed to get cash for entry size calculation: %s", exc)
+        _log.warning("Failed to get cash for entry size calculation: %s", exc)
         return 1
 
     cap_pct = ctx.params.get("CAPITAL_CAP", CAPITAL_CAP)
@@ -6372,7 +6372,7 @@ def calculate_entry_size(
     if liq < 0.2:
         # If we have significant cash, still allow minimum position
         if cash > 5000:
-            logger.info(
+            _log.info(
                 f"Low liquidity for {symbol} (factor={liq:.3f}), using minimum position size"
             )
             return max(1, int(1000 / price)) if price > 0 else 1
@@ -6385,53 +6385,53 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
     """Execute entry order."""
 
     if ctx.api is None:
-        logger.warning("ctx.api is None - cannot execute entry")
+        _log.warning("ctx.api is None - cannot execute entry")
         return
 
     try:
         buying_pw = float(ctx.api.get_account().buying_power)
         if buying_pw <= 0:
-            logger.info("NO_BUYING_POWER", extra={"symbol": symbol})
+            _log.info("NO_BUYING_POWER", extra={"symbol": symbol})
             return
     except Exception as exc:
-        logger.warning("Failed to get buying power for %s: %s", symbol, exc)
+        _log.warning("Failed to get buying power for %s: %s", symbol, exc)
         return
     if qty is None or qty <= 0 or not np.isfinite(qty):
-        logger.error(
+        _log.error(
             f"Invalid order quantity for {symbol}: {qty}. Skipping order and logging input data."
         )
         # Optionally, log signal, price, and input features here for debug
         return
     if POV_SLICE_PCT > 0 and qty > SLICE_THRESHOLD:
-        logger.info("POV_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
+        _log.info("POV_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
         pov_submit(ctx, symbol, qty, side)
     elif qty > SLICE_THRESHOLD:
-        logger.info("VWAP_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
+        _log.info("VWAP_SLICE_ENTRY", extra={"symbol": symbol, "qty": qty})
         vwap_pegged_submit(ctx, symbol, qty, side)
     else:
-        logger.info("MARKET_ENTRY", extra={"symbol": symbol, "qty": qty})
+        _log.info("MARKET_ENTRY", extra={"symbol": symbol, "qty": qty})
         submit_order(ctx, symbol, qty, side)
 
     try:
         raw = fetch_minute_df_safe(symbol)
     except DataFetchError:
-        logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
+        _log.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
         return
     if raw is None or raw.empty:
-        logger.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
+        _log.warning("NO_MINUTE_BARS_POST_ENTRY", extra={"symbol": symbol})
         return
     try:
         df_ind = prepare_indicators(raw)
         if df_ind is None:
-            logger.warning(
+            _log.warning(
                 "INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol}
             )
             return
     except ValueError as exc:
-        logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
+        _log.warning(f"Indicator preparation failed for {symbol}: {exc}")
         return
     if df_ind.empty:
-        logger.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
+        _log.warning("INSUFFICIENT_INDICATORS_POST_ENTRY", extra={"symbol": symbol})
         return
     entry_price = get_latest_close(df_ind)
     ctx.trade_logger.log_entry(symbol, entry_price, qty, side, "", "", confidence=0.5)
@@ -6456,12 +6456,12 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
 
 def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> None:
     if qty is None or not np.isfinite(qty) or qty <= 0:
-        logger.warning(f"Skipping {symbol}: computed qty <= 0")
+        _log.warning(f"Skipping {symbol}: computed qty <= 0")
         return
     try:
         raw = fetch_minute_df_safe(symbol)
     except DataFetchError:
-        logger.warning("NO_MINUTE_BARS_POST_EXIT", extra={"symbol": symbol})
+        _log.warning("NO_MINUTE_BARS_POST_EXIT", extra={"symbol": symbol})
         raw = pd.DataFrame()
     exit_price = get_latest_close(raw) if raw is not None else 1.0
     send_exit_order(ctx, symbol, qty, exit_price, "manual_exit")
@@ -6480,7 +6480,7 @@ def exit_all_positions(ctx: BotContext) -> None:
             send_exit_order(
                 ctx, pos.symbol, qty, 0.0, "eod_exit", raw_positions=raw_positions
             )
-            logger.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
+            _log.info("EOD_EXIT", extra={"symbol": pos.symbol, "qty": qty})
 
 
 def _liquidate_all_positions(ctx: BotContext) -> None:
@@ -6493,7 +6493,7 @@ def liquidate_positions_if_needed(ctx: BotContext) -> None:
     """Liquidate all positions when certain risk conditions trigger."""
     if check_halt_flag(ctx):
         # Modified: DO NOT liquidate positions on halt flag.
-        logger.info(
+        _log.info(
             "TRADING_HALTED_VIA_FLAG is active: NOT liquidating positions, holding open positions."
         )
         return
@@ -6508,7 +6508,7 @@ def signal_and_confirm(
     """Wrapper that evaluates signals and checks confidence threshold."""
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, state, df, symbol, model)
     if sig == -1 or conf < CONF_THRESHOLD:
-        logger.debug(
+        _log.debug(
             "SKIP_LOW_SIGNAL", extra={"symbol": symbol, "sig": sig, "conf": conf}
         )
         return -1, 0.0, ""
@@ -6519,41 +6519,41 @@ def pre_trade_checks(
     ctx: BotContext, state: BotState, symbol: str, balance: float, regime_ok: bool
 ) -> bool:
     if S.force_trades:
-        logger.warning("FORCE_TRADES override active: ignoring all pre-trade halts.")
+        _log.warning("FORCE_TRADES override active: ignoring all pre-trade halts.")
         return True
     # Streak kill-switch check
     if (
         state.streak_halt_until
         and datetime.now(UTC).astimezone(PACIFIC) < state.streak_halt_until
     ):
-        logger.info(
+        _log.info(
             "SKIP_STREAK_HALT",
             extra={"symbol": symbol, "until": state.streak_halt_until},
         )
         _log_health_diagnostics(ctx, "streak")
         return False
     if getattr(state, "pdt_blocked", False):
-        logger.info("SKIP_PDT_RULE", extra={"symbol": symbol})
+        _log.info("SKIP_PDT_RULE", extra={"symbol": symbol})
         _log_health_diagnostics(ctx, "pdt")
         return False
     if check_halt_flag(ctx):
-        logger.info("SKIP_HALT_FLAG", extra={"symbol": symbol})
+        _log.info("SKIP_HALT_FLAG", extra={"symbol": symbol})
         _log_health_diagnostics(ctx, "halt_flag")
         return False
     if check_daily_loss(ctx, state):
-        logger.info("SKIP_DAILY_LOSS", extra={"symbol": symbol})
+        _log.info("SKIP_DAILY_LOSS", extra={"symbol": symbol})
         _log_health_diagnostics(ctx, "daily_loss")
         return False
     if check_weekly_loss(ctx, state):
-        logger.info("SKIP_WEEKLY_LOSS", extra={"symbol": symbol})
+        _log.info("SKIP_WEEKLY_LOSS", extra={"symbol": symbol})
         _log_health_diagnostics(ctx, "weekly_loss")
         return False
     if too_many_positions(ctx, symbol):
-        logger.info("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol})
+        _log.info("SKIP_TOO_MANY_POSITIONS", extra={"symbol": symbol})
         _log_health_diagnostics(ctx, "positions")
         return False
     if too_correlated(ctx, symbol):
-        logger.info("SKIP_HIGH_CORRELATION", extra={"symbol": symbol})
+        _log.info("SKIP_HIGH_CORRELATION", extra={"symbol": symbol})
         _log_health_diagnostics(ctx, "correlation")
         return False
     return ctx.data_fetcher.get_daily_df(ctx, symbol) is not None
@@ -6619,18 +6619,18 @@ def _safe_trade(
                     p.symbol: int(p.qty) for p in ctx.api.get_all_positions()
                 }
                 if side == OrderSide.BUY and symbol in live_positions:
-                    logger.info(f"REALTIME_SKIP | {symbol} already held. Skipping BUY.")
+                    _log.info(f"REALTIME_SKIP | {symbol} already held. Skipping BUY.")
                     return False
                 elif side == OrderSide.SELL and symbol not in live_positions:
-                    logger.info(f"REALTIME_SKIP | {symbol} not held. Skipping SELL.")
+                    _log.info(f"REALTIME_SKIP | {symbol} not held. Skipping SELL.")
                     return False
             except Exception as e:
-                logger.warning(
+                _log.warning(
                     f"REALTIME_CHECK_FAIL | Could not check live positions for {symbol}: {e}"
                 )
         return trade_logic(ctx, state, symbol, balance, model, regime_ok)
     except RetryError as e:
-        logger.warning(
+        _log.warning(
             f"[trade_logic] retries exhausted for {symbol}: {e}",
             extra={"symbol": symbol},
         )
@@ -6638,16 +6638,16 @@ def _safe_trade(
     except APIError as e:
         msg = str(e).lower()
         if "insufficient buying power" in msg or "potential wash trade" in msg:
-            logger.warning(
+            _log.warning(
                 f"[trade_logic] skipping {symbol} due to APIError: {e}",
                 extra={"symbol": symbol},
             )
             return False
         else:
-            logger.exception(f"[trade_logic] APIError for {symbol}: {e}")
+            _log.exception(f"[trade_logic] APIError for {symbol}: {e}")
             return False
     except Exception:
-        logger.exception(f"[trade_logic] unhandled exception for {symbol}")
+        _log.exception(f"[trade_logic] unhandled exception for {symbol}")
         return False
 
 
@@ -6665,28 +6665,28 @@ def _fetch_feature_data(
     try:
         raw_df = fetch_minute_df_safe(symbol)
     except DataFetchError:
-        logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+        _log.info(f"SKIP_NO_PRICE_DATA | {symbol}")
         return None, None, False
     except APIError as e:
         msg = str(e).lower()
         if "subscription does not permit querying recent sip data" in msg:
-            logger.debug(f"{symbol}: minute fetch failed, falling back to daily.")
+            _log.debug(f"{symbol}: minute fetch failed, falling back to daily.")
             raw_df = ctx.data_fetcher.get_daily_df(ctx, symbol)
             if raw_df is None or raw_df.empty:
-                logger.debug(f"{symbol}: no daily data either; skipping.")
-                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+                _log.debug(f"{symbol}: no daily data either; skipping.")
+                _log.info(f"SKIP_NO_PRICE_DATA | {symbol}")
                 return None, None, False
         else:
             raise
     if raw_df is None or raw_df.empty:
-        logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+        _log.info(f"SKIP_NO_PRICE_DATA | {symbol}")
         return None, None, False
 
     # Guard: validate OHLCV shape before feature engineering
     try:
         validate_ohlcv(raw_df)
     except Exception as e:
-        logger.warning("OHLCV validation failed for %s: %s; skipping symbol", symbol, e)
+        _log.warning("OHLCV validation failed for %s: %s; skipping symbol", symbol, e)
         return raw_df, pd.DataFrame(), True
 
     df = raw_df.copy()
@@ -6708,23 +6708,23 @@ def _fetch_feature_data(
             _log.warning("Corp actions adjust failed: %s", e)
     
     # AI-AGENT-REF: log initial dataframe and monitor row drops
-    logger.debug(f"Initial tail data for {symbol}:\n{df.tail(5)}")
+    _log.debug(f"Initial tail data for {symbol}:\n{df.tail(5)}")
     initial_len = len(df)
 
     df = compute_macd(df)
     assert_row_integrity(initial_len, len(df), "compute_macd", symbol)
-    logger.debug(f"[{symbol}] Post MACD: last closes:\n{df[['close']].tail(5)}")
+    _log.debug(f"[{symbol}] Post MACD: last closes:\n{df[['close']].tail(5)}")
 
     df = compute_atr(df)
     assert_row_integrity(initial_len, len(df), "compute_atr", symbol)
-    logger.debug(f"[{symbol}] Post ATR: last closes:\n{df[['close']].tail(5)}")
+    _log.debug(f"[{symbol}] Post ATR: last closes:\n{df[['close']].tail(5)}")
 
     df = compute_vwap(df)
     assert_row_integrity(initial_len, len(df), "compute_vwap", symbol)
-    logger.debug(f"[{symbol}] Post VWAP: last closes:\n{df[['close']].tail(5)}")
+    _log.debug(f"[{symbol}] Post VWAP: last closes:\n{df[['close']].tail(5)}")
 
     df = compute_macds(df)
-    logger.debug(f"{symbol} dataframe columns after indicators: {df.columns.tolist()}")
+    _log.debug(f"{symbol} dataframe columns after indicators: {df.columns.tolist()}")
     df = ensure_columns(df, ["macd", "atr", "vwap", "macds"], symbol)
     if df.empty and raw_df is not None:
         df = raw_df.copy()
@@ -6735,15 +6735,15 @@ def _fetch_feature_data(
             return raw_df, None, True
         # AI-AGENT-REF: fallback to raw data when feature engineering drops all rows
         if feat_df.empty:
-            logger.warning(
+            _log.warning(
                 "Parsed feature DataFrame is empty; falling back to raw data"
             )
             feat_df = raw_df.copy()
     except ValueError as exc:
-        logger.warning(f"Indicator preparation failed for {symbol}: {exc}")
+        _log.warning(f"Indicator preparation failed for {symbol}: {exc}")
         return raw_df, None, True
     if feat_df.empty:
-        logger.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
+        _log.debug(f"SKIP_INSUFFICIENT_FEATURES | symbol={symbol}")
         return raw_df, None, True
     return raw_df, feat_df, None
 
@@ -6788,10 +6788,10 @@ def _exit_positions_if_needed(
 ) -> bool:
     if final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
         if _should_hold_position(feat_df):
-            logger.info("HOLD_SIGNAL_ACTIVE", extra={"symbol": symbol})
+            _log.info("HOLD_SIGNAL_ACTIVE", extra={"symbol": symbol})
         else:
             price = get_latest_close(feat_df)
-            logger.info(
+            _log.info(
                 f"SIGNAL_REVERSAL_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
             )
             send_exit_order(ctx, symbol, current_qty, price, "reversal")
@@ -6803,7 +6803,7 @@ def _exit_positions_if_needed(
 
     if final_score > 0 and current_qty < 0 and abs(conf) >= CONF_THRESHOLD:
         price = get_latest_close(feat_df)
-        logger.info(
+        _log.info(
             f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
         )
         send_exit_order(ctx, symbol, abs(current_qty), price, "reversal")
@@ -6826,10 +6826,10 @@ def _enter_long(
     strat: str,
 ) -> bool:
     current_price = get_latest_close(feat_df)
-    logger.debug(f"Latest 5 rows for {symbol}:\n{feat_df.tail(5)}")
-    logger.debug(f"Computed price for {symbol}: {current_price}")
+    _log.debug(f"Latest 5 rows for {symbol}:\n{feat_df.tail(5)}")
+    _log.debug(f"Computed price for {symbol}: {current_price}")
     if current_price <= 0 or pd.isna(current_price):
-        logger.critical(f"Invalid price computed for {symbol}: {current_price}")
+        _log.critical(f"Invalid price computed for {symbol}: {current_price}")
         return True
 
     # AI-AGENT-REF: Get target weight with sensible fallback for signal-based trading
@@ -6854,11 +6854,11 @@ def _enter_long(
             target_weight = min(
                 confidence_weight, available_exposure, 0.15
             )  # Cap at 15%
-            logger.info(
+            _log.info(
                 f"Computed weight for {symbol}: {target_weight:.3f} (confidence={conf:.3f}, available_exposure={available_exposure:.3f})"
             )
         except Exception as e:
-            logger.warning(
+            _log.warning(
                 f"Could not compute dynamic weight for {symbol}: {e}, using confidence-based weight"
             )
             target_weight = min(confidence_weight, 0.10)  # Conservative 10% fallback
@@ -6883,19 +6883,19 @@ def _enter_long(
         # If we have significant cash available and a valid signal, use minimum position size
         if balance > 1000 and target_weight > 0.001 and current_price > 0:
             raw_qty = max(1, int(1000 / current_price))  # Minimum $1000 position
-            logger.info(
+            _log.info(
                 f"Using minimum position size for {symbol}: {raw_qty} shares (balance=${balance:.0f})"
             )
         else:
-            logger.warning(
+            _log.warning(
                 f"Skipping {symbol}: computed qty <= 0 (balance=${balance:.0f}, weight={target_weight:.4f})"
             )
             return True
-    logger.info(
+    _log.info(
         f"SIGNAL_BUY | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={raw_qty}"
     )
     if not sector_exposure_ok(ctx, symbol, raw_qty, current_price):
-        logger.info(
+        _log.info(
             "SKIP_SECTOR_CAP | Buy order skipped due to sector exposure limits",
             extra={
                 "symbol": symbol,
@@ -6907,9 +6907,9 @@ def _enter_long(
         return True
     order = submit_order(ctx, symbol, raw_qty, "buy")
     if order is None:
-        logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
+        _log.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
-        logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
+        _log.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
         ctx.trade_logger.log_entry(
             symbol,
             current_price,
@@ -6957,32 +6957,32 @@ def _enter_short(
     strat: str,
 ) -> bool:
     current_price = get_latest_close(feat_df)
-    logger.debug(f"Latest 5 rows for {symbol}:\n{feat_df.tail(5)}")
-    logger.debug(f"Computed price for {symbol}: {current_price}")
+    _log.debug(f"Latest 5 rows for {symbol}:\n{feat_df.tail(5)}")
+    _log.debug(f"Computed price for {symbol}: {current_price}")
     if current_price <= 0 or pd.isna(current_price):
-        logger.critical(f"Invalid price computed for {symbol}: {current_price}")
+        _log.critical(f"Invalid price computed for {symbol}: {current_price}")
         return True
     atr = feat_df["atr"].iloc[-1]
     qty = calculate_entry_size(ctx, symbol, current_price, atr, conf)
     try:
         asset = ctx.api.get_asset(symbol)
         if hasattr(asset, "shortable") and not asset.shortable:
-            logger.info(f"SKIP_NOT_SHORTABLE | symbol={symbol}")
+            _log.info(f"SKIP_NOT_SHORTABLE | symbol={symbol}")
             return True
         avail = getattr(asset, "shortable_shares", None)
         if avail is not None:
             qty = min(qty, int(avail))
     except Exception as exc:
-        logger.exception("bot.py unexpected", exc_info=exc)
+        _log.exception("bot.py unexpected", exc_info=exc)
         raise
     if qty is None or not np.isfinite(qty) or qty <= 0:
-        logger.warning(f"Skipping {symbol}: computed qty <= 0")
+        _log.warning(f"Skipping {symbol}: computed qty <= 0")
         return True
-    logger.info(
+    _log.info(
         f"SIGNAL_SHORT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}  qty={qty}"
     )
     if not sector_exposure_ok(ctx, symbol, qty, current_price):
-        logger.info(
+        _log.info(
             "SKIP_SECTOR_CAP | Short order skipped due to sector exposure limits",
             extra={
                 "symbol": symbol,
@@ -6996,9 +6996,9 @@ def _enter_short(
         ctx, symbol, qty, "sell_short"
     )  # AI-AGENT-REF: Use sell_short for short signals
     if order is None:
-        logger.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
+        _log.debug(f"TRADE_LOGIC_NO_ORDER | symbol={symbol}")
     else:
-        logger.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
+        _log.debug(f"TRADE_LOGIC_ORDER_PLACED | symbol={symbol}  order_id={order.id}")
         ctx.trade_logger.log_entry(
             symbol,
             current_price,
@@ -7047,15 +7047,15 @@ def _manage_existing_position(
     current_qty: int,
 ) -> bool:
     price = get_latest_close(feat_df)
-    logger.debug(f"Latest 5 rows for {symbol}:\n{feat_df.tail(5)}")
-    logger.debug(f"Computed price for {symbol}: {price}")
+    _log.debug(f"Latest 5 rows for {symbol}:\n{feat_df.tail(5)}")
+    _log.debug(f"Computed price for {symbol}: {price}")
     if price <= 0 or pd.isna(price):
-        logger.critical(f"Invalid price computed for {symbol}: {price}")
+        _log.critical(f"Invalid price computed for {symbol}: {price}")
         return False
     # AI-AGENT-REF: always rely on indicator-driven exits
     should_exit_flag, exit_qty, reason = should_exit(ctx, symbol, price, atr)
     if should_exit_flag and exit_qty > 0:
-        logger.info(
+        _log.info(
             f"EXIT_SIGNAL | symbol={symbol}  reason={reason}  exit_qty={exit_qty}  price={price:.4f}"
         )
         send_exit_order(ctx, symbol, exit_qty, price, reason)
@@ -7075,7 +7075,7 @@ def _manage_existing_position(
                     ctx.stop_targets.pop(symbol, None)
                     ctx.take_profit_targets.pop(symbol, None)
         except Exception as exc:
-            logger.exception("bot.py unexpected", exc_info=exc)
+            _log.exception("bot.py unexpected", exc_info=exc)
             raise
     else:
         try:
@@ -7083,7 +7083,7 @@ def _manage_existing_position(
             entry_price = float(pos.avg_entry_price)
             maybe_pyramid(ctx, symbol, entry_price, price, atr, conf)
         except Exception as exc:
-            logger.exception("bot.py unexpected", exc_info=exc)
+            _log.exception("bot.py unexpected", exc_info=exc)
             raise
     return True
 
@@ -7098,9 +7098,9 @@ def _evaluate_trade_signal(
         {"signal": lab, "flag": s, "weight": w}
         for s, w, lab in ctx.signal_manager.last_components
     ]
-    logger.debug("COMPONENTS | symbol=%s  components=%r", symbol, comp_list)
+    _log.debug("COMPONENTS | symbol=%s  components=%r", symbol, comp_list)
     final_score = sum(s * w for s, w, _ in ctx.signal_manager.last_components)
-    logger.info(
+    _log.info(
         "SIGNAL_RESULT | symbol=%s  final_score=%.4f  confidence=%.4f",
         symbol,
         final_score,
@@ -7137,10 +7137,10 @@ def trade_logic(
     """
     Core per-symbol logic: fetch data, compute features, evaluate signals, enter/exit orders.
     """
-    logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
+    _log.info(f"PROCESSING_SYMBOL | symbol={symbol}")
 
     if not pre_trade_checks(ctx, state, symbol, balance, regime_ok):
-        logger.debug("SKIP_PRE_TRADE_CHECKS", extra={"symbol": symbol})
+        _log.debug("SKIP_PRE_TRADE_CHECKS", extra={"symbol": symbol})
         return False
 
     raw_df, feat_df, skip_flag = _fetch_feature_data(ctx, state, symbol)
@@ -7154,10 +7154,10 @@ def trade_logic(
     feature_names = _model_feature_names(model)
     missing = [f for f in feature_names if f not in feat_df.columns]
     if missing:
-        logger.debug(
+        _log.debug(
             f"Feature snapshot for {symbol}: macd={feat_df['macd'].iloc[-1]}, atr={feat_df['atr'].iloc[-1]}, vwap={feat_df['vwap'].iloc[-1]}, macds={feat_df['macds'].iloc[-1]}"
         )
-        logger.info("SKIP_MISSING_FEATURES | symbol=%s  missing=%s", symbol, missing)
+        _log.info("SKIP_MISSING_FEATURES | symbol=%s  missing=%s", symbol, missing)
         return True
 
     try:
@@ -7165,10 +7165,10 @@ def trade_logic(
             ctx, state, feat_df, symbol, model
         )
     except ValueError as exc:
-        logger.error("%s", exc)
+        _log.error("%s", exc)
         return True
     if pd.isna(final_score) or pd.isna(conf):
-        logger.warning(f"Skipping {symbol}: model returned NaN prediction")
+        _log.warning(f"Skipping {symbol}: model returned NaN prediction")
         return True
 
     current_qty = _current_position_qty(ctx, symbol)
@@ -7190,20 +7190,20 @@ def trade_logic(
         if prev and (
             (prev == "buy" and signal == "sell") or (prev == "sell" and signal == "buy")
         ):
-            logger.info("SKIP_REVERSED_SIGNAL", extra={"symbol": symbol})
+            _log.info("SKIP_REVERSED_SIGNAL", extra={"symbol": symbol})
             return True
-        logger.debug("SKIP_COOLDOWN", extra={"symbol": symbol})
+        _log.debug("SKIP_COOLDOWN", extra={"symbol": symbol})
         return True
 
     # AI-AGENT-REF: Enhanced overtrading prevention - check frequency limits
     if _check_trade_frequency_limits(state, symbol, now):
-        logger.info("SKIP_FREQUENCY_LIMIT", extra={"symbol": symbol})
+        _log.info("SKIP_FREQUENCY_LIMIT", extra={"symbol": symbol})
         return True
 
     if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
         if symbol in state.long_positions:
             held = state.position_cache.get(symbol, 0)
-            logger.info(
+            _log.info(
                 f"Skipping BUY for {symbol} — position already LONG {held} shares"
             )
             return True
@@ -7214,7 +7214,7 @@ def trade_logic(
     if final_score < 0 and conf >= BUY_THRESHOLD and current_qty == 0:
         if symbol in state.short_positions:
             held = abs(state.position_cache.get(symbol, 0))
-            logger.info(
+            _log.info(
                 f"Skipping SELL for {symbol} — position already SHORT {held} shares"
             )
             return True
@@ -7228,7 +7228,7 @@ def trade_logic(
         )
 
     # Else hold / no action
-    logger.info(
+    _log.info(
         f"SKIP_LOW_OR_NO_SIGNAL | symbol={symbol}  "
         f"final_score={final_score:.4f}  confidence={conf:.4f}"
     )
@@ -7264,7 +7264,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
         try:
             raw = fetch_minute_df_safe(sym)
         except DataFetchError:
-            logger.warning("REBALANCE_NO_DATA | %s", sym)
+            _log.warning("REBALANCE_NO_DATA | %s", sym)
             continue
         price = get_latest_close(raw) if raw is not None else 1.0
         if price <= 0:
@@ -7278,8 +7278,8 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
                 "buy" if target_shares > 0 else "sell",
             )
         except Exception:
-            logger.exception(f"Rebalance failed for {sym}")
-    logger.info("PORTFOLIO_REBALANCED")
+            _log.exception(f"Rebalance failed for {sym}")
+    _log.info("PORTFOLIO_REBALANCED")
 
 
 def pair_trade_signal(sym1: str, sym2: str) -> tuple[str, int]:
@@ -7335,7 +7335,7 @@ def fetch_data(
                     sym, resolution=interval, _from=unix_from, to=unix_to
                 )
             except FinnhubAPIException as e:
-                logger.warning(f"[fetch_data] {sym} error: {e}")
+                _log.warning(f"[fetch_data] {sym} error: {e}")
                 continue
 
             if not ohlc or ohlc.get("s") != "ok":
@@ -7387,7 +7387,7 @@ def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
     loaded = joblib.load(path)
     # if this is a plain dict, return it directly
     if isinstance(loaded, dict):
-        logger.info("MODEL_LOADED")
+        _log.info("MODEL_LOADED")
         return loaded
 
     # AI-AGENT-REF: use isfile checks for optional ensemble components
@@ -7400,9 +7400,9 @@ def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
             try:
                 models.append(joblib.load(p))
             except Exception as e:
-                logger.exception("MODEL_LOAD_FAILED: %s", e)
+                _log.exception("MODEL_LOAD_FAILED: %s", e)
                 return None
-        logger.info(
+        _log.info(
             "MODEL_LOADED",
             extra={"path": f"{MODEL_RF_PATH}, {MODEL_XGB_PATH}, {MODEL_LGB_PATH}"},
         )
@@ -7411,12 +7411,12 @@ def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
     try:
         if isinstance(loaded, list):
             model = EnsembleModel(loaded)
-            logger.info("MODEL_LOADED")
+            _log.info("MODEL_LOADED")
             return model
-        logger.info("MODEL_LOADED")
+        _log.info("MODEL_LOADED")
         return loaded
     except Exception as e:
-        logger.exception("MODEL_LOAD_FAILED: %s", e)
+        _log.exception("MODEL_LOAD_FAILED: %s", e)
         return None
 
 
@@ -7428,7 +7428,7 @@ def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
         try:
             model_pipeline.partial_fit(X_new, y_new)
         except Exception as e:
-            logger.error(f"Online update failed for {symbol}: {e}")
+            _log.error(f"Online update failed for {symbol}: {e}")
             return
     pred = model_pipeline.predict(X_new)
     online_error = float(np.mean((pred - y_new) ** 2))
@@ -7443,13 +7443,13 @@ def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
     state.rolling_losses.append(online_error)
     if len(state.rolling_losses) >= 20 and sum(state.rolling_losses[-20:]) > 0.02:
         state.updates_halted = True
-        logger.warning("Halting online updates due to 20-trade rolling loss >2%")
+        _log.warning("Halting online updates due to 20-trade rolling loss >2%")
 
 
 def update_signal_weights() -> None:
     try:
         if not os.path.exists(TRADE_LOG_FILE):
-            logger.warning("No trades log found; skipping weight update.")
+            _log.warning("No trades log found; skipping weight update.")
             return
         df = pd.read_csv(
             TRADE_LOG_FILE,
@@ -7465,7 +7465,7 @@ def update_signal_weights() -> None:
             ],
         ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
-            logger.warning("Loaded DataFrame is empty after parsing/fallback")
+            _log.warning("Loaded DataFrame is empty after parsing/fallback")
         direction = np.where(df["side"] == "buy", 1, -1)
         df["pnl"] = (df["exit_price"] - df["entry_price"]) * direction
         df["confidence"] = df.get("confidence", 0.5)
@@ -7505,13 +7505,13 @@ def update_signal_weights() -> None:
                     usecols=["signal_name", "weight"],
                 )
                 if old_df.empty:
-                    logger.warning("Loaded DataFrame is empty after parsing/fallback")
+                    _log.warning("Loaded DataFrame is empty after parsing/fallback")
                     old = {}
                 else:
                     old = old_df.set_index("signal_name")["weight"].to_dict()
             except ValueError as e:
                 if "usecols" in str(e).lower():
-                    logger.warning(
+                    _log.warning(
                         "Signal weights CSV missing expected columns, trying fallback read"
                     )
                     try:
@@ -7526,19 +7526,19 @@ def update_signal_weights() -> None:
                             # New format with 'signal_name' column
                             old = old_df.set_index("signal_name")["weight"].to_dict()
                         else:
-                            logger.error(
+                            _log.error(
                                 "Signal weights CSV has unexpected format: %s",
                                 old_df.columns.tolist(),
                             )
                             old = {}
                     except Exception as fallback_e:
-                        logger.error(
+                        _log.error(
                             "Failed to load signal weights with fallback: %s",
                             fallback_e,
                         )
                         old = {}
                 else:
-                    logger.error("Failed to load signal weights: %s", e)
+                    _log.error("Failed to load signal weights: %s", e)
                     old = {}
         else:
             old = {}
@@ -7551,9 +7551,9 @@ def update_signal_weights() -> None:
         ).reset_index()
         out_df.columns = ["signal_name", "weight"]
         out_df.to_csv(SIGNAL_WEIGHTS_FILE, index=False)
-        logger.info("SIGNAL_WEIGHTS_UPDATED", extra={"count": len(merged)})
+        _log.info("SIGNAL_WEIGHTS_UPDATED", extra={"count": len(merged)})
     except Exception as e:
-        logger.exception(f"update_signal_weights failed: {e}")
+        _log.exception(f"update_signal_weights failed: {e}")
 
 
 def run_meta_learning_weight_optimizer(
@@ -7562,11 +7562,11 @@ def run_meta_learning_weight_optimizer(
     alpha: float = 1.0,
 ):
     if not meta_lock.acquire(blocking=False):
-        logger.warning("METALEARN_SKIPPED_LOCKED")
+        _log.warning("METALEARN_SKIPPED_LOCKED")
         return
     try:
         if not os.path.exists(trade_log_path):
-            logger.warning("METALEARN_NO_TRADES")
+            _log.warning("METALEARN_NO_TRADES")
             return
 
         df = pd.read_csv(
@@ -7576,8 +7576,8 @@ def run_meta_learning_weight_optimizer(
             usecols=["entry_price", "exit_price", "signal_tags", "side", "confidence"],
         ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
-            logger.warning("Loaded DataFrame is empty after parsing/fallback")
-            logger.warning("METALEARN_NO_VALID_ROWS")
+            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+            _log.warning("METALEARN_NO_VALID_ROWS")
             return
 
         direction = np.where(df["side"] == "buy", 1, -1)
@@ -7593,17 +7593,17 @@ def run_meta_learning_weight_optimizer(
         y = df["outcome"].values
 
         if len(y) < len(tags):
-            logger.warning("METALEARN_TOO_FEW_SAMPLES")
+            _log.warning("METALEARN_TOO_FEW_SAMPLES")
             return
 
         sample_w = df["reward"].abs() + 1e-3
         model = Ridge(alpha=alpha, fit_intercept=True)
         if X.empty:
-            logger.warning("META_MODEL_TRAIN_SKIPPED_EMPTY")
+            _log.warning("META_MODEL_TRAIN_SKIPPED_EMPTY")
             return
         model.fit(X, y, sample_weight=sample_w)
         atomic_joblib_dump(model, META_MODEL_PATH)
-        logger.info("META_MODEL_TRAINED", extra={"samples": len(y)})
+        _log.info("META_MODEL_TRAINED", extra={"samples": len(y)})
         log_metrics(
             {
                 "timestamp": utc_now_iso(),
@@ -7622,7 +7622,7 @@ def run_meta_learning_weight_optimizer(
         }
         out_df = pd.DataFrame(list(weights.items()), columns=["signal_name", "weight"])
         out_df.to_csv(output_path, index=False)
-        logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
+        _log.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
     finally:
         meta_lock.release()
 
@@ -7631,11 +7631,11 @@ def run_bayesian_meta_learning_optimizer(
     trade_log_path: str = TRADE_LOG_FILE, output_path: str = SIGNAL_WEIGHTS_FILE
 ):
     if not meta_lock.acquire(blocking=False):
-        logger.warning("METALEARN_SKIPPED_LOCKED")
+        _log.warning("METALEARN_SKIPPED_LOCKED")
         return
     try:
         if not os.path.exists(trade_log_path):
-            logger.warning("METALEARN_NO_TRADES")
+            _log.warning("METALEARN_NO_TRADES")
             return
 
         df = pd.read_csv(
@@ -7645,8 +7645,8 @@ def run_bayesian_meta_learning_optimizer(
             usecols=["entry_price", "exit_price", "signal_tags", "side"],
         ).dropna(subset=["entry_price", "exit_price", "signal_tags"])
         if df.empty:
-            logger.warning("Loaded DataFrame is empty after parsing/fallback")
-            logger.warning("METALEARN_NO_VALID_ROWS")
+            _log.warning("Loaded DataFrame is empty after parsing/fallback")
+            _log.warning("METALEARN_NO_VALID_ROWS")
             return
 
         direction = np.where(df["side"] == "buy", 1, -1)
@@ -7660,16 +7660,16 @@ def run_bayesian_meta_learning_optimizer(
         y = df["outcome"].values
 
         if len(y) < len(tags):
-            logger.warning("METALEARN_TOO_FEW_SAMPLES")
+            _log.warning("METALEARN_TOO_FEW_SAMPLES")
             return
 
         model = BayesianRidge(fit_intercept=True, normalize=True)
         if X.size == 0:
-            logger.warning("BAYES_MODEL_TRAIN_SKIPPED_EMPTY")
+            _log.warning("BAYES_MODEL_TRAIN_SKIPPED_EMPTY")
             return
         model.fit(X, y)
         atomic_joblib_dump(model, abspath("meta_model_bayes.pkl"))
-        logger.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
+        _log.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
         log_metrics(
             {
                 "timestamp": utc_now_iso(),
@@ -7687,7 +7687,7 @@ def run_bayesian_meta_learning_optimizer(
         }
         out_df = pd.DataFrame(list(weights.items()), columns=["signal_name", "weight"])
         out_df.to_csv(output_path, index=False)
-        logger.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
+        _log.info("META_WEIGHTS_UPDATED", extra={"weights": weights})
     finally:
         meta_lock.release()
 
@@ -7706,7 +7706,7 @@ def load_global_signal_performance(
         )  # Reduced from 0.4 to 0.3
 
     if not os.path.exists(TRADE_LOG_FILE):
-        logger.info("METALEARN_NO_HISTORY | Using defaults for new deployment")
+        _log.info("METALEARN_NO_HISTORY | Using defaults for new deployment")
         return None
 
     try:
@@ -7718,7 +7718,7 @@ def load_global_signal_performance(
         ).dropna(subset=["exit_price", "entry_price", "signal_tags"])
 
         if df.empty:
-            logger.warning("METALEARN_EMPTY_TRADE_LOG - No valid trades found")
+            _log.warning("METALEARN_EMPTY_TRADE_LOG - No valid trades found")
             return {}
 
         # Enhanced data validation and cleaning
@@ -7729,7 +7729,7 @@ def load_global_signal_performance(
         # Remove rows with invalid price data
         df = df.dropna(subset=["exit_price", "entry_price"])
         if df.empty:
-            logger.warning(
+            _log.warning(
                 "METALEARN_INVALID_PRICES - No trades with valid prices. "
                 "This suggests price data corruption or insufficient trading history. "
                 "Using default signal weights.",
@@ -7751,7 +7751,7 @@ def load_global_signal_performance(
         ]  # Remove empty tags
 
         if df_tags.empty:
-            logger.warning("METALEARN_NO_SIGNAL_TAGS - No valid signal tags found")
+            _log.warning("METALEARN_NO_SIGNAL_TAGS - No valid signal tags found")
             return {}
 
         # Calculate win rates with minimum trade validation
@@ -7764,7 +7764,7 @@ def load_global_signal_performance(
                 win_rates[tag] = round(win_rate, 3)
 
         if not win_rates:
-            logger.warning(
+            _log.warning(
                 "METALEARN_INSUFFICIENT_TRADES - No signals meet minimum trade requirement (%d)",
                 min_trades,
             )
@@ -7774,7 +7774,7 @@ def load_global_signal_performance(
         filtered = {tag: wr for tag, wr in win_rates.items() if wr >= threshold}
 
         # Enhanced logging with more details
-        logger.info(
+        _log.info(
             "METALEARN_FILTERED_SIGNALS",
             extra={
                 "signals": list(filtered.keys()) or [],
@@ -7787,14 +7787,14 @@ def load_global_signal_performance(
         )
 
         if not filtered:
-            logger.warning(
+            _log.warning(
                 "METALEARN_NO_SIGNALS_ABOVE_THRESHOLD - No signals above threshold %.3f",
                 threshold,
             )
             # Return best performing signals even if below threshold, with reduced weight
             if win_rates:
                 best_signal = max(win_rates.items(), key=lambda x: x[1])
-                logger.info(
+                _log.info(
                     "METALEARN_FALLBACK_SIGNAL - Using best signal: %s (%.3f)",
                     best_signal[0],
                     best_signal[1],
@@ -7804,7 +7804,7 @@ def load_global_signal_performance(
         return filtered
 
     except Exception as e:
-        logger.error(
+        _log.error(
             "METALEARN_PROCESSING_ERROR - Failed to process signal performance: %s",
             e,
             exc_info=True,
@@ -7874,7 +7874,7 @@ def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
             raise ValueError("No close price data available for MACD")
         macd_df = signals_calculate_macd(close_series)
         if macd_df is None:
-            logger.warning("MACD returned None for %s", symbol)
+            _log.warning("MACD returned None for %s", symbol)
             raise ValueError("MACD calculation returned None")
         macd_col = macd_df.get("macd")
         signal_col = macd_df.get("signal")
@@ -7959,7 +7959,7 @@ def _add_additional_indicators(
         mfi_vals = ta.mfi(df.high, df.low, df.close, df.volume, length=14)
         df["+mfi"] = mfi_vals
     except ValueError:
-        logger.warning("Skipping MFI: insufficient or duplicate data")
+        _log.warning("Skipping MFI: insufficient or duplicate data")
 
     try:
         df["tema"] = ta.tema(df["close"], length=10)
@@ -7996,7 +7996,7 @@ def _add_additional_indicators(
         for col in ich_signal_df.columns:
             df[f"ichi_signal_{col}"] = ich_signal_df[col]
     except (KeyError, IndexError):
-        logger.warning("Skipping Ichimoku: empty or irregular index")
+        _log.warning("Skipping Ichimoku: empty or irregular index")
 
     try:
         st = ta.stochrsi(df["close"])
@@ -8051,7 +8051,7 @@ def _drop_inactive_features(df: pd.DataFrame) -> None:
                 errors="ignore",
             )
         except Exception as exc:  # pragma: no cover - unexpected I/O
-            logger.exception("bot.py unexpected", exc_info=exc)
+            _log.exception("bot.py unexpected", exc_info=exc)
             raise
 
 
@@ -8106,7 +8106,7 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
         df = standardize_ohlcv(df)
     except Exception as e:
         # OHLCV standardization failed - log warning but continue with raw data
-        logger.warning("Failed to standardize OHLCV data: %s", e)
+        _log.warning("Failed to standardize OHLCV data: %s", e)
 
     # 2) Synthesize missing OHLC from 'close' when needed (proxy baskets)
     if "close" in df.columns:
@@ -8125,7 +8125,7 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
             calculate_macd as signals_calculate_macd,  # type: ignore
         )
     except Exception:
-        logger.warning("signals module not available for regime features")
+        _log.warning("signals module not available for regime features")
         signals_calculate_macd = None
 
     # 4) Build features with fallbacks
@@ -8144,7 +8144,7 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
                 macd_df["macd"] if macd_df is not None and "macd" in macd_df else np.nan
             )
         except Exception as e:
-            logger.warning("Regime MACD calculation failed: %s", e)
+            _log.warning("Regime MACD calculation failed: %s", e)
             feat["macd"] = np.nan
     else:
         feat["macd"] = np.nan
@@ -8172,7 +8172,7 @@ def _initialize_regime_model(ctx=None):
     """Initialize regime model - load existing or train new one."""
     # Train or load regime model - skip in test environment
     if os.getenv("TESTING") == "1" or os.getenv("PYTEST_RUNNING"):
-        logger.info("Skipping regime model training in test environment")
+        _log.info("Skipping regime model training in test environment")
         return RandomForestClassifier(
             n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
         )
@@ -8181,13 +8181,13 @@ def _initialize_regime_model(ctx=None):
             with open(REGIME_MODEL_PATH, "rb") as f:
                 return pickle.load(f)
         except Exception as e:
-            logger.warning(f"Failed to load regime model: {e}")
+            _log.warning(f"Failed to load regime model: {e}")
             return RandomForestClassifier(
                 n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
             )
     else:
         if ctx is None:
-            logger.warning(
+            _log.warning(
                 "No context provided for regime model training; using fallback"
             )
             return RandomForestClassifier(
@@ -8197,7 +8197,7 @@ def _initialize_regime_model(ctx=None):
         # --- Regime training uses basket-based proxy now ---
         wide = _build_regime_dataset(ctx)
         if wide is None or getattr(wide, "empty", False):
-            logger.warning("Regime basket is empty; skipping model train")
+            _log.warning("Regime basket is empty; skipping model train")
             bars = pd.DataFrame()
         else:
             bars = _regime_basket_to_proxy_bars(wide)
@@ -8211,7 +8211,7 @@ def _initialize_regime_model(ctx=None):
             # Final conversion (idempotent for Timestamps)
             bars.index = safe_to_datetime(bars.index, context="regime data")
         except Exception as e:
-            logger.warning("REGIME index normalization failed: %s", e)
+            _log.warning("REGIME index normalization failed: %s", e)
             bars = pd.DataFrame()
         bars = bars.rename(columns=lambda c: c.lower())
         feats = _compute_regime_features(bars)
@@ -8225,11 +8225,11 @@ def _initialize_regime_model(ctx=None):
 
         # Add validation for training data quality
         if training.empty:
-            logger.warning(
+            _log.warning(
                 "Regime training dataset is empty after joining features and labels"
             )
             if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
-                logger.warning(
+                _log.warning(
                     "No valid training data for regime model; using fallback"
                 )
                 _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
@@ -8242,7 +8242,7 @@ def _initialize_regime_model(ctx=None):
 
         settings = get_settings()
 
-        logger.debug(
+        _log.debug(
             "Regime training data validation: %d rows available, minimum required: %d",
             len(training),
             settings.REGIME_MIN_ROWS,
@@ -8255,20 +8255,20 @@ def _initialize_regime_model(ctx=None):
                 n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
             )
             if X.empty:
-                logger.warning("REGIME_MODEL_TRAIN_SKIPPED_EMPTY")
+                _log.warning("REGIME_MODEL_TRAIN_SKIPPED_EMPTY")
             else:
                 regime_model.fit(X, y)
             try:
                 atomic_pickle_dump(regime_model, REGIME_MODEL_PATH)
             except Exception as e:
-                logger.warning(f"Failed to save regime model: {e}")
+                _log.warning(f"Failed to save regime model: {e}")
             else:
-                logger.info("REGIME_MODEL_TRAINED", extra={"rows": len(training)})
+                _log.info("REGIME_MODEL_TRAINED", extra={"rows": len(training)})
             return regime_model
         else:
             # Log once at WARNING level; avoid noisy ERROR during closed market.
             if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
-                logger.warning(
+                _log.warning(
                     "Insufficient rows (%d < %d) for regime model; using fallback",
                     len(training),
                     settings.REGIME_MIN_ROWS,
@@ -8423,7 +8423,7 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
             if (
                 extreme_moves > len(price_changes) * 0.1
             ):  # More than 10% of days have extreme moves
-                logger.warning(
+                _log.warning(
                     "DATA_QUALITY_EXTREME_VOLATILITY",
                     extra={
                         "symbol": symbol,
@@ -8489,7 +8489,7 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
         }
 
     except Exception as e:
-        logger.error(
+        _log.error(
             "DATA_VALIDATION_ERROR",
             extra={"symbol": symbol, "error": str(e), "error_type": type(e).__name__},
         )
@@ -8509,7 +8509,7 @@ def screen_universe(
     top_n: int = 20,
 ) -> list[str]:
     cand_set = set(candidates)
-    logger.info(
+    _log.info(
         f"[SCREEN_UNIVERSE] Starting screening of {len(cand_set)} candidates: {sorted(cand_set)}"
     )
 
@@ -8527,14 +8527,14 @@ def screen_universe(
         validation_result = _validate_market_data_quality(df, sym)
         if not validation_result["valid"]:
             filtered_out[sym] = validation_result["reason"]
-            logger.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
+            _log.debug(f"[SCREEN_UNIVERSE] {sym}: {validation_result['message']}")
             continue
 
         original_len = len(df)
         df = df[df["volume"] > 100_000]
         if df.empty:
             filtered_out[sym] = "low_volume"
-            logger.debug(
+            _log.debug(
                 f"[SCREEN_UNIVERSE] {sym}: Filtered out due to low volume (original: {original_len} rows)"
             )
             continue
@@ -8542,21 +8542,21 @@ def screen_universe(
         series = ta.atr(df["high"], df["low"], df["close"], length=ATR_LENGTH)
         if series is None or not hasattr(series, "empty") or series.empty:
             filtered_out[sym] = "atr_calculation_failed"
-            logger.warning(f"[SCREEN_UNIVERSE] {sym}: ATR calculation failed")
+            _log.warning(f"[SCREEN_UNIVERSE] {sym}: ATR calculation failed")
             continue
         atr_val = series.iloc[-1]
         if not pd.isna(atr_val):
             _SCREEN_CACHE[sym] = float(atr_val)
-            logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
+            _log.debug(f"[SCREEN_UNIVERSE] {sym}: ATR = {atr_val:.4f}")
         else:
             filtered_out[sym] = "atr_nan"
-            logger.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
+            _log.debug(f"[SCREEN_UNIVERSE] {sym}: ATR value is NaN")
 
     atrs = {sym: _SCREEN_CACHE[sym] for sym in cand_set if sym in _SCREEN_CACHE}
     ranked = sorted(atrs.items(), key=lambda kv: kv[1], reverse=True)
     selected = [sym for sym, _ in ranked[:top_n]]
 
-    logger.info(
+    _log.info(
         f"[SCREEN_UNIVERSE] Selected {len(selected)} of {len(cand_set)} candidates. "
         f"Selected: {selected}. "
         f"Filtered out: {len(filtered_out)} symbols: {filtered_out}"
@@ -8577,7 +8577,7 @@ def get_stock_bars_safe(api, symbol, timeframe):
     try:
         return api.get_stock_bars(symbol, timeframe)  # Ensure correct API method
     except AttributeError as e:
-        logger.error(f"Alpaca API Error: {e}")
+        _log.error(f"Alpaca API Error: {e}")
         return None
 
 
@@ -8587,7 +8587,7 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
 
     # Check if file exists and handle gracefully
     if not os.path.exists(path):
-        logger.warning(f"Tickers file {path} not found. Using default tickers.")
+        _log.warning(f"Tickers file {path} not found. Using default tickers.")
         # Fallback: define default tickers
         return ["AAPL", "GOOG", "AMZN"]
 
@@ -8600,14 +8600,14 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
                 if t and t not in tickers:
                     tickers.append(t)
     except Exception as e:
-        logger.exception(f"[load_tickers] Failed to read {path}: {e}")
+        _log.exception(f"[load_tickers] Failed to read {path}: {e}")
     return tickers
 
 
 def daily_summary() -> None:
     try:
         if not os.path.exists(TRADE_LOG_FILE):
-            logger.info("DAILY_SUMMARY_NO_TRADES")
+            _log.info("DAILY_SUMMARY_NO_TRADES")
             return
         df = pd.read_csv(
             TRADE_LOG_FILE,
@@ -8616,14 +8616,14 @@ def daily_summary() -> None:
             usecols=["entry_price", "exit_price", "side"],
         ).dropna(subset=["entry_price", "exit_price"])
         if df.empty:
-            logger.warning("Loaded DataFrame is empty after parsing/fallback")
+            _log.warning("Loaded DataFrame is empty after parsing/fallback")
         direction = np.where(df["side"] == "buy", 1, -1)
         df["pnl"] = (df.exit_price - df.entry_price) * direction
         total_trades = len(df)
         win_rate = (df.pnl > 0).mean() if total_trades else 0
         total_pnl = df.pnl.sum()
         max_dd = (df.pnl.cumsum().cummax() - df.pnl.cumsum()).max()
-        logger.info(
+        _log.info(
             "DAILY_SUMMARY",
             extra={
                 "trades": total_trades,
@@ -8633,7 +8633,7 @@ def daily_summary() -> None:
             },
         )
     except Exception as e:
-        logger.exception(f"daily_summary failed: {e}")
+        _log.exception(f"daily_summary failed: {e}")
 
 
 # ─── PCA-BASED PORTFOLIO ADJUSTMENT ─────────────────────────────────────────────
@@ -8660,7 +8660,7 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
         return
     pca = PCA(n_components=3)
     if returns_df.empty:
-        logger.warning("PCA_SKIPPED_EMPTY_RETURNS")
+        _log.warning("PCA_SKIPPED_EMPTY_RETURNS")
         return
     pca.fit(returns_df.values)
     var_explained = pca.explained_variance_ratio_[0]
@@ -8684,7 +8684,7 @@ def run_daily_pca_adjustment(ctx: BotContext) -> None:
                 ctx.portfolio_weights[sym] = round(
                     ctx.portfolio_weights[sym] / total, 4
                 )
-    logger.info(
+    _log.info(
         "PCA_ADJUSTMENT_APPLIED",
         extra={"var_explained": round(var_explained, 3), "adjusted": high_load_syms},
     )
@@ -8696,9 +8696,9 @@ def daily_reset(state: BotState) -> None:
         config.reload_env()
         _slippage_log.clear()
         state.loss_streak = 0
-        logger.info("DAILY_STATE_RESET")
+        _log.info("DAILY_STATE_RESET")
     except Exception as e:
-        logger.exception(f"daily_reset failed: {e}")
+        _log.exception(f"daily_reset failed: {e}")
 
 
 def _average_reward(n: int = 20) -> float:
@@ -8711,7 +8711,7 @@ def _average_reward(n: int = 20) -> float:
         usecols=["reward"],
     ).tail(n)
     if df.empty:
-        logger.warning("Loaded DataFrame is empty after parsing/fallback")
+        _log.warning("Loaded DataFrame is empty after parsing/fallback")
     if df.empty or "reward" not in df.columns:
         return 0.0
     return float(df["reward"].mean())
@@ -8745,7 +8745,7 @@ def update_bot_mode(state: BotState) -> None:
             state.mode_obj = BotMode(new_mode)
             params.update(state.mode_obj.get_config())
             ctx.kelly_fraction = params.get("KELLY_FRACTION", 0.6)
-            logger.info(
+            _log.info(
                 "MODE_SWITCH",
                 extra={
                     "new_mode": new_mode,
@@ -8755,7 +8755,7 @@ def update_bot_mode(state: BotState) -> None:
                 },
             )
     except Exception as e:
-        logger.exception(f"update_bot_mode failed: {e}")
+        _log.exception(f"update_bot_mode failed: {e}")
 
 
 def adaptive_risk_scaling(ctx: BotContext) -> None:
@@ -8782,7 +8782,7 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
         params["CAPITAL_CAP"] = round(
             max(0.02, min(0.1, params.get("CAPITAL_CAP", 0.25) * (1 - dd))), 3
         )
-        logger.info(
+        _log.info(
             "RISK_SCALED",
             extra={
                 "kelly_fraction": ctx.kelly_fraction,
@@ -8792,7 +8792,7 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
             },
         )
     except Exception as e:
-        logger.exception(f"adaptive_risk_scaling failed: {e}")
+        _log.exception(f"adaptive_risk_scaling failed: {e}")
 
 
 def check_disaster_halt() -> None:
@@ -8800,9 +8800,9 @@ def check_disaster_halt() -> None:
         dd = _current_drawdown()
         if dd >= DISASTER_DD_LIMIT:
             set_halt_flag(f"DISASTER_DRAW_DOWN_{dd:.2%}")
-            logger.error("DISASTER_HALT_TRIGGERED", extra={"drawdown": dd})
+            _log.error("DISASTER_HALT_TRIGGERED", extra={"drawdown": dd})
     except Exception as e:
-        logger.exception(f"check_disaster_halt failed: {e}")
+        _log.exception(f"check_disaster_halt failed: {e}")
 
 
 # retrain_meta_learner is imported above if available
@@ -8821,7 +8821,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
 
     need_to_retrain = True
     if S.disable_daily_retrain:
-        logger.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
+        _log.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
         need_to_retrain = False
     if os.path.isfile(marker):
         with open(marker) as f:
@@ -8830,7 +8830,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
             need_to_retrain = False
 
     if not os.path.exists(MODEL_PATH):
-        logger.warning(
+        _log.warning(
             "MODEL_PATH missing; forcing initial retrain.",
             extra={"path": MODEL_PATH},
         )
@@ -8838,16 +8838,16 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
 
     if need_to_retrain:
         if not callable(globals().get("retrain_meta_learner")):
-            logger.warning(
+            _log.warning(
                 "Daily retraining requested, but retrain_meta_learner is unavailable."
             )
         else:
             if not meta_lock.acquire(blocking=False):
-                logger.warning("METALEARN_SKIPPED_LOCKED")
+                _log.warning("METALEARN_SKIPPED_LOCKED")
             else:
                 try:
                     symbols = load_tickers(TICKERS_FILE)
-                    logger.info(
+                    _log.info(
                         f"RETRAINING START for {today_str} on {len(symbols)} tickers..."
                     )
                     valid_symbols = []
@@ -8855,18 +8855,18 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                         try:
                             df_min = fetch_minute_df_safe(symbol)
                         except DataFetchError:
-                            logger.info(
+                            _log.info(
                                 f"{symbol} returned no minute data; skipping symbol."
                             )
                             continue
                         if df_min is None or df_min.empty:
-                            logger.info(
+                            _log.info(
                                 f"{symbol} returned no minute data; skipping symbol."
                             )
                             continue
                         valid_symbols.append(symbol)
                     if not valid_symbols:
-                        logger.warning(
+                        _log.warning(
                             "No symbols returned valid minute data; skipping retraining entirely."
                         )
                     else:
@@ -8876,7 +8876,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                                 ctx, valid_symbols, force=force_train
                             )
                         else:
-                            logger.info(
+                            _log.info(
                                 "[retrain_meta_learner] Outside market hours; skipping"
                             )
                             success = False
@@ -8885,11 +8885,11 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                                 with open(marker, "w") as f:
                                     f.write(today_str)
                             except Exception as e:
-                                logger.warning(
+                                _log.warning(
                                     f"Failed to write retrain marker file: {e}"
                                 )
                         else:
-                            logger.warning(
+                            _log.warning(
                                 "Retraining failed; continuing with existing model."
                             )
                 finally:
@@ -8913,21 +8913,21 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         with model_lock:
             try:
                 if len(X_train) == 0:
-                    logger.warning("DAILY_MODEL_TRAIN_SKIPPED_EMPTY")
+                    _log.warning("DAILY_MODEL_TRAIN_SKIPPED_EMPTY")
                 else:
                     model_pipeline.fit(X_train, y_train)
                     mse = float(
                         np.mean((model_pipeline.predict(X_train) - y_train) ** 2)
                     )
-                    logger.info("TRAIN_METRIC", extra={"mse": mse})
+                    _log.info("TRAIN_METRIC", extra={"mse": mse})
             except Exception as e:
-                logger.error(f"Daily retrain failed: {e}")
+                _log.error(f"Daily retrain failed: {e}")
 
         date_str = datetime.now(UTC).strftime("%Y%m%d_%H%M")
         os.makedirs("models", exist_ok=True)
         path = f"models/sgd_{date_str}.pkl"
         atomic_joblib_dump(model_pipeline, path)
-        logger.info(f"Model checkpoint saved: {path}")
+        _log.info(f"Model checkpoint saved: {path}")
 
         for f in os.listdir("models"):
             if f.endswith(".pkl"):
@@ -8959,15 +8959,15 @@ def on_market_close() -> None:
     """Trigger daily retraining after the market closes."""
     now_est = dt_.now(UTC).astimezone(ZoneInfo("America/New_York"))
     if market_is_open(now_est):
-        logger.info("RETRAIN_SKIP_MARKET_OPEN")
+        _log.info("RETRAIN_SKIP_MARKET_OPEN")
         return
     if now_est.time() < dt_time(16, 0):
-        logger.info("RETRAIN_SKIP_EARLY", extra={"time": now_est.isoformat()})
+        _log.info("RETRAIN_SKIP_EARLY", extra={"time": now_est.isoformat()})
         return
     try:
         load_or_retrain_daily(ctx)
     except Exception as exc:
-        logger.exception(f"on_market_close failed: {exc}")
+        _log.exception(f"on_market_close failed: {exc}")
 
 
 # ─── M. MAIN LOOP & SCHEDULER ─────────────────────────────────────────────────
@@ -8998,18 +8998,18 @@ def start_healthcheck() -> None:
     try:
         app.run(host="0.0.0.0", port=port)
     except OSError as e:
-        logger.warning(
+        _log.warning(
             f"Healthcheck port {port} in use: {e}. Skipping health-endpoint."
         )
     except Exception as e:
-        logger.exception(f"start_healthcheck failed: {e}")
+        _log.exception(f"start_healthcheck failed: {e}")
 
 
 def start_metrics_server(default_port: int = 9200) -> None:
     """Start Prometheus metrics server handling port conflicts."""
     try:
         start_http_server(default_port)
-        logger.debug("Metrics server started on %d", default_port)
+        _log.debug("Metrics server started on %d", default_port)
         return
     except OSError as exc:
         if "Address already in use" in str(exc):
@@ -9018,30 +9018,30 @@ def start_metrics_server(default_port: int = 9200) -> None:
 
                 resp = requests.get(f"http://localhost:{default_port}", timeout=2)
                 if resp.ok:
-                    logger.info(
+                    _log.info(
                         "Metrics port %d already serving; reusing", default_port
                     )
                     return
             except Exception as e:
                 # Metrics server connectivity check failed - continue with port search
-                logger.debug(
+                _log.debug(
                     "Metrics server check failed on port %d: %s", default_port, e
                 )
             port = utils.get_free_port(default_port + 1, default_port + 50)
             if port is None:
-                logger.warning("No free port available for metrics server")
+                _log.warning("No free port available for metrics server")
                 return
-            logger.warning("Metrics port %d busy; using %d", default_port, port)
+            _log.warning("Metrics port %d busy; using %d", default_port, port)
             try:
                 start_http_server(port)
             except Exception as exc2:
-                logger.warning("Failed to start metrics server on %d: %s", port, exc2)
+                _log.warning("Failed to start metrics server on %d: %s", port, exc2)
         else:
-            logger.warning(
+            _log.warning(
                 "Failed to start metrics server on %d: %s", default_port, exc
             )
     except Exception as exc:  # pragma: no cover - unexpected error
-        logger.warning("Failed to start metrics server on %d: %s", default_port, exc)
+        _log.warning("Failed to start metrics server on %d: %s", default_port, exc)
 
 
 def run_multi_strategy(ctx: BotContext) -> None:
@@ -9052,7 +9052,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
             sigs = strat.generate(ctx)
             signals_by_strategy[strat.name] = sigs
         except Exception as e:
-            logger.warning(f"Strategy {strat.name} failed: {e}")
+            _log.warning(f"Strategy {strat.name} failed: {e}")
     # Optionally augment strategy signals with reinforcement learning signals.
     if S.use_rl_agent:
         try:
@@ -9101,7 +9101,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
                             rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
                         )
         except Exception as exc:
-            logger.error("RL_AGENT_ERROR", extra={"exc": str(exc)})
+            _log.error("RL_AGENT_ERROR", extra={"exc": str(exc)})
 
     # AI-AGENT-REF: Add position holding logic to reduce churn
     try:
@@ -9130,7 +9130,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
         enhanced_count = sum(
             len(sigs) for sigs in enhanced_signals_by_strategy.values()
         )
-        logger.info(
+        _log.info(
             "POSITION_HOLD_FILTER",
             extra={
                 "original_signals": original_count,
@@ -9144,7 +9144,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
         signals_by_strategy = enhanced_signals_by_strategy
 
     except Exception as exc:
-        logger.warning("Position holding logic failed, using original signals: %s", exc)
+        _log.warning("Position holding logic failed, using original signals: %s", exc)
 
     final = ctx.allocator.allocate(signals_by_strategy)
     acct = ctx.api.get_account()
@@ -9159,7 +9159,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
                 quote: Quote = ctx.data_client.get_stock_latest_quote(req)
                 price = float(getattr(quote, "ask_price", 0) or 0)
             except APIError as e:
-                logger.warning(
+                _log.warning(
                     "[run_all_trades] quote failed for %s: %s", sig.symbol, e
                 )
                 price = 0.0
@@ -9171,13 +9171,13 @@ def run_multi_strategy(ctx: BotContext) -> None:
                     data = pd.DataFrame()
                 if data is not None and not data.empty:
                     row = data.iloc[-1]
-                    logger.debug(
+                    _log.debug(
                         "Fetched minute data for %s: %s",
                         sig.symbol,
                         row.to_dict(),
                     )
                     minute_close = float(row.get("close", 0))
-                    logger.info(
+                    _log.info(
                         "Using last_close=%.4f vs minute_close=%.4f",
                         utils.get_latest_close(data),
                         minute_close,
@@ -9188,7 +9188,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
                         else utils.get_latest_close(data)
                     )
                 if price <= 0:
-                    logger.warning(
+                    _log.warning(
                         "Retry %s: price %.2f <= 0 for %s, refetching data",
                         retries + 1,
                         price,
@@ -9198,7 +9198,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
             else:
                 break
         if price <= 0:
-            logger.critical(
+            _log.critical(
                 "Failed after retries: non-positive price for %s. Data context: %r",
                 sig.symbol,
                 (
@@ -9211,11 +9211,11 @@ def run_multi_strategy(ctx: BotContext) -> None:
         # Provide the account equity (cash) when sizing positions; this allows
         # CapitalScalingEngine.scale_position to use equity rather than raw size.
         if sig.side == "buy" and ctx.risk_engine.position_exists(ctx.api, sig.symbol):
-            logger.info("SKIP_DUPLICATE_LONG", extra={"symbol": sig.symbol})
+            _log.info("SKIP_DUPLICATE_LONG", extra={"symbol": sig.symbol})
             continue
 
         # AI-AGENT-REF: Add validation and logging for signal processing
-        logger.debug(
+        _log.debug(
             "PROCESSING_SIGNAL",
             extra={
                 "symbol": sig.symbol,
@@ -9228,7 +9228,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
 
         qty = ctx.risk_engine.position_size(sig, cash, price)
         if qty is None or not np.isfinite(qty) or qty <= 0:
-            logger.warning(
+            _log.warning(
                 "SKIP_INVALID_QTY",
                 extra={
                     "symbol": sig.symbol,
@@ -9242,7 +9242,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
 
         # AI-AGENT-REF: Validate signal side before execution to catch any corruption
         if sig.side not in ["buy", "sell"]:
-            logger.error(
+            _log.error(
                 "INVALID_SIGNAL_SIDE",
                 extra={
                     "symbol": sig.symbol,
@@ -9252,7 +9252,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
             )
             continue
 
-        logger.info(
+        _log.info(
             "EXECUTING_ORDER",
             extra={"symbol": sig.symbol, "side": sig.side, "qty": qty, "price": price},
         )
@@ -9267,7 +9267,7 @@ def run_multi_strategy(ctx: BotContext) -> None:
         if hasattr(ctx, "execution_engine"):
             ctx.execution_engine.end_cycle()
     except Exception as exc:
-        logger.error("TRAILING_STOP_CHECK_FAILED", extra={"exc": str(exc)})
+        _log.error("TRAILING_STOP_CHECK_FAILED", extra={"exc": str(exc)})
 
 
 def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[str]]:
@@ -9288,28 +9288,28 @@ def _prepare_run(ctx: BotContext, state: BotState) -> tuple[float, bool, list[st
 
     full_watchlist = load_tickers(TICKERS_FILE)
     symbols = screen_candidates()
-    logger.info(
+    _log.info(
         "Number of screened candidates: %s", len(symbols)
     )  # AI-AGENT-REF: log candidate count
     if not symbols:
-        logger.warning(
+        _log.warning(
             "No candidates found after filtering, using top 5 tickers fallback."
         )
         symbols = full_watchlist[:5]
-    logger.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
+    _log.info("CANDIDATES_SCREENED", extra={"tickers": symbols})
     ctx.tickers = symbols
     try:
         summary = pre_trade_health_check(ctx, symbols)
-        logger.info("PRE_TRADE_HEALTH", extra=summary)
+        _log.info("PRE_TRADE_HEALTH", extra=summary)
     except Exception as exc:
-        logger.warning(f"pre_trade_health_check failure: {exc}")
+        _log.warning(f"pre_trade_health_check failure: {exc}")
     with portfolio_lock:
         ctx.portfolio_weights = portfolio.compute_portfolio_weights(ctx, symbols)
     acct = safe_alpaca_get_account(ctx)
     if acct:
         current_cash = float(getattr(acct, "buying_power", acct.cash))
     else:
-        logger.error("Failed to get account information from Alpaca")
+        _log.error("Failed to get account information from Alpaca")
         return 0.0, False, []
     regime_ok = check_market_regime(state)
     return current_cash, regime_ok, symbols
@@ -9344,14 +9344,14 @@ def _process_symbols(
     for symbol in symbols:
         # AI-AGENT-REF: Final-bar/session gating before strategy evaluation
         if not ensure_final_bar(symbol, "1min"):  # Default to 1min timeframe
-            logger.info(
+            _log.info(
                 "SKIP_PARTIAL_BAR", extra={"symbol": symbol, "timeframe": "1min"}
             )
             continue
 
         # Circuit breaker: limit processing time and symbol count
         if processed_symbols >= max_symbols_per_cycle:
-            logger.warning(
+            _log.warning(
                 "SYMBOL_PROCESSING_CIRCUIT_BREAKER",
                 extra={
                     "processed_count": processed_symbols,
@@ -9363,7 +9363,7 @@ def _process_symbols(
 
         # Check processing time limit (max 5 minutes per cycle)
         if time.monotonic() - processing_start_time > 300:
-            logger.warning(
+            _log.warning(
                 "SYMBOL_PROCESSING_CIRCUIT_BREAKER",
                 extra={
                     "processed_count": processed_symbols,
@@ -9377,7 +9377,7 @@ def _process_symbols(
 
         pos = state.position_cache.get(symbol, 0)
         if pos < 0 and close_shorts:
-            logger.info(
+            _log.info(
                 "SKIP_SHORT_CLOSE_QUEUED | symbol=%s qty=%s",
                 symbol,
                 -pos,
@@ -9389,11 +9389,11 @@ def _process_symbols(
             skipped_duplicates.inc()
             continue
         if pos > 0:
-            logger.info("SKIP_HELD_POSITION | already long, skipping close")
+            _log.info("SKIP_HELD_POSITION | already long, skipping close")
             skipped_duplicates.inc()
             continue
         if pos < 0:
-            logger.info(
+            _log.info(
                 "SHORT_CLOSE_QUEUED | symbol=%s  qty=%d",
                 symbol,
                 abs(pos),
@@ -9401,7 +9401,7 @@ def _process_symbols(
             try:
                 submit_order(ctx, symbol, abs(pos), "buy")
             except Exception as exc:
-                logger.warning("SHORT_CLOSE_FAIL | %s %s", symbol, exc)
+                _log.warning("SHORT_CLOSE_FAIL | %s %s", symbol, exc)
             continue
         # AI-AGENT-REF: Add thread-safe locking for trade cooldown access
         with trade_cooldowns_lock:
@@ -9419,27 +9419,27 @@ def _process_symbols(
 
     def process_symbol(symbol: str) -> None:
         try:
-            logger.info(f"PROCESSING_SYMBOL | symbol={symbol}")
+            _log.info(f"PROCESSING_SYMBOL | symbol={symbol}")
             if not is_market_open():
-                logger.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
+                _log.info("MARKET_CLOSED_SKIP_SYMBOL", extra={"symbol": symbol})
                 return
             try:
                 price_df = fetch_minute_df_safe(symbol)
             except DataFetchError:
-                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+                _log.info(f"SKIP_NO_PRICE_DATA | {symbol}")
                 return
             # AI-AGENT-REF: record raw row count before validation
             row_counts[symbol] = len(price_df)
-            logger.info(f"FETCHED_ROWS | {symbol} rows={len(price_df)}")
+            _log.info(f"FETCHED_ROWS | {symbol} rows={len(price_df)}")
             if price_df.empty or "close" not in price_df.columns:
-                logger.info(f"SKIP_NO_PRICE_DATA | {symbol}")
+                _log.info(f"SKIP_NO_PRICE_DATA | {symbol}")
                 return
             if symbol in state.position_cache:
                 return  # AI-AGENT-REF: skip symbol with open position
             processed.append(symbol)
             _safe_trade(ctx, state, symbol, current_cash, model, regime_ok)
         except Exception as exc:
-            logger.error(f"Error processing {symbol}: {exc}", exc_info=True)
+            _log.error(f"Error processing {symbol}: {exc}", exc_info=True)
 
     futures = [prediction_executor.submit(process_symbol, s) for s in symbols]
     for f in futures:
@@ -9449,7 +9449,7 @@ def _process_symbols(
 
 def _log_loop_heartbeat(loop_id: str, start: float) -> None:
     duration = time.monotonic() - start
-    logger.info(
+    _log.info(
         "HEARTBEAT",
         extra={
             "loop_id": loop_id,
@@ -9461,7 +9461,7 @@ def _log_loop_heartbeat(loop_id: str, start: float) -> None:
 
 def _send_heartbeat() -> None:
     """Lightweight heartbeat when halted."""
-    logger.info(
+    _log.info(
         "HEARTBEAT_HALTED",
         extra={"timestamp": utc_now_iso()},  # AI-AGENT-REF: Use UTC timestamp utility
     )
@@ -9476,22 +9476,22 @@ def manage_position_risk(ctx: BotContext, position) -> None:
         try:
             price_df = fetch_minute_df_safe(symbol)
         except DataFetchError:
-            logger.critical(f"No minute data for {symbol}, skipping.")
+            _log.critical(f"No minute data for {symbol}, skipping.")
             return
-        logger.debug(f"Latest rows for {symbol}:\n{price_df.tail(3)}")
+        _log.debug(f"Latest rows for {symbol}:\n{price_df.tail(3)}")
         if "close" in price_df.columns:
             price_series = price_df["close"].dropna()
             if not price_series.empty:
                 price = price_series.iloc[-1]
-                logger.debug(f"Final extracted price for {symbol}: {price}")
+                _log.debug(f"Final extracted price for {symbol}: {price}")
             else:
-                logger.critical(f"No valid close prices found for {symbol}, skipping.")
+                _log.critical(f"No valid close prices found for {symbol}, skipping.")
                 price = 0.0
         else:
-            logger.critical(f"Close column missing for {symbol}, skipping.")
+            _log.critical(f"Close column missing for {symbol}, skipping.")
             price = 0.0
         if price <= 0 or pd.isna(price):
-            logger.critical(f"Invalid price computed for {symbol}: {price}")
+            _log.critical(f"Invalid price computed for {symbol}: {price}")
             return
         side = "long" if int(position.qty) > 0 else "short"
         if side == "long":
@@ -9513,11 +9513,11 @@ def manage_position_risk(ctx: BotContext, position) -> None:
             and ml_conf > S.ml_confidence_threshold
         ) and side == "long" and price > vwap and pnl > 0.02:
             pyramid_add_position(ctx, symbol, S.pyramid_levels["low"], side)
-        logger.info(
+        _log.info(
             f"HALT_MANAGE {symbol} stop={new_stop:.2f} vwap={vwap:.2f} vol={volume_factor:.2f} ml={ml_conf:.2f}"
         )
     except Exception as exc:  # pragma: no cover - handle edge cases
-        logger.warning(f"manage_position_risk failed for {symbol}: {exc}")
+        _log.warning(f"manage_position_risk failed for {symbol}: {exc}")
 
 
 def pyramid_add_position(
@@ -9526,7 +9526,7 @@ def pyramid_add_position(
     current_qty = _current_position_qty(ctx, symbol)
     add_qty = max(1, int(abs(current_qty) * fraction))
     submit_order(ctx, symbol, add_qty, "buy" if side == "long" else "sell")
-    logger.info("PYRAMID_ADD", extra={"symbol": symbol, "qty": add_qty, "side": side})
+    _log.info("PYRAMID_ADD", extra={"symbol": symbol, "qty": add_qty, "side": side})
 
 
 def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
@@ -9534,7 +9534,7 @@ def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
     reduce_qty = max(1, int(abs(current_qty) * fraction))
     side = "sell" if current_qty > 0 else "buy"
     submit_order(ctx, symbol, reduce_qty, side)
-    logger.info("REDUCE_POSITION", extra={"symbol": symbol, "qty": reduce_qty})
+    _log.info("REDUCE_POSITION", extra={"symbol": symbol, "qty": reduce_qty})
 
 
 @memory_profile  # AI-AGENT-REF: Monitor memory usage of main trading function
@@ -9672,20 +9672,20 @@ def run_all_trades_worker(state: BotState, model) -> None:
     loop_id = str(uuid.uuid4())
     acquired = run_lock.acquire(blocking=False)
     if not acquired:
-        logger.info("RUN_ALL_TRADES_SKIPPED_OVERLAP")
+        _log.info("RUN_ALL_TRADES_SKIPPED_OVERLAP")
         return
     try:  # AI-AGENT-REF: ensure lock released on every exit
         try:
             ctx.risk_engine.wait_for_exposure_update(0.5)
         except Exception as e:
             # Risk engine update failed - log warning but continue
-            logger.warning("Risk engine exposure update failed: %s", e)
+            _log.warning("Risk engine exposure update failed: %s", e)
         if not hasattr(state, "trade_cooldowns"):
             state.trade_cooldowns = {}
         if not hasattr(state, "last_trade_direction"):
             state.last_trade_direction = {}
         if state.running:
-            logger.warning(
+            _log.warning(
                 "RUN_ALL_TRADES_SKIPPED_OVERLAP",
                 extra={"last_duration": getattr(state, "last_loop_duration", 0.0)},
             )
@@ -9698,10 +9698,10 @@ def run_all_trades_worker(state: BotState, model) -> None:
             state.last_run_at
             and (now - state.last_run_at).total_seconds() < RUN_INTERVAL_SECONDS
         ):
-            logger.warning("RUN_ALL_TRADES_SKIPPED_RECENT")
+            _log.warning("RUN_ALL_TRADES_SKIPPED_RECENT")
             return
         if not is_market_open():
-            logger.info("MARKET_CLOSED_NO_FETCH")
+            _log.info("MARKET_CLOSED_NO_FETCH")
             return  # FIXED: skip work when market closed
         state.pdt_blocked = check_pdt_rule(ctx)
         if state.pdt_blocked:
@@ -9714,22 +9714,22 @@ def run_all_trades_worker(state: BotState, model) -> None:
             try:
                 open_orders = ctx.api.list_orders(status="open")
             except Exception as exc:  # pragma: no cover - network issues
-                logger.debug(f"order check failed: {exc}")
+                _log.debug(f"order check failed: {exc}")
                 open_orders = []
             if any(o.status in ("new", "pending_new") for o in open_orders):
-                logger.warning("Detected pending orders; skipping this trade cycle")
+                _log.warning("Detected pending orders; skipping this trade cycle")
                 return
             if S.verbose:
-                logger.info(
+                _log.info(
                     "RUN_ALL_TRADES_START",
                     extra={"timestamp": utc_now_iso()},
                 )
 
             # Log standardized market fetch heartbeat (configurable)
             if S.log_market_fetch:
-                logger.info("MARKET_FETCH")
+                _log.info("MARKET_FETCH")
             else:
-                logger.debug("MARKET_FETCH")
+                _log.debug("MARKET_FETCH")
 
             current_cash, regime_ok, symbols = _prepare_run(ctx, state)
 
@@ -9740,7 +9740,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     if (
                         memory_stats.get("memory_usage_mb", 0) > 512
                     ):  # If using more than 512MB
-                        logger.warning(
+                        _log.warning(
                             "HIGH_MEMORY_USAGE_DETECTED",
                             extra={
                                 "memory_usage_mb": memory_stats.get(
@@ -9753,10 +9753,10 @@ def run_all_trades_worker(state: BotState, model) -> None:
                         if (
                             memory_stats.get("memory_usage_mb", 0) > 1024
                         ):  # 1GB threshold
-                            logger.critical("EMERGENCY_MEMORY_CLEANUP_TRIGGERED")
+                            _log.critical("EMERGENCY_MEMORY_CLEANUP_TRIGGERED")
                             emergency_memory_cleanup()
                 except Exception as exc:
-                    logger.debug(f"Memory optimization check failed: {exc}")
+                    _log.debug(f"Memory optimization check failed: {exc}")
 
             # AI-AGENT-REF: Update drawdown circuit breaker with current equity
             if ctx.drawdown_circuit_breaker:
@@ -9771,7 +9771,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     status = ctx.drawdown_circuit_breaker.get_status()
 
                     if not trading_allowed:
-                        logger.critical(
+                        _log.critical(
                             "TRADING_HALTED_DRAWDOWN_PROTECTION",
                             extra={
                                 "current_drawdown": status["current_drawdown"],
@@ -9786,11 +9786,11 @@ def run_all_trades_worker(state: BotState, model) -> None:
                             for pos in portfolio:
                                 manage_position_risk(ctx, pos)
                         except Exception as exc:
-                            logger.warning(f"HALT_MANAGE_FAIL: {exc}")
+                            _log.warning(f"HALT_MANAGE_FAIL: {exc}")
                         return
                     else:
                         # Log drawdown status for monitoring
-                        logger.debug(
+                        _log.debug(
                             "DRAWDOWN_STATUS_OK",
                             extra={
                                 "current_drawdown": status["current_drawdown"],
@@ -9799,13 +9799,13 @@ def run_all_trades_worker(state: BotState, model) -> None:
                             },
                         )
                 except Exception as exc:
-                    logger.error(f"Drawdown circuit breaker update failed: {exc}")
+                    _log.error(f"Drawdown circuit breaker update failed: {exc}")
                     # Continue trading but log the error for investigation
 
             # AI-AGENT-REF: honor global halt flag before processing symbols
             if check_halt_flag(ctx):
                 _log_health_diagnostics(ctx, "halt_flag_loop")
-                logger.info(
+                _log.info(
                     "TRADING_HALTED_VIA_FLAG: Managing existing positions only."
                 )
                 try:
@@ -9813,8 +9813,8 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     for pos in portfolio:
                         manage_position_risk(ctx, pos)
                 except Exception as exc:  # pragma: no cover - network issues
-                    logger.warning(f"HALT_MANAGE_FAIL: {exc}")
-                logger.info("HALT_SKIP_NEW_TRADES")
+                    _log.warning(f"HALT_MANAGE_FAIL: {exc}")
+                _log.info("HALT_SKIP_NEW_TRADES")
                 _send_heartbeat()
                 # log summary even when halted
                 try:
@@ -9822,7 +9822,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     cash = float(acct.cash)
                     equity = float(acct.equity)
                     positions = ctx.api.get_all_positions()
-                    logger.debug("Raw Alpaca positions: %s", positions)
+                    _log.debug("Raw Alpaca positions: %s", positions)
                     exposure = (
                         sum(abs(float(p.market_value)) for p in positions)
                         / equity
@@ -9830,10 +9830,10 @@ def run_all_trades_worker(state: BotState, model) -> None:
                         if equity > 0
                         else 0.0
                     )
-                    logger.info(
+                    _log.info(
                         f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
                     )
-                    logger.info(
+                    _log.info(
                         "POSITIONS_DETAIL",
                         extra={
                             "positions": [
@@ -9847,7 +9847,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                             ],
                         },
                     )
-                    logger.info(
+                    _log.info(
                         "WEIGHTS_VS_POSITIONS",
                         extra={
                             "weights": ctx.portfolio_weights,
@@ -9856,7 +9856,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                         },
                     )
                 except Exception as exc:  # pragma: no cover - network issues
-                    logger.warning(f"SUMMARY_FAIL: {exc}")
+                    _log.warning(f"SUMMARY_FAIL: {exc}")
                 return
 
             retries = 3
@@ -9867,7 +9867,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 )
                 if processed:
                     if attempt:
-                        logger.info(
+                        _log.info(
                             "DATA_SOURCE_RETRY_SUCCESS",
                             extra={"attempt": attempt + 1, "symbols": symbols},
                         )
@@ -9881,7 +9881,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     ts = ctx.data_fetcher._minute_timestamps.get(sym)
                     if last_ts is None or (ts and ts > last_ts):
                         last_ts = ts
-                logger.critical(
+                _log.critical(
                     "DATA_SOURCE_EMPTY",
                     extra={
                         "symbols": symbols,
@@ -9890,21 +9890,21 @@ def run_all_trades_worker(state: BotState, model) -> None:
                         "row_counts": row_counts,
                     },
                 )
-                logger.info(
+                _log.info(
                     "DATA_SOURCE_RETRY_FAILED",
                     extra={"attempts": retries, "symbols": symbols},
                 )
                 # AI-AGENT-REF: exit immediately on repeated data failure
                 return
             else:
-                logger.info(
+                _log.info(
                     "DATA_SOURCE_RETRY_FINAL",
                     extra={"success": True, "attempts": attempt + 1},
                 )
 
             skipped = [s for s in symbols if s not in processed]
             if skipped:
-                logger.info(
+                _log.info(
                     "CYCLE_SKIPPED_SUMMARY",
                     extra={"count": len(skipped), "symbols": skipped},
                 )
@@ -9915,7 +9915,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
             else:
                 state.skipped_cycles = 0
             if state.skipped_cycles >= 2:
-                logger.critical(
+                _log.critical(
                     "ALL_SYMBOLS_SKIPPED_TWO_CYCLES",
                     extra={
                         "hint": "Check data provider API keys and entitlements; test data fetch manually from the server; review data fetcher logs",
@@ -9936,8 +9936,8 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 if ctx.execution_engine:
                     ctx.execution_engine.check_trailing_stops()
             except Exception as exc:  # pragma: no cover - safety
-                logger.warning("refresh_positions failed: %s", exc)
-            logger.info(
+                _log.warning("refresh_positions failed: %s", exc)
+            _log.info(
                 f"RUN_ALL_TRADES_COMPLETE | processed={len(row_counts)} symbols, total_rows={sum(row_counts.values())}"
             )
             try:
@@ -9945,7 +9945,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 cash = float(acct.cash)
                 equity = float(acct.equity)
                 positions = ctx.api.get_all_positions()
-                logger.debug("Raw Alpaca positions: %s", positions)
+                _log.debug("Raw Alpaca positions: %s", positions)
                 # ai_trading.csv:9422 - Replace import guard with hard import (required dependencies)
                 from ai_trading import portfolio
                 from ai_trading.utils import portfolio_lock
@@ -9955,16 +9955,16 @@ def run_all_trades_worker(state: BotState, model) -> None:
                             ctx, [p.symbol for p in positions]
                         )
                 except Exception:
-                    logger.warning("weight recompute failed", exc_info=True)
+                    _log.warning("weight recompute failed", exc_info=True)
                 exposure = (
                     sum(abs(float(p.market_value)) for p in positions) / equity * 100
                     if equity > 0
                     else 0.0
                 )
-                logger.info(
+                _log.info(
                     f"Portfolio summary: cash=${cash:.2f}, equity=${equity:.2f}, exposure={exposure:.2f}%, positions={len(positions)}"
                 )
-                logger.info(
+                _log.info(
                     "POSITIONS_DETAIL",
                     extra={
                         "positions": [
@@ -9978,7 +9978,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                         ],
                     },
                 )
-                logger.info(
+                _log.info(
                     "WEIGHTS_VS_POSITIONS",
                     extra={
                         "weights": ctx.portfolio_weights,
@@ -9990,7 +9990,7 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     adaptive_cap = ctx.risk_engine._adaptive_global_cap()
                 except Exception:
                     adaptive_cap = 0.0
-                logger.info(
+                _log.info(
                     "CYCLE SUMMARY: cash=$%.0f equity=$%.0f exposure=%.0f%% positions=%d adaptive_cap=%.1f",
                     cash,
                     equity,
@@ -9999,13 +9999,13 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     adaptive_cap,
                 )
             except Exception as exc:  # pragma: no cover - network issues
-                logger.warning(f"SUMMARY_FAIL: {exc}")
+                _log.warning(f"SUMMARY_FAIL: {exc}")
             try:
                 acct = ctx.api.get_account()
                 # Handle case where account object might not have last_equity attribute
                 last_equity = getattr(acct, "last_equity", acct.equity)
                 pnl = float(acct.equity) - float(last_equity)
-                logger.info(
+                _log.info(
                     "LOOP_PNL",
                     extra={
                         "loop_id": loop_id,
@@ -10014,9 +10014,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     },
                 )
             except Exception as e:
-                logger.warning(f"Failed P&L retrieval: {e}")
+                _log.warning(f"Failed P&L retrieval: {e}")
         except Exception as e:
-            logger.error(f"Exception in trading loop: {e}", exc_info=True)
+            _log.error(f"Exception in trading loop: {e}", exc_info=True)
         finally:
             # Always reset running flag
             state.running = False
@@ -10028,11 +10028,11 @@ def run_all_trades_worker(state: BotState, model) -> None:
                 try:
                     gc_result = optimize_memory()
                     if gc_result.get("objects_collected", 0) > 50:
-                        logger.info(
+                        _log.info(
                             f"Post-cycle GC: {gc_result['objects_collected']} objects collected"
                         )
                 except Exception as e:
-                    logger.warning(f"Memory optimization failed: {e}")
+                    _log.warning(f"Memory optimization failed: {e}")
     finally:
         if acquired:
             run_lock.release()
@@ -10051,7 +10051,7 @@ def schedule_run_all_trades(model):
         )
         t.start()
     else:
-        logger.info("Market closed—skipping run_all_trades.")
+        _log.info("Market closed—skipping run_all_trades.")
 
 
 def schedule_run_all_trades_with_delay(model):
@@ -10063,7 +10063,7 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
     """Initial portfolio rebalancing."""
 
     if ctx.api is None:
-        logger.warning("ctx.api is None - cannot perform initial rebalance")
+        _log.warning("ctx.api is None - cannot perform initial rebalance")
         return
 
     try:
@@ -10075,17 +10075,17 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
         buying_power = float(getattr(acct, "buying_power", cash))
         n = len(symbols)
         if n == 0 or cash <= 0 or buying_power <= 0:
-            logger.info("INITIAL_REBALANCE_NO_SYMBOLS_OR_NO_CASH")
+            _log.info("INITIAL_REBALANCE_NO_SYMBOLS_OR_NO_CASH")
             return
     except Exception as exc:
-        logger.warning("Failed to get account info for initial rebalance: %s", exc)
+        _log.warning("Failed to get account info for initial rebalance: %s", exc)
         return
 
     # Determine current UTC time
     now_utc = datetime.now(UTC)
     # If it’s between 00:00 and 00:15 UTC, daily bars may not be published yet.
     if now_utc.hour == 0 and now_utc.minute < 15:
-        logger.info("INITIAL_REBALANCE: Too early—daily bars not live yet.")
+        _log.info("INITIAL_REBALANCE: Too early—daily bars not live yet.")
     else:
         # Gather all symbols that have a valid, nonzero close
         valid_symbols = []
@@ -10101,7 +10101,7 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
 
         if not valid_symbols:
             log_level = logging.ERROR if in_trading_hours(now_utc) else logging.WARNING
-            logger.log(
+            _log.log(
                 log_level,
                 (
                     "INITIAL_REBALANCE: No valid prices for any symbol—skipping "
@@ -10135,14 +10135,14 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
                         order = submit_order(ctx, sym, qty_to_buy, "buy")
                         # AI-AGENT-REF: confirm order result before logging success
                         if order:
-                            logger.info(f"INITIAL_REBALANCE: Bought {qty_to_buy} {sym}")
+                            _log.info(f"INITIAL_REBALANCE: Bought {qty_to_buy} {sym}")
                             ctx.rebalance_buys[sym] = datetime.now(UTC)
                         else:
-                            logger.error(
+                            _log.error(
                                 f"INITIAL_REBALANCE: Buy failed for {sym}: order not placed"
                             )
                     except Exception as e:
-                        logger.error(
+                        _log.error(
                             f"INITIAL_REBALANCE: Buy failed for {sym}: {repr(e)}"
                         )
                 elif current_qty > target_qty:
@@ -10151,9 +10151,9 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
                         continue
                     try:
                         submit_order(ctx, sym, qty_to_sell, "sell")
-                        logger.info(f"INITIAL_REBALANCE: Sold {qty_to_sell} {sym}")
+                        _log.info(f"INITIAL_REBALANCE: Sold {qty_to_sell} {sym}")
                     except Exception as e:
-                        logger.error(
+                        _log.error(
                             f"INITIAL_REBALANCE: Sell failed for {sym}: {repr(e)}"
                         )
 
@@ -10165,7 +10165,7 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
         state.short_positions = {s for s, q in state.position_cache.items() if q < 0}
     except Exception as e:
         # Failed to refresh position cache - log error but continue
-        logger.error("Failed to refresh position cache after rebalance: %s", e)
+        _log.error("Failed to refresh position cache after rebalance: %s", e)
         # Initialize empty cache to prevent AttributeError
         state.position_cache = {}
         state.long_positions = set()
@@ -10173,21 +10173,21 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
 
 
 def main() -> None:
-    logger.info("Main trading bot starting...")
+    _log.info("Main trading bot starting...")
 
     # AI-AGENT-REF: Initialize runtime config and validate credentials
     try:
         init_runtime_config()
     except RuntimeError as e:
-        logger.critical("Runtime configuration failed: %s", e)
+        _log.critical("Runtime configuration failed: %s", e)
         sys.exit(2)
 
     # AI-AGENT-REF: Validate Alpaca credentials using settings singleton
     cfg = get_settings()
     api_key, api_secret = cfg.get_alpaca_keys()
     if not api_key or not api_secret:
-        logger.critical("Alpaca credentials missing – aborting startup")
-        logger.critical(
+        _log.critical("Alpaca credentials missing – aborting startup")
+        _log.critical(
             "Please set ALPACA_API_KEY/APCA_API_KEY_ID and ALPACA_SECRET_KEY/APCA_API_SECRET_KEY"
         )
         sys.exit(2)
@@ -10208,11 +10208,11 @@ def main() -> None:
 
         pm = ProcessManager()
         if not pm.ensure_single_instance():
-            logger.error("Another trading bot instance is already running. Exiting.")
+            _log.error("Another trading bot instance is already running. Exiting.")
             sys.exit(1)
-        logger.info("Single instance lock acquired successfully")
+        _log.info("Single instance lock acquired successfully")
     except Exception as e:
-        logger.error("Failed to acquire single instance lock: %s", e)
+        _log.error("Failed to acquire single instance lock: %s", e)
         sys.exit(1)
 
     # AI-AGENT-REF: Add comprehensive health check on startup
@@ -10221,10 +10221,10 @@ def main() -> None:
 
         log_health_summary()
     except Exception as e:
-        logger.warning("Health check failed on startup: %s", e)
+        _log.warning("Health check failed on startup: %s", e)
 
     def _handle_term(signum, frame):
-        logger.info("PROCESS_TERMINATION", extra={"signal": signum})
+        _log.info("PROCESS_TERMINATION", extra={"signal": signum})
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, _handle_term)
@@ -10242,7 +10242,7 @@ def main() -> None:
         params.update(state.mode_obj.get_config())
 
     try:
-        logger.info(">>> BOT __main__ ENTERED – starting up")
+        _log.info(">>> BOT __main__ ENTERED – starting up")
 
         # --- Market hours check ---
 
@@ -10251,7 +10251,7 @@ def main() -> None:
         # timestamp directly to avoid "Cannot localize tz-aware Timestamp".
         now_utc = pd.Timestamp.now(tz="UTC")
         if is_holiday(now_utc):
-            logger.warning(
+            _log.warning(
                 f"No NYSE market schedule for {now_utc.date()}; skipping market open/close check."
             )
             market_open = False
@@ -10259,19 +10259,19 @@ def main() -> None:
             try:
                 market_open = NY.open_at_time(get_market_schedule(), now_utc)
             except ValueError as e:
-                logger.warning(
+                _log.warning(
                     f"Invalid schedule time {now_utc}: {e}; assuming market closed"
                 )
                 market_open = False
 
         sleep_minutes = 60
         if not market_open:
-            logger.info("Market is closed. Sleeping for %d minutes.", sleep_minutes)
+            _log.info("Market is closed. Sleeping for %d minutes.", sleep_minutes)
             time.sleep(sleep_minutes * 60)
             # Return control to outer loop instead of exiting
             return
 
-        logger.info("Market is open. Starting trade cycle.")
+        _log.info("Market is open. Starting trade cycle.")
 
         # Start Prometheus metrics server on an available port
         start_metrics_server(9200)
@@ -10317,22 +10317,22 @@ def main() -> None:
                 from ai_trading.meta_learning import retrain_meta_learner as _tmp_retrain
             else:
                 globals()["retrain_meta_learner"] = None
-                logger.info("Daily retraining disabled: sklearn not enabled")
+                _log.info("Daily retraining disabled: sklearn not enabled")
         else:
-            logger.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
+            _log.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
 
         try:
             model = load_model(MODEL_PATH)
         except Exception as e:
-            logger.fatal("Could not load model", exc_info=e)
+            _log.fatal("Could not load model", exc_info=e)
             sys.exit(1)
-        logger.info("BOT_LAUNCHED")
+        _log.info("BOT_LAUNCHED")
         cancel_all_open_orders(ctx)
         audit_positions(ctx)
         try:
             initial_list = load_tickers(TICKERS_FILE)
             summary = pre_trade_health_check(ctx, initial_list)
-            logger.info("STARTUP_HEALTH", extra=summary)
+            _log.info("STARTUP_HEALTH", extra=summary)
             failures = (
                 summary["failures"]
                 or summary["insufficient_rows"]
@@ -10348,7 +10348,7 @@ def main() -> None:
             )
 
             if stale_data and allow_stale_on_startup:
-                logger.warning(
+                _log.warning(
                     "BYPASS_STALE_DATA_STARTUP: Allowing trading with stale data for initial deployment",
                     extra={"stale_symbols": stale_data, "count": len(stale_data)},
                 )
@@ -10357,10 +10357,10 @@ def main() -> None:
 
             health_ok = not failures
             if not health_ok:
-                logger.error("HEALTH_CHECK_FAILED", extra=summary)
+                _log.error("HEALTH_CHECK_FAILED", extra=summary)
                 sys.exit(1)
             else:
-                logger.info("HEALTH_OK")
+                _log.info("HEALTH_OK")
             # Prefetch minute history so health check rows are available
             for sym in initial_list:
                 try:
@@ -10368,11 +10368,11 @@ def main() -> None:
                         ctx, sym, lookback_minutes=S.min_health_rows
                     )
                 except Exception as exc:
-                    logger.warning(
+                    _log.warning(
                         "Initial minute prefetch failed for %s: %s", sym, exc
                     )
         except Exception as exc:
-            logger.error(f"startup health check failed: {exc}")
+            _log.error(f"startup health check failed: {exc}")
             sys.exit(1)
 
         # ─── WARM-CACHE SENTIMENT FOR ALL TICKERS ─────────────────────────────────────
@@ -10390,7 +10390,7 @@ def main() -> None:
                 initial_rebalance(ctx, universe)
                 ctx._rebalance_done = True
         except Exception as e:
-            logger.warning(f"[REBALANCE] aborted due to error: {e}")
+            _log.warning(f"[REBALANCE] aborted due to error: {e}")
 
         # Recurring jobs
         def gather_minute_data_with_delay():
@@ -10399,7 +10399,7 @@ def main() -> None:
                 time.sleep(S.scheduler_sleep_seconds)
                 schedule_run_all_trades(model)
             except Exception as e:
-                logger.exception(f"gather_minute_data_with_delay failed: {e}")
+                _log.exception(f"gather_minute_data_with_delay failed: {e}")
 
         schedule.every(1).minutes.do(
             lambda: Thread(target=gather_minute_data_with_delay, daemon=True).start()
@@ -10409,7 +10409,7 @@ def main() -> None:
         try:
             gather_minute_data_with_delay()
         except Exception as e:
-            logger.exception("Initial data fetch failed", exc_info=e)
+            _log.exception("Initial data fetch failed", exc_info=e)
         schedule.every(1).minutes.do(
             lambda: Thread(
                 target=validate_open_orders, args=(ctx,), daemon=True
@@ -10458,24 +10458,24 @@ def main() -> None:
         ).start()
 
     except Exception as e:
-        logger.exception(f"Fatal error in main: {e}")
+        _log.exception(f"Fatal error in main: {e}")
         raise
 
 
 @profile
 def prepare_indicators_simple(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
-        logger.error("Input dataframe is None or empty in prepare_indicators.")
+        _log.error("Input dataframe is None or empty in prepare_indicators.")
         raise ValueError("Input dataframe is None or empty")
 
     try:
         macd_line, signal_line, hist = simple_calculate_macd(df["close"])
     except Exception as e:
-        logger.error(f"MACD calculation failed: {e}", exc_info=True)
+        _log.error(f"MACD calculation failed: {e}", exc_info=True)
         raise ValueError("MACD calculation failed") from e
 
     if macd_line is None or signal_line is None or hist is None:
-        logger.error("MACD returned None")
+        _log.error("MACD returned None")
         raise ValueError("MACD returned None")
 
     df["macd_line"] = macd_line
@@ -10492,7 +10492,7 @@ def simple_calculate_macd(
     signal: int = 9,
 ) -> tuple[pd.Series | None, pd.Series | None, pd.Series | None]:
     if close_prices is None or close_prices.empty:
-        logger.warning("Empty or None close_prices passed to calculate_macd.")
+        _log.warning("Empty or None close_prices passed to calculate_macd.")
         return None, None, None
 
     try:
@@ -10503,7 +10503,7 @@ def simple_calculate_macd(
         histogram = macd_line - signal_line
         return macd_line, signal_line, histogram
     except Exception as e:
-        logger.error(f"Exception in MACD calculation: {e}", exc_info=True)
+        _log.error(f"Exception in MACD calculation: {e}", exc_info=True)
         return None, None, None
 
 
@@ -10519,7 +10519,7 @@ def compute_ichimoku(
 
                 ich_func = ichimoku_fallback
             except Exception:  # pragma: no cover
-                logger.warning("ichimoku indicators not available")
+                _log.warning("ichimoku indicators not available")
                 ich_func = None
 
         if ich_func:
@@ -10558,7 +10558,7 @@ def ichimoku_indicator(
 
                 ich_func = ichimoku_fallback
             except Exception:  # pragma: no cover
-                logger.warning("ichimoku indicators not available")
+                _log.warning("ichimoku indicators not available")
                 ich_func = None
 
         if ich_func:
@@ -10615,7 +10615,7 @@ def _check_trade_frequency_limits(
 
     # Check hourly limits
     if total_trades_hour >= MAX_TRADES_PER_HOUR:
-        logger.warning(
+        _log.warning(
             "FREQUENCY_LIMIT_HOURLY_EXCEEDED",
             extra={
                 "symbol": symbol,
@@ -10628,7 +10628,7 @@ def _check_trade_frequency_limits(
 
     # Check daily limits
     if total_trades_day >= MAX_TRADES_PER_DAY:
-        logger.warning(
+        _log.warning(
             "FREQUENCY_LIMIT_DAILY_EXCEEDED",
             extra={
                 "symbol": symbol,
@@ -10644,7 +10644,7 @@ def _check_trade_frequency_limits(
         1, MAX_TRADES_PER_HOUR // 10
     )  # 10% of hourly limit per symbol
     if symbol_trades_hour >= symbol_hourly_limit:
-        logger.info(
+        _log.info(
             "FREQUENCY_LIMIT_SYMBOL_HOURLY",
             extra={
                 "symbol": symbol,
@@ -10675,7 +10675,7 @@ def _record_trade_in_frequency_tracker(
     hour_ago = timestamp - timedelta(hours=1)
     recent_trades = len([ts for _, ts in state.trade_history if ts > hour_ago])
 
-    logger.debug(
+    _log.debug(
         "TRADE_FREQUENCY_UPDATED",
         extra={
             "symbol": symbol,
@@ -10693,7 +10693,7 @@ def get_latest_price(symbol: str):
             raise ValueError(f"Price returned None for symbol {symbol}")
         return price
     except Exception as e:
-        logger.error("Failed to get latest price for %s: %s", symbol, e, exc_info=True)
+        _log.error("Failed to get latest price for %s: %s", symbol, e, exc_info=True)
         return None
 
 
@@ -10725,7 +10725,7 @@ def execute_trades(ctx, signals: pd.Series) -> list[tuple[str, str]]:
                 api.submit_order(symbol, 1, side)
             except Exception as e:
                 # Order submission failed - log error and add to failed orders
-                logger.error(
+                _log.error(
                     "Failed to submit test order for %s %s: %s", symbol, side, e
                 )
         orders.append((symbol, side))
@@ -10758,7 +10758,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        logger.exception("Fatal error in main: %s", exc)
+        _log.exception("Fatal error in main: %s", exc)
         raise
 
     import time
@@ -10769,5 +10769,5 @@ if __name__ == "__main__":
         try:
             schedule.run_pending()
         except Exception as exc:
-            logger.exception("Scheduler loop error: %s", exc)
+            _log.exception("Scheduler loop error: %s", exc)
         time.sleep(S.scheduler_sleep_seconds)
