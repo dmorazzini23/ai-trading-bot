@@ -37,10 +37,10 @@ def _load_engine():
             _bot_engine = run_all_trades_worker
             _bot_state_class = BotState
             if _bot_engine and _bot_state_class:
-                # Avoid duplicate info spam on repeated lazy loads
-                if not getattr(run_cycle, "_engine_loaded_logged", False):
-                    log.info("Bot engine components loaded successfully")
-                    run_cycle._engine_loaded_logged = True
+                # Use emit-once for startup banners
+                from ai_trading.core.bot_engine import _emit_once
+                import logging
+                _emit_once(log, "engine_components_loaded", logging.INFO, "Bot engine components loaded successfully")
         except Exception as e:
             log.error("Failed to load bot engine components: %s", e)
             raise RuntimeError(f"Cannot load bot engine: {e}")

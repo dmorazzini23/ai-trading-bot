@@ -29,6 +29,20 @@ _log = logging.getLogger(__name__)
 # Import emit-once logger for startup banners
 from ai_trading.logging import logger_once
 
+# AI-AGENT-REF: emit-once helper and readiness gate for startup/runtime coordination
+_EMITTED_KEYS: set[str] = set()
+def _emit_once(logger: logging.Logger, key: str, level: int, msg: str) -> None:
+    """Emit log message only once per key."""
+    if key in _EMITTED_KEYS:
+        return
+    _EMITTED_KEYS.add(key)
+    logger.log(level, msg)
+
+_RUNTIME_READY: bool = False
+def is_runtime_ready() -> bool:
+    """Check if runtime context is fully initialized."""
+    return _RUNTIME_READY
+
 def _initialize_bot_context_post_setup(ctx: Any) -> None:
     """
     Optional, non-fatal finishing steps after LazyBotContext builds its services.
@@ -174,7 +188,7 @@ def ensure_portfolio_weights(ctx, symbols):
 
 
 # Log Alpaca availability on startup (only once per process)
-logger_once.info("Alpaca SDK is available")
+_emit_once(logger, "alpaca_available", logging.INFO, "Alpaca SDK is available")
 # Mirror config to maintain historical constant name
 MIN_CYCLE = S.scheduler_sleep_seconds
 # AI-AGENT-REF: guard environment validation with explicit error logging
@@ -186,7 +200,7 @@ try:
     # Only import config module, don't validate at import time
     from ai_trading.config.settings import get_settings
 
-    logger.info("Config settings loaded, validation deferred to runtime")
+    _emit_once(logger, "config_loaded", logging.INFO, "Config settings loaded, validation deferred to runtime")
 except Exception as e:
     logger.warning("Config settings import failed: %s", e)
 
@@ -700,7 +714,7 @@ from alpaca_trade_api.rest import (
     APIError,  # kept for legacy exception compatibility
 )
 
-logger.info("Real Alpaca Trading SDK imported successfully")
+_emit_once(logger, "real_alpaca_imported", logging.INFO, "Real Alpaca Trading SDK imported successfully")
 logger.debug("Production trading ready with Python %s", sys.version)
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
@@ -1253,7 +1267,23 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     # AI-AGENT-REF: raise on empty DataFrame
     now_utc = datetime.now(UTC)
     start_dt = now_utc - timedelta(days=1)
-    df = get_minute_df(symbol, start_dt, now_utc)
+    
+    # AI-AGENT-REF: Cache wrapper (optional around fetch)
+    if hasattr(S, 'market_cache_enabled') and S.market_cache_enabled:
+        try:
+            from ai_trading.market.cache import get_or_load as _get_or_load
+            cache_key = f"minute:{symbol}:{start_dt.isoformat()}"
+            df = _get_or_load(
+                key=cache_key, 
+                loader=lambda: get_minute_df(symbol, start_dt, now_utc), 
+                ttl=getattr(S, 'market_cache_ttl', 900)
+            )
+        except Exception as e:
+            _log.debug("Cache layer unavailable/failed: %s", e)
+            df = get_minute_df(symbol, start_dt, now_utc)
+    else:
+        df = get_minute_df(symbol, start_dt, now_utc)
+    
     if df.empty:
         logger.error(f"Fetch failed: empty DataFrame for {symbol}")
         raise DataFetchError(f"No data for {symbol}")
@@ -1377,7 +1407,7 @@ def ensure_finbert(cfg=None):
             mdl = transformers.AutoModelForSequenceClassification.from_pretrained("yiyanghkust/finbert-tone")
             mdl.eval()
         _finbert_tokenizer, _finbert_model = tok, mdl
-        logger_once.info("FinBERT loaded successfully")
+        _emit_once(_log, "finbert_loaded", logging.INFO, "FinBERT loaded successfully")
         return _finbert_tokenizer, _finbert_model
     except Exception as e:
         logger.error("FinBERT lazy-load failed: %s", e)
@@ -2000,12 +2030,8 @@ def validate_trading_parameters():
         logger.error("Invalid BUY_THRESHOLD %s, using default 0.2", BUY_THRESHOLD)
         BUY_THRESHOLD = 0.2
 
-    logger.info(
-        "Trading parameters validated: CAPITAL_CAP=%.3f, DOLLAR_RISK_LIMIT=%.3f, MAX_POSITION_SIZE=%d",
-        CAPITAL_CAP,
-        DOLLAR_RISK_LIMIT,
-        MAX_POSITION_SIZE,
-    )
+    _emit_once(logger, "params_validated", logging.INFO, 
+               f"Trading parameters validated: CAPITAL_CAP={CAPITAL_CAP:.3f}, DOLLAR_RISK_LIMIT={DOLLAR_RISK_LIMIT:.3f}, MAX_POSITION_SIZE={MAX_POSITION_SIZE}")
 
 
 # AI-AGENT-REF: Defer parameter validation in testing environments to prevent import blocking
@@ -3689,18 +3715,28 @@ from ai_trading.utils.imports import (
 _log = logging.getLogger(__name__)
 
 def get_risk_engine():
+    """Get risk engine with fallback to RiskManager from ai_trading.risk.manager."""
     global risk_engine
     if risk_engine is None:
         cls = resolve_risk_engine_cls()
         if cls is None:
-            _log.error("RiskEngine not found in ai_trading.risk_engine or scripts.risk_engine; using no-op fallback.")
-            class RiskEngine:  # minimal stub to keep service alive
-                def __init__(self, *args, **kwargs):
-                    pass
-                def assess(self, *args, **kwargs):
-                    return {"risk": "unknown", "score": 0.0}
-            risk_engine = RiskEngine()
+            try:
+                from ai_trading.risk.manager import RiskManager as _RM  # in-package fallback
+                _emit_once(_log, "risk_engine_fallback", logging.INFO, "Risk engine: RiskManager (in-package fallback)")
+                risk_engine = _RM()
+            except Exception as e:
+                _log.warning("No RiskEngine available: %s", e)
+                # minimal stub to keep service alive
+                class RiskEngine:  
+                    def __init__(self, *args, **kwargs):
+                        pass
+                    def assess(self, *args, **kwargs):
+                        return {"risk": "unknown", "score": 0.0}
+                    def update_exposure(self, *args, **kwargs):
+                        pass
+                risk_engine = RiskEngine()
         else:
+            _emit_once(_log, "risk_engine_resolved", logging.INFO, f"Risk engine: {cls.__name__}")
             risk_engine = cls()
     return risk_engine
 
@@ -3984,6 +4020,10 @@ class LazyBotContext:
 
         _ctx = self._context
         self._initialized = True
+        
+        # AI-AGENT-REF: Mark runtime as ready after context is fully initialized
+        global _RUNTIME_READY
+        _RUNTIME_READY = True
 
     def __setattr__(self, name, value):
         """Delegate attribute setting to the underlying context."""
@@ -4102,8 +4142,8 @@ def get_ctx():
 
 # Central place to acquire the runtime context from the lazy singleton
 def _get_runtime_context_or_none():
+    """Get runtime context safely, returning None if not ready."""
     try:
-        # If LazyBotContext is the accessor we standardized on:
         lbc = get_ctx()
         lbc._ensure_initialized()
         return lbc._context
@@ -4112,33 +4152,67 @@ def _get_runtime_context_or_none():
         return None
 
 
-def _update_risk_engine_exposure():
+def _emit_periodic_metrics():
     """
-    Called by the scheduler/loop. Must not assume module-scope ctx.
+    Emit periodic metrics if enabled and runtime is ready.
+    
+    AI-AGENT-REF: Periodic lightweight metrics emission via existing metrics_logger.
     """
+    if not hasattr(S, 'metrics_enabled') or not S.metrics_enabled:
+        return
+        
+    if not is_runtime_ready():
+        _log.debug("Skipping metrics emission: runtime not ready")
+        return
+        
     runtime = _get_runtime_context_or_none()
     if runtime is None:
         return
+        
+    try:
+        from ai_trading.monitoring import metrics as _metrics
+        account = getattr(runtime, 'api', None)
+        if account:
+            account_obj = account.get_account()
+            positions = account.get_all_positions()
+            _metrics.emit_account_health(account_obj, positions)
+    except Exception as e:
+        _log.debug("Metrics emission failed: %s", e)
+
+
+def _update_risk_engine_exposure():
+    """
+    Called by the scheduler/loop with runtime readiness gate.
+    
+    AI-AGENT-REF: Enhanced with readiness gate to prevent early context access warnings.
+    """
+    if not is_runtime_ready():
+        _log.debug("Skipping exposure update: runtime not ready")
+        return
+        
+    runtime = _get_runtime_context_or_none()
+    if runtime is None:
+        return
+        
     try:
         re = getattr(runtime, "risk_engine", None)
-        if re:
-            # Support both styles: update_exposure(context) or update_exposure()
-            try:
-                sig = inspect.signature(re.update_exposure)
-                if len(sig.parameters) >= 1:
-                    re.update_exposure(runtime)
-                else:
-                    # Back-compat: older engines expect a global; set attribute for the call
-                    setattr(re, "ctx", runtime)
-                    re.update_exposure()
-            except NameError as e:
-                _log.debug("Risk engine exposure update failed (NameError): %s", e)
-            except Exception as e:
-                _log.debug("Risk engine exposure update failed: %s", e)
-        else:
+        if not re:
             _log.debug("No risk_engine on runtime context; skipping exposure update.")
+            return
+            
+        try:
+            sig = inspect.signature(re.update_exposure)
+            if len(sig.parameters) >= 1:
+                re.update_exposure(runtime)
+            else:
+                setattr(re, "ctx", runtime)
+                re.update_exposure()
+        except NameError as e:
+            _log.warning("Risk engine exposure update failed (NameError): %s", e)
+        except Exception as e:
+            _log.warning("Risk engine exposure update failed: %s", e)
     except Exception as e:
-        _log.debug("Risk engine exposure update failed: %s", e)
+        _log.warning("Risk engine exposure update failed: %s", e)
 
 
 def _initialize_bot_context_post_setup_legacy(ctx):
@@ -5655,6 +5729,19 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
         )
         raise RuntimeError("Execution engine not initialized. Cannot execute orders.")
 
+    # AI-AGENT-REF: Liquidity checks before order submission (gated by flag)
+    if hasattr(S, 'liquidity_checks_enabled') and S.liquidity_checks_enabled:
+        try:
+            from ai_trading.execution.liquidity import LiquidityManager
+            lm = LiquidityManager()
+            lm.pre_trade_check({
+                'symbol': symbol,
+                'qty': qty, 
+                'side': side
+            }, getattr(ctx, 'market_data', None))
+        except Exception as e:
+            _log.warning("Liquidity checks failed open-loop: %s", e)
+
     try:
         return _exec_engine.execute_order(symbol, qty, side)
     except Exception as e:
@@ -6606,6 +6693,23 @@ def _fetch_feature_data(
         return raw_df, pd.DataFrame(), True
 
     df = raw_df.copy()
+    
+    # AI-AGENT-REF: Data sanitize integration (gated by flag)
+    if hasattr(S, 'data_sanitize_enabled') and S.data_sanitize_enabled:
+        try:
+            from ai_trading.data.sanitize import clean as _clean
+            df = _clean(df)
+        except Exception as e:
+            _log.warning("Data sanitize failed: %s", e)
+
+    # AI-AGENT-REF: Corporate actions adjustment (gated by flag)
+    if hasattr(S, 'corp_actions_enabled') and S.corp_actions_enabled:
+        try:
+            from ai_trading.data.corp_actions import adjust as _adjust
+            df = _adjust(df, symbol)
+        except Exception as e:
+            _log.warning("Corp actions adjust failed: %s", e)
+    
     # AI-AGENT-REF: log initial dataframe and monitor row drops
     logger.debug(f"Initial tail data for {symbol}:\n{df.tail(5)}")
     initial_len = len(df)
@@ -6763,6 +6867,19 @@ def _enter_long(
             target_weight = min(confidence_weight, 0.10)  # Conservative 10% fallback
 
     raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
+
+    # AI-AGENT-REF: Position sizing integration (gated by flag)
+    if hasattr(S, 'sizing_enabled') and S.sizing_enabled:
+        try:
+            from ai_trading.portfolio import sizing as _sizing
+            account_equity = float(ctx.api.get_account().equity) if ctx.api else balance
+            optimized_qty = _sizing.position_size(symbol, final_score, account_equity, getattr(S, 'risk_level', 'moderate'))
+            optimized_qty = min(optimized_qty, getattr(S, 'max_position_size', 1000))
+            if optimized_qty > 0:
+                raw_qty = optimized_qty
+                _log.debug("Sizing decided qty=%s for %s", raw_qty, symbol)
+        except Exception as e:
+            _log.warning("Sizing failed; falling back to default sizing: %s", e)
 
     # AI-AGENT-REF: Fix zero quantity calculations - ensure minimum position size when cash available
     if raw_qty is None or not np.isfinite(raw_qty) or raw_qty <= 0:
@@ -10303,6 +10420,10 @@ def main() -> None:
         )
         schedule.every(1).minutes.do(
             lambda: Thread(target=_update_risk_engine_exposure, daemon=True).start()
+        )
+        # AI-AGENT-REF: Periodic metrics emission (gated by flag)
+        schedule.every(5).minutes.do(
+            lambda: Thread(target=_emit_periodic_metrics, daemon=True).start()
         )
         schedule.every(6).hours.do(
             lambda: Thread(target=update_signal_weights, daemon=True).start()
