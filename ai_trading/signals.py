@@ -25,6 +25,9 @@ from hmmlearn.hmm import GaussianHMM
 # Import indicators
 from ai_trading.indicators import atr, mean_reversion_zscore, rsi
 
+# Import settings for configuration
+from ai_trading.config import get_settings
+
 # Cache the last computed signal matrix to avoid recomputation
 _LAST_SIGNAL_BAR = None
 _LAST_SIGNAL_MATRIX = None
@@ -61,39 +64,23 @@ def rolling_mean(arr, window: int):
 logger = logging.getLogger(__name__)
 
 # AI-AGENT-REF: Portfolio-level optimization integration
-try:
-    from transaction_cost_calculator import (
-        TradeType,
-        TransactionCostCalculator,
-        create_transaction_cost_calculator,
-    )
+from scripts.transaction_cost_calculator import (
+    TradeType,
+    TransactionCostCalculator,
+    create_transaction_cost_calculator,
+)
 
-    from ai_trading.portfolio import (
-        PortfolioDecision,
-        PortfolioOptimizer,
-        create_portfolio_optimizer,
-    )
-    from ai_trading.strategies.regime_detector import (
-        RegimeDetector,
-        create_regime_detector,
-    )
+from ai_trading.portfolio import (
+    PortfolioDecision,
+    PortfolioOptimizer,
+    create_portfolio_optimizer,
+)
+from ai_trading.strategies.regime_detector import (
+    RegimeDetector,
+    create_regime_detector,
+)
 
-    PORTFOLIO_OPTIMIZATION_AVAILABLE = True
-    logger.info("Portfolio optimization modules loaded successfully")
-except ImportError:
-    # Import settings to check if portfolio features are enabled
-    from ai_trading.config.settings import get_settings
-
-    settings = get_settings()
-
-    if settings.ENABLE_PORTFOLIO_FEATURES:
-        # If explicitly enabled but deps not present, warn.
-        logger.warning(
-            "Portfolio optimization modules not available; install optional 'portfolio' extras."
-        )
-    else:
-        logger.info("Portfolio optimization disabled; using baseline signal processing")
-    PORTFOLIO_OPTIMIZATION_AVAILABLE = False
+logger.info("Portfolio optimization modules loaded successfully")
 
 # Global portfolio optimizer instance (initialized when first used)
 _portfolio_optimizer = None
@@ -797,7 +784,8 @@ def filter_signals_with_portfolio_optimization(
         Filtered list of signals that pass portfolio-level validation
     """
     try:
-        if not PORTFOLIO_OPTIMIZATION_AVAILABLE:
+        settings = get_settings()
+        if not settings.ENABLE_PORTFOLIO_FEATURES:
             logger.debug("Portfolio optimization not available, skipping filtering")
             return signals
 
@@ -1149,7 +1137,8 @@ def _check_portfolio_rebalancing(
 ) -> tuple:
     """Check if portfolio should be rebalanced instead of individual trades."""
     try:
-        if not PORTFOLIO_OPTIMIZATION_AVAILABLE or not _portfolio_optimizer:
+        settings = get_settings()
+        if not settings.ENABLE_PORTFOLIO_FEATURES or not _portfolio_optimizer:
             return False, "Portfolio optimization not available"
 
         # Get target weights (simplified equal weight for now)

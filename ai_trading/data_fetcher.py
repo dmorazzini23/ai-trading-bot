@@ -21,6 +21,9 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
 from ai_trading.config.settings import get_settings
 from ai_trading.market import cache as mcache
 
+# Define logger early
+logger = logging.getLogger(__name__)
+
 # Prometheus metrics (optional)
 try:
     from prometheus_client import Counter, Histogram
@@ -75,7 +78,6 @@ else:
 
 # Session management for HTTP requests
 _session = None
-logger = logging.getLogger(__name__)
 
 # Default market data feed for Alpaca requests
 _DEFAULT_FEED = "iex"

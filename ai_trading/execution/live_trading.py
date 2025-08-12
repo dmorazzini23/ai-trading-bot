@@ -15,6 +15,15 @@ from ai_trading.logging import logger
 # Internal config import
 from ai_trading.config import get_alpaca_config
 
+# Alpaca SDK imports - now required dependencies
+from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.requests import (
+    LimitOrderRequest,
+    MarketOrderRequest,
+)
+from alpaca.common.exceptions import APIError
+
 
 class AlpacaExecutionEngine:
     """
@@ -85,24 +94,14 @@ class AlpacaExecutionEngine:
                 self.trading_client = MockTradingClient()
                 logger.info("Mock Alpaca client initialized for testing")
             else:
-                try:
-                    from alpaca.trading.client import TradingClient
-
-                    self.trading_client = TradingClient(
-                        api_key=self.config["api_key"],
-                        secret_key=self.config["secret_key"],
-                        paper=self.config["paper"],
-                    )
-                    logger.info(
-                        f"Real Alpaca client initialized (paper={self.config['paper']})"
-                    )
-                except ImportError:
-                    logger.error(
-                        "Alpaca SDK not available, falling back to mock client"
-                    )
-                    from tests.mocks import MockTradingClient
-
-                    self.trading_client = MockTradingClient()
+                self.trading_client = TradingClient(
+                    api_key=self.config["api_key"],
+                    secret_key=self.config["secret_key"],
+                    paper=self.config["paper"],
+                )
+                logger.info(
+                    f"Real Alpaca client initialized (paper={self.config['paper']})"
+                )
 
             # Validate connection
             if self._validate_connection():
@@ -113,8 +112,14 @@ class AlpacaExecutionEngine:
                 logger.error("Failed to validate Alpaca connection")
                 return False
 
-        except Exception as e:
-            logger.error(f"Failed to initialize Alpaca execution engine: {e}")
+        except (ValueError, KeyError, AttributeError) as e:
+            logger.error(f"Configuration error initializing Alpaca execution engine: {e}")
+            return False
+        except (ConnectionError, TimeoutError) as e:
+            logger.error(f"Network error initializing Alpaca execution engine: {e}")
+            return False
+        except APIError as e:
+            logger.error(f"Alpaca API error initializing execution engine: {e}")
             return False
 
     def submit_market_order(
@@ -249,8 +254,11 @@ class AlpacaExecutionEngine:
                 logger.error(f"Failed to cancel order: {order_id}")
                 return False
 
-        except Exception as e:
-            logger.error(f"Error cancelling order {order_id}: {e}")
+        except (ValueError, KeyError) as e:
+            logger.error(f"Invalid order data for cancellation {order_id}: {e}")
+            return False
+        except (ConnectionError, TimeoutError) as e:
+            logger.error(f"Network error cancelling order {order_id}: {e}")
             return False
 
     def get_order_status(self, order_id: str) -> dict | None:
@@ -465,58 +473,40 @@ class AlpacaExecutionEngine:
             }
         else:
             # Real Alpaca API call
-            try:
-                from alpaca.trading.enums import OrderSide, TimeInForce
-                from alpaca.trading.requests import (
-                    LimitOrderRequest,
-                    MarketOrderRequest,
+            if order_data["type"] == "market":
+                request = MarketOrderRequest(
+                    symbol=order_data["symbol"],
+                    qty=order_data["quantity"],
+                    side=(
+                        OrderSide.BUY
+                        if order_data["side"] == "buy"
+                        else OrderSide.SELL
+                    ),
+                    time_in_force=TimeInForce.DAY,
+                )
+            else:  # limit order
+                request = LimitOrderRequest(
+                    symbol=order_data["symbol"],
+                    qty=order_data["quantity"],
+                    side=(
+                        OrderSide.BUY
+                        if order_data["side"] == "buy"
+                        else OrderSide.SELL
+                    ),
+                    time_in_force=TimeInForce.DAY,
+                    limit_price=order_data["limit_price"],
                 )
 
-                if order_data["type"] == "market":
-                    request = MarketOrderRequest(
-                        symbol=order_data["symbol"],
-                        qty=order_data["quantity"],
-                        side=(
-                            OrderSide.BUY
-                            if order_data["side"] == "buy"
-                            else OrderSide.SELL
-                        ),
-                        time_in_force=TimeInForce.DAY,
-                    )
-                else:  # limit order
-                    request = LimitOrderRequest(
-                        symbol=order_data["symbol"],
-                        qty=order_data["quantity"],
-                        side=(
-                            OrderSide.BUY
-                            if order_data["side"] == "buy"
-                            else OrderSide.SELL
-                        ),
-                        time_in_force=TimeInForce.DAY,
-                        limit_price=order_data["limit_price"],
-                    )
-
-                response = self.trading_client.submit_order(request)
-                return {
-                    "id": response.id,
-                    "status": response.status,
-                    "symbol": response.symbol,
-                    "side": response.side,
-                    "quantity": response.qty,
-                    "filled_qty": response.filled_qty,
-                    "filled_avg_price": response.filled_avg_price,
-                }
-
-            except ImportError:
-                # Fallback if Alpaca SDK not available
-                logger.warning("Alpaca SDK not available, using mock response")
-                return {
-                    "id": f"fallback_order_{int(time.time())}",
-                    "status": "submitted",
-                    "symbol": order_data["symbol"],
-                    "side": order_data["side"],
-                    "quantity": order_data["quantity"],
-                }
+            response = self.trading_client.submit_order(request)
+            return {
+                "id": response.id,
+                "status": response.status,
+                "symbol": response.symbol,
+                "side": response.side,
+                "quantity": response.qty,
+                "filled_qty": response.filled_qty,
+                "filled_avg_price": response.filled_avg_price,
+            }
 
     def _cancel_order_alpaca(self, order_id: str) -> bool:
         """Cancel order via Alpaca API."""
@@ -525,12 +515,8 @@ class AlpacaExecutionEngine:
         if os.environ.get("PYTEST_RUNNING"):
             return True
         else:
-            try:
-                self.trading_client.cancel_order_by_id(order_id)
-                return True
-            except ImportError:
-                logger.warning("Alpaca SDK not available for cancellation")
-                return True
+            self.trading_client.cancel_order_by_id(order_id)
+            return True
 
     def _get_order_status_alpaca(self, order_id: str) -> dict:
         """Get order status via Alpaca API."""
@@ -539,19 +525,16 @@ class AlpacaExecutionEngine:
         if os.environ.get("PYTEST_RUNNING"):
             return {"id": order_id, "status": "filled", "filled_qty": "100"}
         else:
-            try:
-                order = self.trading_client.get_order_by_id(order_id)
-                return {
-                    "id": order.id,
-                    "status": order.status,
-                    "symbol": order.symbol,
-                    "side": order.side,
-                    "quantity": order.qty,
-                    "filled_qty": order.filled_qty,
-                    "filled_avg_price": order.filled_avg_price,
-                }
-            except ImportError:
-                return {"id": order_id, "status": "unknown"}
+            order = self.trading_client.get_order_by_id(order_id)
+            return {
+                "id": order.id,
+                "status": order.status,
+                "symbol": order.symbol,
+                "side": order.side,
+                "quantity": order.qty,
+                "filled_qty": order.filled_qty,
+                "filled_avg_price": order.filled_avg_price,
+            }
 
     def _get_account_alpaca(self) -> dict:
         """Get account info via Alpaca API."""
@@ -560,16 +543,13 @@ class AlpacaExecutionEngine:
         if os.environ.get("PYTEST_RUNNING"):
             return {"equity": "100000", "buying_power": "100000"}
         else:
-            try:
-                account = self.trading_client.get_account()
-                return {
-                    "equity": account.equity,
-                    "buying_power": account.buying_power,
-                    "cash": account.cash,
-                    "portfolio_value": account.portfolio_value,
-                }
-            except ImportError:
-                return {"equity": "unknown", "buying_power": "unknown"}
+            account = self.trading_client.get_account()
+            return {
+                "equity": account.equity,
+                "buying_power": account.buying_power,
+                "cash": account.cash,
+                "portfolio_value": account.portfolio_value,
+            }
 
     def _get_positions_alpaca(self) -> list[dict]:
         """Get positions via Alpaca API."""
@@ -578,17 +558,14 @@ class AlpacaExecutionEngine:
         if os.environ.get("PYTEST_RUNNING"):
             return []
         else:
-            try:
-                positions = self.trading_client.get_all_positions()
-                return [
-                    {
-                        "symbol": pos.symbol,
-                        "qty": pos.qty,
-                        "side": pos.side,
-                        "market_value": pos.market_value,
-                        "unrealized_pl": pos.unrealized_pl,
-                    }
-                    for pos in positions
-                ]
-            except ImportError:
-                return []
+            positions = self.trading_client.get_all_positions()
+            return [
+                {
+                    "symbol": pos.symbol,
+                    "qty": pos.qty,
+                    "side": pos.side,
+                    "market_value": pos.market_value,
+                    "unrealized_pl": pos.unrealized_pl,
+                }
+                for pos in positions
+            ]
