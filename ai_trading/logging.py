@@ -473,9 +473,9 @@ def _sanitize_log_data(data: dict[str, any]) -> dict[str, any]:
         # Mask sensitive keys
         if any(sensitive in key_lower for sensitive in sensitive_keys):
             sanitized[key] = "***MASKED***"
-        # Truncate very long values
-        elif isinstance(value, str) and len(value) > 1000:
-            sanitized[key] = value[:1000] + "...[TRUNCATED]"
+        # Keep long values intact for observability (no truncation)
+        elif isinstance(value, str):
+            sanitized[key] = value
         # Handle nested dictionaries
         elif isinstance(value, dict):
             sanitized[key] = _sanitize_log_data(value)

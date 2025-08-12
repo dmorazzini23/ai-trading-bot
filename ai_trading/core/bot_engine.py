@@ -4111,11 +4111,23 @@ def _update_risk_engine_exposure():
     """
     runtime = _get_runtime_context_or_none()
     if runtime is None:
-        # single warn line; return quietly to avoid spam
         return
     try:
-        if hasattr(runtime, "risk_engine") and runtime.risk_engine:
-            runtime.risk_engine.update_exposure(runtime)
+        re = getattr(runtime, "risk_engine", None)
+        if re:
+            # Support both styles: update_exposure(context) or update_exposure()
+            try:
+                sig = inspect.signature(re.update_exposure)
+                if len(sig.parameters) >= 1:
+                    re.update_exposure(runtime)
+                else:
+                    # Back-compat: older engines expect a global; set attribute for the call
+                    setattr(re, "ctx", runtime)
+                    re.update_exposure()
+            except NameError as e:
+                _log.warning("Risk engine exposure update failed (NameError): %s", e)
+            except Exception as e:
+                _log.warning("Risk engine exposure update failed: %s", e)
         else:
             _log.debug("No risk_engine on runtime context; skipping exposure update.")
     except Exception as e:
@@ -9591,6 +9603,9 @@ def run_all_trades_worker(state: BotState, model) -> None:
                     "RUN_ALL_TRADES_START",
                     extra={"timestamp": utc_now_iso()},
                 )
+
+            # Log standardized market fetch heartbeat
+            logger.info("MARKET_FETCH")
 
             current_cash, regime_ok, symbols = _prepare_run(ctx, state)
 
