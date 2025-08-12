@@ -785,6 +785,7 @@ class TradingConfig:
         # Required trading risk parameters
         capital_cap = float(getenv("CAPITAL_CAP", overrides.get("capital_cap", 0.04)))
         dollar_risk_limit = float(getenv("DOLLAR_RISK_LIMIT", overrides.get("dollar_risk_limit", 0.05)))
+        max_position_size = float(getenv("MAX_POSITION_SIZE", overrides.get("max_position_size", 1.0)))
         
         # feature toggles
         def _as_bool(x):
@@ -818,7 +819,7 @@ class TradingConfig:
         # and propagate remaining overrides into kwargs
         excluded_keys = {
             "conf_threshold", "buy_threshold", "confirmation_count", "enable_finbert",
-            "capital_cap", "dollar_risk_limit",
+            "capital_cap", "dollar_risk_limit", "max_position_size",
             "signal_confirm_bars", "delta_hold", "min_confidence", "trading_mode",
             "alpaca_base_url", "sleep_interval", "max_retries", "backoff_factor",
             "max_backoff_interval", "pct", "MODEL_PATH", "scheduler_iterations",
@@ -832,6 +833,7 @@ class TradingConfig:
             confirmation_count=confirmation_count,
             capital_cap=capital_cap,
             dollar_risk_limit=dollar_risk_limit,
+            max_position_size=max_position_size,
             enable_finbert=enable_finbert,
             signal_confirm_bars=signal_confirm_bars,
             delta_hold=delta_hold,
