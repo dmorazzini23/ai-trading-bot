@@ -1,6 +1,7 @@
 import importlib
 import importlib.util
 import logging
+import os
 
 _log = logging.getLogger(__name__)
 
@@ -19,12 +20,14 @@ def _try_import(module_name: str, cls_name: str):
 
 
 def resolve_risk_engine_cls():
-    cls = _try_import("ai_trading.risk_engine", "RiskEngine")
-    if cls: 
+    cls = _try_import("ai_trading.risk.engine", "RiskEngine")
+    if cls:
         return cls
-    cls = _try_import("scripts.risk_engine", "RiskEngine")
-    if cls: 
-        return cls
+    # Optional dev fallback (off by default)
+    if os.getenv("DEV_ALLOW_SCRIPTS", "0") in ("1","true","True","yes"):
+        cls = _try_import("scripts.risk_engine", "RiskEngine")
+        if cls:
+            return cls
     return None
 
 
