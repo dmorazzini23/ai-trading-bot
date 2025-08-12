@@ -2440,6 +2440,14 @@ def safe_get_stock_bars(client, request, symbol: str, context: str = ""):
         return None
 
 
+def _create_empty_bars_dataframe(timeframe: str = "daily") -> pd.DataFrame:
+    """Create an empty DataFrame with valid public pandas indexes for failed data fetches."""
+    empty_df = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    # Use public pandas API for datetime index
+    empty_df.index = pd.DatetimeIndex([], tz="UTC", name="timestamp")
+    return empty_df
+
+
 @dataclass
 class DataFetcher:
     def __post_init__(self):
@@ -2483,7 +2491,7 @@ class DataFetcher:
             bars = safe_get_stock_bars(client, req, symbol, "DAILY")
             if bars is None:
                 return None
-            if isinstance(bars.columns, _RealMultiIndex):
+            if isinstance(bars.columns, pd.MultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
@@ -2518,7 +2526,7 @@ class DataFetcher:
                     df_iex = safe_get_stock_bars(client, req, symbol, "IEX DAILY")
                     if df_iex is None:
                         return None
-                    if isinstance(df_iex.columns, _RealMultiIndex):
+                    if isinstance(df_iex.columns, pd.MultiIndex):
                         df_iex = df_iex.xs(symbol, level=0, axis=1)
                     else:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
@@ -2569,6 +2577,13 @@ class DataFetcher:
                     [{"open": 0.0, "high": 0.0, "low": 0.0, "close": 0.0, "volume": 0}],
                     index=[dummy_date],
                 )
+        except (NameError, AttributeError) as e:
+            # Handle pandas schema errors (like missing _RealMultiIndex) gracefully
+            _log.error("DATA_SOURCE_SCHEMA_ERROR", extra={"symbol": symbol, "cause": str(e)})
+            return _create_empty_bars_dataframe("daily")
+        except (KeyError, ValueError) as e:
+            _log.error(f"DATA_VALIDATION_ERROR for {symbol}: {repr(e)}")
+            return _create_empty_bars_dataframe("daily")
         except Exception as e:
             _log.error(f"Failed to fetch daily data for {symbol}: {repr(e)}")
             return None
@@ -2623,7 +2638,7 @@ class DataFetcher:
             bars = safe_get_stock_bars(client, req, symbol, "MINUTE")
             if bars is None:
                 return None
-            if isinstance(bars.columns, _RealMultiIndex):
+            if isinstance(bars.columns, pd.MultiIndex):
                 bars = bars.xs(symbol, level=0, axis=1)
             else:
                 bars = bars.drop(columns=["symbol"], errors="ignore")
@@ -2661,7 +2676,7 @@ class DataFetcher:
                     df_iex = safe_get_stock_bars(client, req, symbol, "IEX MINUTE")
                     if df_iex is None:
                         return None
-                    if isinstance(df_iex.columns, _RealMultiIndex):
+                    if isinstance(df_iex.columns, pd.MultiIndex):
                         df_iex = df_iex.xs(symbol, level=0, axis=1)
                     else:
                         df_iex = df_iex.drop(columns=["symbol"], errors="ignore")
@@ -2691,6 +2706,13 @@ class DataFetcher:
             else:
                 _log.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
                 df = pd.DataFrame()
+        except (NameError, AttributeError) as e:
+            # Handle pandas schema errors (like missing _RealMultiIndex) gracefully  
+            _log.error("DATA_SOURCE_SCHEMA_ERROR", extra={"symbol": symbol, "cause": str(e)})
+            df = _create_empty_bars_dataframe("minute")
+        except (KeyError, ValueError) as e:
+            _log.warning(f"DATA_VALIDATION_ERROR for minute data {symbol}: {repr(e)}")
+            df = _create_empty_bars_dataframe("minute")
         except Exception as e:
             _log.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
             df = pd.DataFrame()
@@ -2761,7 +2783,7 @@ class DataFetcher:
                             return []
                     else:
                         raise
-                if isinstance(bars_day.columns, _RealMultiIndex):
+                if isinstance(bars_day.columns, pd.MultiIndex):
                     bars_day = bars_day.xs(symbol, level=0, axis=1)
                 else:
                     bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
@@ -2829,7 +2851,7 @@ def prefetch_daily_data(
         bars = safe_get_stock_bars(client, req, str(symbols), "BULK DAILY")
         if bars is None:
             return {}
-        if isinstance(bars.columns, _RealMultiIndex):
+        if isinstance(bars.columns, pd.MultiIndex):
             grouped_raw = {
                 sym: bars.xs(sym, level=0, axis=1)
                 for sym in symbols
@@ -2863,7 +2885,7 @@ def prefetch_daily_data(
                 )
                 if bars_iex is None:
                     return {}
-                if isinstance(bars_iex.columns, _RealMultiIndex):
+                if isinstance(bars_iex.columns, pd.MultiIndex):
                     grouped_raw = {
                         sym: bars_iex.xs(sym, level=0, axis=1)
                         for sym in symbols
@@ -4111,6 +4133,11 @@ class LazyBotContext:
         self._ensure_initialized()
         return self._context.trailing_extremes
     
+    @property
+    def params(self):
+        self._ensure_initialized()
+        return self._context.params
+    
     # Allow setting attributes by delegating to context
     def __setattr__(self, name, value):
         if name.startswith("_") or name in ("_initialized", "_context"):
@@ -4996,7 +5023,7 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
         if d is None or d.empty:
             continue
         # Handle DataFrame with MultiIndex columns (symbol, field) or single-level
-        if isinstance(d.columns, _RealMultiIndex):
+        if isinstance(d.columns, pd.MultiIndex):
             if (s, "close") in d.columns:
                 series = d[(s, "close")].pct_change(fill_method=None).dropna()
             else:
