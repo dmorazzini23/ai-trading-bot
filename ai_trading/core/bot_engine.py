@@ -9293,6 +9293,15 @@ def run_multi_strategy(runtime) -> None:
         _log.error("TRAILING_STOP_CHECK_FAILED", extra={"exc": str(exc)})
 
 
+def _param(runtime, key, default):
+    """Pull from runtime.params first, then cfg, else default."""
+    if runtime and getattr(runtime, "params", None) and key in runtime.params:
+        return runtime.params[key]
+    if runtime and hasattr(runtime, "cfg") and runtime.cfg:
+        return float(getattr(runtime.cfg, key.lower(), default))
+    return default
+
+
 def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     from ai_trading import portfolio
     from ai_trading.utils import portfolio_lock
@@ -9306,7 +9315,7 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     except Exception:
         equity = 0.0
     runtime.capital_scaler.update(runtime, equity)
-    params["CAPITAL_CAP"] = runtime.params["CAPITAL_CAP"]
+    params["CAPITAL_CAP"] = _param(runtime, "CAPITAL_CAP", 0.04)
     compute_spy_vol_stats(runtime)
 
     full_watchlist = load_tickers(TICKERS_FILE)

@@ -676,6 +676,9 @@ class TradingConfig:
                  conf_threshold: float = 0.55,
                  buy_threshold: float = 0.50,
                  confirmation_count: int = 2,
+                 # Required trading risk parameters
+                 capital_cap: float = 0.04,
+                 dollar_risk_limit: float = 0.05,
                  # model/feature toggles
                  enable_finbert: bool = False,
                  # strategy/allocator knobs (added)
@@ -721,6 +724,11 @@ class TradingConfig:
         self.conf_threshold = conf_threshold
         self.buy_threshold = buy_threshold
         self.confirmation_count = confirmation_count
+        
+        # Required trading risk parameters
+        self.capital_cap = capital_cap
+        self.dollar_risk_limit = dollar_risk_limit
+        
         # feature toggles
         self.enable_finbert = bool(enable_finbert)
         # strategy/allocator knobs
@@ -773,6 +781,12 @@ class TradingConfig:
         conf_threshold = float(getenv("CONF_THRESHOLD", overrides.get("conf_threshold", 0.55)))
         buy_threshold  = float(getenv("BUY_THRESHOLD",  overrides.get("buy_threshold",  0.60)))
         confirmation_count = int(getenv("CONFIRMATION_COUNT", overrides.get("confirmation_count", 2)))
+        
+        # Required trading risk parameters
+        capital_cap = float(getenv("CAPITAL_CAP", overrides.get("capital_cap", 0.04)))
+        dollar_risk_limit = float(getenv("DOLLAR_RISK_LIMIT", overrides.get("dollar_risk_limit", 0.05)))
+        max_position_size = float(getenv("MAX_POSITION_SIZE", overrides.get("max_position_size", 1.0)))
+        
         # feature toggles
         def _as_bool(x):
             s = str(x).strip().lower()
@@ -805,6 +819,7 @@ class TradingConfig:
         # and propagate remaining overrides into kwargs
         excluded_keys = {
             "conf_threshold", "buy_threshold", "confirmation_count", "enable_finbert",
+            "capital_cap", "dollar_risk_limit", "max_position_size",
             "signal_confirm_bars", "delta_hold", "min_confidence", "trading_mode",
             "alpaca_base_url", "sleep_interval", "max_retries", "backoff_factor",
             "max_backoff_interval", "pct", "MODEL_PATH", "scheduler_iterations",
@@ -816,6 +831,9 @@ class TradingConfig:
             conf_threshold=conf_threshold,
             buy_threshold=buy_threshold,
             confirmation_count=confirmation_count,
+            capital_cap=capital_cap,
+            dollar_risk_limit=dollar_risk_limit,
+            max_position_size=max_position_size,
             enable_finbert=enable_finbert,
             signal_confirm_bars=signal_confirm_bars,
             delta_hold=delta_hold,

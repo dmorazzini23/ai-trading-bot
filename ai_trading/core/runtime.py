@@ -14,6 +14,31 @@ if TYPE_CHECKING:
     from ai_trading.config.management import TradingConfig
 
 
+# Required parameter defaults as specified in the problem statement
+REQUIRED_PARAM_DEFAULTS = {
+    "CAPITAL_CAP": 0.04,          # fraction of equity cap per position
+    "DOLLAR_RISK_LIMIT": 0.05,    # fraction or absolute depending on your semantics
+    "MAX_POSITION_SIZE": 1.0,     # multiplier / lots
+    "KELLY_FRACTION": 0.6,        # Kelly criterion fraction
+    "BUY_THRESHOLD": 0.2,         # Buy signal threshold
+    "CONF_THRESHOLD": 0.75,       # Confidence threshold
+}
+
+
+def _cfg_coalesce(cfg, key, default):
+    """
+    Support both UPPER_SNAKE in params and lower_snake on cfg.
+    Prefer explicit cfg attributes if present.
+    """
+    lower = key.lower()
+    # prefer explicit cfg attributes if present
+    if hasattr(cfg, lower):
+        return getattr(cfg, lower)
+    if hasattr(cfg, key):
+        return getattr(cfg, key)
+    return default
+
+
 @dataclass
 class BotRuntime:
     """
@@ -41,21 +66,20 @@ def build_runtime(cfg: "TradingConfig") -> BotRuntime:
     """
     Build a runtime context from trading configuration.
     
+    Ensures all required parameters are populated from TradingConfig with 
+    explicit defaults as specified in the problem statement.
+    
     Args:
         cfg: Trading configuration object
         
     Returns:
-        BotRuntime with populated params dict
+        BotRuntime with fully populated params dict
     """
-    params = {
-        "CAPITAL_CAP": float(getattr(cfg, "capital_cap", 0.04)),
-        "DOLLAR_RISK_LIMIT": float(getattr(cfg, "dollar_risk_limit", 0.05)),
-        "MAX_POSITION_SIZE": float(getattr(cfg, "max_position_size", 1)),
-        "KELLY_FRACTION": float(getattr(cfg, "kelly_fraction", 0.6)),
-        "BUY_THRESHOLD": float(getattr(cfg, "buy_threshold", 0.2)),
-        "CONF_THRESHOLD": float(getattr(cfg, "conf_threshold", 0.75)),
-    }
+    params = {}
+    for k, dflt in REQUIRED_PARAM_DEFAULTS.items():
+        params[k] = float(_cfg_coalesce(cfg, k, dflt))
     
+    # Add any additional keys the loop expects if needed
     return BotRuntime(cfg=cfg, params=params)
 
 
