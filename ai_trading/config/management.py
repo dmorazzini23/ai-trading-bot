@@ -685,6 +685,23 @@ class TradingConfig:
                  # allocator-related defaults (silence warnings; explicit behavior)
                  signal_confirm_bars: int = 2,
                  delta_hold: float = 0.02,
+                 # Required new attributes for production reliability
+                 trading_mode: str = "paper",
+                 alpaca_base_url: str = "https://paper-api.alpaca.markets",
+                 sleep_interval: float = 1.0,
+                 max_retries: int = 3,
+                 backoff_factor: float = 2.0,
+                 max_backoff_interval: float = 60.0,
+                 pct: float = 0.05,
+                 MODEL_PATH: str = None,
+                 scheduler_iterations: int = 0,
+                 scheduler_sleep_seconds: int = 60,
+                 window: int = 20,
+                 enabled: bool = True,
+                 # Rate limiter configuration
+                 capacity: int = 100,
+                 refill_rate: float = 10.0,
+                 queue_timeout: float = 30.0,
                  **kwargs):
         self.mode = mode
         self.trailing_factor = trailing_factor
@@ -713,6 +730,24 @@ class TradingConfig:
         # allocator/strategy knobs
         self.signal_confirm_bars = signal_confirm_bars
         self.delta_hold = delta_hold
+        
+        # Required new attributes for production reliability
+        self.trading_mode = trading_mode
+        self.alpaca_base_url = alpaca_base_url
+        self.sleep_interval = sleep_interval
+        self.max_retries = max_retries
+        self.backoff_factor = backoff_factor
+        self.max_backoff_interval = max_backoff_interval
+        self.pct = pct
+        self.MODEL_PATH = MODEL_PATH
+        self.scheduler_iterations = scheduler_iterations
+        self.scheduler_sleep_seconds = scheduler_sleep_seconds
+        self.window = window
+        self.enabled = enabled
+        # Rate limiter configuration
+        self.capacity = capacity
+        self.refill_rate = refill_rate
+        self.queue_timeout = queue_timeout
 
         # Basic validation for new fields
         if not (0.0 <= self.conf_threshold <= 1.0):
@@ -747,9 +782,35 @@ class TradingConfig:
         signal_confirm_bars = int(getenv("SIGNAL_CONFIRM_BARS", overrides.get("signal_confirm_bars", 2)))
         delta_hold          = float(getenv("DELTA_HOLD",         overrides.get("delta_hold",          0.02)))
         min_confidence      = float(getenv("MIN_CONFIDENCE",     overrides.get("min_confidence",      0.60)))
+        
+        # Required new attributes from environment variables
+        trading_mode = getenv("TRADING_MODE", overrides.get("trading_mode", "paper"))
+        alpaca_base_url = getenv("ALPACA_BASE_URL", overrides.get("alpaca_base_url", "https://paper-api.alpaca.markets"))
+        sleep_interval = float(getenv("SLEEP_INTERVAL", overrides.get("sleep_interval", 1.0)))
+        max_retries = int(getenv("MAX_RETRIES", overrides.get("max_retries", 3)))
+        backoff_factor = float(getenv("BACKOFF_FACTOR", overrides.get("backoff_factor", 2.0)))
+        max_backoff_interval = float(getenv("MAX_BACKOFF_INTERVAL", overrides.get("max_backoff_interval", 60.0)))
+        pct = float(getenv("PCT", overrides.get("pct", 0.05)))
+        MODEL_PATH = getenv("MODEL_PATH", overrides.get("MODEL_PATH", None))
+        scheduler_iterations = int(getenv("SCHEDULER_ITERATIONS", overrides.get("scheduler_iterations", 0)))
+        scheduler_sleep_seconds = int(getenv("SCHEDULER_SLEEP_SECONDS", overrides.get("scheduler_sleep_seconds", 60)))
+        window = int(getenv("WINDOW", overrides.get("window", 20)))
+        enabled = _as_bool(getenv("ENABLED", overrides.get("enabled", True)))
+        # Rate limiter configuration
+        capacity = int(getenv("CAPACITY", overrides.get("capacity", 100)))
+        refill_rate = float(getenv("REFILL_RATE", overrides.get("refill_rate", 10.0)))
+        queue_timeout = float(getenv("QUEUE_TIMEOUT", overrides.get("queue_timeout", 30.0)))
 
         # include any other fields you already parse in from_env
         # and propagate remaining overrides into kwargs
+        excluded_keys = {
+            "conf_threshold", "buy_threshold", "confirmation_count", "enable_finbert",
+            "signal_confirm_bars", "delta_hold", "min_confidence", "trading_mode",
+            "alpaca_base_url", "sleep_interval", "max_retries", "backoff_factor",
+            "max_backoff_interval", "pct", "MODEL_PATH", "scheduler_iterations",
+            "scheduler_sleep_seconds", "window", "enabled", "capacity", "refill_rate",
+            "queue_timeout"
+        }
         cfg = cls(
             mode=mode,
             conf_threshold=conf_threshold,
@@ -759,9 +820,22 @@ class TradingConfig:
             signal_confirm_bars=signal_confirm_bars,
             delta_hold=delta_hold,
             min_confidence=min_confidence,
-            **{k: v for k, v in overrides.items()
-               if k not in {"conf_threshold","buy_threshold","confirmation_count",
-                            "enable_finbert","signal_confirm_bars","delta_hold","min_confidence"}}
+            trading_mode=trading_mode,
+            alpaca_base_url=alpaca_base_url,
+            sleep_interval=sleep_interval,
+            max_retries=max_retries,
+            backoff_factor=backoff_factor,
+            max_backoff_interval=max_backoff_interval,
+            pct=pct,
+            MODEL_PATH=MODEL_PATH,
+            scheduler_iterations=scheduler_iterations,
+            scheduler_sleep_seconds=scheduler_sleep_seconds,
+            window=window,
+            enabled=enabled,
+            capacity=capacity,
+            refill_rate=refill_rate,
+            queue_timeout=queue_timeout,
+            **{k: v for k, v in overrides.items() if k not in excluded_keys}
         )
         # set mode last so downstream logic sees it
         if mode is not None:
@@ -772,6 +846,27 @@ class TradingConfig:
         cfg.ALPACA_SECRET_KEY = getenv("ALPACA_SECRET_KEY", "test_secret")
         
         return cfg
+
+    def to_dict(self, safe=True):
+        """
+        Export configuration as dictionary.
+        
+        Args:
+            safe: If True, redact secrets (API keys)
+        
+        Returns:
+            Dict containing configuration values
+        """
+        config_dict = {}
+        for attr in dir(self):
+            if not attr.startswith('_') and not callable(getattr(self, attr)):
+                value = getattr(self, attr)
+                # Redact secrets if safe=True
+                if safe and ('API_KEY' in attr or 'SECRET' in attr):
+                    config_dict[attr] = '***REDACTED***'
+                else:
+                    config_dict[attr] = value
+        return config_dict
 
     def get_legacy_params(self):
         """Return legacy parameters for backward compatibility."""

@@ -1019,19 +1019,16 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
 
 class StrategyAllocator:
     def __init__(self, *args, **kwargs):
-        # Package-safe resolution: ai_trading.strategy_allocator -> scripts.strategy_allocator -> stub
+        # Package-safe resolution: ai_trading.strategy_allocator -> scripts.strategy_allocator -> fail hard
         from ai_trading.utils.imports import resolve_strategy_allocator_cls
         cls = resolve_strategy_allocator_cls()
         if cls is None:
-            logger.error(
-                "StrategyAllocator not found (ai_trading.strategy_allocator, scripts.strategy_allocator). "
-                "Using no-op fallback."
+            raise RuntimeError(
+                "StrategyAllocator not found. Please ensure that either "
+                "ai_trading.strategy_allocator or scripts.strategy_allocator is available. "
+                "Check that scripts/strategy_allocator.py exists and has a StrategyAllocator class."
             )
-            class _Stub:
-                def allocate(self, *a, **k): return []
-            self._alloc = _Stub()
-        else:
-            self._alloc = cls(*args, **kwargs)
+        self._alloc = cls(*args, **kwargs)
 
     def allocate_signals(self, *args, **kwargs):
         return self._alloc.allocate(*args, **kwargs)

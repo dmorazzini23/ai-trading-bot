@@ -29,48 +29,25 @@ def apply_no_trade_bands(
 
 
 # AI-AGENT-REF: Enhanced rebalancer with tax awareness
-try:
-    from ai_trading.core.constants import RISK_PARAMETERS
-    from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer
+from ai_trading.core.constants import RISK_PARAMETERS
+from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer
 
-    ENHANCED_FEATURES_AVAILABLE = True
-except ImportError:
-    ENHANCED_FEATURES_AVAILABLE = False
+# AI-AGENT-REF: Portfolio-first trading integration  
+from scripts.transaction_cost_calculator import (
+    TransactionCostCalculator,
+    create_transaction_cost_calculator,
+)
 
-# AI-AGENT-REF: Portfolio-first trading integration
-try:
-    from transaction_cost_calculator import (
-        TransactionCostCalculator,
-        create_transaction_cost_calculator,
-    )
-
-    from ai_trading.portfolio import PortfolioOptimizer, create_portfolio_optimizer
-    from ai_trading.strategies.regime_detector import (
-        RegimeDetector,
-        create_regime_detector,
-    )
-
-    PORTFOLIO_FIRST_AVAILABLE = True
-except ImportError:
-    PORTFOLIO_FIRST_AVAILABLE = False
+from ai_trading.portfolio import PortfolioOptimizer, create_portfolio_optimizer
+from ai_trading.strategies.regime_detector import (
+    RegimeDetector,
+    create_regime_detector,
+)
 
 logger = logging.getLogger(__name__)
 
-# Log availability after logger is defined
-if PORTFOLIO_FIRST_AVAILABLE:
-    logger.info("Portfolio-first trading capabilities loaded")
-else:
-    # Import settings to check if portfolio features are enabled
-    from ai_trading.config.settings import get_settings
-
-    settings = get_settings()
-
-    if settings.ENABLE_PORTFOLIO_FEATURES:
-        logger.warning(
-            "Portfolio-first capabilities requested but unavailable (missing optional deps)"
-        )
-    else:
-        logger.info("Portfolio-first features disabled")
+# Log availability after logger is defined - now that imports are guaranteed
+logger.info("Portfolio-first trading capabilities loaded")
 
 S = get_settings()
 REBALANCE_INTERVAL_MIN = S.rebalance_interval_min
@@ -97,8 +74,8 @@ class TaxAwareRebalancer:
         self.tax_rate_long = tax_rate_long  # Long-term capital gains tax rate
         self.wash_sale_days = 31  # Days to avoid wash sale rule
 
-        # Enhanced features if available
-        if ENHANCED_FEATURES_AVAILABLE:
+        # Enhanced features if available via configuration
+        if S.ENABLE_PORTFOLIO_FEATURES:
             self.adaptive_sizer = AdaptivePositionSizer()
             self.max_portfolio_risk = RISK_PARAMETERS["MAX_PORTFOLIO_RISK"]
 
@@ -537,8 +514,8 @@ def rebalance_portfolio(ctx) -> None:
 
     # AI-AGENT-REF: Enhanced rebalancing with tax optimization
     try:
-        # Try to use enhanced tax-aware rebalancing if available
-        if ENHANCED_FEATURES_AVAILABLE and hasattr(ctx, "account_equity"):
+        # Try to use enhanced tax-aware rebalancing if enabled
+        if S.ENABLE_PORTFOLIO_FEATURES and hasattr(ctx, "account_equity"):
             tax_rebalancer = TaxAwareRebalancer()
 
             current_positions = getattr(ctx, "current_positions", {})
@@ -595,8 +572,8 @@ def enhanced_maybe_rebalance(ctx) -> None:
             # Dynamic threshold based on market volatility if available
             drift_threshold = S.portfolio_drift_threshold
 
-            # Use portfolio-first rebalancing if available
-            if PORTFOLIO_FIRST_AVAILABLE:
+            # Use portfolio-first rebalancing if enabled
+            if S.ENABLE_PORTFOLIO_FEATURES:
                 should_rebalance, reason = _check_portfolio_first_rebalancing(
                     ctx, drift, drift_threshold
                 )
@@ -630,8 +607,8 @@ def portfolio_first_rebalance(ctx) -> None:
     global _portfolio_optimizer, _regime_detector
 
     try:
-        if not PORTFOLIO_FIRST_AVAILABLE:
-            logger.info("Portfolio-first not available, using standard rebalancing")
+        if not S.ENABLE_PORTFOLIO_FEATURES:
+            logger.info("Portfolio-first not enabled, using standard rebalancing")
             rebalance_portfolio(ctx)
             return
 
@@ -679,7 +656,7 @@ def portfolio_first_rebalance(ctx) -> None:
 
         if should_rebalance:
             # Execute tax-aware rebalancing
-            if ENHANCED_FEATURES_AVAILABLE:
+            if S.ENABLE_PORTFOLIO_FEATURES:
                 tax_rebalancer = TaxAwareRebalancer()
 
                 # Calculate account equity

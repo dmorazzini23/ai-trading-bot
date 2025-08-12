@@ -20,6 +20,10 @@ from zoneinfo import ZoneInfo
 
 # AI-AGENT-REF: Pandas is a hard dependency
 import pandas as pd
+import pandas_market_calendars as mcal
+
+# Alpaca SDK imports - now required dependencies  
+from alpaca_trade_api.rest import REST
 
 HAS_PANDAS = True
 Timestamp = pd.Timestamp
@@ -387,62 +391,12 @@ def is_market_holiday(date_to_check: date | dt.datetime | None = None) -> bool:
     elif isinstance(date_to_check, dt.datetime):
         date_to_check = date_to_check.date()
 
-    try:
-        # Try to use pandas_market_calendars if available
-        import pandas_market_calendars as mcal
+    # Use pandas_market_calendars for accurate market calendar  
+    nyse = mcal.get_calendar("NYSE")
 
-        nyse = mcal.get_calendar("NYSE")
-
-        # Check if the date is a trading day
-        schedule = nyse.schedule(start_date=date_to_check, end_date=date_to_check)
-        return schedule.empty
-
-    except ImportError:
-        # Fallback to basic holiday detection without pandas_market_calendars
-        year = date_to_check.year
-
-        # Basic US market holidays (static dates and simple rules)
-        holidays = [
-            date(year, 1, 1),  # New Year's Day
-            date(year, 7, 4),  # Independence Day
-            date(year, 12, 25),  # Christmas Day
-        ]
-
-        # Memorial Day (last Monday in May)
-        may_last_monday = date(year, 5, 31)
-        while may_last_monday.weekday() != 0:  # Monday = 0
-            may_last_monday = date(year, may_last_monday.month, may_last_monday.day - 1)
-        holidays.append(may_last_monday)
-
-        # Labor Day (first Monday in September)
-        sept_first_monday = date(year, 9, 1)
-        while sept_first_monday.weekday() != 0:
-            sept_first_monday = date(
-                year, sept_first_monday.month, sept_first_monday.day + 1
-            )
-        holidays.append(sept_first_monday)
-
-        # Thanksgiving (fourth Thursday in November)
-        nov_fourth_thursday = date(year, 11, 1)
-        thursdays = 0
-        while thursdays < 4:
-            if nov_fourth_thursday.weekday() == 3:  # Thursday = 3
-                thursdays += 1
-                if thursdays < 4:
-                    nov_fourth_thursday = date(
-                        year, nov_fourth_thursday.month, nov_fourth_thursday.day + 7
-                    )
-            else:
-                nov_fourth_thursday = date(
-                    year, nov_fourth_thursday.month, nov_fourth_thursday.day + 1
-                )
-        holidays.append(nov_fourth_thursday)
-
-        return date_to_check in holidays
-
-    except Exception as e:
-        logger.debug(f"Holiday check failed for {date_to_check}: {e}")
-        return False  # Conservative fallback
+    # Check if the date is a trading day
+    schedule = nyse.schedule(start_date=date_to_check, end_date=date_to_check)
+    return schedule.empty
 
 
 BASE_PATH = os.path.dirname(os.path.abspath(__file__))
@@ -886,26 +840,8 @@ def validate_ohlcv_basic(df: DataFrame) -> bool:
     return True
 
 
-# Lazy-load Alpaca SDK only when needed
-REST = None
-
-
 def _get_alpaca_rest():
-    global REST
-    if REST is None:
-        try:
-            from alpaca_trade_api.rest import REST as _REST
-
-            REST = _REST
-            logger.debug("Successfully imported alpaca_trade_api.rest.REST")
-        except ImportError as e:
-            logger.error("alpaca_trade_api import failed: %s", e)
-            raise RuntimeError(f"Required dependency alpaca_trade_api not available: {e}") from e
-        except Exception as e:
-            logger.error(
-                "alpaca_trade_api import failed with unexpected error", exc_info=e
-            )
-            raise RuntimeError(f"Failed to import Alpaca SDK: {e}") from e
+    """Get Alpaca REST API class."""
     return REST
 
 
