@@ -78,12 +78,34 @@ def _initialize_bot_context_post_setup(ctx: Any) -> None:
             try:
                 data_source_health_check(ctx, REGIME_SYMBOLS)  # type: ignore[name-defined]
                 _log.info("Post-setup data source health check completed.")
-            except Exception as e:
-                _log.warning("Post-setup health check skipped: %s", e)
+            except (
+                FileNotFoundError,
+                OSError,
+                KeyError,
+                ValueError,
+                TypeError,
+                TimeoutError,
+                ConnectionError,
+            ) as e:  # AI-AGENT-REF: tighten health probe error handling
+                _log.warning(
+                    "HEALTH_DATA_PROBE_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e)},
+                )
         else:
             _log.debug("Post-setup health check not available; skipping.")
-    except Exception as e:
-        _log.warning("Post-setup hook encountered a non-fatal error: %s", e)
+    except (
+        FileNotFoundError,
+        OSError,
+        KeyError,
+        ValueError,
+        TypeError,
+        TimeoutError,
+        ConnectionError,
+    ) as e:  # AI-AGENT-REF: tighten health probe error handling
+        _log.warning(
+            "HEALTH_DATA_PROBE_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
 
 
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
@@ -2427,8 +2449,15 @@ def safe_alpaca_get_account(ctx: BotContext):
     """Safely get account information."""
     if ctx.api is None:
         _log.warning("ctx.api is None - Alpaca trading client unavailable")
-        return None
-    return ctx.api.get_account()
+        return False
+    try:
+        return ctx.api.get_account()
+    except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: explicit error logging for account fetch
+        _log.warning(
+            "HEALTH_ACCOUNT_FETCH_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
+        return False
 
 
 # ─── C. HELPERS ────────────────────────────────────────────────────────────────
@@ -4557,8 +4586,20 @@ def pre_trade_health_check(
                 symbol=sym,
             )
             _validate_timezones(df, results, sym)
-        except Exception as exc:
-            results["failures"].append((sym, str(exc)))
+        except (
+            FileNotFoundError,
+            OSError,
+            KeyError,
+            ValueError,
+            TypeError,
+            TimeoutError,
+            ConnectionError,
+        ) as e:  # AI-AGENT-REF: explicit error logging for data health
+            results["failures"].append((sym, str(e)))
+            _log.warning(
+                "HEALTH_DATA_PROBE_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
     return results
 
 
@@ -9243,8 +9284,20 @@ def health() -> str:
             raise RuntimeError("runtime not ready")
         pre_trade_health_check(runtime, runtime.tickers or REGIME_SYMBOLS)
         status = "ok"
-    except Exception as exc:
-        status = f"degraded: {exc}"
+    except (
+        FileNotFoundError,
+        OSError,
+        KeyError,
+        ValueError,
+        TypeError,
+        TimeoutError,
+        ConnectionError,
+    ) as e:  # AI-AGENT-REF: explicit error logging for data health
+        status = f"degraded: {e}"
+        _log.warning(
+            "HEALTH_DATA_PROBE_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
     summary = {
         "status": status,
         "no_signal_events": state.no_signal_events,
@@ -9571,8 +9624,19 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
     try:
         summary = pre_trade_health_check(runtime, symbols)
         _log.info("PRE_TRADE_HEALTH", extra=summary)
-    except Exception as exc:
-        _log.warning(f"pre_trade_health_check failure: {exc}")
+    except (
+        FileNotFoundError,
+        OSError,
+        KeyError,
+        ValueError,
+        TypeError,
+        TimeoutError,
+        ConnectionError,
+    ) as e:  # AI-AGENT-REF: explicit error logging for data health
+        _log.warning(
+            "HEALTH_DATA_PROBE_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
     with portfolio_lock:
         runtime.portfolio_weights = portfolio.compute_portfolio_weights(runtime, symbols)
     acct = safe_alpaca_get_account(runtime)
@@ -10635,8 +10699,19 @@ def main() -> None:
                     _log.warning(
                         "Initial minute prefetch failed for %s: %s", sym, exc
                     )
-        except Exception as exc:
-            _log.error(f"startup health check failed: {exc}")
+        except (
+            FileNotFoundError,
+            OSError,
+            KeyError,
+            ValueError,
+            TypeError,
+            TimeoutError,
+            ConnectionError,
+        ) as e:  # AI-AGENT-REF: explicit error logging for data health
+            _log.warning(
+                "HEALTH_DATA_PROBE_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             sys.exit(1)
 
         # ─── WARM-CACHE SENTIMENT FOR ALL TICKERS ─────────────────────────────────────
