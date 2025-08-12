@@ -1,0 +1,26 @@
+# CODEOWNERS enforces default reviewers for changes.
+# Patterns are evaluated top-to-bottom; last match wins.
+
+# All files require at least the core owner to review.
+*                                       @OWNER_HANDLE
+
+# Critical runtime flow
+/ai_trading/core/bot_engine.py          @OWNER_HANDLE @REVIEW_TEAM
+/ai_trading/runner.py                   @OWNER_HANDLE @REVIEW_TEAM
+/ai_trading/rebalancer.py               @OWNER_HANDLE @REVIEW_TEAM
+
+# Risk, monitoring, and execution layers
+/ai_trading/risk/**                     @OWNER_HANDLE @REVIEW_TEAM
+/ai_trading/monitoring/**               @OWNER_HANDLE @REVIEW_TEAM
+/ai_trading/execution/**                @OWNER_HANDLE @REVIEW_TEAM
+
+# Strategy surfaces (guard changes to strategy logic)
+/ai_trading/strategies/**               @OWNER_HANDLE @REVIEW_TEAM
+
+# Config & runtime definitions
+/ai_trading/core/runtime.py             @OWNER_HANDLE @REVIEW_TEAM
+/ai_trading/config/**                   @OWNER_HANDLE @REVIEW_TEAM
+
+# Docs are flexible but still notify the owner
+/*.md                                   @OWNER_HANDLE
+/docs/**                                @OWNER_HANDLE
