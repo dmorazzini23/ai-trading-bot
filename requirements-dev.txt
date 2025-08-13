@@ -1,0 +1,5 @@
+pytest
+pytest-xdist
+pydantic
+pandas_ta
+yfinance
