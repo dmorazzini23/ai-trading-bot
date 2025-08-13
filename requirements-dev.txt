@@ -16,7 +16,7 @@ pandas-ta
 pandas-market-calendars>=4.4,<5.0
 alpaca-trade-api>=3.0,<4.0
 cachetools>=5.3,<6.0
-yfinance
+yfinance>=0.2.40,<0.3  # AI-AGENT-REF: pin yfinance for CI
 
 # System/process utilities used by perf checks & test helpers (CI-only)
 # Pin to <6 to avoid upcoming API changes that may break older helpers.

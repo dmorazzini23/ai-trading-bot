@@ -83,3 +83,14 @@ c = get_alpaca_config()
 print("alpaca_cfg:", bool(c.base_url and c.key_id))
 PY
 
+# AI-AGENT-REF: smoke test yfinance availability
+python - <<'PY'
+import os, importlib
+os.environ.setdefault("YFINANCE_STUB","1")
+m = importlib.import_module("yfinance")
+print("yfinance import ok:", getattr(m, "__version__", "unknown"))
+has_dl = hasattr(m, "download")
+t = getattr(m, "Ticker", None)
+print("has_download:", has_dl, "has_Ticker:", bool(t))
+PY
+
