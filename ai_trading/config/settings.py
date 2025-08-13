@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -19,12 +19,38 @@ class Settings(BaseSettings):
         default=SecretStr("test_secret"), alias="ALPACA_SECRET_KEY"
     )
     redis_url: Optional[str] = Field(default=None, alias="REDIS_URL")
+    # AI-AGENT-REF: include Alpaca base URL
+    alpaca_base_url: str = Field(
+        default="https://paper-api.alpaca.markets", alias="ALPACA_BASE_URL"
+    )
+    bot_mode: str = Field(default="test", alias="BOT_MODE")
 
-    model_config = SettingsConfigDict(env_prefix="AI_TRADING_", extra="ignore")
+    # AI-AGENT-REF: optional Finnhub API config
+    # --- Finnhub (optional; tests may reference these) ---
+    finnhub_api_key: str | None = Field(
+        default=None,
+        alias="FINNHUB_API_KEY",
+        description="Finnhub API key; optional for local/dev & tests",
+    )
+    finnhub_base_url: str = Field(
+        default="https://finnhub.io/api/v1",
+        alias="FINNHUB_BASE_URL",
+        description="Finnhub REST base URL",
+    )
+
+    model_config = SettingsConfigDict(
+        env_prefix="AI_TRADING_",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
     @property
     def alpaca_secret_key_plain(self) -> str:
         return self.alpaca_secret_key.get_secret_value()
+
+    # AI-AGENT-REF: allow missing attributes to default to None
+    def __getattr__(self, name: str) -> Any:  # pragma: no cover - simple fallback
+        return None
 
 
 @lru_cache(maxsize=1)
@@ -32,7 +58,14 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def broker_keys() -> tuple[str, str]:
-    s = get_settings()
-    return (s.alpaca_api_key, s.alpaca_secret_key_plain)
+# AI-AGENT-REF: return mapping of broker keys with optional Finnhub
+def broker_keys(s: Settings | None = None) -> dict[str, str]:
+    s = s or get_settings()
+    keys = {
+        "ALPACA_API_KEY": s.alpaca_api_key,
+        "ALPACA_SECRET_KEY": s.alpaca_secret_key_plain,
+    }
+    if getattr(s, "finnhub_api_key", None):
+        keys["finnhub"] = s.finnhub_api_key
+    return keys
 

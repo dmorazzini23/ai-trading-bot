@@ -1,6 +1,9 @@
 #!/usr/bin/env sh
 set -euo pipefail
 
+# AI-AGENT-REF: seed dummy Finnhub key for CI
+export FINNHUB_API_KEY="${FINNHUB_API_KEY:-dummy-ci-key}"
+
 
 # Ensure dev deps (pytest, xdist, pydantic) are available locally
 if [ -f requirements-dev.txt ]; then
@@ -78,7 +81,7 @@ except Exception as e:
 PY
 
 python - <<'PY'
-from ai_trading.config import get_alpaca_config
+from ai_trading.config.alpaca import get_alpaca_config
 c = get_alpaca_config()
 print("alpaca_cfg:", bool(c.base_url and c.key_id))
 PY
