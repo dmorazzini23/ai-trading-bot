@@ -106,8 +106,9 @@ class AlpacaExecutionEngine:
             import os
 
             if os.environ.get("PYTEST_RUNNING"):
-                from tests.mocks import MockTradingClient
-
+                from ai_trading.execution.mocks import (
+                    MockTradingClient,
+                )  # AI-AGENT-REF: internal test mock
                 self.trading_client = MockTradingClient()
                 logger.info("Mock Alpaca client initialized for testing")
             else:
