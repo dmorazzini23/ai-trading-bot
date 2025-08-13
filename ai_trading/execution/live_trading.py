@@ -8,9 +8,12 @@ retry mechanisms, circuit breakers, and comprehensive monitoring.
 import logging
 import time
 from datetime import UTC, datetime
+from typing import Optional, Dict, Any  # AI-AGENT-REF: typed helpers
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
+
+_log = logging.getLogger(__name__)  # AI-AGENT-REF: module logger
 
 # Internal config import
 from ai_trading.config import get_alpaca_config, AlpacaConfig
@@ -24,6 +27,19 @@ from alpaca.trading.requests import (
     MarketOrderRequest,
 )
 from alpaca_trade_api.rest import APIError
+
+
+def _req_str(name: str, v: Optional[str]) -> str:  # AI-AGENT-REF: required string validator
+    if not v:
+        raise ValueError(f"{name}_empty")
+    return v
+
+
+def _pos_num(name: str, v) -> float:  # AI-AGENT-REF: positive number validator
+    x = float(v)
+    if not (x > 0):
+        raise ValueError(f"{name}_nonpositive:{v}")
+    return x
 
 
 class AlpacaExecutionEngine:
@@ -142,6 +158,16 @@ class AlpacaExecutionEngine:
         if not self._pre_execution_checks():
             return None
 
+        try:  # AI-AGENT-REF: validate submit inputs
+            symbol = _req_str("symbol", symbol)
+            quantity = int(_pos_num("qty", quantity))
+        except (ValueError, TypeError) as e:
+            _log.error(
+                "ORDER_INPUT_INVALID",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
+            raise
+
         start_time = time.time()
         order_data = {
             "symbol": symbol,
@@ -157,20 +183,9 @@ class AlpacaExecutionEngine:
         logger.info(f"Submitting market order: {side} {quantity} {symbol}")
 
         # Execute with retry logic
-        try:
-            result = self._execute_with_retry(
-                self._submit_order_to_alpaca, order_data
-            )
-        except (APIError, TimeoutError, ConnectionError) as e:
-            logger.error(
-                "ORDER_API_FAILED",
-                extra={
-                    "cause": e.__class__.__name__,
-                    "detail": str(e),
-                    "op": "submit",
-                },
-            )  # AI-AGENT-REF: log submission failure
-            raise
+        result = self._execute_with_retry(
+            self._submit_order_to_alpaca, order_data
+        )
 
         # Update statistics
         execution_time = time.time() - start_time
@@ -207,6 +222,17 @@ class AlpacaExecutionEngine:
         if not self._pre_execution_checks():
             return None
 
+        try:  # AI-AGENT-REF: validate submit inputs
+            symbol = _req_str("symbol", symbol)
+            quantity = int(_pos_num("qty", quantity))
+            limit_price = _pos_num("limit_price", limit_price)
+        except (ValueError, TypeError) as e:
+            _log.error(
+                "ORDER_INPUT_INVALID",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
+            raise
+
         start_time = time.time()
         order_data = {
             "symbol": symbol,
@@ -225,20 +251,9 @@ class AlpacaExecutionEngine:
         )
 
         # Execute with retry logic
-        try:
-            result = self._execute_with_retry(
-                self._submit_order_to_alpaca, order_data
-            )
-        except (APIError, TimeoutError, ConnectionError) as e:
-            logger.error(
-                "ORDER_API_FAILED",
-                extra={
-                    "cause": e.__class__.__name__,
-                    "detail": str(e),
-                    "op": "submit",
-                },
-            )  # AI-AGENT-REF: log submission failure
-            raise
+        result = self._execute_with_retry(
+            self._submit_order_to_alpaca, order_data
+        )
 
         # Update statistics
         execution_time = time.time() - start_time
@@ -271,38 +286,24 @@ class AlpacaExecutionEngine:
         if not self._pre_execution_checks():
             return False
 
+        try:  # AI-AGENT-REF: validate cancel inputs
+            order_id = _req_str("order_id", order_id)
+        except (ValueError, TypeError) as e:
+            _log.error(
+                "ORDER_INPUT_INVALID",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
+            raise
+
         logger.info(f"Cancelling order: {order_id}")
 
-        try:
-            result = self._execute_with_retry(self._cancel_order_alpaca, order_id)
-            if result:
-                logger.info(f"Order cancelled successfully: {order_id}")
-                return True
-            else:
-                logger.error(f"Failed to cancel order: {order_id}")
-                return False
-
-        except (ValueError, KeyError) as e:
-            logger.error(
-                "INVALID_ORDER_DATA",
-                extra={
-                    "cause": e.__class__.__name__,
-                    "detail": str(e),
-                    "order_id": order_id,
-                },
-            )
+        result = self._execute_with_retry(self._cancel_order_alpaca, order_id)
+        if result:
+            logger.info(f"Order cancelled successfully: {order_id}")
+            return True
+        else:
+            logger.error(f"Failed to cancel order: {order_id}")
             return False
-        except (APIError, TimeoutError, ConnectionError) as e:
-            logger.error(
-                "ORDER_API_FAILED",
-                extra={
-                    "cause": e.__class__.__name__,
-                    "detail": str(e),
-                    "op": "cancel",
-                    "order_id": order_id,
-                },
-            )  # AI-AGENT-REF: log cancellation failure cause
-            raise
 
     def get_order_status(self, order_id: str) -> dict | None:
         """
@@ -510,7 +511,7 @@ class AlpacaExecutionEngine:
         return True
 
     # Alpaca API wrapper methods
-    def _submit_order_to_alpaca(self, order_data: dict) -> dict:
+    def _submit_order_to_alpaca(self, order_data: Dict[str, Any]) -> Dict[str, Any]:
         """Submit order to Alpaca API."""
         import os
 
@@ -522,27 +523,37 @@ class AlpacaExecutionEngine:
 
             # Validate symbol - reject clearly invalid symbols
             if not symbol or symbol == "INVALID" or len(symbol) < 1:
-                logger.error(f"Invalid symbol rejected: {symbol}")
+                _log.error(f"Invalid symbol rejected: {symbol}")
                 return None
 
             # Validate quantity - reject negative or zero quantities
             if quantity <= 0:
-                logger.error(f"Invalid quantity rejected: {quantity}")
+                _log.error(f"Invalid quantity rejected: {quantity}")
                 return None
 
             # Validate side
             if side not in ["buy", "sell"]:
-                logger.error(f"Invalid side rejected: {side}")
+                _log.error(f"Invalid side rejected: {side}")
                 return None
 
             # Return mock response for valid orders in testing
-            return {
+            mock_resp = {
                 "id": f"mock_order_{int(time.time())}",
                 "status": "filled",
                 "symbol": order_data["symbol"],
                 "side": order_data["side"],
                 "quantity": order_data["quantity"],
             }
+            _log.debug(
+                "ORDER_SUBMIT_OK",
+                extra={
+                    "symbol": order_data["symbol"],
+                    "qty": order_data["quantity"],
+                    "side": order_data["side"],
+                    "id": mock_resp["id"],
+                },
+            )
+            return mock_resp
         else:
             # Real Alpaca API call
             if order_data["type"] == "market":
@@ -569,26 +580,67 @@ class AlpacaExecutionEngine:
                     limit_price=order_data["limit_price"],
                 )
 
-            response = self.trading_client.submit_order(request)
-            return {
-                "id": response.id,
-                "status": response.status,
-                "symbol": response.symbol,
-                "side": response.side,
-                "quantity": response.qty,
-                "filled_qty": response.filled_qty,
-                "filled_avg_price": response.filled_avg_price,
-            }
+            try:  # AI-AGENT-REF: structured broker call
+                resp = self.trading_client.submit_order(request)
+            except (APIError, TimeoutError, ConnectionError) as e:
+                _log.error(
+                    "ORDER_API_FAILED",
+                    extra={
+                        "op": "submit",
+                        "cause": e.__class__.__name__,
+                        "detail": str(e),
+                        "symbol": order_data.get("symbol"),
+                        "qty": order_data.get("quantity"),
+                        "side": order_data.get("side"),
+                        "type": order_data.get("type"),
+                        "time_in_force": order_data.get("time_in_force"),
+                    },
+                )
+                raise
+            else:
+                _log.debug(
+                    "ORDER_SUBMIT_OK",
+                    extra={
+                        "symbol": order_data.get("symbol"),
+                        "qty": order_data.get("quantity"),
+                        "side": order_data.get("side"),
+                        "id": getattr(resp, "id", None),
+                    },
+                )
+                return {
+                    "id": resp.id,
+                    "status": resp.status,
+                    "symbol": resp.symbol,
+                    "side": resp.side,
+                    "quantity": resp.qty,
+                    "filled_qty": resp.filled_qty,
+                    "filled_avg_price": resp.filled_avg_price,
+                }
 
     def _cancel_order_alpaca(self, order_id: str) -> bool:
         """Cancel order via Alpaca API."""
         import os
 
         if os.environ.get("PYTEST_RUNNING"):
+            _log.debug("ORDER_CANCEL_OK", extra={"id": order_id})  # AI-AGENT-REF: mock cancel success
             return True
         else:
-            self.trading_client.cancel_order_by_id(order_id)
-            return True
+            try:  # AI-AGENT-REF: structured broker call
+                resp = self.trading_client.cancel_order_by_id(order_id)
+            except (APIError, TimeoutError, ConnectionError) as e:
+                _log.error(
+                    "ORDER_API_FAILED",
+                    extra={
+                        "op": "cancel",
+                        "cause": e.__class__.__name__,
+                        "detail": str(e),
+                        "id": order_id,
+                    },
+                )
+                raise
+            else:
+                _log.debug("ORDER_CANCEL_OK", extra={"id": order_id})
+                return True
 
     def _get_order_status_alpaca(self, order_id: str) -> dict:
         """Get order status via Alpaca API."""
