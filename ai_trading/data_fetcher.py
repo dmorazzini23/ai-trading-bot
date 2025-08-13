@@ -306,10 +306,7 @@ def _fetch_bars(
         "timeframe": timeframe,
         "feed": feed,
     }
-    headers = {
-        "APCA-API-KEY-ID": ALPACA_API_KEY,
-        "APCA-API-SECRET-KEY": ALPACA_SECRET_KEY,
-    }
+    headers = CFG.alpaca_headers  # AI-AGENT-REF: canonical Alpaca headers
     _log_http_request("GET", url, params, headers)
     delay = 1.0
     for attempt in range(3):

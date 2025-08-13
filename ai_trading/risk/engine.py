@@ -82,7 +82,7 @@ class RiskEngine:
             if (
                 StockHistoricalDataClient
                 and getattr(s, "alpaca_api_key", None)
-                and getattr(s, "alpaca_secret_key", None)
+                and getattr(s, "alpaca_secret_key_plain", None)  # AI-AGENT-REF: ensure plain secret
             ):
                 self.data_client = StockHistoricalDataClient(
                     api_key=s.alpaca_api_key,
