@@ -158,8 +158,11 @@ class TransactionCostCalculator:
 
             return spread_cost
 
-        except Exception as e:
-            logger.error(f"Error calculating spread cost for {symbol}: {e}")
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+            logger.error(
+                "SPREAD_COST_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+            )
             # Conservative fallback
             price = market_data.get('prices', {}).get(symbol, 100.0)
             return abs(trade_size) * price * 0.001  # 10 bps fallback
@@ -191,8 +194,11 @@ class TransactionCostCalculator:
 
             return commission
 
-        except Exception as e:
-            logger.error(f"Error calculating commission for {symbol}: {e}")
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+            logger.error(
+                "COMMISSION_CALC_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+            )
             return max(self.min_commission, trade_value * 0.0001)  # 1bp fallback
 
     def calculate_market_impact(self,
@@ -248,8 +254,11 @@ class TransactionCostCalculator:
 
             return temporary_impact, permanent_impact
 
-        except Exception as e:
-            logger.error(f"Error calculating market impact for {symbol}: {e}")
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+            logger.error(
+                "MARKET_IMPACT_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+            )
             # Conservative fallback
             trade_value = abs(trade_size) * market_data.get('prices', {}).get(symbol, 100.0)
             impact = trade_value * 0.005  # 50 bps fallback
@@ -287,8 +296,11 @@ class TransactionCostCalculator:
 
             return opportunity_cost
 
-        except Exception as e:
-            logger.error(f"Error calculating opportunity cost for {symbol}: {e}")
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+            logger.error(
+                "OPPORTUNITY_COST_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+            )
             return 0.0
 
     def calculate_borrowing_cost(self,
@@ -325,8 +337,11 @@ class TransactionCostCalculator:
 
             return borrowing_cost
 
-        except Exception as e:
-            logger.error(f"Error calculating borrowing cost for {symbol}: {e}")
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+            logger.error(
+                "BORROWING_COST_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+            )
             return 0.0
 
     def calculate_total_transaction_cost(self,
@@ -393,8 +408,11 @@ class TransactionCostCalculator:
                 cost_percentage=cost_percentage
             )
 
-        except Exception as e:
-            logger.error(f"Error calculating transaction cost for {symbol}: {e}")
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+            logger.error(
+                "TRANSACTION_COST_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+            )
             # Conservative fallback
             fallback_cost = abs(trade_size) * price * 0.01  # 1% fallback
             return TransactionCostBreakdown(
@@ -475,8 +493,11 @@ class TransactionCostCalculator:
         except KeyError as e:
             logger.warning(f"Missing market data for {symbol}: {e}")
             raise KeyError(f"Required market data missing: {str(e)}")
-        except Exception as e:
-            logger.error(f"Error validating trade profitability for {symbol}: {e}")
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+            logger.error(
+                "PROFITABILITY_VALIDATION_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+            )
             return ProfitabilityAnalysis(
                 expected_profit=expected_profit,
                 transaction_cost=abs(expected_profit) * 0.5,  # Assume high cost
@@ -504,7 +525,11 @@ class TransactionCostCalculator:
 
             return spread_estimates.get(liquidity_tier, 0.005)
 
-        except Exception:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+            logger.warning(
+                "SPREAD_PERCENT_ESTIMATE_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+            )
             return 0.005  # 50 bps default
 
     def _classify_liquidity(self, symbol: str, market_data: dict[str, Any]) -> LiquidityTier:
@@ -523,7 +548,11 @@ class TransactionCostCalculator:
             else:
                 return LiquidityTier.ILLIQUID
 
-        except Exception:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+            logger.warning(
+                "LIQUIDITY_CLASSIFICATION_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+            )
             return LiquidityTier.MEDIUM_LIQUIDITY
 
 
