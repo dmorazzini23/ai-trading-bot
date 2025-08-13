@@ -37,9 +37,8 @@ SENTIMENT_API_URL = S.sentiment_api_url
 
 # FinBERT model initialization
 import torch
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
 try:
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
     _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
     _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
         "yiyanghkust/finbert-tone"
@@ -47,25 +46,15 @@ try:
     _FINBERT_MODEL.eval()
     _HUGGINGFACE_AVAILABLE = True
     logger.info("FinBERT loaded successfully")
-except (ImportError, ModuleNotFoundError) as e:
-    logger.warning("FinBERT load failed - transformers not available: %s", e)
-    from tests.support.mocks_runtime import MockFinBERT
-    _FINBERT_TOKENIZER = MockFinBERT()
-    _FINBERT_MODEL = MockFinBERT()
+except Exception:
+    class _MockFinBERT:
+        def __call__(self, *args, **kwargs):
+            return [{"label": "neutral", "score": 0.0}]
+
+    _FINBERT_TOKENIZER = _MockFinBERT()
+    _FINBERT_MODEL = _MockFinBERT()
     _HUGGINGFACE_AVAILABLE = False
-except (OSError, IOError) as e:
-    logger.warning("FinBERT load failed - model download/IO error: %s", e)
-    from tests.support.mocks_runtime import MockFinBERT
-    _FINBERT_TOKENIZER = MockFinBERT()
-    _FINBERT_MODEL = MockFinBERT()
-    _HUGGINGFACE_AVAILABLE = False
-except Exception as e:
-    logger.warning("FinBERT load failed - unexpected error: %s", e,
-                  extra={"component": "sentiment", "error_type": "model_load"})
-    from tests.support.mocks_runtime import MockFinBERT
-    _FINBERT_TOKENIZER = MockFinBERT()
-    _FINBERT_MODEL = MockFinBERT()
-    _HUGGINGFACE_AVAILABLE = False
+    logger.info("Transformers unavailable; using local sentiment stub")
 
 # Sentiment caching and circuit breaker - Enhanced for critical rate limiting fix
 SENTIMENT_TTL_SEC = 600  # 10 minutes normal cache

@@ -82,3 +82,13 @@ class RLAgent:
         except Exception as exc:
             logger.error("RL prediction failed: %s", exc)
             return None
+
+
+class RLTrader(RLAgent):
+    """Backward-compatible alias used by bot_engine."""
+    pass
+
+try:
+    __all__.append("RLTrader")
+except NameError:
+    __all__ = ["RLAgent", "RLTrader"]

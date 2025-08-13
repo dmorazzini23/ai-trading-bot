@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     )
     bot_mode: str = Field(default="test", alias="BOT_MODE")
 
+    REGIME_MIN_ROWS: int = Field(200, alias="REGIME_MIN_ROWS")
+    data_warmup_lookback_days: int = Field(60, alias="DATA_WARMUP_LOOKBACK_DAYS")
+    disable_daily_retrain: bool = Field(False, alias="DISABLE_DAILY_RETRAIN")
+    enable_sklearn: bool = Field(False, alias="ENABLE_SKLEARN")
+    intraday_lookback_minutes: int = Field(120, alias="INTRADAY_LOOKBACK_MINUTES")
+
     # AI-AGENT-REF: runtime defaults for deterministic behavior and loops
     seed: int | None = 42
     loop_interval_seconds: int = 60

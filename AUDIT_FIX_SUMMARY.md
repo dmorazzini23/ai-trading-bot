@@ -102,3 +102,10 @@ AAPL,2025-08-05T17:00:00+00:00,150.75,,,100,buy,MOMENTUM,,,,
 
 ## Impact
 This fix prevents systematic data corruption that was affecting trading decisions and compliance auditing. The trade log CSV files now maintain proper data integrity with correct column alignment.
+
+## Latest Changes
+
+- Removed hard `data_client` dependency from `RiskEngine` and introduced a lazy Alpaca resolver for historical data.
+- Added `RLTrader` alias to maintain backward compatibility with modules expecting the old class name.
+- Completed `Settings` and `TradingConfig` with missing defaults for lookbacks, sklearn enablement, and retraining flags.
+- Replaced test mock imports in `sentiment` analysis with a local stub to prevent test leakage into production.
