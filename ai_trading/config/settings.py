@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     def alpaca_secret_key_plain(self) -> str:
         return self.alpaca_secret_key.get_secret_value()
 
+    @property
+    def alpaca_headers(self) -> dict[str, str]:
+        """Canonical Alpaca auth headers as plain strings."""  # AI-AGENT-REF: standard header builder
+        return {
+            "APCA-API-KEY-ID": self.alpaca_api_key or "",
+            "APCA-API-SECRET-KEY": self.alpaca_secret_key_plain or "",
+        }
+
     # AI-AGENT-REF: allow missing attributes to default to None
     def __getattr__(self, name: str) -> Any:  # pragma: no cover - simple fallback
         return None

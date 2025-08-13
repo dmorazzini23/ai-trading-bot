@@ -74,8 +74,8 @@ def validate_environment() -> None:
     # Check critical environment variables
     if not cfg.webhook_secret:
         raise RuntimeError("WEBHOOK_SECRET is required")
-    if not cfg.alpaca_api_key or not cfg.alpaca_secret_key:
-        raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
+    if not cfg.alpaca_api_key or not cfg.alpaca_secret_key_plain:
+        raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")  # AI-AGENT-REF: check plain secret
 
     # Check optional but important dependencies
     import alpaca_trade_api

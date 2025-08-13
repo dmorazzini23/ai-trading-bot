@@ -16,10 +16,7 @@ S = get_settings()
 _TRADING_BASE = (S.alpaca_base_url or "https://paper-api.alpaca.markets").rstrip("/")
 _DATA_BASE = "https://data.alpaca.markets"  # market data v2
 
-_HEADERS = {
-    "APCA-API-KEY-ID": S.alpaca_api_key or "",
-    "APCA-API-SECRET-KEY": S.alpaca_secret_key_plain or "",  # AI-AGENT-REF: use plain secret string
-}
+_HEADERS = S.alpaca_headers  # AI-AGENT-REF: canonical Alpaca headers
 
 def _resolve_url(path_or_url: str) -> str:
     if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
