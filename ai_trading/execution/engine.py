@@ -17,9 +17,13 @@ from typing import Any, Dict, Optional
 
 _log = logging.getLogger(__name__)
 
-try:
-    from alpaca_trade_api.rest import APIError  # broker REST errors
-except (ImportError, ModuleNotFoundError):  # pragma: no cover - fallback for dev/test
+from ai_trading.imports import optional_import
+
+# AI-AGENT-REF: replace ImportError guard with optional_import
+_alpaca_rest = optional_import("alpaca_trade_api.rest")
+if _alpaca_rest is not None:
+    APIError = _alpaca_rest.APIError  # type: ignore[attr-defined]
+else:  # pragma: no cover - fallback for dev/test
     class APIError(Exception):
         pass
 

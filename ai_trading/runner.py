@@ -19,6 +19,30 @@ _bot_engine = None
 _bot_state_class = None
 
 
+# AI-AGENT-REF: startup import preflight
+def _preflight_import_health() -> None:
+    import importlib
+    import os
+
+    if os.environ.get("IMPORT_PREFLIGHT_DISABLED", "").lower() in {"1", "true"}:
+        return
+
+    core_modules = [
+        "ai_trading.core.bot_engine",
+        "ai_trading.risk.engine",
+        "ai_trading.rl_trading",
+        "ai_trading.telemetry.metrics_logger",
+    ]
+    for mod in core_modules:
+        try:
+            importlib.import_module(mod)
+        except Exception as exc:  # pragma: no cover - surface import issues
+            log.error("IMPORT_PREFLIGHT_FAILED", extra={"module": mod, "error": repr(exc)})
+            if os.environ.get("FAIL_FAST_IMPORTS", "").lower() in {"1", "true"}:
+                raise SystemExit(1)
+    log.info("IMPORT_PREFLIGHT_OK")
+
+
 def _load_engine():
     """
     Lazy loader for bot engine components to avoid import-time side effects.
@@ -141,3 +165,13 @@ def run_cycle() -> None:
         log.exception("Trading cycle failed: %s", e)
     finally:
         _run_lock.release()
+
+
+def main() -> None:
+    """Entry point for command-line invocation."""
+    run_cycle()
+
+
+if __name__ == "__main__":
+    _preflight_import_health()
+    main()
