@@ -743,10 +743,10 @@ except (
 # AI-AGENT-REF: schedule is a hard dependency in pyproject.toml
 import schedule
 
-# AI-AGENT-REF: yfinance is a hard dependency in pyproject.toml
-import yfinance as yf
+# AI-AGENT-REF: optional yfinance provider
+from ai_trading.data_providers import get_yfinance, has_yfinance
 
-YFINANCE_AVAILABLE = True
+YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availability
 
 # Production imports - real Alpaca SDK
 from alpaca.data.historical import StockHistoricalDataClient
@@ -4946,18 +4946,31 @@ _calendar_cache: dict[str, pd.DataFrame] = {}
 _calendar_last_fetch: dict[str, date] = {}
 
 
+# AI-AGENT-REF: optional yfinance calendar fetch
+def _fetch_calendar_via_yf(symbol: str) -> pd.DataFrame:
+    yf = get_yfinance() if YFINANCE_AVAILABLE else None
+    if yf is None:
+        _log.warning("YF_PROVIDER_UNAVAILABLE", extra={"provider": "yfinance", "symbol": symbol})
+        return pd.DataFrame()
+    try:
+        cal = yf.Ticker(symbol).calendar
+    except HTTPError as e:
+        _log.warning("YF_CALENDAR_HTTP_ERROR", extra={"provider": "yfinance", "symbol": symbol, "cause": e.__class__.__name__, "detail": str(e)})
+        return pd.DataFrame()
+    except Exception as e:  # noqa: BLE001
+        _log.warning("YF_CALENDAR_FAILED", extra={"provider": "yfinance", "symbol": symbol, "cause": e.__class__.__name__, "detail": str(e)})
+        return pd.DataFrame()
+    if cal is None or getattr(cal, "empty", False):
+        _log.warning("YF_CALENDAR_EMPTY", extra={"provider": "yfinance", "symbol": symbol})
+        return pd.DataFrame()
+    return cal
+
+
 def get_calendar_safe(symbol: str) -> pd.DataFrame:
     today_date = date.today()
     if symbol in _calendar_cache and _calendar_last_fetch.get(symbol) == today_date:
         return _calendar_cache[symbol]
-    try:
-        cal = yf.Ticker(symbol).calendar
-    except HTTPError:
-        _log.warning(f"[Events] Rate limited for {symbol}; skipping events.")
-        cal = pd.DataFrame()
-    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-        _log.error(f"[Events] Error fetching calendar for {symbol}: {e}")
-        cal = pd.DataFrame()
+    cal = _fetch_calendar_via_yf(symbol)
     _calendar_cache[symbol] = cal
     _calendar_last_fetch[symbol] = today_date
     return cal
@@ -5284,6 +5297,24 @@ def too_correlated(ctx: BotContext, sym: str) -> bool:
     return avg_corr > limit
 
 
+# AI-AGENT-REF: optional yfinance sector fetch
+def _fetch_sector_via_yf(symbol: str) -> str | None:
+    yf = get_yfinance() if YFINANCE_AVAILABLE else None
+    if yf is None:
+        _log.warning("YF_PROVIDER_UNAVAILABLE", extra={"provider": "yfinance", "symbol": symbol})
+        return None
+    try:
+        info = yf.Ticker(symbol).info
+    except Exception as e:  # noqa: BLE001
+        _log.warning("YF_SECTOR_FAILED", extra={"provider": "yfinance", "symbol": symbol, "cause": e.__class__.__name__, "detail": str(e)})
+        return None
+    sector = info.get("sector")
+    if not sector or sector == "Unknown":
+        _log.warning("YF_SECTOR_EMPTY", extra={"provider": "yfinance", "symbol": symbol})
+        return None
+    return sector
+
+
 def get_sector(symbol: str) -> str:
     """
     Get sector classification for a stock symbol.
@@ -5420,22 +5451,16 @@ def get_sector(symbol: str) -> str:
         _log.debug(f"Using fallback sector mapping for {symbol}: {sector}")
         return sector
 
-    # Then try yfinance if available
-    if YFINANCE_AVAILABLE:
-        try:
-            ticker_info = yf.Ticker(symbol).info
-            sector = ticker_info.get("sector", "Unknown")
-            if sector and sector != "Unknown":
-                _SECTOR_CACHE[symbol] = sector
-                _log.debug(f"Retrieved sector from yfinance for {symbol}: {sector}")
-                return sector
-        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-            _log.debug(f"yfinance sector lookup failed for {symbol}: {e}")
+    sector = _fetch_sector_via_yf(symbol)
+    if sector:
+        _SECTOR_CACHE[symbol] = sector
+        _log.debug("YF_SECTOR_SUCCESS", extra={"provider": "yfinance", "symbol": symbol, "sector": sector})
+        return sector
 
     # Default to Unknown if all methods fail
     sector = "Unknown"
     _SECTOR_CACHE[symbol] = sector
-    _log.warning(f"Could not determine sector for {symbol}, using Unknown")
+    _log.warning("YF_SECTOR_UNKNOWN", extra={"provider": "yfinance", "symbol": symbol})
     return sector
 
 
