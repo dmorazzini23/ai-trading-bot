@@ -250,8 +250,22 @@ class OrderManager:
     def _ensure_idempotency_cache(self) -> OrderIdempotencyCache:
         """Ensure idempotency cache is instantiated."""
         if self._idempotency_cache is None:
-            # AI-AGENT-REF: instantiate idempotency cache
-            self._idempotency_cache = OrderIdempotencyCache()
+            try:
+                # AI-AGENT-REF: instantiate idempotency cache
+                self._idempotency_cache = OrderIdempotencyCache()
+            except (
+                ValueError,
+                KeyError,
+                TypeError,
+                OSError,
+                FileNotFoundError,
+                PermissionError,
+            ) as e:
+                logger.error(
+                    "IDEMPOTENCY_CACHE_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e)},
+                )
+                raise
         return self._idempotency_cache
 
     def submit_order(self, order: Order) -> bool:
@@ -448,11 +462,18 @@ class OrderManager:
 
             return True
 
-        except (APIError, TimeoutError, ConnectionError) as e:
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            OSError,
+            FileNotFoundError,
+            PermissionError,
+        ) as e:
             logger.error(
                 "ORDER_VALIDATION_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )  # AI-AGENT-REF: log order validation failure
+            )  # AI-AGENT-REF: narrow validation errors
             return False
 
     def _monitor_orders(self):
@@ -508,7 +529,14 @@ class OrderManager:
             for callback in self.execution_callbacks:
                 try:
                     callback(order, event_type)
-                except (APIError, TimeoutError, ConnectionError) as e:
+                except (
+                    ValueError,
+                    KeyError,
+                    TypeError,
+                    OSError,
+                    FileNotFoundError,
+                    PermissionError,
+                ) as e:
                     logger.error(
                         "CALLBACK_FAILED",
                         extra={
@@ -517,7 +545,14 @@ class OrderManager:
                             "order_id": order.id,
                         },
                     )
-        except (APIError, TimeoutError, ConnectionError) as e:
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            OSError,
+            FileNotFoundError,
+            PermissionError,
+        ) as e:
             logger.error(
                 "CALLBACK_NOTIFICATION_FAILED",
                 extra={
@@ -525,7 +560,7 @@ class OrderManager:
                     "detail": str(e),
                     "order_id": order.id,
                 },
-            )
+            )  # AI-AGENT-REF: narrow callback errors
 
 
 class ExecutionEngine:
@@ -621,11 +656,18 @@ class ExecutionEngine:
                 self.execution_stats["rejected_orders"] += 1
                 return None
 
-        except (APIError, TimeoutError, ConnectionError) as e:
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            OSError,
+            FileNotFoundError,
+            PermissionError,
+        ) as e:
             logger.error(
                 "ORDER_EXECUTION_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )  # AI-AGENT-REF: log execution failure
+            )  # AI-AGENT-REF: narrow execution errors
             self.execution_stats["rejected_orders"] += 1
             return None
 
@@ -667,7 +709,14 @@ class ExecutionEngine:
                     + fill_time
                 ) / self.execution_stats["filled_orders"]
 
-        except (APIError, TimeoutError, ConnectionError) as e:
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            OSError,
+            FileNotFoundError,
+            PermissionError,
+        ) as e:
             logger.error(
                 "SIMULATION_FAILED",
                 extra={
@@ -675,7 +724,7 @@ class ExecutionEngine:
                     "detail": str(e),
                     "order_id": order.id,
                 },
-            )
+            )  # AI-AGENT-REF: narrow simulation errors
 
     def get_execution_stats(self) -> dict:
         """Get execution engine statistics."""

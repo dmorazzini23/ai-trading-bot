@@ -6,6 +6,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from alpaca_trade_api.rest import APIError
 from ai_trading.config import get_settings
 from ai_trading.portfolio import compute_portfolio_weights
 
@@ -142,8 +143,11 @@ class TaxAwareRebalancer:
                 ),
             }
 
-        except Exception as e:
-            logger.error(f"Error calculating tax impact: {e}")
+        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+            logger.error(
+                "CALCULATE_TAX_IMPACT_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: narrow tax impact errors
             return {"error": str(e)}
 
     def identify_loss_harvesting_opportunities(
@@ -208,8 +212,11 @@ class TaxAwareRebalancer:
 
             return opportunities
 
-        except Exception as e:
-            logger.error(f"Error identifying loss harvesting opportunities: {e}")
+        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+            logger.error(
+                "LOSS_HARVEST_OPS_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: narrow harvesting errors
             return []
 
     def calculate_optimal_rebalance(
@@ -340,8 +347,11 @@ class TaxAwareRebalancer:
                 ),
             }
 
-        except Exception as e:
-            logger.error(f"Error calculating optimal rebalance: {e}")
+        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+            logger.error(
+                "CALC_OPTIMAL_REBALANCE_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: narrow optimal rebalance errors
             return {"error": str(e), "rebalance_trades": []}
 
     def _calculate_tax_efficiency(self, gain_loss: float, is_long_term: bool) -> float:
@@ -360,8 +370,11 @@ class TaxAwareRebalancer:
 
             return max(0, base_score - gain_magnitude_penalty)
 
-        except (KeyError, ValueError, TypeError, ZeroDivisionError) as e:
-            logger.exception(f"Error calculating tax efficiency score: {e}")
+        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+            logger.error(
+                "TAX_EFFICIENCY_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: structured tax efficiency error
             return 0.5
 
     def _calculate_harvest_priority(
@@ -503,8 +516,11 @@ class TaxAwareRebalancer:
 
             return recommendations
 
-        except Exception as e:
-            logger.error(f"Error generating recommendations: {e}")
+        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+            logger.error(
+                "REBALANCE_RECOMMENDATIONS_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )  # AI-AGENT-REF: narrow recommendation errors
             return ["Manual review recommended due to analysis error"]
 
 
@@ -538,8 +554,20 @@ def rebalance_portfolio(ctx) -> None:
                 ctx.rebalance_plan = rebalance_plan
                 return
 
-    except Exception as e:
-        logger.warning(f"Enhanced rebalancing failed, falling back to basic: {e}")
+    except (
+        ValueError,
+        KeyError,
+        TypeError,
+        ZeroDivisionError,
+        APIError,
+        TimeoutError,
+        ConnectionError,
+        OSError,
+    ) as e:
+        logger.warning(
+            "ENHANCED_REBALANCE_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )  # AI-AGENT-REF: narrow enhanced rebalance errors
 
     # Fallback to original rebalancing logic
     logger.info("Using basic portfolio rebalancing")
@@ -587,14 +615,41 @@ def enhanced_maybe_rebalance(ctx) -> None:
                     rebalance_portfolio(ctx)
                     _last_rebalance = now
 
-        except Exception as e:
-            logger.error(f"Error in enhanced rebalancing: {e}")
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            ZeroDivisionError,
+            APIError,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        ) as e:
+            logger.error(
+                "ENHANCED_REBALANCE_LOOP_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             # Fallback to basic rebalancing
             try:
                 rebalance_portfolio(ctx)
                 _last_rebalance = now
-            except Exception as fallback_error:
-                logger.error(f"Fallback rebalancing also failed: {fallback_error}")
+            except (
+                ValueError,
+                KeyError,
+                TypeError,
+                ZeroDivisionError,
+                APIError,
+                TimeoutError,
+                ConnectionError,
+                OSError,
+            ) as fallback_error:
+                logger.error(
+                    "FALLBACK_REBALANCE_FAILED",
+                    extra={
+                        "cause": fallback_error.__class__.__name__,
+                        "detail": str(fallback_error),
+                    },
+                )  # AI-AGENT-REF: narrow fallback errors
 
 
 def portfolio_first_rebalance(ctx) -> None:
@@ -709,13 +764,40 @@ def portfolio_first_rebalance(ctx) -> None:
         else:
             logger.info(f"PORTFOLIO_FIRST_REBALANCING_SKIPPED | {rebalance_reason}")
 
-    except Exception as e:
-        logger.error(f"Error in portfolio-first rebalancing: {e}")
+    except (
+        ValueError,
+        KeyError,
+        TypeError,
+        ZeroDivisionError,
+        APIError,
+        TimeoutError,
+        ConnectionError,
+        OSError,
+    ) as e:
+        logger.error(
+            "PORTFOLIO_FIRST_REBALANCE_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
         # Fallback to original rebalancing
         try:
             rebalance_portfolio(ctx)
-        except Exception as fallback_error:
-            logger.error(f"Fallback rebalancing failed: {fallback_error}")
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            ZeroDivisionError,
+            APIError,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        ) as fallback_error:
+            logger.error(
+                "PORTFOLIO_FIRST_FALLBACK_FAILED",
+                extra={
+                    "cause": fallback_error.__class__.__name__,
+                    "detail": str(fallback_error),
+                },
+            )  # AI-AGENT-REF: narrow portfolio-first errors
 
 
 def _check_portfolio_first_rebalancing(
@@ -766,16 +848,40 @@ def _check_portfolio_first_rebalancing(
                             f"Extreme volatility regime: {metrics.volatility_regime.value}",
                         )
 
-            except Exception as e:
-                logger.debug(f"Error in regime-based rebalancing check: {e}")
+            except (
+                ValueError,
+                KeyError,
+                TypeError,
+                ZeroDivisionError,
+                APIError,
+                TimeoutError,
+                ConnectionError,
+                OSError,
+            ) as e:
+                logger.debug(
+                    "REGIME_REBALANCE_CHECK_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e)},
+                )
 
         return (
             False,
             f"No rebalancing needed (drift={current_drift:.3f}, days={days_since_rebalance})",
         )
 
-    except Exception as e:
-        logger.error(f"Error checking portfolio-first rebalancing: {e}")
+    except (
+        ValueError,
+        KeyError,
+        TypeError,
+        ZeroDivisionError,
+        APIError,
+        TimeoutError,
+        ConnectionError,
+        OSError,
+    ) as e:
+        logger.error(
+            "CHECK_PORTFOLIO_REBALANCE_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
         return (
             current_drift > drift_threshold,
             "Error in analysis, using basic drift check",
@@ -807,8 +913,11 @@ def _get_current_positions_for_rebalancing(ctx) -> dict:
 
         return filtered_positions
 
-    except Exception as e:
-        logger.error(f"Error getting current positions: {e}")
+    except (APIError, TimeoutError, ConnectionError, OSError, ValueError) as e:
+        logger.error(
+            "GET_CURRENT_POSITIONS_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )  # AI-AGENT-REF: narrow position read errors
         return {}
 
 
@@ -828,8 +937,11 @@ def _get_target_weights_for_rebalancing(ctx) -> dict:
 
         return {}
 
-    except Exception as e:
-        logger.error(f"Error getting target weights: {e}")
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+        logger.error(
+            "GET_TARGET_WEIGHTS_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )  # AI-AGENT-REF: narrow target weight errors
         return {}
 
 
@@ -877,13 +989,29 @@ def _prepare_rebalancing_market_data(ctx) -> dict:
                                 df["volume"].tail(20).mean()
                             )
 
-            except Exception as e:
-                logger.debug(f"Could not fetch rebalancing data for {symbol}: {e}")
+            except (
+                APIError,
+                TimeoutError,
+                ConnectionError,
+                OSError,
+                ValueError,
+            ) as e:
+                logger.debug(
+                    "REBALANCE_DATA_FETCH_FAILED",
+                    extra={
+                        "cause": e.__class__.__name__,
+                        "detail": str(e),
+                        "symbol": symbol,
+                    },
+                )
 
         return market_data
 
-    except Exception as e:
-        logger.error(f"Error preparing rebalancing market data: {e}")
+    except (APIError, TimeoutError, ConnectionError, OSError, ValueError) as e:
+        logger.error(
+            "PREPARE_MARKET_DATA_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )  # AI-AGENT-REF: narrow market data errors
         return {}
 
 
@@ -920,8 +1048,19 @@ def start_rebalancer(ctx) -> threading.Thread:
                 # AI-AGENT-REF: Allow tests to break out of the loop
                 logger.debug("Rebalancer loop stopped by test")
                 break
-            except Exception as exc:  # pragma: no cover - background errors
-                logger.error("Rebalancer loop error: %s", exc)
+            except (
+                ValueError,
+                KeyError,
+                TypeError,
+                OSError,
+                APIError,
+                TimeoutError,
+                ConnectionError,
+            ) as exc:  # pragma: no cover - background errors
+                logger.error(
+                    "REBALANCER_LOOP_ERROR",
+                    extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+                )  # AI-AGENT-REF: narrow loop error
             # AI-AGENT-REF: configurable sleep interval, shorter for tests
             sleep_interval = S.rebalance_sleep_seconds
             # Detect test environment and use shorter interval
