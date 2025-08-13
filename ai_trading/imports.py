@@ -34,7 +34,7 @@ _ta = None
 def resolve_talib():
     """
     Package-safe TA-Lib import using find_spec -> import_module.
-    No try/except ImportError; clear logging; raises if missing.
+    No try/except blocks; clear logging; raises if missing.
     """
     # canonical Python package name is 'talib'
     if importlib.util.find_spec("talib") is None:

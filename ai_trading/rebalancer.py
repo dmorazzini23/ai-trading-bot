@@ -10,13 +10,7 @@ from typing import Any, Dict
 
 _log = logging.getLogger(__name__)
 
-try:  # AI-AGENT-REF: broker API error import with fallback
-    from alpaca_trade_api.rest import APIError  # type: ignore
-except ImportError:  # pragma: no cover
-    class APIError(Exception):
-        """Fallback API error for non-Alpaca environments."""
-
-        pass
+from alpaca_trade_api.rest import APIError  # type: ignore  # AI-AGENT-REF: fail fast on missing Alpaca SDK
 
 from ai_trading.config import get_settings
 from ai_trading.portfolio import compute_portfolio_weights
