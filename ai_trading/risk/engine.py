@@ -54,7 +54,7 @@ class RiskEngine:
                 logger.warning("Invalid exposure_cap_aggressive %s, using default 0.8", exposure_cap)
                 exposure_cap = 0.8
             self.global_limit = exposure_cap
-        except Exception as e:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.error("Error validating exposure_cap_aggressive: %s, using default", e)
             self.global_limit = 0.8
 
@@ -67,7 +67,7 @@ class RiskEngine:
         self._volatility_cache: dict[str, tuple] = {}
         try:
             from data_client import DataClient
-        except Exception:  # pragma: no cover - optional dependency
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):  # pragma: no cover - optional dependency  # AI-AGENT-REF: narrow exception
             self.data_client = None
         else:
             self.data_client = DataClient()
@@ -432,7 +432,7 @@ class RiskEngine:
         try:
             self.refresh_positions(ctx.api)
             logger.debug("Exposure updated successfully")
-        except Exception as exc:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:  # AI-AGENT-REF: narrow exception
             logger.warning("Failed to update exposure: %s", exc)
 
     def apply_risk_scaling(
@@ -472,7 +472,7 @@ class RiskEngine:
             # AI-AGENT-REF: Ensure signal.weight is float before arithmetic operations
             signal.weight = max(0.0, float(signal.weight) * scale)
             return signal
-        except Exception as exc:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:  # AI-AGENT-REF: narrow exception
             logger.error("Risk scaling failed: %s", exc)
             return signal
 
@@ -531,7 +531,7 @@ class RiskEngine:
                 total_equity = float(getattr(account, "equity", cash))
             else:
                 total_equity = cash
-        except Exception as e:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.warning("Error getting account equity: %s", e)
             total_equity = cash
 
@@ -566,13 +566,13 @@ class RiskEngine:
                 # Used when ATR data is unavailable or invalid
                 weight = self._apply_weight_limits(signal)
                 raw_qty = (total_equity * weight) / price
-        except Exception as exc:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:  # AI-AGENT-REF: narrow exception
             logger.warning("ATR calculation failed for %s: %s", getattr(signal, 'symbol', 'UNKNOWN'), exc)
             try:
                 # Secondary fallback to basic percentage-based sizing
                 weight = self._apply_weight_limits(signal)
                 raw_qty = (total_equity * weight) / price
-            except Exception:
+            except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):  # AI-AGENT-REF: narrow exception
                 # AI-AGENT-REF: Fallback for completely invalid signals
                 logger.warning("Failed to calculate position size, returning 0")
                 return 0
@@ -603,7 +603,7 @@ class RiskEngine:
             else:
                 qty = max(int(raw_qty), int(min_qty))
             return max(qty, 0)  # Ensure non-negative result
-        except Exception as exc:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:  # AI-AGENT-REF: narrow exception
             logger.warning("Error calculating final quantity: %s", exc)
             return 0
 
@@ -614,7 +614,7 @@ class RiskEngine:
             if not hasattr(sig, 'asset_class') or not hasattr(sig, 'strategy') or not hasattr(sig, 'weight') or not hasattr(sig, 'confidence'):
                 logger.warning("Invalid signal object missing required attributes")
                 return 0.0
-        except Exception:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):  # AI-AGENT-REF: narrow exception
             logger.warning("Error validating signal object")
             return 0.0
 
@@ -710,7 +710,7 @@ class RiskEngine:
                 garch_vol = float(np.sqrt(garch_vol))
             except (AttributeError, TypeError):
                 garch_vol = float(garch_vol ** 0.5)
-        except Exception:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):  # AI-AGENT-REF: narrow exception
             garch_vol = std_vol
 
         primary_vol = std_vol  # Use standard deviation as primary volatility for test compatibility
@@ -816,7 +816,7 @@ class RiskEngine:
 
             return True
 
-        except Exception as e:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.error("Error checking position limits for %s: %s", symbol, e)
             return False  # Fail safe - reject if we can't validate
 
@@ -871,7 +871,7 @@ class RiskEngine:
 
             return True
 
-        except Exception as e:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.error("Error validating order size for %s: %s", symbol, e)
             return False  # Fail safe - reject if we can't validate
 
@@ -1156,12 +1156,12 @@ def apply_trailing_atr_stop(
                     from ai_trading.core.bot_engine import send_exit_order
 
                     send_exit_order(context, symbol, abs(int(qty)), price, "atr_stop")
-                except Exception as exc:  # pragma: no cover - best effort
+                except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:  # pragma: no cover - best effort  # AI-AGENT-REF: narrow exception
                     logger.error("ATR stop exit failed: %s", exc)
             else:
                 logger.warning("ATR stop triggered but no context/qty provided")
             schedule_reentry_check(symbol, lookahead_days=2)
-    except Exception as e:  # pragma: no cover - defensive
+    except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # pragma: no cover - defensive  # AI-AGENT-REF: narrow exception
         logger.error("ATR stop error: %s", e)
 
 

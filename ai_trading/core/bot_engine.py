@@ -46,7 +46,7 @@ def _is_market_open_now(cfg=None) -> bool:
             return False
         open_, close_ = schedule.iloc[0]["market_open"], schedule.iloc[0]["market_close"]
         return (open_ <= now <= close_)
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         # if calendar not available, default to True (remain conservative)
         return True
 
@@ -248,7 +248,7 @@ try:
     from ai_trading.config.settings import get_settings
 
     _emit_once(logger, "config_loaded", logging.INFO, "Config settings loaded, validation deferred to runtime")
-except Exception as e:
+except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
     _log.warning("Config settings import failed: %s", e)
 
 # Provide a no-op ``profile`` decorator when line_profiler is not active.
@@ -337,7 +337,7 @@ else:
 
 try:
     from sklearn.exceptions import InconsistentVersionWarning
-except Exception:  # pragma: no cover - sklearn optional
+except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # pragma: no cover - sklearn optional  # AI-AGENT-REF: narrow exception
 
     class InconsistentVersionWarning(UserWarning):
         pass
@@ -371,6 +371,7 @@ BOT_MODE = S.bot_mode
 assert BOT_MODE is not None, "BOT_MODE must be set before using BotState"
 import csv
 import json
+from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 import logging
 import random
 import re
@@ -570,7 +571,7 @@ try:
     ):
         raise TypeError("Invalid RetryError type")
     RetryError = _TenacityRetryError  # type: ignore[assignment]
-except Exception:
+except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
 
     class RetryError(
         Exception
@@ -785,7 +786,7 @@ import pickle
 if not os.getenv("PYTEST_RUNNING"):
     try:
         from ai_trading.meta_learning import optimize_signals  # type: ignore
-    except Exception as _e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as _e:  # AI-AGENT-REF: narrow exception
         _log.warning(
             "Meta-learning unavailable (%s); proceeding without signal optimization", _e
         )
@@ -1005,7 +1006,7 @@ def _init_metrics() -> None:
 
 try:
     from ai_trading.trade_execution import ExecutionEngine  # type: ignore
-except Exception:  # pragma: no cover - allow tests with stubbed module
+except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # pragma: no cover - allow tests with stubbed module  # AI-AGENT-REF: narrow exception
 
     class ExecutionEngine:
         """
@@ -1049,7 +1050,7 @@ except Exception:  # pragma: no cover - allow tests with stubbed module
 
 try:
     from ai_trading.capital_scaling import CapitalScalingEngine
-except Exception:  # pragma: no cover - allow tests with stubbed module
+except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # pragma: no cover - allow tests with stubbed module  # AI-AGENT-REF: narrow exception
 
     class CapitalScalingEngine:
         def __init__(self, *args, **kwargs):
@@ -1110,7 +1111,7 @@ try:
         from ai_trading.data_fetcher import finnhub_client  # noqa: F401
     else:
         finnhub_client = None  # Mock client for tests
-except Exception:
+except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
     finnhub_client = None  # type: ignore
 
 # AI-AGENT-REF: Add cache size management to prevent memory leaks
@@ -1163,7 +1164,7 @@ def market_is_open(now: datetime | None = None) -> bool:
     except TimeoutError:
         _log.error("Market status check timed out, assuming market closed")
         return False
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error("Market status check failed: %s", e)
         return False
 
@@ -1261,7 +1262,7 @@ def get_latest_close(df: pd.DataFrame) -> float:
         _log.debug("get_latest_close returning: %s", result)
         return result
 
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning("get_latest_close exception: %s", e)
         return 0.0
 
@@ -1449,7 +1450,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
                 loader=lambda: get_minute_df(symbol, start_dt, now_utc), 
                 ttl=getattr(S, 'market_cache_ttl', 900)
             )
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.debug("Cache layer unavailable/failed: %s", e)
             df = get_minute_df(symbol, start_dt, now_utc)
     else:
@@ -1518,7 +1519,7 @@ def reconcile_positions(ctx: BotContext) -> None:
                 if symbol not in live_positions or live_positions[symbol] == 0:
                     ctx.stop_targets.pop(symbol, None)
                     ctx.take_profit_targets.pop(symbol, None)
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         _log.exception("reconcile_positions failed", exc_info=exc)
 
 
@@ -1561,7 +1562,7 @@ def ensure_finbert(cfg=None):
             try:
                 from ai_trading.config.management import TradingConfig
                 enabled = bool(getattr(TradingConfig.from_env(), "enable_finbert", False))
-            except Exception:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
                 enabled = False
         if not enabled:
             _log.info("FinBERT disabled by config; skipping model load.")
@@ -1587,7 +1588,7 @@ def ensure_finbert(cfg=None):
         _finbert_tokenizer, _finbert_model = tok, mdl
         _emit_once(_log, "finbert_loaded", logging.INFO, "FinBERT loaded successfully")
         return _finbert_tokenizer, _finbert_model
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error("FinBERT lazy-load failed: %s", e)
         return None, None
 
@@ -1657,7 +1658,7 @@ def get_git_hash() -> str:
             capture_output=True,
             text=True,
         ).stdout.strip()
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         return "unknown"
 
 
@@ -1721,7 +1722,7 @@ def _maybe_warm_cache(ctx: BotContext) -> None:
                 end=end_dt,
                 feed=getattr(ctx, "data_feed", None),
             )
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         _log.warning("Cache warm-up failed: %s", exc)
 
 
@@ -1741,7 +1742,7 @@ def _fetch_universe_bars(
 
     try:
         batch = get_bars_batch(symbols, timeframe, start, end, feed=feed)
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         _log.warning("Universe batch failed: %s", exc)
         batch = {}
 
@@ -1759,7 +1760,7 @@ def _fetch_universe_bars(
         def _pull(sym: str):
             try:
                 return sym, get_bars(sym, timeframe, start, end)
-            except Exception as one_exc:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as one_exc:  # AI-AGENT-REF: narrow exception
                 _log.warning("Per-symbol fetch failed for %s: %s", sym, one_exc)
                 return sym, None
 
@@ -1821,7 +1822,7 @@ def _fetch_intraday_bars_chunked(
         chunk = symbols[i : i + batch_size]
         try:
             got = get_minute_bars_batch(chunk, start, end, feed=feed)
-        except Exception as exc:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
             _log.warning(
                 "Intraday batch failed for chunk size %d: %s; falling back",
                 len(chunk),
@@ -1841,7 +1842,7 @@ def _fetch_intraday_bars_chunked(
             def _pull(sym: str):
                 try:
                     return sym, get_minute_bars(sym, start, end, feed=feed)
-                except Exception as one_exc:
+                except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as one_exc:  # AI-AGENT-REF: narrow exception
                     _log.warning(
                         "Intraday per-symbol fallback failed for %s: %s", sym, one_exc
                     )
@@ -1914,7 +1915,7 @@ def _build_regime_dataset(ctx: BotContext) -> pd.DataFrame:
                     cols.append(s)
                 else:
                     raise Exception("SPY data not available")
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.error("SPY fallback failed: %s", e)
                 _log.error(
                     "Not enough valid rows (0) to train regime model; using dummy fallback"
@@ -1926,7 +1927,7 @@ def _build_regime_dataset(ctx: BotContext) -> pd.DataFrame:
         out = pd.concat(cols, axis=1).sort_index().reset_index()
         out.columns.name = None
         return out
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         _log.warning("REGIME bootstrap failed: %s", exc)
         return pd.DataFrame()
 
@@ -2171,7 +2172,7 @@ def _as_int(v, default, min_v=1, max_v=1_000_000):
     try:
         x = int(float(v))
         return min(max(x, min_v), max_v)
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         return default
 
 
@@ -2274,14 +2275,14 @@ def cleanup_executors():
         if executor:
             executor.shutdown(wait=True, cancel_futures=True)
             _log.debug("Main executor shutdown successfully")
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning("Error shutting down main executor: %s", e)
 
     try:
         if prediction_executor:
             prediction_executor.shutdown(wait=True, cancel_futures=True)
             _log.debug("Prediction executor shutdown successfully")
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning("Error shutting down prediction executor: %s", e)
 
 
@@ -2317,7 +2318,7 @@ if not os.path.exists(SLIPPAGE_LOG_FILE):
             csv.writer(f).writerow(
                 ["timestamp", "symbol", "expected", "actual", "slippage_cents"]
             )
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning(f"Could not create slippage log {SLIPPAGE_LOG_FILE}: {e}")
 
 # Sector cache for portfolio exposure calculations
@@ -2401,7 +2402,7 @@ def log_circuit_breaker_status():
                         "last_failure": getattr(cb, "last_failure", None),
                     },
                 )
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.debug(f"Circuit breaker status logging failed: {e}")
 
 
@@ -2427,7 +2428,7 @@ def get_circuit_breaker_health() -> dict:
                 health[name] = {"state": "unknown", "healthy": True, "failures": 0}
 
         return health
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error(f"Failed to get circuit breaker health: {e}")
         return {}
 
@@ -2630,7 +2631,7 @@ def safe_get_stock_bars(client, request, symbol: str, context: str = ""):
     except AttributeError as e:
         _log.error(f"ALPACA {context} FETCH ERROR for {symbol}: AttributeError: {e}")
         return None
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error(
             f"ALPACA {context} FETCH ERROR for {symbol}: {type(e).__name__}: {e}"
         )
@@ -2664,7 +2665,7 @@ class DataFetcher:
                 if daily_cache_hit:
                     try:
                         daily_cache_hit.inc()
-                    except Exception as exc:
+                    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
                         _log.exception("bot.py unexpected", exc_info=exc)
                         raise
                 return self._daily_cache[symbol]
@@ -2743,7 +2744,7 @@ class DataFetcher:
                         return None
                     df_iex.index = idx
                     df = df_iex.rename(columns=lambda c: c.lower())
-                except Exception as iex_err:
+                except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as iex_err:  # AI-AGENT-REF: narrow exception
                     _log.warning(f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
                     _log.info(
                         f"INSERTING DUMMY DAILY FOR {symbol} ON {end_ts.date().isoformat()}"
@@ -2781,7 +2782,7 @@ class DataFetcher:
         except (KeyError, ValueError) as e:
             _log.error(f"DATA_VALIDATION_ERROR for {symbol}: {repr(e)}")
             return _create_empty_bars_dataframe("daily")
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.error(f"Failed to fetch daily data for {symbol}: {repr(e)}")
             return None
 
@@ -2805,7 +2806,7 @@ class DataFetcher:
                 if minute_cache_hit:
                     try:
                         minute_cache_hit.inc()
-                    except Exception as exc:
+                    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
                         _log.exception("bot.py unexpected", exc_info=exc)
                         raise
                 return self._minute_cache[symbol]
@@ -2813,7 +2814,7 @@ class DataFetcher:
         if minute_cache_miss:
             try:
                 minute_cache_miss.inc()
-            except Exception as exc:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
                 _log.exception("bot.py unexpected", exc_info=exc)
                 raise
         api_key = get_settings().alpaca_api_key
@@ -2896,7 +2897,7 @@ class DataFetcher:
                         df = df_iex.rename(columns=lambda c: c.lower())[
                             "open", "high", "low", "close", "volume"
                         ]
-                except Exception as iex_err:
+                except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as iex_err:  # AI-AGENT-REF: narrow exception
                     _log.warning(f"ALPACA IEX ERROR for {symbol}: {repr(iex_err)}")
                     _log.info(f"NO ALTERNATIVE MINUTE DATA FOR {symbol}")
                     df = pd.DataFrame()
@@ -2910,7 +2911,7 @@ class DataFetcher:
         except (KeyError, ValueError) as e:
             _log.warning(f"DATA_VALIDATION_ERROR for minute data {symbol}: {repr(e)}")
             df = _create_empty_bars_dataframe("minute")
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning(f"ALPACA MINUTE FETCH ERROR for {symbol}: {repr(e)}")
             df = pd.DataFrame()
 
@@ -2984,7 +2985,7 @@ class DataFetcher:
                     bars_day = bars_day.xs(symbol, level=0, axis=1)
                 else:
                     bars_day = bars_day.drop(columns=["symbol"], errors="ignore")
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.warning(
                     f"[historic_minute] failed for {symbol} {day_start}-{day_end}: {e}"
                 )
@@ -3104,7 +3105,7 @@ def prefetch_daily_data(
                     df = df.rename(columns=lambda c: c.lower())
                     grouped[sym] = df
                 return grouped
-            except Exception as iex_err:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as iex_err:  # AI-AGENT-REF: narrow exception
                 _log.warning(f"ALPACA IEX BULK ERROR for {symbols}: {repr(iex_err)}")
                 daily_dict = {}
                 for sym in symbols:
@@ -3134,7 +3135,7 @@ def prefetch_daily_data(
                         df_sym.index = idx
                         df_sym = df_sym.rename(columns=lambda c: c.lower())
                         daily_dict[sym] = df_sym
-                    except Exception as indiv_err:
+                    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as indiv_err:  # AI-AGENT-REF: narrow exception
                         _log.warning(f"ALPACA IEX ERROR for {sym}: {repr(indiv_err)}")
                         _log.info(
                             f"INSERTING DUMMY DAILY FOR {sym} ON {end_date.isoformat()}"
@@ -3171,7 +3172,7 @@ def prefetch_daily_data(
                 )
                 daily_dict[sym] = dummy_df
             return daily_dict
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning(f"ALPACA BULK FETCH EXCEPTION for {symbols}: {repr(e)}")
         daily_dict = {}
         for sym in symbols:
@@ -3230,7 +3231,7 @@ class TradeLogger:
                             "band",
                         ]
                     )
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.warning(f"Failed to create reward log: {e}")
 
     def log_entry(
@@ -3300,7 +3301,7 @@ class TradeLogger:
                             if len(row) >= 11:
                                 try:
                                     conf = float(row[10])
-                                except Exception:
+                                except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
                                     conf = 0.0
                             if len(row) >= 12:
                                 row[11] = pnl * conf
@@ -3332,7 +3333,7 @@ class TradeLogger:
                         ctx.capital_band,
                     ]
                 )
-        except Exception as exc:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
             _log.exception("bot.py unexpected", exc_info=exc)
             raise
 
@@ -3508,7 +3509,7 @@ def validate_open_orders(ctx: BotContext) -> None:
         return
     try:
         open_orders = ctx.api.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         logger = logging.getLogger(__name__)
         _log.exception("bot_engine: failed to fetch open orders from broker", exc_info=e)
         return
@@ -3531,7 +3532,7 @@ def validate_open_orders(ctx: BotContext) -> None:
                         time_in_force=TimeInForce.DAY,
                     )
                     safe_submit_order(ctx.api, req)
-            except Exception as exc:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
                 _log.exception("bot.py unexpected", exc_info=exc)
                 raise
 
@@ -3650,7 +3651,7 @@ class SignalManager:
             else:
                 w = 0.0  # Safe fallback when average is zero
             return s, w, "vsa"
-        except Exception:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
             _log.exception("Error in signal_vsa")
             return -1, 0.0, "vsa"
 
@@ -3672,7 +3673,7 @@ class SignalManager:
             try:
                 pred = model.predict(X)[0]
                 proba = float(model.predict_proba(X)[0][pred])
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.error("signal_ml predict failed: %s", e)
                 return -1, 0.0, "ml"
             s = 1 if pred == 1 else -1
@@ -3680,7 +3681,7 @@ class SignalManager:
                 "ML_SIGNAL", extra={"prediction": int(pred), "probability": proba}
             )
             return s, proba, "ml"
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.exception(f"signal_ml failed: {e}")
             return -1, 0.0, "ml"
 
@@ -3713,7 +3714,7 @@ class SignalManager:
             # Price moved enough → fetch fresh sentiment
             try:
                 score = fetch_sentiment(ctx, ticker)
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.warning(f"[signal_sentiment] {ticker} error: {e}")
                 score = 0.0
 
@@ -3778,7 +3779,7 @@ class SignalManager:
                             df.columns.tolist(),
                         )
                         return {}
-                except Exception as fallback_e:
+                except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as fallback_e:  # AI-AGENT-REF: narrow exception
                     _log.error(
                         "Failed to load signal weights with fallback: %s", fallback_e
                     )
@@ -3840,7 +3841,7 @@ class SignalManager:
         if signals_evaluated:
             try:
                 signals_evaluated.inc()
-            except Exception as exc:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
                 _log.exception("bot.py unexpected", exc_info=exc)
                 raise
 
@@ -3959,7 +3960,7 @@ def get_risk_engine():
                 from ai_trading.risk.manager import RiskManager as _RM  # in-package fallback
                 _emit_once(_log, "risk_engine_fallback", logging.INFO, "Risk engine: RiskManager (in-package fallback)")
                 risk_engine = _RM()
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.warning("No RiskEngine available: %s", e)
                 # minimal stub to keep service alive
                 class RiskEngine:  
@@ -4007,7 +4008,7 @@ def _import_all_strategy_submodules(pkg_name: str):
     """
     try:
         pkg = importlib.import_module(pkg_name)
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error("Failed to import %s: %s", pkg_name, e)
         return None
     path = getattr(pkg, "__path__", None)
@@ -4025,7 +4026,7 @@ def _import_all_strategy_submodules(pkg_name: str):
                     attr_name not in ['BaseStrategy']):  # Don't re-add BaseStrategy
                     # Add strategy classes to the main package namespace
                     setattr(pkg, attr_name, attr_obj)
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             # Keep going; one bad module shouldn't hide others.
             _log.error("Failed to import strategy module %s: %s", name, e)
     return pkg
@@ -4051,14 +4052,14 @@ def get_strategies():
                 try:
                     if _is_concrete_strategy(obj, BaseStrategy):
                         concrete.append(obj)
-                except Exception:
+                except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
                     continue
             # optional filtering by configured list of class names
             try:
                 from ai_trading.config.management import TradingConfig
                 cfg = TradingConfig()
                 wanted = getattr(cfg, "strategy_names", None)
-            except Exception:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
                 cfg = None
                 wanted = None
 
@@ -4072,7 +4073,7 @@ def get_strategies():
                 try:
                     strategies.append(cls())
                     names.append(cls.__name__)
-                except Exception as e:
+                except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                     _log.error("Failed to instantiate strategy %s: %s", cls.__name__, e)
             if names:
                 _log.info("Loaded strategies: %s", ", ".join(sorted(names)))
@@ -4132,7 +4133,7 @@ def _initialize_alpaca_clients():
         from alpaca.trading.client import TradingClient
 
         _log.debug("Successfully imported Alpaca SDK classes")
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error(
             "alpaca_trade_api import failed; cannot initialize clients", exc_info=e
         )
@@ -4194,7 +4195,7 @@ class LazyBotContext:
         if stream and hasattr(stream, "subscribe_trade_updates"):
             try:
                 stream.subscribe_trade_updates(on_trade_update)
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.warning("Failed to subscribe to trade updates: %s", e)
 
         self._context = BotContext(
@@ -4387,7 +4388,7 @@ def _get_runtime_context_or_none():
         lbc = get_ctx()
         lbc._ensure_initialized()
         return lbc._context
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.debug("Runtime context unavailable for risk exposure update: %s", e)
         return None
 
@@ -4416,7 +4417,7 @@ def _emit_periodic_metrics():
             account_obj = account.get_account()
             positions = account.get_all_positions()
             _metrics.emit_account_health(account_obj, positions)
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.debug("Metrics emission failed: %s", e)
 
 
@@ -4445,9 +4446,9 @@ def _update_risk_engine_exposure():
             re.wait_for_exposure_update(timeout=0.5)
         except RuntimeError as e:
             _log.warning("Risk engine exposure update failed (context): %s", e)
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning("Risk engine exposure update failed: %s", e)
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning("Risk engine exposure update failed: %s", e)
 
 
@@ -4455,7 +4456,7 @@ def _initialize_bot_context_post_setup_legacy(ctx):
     """Complete bot context setup after creation - legacy version."""
     try:
         equity_init = float(ctx.api.get_account().equity)
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         equity_init = 0.0
     ctx.capital_scaler.update(ctx, equity_init)
     ctx.last_positions = load_portfolio_snapshot()
@@ -4463,7 +4464,7 @@ def _initialize_bot_context_post_setup_legacy(ctx):
     # Warm up regime history cache so initial regime checks pass
     try:
         ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning(f"[warm_cache] failed to seed regime history: {e}")
 
     return ctx
@@ -4498,7 +4499,7 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
         from ai_trading.data_fetcher import (
             last_minute_bar_age_seconds,
         )  # type: ignore
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning("Data freshness check unavailable; skipping", exc_info=e)
         return
     now_utc = utc_now_iso()
@@ -4652,7 +4653,7 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
             if len(tds) >= 4:
                 texts.append(tds[-1].get_text(strip=True))
         return " ".join(texts)
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning(f"[get_sec_headlines] parse failed for {ticker}: {e}")
         return ""
 
@@ -4792,7 +4793,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
             for filing in form4:
                 if filing["type"] == "buy" and filing["dollar_amount"] > 50_000:
                     form4_score += 0.1
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.debug(
                 f"Form4 fetch failed for {ticker}: {e}"
             )  # Reduced to debug level
@@ -4822,7 +4823,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
             # No cache available, return neutral
             _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
             return 0.0
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error(f"Unexpected error fetching sentiment for {ticker}: {e}")
         _record_sentiment_failure()
         with sentiment_lock:
@@ -4855,7 +4856,7 @@ def predict_text_sentiment(text: str, cfg=None) -> float:
 
         neg, neu, pos = probs.tolist()
         return float(pos - neg)
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning(
             f"[predict_text_sentiment] FinBERT inference failed ({e}); returning neutral"
         )
@@ -4901,13 +4902,13 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
         date_str = cols[3].get_text(strip=True)
         try:
             fdate = datetime.strptime(date_str, "%Y-%m-%d")
-        except Exception:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
             continue
         txn_type = cols[4].get_text(strip=True).lower()  # "purchase" or "sale"
         amt_str = cols[5].get_text(strip=True).replace("$", "").replace(",", "")
         try:
             amt = float(amt_str)
-        except Exception:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
             amt = 0.0
         filings.append(
             {
@@ -4926,7 +4927,7 @@ def _can_fetch_events(symbol: str) -> bool:
         if event_cooldown_hits:
             try:
                 event_cooldown_hits.inc()
-            except Exception as exc:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
                 _log.exception("bot.py unexpected", exc_info=exc)
                 raise
         return False
@@ -4947,7 +4948,7 @@ def get_calendar_safe(symbol: str) -> pd.DataFrame:
     except HTTPError:
         _log.warning(f"[Events] Rate limited for {symbol}; skipping events.")
         cal = pd.DataFrame()
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error(f"[Events] Error fetching calendar for {symbol}: {e}")
         cal = pd.DataFrame()
     _calendar_cache[symbol] = cal
@@ -4968,7 +4969,7 @@ def is_near_event(symbol: str, days: int = 3) -> bool:
             if isinstance(raw, list | tuple):
                 raw = raw[0]
             dates.append(pd.to_datetime(raw))
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         _log.debug(
             f"[Events] Malformed calendar for {symbol}, columns={getattr(cal, 'columns', None)}"
         )
@@ -5159,7 +5160,7 @@ def set_halt_flag(reason: str) -> None:
         with open(HALT_FLAG_PATH, "w") as f:
             f.write(f"{reason} " + dt_.now(UTC).isoformat())
         _log.info(f"TRADING_HALTED set due to {reason}")
-    except Exception as exc:  # pragma: no cover - disk issues
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # pragma: no cover - disk issues  # AI-AGENT-REF: narrow exception
         _log.error(f"Failed to write halt flag: {exc}")
 
 
@@ -5224,7 +5225,7 @@ def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
 
         return position_count >= MAX_PORTFOLIO_POSITIONS
 
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning(f"[too_many_positions] Could not fetch positions: {e}")
         return False
 
@@ -5421,7 +5422,7 @@ def get_sector(symbol: str) -> str:
                 _SECTOR_CACHE[symbol] = sector
                 _log.debug(f"Retrieved sector from yfinance for {symbol}: {sector}")
                 return sector
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.debug(f"yfinance sector lookup failed for {symbol}: {e}")
 
     # Default to Unknown if all methods fail
@@ -5435,11 +5436,11 @@ def sector_exposure(ctx: BotContext) -> dict[str, float]:
     """Return current portfolio exposure by sector as fraction of equity."""
     try:
         positions = ctx.api.get_all_positions()
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         return {}
     try:
         total = float(ctx.api.get_account().portfolio_value)
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         total = 0.0
     exposure: dict[str, float] = {}
     for pos in positions:
@@ -5461,7 +5462,7 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
     exposures = sector_exposure(ctx)
     try:
         total = float(ctx.api.get_account().portfolio_value)
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning(
             f"SECTOR_EXPOSURE_PORTFOLIO_ERROR: Failed to get portfolio value for {symbol}: {e}"
         )
@@ -5677,7 +5678,7 @@ def scaled_atr_stop(
 
         return stop, take
 
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error("Error in ATR stop calculation: %s", e)
         # Return conservative defaults on error
         return entry_price * 0.95, entry_price * 1.05
@@ -5705,7 +5706,7 @@ def liquidity_factor(ctx: BotContext, symbol: str) -> float:
     except APIError as e:
         _log.warning(f"[liquidity_factor] Alpaca quote failed for {symbol}: {e}")
         spread = 0.0
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         spread = 0.0
     vol_score = min(1.0, avg_vol / ctx.volume_threshold) if avg_vol else 0.0
 
@@ -5839,7 +5840,7 @@ def fractional_kelly_size(
         try:
             if is_high_vol_thr_spy():
                 frac *= 0.5
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning("Error checking SPY volatility: %s", e)
 
         cap_scale = frac / base_frac if base_frac > 0 else 1.0
@@ -5918,7 +5919,7 @@ def fractional_kelly_size(
 
         return size
 
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error("Error in Kelly calculation: %s", e)
         return 0
 
@@ -5950,7 +5951,7 @@ def adjust_position_size(position, scale: float) -> None:
     """Placeholder for adjusting position quantity."""
     try:
         position.qty = str(int(int(position.qty) * scale))
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         _log.debug("adjust_position_size no-op")
 
 
@@ -5988,7 +5989,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
                 'qty': qty, 
                 'side': side
             }, getattr(ctx, 'market_data', None))
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning("Liquidity checks failed open-loop: %s", e)
 
     try:
@@ -6154,7 +6155,7 @@ def poll_order_fill_status(ctx: BotContext, order_id: str, timeout: int = 120) -
                     },
                 )
                 return
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning(f"[poll_order_fill_status] failed for {order_id}: {e}")
             return
         pytime.sleep(3)
@@ -6179,7 +6180,7 @@ def send_exit_order(
     try:
         pos = ctx.api.get_open_position(symbol)
         held_qty = int(pos.qty)
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         held_qty = 0
 
     if held_qty < exit_qty:
@@ -6213,7 +6214,7 @@ def send_exit_order(
                         asset_class="equity",
                     )
                 )
-            except Exception:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
                 _log.debug("register_fill exit failed", exc_info=True)
         return
 
@@ -6244,7 +6245,7 @@ def send_exit_order(
                     asset_class="equity",
                 )
             )
-        except Exception:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
             _log.debug("register_fill exit failed", exc_info=True)
     pytime.sleep(5)
     try:
@@ -6323,7 +6324,7 @@ def vwap_pegged_submit(
         except APIError as e:
             _log.warning(f"[vwap_slice] Alpaca quote failed for {symbol}: {e}")
             spread = 0.0
-        except Exception:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
             spread = 0.0
         if spread > 0.05:
             slice_qty = max(1, int((total_qty - placed) * 0.5))
@@ -6371,13 +6372,13 @@ def vwap_pegged_submit(
                     if slippage_total:
                         try:
                             slippage_total.inc(abs(slip))
-                        except Exception as exc:
+                        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
                             _log.exception("bot.py unexpected", exc_info=exc)
                             raise
                     if slippage_count:
                         try:
                             slippage_count.inc()
-                        except Exception as exc:
+                        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
                             _log.exception("bot.py unexpected", exc_info=exc)
                             raise
                     _slippage_log.append(
@@ -6400,19 +6401,19 @@ def vwap_pegged_submit(
                                         slip,
                                     ]
                                 )
-                        except Exception as e:
+                        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                             _log.warning(f"Failed to append slippage log: {e}")
                 if orders_total:
                     try:
                         orders_total.inc()
-                    except Exception as exc:
+                    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
                         _log.exception("bot.py unexpected", exc_info=exc)
                         raise
                 break
             except APIError as e:
                 _log.warning(f"[VWAP] APIError attempt {attempt+1} for {symbol}: {e}")
                 pytime.sleep(attempt + 1)
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.exception(f"[VWAP] slice attempt {attempt+1} failed: {e}")
                 pytime.sleep(attempt + 1)
         if order is None:
@@ -6498,7 +6499,7 @@ def pov_submit(
         except APIError as e:
             _log.warning(f"[pov_submit] Alpaca quote failed for {symbol}: {e}")
             spread = 0.0
-        except Exception:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
             spread = 0.0
 
         vol = df["volume"].iloc[-1]
@@ -6557,7 +6558,7 @@ def pov_submit(
 
             placed += actual_filled  # Use actual filled, not intended
 
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.exception(
                 f"[pov_submit] submit_order failed on slice, aborting: {e}",
                 extra={"symbol": symbol},
@@ -6597,7 +6598,7 @@ def maybe_pyramid(
             if qty > 0:
                 submit_order(ctx, symbol, qty, "buy")
                 _log.info("PYRAMIDED", extra={"symbol": symbol, "qty": qty})
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.exception(f"[maybe_pyramid] failed for {symbol}: {e}")
 
 
@@ -6634,7 +6635,7 @@ def calculate_entry_size(
 
     try:
         cash = float(ctx.api.get_account().cash)
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         _log.warning("Failed to get cash for entry size calculation: %s", exc)
         return 1
 
@@ -6677,7 +6678,7 @@ def execute_entry(ctx: BotContext, symbol: str, qty: int, side: str) -> None:
         if buying_pw <= 0:
             _log.info("NO_BUYING_POWER", extra={"symbol": symbol})
             return
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         _log.warning("Failed to get buying power for %s: %s", symbol, exc)
         return
     if qty is None or qty <= 0 or not np.isfinite(qty):
@@ -6855,7 +6856,7 @@ def should_exit(
     try:
         pos = ctx.api.get_open_position(symbol)
         current_qty = int(pos.qty)
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         current_qty = 0
 
     # AI-AGENT-REF: remove time-based rebalance hold logic
@@ -6967,7 +6968,7 @@ def _fetch_feature_data(
     # Guard: validate OHLCV shape before feature engineering
     try:
         validate_ohlcv(raw_df)
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning("OHLCV validation failed for %s: %s; skipping symbol", symbol, e)
         return raw_df, pd.DataFrame(), True
 
@@ -6978,7 +6979,7 @@ def _fetch_feature_data(
         try:
             from ai_trading.data.sanitize import clean as _clean
             df = _clean(df)
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning("Data sanitize failed: %s", e)
 
     # AI-AGENT-REF: Corporate actions adjustment (gated by flag)
@@ -6986,7 +6987,7 @@ def _fetch_feature_data(
         try:
             from ai_trading.data.corp_actions import adjust as _adjust
             df = _adjust(df, symbol)
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning("Corp actions adjust failed: %s", e)
     
     # AI-AGENT-REF: log initial dataframe and monitor row drops
@@ -7055,7 +7056,7 @@ def _should_hold_position(df: pd.DataFrame) -> bool:
         ema_slow = close.ewm(span=50, adjust=False).mean().iloc[-1]
         rsi_val = rsi(tuple(close), 14).iloc[-1]
         return close.iloc[-1] > ema_fast > ema_slow and rsi_val >= 55
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         return False
 
 
@@ -7139,7 +7140,7 @@ def _enter_long(
             _log.info(
                 f"Computed weight for {symbol}: {target_weight:.3f} (confidence={conf:.3f}, available_exposure={available_exposure:.3f})"
             )
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning(
                 f"Could not compute dynamic weight for {symbol}: {e}, using confidence-based weight"
             )
@@ -7157,7 +7158,7 @@ def _enter_long(
             if optimized_qty > 0:
                 raw_qty = optimized_qty
                 _log.debug("Sizing decided qty=%s for %s", raw_qty, symbol)
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning("Sizing failed; falling back to default sizing: %s", e)
 
     # AI-AGENT-REF: Fix zero quantity calculations - ensure minimum position size when cash available
@@ -7254,7 +7255,7 @@ def _enter_short(
         avail = getattr(asset, "shortable_shares", None)
         if avail is not None:
             qty = min(qty, int(avail))
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         _log.exception("bot.py unexpected", exc_info=exc)
         raise
     if qty is None or not np.isfinite(qty) or qty <= 0:
@@ -7356,7 +7357,7 @@ def _manage_existing_position(
                 with targets_lock:
                     ctx.stop_targets.pop(symbol, None)
                     ctx.take_profit_targets.pop(symbol, None)
-        except Exception as exc:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
             _log.exception("bot.py unexpected", exc_info=exc)
             raise
     else:
@@ -7364,7 +7365,7 @@ def _manage_existing_position(
             pos = ctx.api.get_open_position(symbol)
             entry_price = float(pos.avg_entry_price)
             maybe_pyramid(ctx, symbol, entry_price, price, atr, conf)
-        except Exception as exc:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
             _log.exception("bot.py unexpected", exc_info=exc)
             raise
     return True
@@ -7397,7 +7398,7 @@ def _current_position_qty(ctx: BotContext, symbol: str) -> int:
     try:
         pos = ctx.api.get_open_position(symbol)
         return int(pos.qty)
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         return 0
 
 
@@ -7531,7 +7532,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     try:
         positions = ctx.api.get_all_positions()
         symbols = [p.symbol for p in positions]
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         symbols = []
     current = portfolio.compute_portfolio_weights(ctx, symbols)
     old = ctx.portfolio_weights
@@ -7559,7 +7560,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
                 abs(target_shares),
                 "buy" if target_shares > 0 else "sell",
             )
-        except Exception:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
             _log.exception(f"Rebalance failed for {sym}")
     _log.info("PORTFOLIO_REBALANCED")
 
@@ -7681,7 +7682,7 @@ def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
         for p in [MODEL_RF_PATH, MODEL_XGB_PATH, MODEL_LGB_PATH]:
             try:
                 models.append(joblib.load(p))
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.exception("MODEL_LOAD_FAILED: %s", e)
                 return None
         _log.info(
@@ -7697,7 +7698,7 @@ def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
             return model
         _log.info("MODEL_LOADED")
         return loaded
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.exception("MODEL_LOAD_FAILED: %s", e)
         return None
 
@@ -7709,7 +7710,7 @@ def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
     with model_lock:
         try:
             model_pipeline.partial_fit(X_new, y_new)
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.error(f"Online update failed for {symbol}: {e}")
             return
     pred = model_pipeline.predict(X_new)
@@ -7813,7 +7814,7 @@ def update_signal_weights() -> None:
                                 old_df.columns.tolist(),
                             )
                             old = {}
-                    except Exception as fallback_e:
+                    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as fallback_e:  # AI-AGENT-REF: narrow exception
                         _log.error(
                             "Failed to load signal weights with fallback: %s",
                             fallback_e,
@@ -7834,7 +7835,7 @@ def update_signal_weights() -> None:
         out_df.columns = ["signal_name", "weight"]
         out_df.to_csv(SIGNAL_WEIGHTS_FILE, index=False)
         _log.info("SIGNAL_WEIGHTS_UPDATED", extra={"count": len(merged)})
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.exception(f"update_signal_weights failed: {e}")
 
 
@@ -8085,7 +8086,7 @@ def load_global_signal_performance(
 
         return filtered
 
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error(
             "METALEARN_PROCESSING_ERROR - Failed to process signal performance: %s",
             e,
@@ -8113,21 +8114,21 @@ def _add_basic_indicators(
     """Add VWAP, RSI, ATR and simple moving averages."""
     try:
         df["vwap"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_VWAP_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
         df["vwap"] = np.nan
     try:
         df["rsi"] = ta.rsi(df["close"], length=14)
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_RSI_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
         df["rsi"] = np.nan
     try:
         df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_ATR_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
@@ -8164,7 +8165,7 @@ def _add_macd(df: pd.DataFrame, symbol: str, state: BotState | None) -> None:
             raise KeyError("MACD dataframe missing required columns")
         df["macd"] = macd_col.astype(float)
         df["macds"] = signal_col.astype(float)
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning(
             "INDICATOR_MACD_FAIL",
             exc=exc,
@@ -8187,7 +8188,7 @@ def _add_additional_indicators(
         df["kc_lower"] = kc.iloc[:, 0]
         df["kc_mid"] = kc.iloc[:, 1]
         df["kc_upper"] = kc.iloc[:, 2]
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_KC_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
@@ -8205,7 +8206,7 @@ def _add_additional_indicators(
         df["bb_upper"] = bb["BBU_20_2.0"]
         df["bb_lower"] = bb["BBL_20_2.0"]
         df["bb_percent"] = bb["BBP_20_2.0"]
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_BBANDS_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
@@ -8218,7 +8219,7 @@ def _add_additional_indicators(
         df["adx"] = adx["ADX_14"]
         df["dmp"] = adx["DMP_14"]
         df["dmn"] = adx["DMN_14"]
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_ADX_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
@@ -8228,7 +8229,7 @@ def _add_additional_indicators(
 
     try:
         df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20)
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_CCI_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
@@ -8245,7 +8246,7 @@ def _add_additional_indicators(
 
     try:
         df["tema"] = ta.tema(df["close"], length=10)
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_TEMA_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
@@ -8253,7 +8254,7 @@ def _add_additional_indicators(
 
     try:
         df["willr"] = ta.willr(df["high"], df["low"], df["close"], length=14)
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_WILLR_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
@@ -8263,7 +8264,7 @@ def _add_additional_indicators(
         psar = ta.psar(df["high"], df["low"], df["close"])
         df["psar_long"] = psar["PSARl_0.02_0.2"]
         df["psar_short"] = psar["PSARs_0.02_0.2"]
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_PSAR_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
@@ -8283,7 +8284,7 @@ def _add_additional_indicators(
     try:
         st = ta.stochrsi(df["close"])
         df["stochrsi"] = st["STOCHRSIk_14_14_3_3"]
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_STOCHRSI_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
@@ -8311,7 +8312,7 @@ def _add_multi_timeframe_features(
         df["mom_agg"] = df["ret_5m"] + df["ret_1h"] + df["ret_d"]
         df["lag_close_1"] = df["close"].shift(1)
         df["lag_close_3"] = df["close"].shift(3)
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_MULTITF_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
@@ -8332,7 +8333,7 @@ def _drop_inactive_features(df: pd.DataFrame) -> None:
                 inplace=True,
                 errors="ignore",
             )
-        except Exception as exc:  # pragma: no cover - unexpected I/O
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # pragma: no cover - unexpected I/O  # AI-AGENT-REF: narrow exception
             _log.exception("bot.py unexpected", exc_info=exc)
             raise
 
@@ -8376,7 +8377,7 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
         from ai_trading.utils.ohlcv import standardize_ohlcv
 
         df = standardize_ohlcv(df)
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         # OHLCV standardization failed - log warning but continue with raw data
         _log.warning("Failed to standardize OHLCV data: %s", e)
 
@@ -8396,7 +8397,7 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
         from ai_trading.signals import (
             calculate_macd as signals_calculate_macd,  # type: ignore
         )
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         _log.warning("signals module not available for regime features")
         signals_calculate_macd = None
 
@@ -8404,7 +8405,7 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
     feat = pd.DataFrame(index=df.index)
     try:
         feat["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         # Fallback ATR proxy from close-to-close movement
         tr = (df["close"].diff().abs()).fillna(0.0)
         feat["atr"] = tr.rolling(14, min_periods=1).mean()
@@ -8415,7 +8416,7 @@ def _compute_regime_features(df: pd.DataFrame) -> pd.DataFrame:
             feat["macd"] = (
                 macd_df["macd"] if macd_df is not None and "macd" in macd_df else np.nan
             )
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning("Regime MACD calculation failed: %s", e)
             feat["macd"] = np.nan
     else:
@@ -8452,7 +8453,7 @@ def _initialize_regime_model(ctx=None):
         try:
             with open(REGIME_MODEL_PATH, "rb") as f:
                 return pickle.load(f)
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning(f"Failed to load regime model: {e}")
             return RandomForestClassifier(
                 n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
@@ -8482,7 +8483,7 @@ def _initialize_regime_model(ctx=None):
                 bars.index = idx
             # Final conversion (idempotent for Timestamps)
             bars.index = safe_to_datetime(bars.index, context="regime data")
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning("REGIME index normalization failed: %s", e)
             bars = pd.DataFrame()
         bars = bars.rename(columns=lambda c: c.lower())
@@ -8532,7 +8533,7 @@ def _initialize_regime_model(ctx=None):
                 regime_model.fit(X, y)
             try:
                 atomic_pickle_dump(regime_model, REGIME_MODEL_PATH)
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.warning(f"Failed to save regime model: {e}")
             else:
                 _log.info("REGIME_MODEL_TRAINED", extra={"rows": len(training)})
@@ -8785,7 +8786,7 @@ def _validate_market_data_quality(df: pd.DataFrame, symbol: str) -> dict:
             },
         }
 
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error(
             "DATA_VALIDATION_ERROR",
             extra={"symbol": symbol, "error": str(e), "error_type": type(e).__name__},
@@ -8914,7 +8915,7 @@ def load_tickers(path: str = TICKERS_FILE) -> list[str]:
                 t = row[0].strip().upper()
                 if t and t not in tickers:
                     tickers.append(t)
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.exception(f"[load_tickers] Failed to read {path}: {e}")
     return tickers
 
@@ -8970,7 +8971,7 @@ def daily_summary() -> None:
                 "max_drawdown": max_dd,
             },
         )
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.exception(f"daily_summary failed: {e}")
 
 
@@ -9035,7 +9036,7 @@ def daily_reset(state: BotState) -> None:
         _slippage_log.clear()
         state.loss_streak = 0
         _log.info("DAILY_STATE_RESET")
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.exception(f"daily_reset failed: {e}")
 
 
@@ -9064,7 +9065,7 @@ def _current_drawdown() -> float:
             peak = float(pf.read().strip() or 0)
         with open(EQUITY_FILE) as ef:
             eq = float(ef.read().strip() or 0)
-    except Exception:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         return 0.0
     if peak <= 0:
         return 0.0
@@ -9095,7 +9096,7 @@ def update_bot_mode(state: BotState) -> None:
                     "regime": regime,
                 },
             )
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.exception(f"update_bot_mode failed: {e}")
 
 
@@ -9108,7 +9109,7 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
         dd = _current_drawdown()
         try:
             equity = float(ctx.api.get_account().equity)
-        except Exception:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
             equity = 0.0
         ctx.capital_scaler.update(ctx, equity)
         params["CAPITAL_CAP"] = ctx.params["CAPITAL_CAP"]
@@ -9132,7 +9133,7 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
                 "avg_reward": avg_r,
             },
         )
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.exception(f"adaptive_risk_scaling failed: {e}")
 
 
@@ -9142,7 +9143,7 @@ def check_disaster_halt() -> None:
         if dd >= DISASTER_DD_LIMIT:
             set_halt_flag(f"DISASTER_DRAW_DOWN_{dd:.2%}")
             _log.error("DISASTER_HALT_TRIGGERED", extra={"drawdown": dd})
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.exception(f"check_disaster_halt failed: {e}")
 
 
@@ -9225,7 +9226,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                             try:
                                 with open(marker, "w") as f:
                                     f.write(today_str)
-                            except Exception as e:
+                            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                                 _log.warning(
                                     f"Failed to write retrain marker file: {e}"
                                 )
@@ -9261,7 +9262,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                         np.mean((model_pipeline.predict(X_train) - y_train) ** 2)
                     )
                     _log.info("TRAIN_METRIC", extra={"mse": mse})
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.error(f"Daily retrain failed: {e}")
 
         date_str = datetime.now(UTC).strftime("%Y%m%d_%H%M")
@@ -9307,7 +9308,7 @@ def on_market_close() -> None:
         return
     try:
         load_or_retrain_daily(ctx)
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         _log.exception(f"on_market_close failed: {exc}")
 
 
@@ -9387,7 +9388,7 @@ def start_metrics_server(default_port: int = 9200) -> None:
                         "Metrics port %d already serving; reusing", default_port
                     )
                     return
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 # Metrics server connectivity check failed - continue with port search
                 _log.debug(
                     "Metrics server check failed on port %d: %s", default_port, e
@@ -9399,13 +9400,13 @@ def start_metrics_server(default_port: int = 9200) -> None:
             _log.warning("Metrics port %d busy; using %d", default_port, port)
             try:
                 start_http_server(port)
-            except Exception as exc2:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc2:  # AI-AGENT-REF: narrow exception
                 _log.warning("Failed to start metrics server on %d: %s", port, exc2)
         else:
             _log.warning(
                 "Failed to start metrics server on %d: %s", default_port, exc
             )
-    except Exception as exc:  # pragma: no cover - unexpected error
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # pragma: no cover - unexpected error  # AI-AGENT-REF: narrow exception
         _log.warning("Failed to start metrics server on %d: %s", default_port, exc)
 
 
@@ -9418,7 +9419,7 @@ def run_multi_strategy(runtime) -> None:
         try:
             sigs = strat.generate(ctx)
             signals_by_strategy[strat.name] = sigs
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning(f"Strategy {strat.name} failed: {e}")
     # Optionally augment strategy signals with reinforcement learning signals.
     if S.use_rl_agent:
@@ -9451,12 +9452,12 @@ def run_multi_strategy(runtime) -> None:
                     df = None
                     try:
                         df = ctx.data_fetcher.get_daily_df(ctx, sym)
-                    except Exception:
+                    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
                         df = None
                     if df is None or getattr(df, "empty", True):
                         try:
                             df = ctx.data_fetcher.get_minute_df(ctx, sym)
-                        except Exception:
+                        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
                             df = None
                     state_vec = compute_features(df, window=10)
                     states.append(state_vec)
@@ -9467,7 +9468,7 @@ def run_multi_strategy(runtime) -> None:
                         signals_by_strategy["rl"] = (
                             rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
                         )
-        except Exception as exc:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
             _log.error("RL_AGENT_ERROR", extra={"exc": str(exc)})
 
     # AI-AGENT-REF: Add position holding logic to reduce churn
@@ -9510,7 +9511,7 @@ def run_multi_strategy(runtime) -> None:
         # Use enhanced signals for allocation
         signals_by_strategy = enhanced_signals_by_strategy
 
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         _log.warning("Position holding logic failed, using original signals: %s", exc)
 
     final = ctx.allocator.allocate(signals_by_strategy)
@@ -9633,7 +9634,7 @@ def run_multi_strategy(runtime) -> None:
     try:
         if hasattr(ctx, "execution_engine"):
             ctx.execution_engine.end_cycle()
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         _log.error("TRAILING_STOP_CHECK_FAILED", extra={"exc": str(exc)})
 
 
@@ -9907,7 +9908,7 @@ def manage_position_risk(runtime, position) -> None:
         _log.info(
             f"HALT_MANAGE {symbol} stop={new_stop:.2f} vwap={vwap:.2f} vol={volume_factor:.2f} ml={ml_conf:.2f}"
         )
-    except Exception as exc:  # pragma: no cover - handle edge cases
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # pragma: no cover - handle edge cases  # AI-AGENT-REF: narrow exception
         _log.warning(f"manage_position_risk failed for {symbol}: {exc}")
 
 
@@ -10633,7 +10634,7 @@ def main() -> None:
             _log.error("Another trading bot instance is already running. Exiting.")
             sys.exit(1)
         _log.info("Single instance lock acquired successfully")
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error("Failed to acquire single instance lock: %s", e)
         sys.exit(1)
 
@@ -10642,7 +10643,7 @@ def main() -> None:
         from health_check import log_health_summary
 
         log_health_summary()
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning("Health check failed on startup: %s", e)
 
     def _handle_term(signum, frame):
@@ -10784,7 +10785,7 @@ def main() -> None:
                     ctx.data_fetcher.get_minute_df(
                         ctx, sym, lookback_minutes=S.min_health_rows
                     )
-                except Exception as exc:
+                except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
                     _log.warning(
                         "Initial minute prefetch failed for %s: %s", sym, exc
                     )
@@ -10817,7 +10818,7 @@ def main() -> None:
                 universe = load_tickers(TICKERS_FILE)
                 initial_rebalance(ctx, universe)
                 ctx._rebalance_done = True
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning(f"[REBALANCE] aborted due to error: {e}")
 
         # Recurring jobs
@@ -10826,7 +10827,7 @@ def main() -> None:
                 # delay can be configured via env SCHEDULER_SLEEP_SECONDS
                 time.sleep(S.scheduler_sleep_seconds)
                 schedule_run_all_trades(ctx)  # AI-AGENT-REF: runtime-based scheduling
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.exception(f"gather_minute_data_with_delay failed: {e}")
 
         schedule.every(1).minutes.do(
@@ -10836,7 +10837,7 @@ def main() -> None:
         # --- run one fetch right away, before entering the loop ---
         try:
             gather_minute_data_with_delay()
-        except Exception as e:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.exception("Initial data fetch failed", exc_info=e)
         schedule.every(1).minutes.do(
             lambda: Thread(
@@ -10885,7 +10886,7 @@ def main() -> None:
             daemon=True,
         ).start()
 
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.exception(f"Fatal error in main: {e}")
         raise
 
@@ -10898,7 +10899,7 @@ def prepare_indicators_simple(df: pd.DataFrame) -> pd.DataFrame:
 
     try:
         macd_line, signal_line, hist = simple_calculate_macd(df["close"])
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error(f"MACD calculation failed: {e}", exc_info=True)
         raise ValueError("MACD calculation failed") from e
 
@@ -10930,7 +10931,7 @@ def simple_calculate_macd(
         signal_line = macd_line.ewm(span=signal, adjust=False).mean()
         histogram = macd_line - signal_line
         return macd_line, signal_line, histogram
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error(f"Exception in MACD calculation: {e}", exc_info=True)
         return None, None, None
 
@@ -10946,7 +10947,7 @@ def compute_ichimoku(
                 from ai_trading.indicators import ichimoku_fallback  # type: ignore
 
                 ich_func = ichimoku_fallback
-            except Exception:  # pragma: no cover
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # pragma: no cover  # AI-AGENT-REF: narrow exception
                 _log.warning("ichimoku indicators not available")
                 ich_func = None
 
@@ -10967,7 +10968,7 @@ def compute_ichimoku(
         if not hasattr(signal_df, "iloc") or not hasattr(signal_df, "columns"):
             signal_df = pd.DataFrame(signal_df)
         return ich_df, signal_df
-    except Exception as exc:  # pragma: no cover - defensive
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # pragma: no cover - defensive  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_ICHIMOKU_FAIL", exc=exc)
         return pd.DataFrame(), pd.DataFrame()
 
@@ -10985,7 +10986,7 @@ def ichimoku_indicator(
                 from ai_trading.indicators import ichimoku_fallback  # type: ignore
 
                 ich_func = ichimoku_fallback
-            except Exception:  # pragma: no cover
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # pragma: no cover  # AI-AGENT-REF: narrow exception
                 _log.warning("ichimoku indicators not available")
                 ich_func = None
 
@@ -10998,7 +10999,7 @@ def ichimoku_indicator(
             ich_df = ich
             params = None
         return ich_df, params
-    except Exception as exc:  # pragma: no cover - defensive
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # pragma: no cover - defensive  # AI-AGENT-REF: narrow exception
         log_warning("INDICATOR_ICHIMOKU_FAIL", exc=exc, extra={"symbol": symbol})
         if state:
             state.indicator_failures += 1
@@ -11120,7 +11121,7 @@ def get_latest_price(symbol: str):
         if price is None:
             raise ValueError(f"Price returned None for symbol {symbol}")
         return price
-    except Exception as e:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error("Failed to get latest price for %s: %s", symbol, e, exc_info=True)
         return None
 
@@ -11151,7 +11152,7 @@ def execute_trades(ctx, signals: pd.Series) -> list[tuple[str, str]]:
         if api is not None and hasattr(api, "submit_order"):
             try:
                 api.submit_order(symbol, 1, side)
-            except Exception as e:
+            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 # Order submission failed - log error and add to failed orders
                 _log.error(
                     "Failed to submit test order for %s %s: %s", symbol, side, e
@@ -11185,7 +11186,7 @@ def compute_atr_stop(df, atr_window=14, multiplier=2):
 if __name__ == "__main__":
     try:
         main()
-    except Exception as exc:
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
         _log.exception("Fatal error in main: %s", exc)
         raise
 
@@ -11196,6 +11197,6 @@ if __name__ == "__main__":
     while True:
         try:
             schedule.run_pending()
-        except Exception as exc:
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
             _log.exception("Scheduler loop error: %s", exc)
         time.sleep(S.scheduler_sleep_seconds)
