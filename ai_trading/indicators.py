@@ -297,6 +297,21 @@ def compute_bollinger(
 
 # AI-AGENT-REF: compute ATR values for several lookback periods
 def compute_atr(df: pd.DataFrame, periods: list[int] | None = None) -> pd.DataFrame:
+    """
+    Compute the Average True Range (ATR) for one or more lookback periods.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Must contain columns: 'high', 'low', 'close'.
+    periods : list[int] | None, default None
+        ATR windows to compute. Defaults to [14, 50].
+
+    Returns
+    -------
+    pandas.DataFrame
+        The input DataFrame with additional ATR columns per period.
+    """
     periods = periods or [14, 50]
     for p in periods:
         tr = np.maximum(

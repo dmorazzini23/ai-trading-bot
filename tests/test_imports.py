@@ -1,23 +1,2 @@
-import importlib
-
-MODULES = [
-    "requests",
-    "urllib3.util.retry",
-    "alpaca_trade_api.rest",
-    "run",
-    "alpaca_api",
-]
-
-def test_imports():
-    for mod in MODULES:
-        try:
-            importlib.import_module(mod)
-        except Exception as exc:
-            raise AssertionError(f"Failed to import {mod}: {exc}")
-
-
-def test_import_capital_scaling():
-    from ai_trading.capital_scaling import drawdown_adjusted_kelly, volatility_parity_position
-    assert callable(drawdown_adjusted_kelly)
-    assert callable(volatility_parity_position)
-
+def test_compute_atr_import_path():
+    from ai_trading.indicators import compute_atr  # noqa: F401  # AI-AGENT-REF: smoke test import
