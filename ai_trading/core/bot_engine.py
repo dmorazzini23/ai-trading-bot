@@ -4393,12 +4393,9 @@ class LazyBotContext:
                 else None
             ),
         )
-        _exec_engine = ExecutionEngine(
-            self._context,
-            slippage_total=slippage_total,
-            slippage_count=slippage_count,
-            orders_total=orders_total,
-        )
+        # ExecutionEngine does not accept slippage/metrics kwargs.
+        # Metrics remain tracked in bot_engine via Prometheus counters.
+        _exec_engine = ExecutionEngine(self._context)  # AI-AGENT-REF: remove unsupported kwargs
         self._context.execution_engine = _exec_engine
 
         # Propagate the capital_scaler to the risk engine so that position_size
