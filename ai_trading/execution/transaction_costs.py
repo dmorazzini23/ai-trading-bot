@@ -6,7 +6,6 @@ spread costs, market impact, commissions, and opportunity costs.
 Validates that trades exceed total costs with required safety margins.
 """
 
-import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
@@ -155,7 +154,7 @@ class TransactionCostCalculator:
 
             return spread_cost
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(
                 "SPREAD_COST_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
@@ -191,7 +190,7 @@ class TransactionCostCalculator:
 
             return commission
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(
                 "COMMISSION_CALC_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
@@ -251,7 +250,7 @@ class TransactionCostCalculator:
 
             return temporary_impact, permanent_impact
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(
                 "MARKET_IMPACT_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
@@ -293,7 +292,7 @@ class TransactionCostCalculator:
 
             return opportunity_cost
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(
                 "OPPORTUNITY_COST_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
@@ -334,7 +333,7 @@ class TransactionCostCalculator:
 
             return borrowing_cost
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(
                 "BORROWING_COST_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
@@ -405,7 +404,7 @@ class TransactionCostCalculator:
                 cost_percentage=cost_percentage
             )
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(
                 "TRANSACTION_COST_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
@@ -485,12 +484,18 @@ class TransactionCostCalculator:
             )
 
         except ValueError as e:
-            logger.warning(f"Trade profitability validation error for {symbol}: {e}")
+            logger.warning(
+                "PROFITABILITY_VALIDATION_VALUE_ERROR",
+                extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+            )  # AI-AGENT-REF: structured logging
             raise ValueError(f"Invalid trade parameters: {str(e)}")
         except KeyError as e:
-            logger.warning(f"Missing market data for {symbol}: {e}")
+            logger.warning(
+                "PROFITABILITY_VALIDATION_KEY_ERROR",
+                extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+            )  # AI-AGENT-REF: structured logging
             raise KeyError(f"Required market data missing: {str(e)}")
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(
                 "PROFITABILITY_VALIDATION_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
@@ -522,7 +527,7 @@ class TransactionCostCalculator:
 
             return spread_estimates.get(liquidity_tier, 0.005)
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.warning(
                 "SPREAD_PERCENT_ESTIMATE_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
@@ -545,7 +550,7 @@ class TransactionCostCalculator:
             else:
                 return LiquidityTier.ILLIQUID
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.warning(
                 "LIQUIDITY_CLASSIFICATION_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
