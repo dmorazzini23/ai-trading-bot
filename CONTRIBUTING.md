@@ -49,3 +49,14 @@
 - ❌ No global `ctx`.  
 - ❌ No shims, no broad `except`, no dynamic exec/eval in prod.
 
+
+## Runtime settings
+- Prefer `AI_TRADING_*` environment variables (e.g., `AI_TRADING_INTERVAL`, `AI_TRADING_MODEL_PATH`).
+- Heavy ML features (`torch`, `hmmlearn`) load only when `USE_RL_AGENT=1`.
+
+## Smoke test
+Run the lightweight verification script:
+
+```
+scripts/smoke.sh
+```

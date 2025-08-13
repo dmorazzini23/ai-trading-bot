@@ -11,6 +11,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, Union
 
 import requests  # AI-AGENT-REF: ensure requests import for function annotations
+from pathlib import Path
 
 # Do not hard fail when running under older Python versions in tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
@@ -18,7 +19,8 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
 
     logging.getLogger(__name__).warning("Running under unsupported Python version")
 
-from ai_trading.config.settings import get_settings
+from ai_trading.config.settings import get_settings as get_config_settings
+from ai_trading.settings import get_settings as get_runtime_settings  # AI-AGENT-REF: runtime settings
 from ai_trading.market import cache as mcache
 
 # Define logger early
@@ -51,14 +53,19 @@ except Exception:  # pragma: no cover
     _MET_REQS = _Noop()
     _MET_LAT = _Noop()
 
-S = get_settings()
+CFG = get_config_settings()
+S = get_runtime_settings()
+BASE_DIR = Path(__file__).resolve().parents[1]  # AI-AGENT-REF: repo root for paths
 
-FINNHUB_API_KEY = S.finnhub_api_key
-ALPACA_API_KEY = S.alpaca_api_key
-ALPACA_SECRET_KEY = S.alpaca_secret_key
-ALPACA_BASE_URL = S.alpaca_base_url
-ALPACA_DATA_FEED = S.alpaca_data_feed or "iex"
-HALT_FLAG_PATH = str(S.halt_flag_path_abs)  # AI-AGENT-REF: absolute halt flag path
+def abspath(fname: str) -> str:
+    return str((BASE_DIR / str(fname)).resolve())
+
+FINNHUB_API_KEY = CFG.finnhub_api_key
+ALPACA_API_KEY = CFG.alpaca_api_key
+ALPACA_SECRET_KEY = CFG.alpaca_secret_key
+ALPACA_BASE_URL = CFG.alpaca_base_url
+ALPACA_DATA_FEED = CFG.alpaca_data_feed or "iex"
+HALT_FLAG_PATH = abspath(S.halt_flag_path)  # AI-AGENT-REF: absolute halt flag path
 
 try:
     from alpaca.data.historical import StockHistoricalDataClient

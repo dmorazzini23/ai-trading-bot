@@ -464,7 +464,7 @@ if S.use_rl_agent:
         _seed_torch_if_available(SEED)
         from ai_trading.rl import load_rl_agent  # type: ignore  # AI-AGENT-REF: lazy RL import
 
-        RL_AGENT = load_rl_agent(S.rl_model_path_abs)
+        RL_AGENT = load_rl_agent(str((BASE_DIR / S.rl_model_path).resolve()))  # AI-AGENT-REF: resolve RL model path
 
 _DEFAULT_FEED = CFG.alpaca_data_feed or "iex"
 
@@ -985,7 +985,7 @@ ALPACA_API_KEY = None
 ALPACA_SECRET_KEY = None
 BOT_MODE_ENV = "development"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = Path(__file__).resolve().parents[2]  # AI-AGENT-REF: repo root for path joins
 
 # AI-AGENT-REF: pybreaker is a hard dependency in pyproject.toml
 import pybreaker
@@ -1657,25 +1657,23 @@ def ensure_finbert(cfg=None):
 DISASTER_DD_LIMIT = CFG.disaster_dd_limit
 
 # Paths
-# PROJECT_ROOT: repo root (…/ai_trading/core/ -> up two levels)
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-
-def abspath(fname: str | None) -> str:
-    """Return absolute path for model/flag files."""
-    name = fname or "trained_model.pkl"
-    if os.path.isabs(name):
-        return name
-    return os.path.join(BASE_DIR, name)
+def abspath(fname: str) -> str:
+    """Return absolute path for model/flag files."""  # AI-AGENT-REF: prevent NoneType
+    return str((BASE_DIR / str(fname)).resolve())
 
 # AI-AGENT-REF: log resolved runtime settings once
-MODEL_PATH = str(S.model_path_abs)
-_log.info("RUNTIME_SETTINGS_RESOLVED", seed=S.seed, model_path=MODEL_PATH, interval_hint="main.py")
+MODEL_PATH = abspath(S.model_path)
+_log.info(
+    "RUNTIME_SETTINGS_RESOLVED seed=%s model_path=%s src=bot_engine",
+    S.seed,
+    MODEL_PATH,
+)  # AI-AGENT-REF: use format args to avoid logger kwargs
 
 
 def abspath_repo_root(fname: str) -> str:
     """Path relative to repository root."""
-    return str(PROJECT_ROOT.joinpath(fname))
+    return str((BASE_DIR / fname).resolve())
 
 
 def atomic_joblib_dump(obj, path: str) -> None:
@@ -1737,7 +1735,7 @@ TRADE_LOG_FILE = CFG.trade_log_file
 SIGNAL_WEIGHTS_FILE = str(paths.DATA_DIR / "signal_weights.csv")
 EQUITY_FILE = str(paths.DATA_DIR / "last_equity.txt")
 PEAK_EQUITY_FILE = str(paths.DATA_DIR / "peak_equity.txt")
-HALT_FLAG_PATH = str(S.halt_flag_path_abs)
+HALT_FLAG_PATH = abspath(S.halt_flag_path)  # AI-AGENT-REF: absolute halt flag path
 SLIPPAGE_LOG_FILE = str(paths.LOG_DIR / "slippage.csv")
 REWARD_LOG_FILE = str(paths.LOG_DIR / "reward_log.csv")
 FEATURE_PERF_FILE = abspath("feature_perf.csv")
