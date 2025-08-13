@@ -14,6 +14,7 @@ from ai_trading.logging import logger
 
 # Internal config import
 from ai_trading.config import get_alpaca_config, AlpacaConfig
+from ai_trading.execution.slippage import estimate as estimate_slippage  # AI-AGENT-REF: prod slippage estimator
 
 # Alpaca SDK imports - now required dependencies
 from alpaca.trading.client import TradingClient

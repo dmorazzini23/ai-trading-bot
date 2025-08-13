@@ -1,15 +1,6 @@
 #!/usr/bin/env sh
 set -euo pipefail
 
-# Ensure test-only compat shims (sitecustomize) are importable
-export PYTHONPATH="tests/_compat:${PYTHONPATH:-}"
-
-# AI-AGENT-REF: verify memory_optimizer shim is present
-python - <<'PY'
-import importlib
-mod = importlib.import_module("memory_optimizer")
-print("memory_optimizer shim OK:", hasattr(mod, "MemoryOptimizer"))
-PY
 
 # Ensure dev deps (pytest, xdist, pydantic) are available locally
 if [ -f requirements-dev.txt ]; then
@@ -58,17 +49,9 @@ PY
 
 echo "== Import sanity =="
 python - <<'PY'
-import sys
+import importlib
 
-def must_import(mod: str) -> None:
-    try:
-        __import__(mod)
-        print(f"[ok] import {mod}")
-    except Exception as e:  # pragma: no cover - best-effort CI guard
-        print(f"[fail] import {mod}: {e}", file=sys.stderr)
-        sys.exit(1)
-
-for mod in (
+for mod in [
     "numpy",
     "pandas",
     "pandas_ta",
@@ -76,8 +59,11 @@ for mod in (
     "alpaca_trade_api",
     "cachetools",
     "psutil",
-):
-    must_import(mod)
+    "ai_trading.execution.slippage",
+    "ai_trading.utils.memory_optimizer",
+]:
+    importlib.import_module(mod)
+print("ok")
 PY
 
 python - <<'PY'
@@ -97,13 +83,3 @@ c = get_alpaca_config()
 print("alpaca_cfg:", bool(c.base_url and c.key_id))
 PY
 
-python - <<'PY'
-try:
-    import slippage
-    from slippage import NullSlippageModel
-    m = NullSlippageModel()
-    print("slippage_shim_ok:", hasattr(slippage, "NullSlippageModel"))
-except Exception as e:
-    print("slippage_import_failed:", type(e).__name__, str(e))
-    raise
-PY

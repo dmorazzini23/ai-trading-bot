@@ -135,23 +135,30 @@ def _get_memory_optimization():
     S = get_settings()
     
     if S.enable_memory_optimization:
-        from memory_optimizer import (
-            emergency_memory_cleanup,
-            memory_profile,
-            optimize_memory,
-        )
+        from ai_trading.utils import memory_optimizer  # AI-AGENT-REF: stable import path
+
+        def memory_profile(func):
+            return func
+
+        def optimize_memory():
+            return memory_optimizer.report_memory_use()
+
+        def emergency_memory_cleanup():
+            memory_optimizer.enable_low_memory_mode()
+            return {}
+
         return True, memory_profile, optimize_memory, emergency_memory_cleanup
     else:
         # Fallback no-op decorators when memory optimization is disabled
         def memory_profile(func):
             return func
-        
+
         def optimize_memory():
             return {}
-        
+
         def emergency_memory_cleanup():
             return {}
-            
+
         return False, memory_profile, optimize_memory, emergency_memory_cleanup
 
 MEMORY_OPTIMIZATION_AVAILABLE, memory_profile, optimize_memory, emergency_memory_cleanup = _get_memory_optimization()
