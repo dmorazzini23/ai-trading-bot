@@ -81,8 +81,19 @@ def _is_market_open_now(cfg=None) -> bool:
 
 
 # Import emit-once logger for startup banners
-from ai_trading.logging import logger_once, info_kv  # AI-AGENT-REF: structured logging helper
+from ai_trading.logging import (
+    logger_once,
+    info_kv,
+    warning_kv,
+)  # AI-AGENT-REF: structured logging helper
 from ai_trading.indicators import compute_atr as _compute_atr  # AI-AGENT-REF: fail fast at import-time
+
+# RL: import the trader wrapper from the correct package
+try:
+    from ai_trading.rl_trading import RLTrader  # Provides .load() and .predict()  # AI-AGENT-REF: correct RL import path
+except Exception as e:  # noqa: BLE001 - best-effort import; we log below.
+    RLTrader = None  # type: ignore
+    warning_kv(_log, "RL_IMPORT_FAILED", extra={"detail": str(e)})
 
 # AI-AGENT-REF: emit-once helper and readiness gate for startup/runtime coordination
 _EMITTED_KEYS: set[str] = set()
@@ -272,6 +283,12 @@ info_kv(
     "INDICATOR_IMPORT_OK",
     extra={"compute_atr_is_function": bool(inspect.isfunction(_compute_atr))},
 )
+
+info_kv(
+    _log,
+    "RL_IMPORT_OK",
+    extra={"available": bool(RLTrader)},
+)  # AI-AGENT-REF: RL import self-check
 
 
 # Handling missing portfolio weights function
@@ -484,23 +501,28 @@ def _seed_torch_if_available(seed: int) -> None:
         pass
 
 
-RL_AGENT = None  # AI-AGENT-REF: populated only when deps available
-if S.use_rl_agent:
-    missing: list[str] = []
-    if not _lazy_import_torch():
-        missing.append("torch")
-    if not _lazy_import_hmmlearn():
-        missing.append("hmmlearn")
-    if missing:
-        logging.getLogger(__name__).warning(
-            "USE_RL_AGENT=1 but missing deps: %s – RL disabled. Install with: pip install hmmlearn && see pytorch.org/get-started for torch.",
-            ", ".join(missing),
-        )
+RL_MODEL_PATH = (
+    (Path(BASE_DIR) / S.rl_model_path).resolve()
+    if getattr(S, "rl_model_path", None)
+    else None
+)  # AI-AGENT-REF: resolve RL model path
+RL_AGENT: Optional[Any] = None
+if S.use_rl_agent and RL_MODEL_PATH:
+    if RLTrader is not None:
+        try:
+            rl = RLTrader(RL_MODEL_PATH)
+            rl.load()  # load PPO policy from zip path
+            RL_AGENT = rl
+            info_kv(_log, "RL_AGENT_READY", extra={"model": str(RL_MODEL_PATH)})
+        except Exception as e:  # noqa: BLE001
+            warning_kv(_log, "RL_AGENT_INIT_FAILED", extra={"error": str(e)})
+            RL_AGENT = None
     else:
-        _seed_torch_if_available(SEED)
-        from ai_trading.rl import load_rl_agent  # type: ignore  # AI-AGENT-REF: lazy RL import
-
-        RL_AGENT = load_rl_agent(str((BASE_DIR / S.rl_model_path).resolve()))  # AI-AGENT-REF: resolve RL model path
+        warning_kv(
+            _log,
+            "RL_TRADER_UNAVAILABLE",
+            extra={"hint": "ai_trading.rl_trading import failed"},
+        )
 
 _DEFAULT_FEED = CFG.alpaca_data_feed or "iex"
 
