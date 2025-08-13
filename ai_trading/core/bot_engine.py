@@ -1665,10 +1665,9 @@ def abspath(fname: str) -> str:
 # AI-AGENT-REF: log resolved runtime settings once
 MODEL_PATH = abspath(S.model_path)
 _log.info(
-    "RUNTIME_SETTINGS_RESOLVED seed=%s model_path=%s src=bot_engine",
-    S.seed,
-    MODEL_PATH,
-)  # AI-AGENT-REF: use format args to avoid logger kwargs
+    "RUNTIME_SETTINGS_RESOLVED",
+    extra={"seed": S.seed, "model_path": MODEL_PATH, "interval_hint": "main.py"},
+)  # AI-AGENT-REF: structured log payload
 
 
 def abspath_repo_root(fname: str) -> str:
