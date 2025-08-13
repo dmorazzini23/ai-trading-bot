@@ -254,17 +254,15 @@ class OrderManager:
                 # AI-AGENT-REF: instantiate idempotency cache
                 self._idempotency_cache = OrderIdempotencyCache()
             except (
-                ValueError,
                 KeyError,
+                ValueError,
                 TypeError,
-                OSError,
-                FileNotFoundError,
-                PermissionError,
+                RuntimeError,
             ) as e:
                 logger.error(
                     "IDEMPOTENCY_CACHE_FAILED",
                     extra={"cause": e.__class__.__name__, "detail": str(e)},
-                )
+                )  # AI-AGENT-REF: narrow idempotency cache errors
                 raise
         return self._idempotency_cache
 
@@ -463,12 +461,10 @@ class OrderManager:
             return True
 
         except (
-            ValueError,
             KeyError,
+            ValueError,
             TypeError,
-            OSError,
-            FileNotFoundError,
-            PermissionError,
+            RuntimeError,
         ) as e:
             logger.error(
                 "ORDER_VALIDATION_FAILED",
@@ -530,12 +526,10 @@ class OrderManager:
                 try:
                     callback(order, event_type)
                 except (
-                    ValueError,
                     KeyError,
+                    ValueError,
                     TypeError,
-                    OSError,
-                    FileNotFoundError,
-                    PermissionError,
+                    RuntimeError,
                 ) as e:
                     logger.error(
                         "CALLBACK_FAILED",
@@ -546,12 +540,10 @@ class OrderManager:
                         },
                     )
         except (
-            ValueError,
             KeyError,
+            ValueError,
             TypeError,
-            OSError,
-            FileNotFoundError,
-            PermissionError,
+            RuntimeError,
         ) as e:
             logger.error(
                 "CALLBACK_NOTIFICATION_FAILED",
@@ -657,12 +649,10 @@ class ExecutionEngine:
                 return None
 
         except (
-            ValueError,
             KeyError,
+            ValueError,
             TypeError,
-            OSError,
-            FileNotFoundError,
-            PermissionError,
+            RuntimeError,
         ) as e:
             logger.error(
                 "ORDER_EXECUTION_FAILED",
@@ -710,12 +700,10 @@ class ExecutionEngine:
                 ) / self.execution_stats["filled_orders"]
 
         except (
-            ValueError,
             KeyError,
+            ValueError,
             TypeError,
-            OSError,
-            FileNotFoundError,
-            PermissionError,
+            RuntimeError,
         ) as e:
             logger.error(
                 "SIMULATION_FAILED",
