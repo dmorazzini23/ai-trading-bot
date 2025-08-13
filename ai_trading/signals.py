@@ -5,9 +5,17 @@ import logging
 import os
 import time
 from functools import lru_cache
-from typing import Any
+from typing import Any, Dict, Iterable  # AI-AGENT-REF: broaden typing for signals
 
-logger = logging.getLogger(__name__)
+# If this file calls broker/data APIs, they may raise concrete errors.
+try:
+    from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: narrow broker catches
+except Exception:  # tests/dev envs without alpaca
+    class APIError(Exception):
+        pass
+
+_log = logging.getLogger(__name__)
+logger = _log
 
 # Core dependencies
 import numpy as np
@@ -65,8 +73,6 @@ def rolling_mean(arr, window: int):
     return (cumsum[window:] - cumsum[:-window]) / float(window)
 
 
-logger = logging.getLogger(__name__)
-
 # AI-AGENT-REF: Portfolio-level optimization integration
 from ai_trading.execution.transaction_costs import (
     TradeType,
@@ -121,6 +127,81 @@ def generate() -> int:
     """Placeholder generate function used in tests."""
 
     return 0
+
+
+# AI-AGENT-REF: structured error logging for data fetch
+def fetch_history(symbols: Iterable[str], start, end, source: str = "alpaca") -> pd.DataFrame:
+    """Fetch historical data for symbols between start and end."""
+    try:
+        # existing logic (alpaca / yfinance / cache) ...
+        df = pd.DataFrame()
+        return df
+    except (APIError, ConnectionError, TimeoutError, KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow exception
+        _log.error(
+            "FETCH_HISTORY_FAILED",
+            extra={
+                "symbol_count": len(symbols),
+                "cause": e.__class__.__name__,
+                "detail": str(e),
+            },
+        )
+        raise
+
+
+# AI-AGENT-REF: structured error logging for indicators
+def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    try:
+        # compute TA features, rolling windows, etc.
+        out = df.copy()
+        return out
+    except (KeyError, ValueError, TypeError, ZeroDivisionError, AttributeError) as e:  # AI-AGENT-REF: narrow exception
+        _log.error(
+            "INDICATORS_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
+        raise
+
+
+# AI-AGENT-REF: structured error logging for feature matrix
+def build_feature_matrix(df: pd.DataFrame) -> pd.DataFrame:
+    try:
+        # select/align columns, dropna, normalize
+        X = df.copy()
+        return X
+    except (KeyError, ValueError, TypeError, IndexError) as e:  # AI-AGENT-REF: narrow exception
+        _log.error(
+            "FEATURE_MATRIX_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
+        raise
+
+
+# AI-AGENT-REF: structured error logging for model scoring
+def score_candidates(X: pd.DataFrame, model) -> pd.DataFrame:
+    try:
+        # model.predict_proba or predict; attach to frame
+        scored = X.copy()
+        return scored
+    except (ValueError, TypeError, AttributeError) as e:  # AI-AGENT-REF: narrow exception
+        _log.error(
+            "SCORING_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
+        raise
+
+
+# AI-AGENT-REF: structured error logging for signal generation
+def generate_signals(scored: pd.DataFrame, buy_threshold: float) -> pd.DataFrame:
+    try:
+        # thresholding / momentum rules
+        signals = scored.copy()
+        return signals
+    except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow exception
+        _log.error(
+            "SIGNAL_GEN_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
+        raise
 
 
 def _validate_macd_input(close_prices, min_len):

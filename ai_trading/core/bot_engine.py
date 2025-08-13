@@ -1662,12 +1662,40 @@ def abspath(fname: str) -> str:
     """Return absolute path for model/flag files."""  # AI-AGENT-REF: prevent NoneType
     return str((BASE_DIR / str(fname)).resolve())
 
-# AI-AGENT-REF: log resolved runtime settings once
-MODEL_PATH = abspath(S.model_path)
+
+# AI-AGENT-REF: safe ML model path resolution
+def _resolve_model_path(settings) -> str | None:
+    """
+    Returns absolute model path if provided and exists; otherwise None.
+    Never raises; emits structured logs and lets the bot continue without ML.
+    """
+    import os
+
+    path = getattr(settings, "ai_trading_model_path", None) or getattr(settings, "model_path", None)
+    if not path:
+        _log.info("ML_MODEL_DISABLED", extra={"reason": "no_path_provided"})
+        return None
+    fname = str(path)
+    abs_path = abspath(fname) if 'abspath' in globals() else os.path.abspath(fname)
+    if not os.path.exists(abs_path):
+        _log.warning("ML_MODEL_MISSING", extra={"path": abs_path})
+        return None
+    _log.info("ML_MODEL_READY", extra={"path": abs_path})
+    return abs_path
+
+
+# Resolve once at import time; downstream loaders must handle None gracefully
+MODEL_PATH = _resolve_model_path(S)
+USE_ML = MODEL_PATH is not None
+
 _log.info(
     "RUNTIME_SETTINGS_RESOLVED",
-    extra={"seed": S.seed, "model_path": MODEL_PATH, "interval_hint": "main.py"},
-)  # AI-AGENT-REF: structured log payload
+    extra={
+        "seed": getattr(S, "seed", 42),
+        "model_path": MODEL_PATH or "",
+        "interval_hint": "main.py",
+    },
+)
 
 
 def abspath_repo_root(fname: str) -> str:
@@ -7755,8 +7783,8 @@ def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
     """Load a model from ``path`` supporting both single and ensemble files."""
     import joblib
 
-    if not os.path.exists(path):
-        return None
+    if not path or not os.path.exists(path):
+        return None  # AI-AGENT-REF: handle disabled ML gracefully
 
     loaded = joblib.load(path)
     # if this is a plain dict, return it directly
@@ -9262,12 +9290,12 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         if last_date == today_str:
             need_to_retrain = False
 
-    if not os.path.exists(MODEL_PATH):
+    if not MODEL_PATH or not os.path.exists(MODEL_PATH):
         _log.warning(
             "MODEL_PATH missing; forcing initial retrain.",
-            extra={"path": MODEL_PATH},
+            extra={"path": MODEL_PATH or ""},
         )
-        need_to_retrain = True
+        need_to_retrain = True  # AI-AGENT-REF: guard for missing model path
 
     if need_to_retrain:
         if not callable(globals().get("retrain_meta_learner")):
@@ -9303,7 +9331,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                             "No symbols returned valid minute data; skipping retraining entirely."
                         )
                     else:
-                        force_train = not os.path.exists(MODEL_PATH)
+                        force_train = (not MODEL_PATH) or (not os.path.exists(MODEL_PATH))  # AI-AGENT-REF: guard for missing model path
                         if is_market_open():
                             success = retrain_meta_learner(
                                 ctx, valid_symbols, force=force_train
