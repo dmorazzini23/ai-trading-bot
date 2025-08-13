@@ -21,7 +21,7 @@ execution controls, monitoring, and compliance capabilities.
 """
 
 # Import execution components
-from .engine import ExecutionAlgorithm, Order
+from .engine import ExecutionAlgorithm, ExecutionEngine, Order  # AI-AGENT-REF: expose ExecutionEngine
 
 
 # Import enhanced debugging and tracking modules
@@ -71,6 +71,7 @@ __all__ = [
     # Core execution engine
     "Order",
     "ExecutionAlgorithm",
+    "ExecutionEngine",  # AI-AGENT-REF: expose ExecutionEngine
     # Production execution coordination
     "ProductionExecutionCoordinator",
     "ExecutionResult",
