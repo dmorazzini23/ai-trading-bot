@@ -54,6 +54,7 @@ def _is_market_open_now(cfg=None) -> bool:
 
 # Import emit-once logger for startup banners
 from ai_trading.logging import logger_once, info_kv  # AI-AGENT-REF: structured logging helper
+from ai_trading.indicators import compute_atr as _compute_atr  # AI-AGENT-REF: fail fast at import-time
 
 # AI-AGENT-REF: emit-once helper and readiness gate for startup/runtime coordination
 _EMITTED_KEYS: set[str] = set()
@@ -236,6 +237,13 @@ if not logging.getLogger().handlers and not os.getenv("PYTEST_RUNNING"):
     from ai_trading.logging import setup_logging  # AI-AGENT-REF: lazy logger import
 
     setup_logging(log_file=LOG_PATH)
+
+# AI-AGENT-REF: import sanity signal for CI/ops
+info_kv(
+    _log,
+    "INDICATOR_IMPORT_OK",
+    extra={"compute_atr_is_function": bool(inspect.isfunction(_compute_atr))},
+)
 
 
 # Handling missing portfolio weights function
