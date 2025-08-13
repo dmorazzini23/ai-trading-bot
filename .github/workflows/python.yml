@@ -38,12 +38,13 @@ jobs:
           python-version: "3.12"
           cache: "pip"
 
-      - name: Install dependencies
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
+          # Runtime deps
           pip install -r requirements.txt
-          # Ensure CI has test/dev-only dependencies as well
-          pip install -r requirements-dev.txt
+          # Test-only deps (prefer extras; fall back to plain file for forks)
+          pip install -e ".[test]" || pip install -r requirements-test.txt
 
       - name: Static compile check
         run: |
@@ -63,6 +64,6 @@ jobs:
           chmod +x scripts/quick_verify.sh
           ./scripts/quick_verify.sh
 
-      - name: Run tests (no network)
+      - name: Run tests
         run: |
-          pytest -q -n auto --maxfail=1 --disable-warnings
+          pytest -q -n auto --disable-warnings
