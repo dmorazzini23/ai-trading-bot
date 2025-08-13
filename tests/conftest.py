@@ -8,6 +8,8 @@ import types
 
 os.environ.setdefault("ALPACA_KEY_ID", "test_key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
+# AI-AGENT-REF: seed dummy Finnhub key for tests
+os.environ.setdefault("FINNHUB_API_KEY", "dummy-ci-key")
 
 
 @pytest.fixture
