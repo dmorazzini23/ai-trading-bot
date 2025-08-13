@@ -3,10 +3,7 @@ from __future__ import annotations
 import logging
 
 from flask import Flask, jsonify
-
-
-# AI-AGENT-REF: expose a sensible default port when running the API directly
-DEFAULT_PORT = 9001
+from ai_trading.config.settings import get_settings
 
 
 def create_app():
@@ -22,12 +19,8 @@ def create_app():
 
 
 if __name__ == "__main__":
-    from os import getenv
-    from dotenv import load_dotenv
-    from ai_trading.config import get_settings
-
-    load_dotenv()
-    settings = get_settings()
-    port = getattr(settings, "api_port", None) or int(getenv("PORT", DEFAULT_PORT))
+    s = get_settings()
+    port = int(s.api_port or 9001)  # AI-AGENT-REF: default Flask port fallback
     app = create_app()
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.logger.info("Starting Flask", extra={"port": port})
+    app.run(host="0.0.0.0", port=port)

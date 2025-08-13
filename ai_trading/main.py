@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import logging
 import threading
 import time
@@ -172,16 +173,17 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
 def start_api(ready_signal: threading.Event = None) -> None:
     """Spin up the Flask API server."""
     settings = get_settings()
-    from os import getenv
-
-    # AI-AGENT-REF: ensure default port fallback if unset
-    DEFAULT_PORT = 9001
-    port = getattr(settings, "api_port", None) or int(getenv("PORT", DEFAULT_PORT))
+    port = int(settings.api_port or 9001)  # AI-AGENT-REF: default API port fallback
     run_flask_app(port, ready_signal)
 
 
 def main() -> None:
     """Start the API thread and repeatedly run trading cycles."""
+    parser = argparse.ArgumentParser(description="AI Trading Bot")
+    parser.add_argument("--iterations")
+    parser.add_argument("--interval")
+    args = parser.parse_args()
+
     load_dotenv()
     global config
     config = get_settings()
@@ -238,9 +240,32 @@ def main() -> None:
         logger.error("Unexpected error during API startup synchronization: %s", e)
         raise RuntimeError(f"API startup synchronization failed: {e}")
 
-    interval = config.scheduler_sleep_seconds
-    iterations = config.scheduler_iterations  # AI-AGENT-REF: test hook
-    iterations = 0 if iterations is None else iterations  # AI-AGENT-REF: treat None as infinite
+    s = get_settings()
+
+    # CLI takes precedence; then settings; then defaults
+    iterations = args.iterations
+    if iterations is None:
+        iterations = s.iterations if s.iterations is not None else 0
+    try:
+        iterations = int(iterations)
+    except (TypeError, ValueError):
+        iterations = 0  # fail-open to "run forever"
+
+    interval = args.interval
+    if interval is None:
+        interval = getattr(s, "loop_interval_seconds", None)
+    if interval is None:
+        interval = 60
+    try:
+        interval = int(interval)
+    except (TypeError, ValueError):
+        interval = 60
+
+    # AI-AGENT-REF: log resolved runtime defaults
+    logger.info(
+        "Runtime defaults resolved", extra={"iterations": iterations, "interval": interval}
+    )
+
     count = 0
 
     # AI-AGENT-REF: Track memory optimization cycles

@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     )
     bot_mode: str = Field(default="test", alias="BOT_MODE")
 
+    # AI-AGENT-REF: runtime defaults for deterministic behavior and loops
+    seed: int | None = 42
+    loop_interval_seconds: int = 60
+    iterations: int | None = 0  # 0 => run forever
+    api_port: int | None = 9001
+
     # AI-AGENT-REF: optional Finnhub API config
     # --- Finnhub (optional; tests may reference these) ---
     finnhub_api_key: str | None = Field(
