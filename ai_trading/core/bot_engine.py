@@ -131,7 +131,7 @@ from pathlib import Path
 # (settings will be imported below with other config imports)
 def _get_memory_optimization():
     """Initialize memory optimization based on settings."""
-    from ai_trading.config import get_settings
+    from ai_trading.config.settings import get_settings
     S = get_settings()
     
     if S.enable_memory_optimization:
@@ -181,7 +181,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from ai_trading import (
     paths,  # AI-AGENT-REF: Runtime paths for proper directory separation
 )
-from ai_trading.config import get_settings
+from ai_trading.config.settings import get_settings
 from ai_trading.config import management as config
 
 # Initialize settings once for global use
@@ -397,9 +397,16 @@ from datetime import time as dt_time
 from threading import Lock, Semaphore, Thread
 from typing import Any
 from zoneinfo import ZoneInfo
+from secrets import randbits
 
-# Set deterministic random seeds for reproducibility
-SEED = S.seed
+# AI-AGENT-REF: resolve seed safely with fallback
+_settings = get_settings()
+_raw_seed = _settings.seed
+try:
+    SEED = int(_raw_seed) if _raw_seed is not None else randbits(32)
+except (TypeError, ValueError):
+    SEED = randbits(32)
+
 random.seed(SEED)
 # AI-AGENT-REF: guard numpy random seed for test environments
 if hasattr(np, "random"):
@@ -408,9 +415,14 @@ if hasattr(np, "random"):
 # AI-AGENT-REF: throttle SKIP_COOLDOWN logs
 _LAST_SKIP_CD_TIME = 0.0
 _LAST_SKIP_SYMBOLS: frozenset[str] = frozenset()
-import torch
 
-torch.manual_seed(SEED)
+try:
+    import torch  # already a dep; safe import
+    torch.manual_seed(SEED)
+except Exception as e:  # pragma: no cover - log and continue
+    _log.warning(
+        "SEED_INIT_SKIPPED", extra={"cause": e.__class__.__name__, "detail": str(e)}
+    )
 
 _DEFAULT_FEED = get_settings().alpaca_data_feed or "iex"
 
