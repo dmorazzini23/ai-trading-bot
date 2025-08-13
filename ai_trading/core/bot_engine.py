@@ -22,10 +22,38 @@ import uuid
 import warnings
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional, Union
 from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 
 _log = logging.getLogger(__name__)
+
+# --- path helpers (no imports of heavy deps) ---
+BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+
+def abspath_safe(fname: Optional[Union[str, Path]]) -> str:
+    """Return absolute path or empty string for falsy inputs."""  # AI-AGENT-REF: guard None paths
+    if not fname:
+        return ""
+    s = str(fname)
+    if os.path.isabs(s):
+        return s
+    return os.path.join(BASE_DIR, s)
+
+def default_trade_log_path() -> str:
+    """Resolve trade log path from env vars or fallback."""  # AI-AGENT-REF: ensure trade log exists
+    env_candidates = [
+        os.getenv("TRADE_LOG_PATH"),
+        os.getenv("AI_TRADING_TRADE_LOG_PATH"),
+    ]
+    for candidate in env_candidates:
+        cand = abspath_safe(candidate)
+        if cand:
+            os.makedirs(os.path.dirname(cand), exist_ok=True)
+            return cand
+
+    fallback = os.path.join(BASE_DIR, "logs", "trades.jsonl")
+    os.makedirs(os.path.dirname(fallback), exist_ok=True)
+    return fallback
 
 # AI-AGENT-REF: warn-once flags for config/tickers issues
 _warned_missing_tickers = False
@@ -1672,29 +1700,10 @@ def abspath(fname: str) -> str:
 
 
 # AI-AGENT-REF: safe ML model path resolution
-def _resolve_model_path(settings) -> str | None:
-    """
-    Returns absolute model path if provided and exists; otherwise None.
-    Never raises; emits structured logs and lets the bot continue without ML.
-    """
-    import os
-
-    path = getattr(settings, "ai_trading_model_path", None) or getattr(settings, "model_path", None)
-    if not path:
-        _log.info("ML_MODEL_DISABLED", extra={"reason": "no_path_provided"})
-        return None
-    fname = str(path)
-    abs_path = abspath(fname) if 'abspath' in globals() else os.path.abspath(fname)
-    if not os.path.exists(abs_path):
-        _log.warning("ML_MODEL_MISSING", extra={"path": abs_path})
-        return None
-    _log.info("ML_MODEL_READY", extra={"path": abs_path})
-    return abs_path
-
-
-# Resolve once at import time; downstream loaders must handle None gracefully
-MODEL_PATH = _resolve_model_path(S)
-USE_ML = MODEL_PATH is not None
+MODEL_PATH = abspath_safe(getattr(S, "model_path", None))
+if not MODEL_PATH:
+    _log.warning("ML_MODEL_MISSING", extra={"path": os.path.join(BASE_DIR, "trained_model.pkl")})
+USE_ML = bool(MODEL_PATH)
 
 info_kv(
     _log,
@@ -1767,15 +1776,15 @@ def get_git_hash() -> str:
 TICKERS_FILE = abspath_repo_root("tickers.csv")
 DEFAULT_TICKERS = ["AAPL", "GOOG", "AMZN"]  # AI-AGENT-REF: fallback tickers
 # AI-AGENT-REF: use centralized trade log path
-TRADE_LOG_FILE = CFG.trade_log_file
+TRADE_LOG_FILE = default_trade_log_path()
 SIGNAL_WEIGHTS_FILE = str(paths.DATA_DIR / "signal_weights.csv")
 EQUITY_FILE = str(paths.DATA_DIR / "last_equity.txt")
 PEAK_EQUITY_FILE = str(paths.DATA_DIR / "peak_equity.txt")
 HALT_FLAG_PATH = abspath(S.halt_flag_path)  # AI-AGENT-REF: absolute halt flag path
 SLIPPAGE_LOG_FILE = str(paths.LOG_DIR / "slippage.csv")
 REWARD_LOG_FILE = str(paths.LOG_DIR / "reward_log.csv")
-FEATURE_PERF_FILE = abspath("feature_perf.csv")
-INACTIVE_FEATURES_FILE = abspath("inactive_features.json")
+FEATURE_PERF_FILE = abspath_safe("feature_perf.csv")
+INACTIVE_FEATURES_FILE = abspath_safe("inactive_features.json")
 
 # Hyperparameter files (repo root, not core/)
 HYPERPARAMS_FILE = abspath_repo_root("hyperparams.json")
@@ -2059,13 +2068,13 @@ def _regime_basket_to_proxy_bars(wide: pd.DataFrame) -> pd.DataFrame:
 RETRAIN_MARKER_FILE = abspath("last_retrain.txt")
 
 # Main meta‐learner path: this is where retrain.py will dump the new sklearn model each day.
-MODEL_RF_PATH = abspath(CFG.model_rf_path)
-MODEL_XGB_PATH = abspath(CFG.model_xgb_path)
-MODEL_LGB_PATH = abspath(CFG.model_lgb_path)
+MODEL_RF_PATH = abspath_safe(getattr(CFG, "model_rf_path", None))
+MODEL_XGB_PATH = abspath_safe(getattr(CFG, "model_xgb_path", None))
+MODEL_LGB_PATH = abspath_safe(getattr(CFG, "model_lgb_path", None))
 
-REGIME_MODEL_PATH = abspath("regime_model.pkl")
+REGIME_MODEL_PATH = abspath_safe("regime_model.pkl")
 # (We keep a separate meta‐model for signal‐weight learning, if you use Bayesian/Ridge, etc.)
-META_MODEL_PATH = abspath("meta_model.pkl")
+META_MODEL_PATH = abspath_safe("meta_model.pkl")
 
 
 # Strategy mode
@@ -2260,10 +2269,20 @@ CONF_THRESHOLD = params.get("CONF_THRESHOLD", state.mode_obj.config.conf_thresho
 CONFIRMATION_COUNT = params.get(
     "CONFIRMATION_COUNT", state.mode_obj.config.confirmation_count
 )
-CAPITAL_CAP = params.get("CAPITAL_CAP", 
-                     getattr(S, "capital_cap",
-                             getattr(state.mode_obj.config, "capital_cap", 0.04)))
-DOLLAR_RISK_LIMIT = CFG.dollar_risk_limit
+
+def _env_float(default: float, *keys: str) -> float:
+    for k in keys:
+        v = os.getenv(k)
+        if v is None or v == "":
+            continue
+        try:
+            return float(v)
+        except Exception:
+            _log.warning("ENV_COERCE_FLOAT_FAILED", extra={"key": k, "value": v})
+    return default
+
+CAPITAL_CAP = _env_float(0.04, "AI_TRADING_CAPITAL_CAP", "CAPITAL_CAP")
+DOLLAR_RISK_LIMIT = _env_float(0.05, "AI_TRADING_DOLLAR_RISK_LIMIT", "DOLLAR_RISK_LIMIT")
 BUY_THRESHOLD = params.get("BUY_THRESHOLD", state.mode_obj.config.buy_threshold)
 
 
@@ -2310,8 +2329,14 @@ def validate_trading_parameters():
         _log.error("Invalid BUY_THRESHOLD %s, using default 0.2", BUY_THRESHOLD)
         BUY_THRESHOLD = 0.2
 
-    _emit_once(logger, "params_validated", logging.INFO, 
-               f"Trading parameters validated: CAPITAL_CAP={CAPITAL_CAP:.3f}, DOLLAR_RISK_LIMIT={DOLLAR_RISK_LIMIT:.3f}, MAX_POSITION_SIZE={MAX_POSITION_SIZE}")
+    _log.info(
+        "TRADING_PARAMS_VALIDATED",
+        extra={
+            "CAPITAL_CAP": f"{CAPITAL_CAP:.3f}",
+            "DOLLAR_RISK_LIMIT": f"{DOLLAR_RISK_LIMIT:.3f}",
+            "MAX_POSITION_SIZE": MAX_POSITION_SIZE,
+        },
+    )
 
 
 # AI-AGENT-REF: Defer parameter validation in testing environments to prevent import blocking
@@ -3293,11 +3318,18 @@ def prefetch_daily_data(
 
 # ─── E. TRADE LOGGER ───────────────────────────────────────────────────────────
 class TradeLogger:
-    def __init__(self, path: str = TRADE_LOG_FILE) -> None:
-        self.path = path
-        if not os.path.exists(path):
+    def __init__(self, path: Optional[Union[str, Path]] = None, *args, **kwargs):
+        # AI-AGENT-REF: sanitize and default trade log path
+        resolved = abspath_safe(path)
+        if not resolved:
+            resolved = default_trade_log_path()
+        parent = os.path.dirname(resolved) or BASE_DIR
+        os.makedirs(parent, exist_ok=True)
+
+        self.path = resolved
+        if not os.path.exists(resolved):
             try:
-                with open(path, "w") as f:
+                with open(resolved, "w") as f:
                     portalocker.lock(f, portalocker.LOCK_EX)
                     try:
                         csv.writer(f).writerow(
@@ -4029,15 +4061,15 @@ class BotContext:
 data_fetcher = DataFetcher()
 signal_manager = SignalManager()
 # AI-AGENT-REF: Lazy initialization for trade logger to speed up imports in testing
-trade_logger = None
+_TRADE_LOGGER_SINGLETON = None
 
 
-def get_trade_logger():
-    """Get trade logger instance, creating it lazily."""
-    global trade_logger
-    if trade_logger is None:
-        trade_logger = TradeLogger()
-    return trade_logger
+def get_trade_logger() -> TradeLogger:
+    """Get trade logger singleton."""  # AI-AGENT-REF: ensure default path resolution
+    global _TRADE_LOGGER_SINGLETON
+    if _TRADE_LOGGER_SINGLETON is None:
+        _TRADE_LOGGER_SINGLETON = TradeLogger(None)
+    return _TRADE_LOGGER_SINGLETON
 
 
 risk_engine = None
@@ -7802,9 +7834,9 @@ def load_model(path: str = MODEL_PATH) -> dict | EnsembleModel | None:
         return loaded
 
     # AI-AGENT-REF: use isfile checks for optional ensemble components
-    rf_exists = os.path.isfile(MODEL_RF_PATH)
-    xgb_exists = os.path.isfile(MODEL_XGB_PATH)
-    lgb_exists = os.path.isfile(MODEL_LGB_PATH)
+    rf_exists = bool(MODEL_RF_PATH) and os.path.isfile(MODEL_RF_PATH)
+    xgb_exists = bool(MODEL_XGB_PATH) and os.path.isfile(MODEL_XGB_PATH)
+    lgb_exists = bool(MODEL_LGB_PATH) and os.path.isfile(MODEL_LGB_PATH)
     if rf_exists and xgb_exists and lgb_exists:
         models = []
         for p in [MODEL_RF_PATH, MODEL_XGB_PATH, MODEL_LGB_PATH]:
