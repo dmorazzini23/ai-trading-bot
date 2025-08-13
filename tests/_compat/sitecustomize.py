@@ -21,16 +21,3 @@ try:
 except Exception:
     pass
 
-# AI-AGENT-REF: register slippage shim for tests when real package missing
-try:
-    import slippage  # noqa: F401
-except Exception:
-    shim_path = os.path.dirname(__file__)
-    if shim_path not in sys.path:
-        sys.path.insert(0, shim_path)
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("slippage", os.path.join(shim_path, "slippage.py"))
-    module = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    assert spec and spec.loader
-    spec.loader.exec_module(module)  # type: ignore[assignment]
-    sys.modules["slippage"] = module

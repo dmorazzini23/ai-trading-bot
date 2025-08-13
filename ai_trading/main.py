@@ -20,37 +20,43 @@ def get_memory_optimizer():
     S = get_settings()
     if not S.enable_memory_optimization:
         return None
-    
-    import sys
-    sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot/scripts')
-    from memory_optimizer import get_memory_optimizer as _get_memory_optimizer
+
+    from ai_trading.utils import memory_optimizer  # AI-AGENT-REF: stable import path
+    return memory_optimizer
+
+
 def optimize_memory():
     from ai_trading.config import get_settings
     S = get_settings()
     if not S.enable_memory_optimization:
         return {}
-    
-    import sys
-    sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot/scripts')
-    from memory_optimizer import optimize_memory as _optimize_memory
+
+    from ai_trading.utils import memory_optimizer  # AI-AGENT-REF: stable import path
+    return memory_optimizer.report_memory_use()
+
+
 def get_performance_monitor():
-    from ai_trading.config import get_settings  
+    from ai_trading.config import get_settings
     S = get_settings()
     if not S.enable_memory_optimization:  # Reuse same flag for both features
         return None
-    
-    import sys
-    sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot/scripts')
-    from performance_monitor import get_performance_monitor as _get_performance_monitor
+
+    from performance_monitor import (  # noqa: F401 - external optional dep
+        get_performance_monitor as _get_performance_monitor,
+    )
+    return _get_performance_monitor()
+
+
 def start_performance_monitoring():
     from ai_trading.config import get_settings
     S = get_settings()
     if not S.enable_memory_optimization:
         return
-    
-    import sys
-    sys.path.insert(0, '/home/runner/work/ai-trading-bot/ai-trading-bot/scripts')
-    from performance_monitor import start_performance_monitoring as _start_performance_monitoring
+
+    from performance_monitor import (  # noqa: F401 - external optional dep
+        start_performance_monitoring as _start_performance_monitoring,
+    )
+    _start_performance_monitoring()
 # AI-AGENT-REF: Create global config AFTER .env loading and Settings import
 config: Settings | None = None
 
@@ -112,7 +118,8 @@ def run_bot(*_a, **_k) -> int:
         memory_optimizer = get_memory_optimizer()
         performance_monitor = get_performance_monitor()
 
-        if memory_optimizer and memory_optimizer.enable_monitoring:
+        if memory_optimizer:
+            memory_optimizer.enable_low_memory_mode()
             logger.info("Memory optimization enabled")
 
         if performance_monitor:
