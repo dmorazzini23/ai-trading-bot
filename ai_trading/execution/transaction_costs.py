@@ -6,16 +6,39 @@ spread costs, market impact, commissions, and opportunity costs.
 Validates that trades exceed total costs with required safety margins.
 """
 
+import logging
 import math
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, Optional, Dict
 
-# Use the centralized logger as per AGENTS.md
-from ai_trading.logging import logger
+_log = logging.getLogger(__name__)  # AI-AGENT-REF: module logger
 
-# Import configuration directly; fail fast on missing dependency
+from ai_trading.risk.engine import compute_atr  # AI-AGENT-REF: fail fast import
 from ai_trading.core.constants import EXECUTION_PARAMETERS, RISK_PARAMETERS  # AI-AGENT-REF: direct import without shim
+
+
+def _finite_nonneg(name: str, v: Optional[float]) -> float:  # AI-AGENT-REF: input guard helper
+    if v is None:
+        raise ValueError(f"{name}_none")
+    x = float(v)
+    if not math.isfinite(x) or x < 0.0:
+        raise ValueError(f"{name}_invalid:{v}")
+    return x
+
+
+def _bounded_rate(name: str, v: Optional[float]) -> float:  # AI-AGENT-REF: bounded rate guard
+    x = _finite_nonneg(name, v)
+    if x > 1.0:
+        raise ValueError(f"{name}_gt1:{v}")
+    return x
+
+
+def _finite_pos(name: str, v: Optional[float]) -> float:  # AI-AGENT-REF: positive guard
+    x = _finite_nonneg(name, v)
+    if x <= 0.0:
+        raise ValueError(f"{name}_invalid:{v}")
+    return x
 
 
 class TradeType(Enum):
@@ -89,10 +112,10 @@ class TransactionCostCalculator:
             max_commission: Maximum commission per trade
             safety_margin_multiplier: Required safety margin over costs
         """
-        self.commission_rate = commission_rate
-        self.min_commission = min_commission
-        self.max_commission = max_commission
-        self.safety_margin_multiplier = safety_margin_multiplier
+        self.commission_rate = _bounded_rate("commission_rate", commission_rate)  # AI-AGENT-REF: validate rate
+        self.min_commission = _finite_nonneg("min_commission", min_commission)  # AI-AGENT-REF: validate min
+        self.max_commission = _finite_nonneg("max_commission", max_commission)  # AI-AGENT-REF: validate max
+        self.safety_margin_multiplier = _finite_pos("safety_margin_multiplier", safety_margin_multiplier)  # AI-AGENT-REF: validate safety margin
 
         # Load enhanced parameters
         self.limit_slippage = EXECUTION_PARAMETERS.get('LIMIT_ORDER_SLIPPAGE', 0.005)
@@ -107,7 +130,7 @@ class TransactionCostCalculator:
             'recovery_halflife': 300         # Impact recovery half-life in seconds
         }
 
-        logger.info(f"TransactionCostCalculator initialized with commission_rate={commission_rate:.4f}, "
+        _log.info(f"TransactionCostCalculator initialized with commission_rate={commission_rate:.4f}, "
                    f"safety_margin={safety_margin_multiplier}x")
 
     def calculate_spread_cost(self,
@@ -149,13 +172,13 @@ class TransactionCostCalculator:
             # Spread cost is half-spread times trade size
             spread_cost = abs(trade_size) * spread / 2
 
-            logger.debug(f"Spread cost for {symbol}: ${spread_cost:.4f} "
+            _log.debug(f"Spread cost for {symbol}: ${spread_cost:.4f} "
                         f"(spread=${spread:.4f}, size={trade_size})")
 
             return spread_cost
 
-        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-            logger.error(
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:  # AI-AGENT-REF: narrow exception
+            _log.error(
                 "SPREAD_COST_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
             )
@@ -185,13 +208,13 @@ class TransactionCostCalculator:
             # Apply min/max constraints
             commission = max(self.min_commission, min(self.max_commission, commission))
 
-            logger.debug(f"Commission for {symbol}: ${commission:.4f} "
+            _log.debug(f"Commission for {symbol}: ${commission:.4f} "
                         f"(value=${trade_value:.2f}, rate={self.commission_rate:.4f})")
 
             return commission
 
-        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-            logger.error(
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:  # AI-AGENT-REF: narrow exception
+            _log.error(
                 "COMMISSION_CALC_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
             )
@@ -245,13 +268,13 @@ class TransactionCostCalculator:
             temporary_impact = trade_value * temp_impact_pct
             permanent_impact = trade_value * perm_impact_pct
 
-            logger.debug(f"Market impact for {symbol}: temp=${temporary_impact:.4f}, "
+            _log.debug(f"Market impact for {symbol}: temp=${temporary_impact:.4f}, "
                         f"perm=${permanent_impact:.4f} (participation={participation_rate:.4f})")
 
             return temporary_impact, permanent_impact
 
-        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-            logger.error(
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:  # AI-AGENT-REF: narrow exception
+            _log.error(
                 "MARKET_IMPACT_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
             )
@@ -287,13 +310,13 @@ class TransactionCostCalculator:
             # Opportunity cost = delay * expected return * trade value
             opportunity_cost = delay_fraction * abs(expected_return) * trade_value
 
-            logger.debug(f"Opportunity cost for {symbol}: ${opportunity_cost:.4f} "
+            _log.debug(f"Opportunity cost for {symbol}: ${opportunity_cost:.4f} "
                         f"(delay={expected_delay}min, return={expected_return:.4f})")
 
             return opportunity_cost
 
-        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-            logger.error(
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:  # AI-AGENT-REF: narrow exception
+            _log.error(
                 "OPPORTUNITY_COST_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
             )
@@ -328,13 +351,13 @@ class TransactionCostCalculator:
             daily_rate = annual_borrow_rate / 365.0
             borrowing_cost = trade_value * daily_rate * holding_period_days
 
-            logger.debug(f"Borrowing cost for {symbol}: ${borrowing_cost:.4f} "
+            _log.debug(f"Borrowing cost for {symbol}: ${borrowing_cost:.4f} "
                         f"(rate={annual_borrow_rate:.1%}, days={holding_period_days})")
 
             return borrowing_cost
 
-        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-            logger.error(
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:  # AI-AGENT-REF: narrow exception
+            _log.error(
                 "BORROWING_COST_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
             )
@@ -364,8 +387,9 @@ class TransactionCostCalculator:
             Detailed transaction cost breakdown
         """
         try:
-            price = market_data.get('prices', {}).get(symbol, 100.0)
-            trade_value = abs(trade_size) * price
+            trade_size_abs = _finite_pos("qty", abs(trade_size))  # AI-AGENT-REF: validate quantity
+            price = _finite_pos("price", market_data.get('prices', {}).get(symbol, 100.0))  # AI-AGENT-REF: validate price
+            trade_value = trade_size_abs * price
 
             # Calculate individual cost components
             spread_cost = self.calculate_spread_cost(symbol, trade_size, market_data)
@@ -387,13 +411,10 @@ class TransactionCostCalculator:
                 opportunity_cost *= 0.5
 
             total_cost = spread_cost + commission + market_impact + opportunity_cost + borrowing_cost
-            cost_per_share = total_cost / max(abs(trade_size), 1)
+            cost_per_share = total_cost / trade_size_abs
             cost_percentage = total_cost / max(trade_value, 1)
 
-            logger.info(f"Transaction cost for {symbol}: ${total_cost:.4f} "
-                       f"({cost_percentage:.4f}% of trade value)")
-
-            return TransactionCostBreakdown(
+            result = TransactionCostBreakdown(
                 spread_cost=spread_cost,
                 commission=commission,
                 market_impact=market_impact,
@@ -404,23 +425,32 @@ class TransactionCostCalculator:
                 cost_percentage=cost_percentage
             )
 
-        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-            logger.error(
-                "TRANSACTION_COST_FAILED",
+            _log.info(
+                f"Transaction cost for {symbol}: ${total_cost:.4f} ("  # AI-AGENT-REF: info log
+                f"{cost_percentage:.4f}% of trade value)"
+            )
+
+            _log.debug(
+                "TX_COSTS_COMPUTED",
+                extra={
+                    "symbol": symbol,
+                    "qty": trade_size_abs,
+                    "price": price,
+                    "fee_rate": None,
+                    "slippage_bps": None,
+                    "atr_used": None,
+                    "result_keys": list(result.__dict__.keys()),
+                },
+            )  # AI-AGENT-REF: debug log
+
+            return result
+
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:  # AI-AGENT-REF: narrow exception
+            _log.error(
+                "TX_COST_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
             )
-            # Conservative fallback
-            fallback_cost = abs(trade_size) * price * 0.01  # 1% fallback
-            return TransactionCostBreakdown(
-                spread_cost=fallback_cost * 0.3,
-                commission=fallback_cost * 0.1,
-                market_impact=fallback_cost * 0.5,
-                opportunity_cost=fallback_cost * 0.1,
-                borrowing_cost=0.0,
-                total_cost=fallback_cost,
-                cost_per_share=fallback_cost / max(abs(trade_size), 1),
-                cost_percentage=0.01
-            )
+            raise
 
     def validate_trade_profitability(self,
                                    symbol: str,
@@ -468,7 +498,7 @@ class TransactionCostCalculator:
                 confidence_level >= 0.6               # Sufficient confidence
             )
 
-            logger.info(f"Profitability analysis for {symbol}: "
+            _log.info(f"Profitability analysis for {symbol}: "
                        f"profit=${expected_profit:.4f}, cost=${transaction_cost:.4f}, "
                        f"net=${net_expected_profit:.4f}, profitable={is_profitable}")
 
@@ -484,19 +514,19 @@ class TransactionCostCalculator:
             )
 
         except ValueError as e:
-            logger.warning(
+            _log.warning(
                 "PROFITABILITY_VALIDATION_VALUE_ERROR",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
             )  # AI-AGENT-REF: structured logging
             raise ValueError(f"Invalid trade parameters: {str(e)}")
         except KeyError as e:
-            logger.warning(
+            _log.warning(
                 "PROFITABILITY_VALIDATION_KEY_ERROR",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
             )  # AI-AGENT-REF: structured logging
             raise KeyError(f"Required market data missing: {str(e)}")
-        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-            logger.error(
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:  # AI-AGENT-REF: narrow exception
+            _log.error(
                 "PROFITABILITY_VALIDATION_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
             )
@@ -527,8 +557,8 @@ class TransactionCostCalculator:
 
             return spread_estimates.get(liquidity_tier, 0.005)
 
-        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-            logger.warning(
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:  # AI-AGENT-REF: narrow exception
+            _log.warning(
                 "SPREAD_PERCENT_ESTIMATE_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
             )
@@ -550,8 +580,8 @@ class TransactionCostCalculator:
             else:
                 return LiquidityTier.ILLIQUID
 
-        except (ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-            logger.warning(
+        except (ValueError, TypeError, ZeroDivisionError, OverflowError, KeyError) as e:  # AI-AGENT-REF: narrow exception
+            _log.warning(
                 "LIQUIDITY_CLASSIFICATION_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
             )
