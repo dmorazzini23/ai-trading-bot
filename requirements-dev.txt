@@ -1,5 +1,27 @@
-pytest
-pytest-xdist
-pydantic
-pandas_ta
+## Development & test dependencies
+
+# --- Core dev/test tools ---
+pytest>=8.0,<9.0
+pytest-xdist>=3.5,<4.0
+pytest-cov>=5.0,<6.0
+flake8
+black
+isort
+pydantic>=2.6
+pydantic-settings>=2.2
+
+# Market / data tooling used only in tests/CI
+pandas>=2.0
+pandas-ta
+pandas-market-calendars>=4.4,<5.0
+alpaca-trade-api>=3.0,<4.0
+cachetools>=5.3,<6.0
 yfinance
+
+# System/process utilities used by perf checks & test helpers (CI-only)
+# Pin to <6 to avoid upcoming API changes that may break older helpers.
+psutil>=5.9,<6.0
+
+# Keep CI/dev on a NumPy that still exports `NaN` (NumPy 2.0 removed it).
+# 1.26.4 supports Python 3.12 and is broadly compatible with pandas & pandas-ta.
+numpy==1.26.4

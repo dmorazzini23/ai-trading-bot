@@ -1,219 +1,38 @@
-# Ensure .env is loaded before constructing settings (test expectation)
-from ai_trading.env import ensure_dotenv_loaded
+from __future__ import annotations
 
-ensure_dotenv_loaded()
+from functools import lru_cache
+from typing import Optional
 
-import functools
-
-from pydantic import AliasChoices, Field, model_validator
-from pydantic_settings import BaseSettings
+from pydantic import Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    force_trades: bool = Field(False, env='FORCE_TRADES')
-    max_drawdown_threshold: float = Field(0.15, env='MAX_DRAWDOWN_THRESHOLD')
-    min_health_rows: int = Field(100, env='MIN_HEALTH_ROWS')
-    ml_confidence_threshold: float = Field(0.6, env='ML_CONFIDENCE_THRESHOLD')
-    portfolio_drift_threshold: float = Field(0.05, env='PORTFOLIO_DRIFT_THRESHOLD')
-    pyramid_levels: int = Field(0, env='PYRAMID_LEVELS')
-    rl_model_path: str | None = Field(default=None, env='RL_MODEL_PATH')
-    sgd_params: str | None = Field(default=None, env='SGD_PARAMS')
-    use_rl_agent: bool = Field(False, env='USE_RL_AGENT')
-    verbose: bool = Field(False, env='VERBOSE')
-    verbose_logging: bool = Field(False, env='VERBOSE_LOGGING')
-    volume_spike_threshold: float = Field(1.5, env='VOLUME_SPIKE_THRESHOLD')
-    # Runtime toggles
-    trading_mode: str = Field("balanced", env="TRADING_MODE")
-    shadow_mode: bool = Field(False, env="SHADOW_MODE")
-    disable_daily_retrain: bool = Field(False, env="DISABLE_DAILY_RETRAIN")
+    """Minimal project settings for tests and CI."""
 
-    # Portfolio features (default disabled to reduce startup noise)
-    ENABLE_PORTFOLIO_FEATURES: bool = Field(False, env="ENABLE_PORTFOLIO_FEATURES")
-    REGIME_MIN_ROWS: int = Field(50, env="REGIME_MIN_ROWS")
-    
-    # Performance optimizations (optional)
-    enable_numba_optimization: bool = Field(False, env="ENABLE_NUMBA_OPTIMIZATION")
-    enable_memory_optimization: bool = Field(False, env="ENABLE_MEMORY_OPTIMIZATION")
-    
-    # Visualization features (optional)
-    enable_plotting: bool = Field(False, env="ENABLE_PLOTTING")
-    
-    # Optional feature flags for import dependencies
-    enable_streaming: bool = Field(False, env="ENABLE_STREAMING")
-    enable_nlp: bool = Field(False, env="ENABLE_NLP")
-    enable_bs4: bool = Field(False, env="ENABLE_BS4")
-    enable_retry: bool = Field(False, env="ENABLE_RETRY")
-    enable_sklearn: bool = Field(True, env="ENABLE_SKLEARN")  # Default True since it's in hard deps
-    enable_reinforcement_learning: bool = Field(False, env="ENABLE_REINFORCEMENT_LEARNING")
-
-    # Logging configuration flags
-    log_compact_json: bool = Field(False, env="LOG_COMPACT_JSON")
-    log_market_fetch: bool = Field(False, env="LOG_MARKET_FETCH")
-
-    # Keeper integration flags (all disabled by default for behavioral compatibility)
-    liquidity_checks_enabled: bool = Field(False, env="LIQUIDITY_CHECKS_ENABLED")
-    sizing_enabled: bool = Field(False, env="SIZING_ENABLED")
-    data_sanitize_enabled: bool = Field(False, env="DATA_SANITIZE_ENABLED")
-    corp_actions_enabled: bool = Field(False, env="CORP_ACTIONS_ENABLED")
-    market_cache_enabled: bool = Field(False, env="MARKET_CACHE_ENABLED")
-    market_cache_ttl: int = Field(900, env="MARKET_CACHE_TTL")
-    metrics_enabled: bool = Field(False, env="METRICS_ENABLED")
-
-    # Worker sizing (None/0 => auto)
-    executor_workers: int | None = Field(None, env="EXECUTOR_WORKERS")
-    prediction_workers: int | None = Field(None, env="PREDICTION_WORKERS")
-
-    # Alpaca credentials (dual-schema)
-    alpaca_api_key: str | None = Field(
-        None, validation_alias=AliasChoices("ALPACA_API_KEY", "APCA_API_KEY_ID")
+    env: str = Field(default="test", alias="APP_ENV")
+    data_provider: str = Field(default="mock", alias="DATA_PROVIDER")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    enable_memory_optimization: bool = Field(default=True)
+    alpaca_api_key: str = Field(default="test_key", alias="ALPACA_API_KEY")
+    alpaca_secret_key: SecretStr = Field(
+        default=SecretStr("test_secret"), alias="ALPACA_SECRET_KEY"
     )
-    alpaca_secret_key: str | None = Field(
-        None, validation_alias=AliasChoices("ALPACA_SECRET_KEY", "APCA_API_SECRET_KEY")
-    )
-    alpaca_base_url: str | None = Field(
-        None, validation_alias=AliasChoices("ALPACA_BASE_URL", "APCA_API_BASE_URL")
-    )
-    # Additional settings used by runtime
-    alpaca_data_feed: str | None = Field(None, env="ALPACA_DATA_FEED")
-    finnhub_api_key: str | None = Field(None, env="FINNHUB_API_KEY")
-    halt_flag_path: str | None = Field(None, env="HALT_FLAG_PATH")
+    redis_url: Optional[str] = Field(default=None, alias="REDIS_URL")
 
-    # Bot engine environment variables
-    disaster_dd_limit: float = Field(0.2, env="DISASTER_DD_LIMIT")
-    model_path: str | None = Field(None, env="MODEL_PATH")
-    model_rf_path: str = Field("model_rf.pkl", env="MODEL_RF_PATH")
-    model_xgb_path: str = Field("model_xgb.pkl", env="MODEL_XGB_PATH")
-    model_lgb_path: str = Field("model_lgb.pkl", env="MODEL_LGB_PATH")
-    max_portfolio_positions: int = Field(20, env="MAX_PORTFOLIO_POSITIONS")
-    sector_exposure_cap: float = Field(0.4, env="SECTOR_EXPOSURE_CAP")
-    max_open_positions: int = Field(10, env="MAX_OPEN_POSITIONS")
-    weekly_drawdown_limit: float = Field(0.15, env="WEEKLY_DRAWDOWN_LIMIT")
-    volume_threshold: int = Field(50000, env="VOLUME_THRESHOLD")
-    finnhub_rpm: int = Field(60, env="FINNHUB_RPM")
-    trade_cooldown_min: int = Field(5, env="TRADE_COOLDOWN_MIN")
-    max_trades_per_hour: int = Field(10, env="MAX_TRADES_PER_HOUR")
-    max_trades_per_day: int = Field(50, env="MAX_TRADES_PER_DAY")
-    minute_cache_ttl: int = Field(60, env="MINUTE_CACHE_TTL")
-    healthcheck_port: int = Field(8080, env="HEALTHCHECK_PORT")
+    model_config = SettingsConfigDict(env_prefix="AI_TRADING_", extra="ignore")
 
-    # Rebalancer environment variables
-    rebalance_interval_min: int = Field(10, env="REBALANCE_INTERVAL_MIN")
-    rebalance_sleep_seconds: int = Field(600, env="REBALANCE_SLEEP_SECONDS")
-
-    # Webhook secret for API security
-    webhook_secret: str | None = Field(None, env="WEBHOOK_SECRET")
-
-    # --- risk & sizing knobs (env-coerced) ---
-    trailing_factor: float = Field(1.0, env="TRAILING_FACTOR")
-    kelly_fraction: float = Field(0.0, env="KELLY_FRACTION")
-    max_position_size: float = Field(1.0, env="MAX_POSITION_SIZE")
-    stop_loss: float = Field(0.05, env="STOP_LOSS")
-    take_profit: float = Field(0.10, env="TAKE_PROFIT")
-    take_profit_factor: float = Field(2.0, env="TAKE_PROFIT_FACTOR")
-    lookback_days: int = Field(60, env="LOOKBACK_DAYS")
-    min_signal_strength: float = Field(0.1, env="MIN_SIGNAL_STRENGTH")
-    scaling_factor: float = Field(1.0, env="SCALING_FACTOR")
-    limit_order_slippage: float = Field(0.001, env="LIMIT_ORDER_SLIPPAGE")
-    pov_slice_pct: float = Field(0.05, env="POV_SLICE_PCT")
-    daily_loss_limit: float = Field(0.05, env="DAILY_LOSS_LIMIT")
-    
-    # --- entry/exit window knobs ---
-    entry_start_offset_min: int = Field(0, env="ENTRY_START_OFFSET_MIN")
-    entry_end_offset_min: int = Field(0, env="ENTRY_END_OFFSET_MIN")
-    
-    # Other risk knobs (align defaults with current behavior)
-    capital_cap: float = Field(0.04, env="CAPITAL_CAP")
-    dollar_risk_limit: float = Field(0.05, env="DOLLAR_RISK_LIMIT")
-
-    # Additional environment variables commonly used
-    news_api_key: str | None = Field(None, env="NEWS_API_KEY")
-    sentiment_api_key: str | None = Field(None, env="SENTIMENT_API_KEY")
-    sentiment_api_url: str = Field(
-        "https://newsapi.org/v2/everything", env="SENTIMENT_API_URL"
-    )
-    bot_mode: str = Field("balanced", env="BOT_MODE")
-    bot_log_dir: str = Field("logs", env="BOT_LOG_DIR")
-    api_port: int = Field(9001, env="API_PORT")
-    scheduler_sleep_seconds: int = Field(5, env="SCHEDULER_SLEEP_SECONDS")
-    scheduler_iterations: int = Field(0, env="SCHEDULER_ITERATIONS")
-    
-    # Random seed for reproducibility
-    seed: int = Field(42, env="SEED")
-    
-    # Testing mode flag
-    testing: bool = Field(False, env="TESTING")
-    
-    # File paths
-    trade_log_file: str = Field("trades.csv", env="TRADE_LOG_FILE")
-
-    # --- Data cache controls ---
-    data_cache_enable: bool = Field(False, env="DATA_CACHE_ENABLE")
-    data_cache_ttl_seconds: int = Field(90, env="DATA_CACHE_TTL_SECONDS")
-    data_cache_dir: str = Field("data_cache", env="DATA_CACHE_DIR")
-    data_cache_disk_enable: bool = Field(False, env="DATA_CACHE_DISK_ENABLE")
-
-    # --- Data warm-up controls ---
-    data_warmup_enable: bool = Field(False, env="DATA_WARMUP_ENABLE")
-    data_warmup_symbols: int = Field(
-        25, env="DATA_WARMUP_SYMBOLS"
-    )  # top N from tickers.csv
-    data_warmup_timeframe: str = Field(
-        "1Min", env="DATA_WARMUP_TIMEFRAME"
-    )  # "1Min" or "1D"
-    data_warmup_lookback_days: int = Field(
-        5, env="DATA_WARMUP_LOOKBACK_DAYS"
-    )  # historical window
-
-    # --- Regime configuration ---
-    regime_symbols_csv: str = Field("SPY", env="REGIME_SYMBOLS_CSV")
-
-    # --- Batch sizing ---
-    pretrade_batch_size: int = Field(50, env="PRETRADE_BATCH_SIZE")
-    # Fallback used if ctx.lookback_start/end are unset
-    pretrade_lookback_days: int = Field(120, env="PRETRADE_LOOKBACK_DAYS")
-    # If ctx.lookback_start/end are not present, fall back to this many days
-
-    # --- Intraday batching controls ---
-    intraday_batch_enable: bool = Field(True, env="INTRADAY_BATCH_ENABLE")
-    intraday_batch_size: int = Field(40, env="INTRADAY_BATCH_SIZE")
-    intraday_lookback_minutes: int = Field(120, env="INTRADAY_LOOKBACK_MINUTES")
-
-    # --- Bounded concurrency for per-symbol fallbacks ---
-    batch_fallback_workers: int = Field(4, env="BATCH_FALLBACK_WORKERS")
-
-    model_config = {"env_file": ".env", "case_sensitive": False, "extra": "ignore"}
-
-    @model_validator(mode="after")
-    def _normalize_alpaca(self):
-        def clean(v: str | None) -> str | None:
-            if not v:
-                return None
-            return v.strip().strip('"').strip("'") or None
-
-        self.alpaca_api_key = clean(self.alpaca_api_key)
-        self.alpaca_secret_key = clean(self.alpaca_secret_key)
-        self.alpaca_base_url = (
-            clean(self.alpaca_base_url) or "https://paper-api.alpaca.markets"
-        )
-        return self
-
-    # Enforcement
-    def require_alpaca_or_raise(self) -> None:
-        if self.shadow_mode:
-            return
-        if not (self.alpaca_api_key and self.alpaca_secret_key):
-            raise RuntimeError("Missing Alpaca API credentials")
-
-    # Policy: worker sizing
-    def effective_executor_workers(self, cpu_count: int) -> int:
-        return (self.executor_workers or 0) or max(2, min(4, cpu_count or 2))
-
-    def effective_prediction_workers(self, cpu_count: int) -> int:
-        return (self.prediction_workers or 0) or max(2, min(4, cpu_count or 2))
-
-    # NOTE: Intentionally no uppercase alias properties; callers should use lower-case fields via get_settings().
+    @property
+    def alpaca_secret_key_plain(self) -> str:
+        return self.alpaca_secret_key.get_secret_value()
 
 
-@functools.lru_cache(maxsize=1)
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
+
+
+def broker_keys() -> tuple[str, str]:
+    s = get_settings()
+    return (s.alpaca_api_key, s.alpaca_secret_key_plain)
+

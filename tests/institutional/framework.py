@@ -18,6 +18,32 @@ import logging
 from ai_trading.logging import logger
 
 
+class MockMarketDataProvider:
+    """Minimal market data provider for institutional tests.
+
+    AI-AGENT-REF: provide deterministic prices for tests.
+    """
+
+    def __init__(self) -> None:
+        self._prices: Dict[str, float] = {"AAPL": 170.0}
+        self._history: Dict[str, List[float]] = {"AAPL": [168.0, 169.0, 170.0]}
+
+    def get_current_price(self, symbol: str) -> Optional[float]:
+        """Return the latest price for *symbol*."""
+        return self._prices.get(symbol)
+
+    def get_price_history(self, symbol: str) -> List[float]:
+        """Return recent price history for *symbol*."""
+        return list(self._history.get(symbol, []))
+
+    def create_market_scenario(self, scenario: str) -> None:
+        """Adjust prices to simulate simple market regimes."""
+        if scenario == "bull_market":
+            self._prices = {s: p * 1.1 for s, p in self._prices.items()}
+        elif scenario == "bear_market":
+            self._prices = {s: p * 0.9 for s, p in self._prices.items()}
+
+
 class TradingScenarioRunner:
     """
     Comprehensive trading scenario test runner.

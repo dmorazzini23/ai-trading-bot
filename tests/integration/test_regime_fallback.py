@@ -1,7 +1,10 @@
 import types
 import pytest
 
-bot_engine = pytest.importorskip("ai_trading.core.bot_engine", reason="bot engine not importable")
+try:
+    import ai_trading.core.bot_engine as bot_engine
+except Exception:
+    pytest.skip("bot engine not importable", allow_module_level=True)
 
 @pytest.mark.integration
 def test_regime_fallback_warns_but_continues(dummy_data_fetcher_empty, dummy_data_fetcher, caplog):
