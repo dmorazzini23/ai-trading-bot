@@ -143,7 +143,7 @@ class TaxAwareRebalancer:
                 ),
             }
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             logger.error(
                 "CALCULATE_TAX_IMPACT_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
@@ -212,7 +212,7 @@ class TaxAwareRebalancer:
 
             return opportunities
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             logger.error(
                 "LOSS_HARVEST_OPS_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
@@ -347,7 +347,7 @@ class TaxAwareRebalancer:
                 ),
             }
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             logger.error(
                 "CALC_OPTIMAL_REBALANCE_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
@@ -370,7 +370,7 @@ class TaxAwareRebalancer:
 
             return max(0, base_score - gain_magnitude_penalty)
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+        except (KeyError, ValueError, TypeError) as e:
             logger.error(
                 "TAX_EFFICIENCY_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
@@ -398,8 +398,12 @@ class TaxAwareRebalancer:
 
             return base_score + loss_bonus - recency_penalty
 
-        except (KeyError, ValueError, TypeError, ZeroDivisionError) as e:
-            logger.exception(f"Error calculating harvest priority: {e}")
+        except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow harvest priority errors
+            logger.error(
+                "HARVEST_PRIORITY_FAILED",
+                exc_info=True,
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             return 0
 
     def _calculate_rebalance_priority(
@@ -419,8 +423,12 @@ class TaxAwareRebalancer:
 
             return deviation_score - tax_penalty + timing_bonus
 
-        except (KeyError, ValueError, TypeError, ZeroDivisionError) as e:
-            logger.exception(f"Error calculating rebalance priority: {e}")
+        except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow rebalance priority errors
+            logger.error(
+                "REBALANCE_PRIORITY_FAILED",
+                exc_info=True,
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             return 0
 
     def _calculate_portfolio_drift(
@@ -440,8 +448,12 @@ class TaxAwareRebalancer:
 
             return total_drift / 2  # Normalize (sum of absolute differences / 2)
 
-        except (KeyError, ValueError, TypeError, ZeroDivisionError) as e:
-            logger.exception(f"Error calculating portfolio drift: {e}")
+        except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow drift calculation errors
+            logger.error(
+                "PORTFOLIO_DRIFT_FAILED",
+                exc_info=True,
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             return 0
 
     def _calculate_overall_tax_efficiency(self, rebalance_trades: list[dict]) -> float:
@@ -469,8 +481,12 @@ class TaxAwareRebalancer:
 
             return sum(efficiency_scores) / len(efficiency_scores)
 
-        except (KeyError, ValueError, TypeError, ZeroDivisionError) as e:
-            logger.exception(f"Error calculating overall tax efficiency: {e}")
+        except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow efficiency errors
+            logger.error(
+                "TAX_EFFICIENCY_FAILED",
+                exc_info=True,
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             return 0.5
 
     def _generate_rebalance_recommendations(
@@ -516,11 +532,11 @@ class TaxAwareRebalancer:
 
             return recommendations
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+        except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow recommendation errors
             logger.error(
                 "REBALANCE_RECOMMENDATIONS_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )  # AI-AGENT-REF: narrow recommendation errors
+            )
             return ["Manual review recommended due to analysis error"]
 
 
@@ -555,10 +571,9 @@ def rebalance_portfolio(ctx) -> None:
                 return
 
     except (
-        ValueError,
         KeyError,
+        ValueError,
         TypeError,
-        ZeroDivisionError,
         APIError,
         TimeoutError,
         ConnectionError,
@@ -616,10 +631,9 @@ def enhanced_maybe_rebalance(ctx) -> None:
                     _last_rebalance = now
 
         except (
-            ValueError,
             KeyError,
+            ValueError,
             TypeError,
-            ZeroDivisionError,
             APIError,
             TimeoutError,
             ConnectionError,
@@ -634,10 +648,9 @@ def enhanced_maybe_rebalance(ctx) -> None:
                 rebalance_portfolio(ctx)
                 _last_rebalance = now
             except (
-                ValueError,
                 KeyError,
+                ValueError,
                 TypeError,
-                ZeroDivisionError,
                 APIError,
                 TimeoutError,
                 ConnectionError,
@@ -765,10 +778,9 @@ def portfolio_first_rebalance(ctx) -> None:
             logger.info(f"PORTFOLIO_FIRST_REBALANCING_SKIPPED | {rebalance_reason}")
 
     except (
-        ValueError,
         KeyError,
+        ValueError,
         TypeError,
-        ZeroDivisionError,
         APIError,
         TimeoutError,
         ConnectionError,
@@ -782,10 +794,9 @@ def portfolio_first_rebalance(ctx) -> None:
         try:
             rebalance_portfolio(ctx)
         except (
-            ValueError,
             KeyError,
+            ValueError,
             TypeError,
-            ZeroDivisionError,
             APIError,
             TimeoutError,
             ConnectionError,
@@ -849,10 +860,9 @@ def _check_portfolio_first_rebalancing(
                         )
 
             except (
-                ValueError,
                 KeyError,
+                ValueError,
                 TypeError,
-                ZeroDivisionError,
                 APIError,
                 TimeoutError,
                 ConnectionError,
@@ -869,10 +879,9 @@ def _check_portfolio_first_rebalancing(
         )
 
     except (
-        ValueError,
         KeyError,
+        ValueError,
         TypeError,
-        ZeroDivisionError,
         APIError,
         TimeoutError,
         ConnectionError,
@@ -937,11 +946,11 @@ def _get_target_weights_for_rebalancing(ctx) -> dict:
 
         return {}
 
-    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:
+    except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow target weight errors
         logger.error(
             "GET_TARGET_WEIGHTS_FAILED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},
-        )  # AI-AGENT-REF: narrow target weight errors
+        )
         return {}
 
 

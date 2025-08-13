@@ -200,8 +200,12 @@ def calculate_macd(
 
         return macd_df
 
-    except (ValueError, TypeError) as exc:  # pragma: no cover - defensive
-        logger.error("MACD calculation failed with exception: %s", exc, exc_info=True)
+    except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow MACD errors
+        logger.error(
+            "MACD_CALCULATION_FAILED",
+            exc_info=True,
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
         return None
 
 
@@ -264,9 +268,15 @@ def prepare_indicators(data, ticker: str | None = None) -> Any | None:
     if cache_path:
         try:
             data.to_parquet(cache_path, engine="pyarrow")
-        except OSError as e:
-            # Cache write failed - log but continue execution
-            logger.warning("Failed to cache indicator data to %s: %s", cache_path, e)
+        except (OSError, ValueError) as e:  # AI-AGENT-REF: narrow cache write errors
+            logger.warning(
+                "INDICATOR_CACHE_WRITE_FAILED",
+                extra={
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                    "path": str(cache_path),
+                },
+            )
 
     # Additional indicators can be added here using similar defensive checks
     return data
