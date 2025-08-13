@@ -165,13 +165,19 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
         ready_signal.set()
 
     logger.info(f"Starting Flask app on 0.0.0.0:{port}")
-    application.run(host="0.0.0.0", port=port)
+    # AI-AGENT-REF: disable debug mode in production server
+    application.run(host="0.0.0.0", port=port, debug=False)
 
 
 def start_api(ready_signal: threading.Event = None) -> None:
     """Spin up the Flask API server."""
     settings = get_settings()
-    run_flask_app(settings.api_port, ready_signal)
+    from os import getenv
+
+    # AI-AGENT-REF: ensure default port fallback if unset
+    DEFAULT_PORT = 9001
+    port = getattr(settings, "api_port", None) or int(getenv("PORT", DEFAULT_PORT))
+    run_flask_app(port, ready_signal)
 
 
 def main() -> None:
@@ -234,6 +240,7 @@ def main() -> None:
 
     interval = config.scheduler_sleep_seconds
     iterations = config.scheduler_iterations  # AI-AGENT-REF: test hook
+    iterations = 0 if iterations is None else iterations  # AI-AGENT-REF: treat None as infinite
     count = 0
 
     # AI-AGENT-REF: Track memory optimization cycles
