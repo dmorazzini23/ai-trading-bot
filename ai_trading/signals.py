@@ -44,7 +44,11 @@ def robust_signal_price(df) -> float:
         return 1e-3
     try:
         return df["close"].iloc[-1]
-    except Exception:
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+        logger.warning(
+            "DATA_MUNGING_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
         return 1e-3
 
 
@@ -435,16 +439,23 @@ def generate_signal(df: pd.DataFrame, column: str) -> pd.Series:
 
     except (ValueError, TypeError, AttributeError) as exc:
         logger.error(
-            "Exception generating signal from column '%s': %s",
-            column,
-            exc,
+            "SIGNAL_GEN_FAILED",
             exc_info=True,
+            extra={
+                "cause": exc.__class__.__name__,
+                "detail": str(exc),
+                "column": column,
+            },
         )
         return pd.Series(
             dtype=int, name="signal", index=df.index if hasattr(df, "index") else None
         )
-    except Exception as exc:
-        logger.error("Unexpected error in generate_signal: %s", exc, exc_info=True)
+    except (KeyError, ZeroDivisionError) as exc:  # AI-AGENT-REF: narrow exception
+        logger.error(
+            "SIGNAL_GEN_FAILED",
+            exc_info=True,
+            extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+        )
         return pd.Series(
             dtype=int, name="signal", index=df.index if hasattr(df, "index") else None
         )
@@ -492,8 +503,11 @@ def detect_market_regime_hmm(
         model.fit(train)
         hidden_full = model.predict(all_returns)
         df["regime"] = np.concatenate([[hidden_full[0]], hidden_full])
-    except Exception as exc:  # pragma: no cover - hmmlearn may fail
-        logger.warning("HMM regime detection failed: %s", exc)
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as exc:  # pragma: no cover - hmmlearn may fail  # AI-AGENT-REF: narrow exception
+        logger.warning(
+            "MODEL_FIT_FAILED",
+            extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+        )
         df["regime"] = np.nan
 
     df["Regime"] = df["regime"]
@@ -568,8 +582,11 @@ def compute_signal_matrix(df) -> Any | None:
                 # AI-AGENT-REF: avoid division by zero
                 std_val = std_val.replace(0, np.nan)
                 return (series - mean_val) / std_val
-            except Exception as e:
-                logger.warning("Z-score calculation failed: %s", e)
+            except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+                logger.warning(
+                    "DATA_MUNGING_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e)},
+                )
                 return pd.Series(0.0, index=df.index)
 
         matrix = pd.DataFrame(index=df.index)
@@ -599,8 +616,12 @@ def compute_signal_matrix(df) -> Any | None:
         )
         return matrix
 
-    except Exception as e:
-        logger.error("compute_signal_matrix failed: %s", e, exc_info=True)
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+        logger.error(
+            "SIGNAL_PROCESSING_FAILED",
+            exc_info=True,
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
         return pd.DataFrame()
 
 
@@ -680,8 +701,11 @@ def generate_position_hold_signals(ctx, current_positions: list) -> dict:
 
         return hold_signals
 
-    except Exception as exc:
-        logger.error("generate_position_hold_signals failed: %s", exc)
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as exc:  # AI-AGENT-REF: narrow exception
+        logger.error(
+            "SIGNAL_PROCESSING_FAILED",
+            extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+        )
         return {}
 
 
@@ -706,8 +730,11 @@ def should_generate_new_signal(
 
         return True
 
-    except Exception as exc:
-        logger.warning("should_generate_new_signal failed for %s: %s", symbol, exc)
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as exc:  # AI-AGENT-REF: narrow exception
+        logger.warning(
+            "DATA_MUNGING_FAILED",
+            extra={"cause": exc.__class__.__name__, "detail": str(exc), "symbol": symbol},
+        )
         return True  # Default to allowing signal generation
 
 
@@ -759,8 +786,11 @@ def enhance_signals_with_position_logic(
 
         return enhanced_signals
 
-    except Exception as exc:
-        logger.error("enhance_signals_with_position_logic failed: %s", exc)
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as exc:  # AI-AGENT-REF: narrow exception
+        logger.error(
+            "SIGNAL_PROCESSING_FAILED",
+            extra={"cause": exc.__class__.__name__, "detail": str(exc)},
+        )
         return signals  # Return original signals on error
 
 
@@ -902,8 +932,15 @@ def filter_signals_with_portfolio_optimization(
                         logger.warning(
                             f"SIGNAL_REJECTED_COSTS | {symbol} {side} - Cost calculation error: {e}"
                         )
-                    except Exception as e:
-                        logger.error(f"Unexpected error in cost validation for {symbol}: {e}")
+                    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+                        logger.error(
+                            "COST_VALIDATION_FAILED",
+                            extra={
+                                "cause": e.__class__.__name__,
+                                "detail": str(e),
+                                "symbol": symbol,
+                            },
+                        )
                         # Default to rejection on unexpected errors for safety
                         logger.info(
                             f"SIGNAL_REJECTED_COSTS | {symbol} {side} - Validation error"
@@ -921,8 +958,11 @@ def filter_signals_with_portfolio_optimization(
                         f"SIGNAL_REJECTED_PORTFOLIO | {symbol} {side} - {reasoning}"
                     )
 
-            except Exception as e:
-                logger.error(f"Error evaluating signal for {symbol}: {e}")
+            except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+                logger.error(
+                    "SIGNAL_EVALUATION_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+                )
                 # On error, keep the signal to avoid blocking trades
                 filtered_signals.append(signal)
 
@@ -955,8 +995,11 @@ def filter_signals_with_portfolio_optimization(
 
         return filtered_signals
 
-    except Exception as e:
-        logger.error("Error in portfolio-level signal filtering: %s", e)
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+        logger.error(
+            "PORTFOLIO_FILTER_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
         # On error, return original signals to avoid blocking trading
         return signals
 
@@ -1015,8 +1058,11 @@ def _prepare_market_data_for_portfolio_analysis(ctx, signals: list) -> dict:
                             )  # 21-day vol
                             market_data["volatility"][symbol] = returns_std
 
-            except Exception as e:
-                logger.debug(f"Could not fetch data for {symbol}: {e}")
+            except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+                logger.debug(
+                    "MARKET_DATA_FETCH_FAILED",
+                    extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+                )
                 continue
 
         # Calculate correlations between symbols
@@ -1024,8 +1070,11 @@ def _prepare_market_data_for_portfolio_analysis(ctx, signals: list) -> dict:
 
         return market_data
 
-    except Exception as e:
-        logger.error(f"Error preparing market data: {e}")
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+        logger.error(
+            "MARKET_DATA_PREP_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
         return {}
 
 
@@ -1078,13 +1127,20 @@ def _calculate_correlation_matrix(market_data: dict):
 
                     correlations[symbol1][symbol2] = correlation
 
-                except Exception:
+                except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+                    logger.debug(
+                        "CORRELATION_CALC_FAILED",
+                        extra={"cause": e.__class__.__name__, "detail": str(e)},
+                    )
                     correlations[symbol1][symbol2] = 0.0
 
         market_data["correlations"] = correlations
 
-    except Exception as e:
-        logger.error(f"Error calculating correlation matrix: {e}")
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+        logger.error(
+            "CORRELATION_MATRIX_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
 
 
 def _get_current_portfolio_positions(ctx) -> dict:
@@ -1107,8 +1163,11 @@ def _get_current_portfolio_positions(ctx) -> dict:
 
         return positions
 
-    except Exception as e:
-        logger.error(f"Error getting current positions: {e}")
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+        logger.error(
+            "POSITION_FETCH_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
         return {}
 
 
@@ -1138,8 +1197,11 @@ def _estimate_signal_profit(signal, market_data: dict) -> float:
         # Fallback: assume 1% profit potential
         return trade_value * 0.01
 
-    except Exception as e:
-        logger.debug(f"Error estimating signal profit: {e}")
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+        logger.debug(
+            "PROFIT_ESTIMATE_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
         return 0.0
 
 
@@ -1168,8 +1230,11 @@ def _check_portfolio_rebalancing(
 
         return should_rebalance, reason
 
-    except Exception as e:
-        logger.error(f"Error checking portfolio rebalancing: {e}")
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+        logger.error(
+            "REBALANCE_CHECK_FAILED",
+            extra={"cause": e.__class__.__name__, "detail": str(e)},
+        )
         return False, f"Error: {str(e)}"
 
 
@@ -1279,9 +1344,17 @@ class SignalDecisionPipeline:
             logger.warning("Signal evaluation failed - data error: %s", e,
                           extra={"component": "signal_decision", "symbol": symbol, "error_type": "data"})
             return {"decision": "REJECT", "reason": "REJECT_DATA_ERROR", "symbol": symbol}
-        except Exception as e:
-            logger.error("Signal evaluation failed - unexpected error: %s", e,
-                        extra={"component": "signal_decision", "symbol": symbol, "error_type": "unexpected"})
+        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+            logger.error(
+                "SIGNAL_EVALUATION_FAILED",
+                extra={
+                    "component": "signal_decision",
+                    "symbol": symbol,
+                    "error_type": "unexpected",
+                    "cause": e.__class__.__name__,
+                    "detail": str(e),
+                },
+            )
             return {"decision": "REJECT", "reason": "REJECT_SYSTEM_ERROR", "symbol": symbol}
     
     def _estimate_transaction_costs(self, symbol: str, price: float, quantity: float) -> dict:
@@ -1320,7 +1393,11 @@ class SignalDecisionPipeline:
             atr_values = atr(df, period)
             return atr_values.iloc[-1] if not atr_values.empty else df["close"].iloc[-1] * 0.02
             
-        except Exception:
+        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+            logger.warning(
+                "DATA_MUNGING_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             return df["close"].iloc[-1] * 0.02  # 2% fallback
     
     def _analyze_market_regime(self, df: pd.DataFrame) -> dict:
@@ -1345,8 +1422,11 @@ class SignalDecisionPipeline:
                 "regime_type": "trending" if trend_strength > 0.02 else "ranging"
             }
             
-        except Exception as e:
-            logger.debug("Regime analysis failed: %s", e)
+        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+            logger.debug(
+                "REGIME_ANALYSIS_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             return {
                 "recent_volatility": 0.02,
                 "is_high_volatility": False,
@@ -1393,8 +1473,11 @@ class SignalDecisionPipeline:
             # Require minimum agreement
             return max_agreement >= self.ensemble_min_agree
             
-        except Exception as e:
-            logger.debug("Ensemble gating failed: %s", e)
+        except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+            logger.debug(
+                "ENSEMBLE_GATING_FAILED",
+                extra={"cause": e.__class__.__name__, "detail": str(e)},
+            )
             return False  # Fail safe - reject if can't evaluate
 
 
@@ -1426,8 +1509,11 @@ def generate_cost_aware_signals(ctx, symbols: list[str]) -> list[dict]:
                     if hasattr(ctx, 'model') and ctx.model:
                         features = ctx.feature_generator.generate_features(df)
                         predicted_edge = ctx.model.predict_edge(features)
-                except Exception as e:
-                    logger.debug("Model prediction failed for %s: %s", symbol, e)
+                except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+                    logger.debug(
+                        "MODEL_PREDICTION_FAILED",
+                        extra={"cause": e.__class__.__name__, "detail": str(e), "symbol": symbol},
+                    )
                 
                 # Evaluate signal with costs
                 decision = decision_pipeline.evaluate_signal_with_costs(
@@ -1435,9 +1521,17 @@ def generate_cost_aware_signals(ctx, symbols: list[str]) -> list[dict]:
                 )
                 signal_decisions.append(decision)
                 
-            except Exception as e:
-                logger.warning("Signal generation failed for %s: %s", symbol, e,
-                              extra={"component": "signal_generation", "symbol": symbol, "error_type": "processing"})
+            except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+                logger.warning(
+                    "SIGNAL_PROCESSING_FAILED",
+                    extra={
+                        "component": "signal_generation",
+                        "symbol": symbol,
+                        "error_type": "processing",
+                        "cause": e.__class__.__name__,
+                        "detail": str(e),
+                    },
+                )
         
         # Log summary
         accepted = sum(1 for d in signal_decisions if d.get("decision") == "ACCEPT")
@@ -1449,7 +1543,14 @@ def generate_cost_aware_signals(ctx, symbols: list[str]) -> list[dict]:
         
         return signal_decisions
         
-    except Exception as e:
-        logger.error("Cost-aware signal generation failed: %s", e,
-                    extra={"component": "signal_generation", "error_type": "unexpected"})
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as e:  # AI-AGENT-REF: narrow exception
+        logger.error(
+            "SIGNAL_PROCESSING_FAILED",
+            extra={
+                "component": "signal_generation",
+                "error_type": "unexpected",
+                "cause": e.__class__.__name__,
+                "detail": str(e),
+            },
+        )
         return []
