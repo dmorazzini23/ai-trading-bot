@@ -12,7 +12,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # AI-AGENT-REF: Import only essential modules at top level for import-light entrypoint
-from ai_trading.config import Settings, get_settings
+from ai_trading.config import Settings, get_settings as get_config
+from ai_trading.settings import get_settings as get_runtime_settings  # AI-AGENT-REF: runtime env settings
 from ai_trading.utils import get_free_port, get_pid_on_port
 
 # AI-AGENT-REF: Import memory optimization and performance monitoring
@@ -61,15 +62,17 @@ def start_performance_monitoring():
 # AI-AGENT-REF: Create global config AFTER .env loading and Settings import
 config: Settings | None = None
 
+
 logger = logging.getLogger(__name__)
 
 
 def validate_environment() -> None:
     """Ensure required environment variables are present and dependencies are available."""
+    cfg = get_config()
     # Check critical environment variables
-    if not S.webhook_secret:
+    if not cfg.webhook_secret:
         raise RuntimeError("WEBHOOK_SECRET is required")
-    if not S.alpaca_api_key or not S.alpaca_secret_key:
+    if not cfg.alpaca_api_key or not cfg.alpaca_secret_key:
         raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")
 
     # Check optional but important dependencies
@@ -112,7 +115,7 @@ def run_bot(*_a, **_k) -> int:
 
     try:
         # Load configuration
-        config = get_settings()
+        config = get_config()
         validate_environment()
 
         # Memory optimization and performance monitoring
@@ -172,7 +175,7 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
 
 def start_api(ready_signal: threading.Event = None) -> None:
     """Spin up the Flask API server."""
-    settings = get_settings()
+    settings = get_config()
     port = int(settings.api_port or 9001)  # AI-AGENT-REF: default API port fallback
     run_flask_app(port, ready_signal)
 
@@ -185,8 +188,9 @@ def main() -> None:
     args = parser.parse_args()
 
     load_dotenv()
+    S = get_runtime_settings()  # AI-AGENT-REF: resolve runtime defaults once
     global config
-    config = get_settings()
+    config = get_config()
     # Defer runner import to avoid import-time side effects
     from ai_trading.runner import run_cycle
     run_cycle()
@@ -240,26 +244,18 @@ def main() -> None:
         logger.error("Unexpected error during API startup synchronization: %s", e)
         raise RuntimeError(f"API startup synchronization failed: {e}")
 
-    s = get_settings()
-
-    # CLI takes precedence; then settings; then defaults
-    iterations = args.iterations
-    if iterations is None:
-        iterations = s.iterations if s.iterations is not None else 0
+    # CLI takes precedence; then settings
+    iterations = args.iterations if args.iterations is not None else S.iterations
     try:
         iterations = int(iterations)
     except (TypeError, ValueError):
-        iterations = 0  # fail-open to "run forever"
+        iterations = S.iterations
 
-    interval = args.interval
-    if interval is None:
-        interval = getattr(s, "loop_interval_seconds", None)
-    if interval is None:
-        interval = 60
+    interval = args.interval if args.interval is not None else S.interval
     try:
         interval = int(interval)
     except (TypeError, ValueError):
-        interval = 60
+        interval = S.interval
 
     # AI-AGENT-REF: log resolved runtime defaults
     logger.info(
@@ -287,7 +283,7 @@ def main() -> None:
         except Exception:  # pragma: no cover - log unexpected errors
             logger.exception("run_cycle failed")
         count += 1
-        time.sleep(interval)
+        time.sleep(int(max(1, interval)))
 
 
 if __name__ == "__main__":
@@ -295,9 +291,9 @@ if __name__ == "__main__":
 
 
 from importlib.util import find_spec
-from ai_trading.config import get_settings
-S = get_settings()
-if getattr(S, "enable_performance_monitoring", False):
+from ai_trading.config import get_settings as get_config
+cfg = get_config()
+if getattr(cfg, "enable_performance_monitoring", False):
     if find_spec("performance_monitor") is None:
         raise RuntimeError("Feature enabled but module 'performance_monitor' not installed")
     from performance_monitor import *  # noqa: F401

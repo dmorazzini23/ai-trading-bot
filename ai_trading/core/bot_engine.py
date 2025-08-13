@@ -181,11 +181,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from ai_trading import (
     paths,  # AI-AGENT-REF: Runtime paths for proper directory separation
 )
-from ai_trading.config.settings import get_settings
+from ai_trading.config.settings import get_settings as get_config_settings
 from ai_trading.config import management as config
+from ai_trading.settings import get_settings as get_runtime_settings  # AI-AGENT-REF: runtime env settings
 
 # Initialize settings once for global use
-S = get_settings()
+S = get_config_settings()
+# AI-AGENT-REF: cached runtime settings for env aliases
+RUNTIME = get_runtime_settings()
 from ai_trading.data_fetcher import (
     get_bars,
     get_bars_batch,
@@ -397,15 +400,7 @@ from datetime import time as dt_time
 from threading import Lock, Semaphore, Thread
 from typing import Any
 from zoneinfo import ZoneInfo
-from secrets import randbits
-
-# AI-AGENT-REF: resolve seed safely with fallback
-_settings = get_settings()
-_raw_seed = _settings.seed
-try:
-    SEED = int(_raw_seed) if _raw_seed is not None else randbits(32)
-except (TypeError, ValueError):
-    SEED = randbits(32)
+SEED = RUNTIME.seed  # AI-AGENT-REF: deterministic seed from runtime settings
 
 random.seed(SEED)
 # AI-AGENT-REF: guard numpy random seed for test environments
@@ -1615,14 +1610,20 @@ def ensure_finbert(cfg=None):
 DISASTER_DD_LIMIT = S.disaster_dd_limit
 
 # Paths
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # PROJECT_ROOT: repo root (…/ai_trading/core/ -> up two levels)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def abspath(fname: str) -> str:
-    """Path within core/ directory."""
-    return os.path.join(BASE_DIR, fname)
+def abspath(fname: str | None) -> str:
+    """Return absolute path for model/flag files."""
+    name = fname or "trained_model.pkl"
+    if os.path.isabs(name):
+        return name
+    return os.path.join(BASE_DIR, name)
+
+# AI-AGENT-REF: log resolved runtime settings once
+MODEL_PATH = abspath(RUNTIME.model_path)
+_log.info("RUNTIME_SETTINGS_RESOLVED", seed=RUNTIME.seed, model_path=MODEL_PATH, interval_hint="main.py")
 
 
 def abspath_repo_root(fname: str) -> str:
@@ -1689,7 +1690,7 @@ TRADE_LOG_FILE = S.trade_log_file
 SIGNAL_WEIGHTS_FILE = str(paths.DATA_DIR / "signal_weights.csv")
 EQUITY_FILE = str(paths.DATA_DIR / "last_equity.txt")
 PEAK_EQUITY_FILE = str(paths.DATA_DIR / "peak_equity.txt")
-HALT_FLAG_PATH = str(paths.DATA_DIR / "halt.flag")
+HALT_FLAG_PATH = abspath(RUNTIME.halt_flag_path)
 SLIPPAGE_LOG_FILE = str(paths.LOG_DIR / "slippage.csv")
 REWARD_LOG_FILE = str(paths.LOG_DIR / "reward_log.csv")
 FEATURE_PERF_FILE = abspath("feature_perf.csv")
@@ -1977,7 +1978,6 @@ def _regime_basket_to_proxy_bars(wide: pd.DataFrame) -> pd.DataFrame:
 RETRAIN_MARKER_FILE = abspath("last_retrain.txt")
 
 # Main meta‐learner path: this is where retrain.py will dump the new sklearn model each day.
-MODEL_PATH = abspath(S.model_path)
 MODEL_RF_PATH = abspath(S.model_rf_path)
 MODEL_XGB_PATH = abspath(S.model_xgb_path)
 MODEL_LGB_PATH = abspath(S.model_lgb_path)
@@ -2313,7 +2313,8 @@ EVENT_COOLDOWN = 15.0  # seconds
 # AI-AGENT-REF: hold time now configurable; default to 0 for pure signal holding
 REBALANCE_HOLD_SECONDS = int(os.getenv("REBALANCE_HOLD_SECONDS", "0"))
 RUN_INTERVAL_SECONDS = 60  # don't run trading loop more often than this
-TRADE_COOLDOWN_MIN = S.trade_cooldown_min  # minutes
+TRADE_COOLDOWN = RUNTIME.trade_cooldown  # AI-AGENT-REF: validated timedelta
+TRADE_COOLDOWN_MIN = RUNTIME.trade_cooldown_min  # minutes
 
 # AI-AGENT-REF: Enhanced overtrading prevention with frequency limits
 MAX_TRADES_PER_HOUR = S.max_trades_per_hour  # limit high-frequency trading
@@ -9472,7 +9473,8 @@ def run_multi_strategy(runtime) -> None:
             from ai_trading.rl_trading.inference import load_policy
 
             if not hasattr(ctx, "rl_agent"):
-                ctx.rl_agent = load_policy(S.rl_model_path)
+                from ai_trading.config.management import RL_MODEL_PATH  # AI-AGENT-REF: config-driven RL path
+                ctx.rl_agent = load_policy(abspath(RL_MODEL_PATH))
             # Determine the set of symbols that currently have signals from other strategies
             all_symbols: list[str] = []
             for sigs in signals_by_strategy.values():
