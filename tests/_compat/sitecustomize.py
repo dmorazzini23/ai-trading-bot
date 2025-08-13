@@ -21,3 +21,13 @@ try:
 except Exception:
     pass
 
+# AI-AGENT-REF: stub yfinance when unavailable or disabled
+if os.getenv("YFINANCE_STUB", "1") == "1":
+    from tests._compat import yfinance_stub as _stub
+    sys.modules["yfinance"] = _stub
+else:
+    try:
+        import yfinance  # noqa: F401
+    except Exception:
+        from tests._compat import yfinance_stub as _stub
+        sys.modules.setdefault("yfinance", _stub)
