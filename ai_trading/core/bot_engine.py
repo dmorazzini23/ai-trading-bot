@@ -53,7 +53,7 @@ def _is_market_open_now(cfg=None) -> bool:
 
 
 # Import emit-once logger for startup banners
-from ai_trading.logging import logger_once
+from ai_trading.logging import logger_once, info_kv  # AI-AGENT-REF: structured logging helper
 
 # AI-AGENT-REF: emit-once helper and readiness gate for startup/runtime coordination
 _EMITTED_KEYS: set[str] = set()
@@ -1688,7 +1688,8 @@ def _resolve_model_path(settings) -> str | None:
 MODEL_PATH = _resolve_model_path(S)
 USE_ML = MODEL_PATH is not None
 
-_log.info(
+info_kv(
+    _log,
     "RUNTIME_SETTINGS_RESOLVED",
     extra={
         "seed": getattr(S, "seed", 42),

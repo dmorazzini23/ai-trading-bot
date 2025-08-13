@@ -13,6 +13,28 @@ import traceback
 from datetime import UTC, date, datetime
 from typing import Any
 
+# AI-AGENT-REF: structured logging helper to avoid stray kwargs
+def with_extra(logger, level, msg: str, *, extra: dict | None = None, **_ignored):
+    """Log `msg` with structured fields via `extra` only (no arbitrary kwargs)."""
+    payload = {} if extra is None else dict(extra)
+    logger.log(level, msg, extra=payload)
+
+
+def info_kv(logger, msg: str, *, extra: dict | None = None):
+    """Log at INFO level with structured key-value fields."""  # AI-AGENT-REF: wrapper
+    with_extra(logger, logging.INFO, msg, extra=extra)
+
+
+def warning_kv(logger, msg: str, *, extra: dict | None = None):
+    """Log at WARNING level with structured key-value fields."""  # AI-AGENT-REF: wrapper
+    with_extra(logger, logging.WARNING, msg, extra=extra)
+
+
+def error_kv(logger, msg: str, *, extra: dict | None = None):
+    """Log at ERROR level with structured key-value fields."""  # AI-AGENT-REF: wrapper
+    with_extra(logger, logging.ERROR, msg, extra=extra)
+
+
 # AI-AGENT-REF: Handle missing dependencies gracefully for testing
 # AI-AGENT-REF: Lazy import config to avoid import-time dependencies
 def _get_config():
@@ -790,4 +812,8 @@ __all__ = [
     "validate_logging_setup",
     "EmitOnceLogger",
     "CompactJsonFormatter",
+    "with_extra",
+    "info_kv",
+    "warning_kv",
+    "error_kv",
 ]
