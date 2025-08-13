@@ -23,6 +23,7 @@ import warnings
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 
 _log = logging.getLogger(__name__)
 
@@ -133,9 +134,21 @@ def _get_memory_optimization():
     """Initialize memory optimization based on settings."""
     from ai_trading.config.settings import get_settings
     S = get_settings()
-    
+
     if S.enable_memory_optimization:
-        from ai_trading.utils import memory_optimizer  # AI-AGENT-REF: stable import path
+        try:
+            from ai_trading.utils import memory_optimizer  # AI-AGENT-REF: stable import path
+        except Exception:
+            def memory_profile(func):
+                return func
+
+            def optimize_memory():
+                return {}
+
+            def emergency_memory_cleanup():
+                return {}
+
+            return False, memory_profile, optimize_memory, emergency_memory_cleanup
 
         def memory_profile(func):
             return func
@@ -148,18 +161,18 @@ def _get_memory_optimization():
             return {}
 
         return True, memory_profile, optimize_memory, emergency_memory_cleanup
-    else:
-        # Fallback no-op decorators when memory optimization is disabled
-        def memory_profile(func):
-            return func
 
-        def optimize_memory():
-            return {}
+    # Fallback no-op decorators when memory optimization is disabled
+    def memory_profile(func):
+        return func
 
-        def emergency_memory_cleanup():
-            return {}
+    def optimize_memory():
+        return {}
 
-        return False, memory_profile, optimize_memory, emergency_memory_cleanup
+    def emergency_memory_cleanup():
+        return {}
+
+    return False, memory_profile, optimize_memory, emergency_memory_cleanup
 
 MEMORY_OPTIMIZATION_AVAILABLE, memory_profile, optimize_memory, emergency_memory_cleanup = _get_memory_optimization()
 
@@ -181,14 +194,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from ai_trading import (
     paths,  # AI-AGENT-REF: Runtime paths for proper directory separation
 )
-from ai_trading.config.settings import get_settings as get_config_settings
+from ai_trading.config.settings import get_settings, get_settings as get_config_settings
 from ai_trading.config import management as config
 from ai_trading.settings import get_settings as get_runtime_settings  # AI-AGENT-REF: runtime env settings
 
 # Initialize settings once for global use
-S = get_config_settings()
+CFG = get_config_settings()
 # AI-AGENT-REF: cached runtime settings for env aliases
-RUNTIME = get_runtime_settings()
+S = get_runtime_settings()
 from ai_trading.data_fetcher import (
     get_bars,
     get_bars_batch,
@@ -247,7 +260,7 @@ def ensure_portfolio_weights(ctx, symbols):
 # Log Alpaca availability on startup (only once per process)
 _emit_once(logger, "alpaca_available", logging.INFO, "Alpaca SDK is available")
 # Mirror config to maintain historical constant name
-MIN_CYCLE = S.scheduler_sleep_seconds
+MIN_CYCLE = CFG.scheduler_sleep_seconds
 # AI-AGENT-REF: guard environment validation with explicit error logging
 # AI-AGENT-REF: Move config validation to runtime to prevent import crashes
 # Config validation moved to init_runtime_config()
@@ -347,7 +360,7 @@ else:
 
 try:
     from sklearn.exceptions import InconsistentVersionWarning
-except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # pragma: no cover - sklearn optional  # AI-AGENT-REF: narrow exception
+except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError, ImportError):  # pragma: no cover - sklearn optional  # AI-AGENT-REF: narrow exception
 
     class InconsistentVersionWarning(UserWarning):
         pass
@@ -377,11 +390,10 @@ if "ALPACA_SECRET_KEY" in os.environ:
 config.reload_env()
 
 # BOT_MODE must be defined before any classes that reference it
-BOT_MODE = S.bot_mode
+BOT_MODE = CFG.bot_mode
 assert BOT_MODE is not None, "BOT_MODE must be set before using BotState"
 import csv
 import json
-from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 import logging
 import random
 import re
@@ -400,7 +412,7 @@ from datetime import time as dt_time
 from threading import Lock, Semaphore, Thread
 from typing import Any
 from zoneinfo import ZoneInfo
-SEED = RUNTIME.seed  # AI-AGENT-REF: deterministic seed from runtime settings
+SEED = S.seed  # AI-AGENT-REF: deterministic seed from runtime settings
 
 random.seed(SEED)
 # AI-AGENT-REF: guard numpy random seed for test environments
@@ -411,15 +423,50 @@ if hasattr(np, "random"):
 _LAST_SKIP_CD_TIME = 0.0
 _LAST_SKIP_SYMBOLS: frozenset[str] = frozenset()
 
-try:
-    import torch  # already a dep; safe import
-    torch.manual_seed(SEED)
-except Exception as e:  # pragma: no cover - log and continue
-    _log.warning(
-        "SEED_INIT_SKIPPED", extra={"cause": e.__class__.__name__, "detail": str(e)}
-    )
+# AI-AGENT-REF: optional heavy dependencies loaded lazily
+def _lazy_import_torch() -> bool:
+    try:
+        import torch  # noqa: F401
+        return True
+    except Exception:
+        return False
 
-_DEFAULT_FEED = get_settings().alpaca_data_feed or "iex"
+
+def _lazy_import_hmmlearn() -> bool:
+    try:
+        import hmmlearn  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _seed_torch_if_available(seed: int) -> None:
+    try:
+        import torch
+        torch.manual_seed(int(seed))
+    except Exception:
+        pass
+
+
+RL_AGENT = None  # AI-AGENT-REF: populated only when deps available
+if S.use_rl_agent:
+    missing: list[str] = []
+    if not _lazy_import_torch():
+        missing.append("torch")
+    if not _lazy_import_hmmlearn():
+        missing.append("hmmlearn")
+    if missing:
+        logging.getLogger(__name__).warning(
+            "USE_RL_AGENT=1 but missing deps: %s – RL disabled. Install with: pip install hmmlearn && see pytorch.org/get-started for torch.",
+            ", ".join(missing),
+        )
+    else:
+        _seed_torch_if_available(SEED)
+        from ai_trading.rl import load_rl_agent  # type: ignore  # AI-AGENT-REF: lazy RL import
+
+        RL_AGENT = load_rl_agent(S.rl_model_path_abs)
+
+_DEFAULT_FEED = CFG.alpaca_data_feed or "iex"
 
 # Ensure numpy.NaN exists for pandas_ta compatibility
 # AI-AGENT-REF: guard numpy.NaN assignment for test environments
@@ -846,7 +893,7 @@ def _require_cfg(value: str | None, name: str) -> str:
         return value
 
     # In testing mode, return a dummy value
-    if S.testing:
+    if CFG.testing:
         dummy_values = {
             "ALPACA_API_KEY": "test_api_key",
             "ALPACA_SECRET_KEY": "test_secret_key",
@@ -912,7 +959,7 @@ def init_runtime_config():
     try:
         ALPACA_API_KEY, ALPACA_SECRET_KEY, _ = _ensure_alpaca_env_or_raise()
     except RuntimeError as e:
-        if not S.testing:  # Allow missing credentials in test mode
+        if not CFG.testing:  # Allow missing credentials in test mode
             raise e
         # AI-AGENT-REF: Use environment variables even in test mode to avoid hardcoded secrets
         ALPACA_API_KEY = os.getenv("TEST_ALPACA_API_KEY", "")
@@ -1455,7 +1502,7 @@ def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
     start_dt = now_utc - timedelta(days=1)
     
     # AI-AGENT-REF: Cache wrapper (optional around fetch)
-    if hasattr(S, 'market_cache_enabled') and S.market_cache_enabled:
+    if hasattr(CFG, 'market_cache_enabled') and CFG.market_cache_enabled:
         try:
             from ai_trading.market.cache import get_or_load as _get_or_load
             cache_key = f"minute:{symbol}:{start_dt.isoformat()}"
@@ -1607,7 +1654,7 @@ def ensure_finbert(cfg=None):
         return None, None
 
 
-DISASTER_DD_LIMIT = S.disaster_dd_limit
+DISASTER_DD_LIMIT = CFG.disaster_dd_limit
 
 # Paths
 # PROJECT_ROOT: repo root (…/ai_trading/core/ -> up two levels)
@@ -1622,8 +1669,8 @@ def abspath(fname: str | None) -> str:
     return os.path.join(BASE_DIR, name)
 
 # AI-AGENT-REF: log resolved runtime settings once
-MODEL_PATH = abspath(RUNTIME.model_path)
-_log.info("RUNTIME_SETTINGS_RESOLVED", seed=RUNTIME.seed, model_path=MODEL_PATH, interval_hint="main.py")
+MODEL_PATH = str(S.model_path_abs)
+_log.info("RUNTIME_SETTINGS_RESOLVED", seed=S.seed, model_path=MODEL_PATH, interval_hint="main.py")
 
 
 def abspath_repo_root(fname: str) -> str:
@@ -1686,11 +1733,11 @@ def get_git_hash() -> str:
 TICKERS_FILE = abspath_repo_root("tickers.csv")
 DEFAULT_TICKERS = ["AAPL", "GOOG", "AMZN"]  # AI-AGENT-REF: fallback tickers
 # AI-AGENT-REF: use centralized trade log path
-TRADE_LOG_FILE = S.trade_log_file
+TRADE_LOG_FILE = CFG.trade_log_file
 SIGNAL_WEIGHTS_FILE = str(paths.DATA_DIR / "signal_weights.csv")
 EQUITY_FILE = str(paths.DATA_DIR / "last_equity.txt")
 PEAK_EQUITY_FILE = str(paths.DATA_DIR / "peak_equity.txt")
-HALT_FLAG_PATH = abspath(RUNTIME.halt_flag_path)
+HALT_FLAG_PATH = str(S.halt_flag_path_abs)
 SLIPPAGE_LOG_FILE = str(paths.LOG_DIR / "slippage.csv")
 REWARD_LOG_FILE = str(paths.LOG_DIR / "reward_log.csv")
 FEATURE_PERF_FILE = abspath("feature_perf.csv")
@@ -1978,9 +2025,9 @@ def _regime_basket_to_proxy_bars(wide: pd.DataFrame) -> pd.DataFrame:
 RETRAIN_MARKER_FILE = abspath("last_retrain.txt")
 
 # Main meta‐learner path: this is where retrain.py will dump the new sklearn model each day.
-MODEL_RF_PATH = abspath(S.model_rf_path)
-MODEL_XGB_PATH = abspath(S.model_xgb_path)
-MODEL_LGB_PATH = abspath(S.model_lgb_path)
+MODEL_RF_PATH = abspath(CFG.model_rf_path)
+MODEL_XGB_PATH = abspath(CFG.model_xgb_path)
+MODEL_LGB_PATH = abspath(CFG.model_lgb_path)
 
 REGIME_MODEL_PATH = abspath("regime_model.pkl")
 # (We keep a separate meta‐model for signal‐weight learning, if you use Bayesian/Ridge, etc.)
@@ -2145,14 +2192,14 @@ MIN_SIGNAL_STRENGTH = params.get("MIN_SIGNAL_STRENGTH",
                                  getattr(S, "min_signal_strength",
                                          getattr(state.mode_obj.config, "min_signal_strength", 0.1)))
 # AI-AGENT-REF: Increase default position limit from 10 to 20 for better portfolio utilization
-MAX_PORTFOLIO_POSITIONS = S.max_portfolio_positions
+MAX_PORTFOLIO_POSITIONS = CFG.max_portfolio_positions
 CORRELATION_THRESHOLD = 0.60
-SECTOR_EXPOSURE_CAP = S.sector_exposure_cap
-MAX_OPEN_POSITIONS = S.max_open_positions
-WEEKLY_DRAWDOWN_LIMIT = S.weekly_drawdown_limit
+SECTOR_EXPOSURE_CAP = CFG.sector_exposure_cap
+MAX_OPEN_POSITIONS = CFG.max_open_positions
+WEEKLY_DRAWDOWN_LIMIT = CFG.weekly_drawdown_limit
 MARKET_OPEN = dt_time(6, 30)
 MARKET_CLOSE = dt_time(13, 0)
-VOLUME_THRESHOLD = S.volume_threshold
+VOLUME_THRESHOLD = CFG.volume_threshold
 ENTRY_START_OFFSET = timedelta(
     minutes=params.get(
         "ENTRY_START_OFFSET_MIN",
@@ -2182,7 +2229,7 @@ CONFIRMATION_COUNT = params.get(
 CAPITAL_CAP = params.get("CAPITAL_CAP", 
                      getattr(S, "capital_cap",
                              getattr(state.mode_obj.config, "capital_cap", 0.04)))
-DOLLAR_RISK_LIMIT = S.dollar_risk_limit
+DOLLAR_RISK_LIMIT = CFG.dollar_risk_limit
 BUY_THRESHOLD = params.get("BUY_THRESHOLD", state.mode_obj.config.buy_threshold)
 
 
@@ -2241,7 +2288,7 @@ if not os.getenv("TESTING"):
 PACIFIC = ZoneInfo("America/Los_Angeles")
 PDT_DAY_TRADE_LIMIT = params.get("PDT_DAY_TRADE_LIMIT", 3)
 PDT_EQUITY_THRESHOLD = params.get("PDT_EQUITY_THRESHOLD", 25_000.0)
-FINNHUB_RPM = S.finnhub_rpm
+FINNHUB_RPM = CFG.finnhub_rpm
 
 # Regime symbols (makes SPY configurable)
 REGIME_SYMBOLS = ["SPY"]
@@ -2281,10 +2328,12 @@ finnhub_breaker = pybreaker.CircuitBreaker(
 # Bounded, CPU-aware executors sized via Settings
 _cpu = os.cpu_count() or 2
 _S = get_settings()
-executor = ThreadPoolExecutor(max_workers=_S.effective_executor_workers(_cpu))
-prediction_executor = ThreadPoolExecutor(
-    max_workers=_S.effective_prediction_workers(_cpu)
-)
+_exec_fn = getattr(_S, "effective_executor_workers", None)
+_exec_workers = _exec_fn(_cpu) if callable(_exec_fn) else _cpu
+_pred_fn = getattr(_S, "effective_prediction_workers", None)
+_pred_workers = _pred_fn(_cpu) if callable(_pred_fn) else _cpu
+executor = ThreadPoolExecutor(max_workers=_exec_workers)
+prediction_executor = ThreadPoolExecutor(max_workers=_pred_workers)
 
 
 # AI-AGENT-REF: Add proper cleanup with atexit handlers for ThreadPoolExecutor resource leak
@@ -2313,12 +2362,12 @@ EVENT_COOLDOWN = 15.0  # seconds
 # AI-AGENT-REF: hold time now configurable; default to 0 for pure signal holding
 REBALANCE_HOLD_SECONDS = int(os.getenv("REBALANCE_HOLD_SECONDS", "0"))
 RUN_INTERVAL_SECONDS = 60  # don't run trading loop more often than this
-TRADE_COOLDOWN = RUNTIME.trade_cooldown  # AI-AGENT-REF: validated timedelta
-TRADE_COOLDOWN_MIN = RUNTIME.trade_cooldown_min  # minutes
+TRADE_COOLDOWN = S.trade_cooldown  # AI-AGENT-REF: validated timedelta
+TRADE_COOLDOWN_MIN = S.trade_cooldown_min  # minutes
 
 # AI-AGENT-REF: Enhanced overtrading prevention with frequency limits
-MAX_TRADES_PER_HOUR = S.max_trades_per_hour  # limit high-frequency trading
-MAX_TRADES_PER_DAY = S.max_trades_per_day  # daily limit to prevent excessive trading
+MAX_TRADES_PER_HOUR = CFG.max_trades_per_hour  # limit high-frequency trading
+MAX_TRADES_PER_DAY = CFG.max_trades_per_day  # daily limit to prevent excessive trading
 TRADE_FREQUENCY_WINDOW_HOURS = 1  # rolling window for hourly limits
 
 # Loss streak kill-switch (managed via BotState)
@@ -2359,7 +2408,7 @@ def _log_health_diagnostics(runtime, reason: str) -> None:
         )
     try:
         df = runtime.data_fetcher.get_minute_df(
-            runtime, REGIME_SYMBOLS[0], lookback_minutes=S.min_health_rows
+            runtime, REGIME_SYMBOLS[0], lookback_minutes=CFG.min_health_rows
         )
         rows = len(df)
         last_time = df.index[-1].isoformat() if not df.empty else "n/a"
@@ -2483,7 +2532,7 @@ def chunked(iterable: Sequence, n: int):
 
 def ttl_seconds() -> int:
     """Configurable TTL for minute-bar cache (default 60s)."""
-    return S.minute_cache_ttl
+    return CFG.minute_cache_ttl
 
 
 def asset_class_for(symbol: str) -> str:
@@ -4250,7 +4299,7 @@ class LazyBotContext:
             # AI-AGENT-REF: Initialize drawdown circuit breaker for real-time protection
             drawdown_circuit_breaker=(
                 DrawdownCircuitBreaker(
-                    max_drawdown=S.max_drawdown_threshold, recovery_threshold=0.8
+                    max_drawdown=CFG.max_drawdown_threshold, recovery_threshold=0.8
                 )
                 if DrawdownCircuitBreaker
                 else None
@@ -4419,7 +4468,7 @@ def _emit_periodic_metrics():
     
     AI-AGENT-REF: Periodic lightweight metrics emission via existing metrics_logger.
     """
-    if not hasattr(S, 'metrics_enabled') or not S.metrics_enabled:
+    if not hasattr(S, 'metrics_enabled') or not CFG.metrics_enabled:
         return
         
     if not is_runtime_ready():
@@ -6025,7 +6074,7 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
         raise RuntimeError("Execution engine not initialized. Cannot execute orders.")
 
     # AI-AGENT-REF: Liquidity checks before order submission (gated by flag)
-    if hasattr(S, 'liquidity_checks_enabled') and S.liquidity_checks_enabled:
+    if hasattr(S, 'liquidity_checks_enabled') and CFG.liquidity_checks_enabled:
         try:
             from ai_trading.execution.liquidity import LiquidityManager
             lm = LiquidityManager()
@@ -6848,7 +6897,7 @@ def signal_and_confirm(
 def pre_trade_checks(
     ctx: BotContext, state: BotState, symbol: str, balance: float, regime_ok: bool
 ) -> bool:
-    if S.force_trades:
+    if CFG.force_trades:
         _log.warning("FORCE_TRADES override active: ignoring all pre-trade halts.")
         return True
     # Streak kill-switch check
@@ -7020,7 +7069,7 @@ def _fetch_feature_data(
     df = raw_df.copy()
     
     # AI-AGENT-REF: Data sanitize integration (gated by flag)
-    if hasattr(S, 'data_sanitize_enabled') and S.data_sanitize_enabled:
+    if hasattr(S, 'data_sanitize_enabled') and CFG.data_sanitize_enabled:
         try:
             from ai_trading.data.sanitize import clean as _clean
             df = _clean(df)
@@ -7028,7 +7077,7 @@ def _fetch_feature_data(
             _log.warning("Data sanitize failed: %s", e)
 
     # AI-AGENT-REF: Corporate actions adjustment (gated by flag)
-    if hasattr(S, 'corp_actions_enabled') and S.corp_actions_enabled:
+    if hasattr(S, 'corp_actions_enabled') and CFG.corp_actions_enabled:
         try:
             from ai_trading.data.corp_actions import adjust as _adjust
             df = _adjust(df, symbol)
@@ -7194,7 +7243,7 @@ def _enter_long(
     raw_qty = int(balance * target_weight / current_price) if current_price > 0 else 0
 
     # AI-AGENT-REF: Position sizing integration (gated by flag)
-    if hasattr(S, 'sizing_enabled') and S.sizing_enabled:
+    if hasattr(S, 'sizing_enabled') and CFG.sizing_enabled:
         try:
             from ai_trading.portfolio import sizing as _sizing
             account_equity = float(ctx.api.get_account().equity) if ctx.api else balance
@@ -9207,7 +9256,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
     marker = RETRAIN_MARKER_FILE
 
     need_to_retrain = True
-    if S.disable_daily_retrain:
+    if CFG.disable_daily_retrain:
         _log.info("Daily retraining disabled via DISABLE_DAILY_RETRAIN")
         need_to_retrain = False
     if os.path.isfile(marker):
@@ -9330,7 +9379,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 "timestamp": utc_now_iso(),
                 "type": "daily_retrain",
                 "batch_mse": batch_mse,
-                "hyperparams": json.dumps(utils.to_serializable(S.sgd_params)),
+                "hyperparams": json.dumps(utils.to_serializable(CFG.sgd_params)),
                 "seed": SEED,
                 "model": "SGDRegressor",
                 "git_hash": get_git_hash(),
@@ -9395,7 +9444,7 @@ def health() -> str:
     return jsonify(summary), 200
 
 def start_healthcheck() -> None:
-    port = S.healthcheck_port
+    port = CFG.healthcheck_port
     try:
         app.run(host="0.0.0.0", port=port)
     except OSError as e:
@@ -9467,14 +9516,8 @@ def run_multi_strategy(runtime) -> None:
         except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning(f"Strategy {strat.name} failed: {e}")
     # Optionally augment strategy signals with reinforcement learning signals.
-    if S.use_rl_agent:
+    if RL_AGENT:
         try:
-            # Lazy load the RL policy and cache it on the context
-            from ai_trading.rl_trading.inference import load_policy
-
-            if not hasattr(ctx, "rl_agent"):
-                from ai_trading.config.management import RL_MODEL_PATH  # AI-AGENT-REF: config-driven RL path
-                ctx.rl_agent = load_policy(abspath(RL_MODEL_PATH))
             # Determine the set of symbols that currently have signals from other strategies
             all_symbols: list[str] = []
             for sigs in signals_by_strategy.values():
@@ -9483,38 +9526,33 @@ def run_multi_strategy(runtime) -> None:
                     if sym and sym not in all_symbols:
                         all_symbols.append(sym)
             if all_symbols:
-                # Compute meaningful feature vectors for each symbol instead of using
-                # placeholder zeros.  The RL agent expects a 1-D observation per
-                # symbol; we derive this from recent returns and technical
-                # indicators (RSI, ATR).  Additional features can be added
-                # by modifying ``compute_features`` in ``ai_trading.rl_trading.features``.
+                # Compute meaningful feature vectors for each symbol
                 import numpy as _np  # AI-AGENT-REF: alias to avoid shadowing global np
 
                 from ai_trading.rl_trading.features import compute_features
 
                 states: list[_np.ndarray] = []
                 for sym in all_symbols:
-                    # Try to fetch recent daily price data; fallback to minute data.
                     df = None
                     try:
                         df = ctx.data_fetcher.get_daily_df(ctx, sym)
-                    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
+                    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):
                         df = None
                     if df is None or getattr(df, "empty", True):
                         try:
                             df = ctx.data_fetcher.get_minute_df(ctx, sym)
-                        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
+                        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):
                             df = None
                     state_vec = compute_features(df, window=10)
                     states.append(state_vec)
                 if states:
                     state_mat = _np.stack(states).astype(_np.float32)
-                    rl_sigs = ctx.rl_agent.predict(state_mat, symbols=all_symbols)
+                    rl_sigs = RL_AGENT.predict(state_mat, symbols=all_symbols)
                     if rl_sigs:
                         signals_by_strategy["rl"] = (
                             rl_sigs if isinstance(rl_sigs, list) else [rl_sigs]
                         )
-        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:
             _log.error("RL_AGENT_ERROR", extra={"exc": str(exc)})
 
     # AI-AGENT-REF: Add position holding logic to reduce churn
@@ -9947,10 +9985,10 @@ def manage_position_risk(runtime, position) -> None:
         volume_factor = utils.get_volume_spike_factor(symbol)
         ml_conf = utils.get_ml_confidence(symbol)
         if (
-            volume_factor > S.volume_spike_threshold
-            and ml_conf > S.ml_confidence_threshold
+            volume_factor > CFG.volume_spike_threshold
+            and ml_conf > CFG.ml_confidence_threshold
         ) and side == "long" and price > vwap and pnl > 0.02:
-            pyramid_add_position(ctx, symbol, S.pyramid_levels["low"], side)
+            pyramid_add_position(ctx, symbol, CFG.pyramid_levels["low"], side)
         _log.info(
             f"HALT_MANAGE {symbol} stop={new_stop:.2f} vwap={vwap:.2f} vol={volume_factor:.2f} ml={ml_conf:.2f}"
         )
@@ -10155,14 +10193,14 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             if any(o.status in ("new", "pending_new") for o in open_orders):
                 _log.warning("Detected pending orders; skipping this trade cycle")
                 return
-            if S.verbose:
+            if CFG.verbose:
                 _log.info(
                     "RUN_ALL_TRADES_START",
                     extra={"timestamp": utc_now_iso()},
                 )
 
             # Log standardized market fetch heartbeat (configurable)
-            if S.log_market_fetch:
+            if CFG.log_market_fetch:
                 _log.info("MARKET_FETCH")
             else:
                 _log.debug("MARKET_FETCH")
@@ -10473,7 +10511,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     extra={
                         "loop_id": loop_id,
                         "pnl": pnl,
-                        "mode": "SHADOW" if S.shadow_mode else "LIVE",
+                        "mode": "SHADOW" if CFG.shadow_mode else "LIVE",
                     },
                 )
             except (APIError, TimeoutError, ConnectionError, ValueError) as e:  # AI-AGENT-REF: tighten PnL retrieval errors
@@ -10829,7 +10867,7 @@ def main() -> None:
             for sym in initial_list:
                 try:
                     ctx.data_fetcher.get_minute_df(
-                        ctx, sym, lookback_minutes=S.min_health_rows
+                        ctx, sym, lookback_minutes=CFG.min_health_rows
                     )
                 except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
                     _log.warning(
@@ -10871,7 +10909,7 @@ def main() -> None:
         def gather_minute_data_with_delay():
             try:
                 # delay can be configured via env SCHEDULER_SLEEP_SECONDS
-                time.sleep(S.scheduler_sleep_seconds)
+                time.sleep(CFG.scheduler_sleep_seconds)
                 schedule_run_all_trades(ctx)  # AI-AGENT-REF: runtime-based scheduling
             except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
                 _log.exception(f"gather_minute_data_with_delay failed: {e}")
@@ -10908,7 +10946,7 @@ def main() -> None:
                 target=adaptive_risk_scaling, args=(ctx,), daemon=True
             ).start()
         )
-        schedule.every(S.rebalance_interval_min).minutes.do(
+        schedule.every(CFG.rebalance_interval_min).minutes.do(
             lambda: Thread(target=maybe_rebalance, args=(ctx,), daemon=True).start()
         )
         schedule.every().day.at("23:55").do(
@@ -11245,4 +11283,4 @@ if __name__ == "__main__":
             schedule.run_pending()
         except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
             _log.exception("Scheduler loop error: %s", exc)
-        time.sleep(S.scheduler_sleep_seconds)
+        time.sleep(CFG.scheduler_sleep_seconds)

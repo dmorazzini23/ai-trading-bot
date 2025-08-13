@@ -58,7 +58,7 @@ ALPACA_API_KEY = S.alpaca_api_key
 ALPACA_SECRET_KEY = S.alpaca_secret_key
 ALPACA_BASE_URL = S.alpaca_base_url
 ALPACA_DATA_FEED = S.alpaca_data_feed or "iex"
-HALT_FLAG_PATH = S.halt_flag_path or "/var/run/ai-trading.HALT"
+HALT_FLAG_PATH = str(S.halt_flag_path_abs)  # AI-AGENT-REF: absolute halt flag path
 
 try:
     from alpaca.data.historical import StockHistoricalDataClient
