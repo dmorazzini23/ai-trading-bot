@@ -94,6 +94,11 @@ visualization = [
   "matplotlib>=3.5.0",
 ]
 
+rl = [  # AI-AGENT-REF: optional RL dependencies
+  "hmmlearn",
+  "torch>=2.1; platform_system != 'Windows'",
+]
+
 [tool.ruff]
 exclude = ["tests/**/*.py"]  # Allow print in tests
 

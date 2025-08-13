@@ -13,8 +13,10 @@ load_dotenv()
 
 # AI-AGENT-REF: Import only essential modules at top level for import-light entrypoint
 from ai_trading.config import Settings, get_settings as get_config
-from ai_trading.settings import get_settings as get_runtime_settings  # AI-AGENT-REF: runtime env settings
+from ai_trading.settings import get_settings  # AI-AGENT-REF: runtime env settings
 from ai_trading.utils import get_free_port, get_pid_on_port
+
+S = get_settings()  # AI-AGENT-REF: resolve runtime defaults once
 
 # AI-AGENT-REF: Import memory optimization and performance monitoring
 def get_memory_optimizer():
@@ -188,7 +190,6 @@ def main() -> None:
     args = parser.parse_args()
 
     load_dotenv()
-    S = get_runtime_settings()  # AI-AGENT-REF: resolve runtime defaults once
     global config
     config = get_config()
     # Defer runner import to avoid import-time side effects
@@ -257,9 +258,12 @@ def main() -> None:
     except (TypeError, ValueError):
         interval = S.interval
 
+    seed = int(S.seed)
+
     # AI-AGENT-REF: log resolved runtime defaults
     logger.info(
-        "Runtime defaults resolved", extra={"iterations": iterations, "interval": interval}
+        "Runtime defaults resolved",
+        extra={"iterations": iterations, "interval": interval, "seed": seed},
     )
 
     count = 0
