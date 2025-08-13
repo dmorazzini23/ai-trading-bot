@@ -1,0 +1,4 @@
+# Core production dependencies
+# AI-AGENT-REF: pin NumPy to 1.x for pandas-ta compatibility
+numpy==1.26.4
+-e .
