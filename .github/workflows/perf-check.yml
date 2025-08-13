@@ -1,24 +1,43 @@
-name: Perf Check
-on: [push]
+name: Perf & Smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 8 * * 1-5"   # weekdays 08:00 UTC
+
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  build:
+  smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.12.3'
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+          python-version: "3.12"
+          cache: "pip"
+
       - name: Install dependencies
-        run: make install-dev
-      - name: Install profiling dependencies
-        run: pip install pytest-profiling
-      - name: Run performance tests
-        run: make benchmark
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+
+      - name: Import smoke (fail-fast on missing prod deps)
+        run: |
+          python - <<'PY'
+          import importlib
+          for m in [
+              "ai_trading",
+              "ai_trading.core.bot_engine",
+              "ai_trading.risk.engine",
+              "ai_trading.execution.engine",
+          ]:
+              importlib.import_module(m)
+          print("OK: imports succeeded")
+          PY

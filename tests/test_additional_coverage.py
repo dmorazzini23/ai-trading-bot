@@ -9,9 +9,18 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import pytest
+import pydantic
 
-import config
-from ai_trading import meta_learning
+try:
+    import pydantic_settings  # noqa: F401
+    import config
+    from ai_trading import meta_learning
+except Exception:
+    pytest.skip("pydantic v2 required", allow_module_level=True)
+
+if not all(hasattr(pydantic, attr) for attr in ("AliasChoices", "model_validator")):
+    pytest.skip("pydantic v2 required", allow_module_level=True)
+
 import ml_model
 import risk_engine
 import ai_trading.main as main

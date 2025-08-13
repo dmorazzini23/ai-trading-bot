@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from ai_trading.logging import logger
 
 # Internal config import
-from ai_trading.config import get_alpaca_config
+from ai_trading.config import get_alpaca_config, AlpacaConfig
 
 # Alpaca SDK imports - now required dependencies
 from alpaca.trading.client import TradingClient
@@ -41,7 +41,7 @@ class AlpacaExecutionEngine:
         """Initialize Alpaca execution engine."""
         # AI-AGENT-REF: Live trading execution with Alpaca SDK
         self.trading_client = None
-        self.config = None
+        self.config: AlpacaConfig | None = None
         self.is_initialized = False
 
         # Circuit breaker settings
@@ -95,12 +95,13 @@ class AlpacaExecutionEngine:
                 logger.info("Mock Alpaca client initialized for testing")
             else:
                 self.trading_client = TradingClient(
-                    api_key=self.config["api_key"],
-                    secret_key=self.config["secret_key"],
-                    paper=self.config["paper"],
+                    api_key=self.config.key_id,
+                    secret_key=self.config.secret_key,
+                    paper=self.config.use_paper,
+                    base_url=self.config.base_url,
                 )
                 logger.info(
-                    f"Real Alpaca client initialized (paper={self.config['paper']})"
+                    f"Real Alpaca client initialized (paper={self.config.use_paper})"
                 )
 
             # Validate connection

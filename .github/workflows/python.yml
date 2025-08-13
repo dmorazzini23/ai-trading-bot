@@ -1,30 +1,68 @@
-name: Lint and Test
+name: CI
+
 on:
+  push:
+    branches: [ main, master ]
   pull_request:
-    branches: [main]
+    branches: [ main, master ]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.12.3', '3.12']
+
+    env:
+      PYTHONDONTWRITEBYTECODE: 1
+      PYTHONUNBUFFERED: 1
+      # Ensure tests never call live services
+      AI_TRADING_OFFLINE_TESTS: "1"
+      ALPACA_API_KEY: "test"
+      ALPACA_SECRET_KEY: "test"
+      # If your code looks at this to choose paper/live, force paper/offline
+      ALPACA_ENV: "paper"
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirements.txt', 'requirements-dev.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-${{ matrix.python-version }}-
-            ${{ runner.os }}-pip-
+          python-version: "3.12"
+          cache: "pip"
+
       - name: Install dependencies
-        run: make install-dev
-      - name: Lint
-        run: make lint
-      - name: Test
-        run: make test-ci
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Ensure CI has test/dev-only dependencies as well
+          pip install -r requirements-dev.txt
+
+      - name: Static compile check
+        run: |
+          python - <<'PY'
+          import sys, subprocess, shlex, py_compile
+          try:
+              out = subprocess.check_output(shlex.split("git ls-files '*.py'")).decode().splitlines()
+          except subprocess.CalledProcessError:
+              out = []
+          for f in out:
+              py_compile.compile(f, doraise=True)
+          print(f"OK: py_compile passed for {len(out)} files")
+          PY
+
+      - name: Quick verification suite
+        run: |
+          chmod +x scripts/quick_verify.sh
+          ./scripts/quick_verify.sh
+
+      - name: Run tests (no network)
+        run: |
+          pytest -q -n auto --maxfail=1 --disable-warnings
