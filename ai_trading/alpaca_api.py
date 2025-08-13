@@ -18,7 +18,7 @@ _DATA_BASE = "https://data.alpaca.markets"  # market data v2
 
 _HEADERS = {
     "APCA-API-KEY-ID": S.alpaca_api_key or "",
-    "APCA-API-SECRET-KEY": S.alpaca_secret_key or "",
+    "APCA-API-SECRET-KEY": S.alpaca_secret_key_plain or "",  # AI-AGENT-REF: use plain secret string
 }
 
 def _resolve_url(path_or_url: str) -> str:

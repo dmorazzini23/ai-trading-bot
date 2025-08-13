@@ -7,6 +7,8 @@ from typing import Any
 
 # AI-AGENT-REF: guard numpy import for test environments
 import numpy as np
+if not hasattr(np, "NaN"):
+    np.NaN = np.nan  # AI-AGENT-REF: ensure numpy.NaN for pandas_ta
 
 # AI-AGENT-REF: guard pandas import for test environments
 import pandas as pd
@@ -82,7 +84,7 @@ class RiskEngine:
             ):
                 self.data_client = StockHistoricalDataClient(
                     api_key=s.alpaca_api_key,
-                    secret_key=s.alpaca_secret_key,
+                    secret_key=s.alpaca_secret_key_plain,  # AI-AGENT-REF: use plain secret string
                 )
         except Exception as e:
             logger.warning("Could not initialize StockHistoricalDataClient: %s", e)

@@ -62,7 +62,7 @@ def abspath(fname: str) -> str:
 
 FINNHUB_API_KEY = CFG.finnhub_api_key
 ALPACA_API_KEY = CFG.alpaca_api_key
-ALPACA_SECRET_KEY = CFG.alpaca_secret_key
+ALPACA_SECRET_KEY = CFG.alpaca_secret_key_plain  # AI-AGENT-REF: use plain secret string
 ALPACA_BASE_URL = CFG.alpaca_base_url
 ALPACA_DATA_FEED = CFG.alpaca_data_feed or "iex"
 HALT_FLAG_PATH = abspath(S.halt_flag_path)  # AI-AGENT-REF: absolute halt flag path
