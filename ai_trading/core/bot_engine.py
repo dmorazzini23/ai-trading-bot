@@ -1024,7 +1024,7 @@ def _init_metrics() -> None:
 
 
 try:
-    from ai_trading.trade_execution import ExecutionEngine  # type: ignore
+    from ai_trading.execution import ExecutionEngine  # canonical import  # AI-AGENT-REF: fix ExecutionEngine import
 except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # pragma: no cover - allow tests with stubbed module  # AI-AGENT-REF: narrow exception
 
     class ExecutionEngine:
