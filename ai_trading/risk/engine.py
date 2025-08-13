@@ -11,6 +11,9 @@ import numpy as np
 # AI-AGENT-REF: guard pandas import for test environments
 import pandas as pd
 
+# AI-AGENT-REF: direct pandas_ta import without guard
+import pandas_ta as ta
+
 from ai_trading.config.management import TradingConfig, SEED
 from ai_trading.telemetry import metrics_logger
 from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: narrow Alpaca exceptions
@@ -1111,8 +1114,6 @@ def check_exposure_caps(portfolio, exposure, cap):
     # Original exposure logic continues here...
 
 
-# AI-AGENT-REF: direct pandas_ta import without guard
-import pandas_ta as ta
 
 
 def apply_trailing_atr_stop(
