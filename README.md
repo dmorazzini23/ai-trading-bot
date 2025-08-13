@@ -1265,3 +1265,11 @@ Common Pitfalls
 
 *(If `README.md` is long, add this as a new section without removing existing content.)*
 
+### Import preflight flags
+
+Environment variables controlling startup import checks:
+
+- `IMPORT_PREFLIGHT_DISABLED=1` — skip import preflight at startup.
+- `FAIL_FAST_IMPORTS=1` — exit immediately on preflight import failures.
+
+

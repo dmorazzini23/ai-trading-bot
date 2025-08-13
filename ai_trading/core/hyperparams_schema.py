@@ -14,6 +14,9 @@ from typing import Any
 # pydantic is a hard dependency
 from pydantic import BaseModel, Field, validator
 
+# AI-AGENT-REF: explicit pydantic availability flag
+PYDANTIC_AVAILABLE = True
+
 logger = logging.getLogger(__name__)
 
 # Current schema version - increment when making breaking changes

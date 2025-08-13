@@ -12,12 +12,21 @@ from typing import Any
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
 
-from ..core.enums import OrderSide, OrderType, RiskLevel
-from ..execution.liquidity import LiquidityManager
-from ..execution.production_engine import ProductionExecutionCoordinator
-from ..monitoring import AlertManager, AlertSeverity, PerformanceDashboard
-from ..risk import DynamicPositionSizer, RiskManager, TradingHaltManager
-from ..strategies import MultiTimeframeAnalyzer, RegimeDetector
+from ai_trading.core.enums import OrderSide, OrderType, RiskLevel
+from ai_trading.execution.liquidity import LiquidityManager
+from ai_trading.execution.production_engine import ProductionExecutionCoordinator
+from ai_trading.monitoring import (
+    AlertManager,
+    AlertSeverity,
+    PerformanceDashboard,
+)
+from ai_trading.risk import (
+    DynamicPositionSizer,
+    RiskManager,
+    TradingHaltManager,
+)
+from ai_trading.strategies.multi_timeframe import MultiTimeframeAnalyzer
+from ai_trading.strategies.regime_detector import RegimeDetector
 
 
 class ProductionTradingSystem:

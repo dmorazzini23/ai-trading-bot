@@ -31,6 +31,15 @@ SKLEARN_AVAILABLE = True
 _talib = None
 _ta = None
 
+
+# AI-AGENT-REF: unified optional import helper
+def optional_import(name: str):
+    """Return imported module or ``None`` if unavailable."""
+    try:
+        return importlib.import_module(name)
+    except Exception:
+        return None
+
 def resolve_talib():
     """
     Package-safe TA-Lib import using find_spec -> import_module.
@@ -101,7 +110,7 @@ def get_ta_lib():
 # Re-export for compatibility
 __all__ = [
     "np", "pd", "LinearRegression", "StandardScaler",
-    "NUMPY_AVAILABLE", "PANDAS_AVAILABLE", "SKLEARN_AVAILABLE", 
+    "NUMPY_AVAILABLE", "PANDAS_AVAILABLE", "SKLEARN_AVAILABLE",
     "TALIB_AVAILABLE", "PANDAS_TA_AVAILABLE", "TA_AVAILABLE",
-    "talib", "ta", "get_ta_lib"
+    "talib", "ta", "get_ta_lib", "optional_import",
 ]
