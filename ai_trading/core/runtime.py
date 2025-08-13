@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, List
+from pathlib import Path  # AI-AGENT-REF: path helper for future extensions
 
 if TYPE_CHECKING:
     from ai_trading.config.management import TradingConfig
