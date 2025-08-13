@@ -5,16 +5,23 @@ Provides order lifecycle management, execution algorithms,
 and real-time execution monitoring with institutional controls.
 """
 
+import logging
+import math
 import threading
 import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import Enum
+from typing import Any, Dict, Optional
 
-# Use the centralized logger as per AGENTS.md
-from ai_trading.logging import logger
-from alpaca_trade_api.rest import APIError
+_log = logging.getLogger(__name__)
+
+try:
+    from alpaca_trade_api.rest import APIError  # broker REST errors
+except (ImportError, ModuleNotFoundError):  # pragma: no cover - fallback for dev/test
+    class APIError(Exception):
+        pass
 
 from ai_trading.market.symbol_specs import TICK_BY_SYMBOL, get_lot_size, get_tick_size
 from ai_trading.math.money import Money, round_to_lot, round_to_tick
@@ -23,6 +30,26 @@ from .idempotency import OrderIdempotencyCache
 
 from ..core.constants import EXECUTION_PARAMETERS
 from ..core.enums import OrderSide, OrderStatus, OrderType
+
+
+# AI-AGENT-REF: quantity input guard
+def _ensure_positive_qty(qty: float) -> float:
+    if qty is None:
+        raise ValueError("qty_none")
+    q = float(qty)
+    if not math.isfinite(q) or q <= 0.0:
+        raise ValueError(f"invalid_qty:{qty}")
+    return q
+
+
+# AI-AGENT-REF: price input guard
+def _ensure_valid_price(price: Optional[float]) -> Optional[float]:
+    if price is None:
+        return None
+    p = float(price)
+    if not math.isfinite(p) or p <= 0.0:
+        raise ValueError(f"invalid_price:{price}")
+    return p
 
 
 class ExecutionAlgorithm(Enum):
@@ -97,7 +124,7 @@ class Order:
         self.source_system = kwargs.get("source_system", "ai_trading")
         self.parent_order_id = kwargs.get("parent_order_id")
 
-        logger.debug(
+        _log.debug(
             f"Order created: {self.id} {self.side} {self.quantity} {self.symbol}"
         )
 
@@ -164,7 +191,7 @@ class Order:
 
         self.updated_at = timestamp
 
-        logger.debug(
+        _log.debug(
             f"Fill added to order {self.id}: {quantity}@{price} "
             f"({self.fill_percentage:.1f}% filled)"
         )
@@ -176,14 +203,14 @@ class Order:
             OrderStatus.CANCELED,
             OrderStatus.REJECTED,
         ]:
-            logger.warning(f"Cannot cancel order {self.id} in status {self.status}")
+            _log.warning(f"Cannot cancel order {self.id} in status {self.status}")
             return False
 
         self.status = OrderStatus.CANCELED
         self.updated_at = datetime.now(UTC)
         self.notes += f" | Cancelled: {reason}"
 
-        logger.info(f"Order {self.id} cancelled: {reason}")
+        _log.info(f"Order {self.id} cancelled: {reason}")
         return True
 
     def to_dict(self) -> dict:
@@ -245,7 +272,7 @@ class OrderManager:
 
         self._idempotency_cache: OrderIdempotencyCache | None = None
 
-        logger.info("OrderManager initialized")
+        _log.info("OrderManager initialized")
 
     def _ensure_idempotency_cache(self) -> OrderIdempotencyCache:
         """Ensure idempotency cache is instantiated."""
@@ -259,7 +286,7 @@ class OrderManager:
                 TypeError,
                 RuntimeError,
             ) as e:
-                logger.error(
+                _log.error(
                     "IDEMPOTENCY_CACHE_FAILED",
                     extra={"cause": e.__class__.__name__, "detail": str(e)},
                 )  # AI-AGENT-REF: narrow idempotency cache errors
@@ -291,7 +318,7 @@ class OrderManager:
 
             # Check if this is a duplicate order
             if cache.is_duplicate(key):
-                logger.warning(
+                _log.warning(
                     f"ORDER_DUPLICATE_SKIPPED: {order.symbol} {order.side} {order.quantity}"
                 )
                 order.status = OrderStatus.REJECTED
@@ -300,7 +327,7 @@ class OrderManager:
 
             # Check capacity
             if len(self.active_orders) >= self.max_concurrent_orders:
-                logger.error(
+                _log.error(
                     f"Cannot submit order: max concurrent orders reached ({self.max_concurrent_orders})"
                 )
                 order.status = OrderStatus.REJECTED
@@ -318,7 +345,7 @@ class OrderManager:
             if not self._monitor_running:
                 self.start_monitoring()
 
-            logger.info(
+            _log.info(
                 f"Order submitted: {order.id} {order.side} {order.quantity} {order.symbol}"
             )
 
@@ -328,24 +355,31 @@ class OrderManager:
             return True
 
         except (APIError, TimeoutError, ConnectionError) as e:
-            logger.error(
-                "ORDER_SUBMIT_FAILED",
+            _log.error(
+                "ORDER_API_FAILED",
                 extra={
                     "cause": e.__class__.__name__,
                     "detail": str(e),
-                    "order_id": order.id,
+                    "op": "submit",
+                    "symbol": order.symbol,
+                    "qty": order.quantity,
+                    "side": getattr(order.side, "value", order.side),
+                    "type": getattr(order.order_type, "value", order.order_type),
                 },
-            )  # AI-AGENT-REF: log submit failure cause
+            )  # AI-AGENT-REF: structured submit failure
             order.status = OrderStatus.REJECTED
             order.notes += f" | Error: {e}"
             return False
 
     def cancel_order(self, order_id: str, reason: str = "User request") -> bool:
         """Cancel an active order."""
+        if not order_id:
+            _log.warning("CANCEL_SKIPPED", extra={"reason": "empty_order_id"})
+            return False
         try:
             order = self.active_orders.get(order_id)
             if not order:
-                logger.warning(
+                _log.warning(
                     f"Cannot cancel order {order_id}: not found in active orders"
                 )
                 return False
@@ -358,14 +392,15 @@ class OrderManager:
             return success
 
         except (APIError, TimeoutError, ConnectionError) as e:
-            logger.error(
-                "ORDER_CANCEL_FAILED",
+            _log.error(
+                "ORDER_API_FAILED",
                 extra={
                     "cause": e.__class__.__name__,
                     "detail": str(e),
+                    "op": "cancel",
                     "order_id": order_id,
                 },
-            )  # AI-AGENT-REF: log cancel failure cause
+            )  # AI-AGENT-REF: structured cancel failure
             return False
 
     def get_order_status(self, order_id: str) -> dict | None:
@@ -405,21 +440,21 @@ class OrderManager:
             target=self._monitor_orders, daemon=True
         )
         self._monitor_thread.start()
-        logger.info("Order monitoring started")
+        _log.info("Order monitoring started")
 
     def stop_monitoring(self):
         """Stop order monitoring thread."""
         self._monitor_running = False
         if self._monitor_thread:
             self._monitor_thread.join(timeout=5)
-        logger.info("Order monitoring stopped")
+        _log.info("Order monitoring stopped")
 
     def _validate_order(self, order: Order) -> bool:
         """Validate order before submission."""
         try:
             # Basic validation
             if not order.symbol or order.quantity <= 0:
-                logger.error(
+                _log.error(
                     f"Invalid order parameters: symbol={order.symbol}, quantity={order.quantity}"
                 )
                 return False
@@ -432,14 +467,14 @@ class OrderManager:
             original_quantity = order.quantity
             order.quantity = round_to_lot(order.quantity, lot)
             if original_quantity != order.quantity:
-                logger.debug(
+                _log.debug(
                     f"Quantity adjusted for {order.symbol}: {original_quantity} -> {order.quantity} (lot={lot})"
                 )
 
             # Price validation and quantization for limit orders
             if order.order_type == OrderType.LIMIT:
                 if not order.price or order.price <= 0:
-                    logger.error(f"Limit order requires valid price: {order.price}")
+                    _log.error(f"Limit order requires valid price: {order.price}")
                     return False
 
                 # AI-AGENT-REF: Quantize price to tick size using Money precision
@@ -449,13 +484,13 @@ class OrderManager:
                 original_price = order.price
                 order.price = round_to_tick(order.price, tick)
                 if float(original_price) != float(order.price):
-                    logger.debug(
+                    _log.debug(
                         f"Price adjusted for {order.symbol}: {original_price} -> {order.price} (tick={tick})"
                     )
 
             # Side validation
             if order.side not in [OrderSide.BUY, OrderSide.SELL]:
-                logger.error(f"Invalid order side: {order.side}")
+                _log.error(f"Invalid order side: {order.side}")
                 return False
 
             return True
@@ -466,7 +501,7 @@ class OrderManager:
             TypeError,
             RuntimeError,
         ) as e:
-            logger.error(
+            _log.error(
                 "ORDER_VALIDATION_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )  # AI-AGENT-REF: narrow validation errors
@@ -501,7 +536,7 @@ class OrderManager:
                         order.status = OrderStatus.EXPIRED
                         order.updated_at = current_time
                         self.active_orders.pop(order_id, None)
-                        logger.warning(
+                        _log.warning(
                             f"Order {order_id} expired after {self.order_timeout} seconds"
                         )
                         self._notify_callbacks(order, "expired")
@@ -513,7 +548,7 @@ class OrderManager:
                 time.sleep(1)  # Check every second
 
             except (APIError, TimeoutError, ConnectionError) as e:
-                logger.error(
+                _log.error(
                     "ORDER_MONITOR_FAILED",
                     extra={"cause": e.__class__.__name__, "detail": str(e)},
                 )
@@ -531,7 +566,7 @@ class OrderManager:
                     TypeError,
                     RuntimeError,
                 ) as e:
-                    logger.error(
+                    _log.error(
                         "CALLBACK_FAILED",
                         extra={
                             "cause": e.__class__.__name__,
@@ -545,7 +580,7 @@ class OrderManager:
             TypeError,
             RuntimeError,
         ) as e:
-            logger.error(
+            _log.error(
                 "CALLBACK_NOTIFICATION_FAILED",
                 extra={
                     "cause": e.__class__.__name__,
@@ -580,7 +615,7 @@ class ExecutionEngine:
             "average_fill_time": 0.0,
         }
 
-        logger.info("ExecutionEngine initialized")
+        _log.info("ExecutionEngine initialized")
 
 
     def execute_order(
@@ -632,6 +667,32 @@ class ExecutionEngine:
             if method == "twap":
                 return self.execute_sliced(symbol, quantity, side, **kwargs)
 
+            quantity = int(_ensure_positive_qty(quantity))
+            kwargs["limit_price"] = _ensure_valid_price(kwargs.get("limit_price"))
+            kwargs["stop_price"] = _ensure_valid_price(kwargs.get("stop_price"))
+
+            payload: Dict[str, Any] = {
+                "symbol": symbol,
+                "side": getattr(side, "value", side),
+                "qty": quantity,
+                "type": getattr(order_type, "value", order_type),
+                "time_in_force": kwargs.get("time_in_force"),
+                "limit_price": kwargs.get("limit_price"),
+                "stop_price": kwargs.get("stop_price"),
+            }
+            _log.debug(
+                "ORDER_SUBMIT_PAYLOAD",
+                extra={k: payload.get(k) for k in (
+                    "symbol",
+                    "side",
+                    "qty",
+                    "type",
+                    "time_in_force",
+                    "limit_price",
+                    "stop_price",
+                )},
+            )
+
             # Create order
             order = Order(symbol, side, quantity, order_type, **kwargs)
 
@@ -648,18 +709,13 @@ class ExecutionEngine:
                 self.execution_stats["rejected_orders"] += 1
                 return None
 
-        except (
-            KeyError,
-            ValueError,
-            TypeError,
-            RuntimeError,
-        ) as e:
-            logger.error(
-                "ORDER_EXECUTION_FAILED",
+        except (ValueError, TypeError, KeyError) as e:
+            _log.error(
+                "EXECUTE_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )  # AI-AGENT-REF: narrow execution errors
             self.execution_stats["rejected_orders"] += 1
-            return None
+            raise
 
     def execute_sliced(
         self, symbol: str, quantity: int, side: OrderSide, **kwargs
@@ -705,7 +761,7 @@ class ExecutionEngine:
             TypeError,
             RuntimeError,
         ) as e:
-            logger.error(
+            _log.error(
                 "SIMULATION_FAILED",
                 extra={
                     "cause": e.__class__.__name__,
