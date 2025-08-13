@@ -17,6 +17,11 @@ import pandas_ta as ta
 from ai_trading.config.management import TradingConfig, SEED
 from ai_trading.telemetry import metrics_logger
 from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: narrow Alpaca exceptions
+from ai_trading.config.settings import get_settings
+try:
+    from alpaca.data.historical import StockHistoricalDataClient
+except Exception:  # pragma: no cover
+    StockHistoricalDataClient = None  # type: ignore
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
 from ai_trading.strategies.base import StrategySignal as TradeSignal
@@ -65,12 +70,22 @@ class RiskEngine:
         self._positions: dict[str, int] = {}
         self._atr_cache: dict[str, tuple] = {}
         self._volatility_cache: dict[str, tuple] = {}
+        # Optional, lazily available data client for historical fetches.
+        # Priority: runtime ctx.data_client > self.data_client (constructed here) > ctx.api as fallback.
+        self.data_client = None
         try:
-            from data_client import DataClient
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):  # pragma: no cover - optional dependency  # AI-AGENT-REF: narrow exception
-            self.data_client = None
-        else:
-            self.data_client = DataClient()
+            s = get_settings()
+            if (
+                StockHistoricalDataClient
+                and getattr(s, "alpaca_api_key", None)
+                and getattr(s, "alpaca_secret_key", None)
+            ):
+                self.data_client = StockHistoricalDataClient(
+                    api_key=s.alpaca_api_key,
+                    secret_key=s.alpaca_secret_key,
+                )
+        except Exception as e:
+            logger.warning("Could not initialize StockHistoricalDataClient: %s", e)
         self.hard_stop = False
         # AI-AGENT-REF: track returns/drawdown for adaptive exposure cap
         self._returns: list[float] = []
@@ -145,9 +160,19 @@ class RiskEngine:
                 if datetime.now(UTC) - ts < timedelta(minutes=30):
                     return val
 
-            if self.data_client is None:
+            ctx = getattr(self, "ctx", None)
+            client = (
+                getattr(ctx, "data_client", None)
+                or self.data_client
+                or getattr(ctx, "api", None)
+            )
+            if not client:
+                logger.warning(
+                    "No data client available; skipping historical fetch for %s",
+                    symbol,
+                )
                 return None
-            bars = self.data_client.get_bars(symbol, lookback + 10)
+            bars = client.get_bars(symbol, lookback + 10)
             if len(bars) < lookback:
                 return None
             high = np.array([b.h for b in bars])
@@ -161,7 +186,7 @@ class RiskEngine:
             from datetime import datetime
             self._atr_cache[symbol] = (datetime.now(UTC), atr)
             return atr
-        except (APIError, ValueError, KeyError, TypeError) as exc:
+        except (APIError, ValueError, KeyError, TypeError, AttributeError) as exc:
             # AI-AGENT-REF: narrow data and API errors
             logger.warning(
                 "ATR calculation error for %s: %s",

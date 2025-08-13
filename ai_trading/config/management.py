@@ -681,6 +681,7 @@ class TradingConfig:
                  dollar_risk_limit: float = 0.05,
                  # model/feature toggles
                  enable_finbert: bool = False,
+                 enable_sklearn: bool = False,
                  # strategy/allocator knobs (added)
                  signal_confirmation_bars: int = 2,
                  delta_threshold: float = 0.02,
@@ -709,6 +710,10 @@ class TradingConfig:
                  ml_model_path: str | None = None,
                  ml_model_module: str | None = None,
                  halt_file: str | None = None,
+                 intraday_lookback_minutes: int = 120,
+                 data_warmup_lookback_days: int = 60,
+                 disable_daily_retrain: bool = False,
+                 REGIME_MIN_ROWS: int = 200,
                  **kwargs):
         self.mode = mode
         self.trailing_factor = trailing_factor
@@ -735,6 +740,7 @@ class TradingConfig:
         
         # feature toggles
         self.enable_finbert = bool(enable_finbert)
+        self.enable_sklearn = bool(enable_sklearn)
         # strategy/allocator knobs
         self.signal_confirmation_bars = signal_confirmation_bars
         self.delta_threshold = delta_threshold
@@ -764,6 +770,10 @@ class TradingConfig:
         self.ml_model_path = ml_model_path
         self.ml_model_module = ml_model_module
         self.halt_file = halt_file
+        self.intraday_lookback_minutes = intraday_lookback_minutes
+        self.data_warmup_lookback_days = data_warmup_lookback_days
+        self.disable_daily_retrain = bool(disable_daily_retrain)
+        self.REGIME_MIN_ROWS = REGIME_MIN_ROWS
 
         # Basic validation for new fields
         if not (0.0 <= self.conf_threshold <= 1.0):
@@ -800,6 +810,19 @@ class TradingConfig:
             s = str(x).strip().lower()
             return s in ("1", "true", "yes", "y", "on")
         enable_finbert = _as_bool(getenv("ENABLE_FINBERT", overrides.get("enable_finbert", False)))
+        enable_sklearn = _as_bool(getenv("ENABLE_SKLEARN", overrides.get("enable_sklearn", False)))
+        intraday_lookback_minutes = int(
+            getenv("INTRADAY_LOOKBACK_MINUTES", overrides.get("intraday_lookback_minutes", 120))
+        )
+        data_warmup_lookback_days = int(
+            getenv("DATA_WARMUP_LOOKBACK_DAYS", overrides.get("data_warmup_lookback_days", 60))
+        )
+        disable_daily_retrain = _as_bool(
+            getenv("DISABLE_DAILY_RETRAIN", overrides.get("disable_daily_retrain", False))
+        )
+        REGIME_MIN_ROWS = int(
+            getenv("REGIME_MIN_ROWS", overrides.get("REGIME_MIN_ROWS", 200))
+        )
         # allocator/strategy fields (use overrides > env > defaults)
         signal_confirm_bars = int(getenv("SIGNAL_CONFIRM_BARS", overrides.get("signal_confirm_bars", 2)))
         delta_hold          = float(getenv("DELTA_HOLD",         overrides.get("delta_hold",          0.02)))
@@ -836,7 +859,9 @@ class TradingConfig:
             "alpaca_base_url", "sleep_interval", "max_retries", "backoff_factor",
             "max_backoff_interval", "pct", "MODEL_PATH", "scheduler_iterations",
             "scheduler_sleep_seconds", "window", "enabled", "capacity", "refill_rate",
-            "queue_timeout", "ml_model_path", "ml_model_module", "halt_file"
+            "queue_timeout", "ml_model_path", "ml_model_module", "halt_file",
+            "enable_sklearn", "intraday_lookback_minutes", "data_warmup_lookback_days",
+            "disable_daily_retrain", "REGIME_MIN_ROWS"
         }
         cfg = cls(
             mode=mode,
@@ -847,6 +872,7 @@ class TradingConfig:
             dollar_risk_limit=dollar_risk_limit,
             max_position_size=max_position_size,
             enable_finbert=enable_finbert,
+            enable_sklearn=enable_sklearn,
             signal_confirm_bars=signal_confirm_bars,
             delta_hold=delta_hold,
             min_confidence=min_confidence,
@@ -868,6 +894,10 @@ class TradingConfig:
             ml_model_path=ml_model_path,
             ml_model_module=ml_model_module,
             halt_file=halt_file,
+            intraday_lookback_minutes=intraday_lookback_minutes,
+            data_warmup_lookback_days=data_warmup_lookback_days,
+            disable_daily_retrain=disable_daily_retrain,
+            REGIME_MIN_ROWS=REGIME_MIN_ROWS,
             **{k: v for k, v in overrides.items() if k not in excluded_keys}
         )
         # set mode last so downstream logic sees it
