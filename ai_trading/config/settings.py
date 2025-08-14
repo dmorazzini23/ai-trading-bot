@@ -53,6 +53,23 @@ class Settings(BaseSettings):
     alpaca_data_feed: str | None = Field(default=None, alias="ALPACA_DATA_FEED")
     scheduler_sleep_seconds: int = Field(60, alias="SCHEDULER_SLEEP_SECONDS")
 
+    # AI-AGENT-REF: rebalancer defaults
+    rebalance_interval_min: int = Field(
+        15,
+        env="AI_TRADER_REBALANCE_INTERVAL_MIN",
+        description="How often (minutes) to consider portfolio rebalancing.",
+    )
+    rebalance_on_fill: bool = Field(
+        True,
+        env="AI_TRADER_REBALANCE_ON_FILL",
+        description="Trigger a rebalance pass after order fills.",
+    )
+    rebalance_max_trades_per_cycle: int = Field(
+        10,
+        env="AI_TRADER_REBALANCE_MAX_TRADES_PER_CYCLE",
+        description="Safety cap to limit rebalance churn.",
+    )
+
     # AI-AGENT-REF: runtime defaults for deterministic behavior and loops
     seed: int | None = 42
     loop_interval_seconds: int = 60
