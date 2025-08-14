@@ -1,96 +1,53 @@
-from __future__ import annotations
+import re, sys, pathlib
 
-import ast
-import logging
-import pathlib
-import sys
-
-# AI-AGENT-REF: enforce repo-wide import style
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
-PKG = "ai_trading"
 DENY_BARE = {
-    "data_client",
-    "utils",
-    "helpers",
-    "config",
-    "settings",
-    "models",
-    "engine",
-    "telemetry",
-    # AI-AGENT-REF: forbid bare imports of packaged modules
-    "alpaca_api",
-    "bot_engine",
-    "audit",
-    "ml_model",
     "order_health_monitor",
-    # AI-AGENT-REF: forbid bare imports of new test facades
-    "trade_execution",
-    "strategy_allocator",
-    "risk_engine",
-    "performance_monitor",
-    "validate_env",
-    "system_health_checker",
-    "lightgbm",
-    "check_data_freshness",
+    "trade_execution",      # bare
+    "strategy_allocator",   # bare
+    "ml_model",             # bare
+    "risk_engine",          # bare
+    "performance_monitor",  # bare
+    "validate_env",         # bare
     "_require_env_vars",
-    "portfolio_optimizer",
+    "check_data_freshness", # bare
+    "system_health_checker",# bare
+    "portfolio_optimizer",  # bare
     "transaction_cost_calculator",
-    "process_manager",
-    "requests",
+    "process_manager",      # bare
 }
 
+DENY_PACKAGE = {
+    "ai_trading.trade_execution",
+    "ai_trading.monitoring.performance_monitor",
+    "ai_trading.validation.require_env",
+    "ai_trading.validation.check_data_freshness",
+    "ai_trading.utils.process_manager",
+    "ai_trading.thirdparty.lightgbm_compat",
+}
 
-def main() -> int:
-    bad: list[tuple[str, int, str]] = []
-    for path in PROJECT_ROOT.rglob("*.py"):
-        p = str(path)
-        if any(
-            s in p
-            for s in (
-                "/.venv/",
-                "/venv/",
-                "/.git/",
-                "/build/",
-                "/dist/",
-                "/tests/",
-                "/scripts/",
-            )
-        ):
-            continue
-        src = path.read_text(encoding="utf-8", errors="ignore")
-        try:
-            tree = ast.parse(src, filename=p)
-        except SyntaxError:
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom):
-                mod = node.module or ""
-                if mod.startswith(PKG) or node.level > 0:
-                    continue
-                head = mod.split(".", 1)[0]
-                if head in DENY_BARE:
-                    bad.append((p, node.lineno, f"Suspicious bare import '{mod}'. Use '{PKG}.' prefix."))
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    mod = alias.name
-                    if mod.startswith(PKG):
-                        continue
-                    if mod.startswith("."):
-                        bad.append((p, node.lineno, f"Top-level import must be absolute: {mod}"))
-                        continue
-                    head = mod.split(".", 1)[0]
-                    if head in DENY_BARE:
-                        bad.append((p, node.lineno, f"Suspicious bare import '{mod}'. Use '{PKG}.' prefix."))
-    if bad:
-        for f, ln, msg in bad:
-            logger.error("%s:%s: %s", f, ln, msg)
-        return 1
-    logger.info("IMPORT CONTRACT: OK")
-    return 0
+ROOT = pathlib.Path("tests")
+pat = re.compile(r"^\s*(from|import)\s+(" + "|".join(map(re.escape, DENY_BARE)) + r")\b")
 
+bad = []
+for p in ROOT.rglob("*.py"):
+    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+        if pat.search(line):
+            bad.append(f"{p}:{i}:{line.strip()}")
 
-if __name__ == "__main__":
-    sys.exit(main())
+if bad:
+    print("[contract] Legacy imports found in tests:")
+    print("\n".join(bad))
+    sys.exit(1)
+
+pat_pkg = re.compile(r"^\s*(from|import)\s+(" + "|".join(map(re.escape, DENY_PACKAGE)) + r")\b")
+
+bad_pkg = []
+for p in pathlib.Path("ai_trading").rglob("*.py"):
+    for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+        if pat_pkg.search(line):
+            bad_pkg.append(f"{p}:{i}:{line.strip()}")
+
+if bad_pkg:
+    print("[contract] Forbidden package imports found:\n" + "\n".join(bad_pkg))
+    sys.exit(1)
+

@@ -44,9 +44,20 @@ def alpaca_get(path_or_url: str, *, params: Optional[dict] = None, timeout: int 
 
 # --- Trade updates stream (optional if SDK present) ---
 
+def _require_alpaca():
+    """Import and return alpaca_trade_api or raise a helpful error."""  # AI-AGENT-REF: lazy import guard
+    try:
+        import alpaca_trade_api as tradeapi  # type: ignore
+        return tradeapi
+    except Exception as e:  # pragma: no cover - safety
+        raise RuntimeError(
+            "alpaca_trade_api is required but not installed. Install with: pip install 'alpaca-trade-api>=3.0,<4'"
+        ) from e
+
+
 def _sdk_available() -> bool:
     try:
-        import alpaca_trade_api  # noqa: F401
+        _require_alpaca()
         return True
     except Exception:
         return False
@@ -55,7 +66,8 @@ async def _stream_with_sdk(
     api_key: str, api_secret: str, trading_client: Any, state: Any, *, paper: bool, running: Optional[asyncio.Event]
 ) -> None:
     """Example async stream using alpaca-trade-api's websockets."""
-    from alpaca_trade_api.stream import Stream
+    tradeapi = _require_alpaca()
+    Stream = tradeapi.stream.Stream
 
     base_url = "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
     stream = Stream(api_key, api_secret, base_url=base_url)

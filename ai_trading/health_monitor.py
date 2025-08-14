@@ -20,7 +20,15 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Any
 
-import psutil
+from ai_trading.monitoring.system_health import (
+    _HAS_PSUTIL,
+    snapshot_basic,
+)  # AI-AGENT-REF: optional psutil
+
+if _HAS_PSUTIL:
+    import psutil  # type: ignore
+else:
+    psutil = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -351,42 +359,49 @@ class HealthMonitor:
 
     def _collect_system_metrics(self) -> SystemMetrics:
         """Collect current system metrics."""
-        try:
-            # CPU metrics
-            cpu_percent = psutil.cpu_percent(interval=1)
+        if not _HAS_PSUTIL:
+            data = snapshot_basic()
+            metrics = SystemMetrics(
+                cpu_percent=float(data.get("cpu_percent", 0.0)),
+                memory_percent=float(data.get("mem_percent", 0.0)),
+                disk_percent=0.0,
+                memory_used_gb=0.0,
+                memory_available_gb=0.0,
+                disk_used_gb=0.0,
+                disk_available_gb=0.0,
+                load_average=(0.0, 0.0, 0.0),
+                process_count=0,
+                open_files=0,
+                network_connections=0,
+                timestamp=datetime.now(UTC),
+            )
+            self.system_metrics_history.append(metrics)
+            return metrics
 
-            # Memory metrics
+        try:
+            import psutil  # type: ignore
+
+            cpu_percent = psutil.cpu_percent(interval=1)
             memory = psutil.virtual_memory()
             memory_used_gb = memory.used / (1024**3)
             memory_available_gb = memory.available / (1024**3)
-
-            # Disk metrics
             disk = psutil.disk_usage("/")
             disk_used_gb = disk.used / (1024**3)
             disk_available_gb = disk.free / (1024**3)
-
-            # Load average (Unix-like systems)
             try:
                 load_avg = os.getloadavg()
             except (OSError, AttributeError):
                 load_avg = (0.0, 0.0, 0.0)
-
-            # Process metrics
             process_count = len(psutil.pids())
-
-            # File descriptor count
             try:
                 process = psutil.Process()
                 open_files = process.num_fds() if hasattr(process, "num_fds") else 0
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 open_files = 0
-
-            # Network connections
             try:
                 network_connections = len(psutil.net_connections())
             except (psutil.AccessDenied, psutil.NoSuchProcess):
                 network_connections = 0
-
             metrics = SystemMetrics(
                 cpu_percent=cpu_percent,
                 memory_percent=memory.percent,
@@ -401,11 +416,10 @@ class HealthMonitor:
                 network_connections=network_connections,
                 timestamp=datetime.now(UTC),
             )
-
             self.system_metrics_history.append(metrics)
             return metrics
 
-        except Exception as e:
+        except Exception as e:  # pragma: no cover - unexpected psutil errors
             self.logger.error(f"Error collecting system metrics: {e}")
             return SystemMetrics(
                 cpu_percent=0,
@@ -509,7 +523,12 @@ class HealthMonitor:
 
     def _check_cpu_usage(self) -> dict[str, Any]:
         """Check CPU usage."""
-        cpu_percent = psutil.cpu_percent(interval=1)
+        if not _HAS_PSUTIL:
+            data = snapshot_basic()
+            cpu_percent = float(data.get("cpu_percent", 0.0))
+        else:
+            import psutil  # type: ignore
+            cpu_percent = psutil.cpu_percent(interval=1)
 
         if cpu_percent > self.thresholds["cpu_critical"]:
             status = HealthStatus.CRITICAL
@@ -529,6 +548,15 @@ class HealthMonitor:
 
     def _check_memory_usage(self) -> dict[str, Any]:
         """Check memory usage."""
+        if not _HAS_PSUTIL:
+            data = snapshot_basic()
+            memory_percent = float(data.get("mem_percent", 0.0))
+            return {
+                "status": HealthStatus.UNKNOWN.value,
+                "message": "psutil unavailable",
+                "details": {"memory_percent": memory_percent},
+            }
+        import psutil  # type: ignore
         memory = psutil.virtual_memory()
 
         if memory.percent > self.thresholds["memory_critical"]:
@@ -553,6 +581,13 @@ class HealthMonitor:
 
     def _check_disk_usage(self) -> dict[str, Any]:
         """Check disk usage."""
+        if not _HAS_PSUTIL:
+            return {
+                "status": HealthStatus.UNKNOWN.value,
+                "message": "psutil unavailable",
+                "details": {},
+            }
+        import psutil  # type: ignore
         disk = psutil.disk_usage("/")
 
         if disk.percent > self.thresholds["disk_critical"]:
