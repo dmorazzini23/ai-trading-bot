@@ -18,6 +18,11 @@ from ai_trading.indicators import compute_atr  # AI-AGENT-REF: correct module
 from ai_trading.core.constants import EXECUTION_PARAMETERS, RISK_PARAMETERS  # AI-AGENT-REF: direct import without shim
 
 
+# AI-AGENT-REF: simple transaction cost estimator for tests
+def estimate_cost(quantity: float, price: float, bps: float = 1.0) -> float:
+    return quantity * price * (bps / 10_000.0)
+
+
 def _finite_nonneg(name: str, v: Optional[float]) -> float:  # AI-AGENT-REF: input guard helper
     if v is None:
         raise ValueError(f"{name}_none")

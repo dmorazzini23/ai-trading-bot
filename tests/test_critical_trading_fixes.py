@@ -251,8 +251,8 @@ class TestLiquidityManagementFixes(unittest.TestCase):
         self.execution_engine = trade_execution.ExecutionEngine(self.mock_ctx)
         self.execution_engine.api = self.mock_api
     
-    @patch('trade_execution.ExecutionEngine._latest_quote')
-    @patch('trade_execution.ExecutionEngine._minute_stats')
+    @patch('ai_trading.trade_execution.ExecutionEngine._latest_quote')
+    @patch('ai_trading.trade_execution.ExecutionEngine._minute_stats')
     def test_enhanced_liquidity_assessment(self, mock_minute_stats, mock_quote):
         """Test enhanced liquidity assessment with more granular controls."""
         # Mock quote data - normal spread
@@ -387,7 +387,7 @@ class TestIntegrationScenarios(unittest.TestCase):
         # For now, just ensure modules can be imported together
         import ai_trading.analysis.sentiment as sentiment
         from ai_trading import meta_learning
-        import trade_execution
+        import ai_trading.trade_execution as trade_execution  # AI-AGENT-REF: normalized import
         
         # Verify key functions exist
         self.assertTrue(callable(sentiment.fetch_sentiment))
@@ -471,7 +471,7 @@ def test_meta_learning_price_validation():
 
 def test_order_execution_partial_fill_tracking():
     """Test that partial fills are properly tracked and reconciled."""
-    from trade_execution import TradingEngine
+    from ai_trading.trade_execution import TradingEngine  # AI-AGENT-REF: normalized import
     
     # Mock the trading context and API
     mock_ctx = Mock()
@@ -501,7 +501,7 @@ def test_quantity_tracking_fix():
     import io
     
     # Import trade execution module
-    from trade_execution import ExecutionEngine
+    from ai_trading.trade_execution import ExecutionEngine  # AI-AGENT-REF: normalized import
     
     # Create mock context
     mock_ctx = Mock()

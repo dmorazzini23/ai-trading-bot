@@ -65,7 +65,7 @@ def test_validate_env_import():
             'TRADING_MODE': 'paper',
             'FORCE_TRADES': 'false'
         }):
-            import validate_env
+            import ai_trading.validation.validate_env as validate_env  # AI-AGENT-REF: normalized import
             
             # Test that Settings class can be instantiated
             settings = validate_env.Settings()
@@ -98,7 +98,7 @@ def test_field_validator_functionality():
             'BOT_MODE': 'invalid_mode',       # Should trigger validation error
             'TRADING_MODE': 'invalid',        # Should trigger validation error
         }):
-            import validate_env
+            import ai_trading.validation.validate_env as validate_env  # AI-AGENT-REF: normalized import
             
             # These should trigger validation errors due to invalid values
             try:

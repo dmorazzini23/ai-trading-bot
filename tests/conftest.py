@@ -1490,7 +1490,7 @@ def stub_capital_scaling(monkeypatch):
     
     # Add missing trade_execution attributes
     try:
-        import trade_execution
+        import ai_trading.trade_execution as trade_execution  # AI-AGENT-REF: normalized import
         if not hasattr(trade_execution, 'ExecutionEngine'):
             trade_execution.ExecutionEngine = MockExecutionEngine
     except ImportError:

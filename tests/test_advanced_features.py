@@ -71,7 +71,7 @@ def test_maybe_rebalance(monkeypatch):
 
 
 def test_atr_stop_adjusts():
-    from risk_engine import calculate_atr_stop
+    from ai_trading.risk.engine import calculate_atr_stop  # AI-AGENT-REF: normalized import
     stop1 = calculate_atr_stop(100, 2, 1.5)
     stop2 = calculate_atr_stop(100, 5, 1.5)
     assert stop1 > stop2

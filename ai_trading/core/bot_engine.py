@@ -10798,7 +10798,7 @@ def main() -> None:
 
     # AI-AGENT-REF: Ensure only one bot instance is running
     try:
-        from process_manager import ProcessManager
+        from ai_trading.process_manager import ProcessManager  # AI-AGENT-REF: normalized import
 
         pm = ProcessManager()
         if not pm.ensure_single_instance():

@@ -72,7 +72,7 @@ def test_position_size_reporting():
     """Test that position size reporting is consistent."""
     print("Testing position size reporting consistency...")
     
-    from trade_execution import ExecutionEngine
+    from ai_trading.trade_execution import ExecutionEngine  # AI-AGENT-REF: normalized import
     
     # Create mock context
     mock_ctx = Mock()
@@ -100,7 +100,7 @@ def test_latency_tracking():
     print("Testing enhanced latency tracking...")
     
     import time
-    from trade_execution import ExecutionEngine
+    from ai_trading.trade_execution import ExecutionEngine  # AI-AGENT-REF: normalized import
     
     # Create mock context and engine
     mock_ctx = Mock()

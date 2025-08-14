@@ -22,7 +22,7 @@ if not all(hasattr(pydantic, attr) for attr in ("AliasChoices", "model_validator
     pytest.skip("pydantic v2 required", allow_module_level=True)
 
 import ai_trading.ml_model as ml_model  # AI-AGENT-REF: canonical import
-import risk_engine
+import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
 import ai_trading.main as main
 from ai_trading import utils
 from ai_trading.strategies.mean_reversion import MeanReversionStrategy

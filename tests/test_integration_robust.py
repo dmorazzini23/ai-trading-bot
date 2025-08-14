@@ -431,7 +431,7 @@ def test_trade_execution_api_timeout(monkeypatch):
         side_effect=TimeoutError("Timeout"),
         create=True,
     ):
-        import trade_execution
+        import ai_trading.trade_execution as trade_execution  # AI-AGENT-REF: normalized import
 
         with pytest.raises(TimeoutError):
             trade_execution.place_order("AAPL", 5, "buy")

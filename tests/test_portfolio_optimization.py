@@ -9,8 +9,8 @@ import os
 # Set testing environment
 os.environ['TESTING'] = '1'
 
-from portfolio_optimizer import PortfolioOptimizer, PortfolioDecision, create_portfolio_optimizer
-from transaction_cost_calculator import TradeType, create_transaction_cost_calculator
+from ai_trading.portfolio.optimizer import PortfolioOptimizer, PortfolioDecision, create_portfolio_optimizer  # AI-AGENT-REF: normalized import
+from ai_trading.execution.transaction_costs import TradeType, create_transaction_cost_calculator  # AI-AGENT-REF: normalized import
 from ai_trading.strategies.regime_detector import MarketRegime, create_regime_detector
 
 

@@ -15,8 +15,12 @@ os.environ.setdefault('FLASK_PORT', '5000')
 
 # Import the modules we need to test
 try:
-    from trade_execution import ExecutionEngine, handle_partial_fill, safe_submit_order
-    from risk_engine import RiskEngine
+    from ai_trading.trade_execution import (
+        ExecutionEngine,
+        handle_partial_fill,
+        safe_submit_order,
+    )  # AI-AGENT-REF: normalized import
+    from ai_trading.risk.engine import RiskEngine  # AI-AGENT-REF: normalized import
     from ai_trading.core import bot_engine
     HAS_FULL_IMPORTS = True
 except ImportError as e:

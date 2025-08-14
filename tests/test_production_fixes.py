@@ -66,7 +66,7 @@ class TestProcessDetection(unittest.TestCase):
     def setUp(self):
         """Set up performance monitor test."""
         try:
-            from performance_monitor import ResourceMonitor
+            from ai_trading.monitoring.performance_monitor import ResourceMonitor  # AI-AGENT-REF: normalized import
             self.monitor = ResourceMonitor()
         except ImportError:
             self.skipTest("performance_monitor module not available")
@@ -192,7 +192,7 @@ class TestEnvironmentDebugging(unittest.TestCase):
     def setUp(self):
         """Set up environment validation test."""
         try:
-            from validate_env import debug_environment, validate_specific_env_var
+            from ai_trading.validation.validate_env import debug_environment, validate_specific_env_var  # AI-AGENT-REF: normalized import
             self.debug_environment = debug_environment
             self.validate_specific_env_var = validate_specific_env_var
         except ImportError:

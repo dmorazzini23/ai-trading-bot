@@ -7,7 +7,7 @@ on the second call when min_confidence=0.0.
 """
 
 from ai_trading.strategies import TradeSignal
-import strategy_allocator
+import ai_trading.strategy_allocator as strategy_allocator  # AI-AGENT-REF: normalized import
 
 
 class TestStrategyAllocatorRegression:

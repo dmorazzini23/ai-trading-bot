@@ -14,14 +14,18 @@ pydantic-settings>=2.2
 pandas>=2.3
 pandas_ta==0.3.14b0
 pandas-market-calendars>=4.4,<5.0
-alpaca-trade-api>=3.0,<4.0
 cachetools>=5.3,<6.0
 yfinance>=0.2.40,<0.3  # AI-AGENT-REF: pin yfinance for CI
+requests>=2.31,<3
+urllib3>=2.0,<3
+certifi>=2023.7.22
+charset-normalizer>=3.2,<4
+idna>=3.4,<4
 
 # System/process utilities used by perf checks & test helpers (CI-only)
 # Pin to <6 to avoid upcoming API changes that may break older helpers.
 psutil>=5.9.8
-tzlocal
+tzlocal>=5.2,<6
 portalocker
 schedule
 scikit-learn

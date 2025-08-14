@@ -20,7 +20,7 @@ def ensure_real_strategy_allocator():
         del sys.modules['strategy_allocator']
     
     # Import the real module from file path
-    import strategy_allocator
+    import ai_trading.strategy_allocator as strategy_allocator  # AI-AGENT-REF: normalized import
     
     # Verify we have the real StrategyAllocator class
     assert hasattr(strategy_allocator.StrategyAllocator, '__init__')

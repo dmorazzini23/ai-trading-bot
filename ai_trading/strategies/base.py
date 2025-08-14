@@ -461,3 +461,7 @@ class StrategyRegistry:
                 for strategy in self.strategies.values()
             ],
         }
+
+# AI-AGENT-REF: legacy base class alias
+Strategy = BaseStrategy  # noqa: N816
+
