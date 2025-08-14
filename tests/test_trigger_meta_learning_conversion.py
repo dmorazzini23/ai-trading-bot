@@ -39,7 +39,7 @@ class TradingConfig:
     @classmethod
     def from_env(cls, mode="balanced"):
         return cls()
-    
+
     def get_legacy_params(self):
         """Return legacy parameters for backward compatibility."""
         return {
@@ -53,6 +53,7 @@ class TradingConfig:
         }
 
 # Replace the config module with our mock
+MockConfig = TradingConfig
 sys.modules['config'] = MockConfig
 
 from ai_trading import meta_learning

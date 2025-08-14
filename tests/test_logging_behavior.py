@@ -49,7 +49,7 @@ def test_cooldown_expired_throttle(monkeypatch, caplog):
     # Ensure we capture logs from the strategy_allocator module
     caplog.set_level("INFO", logger="strategy_allocator")
     import importlib
-    import strategy_allocator
+    import ai_trading.strategy_allocator as strategy_allocator  # AI-AGENT-REF: normalized import
     strategy_allocator = importlib.reload(strategy_allocator)
     alloc = strategy_allocator.StrategyAllocator()
     alloc.config.signal_confirmation_bars = 1  # Allow single confirmation

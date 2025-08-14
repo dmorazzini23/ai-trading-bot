@@ -22,6 +22,7 @@ execution controls, monitoring, and compliance capabilities.
 
 # Import execution components
 from .engine import ExecutionAlgorithm, ExecutionEngine, Order  # AI-AGENT-REF: expose ExecutionEngine
+from .transaction_costs import estimate_cost
 
 
 # Import enhanced debugging and tracking modules
@@ -112,4 +113,5 @@ __all__ = [
     "get_pnl_attribution_stats",
     "PnLSource",
     "PnLEvent",
+    "estimate_cost",
 ]

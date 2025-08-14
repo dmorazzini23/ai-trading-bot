@@ -26,6 +26,20 @@ DENY_BARE = {
     "audit",
     "ml_model",
     "order_health_monitor",
+    # AI-AGENT-REF: forbid bare imports of new test facades
+    "trade_execution",
+    "strategy_allocator",
+    "risk_engine",
+    "performance_monitor",
+    "validate_env",
+    "system_health_checker",
+    "lightgbm",
+    "check_data_freshness",
+    "_require_env_vars",
+    "portfolio_optimizer",
+    "transaction_cost_calculator",
+    "process_manager",
+    "requests",
 }
 
 

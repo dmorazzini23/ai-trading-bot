@@ -39,7 +39,12 @@ def set_random_seeds(seed: int = 42) -> None:
     # PyTorch (if available)
     import torch
     # LightGBM (if available)
-    import lightgbm as lgb
+    # AI-AGENT-REF: optional lightgbm import with shim
+    try:
+        import importlib
+        lgb = importlib.import_module("lightgbm")  # noqa: F401
+    except Exception:  # pragma: no cover - optional dep
+        from ai_trading.thirdparty import lightgbm_compat as lgb  # noqa: F401
     # Set environment variables for additional determinism
     os.environ["PYTHONHASHSEED"] = str(seed)
 

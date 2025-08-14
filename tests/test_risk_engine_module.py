@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 for m in ["strategies", "strategies.momentum", "strategies.mean_reversion"]:
     sys.modules.pop(m, None)
 sys.modules.pop("risk_engine", None)
-from risk_engine import RiskEngine
+from ai_trading.risk.engine import RiskEngine  # AI-AGENT-REF: normalized import
 from ai_trading.strategies import TradeSignal
 
 

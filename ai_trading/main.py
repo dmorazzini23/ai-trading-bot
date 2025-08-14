@@ -45,7 +45,7 @@ def get_performance_monitor():
     if not S.enable_memory_optimization:  # Reuse same flag for both features
         return None
 
-    from performance_monitor import (  # noqa: F401 - external optional dep
+    from ai_trading.monitoring.performance_monitor import (  # AI-AGENT-REF: use packaged monitor
         get_performance_monitor as _get_performance_monitor,
     )
     return _get_performance_monitor()
@@ -57,7 +57,7 @@ def start_performance_monitoring():
     if not S.enable_memory_optimization:
         return
 
-    from performance_monitor import (  # noqa: F401 - external optional dep
+    from ai_trading.monitoring.performance_monitor import (  # AI-AGENT-REF: use packaged monitor
         start_performance_monitoring as _start_performance_monitoring,
     )
     _start_performance_monitoring()
@@ -300,4 +300,4 @@ cfg = get_config()
 if getattr(cfg, "enable_performance_monitoring", False):
     if find_spec("performance_monitor") is None:
         raise RuntimeError("Feature enabled but module 'performance_monitor' not installed")
-    from performance_monitor import *  # noqa: F401
+    from ai_trading.monitoring.performance_monitor import *  # noqa: F401

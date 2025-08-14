@@ -23,6 +23,33 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+# AI-AGENT-REF: requests health probe
+def _probe_requests() -> bool:
+    try:
+        import requests
+        from requests import Response  # noqa: F401
+        ok = hasattr(requests, "Session") and hasattr(requests, "get")
+        print("[health] requests:", "ok" if ok else "broken (missing API)")
+        return ok
+    except Exception as e:  # pragma: no cover - surface import issue
+        print("[health] requests: import failed ->", e)
+        return False
+
+
+# AI-AGENT-REF: tzlocal health probe
+def _probe_tzlocal() -> bool:
+    try:
+        import tzlocal  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _run_probes() -> None:
+    _probe_requests()
+    print("[health] tzlocal:", "ok" if _probe_tzlocal() else "missing (optional)")
+
+
 def find_dirs_missing_init(pkg_dir: pathlib.Path) -> list[str]:
     missing: list[str] = []
     for dirpath, dirnames, filenames in os.walk(pkg_dir):
@@ -85,6 +112,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    _run_probes()
     parser = argparse.ArgumentParser()
     parser.add_argument("--strict", action="store_true")
     parser.parse_args()

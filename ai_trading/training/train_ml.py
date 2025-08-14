@@ -18,9 +18,14 @@ import pandas as pd
 from ai_trading.logging import logger
 
 # ML libraries are hard dependencies as per pyproject.toml
-import lightgbm as lgb
-
-lgb_available = True
+# AI-AGENT-REF: optional lightgbm shim for tests
+try:
+    import importlib
+    lgb = importlib.import_module("lightgbm")
+    lgb_available = True
+except Exception:  # pragma: no cover - optional dependency
+    from ai_trading.thirdparty import lightgbm_compat as lgb
+    lgb_available = False
 
 import xgboost as xgb
 

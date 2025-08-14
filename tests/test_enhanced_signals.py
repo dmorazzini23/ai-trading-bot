@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 try:
-    import risk_engine
+    import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
 except Exception:  # pragma: no cover - optional dependency
     import pytest
     pytest.skip("risk_engine not available", allow_module_level=True)

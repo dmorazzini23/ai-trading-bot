@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from ai_trading import ExecutionEngine
+from ai_trading.trade_execution import ExecutionEngine  # AI-AGENT-REF: normalized import
 
 
 def force_coverage(mod):

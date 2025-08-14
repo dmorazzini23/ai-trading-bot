@@ -4,7 +4,7 @@ import pytest
 
 from ai_trading.strategies import TradeSignal
 
-import strategy_allocator
+import ai_trading.strategy_allocator as strategy_allocator  # AI-AGENT-REF: normalized import
 
 
 def force_coverage(mod):

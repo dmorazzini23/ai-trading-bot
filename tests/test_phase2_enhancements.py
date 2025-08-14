@@ -25,7 +25,7 @@ test_env = {
 with patch.dict(os.environ, test_env):
     import ai_trading.config as config
     from ai_trading.monitoring.order_health_monitor import OrderHealthMonitor, OrderInfo
-    from system_health_checker import SystemHealthChecker, ComponentHealth
+    from ai_trading.monitoring.system_health_checker import SystemHealthChecker, ComponentHealth  # AI-AGENT-REF: normalized import
 
 
 class TestOrderHealthMonitor(unittest.TestCase):
@@ -118,7 +118,7 @@ class TestSystemHealthChecker(unittest.TestCase):
         self.assertIn('meta_learning', self.health_checker.health_thresholds)
         self.assertIn('order_execution', self.health_checker.health_thresholds)
     
-    @patch('system_health_checker.sentiment')
+    @patch('ai_trading.monitoring.system_health_checker.sentiment')
     def test_sentiment_health_check(self, mock_sentiment):
         """Test sentiment analysis health checking."""
         # Mock sentiment module state
@@ -137,8 +137,8 @@ class TestSystemHealthChecker(unittest.TestCase):
         self.assertGreaterEqual(health.success_rate, 0.0)
         self.assertLessEqual(health.success_rate, 1.0)
     
-    @patch('system_health_checker.meta_learning')
-    @patch('system_health_checker.config')
+    @patch('ai_trading.monitoring.system_health_checker.meta_learning')
+    @patch('ai_trading.monitoring.system_health_checker.config')
     def test_meta_learning_health_check(self, mock_config, mock_meta_learning):
         """Test meta-learning health checking."""
         # Mock configuration
@@ -183,7 +183,7 @@ class TestSystemHealthChecker(unittest.TestCase):
         """Test current health report generation."""
         with patch.object(self.health_checker, '_check_all_components') as mock_check:
             # Mock health status
-            from system_health_checker import SystemHealthStatus
+            from ai_trading.monitoring.system_health_checker import SystemHealthStatus  # AI-AGENT-REF: normalized import
             mock_health = SystemHealthStatus(
                 overall_status="healthy",
                 components={

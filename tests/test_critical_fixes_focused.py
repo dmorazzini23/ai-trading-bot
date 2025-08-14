@@ -20,9 +20,9 @@ class TestCriticalFixes(unittest.TestCase):
     def setUp(self):
         """Set up test environment."""
         # Import modules after setting TESTING flag
-        import trade_execution
+        import ai_trading.trade_execution as trade_execution  # AI-AGENT-REF: normalized import
         import ai_trading.analysis.sentiment as sentiment
-        import strategy_allocator
+        import ai_trading.strategy_allocator as strategy_allocator  # AI-AGENT-REF: normalized import
         self.trade_execution = trade_execution
         self.sentiment = sentiment
         self.strategy_allocator = strategy_allocator
@@ -78,7 +78,7 @@ class TestCriticalFixes(unittest.TestCase):
         # We can't easily test the actual fix without mocking orders, but we can verify
         # the _reconcile_partial_fills method exists and has been updated
         
-        from trade_execution import ExecutionEngine
+        from ai_trading.trade_execution import ExecutionEngine  # AI-AGENT-REF: normalized import
         
         # Create a mock context
         ctx = MockContext()
@@ -92,7 +92,7 @@ class TestCriticalFixes(unittest.TestCase):
     def test_short_selling_validation_exists(self):
         """Test that short selling validation method exists."""
         # P2 Fix: Short selling validation
-        from trade_execution import ExecutionEngine
+        from ai_trading.trade_execution import ExecutionEngine  # AI-AGENT-REF: normalized import
         
         ctx = MockContext()
         engine = ExecutionEngine(ctx)
