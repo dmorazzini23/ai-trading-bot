@@ -33,8 +33,8 @@ def _probe_alpaca_trade_api() -> bool:
 
 def _probe_strategy_allocator() -> bool:
     try:
-        import ai_trading.strategy_allocator as sa  # type: ignore
-        assert hasattr(sa, "StrategyAllocator")
+        from ai_trading.strategies.performance_allocator import PerformanceBasedAllocator
+        assert PerformanceBasedAllocator is not None
         print("[health] strategy_allocator: ok")
         return True
     except Exception as e:

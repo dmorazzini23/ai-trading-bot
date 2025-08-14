@@ -45,24 +45,24 @@ def test_exit_confirmation(ensure_real_strategy_allocator):
     sell = TradeSignal(symbol="A", side="sell", confidence=1.0, strategy="s")
     
     # Need to call allocate twice to confirm signals (signal_confirmation_bars = 2)
-    alloc.allocate({"s": [buy]})  # First call to build history
-    out1 = alloc.allocate({"s": [buy]})  # Second call should confirm and set hold_protect=4
+    alloc.select_signals({"s": [buy]})  # First call to build history
+    out1 = alloc.select_signals({"s": [buy]})  # Second call should confirm and set hold_protect=4
     assert any(s.side == "buy" for s in out1)
     
     # Now try to sell - should be blocked by hold protection 4 times
-    alloc.allocate({"s": [sell]})  # First sell call - builds history
-    out2 = alloc.allocate({"s": [sell]})  # Second sell call - confirmed but blocked by hold_protect (remaining=3)
+    alloc.select_signals({"s": [sell]})  # First sell call - builds history
+    out2 = alloc.select_signals({"s": [sell]})  # Second sell call - confirmed but blocked by hold_protect (remaining=3)
     assert not any(s.side == "sell" for s in out2)
     
     # Need to call sell 3 more times to exhaust hold protection
-    out3 = alloc.allocate({"s": [sell]})  # Third sell call - blocked by hold_protect (remaining=2)  
+    out3 = alloc.select_signals({"s": [sell]})  # Third sell call - blocked by hold_protect (remaining=2)  
     assert not any(s.side == "sell" for s in out3)
     
-    out4 = alloc.allocate({"s": [sell]})  # Fourth sell call - blocked by hold_protect (remaining=1)
+    out4 = alloc.select_signals({"s": [sell]})  # Fourth sell call - blocked by hold_protect (remaining=1)
     assert not any(s.side == "sell" for s in out4)
     
-    out5 = alloc.allocate({"s": [sell]})  # Fifth sell call - blocked by hold_protect (remaining=0)
+    out5 = alloc.select_signals({"s": [sell]})  # Fifth sell call - blocked by hold_protect (remaining=0)
     assert not any(s.side == "sell" for s in out5)
     
-    out6 = alloc.allocate({"s": [sell]})  # Sixth sell call - should finally go through
+    out6 = alloc.select_signals({"s": [sell]})  # Sixth sell call - should finally go through
     assert any(s.side == "sell" for s in out6)

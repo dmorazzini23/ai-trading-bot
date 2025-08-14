@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     disable_daily_retrain: bool = Field(False, alias="DISABLE_DAILY_RETRAIN")
     enable_sklearn: bool = Field(False, alias="ENABLE_SKLEARN")
     intraday_lookback_minutes: int = Field(120, alias="INTRADAY_LOOKBACK_MINUTES")
+    enable_numba_optimization: bool = Field(False, alias="ENABLE_NUMBA_OPTIMIZATION")
+    alpaca_data_feed: str | None = Field(default=None, alias="ALPACA_DATA_FEED")
+    scheduler_sleep_seconds: int = Field(60, alias="SCHEDULER_SLEEP_SECONDS")
 
     # AI-AGENT-REF: runtime defaults for deterministic behavior and loops
     seed: int | None = 42
@@ -87,10 +90,6 @@ class Settings(BaseSettings):
             "APCA-API-SECRET-KEY": self.alpaca_secret_key_plain or "",
         }
 
-    # AI-AGENT-REF: allow missing attributes to default to None
-    def __getattr__(self, name: str) -> Any:  # pragma: no cover - simple fallback
-        return None
-
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -104,7 +103,7 @@ def broker_keys(s: Settings | None = None) -> dict[str, str]:
         "ALPACA_API_KEY": s.alpaca_api_key,
         "ALPACA_SECRET_KEY": s.alpaca_secret_key_plain,
     }
-    if getattr(s, "finnhub_api_key", None):
+    if s.finnhub_api_key:
         keys["finnhub"] = s.finnhub_api_key
     return keys
 

@@ -13,10 +13,17 @@ if not hasattr(np, "NaN"):
 # AI-AGENT-REF: guard pandas import for test environments
 import pandas as pd
 
-from ai_trading.imports import optional_import
+import importlib
 
-# AI-AGENT-REF: lazy optional pandas_ta import
-ta = optional_import("pandas_ta")
+# AI-AGENT-REF: lazy optional pandas_ta import without central shim
+def _optional_import(name: str):
+    try:
+        return importlib.import_module(name)
+    except Exception:
+        return None
+
+
+ta = _optional_import("pandas_ta")
 
 from ai_trading.config.management import TradingConfig, SEED
 from ai_trading.telemetry import metrics_logger
