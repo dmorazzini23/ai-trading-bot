@@ -28,12 +28,7 @@ from tenacity import (
 )
 
 # AI-AGENT-REF: Import config
-from ai_trading.config.settings import get_settings
-
-S = get_settings()
-NEWS_API_KEY = S.news_api_key
-SENTIMENT_API_KEY = S.sentiment_api_key or NEWS_API_KEY
-SENTIMENT_API_URL = S.sentiment_api_url
+from ai_trading.settings import get_news_api_key, get_settings
 
 # FinBERT model initialization
 import torch
@@ -146,11 +141,11 @@ def fetch_sentiment(ctx, ticker: str) -> float:
     Returns:
         Sentiment score between -1.0 and 1.0
     """
-    # Use new SENTIMENT_API_KEY or fallback to NEWS_API_KEY for backwards compatibility
-    api_key = SENTIMENT_API_KEY or NEWS_API_KEY
+    settings = get_settings()
+    api_key = settings.sentiment_api_key or get_news_api_key()
     if not api_key:
         logger.debug(
-            "No sentiment API key configured (checked SENTIMENT_API_KEY and NEWS_API_KEY)"
+            "No sentiment API key configured (checked settings.sentiment_api_key and news API key)"
         )
         return 0.0
 
@@ -193,7 +188,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
     try:
         # 1) Fetch NewsAPI articles using configurable URL
         url = (
-            f"{SENTIMENT_API_URL}?"
+            f"{settings.sentiment_api_url}?"
             f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
             f"&apiKey={api_key}"
         )

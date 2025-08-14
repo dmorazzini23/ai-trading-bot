@@ -304,7 +304,10 @@ from ai_trading import (
 )
 from ai_trading.config.settings import get_settings, get_settings as get_config_settings
 from ai_trading.config import management as config
-from ai_trading.settings import get_settings as get_runtime_settings  # AI-AGENT-REF: runtime env settings
+from ai_trading.settings import (
+    get_news_api_key,
+    get_settings as get_runtime_settings,
+)  # AI-AGENT-REF: runtime env settings
 
 # Initialize settings once for global use
 CFG = get_config_settings()
@@ -1001,12 +1004,6 @@ ALPACA_API_KEY = get_settings().alpaca_api_key
 ALPACA_SECRET_KEY = get_settings().alpaca_secret_key_plain  # AI-AGENT-REF: use plain secret string
 ALPACA_PAPER = getattr(config, "ALPACA_PAPER", None)
 validate_alpaca_credentials = getattr(config, "validate_alpaca_credentials", None)
-CONFIG_NEWS_API_KEY = get_settings().news_api_key
-# Support new sentiment API configuration with backwards compatibility
-CONFIG_SENTIMENT_API_KEY = (
-    get_settings().sentiment_api_key or CONFIG_NEWS_API_KEY
-)
-CONFIG_SENTIMENT_API_URL = get_settings().sentiment_api_url
 FINNHUB_API_KEY = get_settings().finnhub_api_key
 BOT_MODE_ENV = getattr(config, "BOT_MODE", BOT_MODE)
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
@@ -2144,11 +2141,7 @@ _log.info(f"Trading mode is set to '{state.mode_obj.mode}'")
 params = state.mode_obj.get_config()
 params.update(load_hyperparams())
 
-# Other constants
-NEWS_API_KEY = CONFIG_NEWS_API_KEY  # Keep for backwards compatibility
-SENTIMENT_API_KEY = CONFIG_SENTIMENT_API_KEY  # New preferred API key
-SENTIMENT_API_URL = CONFIG_SENTIMENT_API_URL  # Configurable API URL
-TRAILING_FACTOR = params.get("TRAILING_FACTOR", 
+TRAILING_FACTOR = params.get("TRAILING_FACTOR",
                            getattr(S, "trailing_factor",
                                    getattr(state.mode_obj.config, "trailing_factor", 1.0)))
 SECONDARY_TRAIL_FACTOR = 1.0
@@ -4791,11 +4784,13 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     Uses a simple in-memory TTL cache to avoid hitting NewsAPI too often.
     If FinBERT isn’t available, return neutral 0.0.
     """
-    # Use new SENTIMENT_API_KEY or fallback to NEWS_API_KEY for backwards compatibility
-    api_key = SENTIMENT_API_KEY or NEWS_API_KEY
+    from ai_trading.settings import get_settings
+
+    settings = get_settings()
+    api_key = settings.sentiment_api_key or get_news_api_key()
     if not api_key:
         _log.debug(
-            "No sentiment API key configured (checked SENTIMENT_API_KEY and NEWS_API_KEY)"
+            "No sentiment API key configured (checked settings.sentiment_api_key and news API key)"
         )
         return 0.0
 
@@ -4838,7 +4833,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     try:
         # 1) Fetch NewsAPI articles using configurable URL
         url = (
-            f"{SENTIMENT_API_URL}?"
+            f"{settings.sentiment_api_url}?"
             f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
             f"&apiKey={api_key}"
         )
