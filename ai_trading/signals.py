@@ -27,8 +27,11 @@ from pathlib import Path
 
 import requests
 
-# Optional ML dependencies
-from hmmlearn.hmm import GaussianHMM
+# Optional ML dependency: hmmlearn
+try:
+    from hmmlearn.hmm import GaussianHMM  # type: ignore
+except Exception:  # absent in many CI envs; tests skip if None
+    GaussianHMM = None  # noqa: N816  (tests import this name)
 
 # Import indicators
 from ai_trading.indicators import atr, mean_reversion_zscore, rsi

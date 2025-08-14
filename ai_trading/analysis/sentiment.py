@@ -36,7 +36,11 @@ SENTIMENT_API_KEY = S.sentiment_api_key or NEWS_API_KEY
 SENTIMENT_API_URL = S.sentiment_api_url
 
 # FinBERT model initialization
-import torch
+try:
+    import torch  # type: ignore
+except Exception:  # optional dependency
+    torch = None  # type: ignore
+
 try:
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
     _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")

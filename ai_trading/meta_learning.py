@@ -18,13 +18,15 @@ import numpy as np
 import pandas as pd
 # CSV:17 - Move metrics_logger import to functions that use it
 
-# ai_trading/meta_learning.py:20 - Convert import guard to hard import (torch is in dependencies)
-import torch
-import torch.nn as _nn
-
-# ensure torch.nn and Parameter live on the torch module
-torch.nn = _nn
-torch.nn.Parameter = _nn.Parameter
+# Optional torch dependency
+try:
+    import torch  # type: ignore
+    import torch.nn as _nn  # type: ignore
+    torch.nn = _nn  # type: ignore[attr-defined]
+    torch.nn.Parameter = _nn.Parameter  # type: ignore[attr-defined]
+except Exception:  # torch not installed
+    torch = None  # type: ignore
+    _nn = None  # type: ignore
 
 # For type checking only
 if TYPE_CHECKING:

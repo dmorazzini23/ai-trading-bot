@@ -1,5 +1,6 @@
 from .settings import Settings, get_settings, broker_keys  # noqa: F401
 from .alpaca import get_alpaca_config, AlpacaConfig  # noqa: F401
+from .management import TradingConfig  # noqa: F401
 
 __all__ = [
     "Settings",
@@ -7,5 +8,6 @@ __all__ = [
     "broker_keys",
     "get_alpaca_config",
     "AlpacaConfig",
+    "TradingConfig",
 ]
 
