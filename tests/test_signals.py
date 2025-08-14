@@ -66,7 +66,7 @@ def test_prepare_indicators_calculates(sample_df, monkeypatch):
 
 def test_composite_signal_confidence(monkeypatch):
     """SignalManager combines weights into final score."""
-    import bot_engine as bot
+    from ai_trading.core import bot_engine as bot
     sm = bot.SignalManager()
     monkeypatch.setattr(sm, 'load_signal_weights', lambda: {})
     monkeypatch.setattr(bot, 'load_global_signal_performance', lambda: [])

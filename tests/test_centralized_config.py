@@ -10,7 +10,7 @@ import os
 import pytest
 os.environ["TESTING"] = "1"
 
-from config import TradingConfig
+from ai_trading.config import TradingConfig
 from ai_trading.core.bot_engine import BotMode
 
 

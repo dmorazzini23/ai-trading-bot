@@ -1,7 +1,7 @@
 
 import pytest
 
-import config
+import ai_trading.config as config
 
 
 def test_get_env_required_missing(monkeypatch):

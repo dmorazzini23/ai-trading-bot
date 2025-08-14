@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with direct import from shim module
-from ai_trading.bot_engine import prepare_indicators
+from ai_trading.core.bot_engine import prepare_indicators
 
 np.random.seed(0)
 

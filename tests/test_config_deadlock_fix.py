@@ -6,7 +6,7 @@ import os
 import pytest
 from unittest.mock import patch
 
-import config
+import ai_trading.config as config
 
 
 def test_no_hang_on_basic_validation():

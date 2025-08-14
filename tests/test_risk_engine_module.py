@@ -9,7 +9,7 @@ for m in ["strategies", "strategies.momentum", "strategies.mean_reversion"]:
     sys.modules.pop(m, None)
 sys.modules.pop("risk_engine", None)
 from risk_engine import RiskEngine
-from strategies import TradeSignal
+from ai_trading.strategies import TradeSignal
 
 
 class DummyAPI:

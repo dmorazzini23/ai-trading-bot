@@ -355,7 +355,7 @@ def test_bot_main_normal(monkeypatch):
             }
         ),
     ):
-        import bot_engine as bot
+        from ai_trading.core import bot_engine as bot
 
         setattr(bot, "main", lambda: True)
 
@@ -383,7 +383,7 @@ def test_bot_main_data_fetch_error(monkeypatch):
             }
         ),
     ):
-        import bot_engine as bot
+        from ai_trading.core import bot_engine as bot
 
         monkeypatch.setattr(
             bot,
@@ -416,7 +416,7 @@ def test_bot_main_signal_nan(monkeypatch):
             }
         ),
     ):
-        import bot_engine as bot
+        from ai_trading.core import bot_engine as bot
 
         monkeypatch.setattr(bot, "main", lambda: None)
         try:

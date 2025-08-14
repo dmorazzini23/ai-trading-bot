@@ -3,7 +3,7 @@ import pandas as pd
 
 
 def test_ichimoku_indicator_returns_dataframe(monkeypatch):
-    import bot_engine as bot
+    from ai_trading.core import bot_engine as bot
 
     if not hasattr(bot.ta, "ichimoku"):
         setattr(bot.ta, "ichimoku", lambda *a, **k: (pd.DataFrame(), {}))
@@ -21,7 +21,7 @@ def test_ichimoku_indicator_returns_dataframe(monkeypatch):
 
 
 def test_compute_ichimoku_returns_df_pair(monkeypatch):
-    import bot_engine as bot
+    from ai_trading.core import bot_engine as bot
     if not hasattr(bot.ta, "ichimoku"):
         setattr(bot.ta, "ichimoku", lambda *a, **k: (pd.DataFrame(), {}))
     ich_df = pd.DataFrame({"ITS_9": [1.0]})

@@ -1,7 +1,7 @@
 import types
 import pandas as pd
 import datetime
-import bot_engine
+from ai_trading.core import bot_engine
 
 class DummyFetcher:
     def get_daily_df(self, ctx, symbol):

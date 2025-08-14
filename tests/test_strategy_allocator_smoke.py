@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from strategies import TradeSignal
+from ai_trading.strategies import TradeSignal
 
 import strategy_allocator
 

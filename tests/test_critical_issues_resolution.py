@@ -17,7 +17,7 @@ os.environ.setdefault('FLASK_PORT', '5000')
 try:
     from trade_execution import ExecutionEngine, handle_partial_fill, safe_submit_order
     from risk_engine import RiskEngine
-    import bot_engine
+    from ai_trading.core import bot_engine
     HAS_FULL_IMPORTS = True
 except ImportError as e:
     # Continue with minimal testing if imports fail

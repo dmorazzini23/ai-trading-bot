@@ -95,12 +95,12 @@ class TestMetaLearningDataFetching(unittest.TestCase):
         
         try:
             # Mock the TRADE_LOG_FILE to use our test file
-            with patch('bot_engine.TRADE_LOG_FILE', tmp_file_path):
+            with patch('ai_trading.core.bot_engine.TRADE_LOG_FILE', tmp_file_path):
                 from ai_trading.core.bot_engine import load_global_signal_performance
-                
+
                 # This should not return None or empty dict due to METALEARN_INVALID_PRICES
                 result = load_global_signal_performance(min_trades=1, threshold=0.1)
-                
+
                 # Should return signal performance data, not None/empty due to invalid prices
                 if result is None:
                     self.fail("load_global_signal_performance returned None - possible METALEARN_INVALID_PRICES issue")
@@ -128,8 +128,8 @@ class TestSentimentCaching(unittest.TestCase):
             _SENTIMENT_CACHE.clear()
             
             # Mock the API key variables in bot_engine module
-            with patch('bot_engine.SENTIMENT_API_KEY', 'test_key'):
-                with patch('bot_engine.NEWS_API_KEY', 'test_key'):
+            with patch('ai_trading.core.bot_engine.SENTIMENT_API_KEY', 'test_key'):
+                with patch('ai_trading.core.bot_engine.NEWS_API_KEY', 'test_key'):
                     # Mock the requests to simulate rate limiting
                     with patch('requests.get') as mock_get:
                         # First call - simulate rate limit (429)

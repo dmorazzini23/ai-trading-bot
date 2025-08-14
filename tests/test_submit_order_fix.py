@@ -26,8 +26,8 @@ os.environ.update({
 def test_submit_order_with_uninitialized_exec_engine():
     """Test that submit_order raises proper error when _exec_engine is None."""
     # Import after setting environment
-    import bot_engine
-    from ai_trading.bot_engine import submit_order, BotContext
+    from ai_trading.core import bot_engine
+    from ai_trading.core.bot_engine import submit_order, BotContext
     
     # Ensure _exec_engine is None
     original_exec_engine = bot_engine._exec_engine
@@ -35,7 +35,7 @@ def test_submit_order_with_uninitialized_exec_engine():
     
     try:
         # Mock market_is_open to return True
-        with patch('bot_engine.market_is_open', return_value=True):
+        with patch('ai_trading.core.bot_engine.market_is_open', return_value=True):
             # Create a mock context
             mock_ctx = Mock(spec=BotContext)
             
@@ -51,11 +51,11 @@ def test_submit_order_with_uninitialized_exec_engine():
 def test_submit_order_with_market_closed():
     """Test that submit_order returns None when market is closed."""
     # Import after setting environment
-    from ai_trading.bot_engine import submit_order, BotContext
+    from ai_trading.core.bot_engine import submit_order, BotContext
     from unittest.mock import Mock
     
     # Mock market_is_open to return False
-    with patch('bot_engine.market_is_open', return_value=False):
+    with patch('ai_trading.core.bot_engine.market_is_open', return_value=False):
         mock_ctx = Mock(spec=BotContext)
         result = submit_order(mock_ctx, "AAPL", 10, "buy")
         assert result is None
@@ -64,8 +64,8 @@ def test_submit_order_with_market_closed():
 def test_submit_order_successful_execution():
     """Test that submit_order works correctly when properly initialized."""
     # Import after setting environment
-    import bot_engine
-    from ai_trading.bot_engine import submit_order, BotContext
+    from ai_trading.core import bot_engine
+    from ai_trading.core.bot_engine import submit_order, BotContext
     from unittest.mock import Mock
     
     # Mock the execution engine
@@ -79,7 +79,7 @@ def test_submit_order_successful_execution():
     
     try:
         # Mock market_is_open to return True
-        with patch('bot_engine.market_is_open', return_value=True):
+        with patch('ai_trading.core.bot_engine.market_is_open', return_value=True):
             mock_ctx = Mock(spec=BotContext)
             
             # Should successfully execute order
@@ -96,8 +96,8 @@ def test_submit_order_successful_execution():
 def test_submit_order_execution_error_propagation():
     """Test that submit_order properly propagates execution errors."""
     # Import after setting environment
-    import bot_engine
-    from ai_trading.bot_engine import submit_order, BotContext
+    from ai_trading.core import bot_engine
+    from ai_trading.core.bot_engine import submit_order, BotContext
     from unittest.mock import Mock
     
     # Mock the execution engine to raise an exception
@@ -111,7 +111,7 @@ def test_submit_order_execution_error_propagation():
     
     try:
         # Mock market_is_open to return True
-        with patch('bot_engine.market_is_open', return_value=True):
+        with patch('ai_trading.core.bot_engine.market_is_open', return_value=True):
             mock_ctx = Mock(spec=BotContext)
             
             # Should propagate the execution error

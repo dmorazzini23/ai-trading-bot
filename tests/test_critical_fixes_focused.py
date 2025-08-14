@@ -21,7 +21,7 @@ class TestCriticalFixes(unittest.TestCase):
         """Set up test environment."""
         # Import modules after setting TESTING flag
         import trade_execution
-        import sentiment
+        import ai_trading.analysis.sentiment as sentiment
         import strategy_allocator
         self.trade_execution = trade_execution
         self.sentiment = sentiment
@@ -64,8 +64,8 @@ class TestCriticalFixes(unittest.TestCase):
     def test_sector_classification_fallback(self):
         """Test that sector classification includes fallback for BABA."""
         # P2 Fix: Sector classification
-        import bot_engine
-        
+        from ai_trading.core import bot_engine
+
         # Test that BABA is now in sector mappings
         sector = bot_engine.get_sector("BABA")
         self.assertNotEqual(sector, "Unknown", "BABA should have a fallback sector classification")

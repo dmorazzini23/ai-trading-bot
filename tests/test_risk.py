@@ -29,7 +29,7 @@ def setup_ctx():
 
 
 def manual_fractional(balance, price, atr, win_prob, peak):
-    import bot_engine as bot
+    from ai_trading.core import bot_engine as bot
     base_frac = 0.6
     comp = 1.0
     base_frac *= comp
@@ -57,7 +57,7 @@ def test_fractional_kelly_drawdown(monkeypatch, tmp_path):
     import types
     sys.modules.setdefault('schedule', types.ModuleType('schedule'))
     sys.modules.setdefault('yfinance', types.ModuleType('yfinance'))
-    import bot_engine as bot
+    from ai_trading.core import bot_engine as bot
     ctx = setup_ctx()
     monkeypatch.setattr(bot, 'PEAK_EQUITY_FILE', tmp_path / 'p.txt')
     monkeypatch.setattr(bot, 'is_high_vol_thr_spy', lambda: False)

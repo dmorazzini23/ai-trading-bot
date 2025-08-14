@@ -17,7 +17,7 @@ def test_kelly_confidence_normalization():
     # Mock BotContext for testing
     # Import the actual function (if available)
     try:
-        from ai_trading.bot_engine import fractional_kelly_size
+        from ai_trading.core.bot_engine import fractional_kelly_size
         
         ctx = MockBotContext()
         balance = 10000.0
@@ -70,7 +70,7 @@ def test_kelly_input_validation():
     """Test that Kelly calculation properly validates all inputs."""
     # Mock BotContext for testing
     try:
-        from ai_trading.bot_engine import fractional_kelly_size
+        from ai_trading.core.bot_engine import fractional_kelly_size
         
         ctx = MockBotContext()
         
