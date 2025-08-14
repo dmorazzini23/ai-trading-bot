@@ -31,6 +31,11 @@ logs/
 *.backup.*
 *.corrupted.*
 
+# Include packaged tickers data
+!ai_trading/data/
+!ai_trading/data/tickers.csv
+!ai_trading/data/universe.py
+
 # Local environment
 .env
 

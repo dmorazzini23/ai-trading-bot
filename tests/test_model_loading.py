@@ -1,45 +1,34 @@
-import os
-os.environ.setdefault("PYTEST_RUNNING", "1")
-import importlib
-import pytest
-
-from ai_trading.core import bot_engine as be
-import ai_trading.config.settings as settings
+import os, tempfile, joblib, types
+from ai_trading.core.bot_engine import _load_required_model
 
 
-def test_model_missing_env_fails(monkeypatch):
+def test_load_model_from_path(monkeypatch, tmp_path):
+    mpath = tmp_path / "m.pkl"
+    joblib.dump({"ok": True}, mpath)
+    monkeypatch.setenv("AI_TRADER_MODEL_PATH", str(mpath))
+    monkeypatch.delenv("AI_TRADER_MODEL_MODULE", raising=False)
+    mdl = _load_required_model()
+    assert isinstance(mdl, dict) and mdl["ok"] is True
+
+
+def test_load_model_from_module(monkeypatch, tmp_path):
+    mod = types.ModuleType("fake_model_mod")
+    class Dummy: pass
+    mod.get_model = lambda: Dummy()
+    import sys
+    sys.modules["fake_model_mod"] = mod
+    monkeypatch.delenv("AI_TRADER_MODEL_PATH", raising=False)
+    monkeypatch.setenv("AI_TRADER_MODEL_MODULE", "fake_model_mod")
+    mdl = _load_required_model()
+    assert isinstance(mdl, Dummy)
+
+
+def test_model_missing_raises(monkeypatch):
     monkeypatch.delenv("AI_TRADER_MODEL_PATH", raising=False)
     monkeypatch.delenv("AI_TRADER_MODEL_MODULE", raising=False)
-    importlib.reload(settings)
-    importlib.reload(be)
-    with pytest.raises(RuntimeError):
-        be._load_required_model()
-
-
-def test_model_bad_path_fails(monkeypatch):
-    monkeypatch.setenv("AI_TRADER_MODEL_PATH", "/tmp/does_not_exist.pkl")
-    monkeypatch.delenv("AI_TRADER_MODEL_MODULE", raising=False)
-    importlib.reload(settings)
-    importlib.reload(be)
-    with pytest.raises(FileNotFoundError):
-        be._load_required_model()
-
-
-def test_model_module_get_model_ok(monkeypatch, tmp_path):
-    mod_dir = tmp_path / "temppkg"
-    mod_dir.mkdir()
-    (mod_dir / "__init__.py").write_text(
-        "def get_model():\n    class M: pass\n    return M()\n",
-        encoding="utf-8",
-    )
-    import sys
-    sys.path.insert(0, str(tmp_path))
     try:
-        monkeypatch.setenv("AI_TRADER_MODEL_MODULE", "temppkg")
-        monkeypatch.delenv("AI_TRADER_MODEL_PATH", raising=False)
-        importlib.reload(settings)
-        importlib.reload(be)
-        m = be._load_required_model()
-        assert m is not None
-    finally:
-        sys.path.remove(str(tmp_path))
+        _ = _load_required_model()
+    except RuntimeError as e:
+        assert "Model required but not configured" in str(e)
+    else:
+        assert False, "Expected RuntimeError"

@@ -20,6 +20,8 @@ import traceback
 import types
 import uuid
 import warnings
+import hashlib  # AI-AGENT-REF: model hash helper
+import joblib  # AI-AGENT-REF: model loader
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -83,15 +85,14 @@ from ai_trading.logging import (
     warning_kv,
 )  # AI-AGENT-REF: structured logging helper
 from ai_trading.indicators import compute_atr as _compute_atr  # AI-AGENT-REF: fail fast at import-time
-from ai_trading.utils.universe import load_universe
+from ai_trading.utils.universe import load_universe as load_universe_from_path
+from ai_trading.data.universe import load_universe  # AI-AGENT-REF: packaged tickers loader
 from ai_trading.utils.safe_cast import as_int, as_float
 from ai_trading.config.settings import (
     MODEL_PATH,
     MODEL_MODULE,
     model_config_source,
     TICKERS_FILE,
-    TICKERS_CSV,
-    UNIVERSE_LIMIT,
 )
 
 # RL: import the trader wrapper from the correct package
@@ -104,106 +105,59 @@ except Exception as e:  # noqa: BLE001 - best-effort import; we log below.
 logger = logging.getLogger("ai_trading.core.bot_engine")
 
 
-def _load_required_model() -> Any:
-    src = model_config_source()
-    if src == "path":
-        import joblib
+def _sha256_file(path: str) -> str:
+    """Compute sha256 digest for model artifacts."""  # AI-AGENT-REF: hash for model logging
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()[:12]
 
-        p = MODEL_PATH
-        assert p, "MODEL_PATH lost after validation"
-        path = Path(p)
-        if not path.exists():
-            logger.error("MODEL_LOAD_ERROR", extra={"reason": "file_not_found", "path": p})
-            raise FileNotFoundError(f"Model file not found: {p}")
+
+def _load_required_model() -> Any:
+    """Load ML model from path or module; fail fast if missing."""  # AI-AGENT-REF: strict model loader
+    path = os.getenv("AI_TRADER_MODEL_PATH")
+    modname = os.getenv("AI_TRADER_MODEL_MODULE")
+
+    if path and os.path.isfile(path):
+        mdl = joblib.load(path)
         try:
-            model = joblib.load(p)
-            logger.info(
-                "MODEL_LOADED",
-                extra={"source": p, "model_type": type(model).__name__},
-            )
-            return model
-        except Exception as e:  # noqa: BLE001
-            logger.error(
-                "MODEL_LOAD_ERROR",
-                extra={"reason": "file_load_failed", "path": p, "err": str(e)},
-            )
-            raise
-    elif src == "module":
-        mod_name = MODEL_MODULE
-        assert mod_name, "MODEL_MODULE lost after validation"
+            digest = _sha256_file(path)
+        except Exception:  # noqa: BLE001 - hashing best effort
+            digest = "unknown"
+        _log.info("MODEL_LOADED", extra={"source": "file", "path": path, "sha": digest})
+        return mdl
+
+    if modname:
         try:
-            mod = __import__(mod_name, fromlist=["get_model", "Model"])
+            mod = importlib.import_module(modname)
         except Exception as e:  # noqa: BLE001
-            logger.error(
-                "MODEL_LOAD_ERROR",
-                extra={
-                    "reason": "module_import_failed",
-                    "module": mod_name,
-                    "err": str(e),
-                },
+            raise RuntimeError(
+                f"Failed to import AI_TRADER_MODEL_MODULE='{modname}': {e}"
+            ) from e
+        factory = getattr(mod, "get_model", None) or getattr(mod, "Model", None)
+        if not factory:
+            raise RuntimeError(
+                f"Module '{modname}' missing get_model()/Model() factory."
             )
-            raise
-        if hasattr(mod, "get_model"):
-            try:
-                model = mod.get_model()
-                logger.info(
-                    "MODEL_LOADED",
-                    extra={"source": mod_name, "model_type": type(model).__name__},
-                )
-                return model
-            except Exception as e:  # noqa: BLE001
-                logger.error(
-                    "MODEL_LOAD_ERROR",
-                    extra={
-                        "reason": "get_model_failed",
-                        "module": mod_name,
-                        "err": str(e),
-                    },
-                )
-                raise
-        if hasattr(mod, "Model"):
-            try:
-                model = mod.Model()
-                logger.info(
-                    "MODEL_LOADED",
-                    extra={"source": mod_name, "model_type": type(model).__name__},
-                )
-                return model
-            except Exception as e:  # noqa: BLE001
-                logger.error(
-                    "MODEL_LOAD_ERROR",
-                    extra={
-                        "reason": "Model_ctor_failed",
-                        "module": mod_name,
-                        "err": str(e),
-                    },
-                )
-                raise
-        logger.error(
-            "MODEL_LOAD_ERROR",
-            extra={
-                "reason": "no_factory",
-                "module": mod_name,
-                "hint": "provide get_model() or Model()",
-            },
-        )
-        raise ImportError(f"No get_model()/Model() in module {mod_name}")
-    else:
-        logger.error(
-            "MODEL_CONFIG_MISSING",
-            extra={
-                "hint_paths": [
-                    "AI_TRADER_MODEL_PATH",
-                    "TradingConfig.ml_model_path",
-                ],
-                "hint_modules": [
-                    "AI_TRADER_MODEL_MODULE",
-                    "TradingConfig.ml_model_module",
-                ],
-                "action": "Set a valid model path (.joblib/.pkl) or module with get_model()/Model().",
-            },
-        )
-        raise RuntimeError("Model required but not configured")
+        mdl = factory() if callable(factory) else factory
+        _log.info("MODEL_LOADED", extra={"source": "module", "module": modname})
+        return mdl
+
+    msg = (
+        "Model required but not configured. "
+        "Set one of: "
+        "AI_TRADER_MODEL_PATH=<abs path to .joblib/.pkl> "
+        "or AI_TRADER_MODEL_MODULE=<import.path with get_model()/Model()>."
+    )
+    _log.error(
+        "MODEL_CONFIG_MISSING",
+        extra={
+            "hint_paths": ["AI_TRADER_MODEL_PATH", "TradingConfig.ml_model_path"],
+            "hint_modules": ["AI_TRADER_MODEL_MODULE", "TradingConfig.ml_model_module"],
+        },
+    )
+    raise RuntimeError(msg)
 
 # AI-AGENT-REF: emit-once helper and readiness gate for startup/runtime coordination
 _EMITTED_KEYS: set[str] = set()
@@ -9034,6 +8988,8 @@ def screen_candidates(runtime, *, fallback_symbols=None) -> list[str]:
     # AI-AGENT-REF: explicit runtime for screening
     try:
         candidates = load_candidate_universe(runtime, fallback_symbols=fallback_symbols)
+        if not candidates:
+            return []
         return screen_universe(candidates, runtime)
     except (KeyError, ValueError, TypeError) as e:
         _log.error(
@@ -9055,21 +9011,22 @@ def get_stock_bars_safe(api, symbol, timeframe):
 
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
     """Load tickers from file or CSV list; no fallback."""
-    return load_universe(path)
+    return load_universe_from_path(path)
 
 
 def load_candidate_universe(runtime, *, fallback_symbols=None) -> list[str]:
-    """Load tickers for screening."""
+    """Load tickers for screening."""  # AI-AGENT-REF: use packaged universe loader
     del fallback_symbols
-    source = (TICKERS_CSV.strip() if TICKERS_CSV and TICKERS_CSV.strip() else TICKERS_FILE)
-    limit = UNIVERSE_LIMIT if UNIVERSE_LIMIT > 0 else None
-    try:
-        symbols = load_universe(source, limit=limit)
-    except RuntimeError as e:
-        _log.critical("UNIVERSE_LOAD_FAILED", extra={"error": str(e), "source": source})
-        raise
-    _log.info("[SCREEN_UNIVERSE] Starting screening of %d candidates", len(symbols))
-    return symbols
+    candidates = load_universe()
+    if not candidates:
+        _log.error("UNIVERSE_EMPTY_ABORT", extra={"reason": "no_tickers_csv"})
+        return []
+    _log.info(
+        "[SCREEN_UNIVERSE] Starting screening of %d candidates: %s",
+        len(candidates),
+        candidates[:10],
+    )
+    return candidates
 
 
 def daily_summary() -> None:
