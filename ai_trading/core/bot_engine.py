@@ -27,6 +27,9 @@ from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 
 _log = logging.getLogger(__name__)
 
+# AI-AGENT-REF: canonical tickers path
+TICKERS_FILE = Path(os.getenv("TICKERS_FILE", "data/tickers.csv"))
+
 # --- path helpers (no imports of heavy deps) ---
 BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 
@@ -1794,8 +1797,7 @@ def get_git_hash() -> str:
         return "unknown"
 
 
-# Tickers file resides at repo root by convention
-TICKERS_FILE = abspath_repo_root("tickers.csv")
+# TICKERS_FILE defined near top via environment
 DEFAULT_TICKERS = ["AAPL", "GOOG", "AMZN"]  # AI-AGENT-REF: fallback tickers
 # AI-AGENT-REF: use centralized trade log path
 TRADE_LOG_FILE = default_trade_log_path()
