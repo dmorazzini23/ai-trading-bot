@@ -144,7 +144,7 @@ class PositionReconciler:
             broker_positions = {}
 
             # In real implementation, this would be:
-            # positions = self.api_client.get_all_positions()
+            # positions = self.api_client.list_open_positions()
             # for position in positions:
             #     broker_positions[position.symbol] = float(position.qty)
 

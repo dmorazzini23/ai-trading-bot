@@ -120,8 +120,25 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
         return {"status": "dry_run"}
     if getattr(order_data, "client_order_id", None) is None:
         setattr(order_data, "client_order_id", str(uuid.uuid4()))
+    kwargs = {}
+    for key in [
+        "symbol",
+        "qty",
+        "side",
+        "type",
+        "time_in_force",
+        "limit_price",
+        "stop_price",
+        "client_order_id",
+    ]:
+        val = getattr(order_data, key, None)
+        if val is None:
+            continue
+        if key in {"side", "time_in_force"}:
+            val = getattr(val, "value", str(val)).lower()
+        kwargs[key] = val
     while True:
-        resp = api.submit_order(order_data)
+        resp = api.submit_order(**kwargs)
         if getattr(resp, "status_code", 200) == 429:
             time.sleep(1)
             continue

@@ -872,12 +872,10 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import (
     OrderSide,
     OrderStatus,
-    QueryOrderStatus,
     TimeInForce,
 )
 from alpaca.trading.models import Order
 from alpaca.trading.requests import (
-    GetOrdersRequest,
     MarketOrderRequest,
 )
 from alpaca_trade_api.rest import (
@@ -894,6 +892,7 @@ from bs4 import BeautifulSoup
 from flask import Flask
 
 from ai_trading.alpaca_api import alpaca_get, start_trade_updates_stream
+from ai_trading.broker.alpaca import AlpacaBroker
 
 from ai_trading.rebalancer import (
     maybe_rebalance as original_rebalance,  # type: ignore
@@ -1318,7 +1317,7 @@ def load_portfolio_snapshot() -> dict[str, int]:
 
 def compute_current_positions(ctx: BotContext) -> dict[str, int]:
     try:
-        positions = ctx.api.get_all_positions()
+        positions = ctx.api.list_open_positions()
         _log.debug("Raw Alpaca positions: %s", positions)
         return {p.symbol: int(p.qty) for p in positions}
     except (AttributeError, ValueError, ConnectionError, TimeoutError) as e:
@@ -1602,14 +1601,13 @@ def cancel_all_open_orders(runtime) -> None:
         return
 
     try:
-        req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
-        open_orders = runtime.api.get_orders(req)
+        open_orders = runtime.api.list_open_orders()
         if not open_orders:
             return
         for od in open_orders:
             if getattr(od, "status", "").lower() == "open":
                 try:
-                    runtime.api.cancel_order_by_id(od.id)
+                    runtime.api.cancel_order(od.id)
                 except APIError as exc:
                     # AI-AGENT-REF: narrow Alpaca API exceptions
                     _log.exception(
@@ -1631,7 +1629,7 @@ def reconcile_positions(ctx: BotContext) -> None:
     """On startup, fetch all live positions and clear any in-memory stop/take targets for assets no longer held."""
     try:
         live_positions = {
-            pos.symbol: int(pos.qty) for pos in ctx.api.get_all_positions()
+            pos.symbol: int(pos.qty) for pos in ctx.api.list_open_positions()
         }
         with targets_lock:
             symbols_with_targets = list(ctx.stop_targets.keys()) + list(
@@ -2481,7 +2479,7 @@ def _log_health_diagnostics(runtime, reason: str) -> None:
     """Log detailed diagnostics used for halt decisions."""
     try:
         cash = float(runtime.api.get_account().cash)
-        positions = len(runtime.api.get_all_positions())
+        positions = len(runtime.api.list_open_positions())
     except (AttributeError, APIError) as e:
         cash = -1.0
         positions = -1
@@ -3577,7 +3575,7 @@ def audit_positions(runtime) -> None:
 
     # 2) Fetch remote (broker) positions
     try:
-        remote = {p.symbol: int(p.qty) for p in runtime.api.get_all_positions()}
+        remote = {p.symbol: int(p.qty) for p in runtime.api.list_open_positions()}
     except APIError as e:
         logger = logging.getLogger(__name__)
         _log.exception(
@@ -3667,7 +3665,7 @@ def validate_open_orders(ctx: BotContext) -> None:
         )
         return
     try:
-        open_orders = ctx.api.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
+        open_orders = ctx.api.list_open_orders()
     except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         logger = logging.getLogger(__name__)
         _log.exception("bot_engine: failed to fetch open orders from broker", exc_info=e)
@@ -3680,7 +3678,7 @@ def validate_open_orders(ctx: BotContext) -> None:
 
         if age > 5 and getattr(od, "status", "").lower() in {"new", "accepted"}:
             try:
-                ctx.api.cancel_order_by_id(od.id)
+                ctx.api.cancel_order(od.id)
                 qty = int(getattr(od, "qty", 0))
                 side = getattr(od, "side", "")
                 if qty > 0 and side in {"buy", "sell"}:
@@ -4033,7 +4031,7 @@ class SignalManager:
 @dataclass
 class BotContext:
     # Trading client using the new Alpaca SDK
-    api: TradingClient
+    api: AlpacaBroker
     # Separate market data client
     data_client: StockHistoricalDataClient
     data_fetcher: DataFetcher
@@ -4297,7 +4295,8 @@ def _initialize_alpaca_clients():
         raise
     # Initialize proper alpaca-py clients (do NOT use legacy REST for data)
     is_paper = base_url.find("paper") != -1  # Determine if paper trading based on URL
-    trading_client = TradingClient(key, secret, paper=is_paper)
+    raw_client = TradingClient(key, secret, paper=is_paper)
+    trading_client = AlpacaBroker(raw_client)
     data_client = StockHistoricalDataClient(key, secret)
     stream = None  # initialize stream lazily elsewhere if/when required
 
@@ -4563,7 +4562,7 @@ def _emit_periodic_metrics():
         account = getattr(runtime, 'api', None)
         if account:
             account_obj = account.get_account()
-            positions = account.get_all_positions()
+            positions = account.list_open_positions()
             _metrics.emit_account_health(account_obj, positions)
     except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.debug("Metrics emission failed: %s", e)
@@ -5361,7 +5360,7 @@ def check_halt_flag(runtime) -> bool:
 def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
     """Check if there are too many positions, with allowance for rebalancing."""
     try:
-        current_positions = ctx.api.get_all_positions()
+        current_positions = ctx.api.list_open_positions()
         position_count = len(current_positions)
 
         # If we're not at the limit, allow new positions
@@ -5608,7 +5607,7 @@ def get_sector(symbol: str) -> str:
 def sector_exposure(ctx: BotContext) -> dict[str, float]:
     """Return current portfolio exposure by sector as fraction of equity."""
     try:
-        positions = ctx.api.get_all_positions()
+        positions = ctx.api.list_open_positions()
     except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         return {}
     try:
@@ -6181,48 +6180,75 @@ def submit_order(ctx: BotContext, symbol: str, qty: int, side: str) -> Order | N
         raise
 
 
-def safe_submit_order(api: TradingClient, req) -> Order | None:
+def safe_submit_order(api: AlpacaBroker, req) -> Order | None:
     config.reload_env()
     if not market_is_open():
         _log.warning(
             "MARKET_CLOSED_ORDER_SKIP", extra={"symbol": getattr(req, "symbol", "")}
         )
         return None
+
+    def _req_to_args(r):
+        side = getattr(r, "side", "")
+        side = getattr(side, "value", str(side)).lower()
+        tif = getattr(r, "time_in_force", "day")
+        tif = getattr(tif, "value", str(tif)).lower()
+        order_type_map = {
+            "MarketOrderRequest": "market",
+            "LimitOrderRequest": "limit",
+            "StopOrderRequest": "stop",
+            "StopLimitOrderRequest": "stop_limit",
+        }
+        otype = order_type_map.get(r.__class__.__name__, "market")
+        args = {
+            "symbol": getattr(r, "symbol", ""),
+            "qty": getattr(r, "qty", 0),
+            "side": side,
+            "type": otype,
+            "time_in_force": tif,
+            "client_order_id": getattr(r, "client_order_id", None),
+        }
+        if hasattr(r, "limit_price"):
+            args["limit_price"] = getattr(r, "limit_price")
+        if hasattr(r, "stop_price"):
+            args["stop_price"] = getattr(r, "stop_price")
+        return args
+
+    order_args = _req_to_args(req)
+
     for attempt in range(2):
         try:
             try:
                 acct = api.get_account()
             except (APIError, TimeoutError, ConnectionError):
                 acct = None
-            if acct and getattr(req, "side", "").lower() == "buy":
-                price = getattr(req, "limit_price", None)
-                if not price:
-                    price = getattr(req, "notional", 0)
-                need = float(price or 0) * float(getattr(req, "qty", 0))
+            if acct and order_args.get("side") == "buy":
+                price = order_args.get("limit_price") or order_args.get("notional", 0)
+                need = float(price or 0) * float(order_args.get("qty", 0))
                 if need > float(getattr(acct, "buying_power", 0)):
                     _log.warning(
                         "insufficient buying power for %s: requested %s, available %s",
-                        req.symbol,
-                        req.qty,
-                        acct.buying_power,
+                        order_args.get("symbol"),
+                        order_args.get("qty"),
+                        getattr(acct, "buying_power", 0),
                     )
                     return None
-            if getattr(req, "side", "").lower() == "sell":
+            if order_args.get("side") == "sell":
                 try:
-                    positions = api.get_all_positions()
+                    positions = api.list_open_positions()
                 except (APIError, TimeoutError, ConnectionError):
                     positions = []
                 avail = next(
-                    (float(p.qty) for p in positions if p.symbol == req.symbol), 0.0
+                    (float(p.qty) for p in positions if p.symbol == order_args.get("symbol")), 0.0
                 )
-                if float(getattr(req, "qty", 0)) > avail:
+                if float(order_args.get("qty", 0)) > avail:
                     _log.warning(
-                        f"insufficient qty available for {req.symbol}: requested {req.qty}, available {avail}"
+                        f"insufficient qty available for {order_args.get('symbol')}: requested {order_args.get('qty')}, available {avail}"
                     )
                     return None
 
             try:
-                order = api.submit_order(order_data=req)
+                order = api.submit_order(**order_args)
             except APIError as e:
                 if getattr(e, "code", None) == 40310000:
                     available = int(
@@ -6230,15 +6256,12 @@ def safe_submit_order(api: TradingClient, req) -> Order | None:
                     )
                     if available > 0:
                         _log.info(
-                            f"Adjusting order for {req.symbol} to available qty={available}"
+                            f"Adjusting order for {order_args.get('symbol')} to available qty={available}"
                         )
-                        if isinstance(req, dict):
-                            req["qty"] = available
-                        else:
-                            req.qty = available
-                        order = api.submit_order(order_data=req)
+                        order_args["qty"] = available
+                        order = api.submit_order(**order_args)
                     else:
-                        _log.warning(f"Skipping {req.symbol}, no available qty")
+                        _log.warning(f"Skipping {order_args.get('symbol')}, no available qty")
                         continue
                 else:
                     raise
@@ -6247,40 +6270,40 @@ def safe_submit_order(api: TradingClient, req) -> Order | None:
             while getattr(order, "status", None) == OrderStatus.PENDING_NEW:
                 if time.monotonic() - start_ts > 1:
                     _log.warning(
-                        f"Order stuck in PENDING_NEW: {req.symbol}, retrying or monitoring required."
+                        f"Order stuck in PENDING_NEW: {order_args.get('symbol')}, retrying or monitoring required."
                     )
                     break
                 time.sleep(0.1)  # AI-AGENT-REF: avoid busy polling
                 order = api.get_order_by_id(order.id)
             _log.info(
-                f"Order status for {req.symbol}: {getattr(order, 'status', '')}"
+                f"Order status for {order_args.get('symbol')}: {getattr(order, 'status', '')}"
             )
             status = getattr(order, "status", "")
             filled_qty = getattr(order, "filled_qty", "0")
             if status == "filled":
                 _log.info(
                     "ORDER_ACK",
-                    extra={"symbol": req.symbol, "order_id": getattr(order, "id", "")},
+                    extra={"symbol": order_args.get("symbol"), "order_id": getattr(order, "id", "")},
                 )
             elif status == "partially_filled":
                 _log.warning(
-                    f"Order partially filled for {req.symbol}: {filled_qty}/{getattr(req, 'qty', 0)}"
+                    f"Order partially filled for {order_args.get('symbol')}: {filled_qty}/{order_args.get('qty', 0)}"
                 )
             elif status in ("rejected", "canceled"):
                 _log.error(
-                    f"Order for {req.symbol} was {status}: {getattr(order, 'reject_reason', '')}"
+                    f"Order for {order_args.get('symbol')} was {status}: {getattr(order, 'reject_reason', '')}"
                 )
-                raise OrderExecutionError(f"Buy failed for {req.symbol}: {status}")
+                raise OrderExecutionError(f"Buy failed for {order_args.get('symbol')}: {status}")
             elif status == OrderStatus.NEW:
-                _log.info(f"Order for {req.symbol} is NEW; awaiting fill")
+                _log.info(f"Order for {order_args.get('symbol')} is NEW; awaiting fill")
             else:
                 _log.error(
-                    f"Order for {req.symbol} status={status}: {getattr(order, 'reject_reason', '')}"
+                    f"Order for {order_args.get('symbol')} status={status}: {getattr(order, 'reject_reason', '')}"
                 )
             return order
         except APIError as e:
             if "insufficient qty" in str(e).lower():
-                _log.warning(f"insufficient qty available for {req.symbol}: {e}")
+                _log.warning(f"insufficient qty available for {order_args.get('symbol')}: {e}")
                 return None
             time.sleep(1)
             if attempt == 1:
@@ -6290,7 +6313,7 @@ def safe_submit_order(api: TradingClient, req) -> Order | None:
                         "cause": e.__class__.__name__,
                         "detail": str(e),
                         "op": "submit",
-                        "symbol": getattr(req, "symbol", ""),
+                        "symbol": order_args.get("symbol", ""),
                     },
                 )
                 raise
@@ -6424,7 +6447,7 @@ def send_exit_order(
     try:
         o2 = ctx.api.get_order_by_id(limit_order.id)
         if getattr(o2, "status", "") in {"new", "accepted", "partially_filled"}:
-            ctx.api.cancel_order_by_id(limit_order.id)
+            ctx.api.cancel_order(limit_order.id)
             safe_submit_order(
                 ctx.api,
                 MarketOrderRequest(
@@ -6931,7 +6954,7 @@ def execute_exit(ctx: BotContext, state: BotState, symbol: str, qty: int) -> Non
 
 
 def exit_all_positions(ctx: BotContext) -> None:
-    raw_positions = ctx.api.get_all_positions()
+    raw_positions = ctx.api.list_open_positions()
     for pos in raw_positions:
         qty = abs(int(pos.qty))
         if qty:
@@ -7074,7 +7097,7 @@ def _safe_trade(
         if side is not None:
             try:
                 live_positions = {
-                    p.symbol: int(p.qty) for p in ctx.api.get_all_positions()
+                    p.symbol: int(p.qty) for p in ctx.api.list_open_positions()
                 }
                 if side == OrderSide.BUY and symbol in live_positions:
                     _log.info(f"REALTIME_SKIP | {symbol} already held. Skipping BUY.")
@@ -7302,7 +7325,7 @@ def _enter_long(
 
         # Get current total exposure to avoid exceeding cap
         try:
-            positions = ctx.api.get_all_positions()
+            positions = ctx.api.list_open_positions()
             current_exposure = sum(
                 abs(float(p.market_value)) for p in positions
             ) / float(ctx.api.get_account().equity)
@@ -7703,7 +7726,7 @@ def on_trade_exit_rebalance(ctx: BotContext) -> None:
     from ai_trading.utils import portfolio_lock
 
     try:
-        positions = ctx.api.get_all_positions()
+        positions = ctx.api.list_open_positions()
         symbols = [p.symbol for p in positions]
     except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
         symbols = []
@@ -9637,7 +9660,7 @@ def run_multi_strategy(runtime) -> None:
     # AI-AGENT-REF: Add position holding logic to reduce churn
     try:
         # Get current positions
-        current_positions = ctx.api.get_all_positions()
+        current_positions = ctx.api.list_open_positions()
 
         # Generate hold signals for existing positions
         # ai_trading/core/bot_engine.py:8588 - Convert import guard to hard import (internal module)
@@ -10262,7 +10285,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
         try:
             # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
             try:
-                open_orders = runtime.api.list_orders(status="open")
+                open_orders = runtime.api.list_open_orders()
             except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten order check errors
                 _log.debug(
                     "ORDER_CHECK_FAILED",
@@ -10338,7 +10361,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                         )
                         # Manage existing positions but skip new trades
                         try:
-                            portfolio = runtime.api.get_all_positions()
+                            portfolio = runtime.api.list_open_positions()
                             for pos in portfolio:
                                 manage_position_risk(runtime, pos)
                         except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten halt manage errors
@@ -10371,7 +10394,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     "TRADING_HALTED_VIA_FLAG: Managing existing positions only."
                 )
                 try:
-                    portfolio = runtime.api.get_all_positions()
+                    portfolio = runtime.api.list_open_positions()
                     for pos in portfolio:
                         manage_position_risk(runtime, pos)
                 except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten halt manage errors
@@ -10386,7 +10409,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     acct = runtime.api.get_account()
                     cash = float(acct.cash)
                     equity = float(acct.equity)
-                    positions = runtime.api.get_all_positions()
+                    positions = runtime.api.list_open_positions()
                     _log.debug("Raw Alpaca positions: %s", positions)
                     exposure = (
                         sum(abs(float(p.market_value)) for p in positions)
@@ -10498,7 +10521,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             run_multi_strategy(runtime)
             try:
                 runtime.risk_engine.refresh_positions(runtime.api)
-                pos_list = runtime.api.get_all_positions()
+                pos_list = runtime.api.list_open_positions()
                 state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
                 state.long_positions = {
                     s for s, q in state.position_cache.items() if q > 0
@@ -10520,7 +10543,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 acct = runtime.api.get_account()
                 cash = float(acct.cash)
                 equity = float(acct.equity)
-                positions = runtime.api.get_all_positions()
+                positions = runtime.api.list_open_positions()
                 _log.debug("Raw Alpaca positions: %s", positions)
                 # ai_trading.csv:9422 - Replace import guard with hard import (required dependencies)
                 from ai_trading import portfolio
@@ -10705,7 +10728,7 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
             total_capital = cash
             weight_per = 1.0 / len(valid_symbols)
 
-            positions = {p.symbol: int(p.qty) for p in ctx.api.get_all_positions()}
+            positions = {p.symbol: int(p.qty) for p in ctx.api.list_open_positions()}
 
             for sym in valid_symbols:
                 price = valid_prices[sym]
@@ -10746,7 +10769,7 @@ def initial_rebalance(ctx: BotContext, symbols: list[str]) -> None:
 
     ctx.initial_rebalance_done = True
     try:
-        pos_list = ctx.api.get_all_positions()
+        pos_list = ctx.api.list_open_positions()
         state.position_cache = {p.symbol: int(p.qty) for p in pos_list}
         state.long_positions = {s for s, q in state.position_cache.items() if q > 0}
         state.short_positions = {s for s, q in state.position_cache.items() if q < 0}

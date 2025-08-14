@@ -70,7 +70,7 @@ def log_portfolio_summary(ctx) -> None:
 
         try:
             acct = ctx.api.get_account()
-            positions = ctx.api.get_all_positions()
+            positions = ctx.api.list_open_positions()
         finally:
             signal.alarm(0)  # Cancel the alarm
 

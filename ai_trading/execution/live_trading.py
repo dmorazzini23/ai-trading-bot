@@ -19,14 +19,9 @@ _log = logging.getLogger(__name__)  # AI-AGENT-REF: module logger
 from ai_trading.config import get_alpaca_config, AlpacaConfig
 from ai_trading.execution.slippage import estimate as estimate_slippage  # AI-AGENT-REF: prod slippage estimator
 
-# Alpaca SDK imports - now required dependencies
-from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import OrderSide, TimeInForce
-from alpaca.trading.requests import (
-    LimitOrderRequest,
-    MarketOrderRequest,
-)
+# Alpaca SDK imports
 from alpaca_trade_api.rest import APIError
+from ai_trading.broker.alpaca import AlpacaBroker
 
 
 def _req_str(name: str, v: Optional[str]) -> str:  # AI-AGENT-REF: required string validator
@@ -109,10 +104,12 @@ class AlpacaExecutionEngine:
                 from ai_trading.execution.mocks import (
                     MockTradingClient,
                 )  # AI-AGENT-REF: internal test mock
-                self.trading_client = MockTradingClient()
+                raw_client = MockTradingClient()
                 logger.info("Mock Alpaca client initialized for testing")
             else:
-                self.trading_client = TradingClient(
+                from alpaca.trading.client import TradingClient  # type: ignore
+
+                raw_client = TradingClient(
                     api_key=self.config.key_id,
                     secret_key=self.config.secret_key,
                     paper=self.config.use_paper,
@@ -121,6 +118,7 @@ class AlpacaExecutionEngine:
                 logger.info(
                     f"Real Alpaca client initialized (paper={self.config.use_paper})"
                 )
+            self.trading_client = AlpacaBroker(raw_client)
 
             # Validate connection
             if self._validate_connection():
@@ -557,32 +555,26 @@ class AlpacaExecutionEngine:
             return mock_resp
         else:
             # Real Alpaca API call
-            if order_data["type"] == "market":
-                request = MarketOrderRequest(
-                    symbol=order_data["symbol"],
-                    qty=order_data["quantity"],
-                    side=(
-                        OrderSide.BUY
-                        if order_data["side"] == "buy"
-                        else OrderSide.SELL
-                    ),
-                    time_in_force=TimeInForce.DAY,
-                )
-            else:  # limit order
-                request = LimitOrderRequest(
-                    symbol=order_data["symbol"],
-                    qty=order_data["quantity"],
-                    side=(
-                        OrderSide.BUY
-                        if order_data["side"] == "buy"
-                        else OrderSide.SELL
-                    ),
-                    time_in_force=TimeInForce.DAY,
-                    limit_price=order_data["limit_price"],
-                )
-
             try:  # AI-AGENT-REF: structured broker call
-                resp = self.trading_client.submit_order(request)
+                if order_data["type"] == "market":
+                    resp = self.trading_client.submit_order(
+                        symbol=order_data["symbol"],
+                        qty=order_data["quantity"],
+                        side=order_data["side"],
+                        type="market",
+                        time_in_force="day",
+                        client_order_id=order_data.get("client_order_id"),
+                    )
+                else:
+                    resp = self.trading_client.submit_order(
+                        symbol=order_data["symbol"],
+                        qty=order_data["quantity"],
+                        side=order_data["side"],
+                        type="limit",
+                        time_in_force="day",
+                        limit_price=order_data["limit_price"],
+                        client_order_id=order_data.get("client_order_id"),
+                    )
             except (APIError, TimeoutError, ConnectionError) as e:
                 _log.error(
                     "ORDER_API_FAILED",
@@ -627,7 +619,7 @@ class AlpacaExecutionEngine:
             return True
         else:
             try:  # AI-AGENT-REF: structured broker call
-                resp = self.trading_client.cancel_order_by_id(order_id)
+                resp = self.trading_client.cancel_order(order_id)
             except (APIError, TimeoutError, ConnectionError) as e:
                 _log.error(
                     "ORDER_API_FAILED",
@@ -683,7 +675,7 @@ class AlpacaExecutionEngine:
         if os.environ.get("PYTEST_RUNNING"):
             return []
         else:
-            positions = self.trading_client.get_all_positions()
+            positions = self.trading_client.list_open_positions()
             return [
                 {
                     "symbol": pos.symbol,

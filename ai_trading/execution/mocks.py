@@ -12,3 +12,6 @@ class MockTradingClient:
 
     def get_all_positions(self):
         return []
+
+    def list_positions(self):
+        return []

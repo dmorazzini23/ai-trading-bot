@@ -214,9 +214,9 @@ class PositionManager:
             if (
                 self.ctx
                 and hasattr(self.ctx, "api")
-                and hasattr(self.ctx.api, "get_all_positions")
+                and hasattr(self.ctx.api, "list_open_positions")
             ):
-                return self.ctx.api.get_all_positions()
+                return self.ctx.api.list_open_positions()
             return []
         except Exception:
             return []
@@ -417,7 +417,7 @@ class PositionManager:
         """Clean up position tracking for symbols no longer held."""
         try:
             # Get current positions from API
-            current_positions = self.ctx.api.get_all_positions()
+            current_positions = self.ctx.api.list_open_positions()
             current_symbols = {pos.symbol for pos in current_positions}
 
             with _position_lock:
