@@ -1240,6 +1240,14 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 *Happy Trading! 🎯📈*
 
+## Required ML model
+Set exactly one of:
+- AI_TRADER_MODEL_PATH=/abs/path/to/model.joblib
+- AI_TRADER_MODEL_MODULE=your.module.with.get_model
+
+Service example:
+Environment="AI_TRADER_MODEL_PATH=/home/aiuser/ai-trading-bot/trained_model.pkl"
+
 ## Agent & Dev Quickstart
 
 ### Environment
@@ -1257,7 +1265,7 @@ Conventions (must follow)
 • Use runtime (instance of BotRuntime) across core paths; do not introduce ctx.
 • No shims; no try/except ImportError; no broad except Exception.
 • Structured JSON logging only; no print().
-• Models: use _load_primary_model(runtime); cache at runtime.model.
+• Models: configure via AI_TRADER_MODEL_PATH or AI_TRADER_MODEL_MODULE; cached at runtime.model.
 
 Common Pitfalls
 • tickers.csv missing → a single warning per process (defaults are used).

@@ -1,10 +1,25 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from functools import lru_cache
 from typing import Any, Optional
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+MODEL_PATH: Optional[str] = os.getenv("AI_TRADER_MODEL_PATH") or None
+MODEL_MODULE: Optional[str] = os.getenv("AI_TRADER_MODEL_MODULE") or None
+
+
+def model_config_source() -> str:
+    """Return 'path', 'module', or ''."""
+    if MODEL_PATH:
+        return "path"
+    if MODEL_MODULE:
+        return "module"
+    return ""
 
 
 class Settings(BaseSettings):

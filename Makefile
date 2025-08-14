@@ -10,6 +10,8 @@ init:
         # safety net to ensure core test deps even if previous step was interrupted
 	python -m pip install "pytest" "pytest-xdist" "tzlocal>=5.2,<6" "psutil>=5.9,<6" "alpaca-trade-api>=3.0,<4" \
 	        "pytest-asyncio>=0.23,<0.24" "anyio>=4,<5" "aiohttp>=3.9,<3.10" "websockets>=12,<13"
+	# safety net
+	python -m pip install "joblib>=1.3,<2"
 
 test: contract
 	PYTHONPATH=. pytest -q -n auto --maxfail=1 --disable-warnings

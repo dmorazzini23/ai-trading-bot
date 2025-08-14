@@ -60,8 +60,30 @@ def _probe_async_testing() -> bool:
     return ok
 
 
+def _probe_model_config():
+    import os
+
+    p = os.getenv("AI_TRADER_MODEL_PATH")
+    m = os.getenv("AI_TRADER_MODEL_MODULE")
+    if p:
+        print(f"[health] model: path -> {p}")
+    elif m:
+        print(f"[health] model: module -> {m}")
+    else:
+        print("[health] model: MISSING (required)")
+        return False
+    try:
+        import joblib  # noqa: F401
+        print("[health] joblib: ok")
+    except Exception as e:
+        print("[health] joblib: MISSING ->", e)
+        return False
+    return True
+
+
 if __name__ == "__main__":
     _probe_psutil()
     _probe_alpaca_trade_api()
     _probe_strategy_allocator()
     _probe_async_testing()
+    _probe_model_config()
