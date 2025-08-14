@@ -27,9 +27,6 @@ from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 
 _log = logging.getLogger(__name__)
 
-# AI-AGENT-REF: canonical tickers path
-TICKERS_FILE = Path(os.getenv("TICKERS_FILE", "data/tickers.csv"))
-
 # --- path helpers (no imports of heavy deps) ---
 BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 
@@ -57,9 +54,6 @@ def default_trade_log_path() -> str:
     fallback = os.path.join(BASE_DIR, "logs", "trades.jsonl")
     os.makedirs(os.path.dirname(fallback), exist_ok=True)
     return fallback
-
-# AI-AGENT-REF: warn-once flags for config/tickers issues
-_warned_missing_tickers = False
 
 
 def _is_market_open_now(cfg=None) -> bool:
@@ -89,10 +83,15 @@ from ai_trading.logging import (
     warning_kv,
 )  # AI-AGENT-REF: structured logging helper
 from ai_trading.indicators import compute_atr as _compute_atr  # AI-AGENT-REF: fail fast at import-time
+from ai_trading.utils.universe import load_universe
+from ai_trading.utils.safe_cast import as_int, as_float
 from ai_trading.config.settings import (
     MODEL_PATH,
     MODEL_MODULE,
     model_config_source,
+    TICKERS_FILE,
+    TICKERS_CSV,
+    UNIVERSE_LIMIT,
 )
 
 # RL: import the trader wrapper from the correct package
@@ -1778,8 +1777,6 @@ def get_git_hash() -> str:
         return "unknown"
 
 
-# TICKERS_FILE defined near top via environment
-DEFAULT_TICKERS = ["AAPL", "GOOG", "AMZN"]  # AI-AGENT-REF: fallback tickers
 # AI-AGENT-REF: use centralized trade log path
 TRADE_LOG_FILE = default_trade_log_path()
 SIGNAL_WEIGHTS_FILE = str(paths.DATA_DIR / "signal_weights.csv")
@@ -4373,6 +4370,8 @@ class LazyBotContext:
         # Metrics remain tracked in bot_engine via Prometheus counters.
         _exec_engine = ExecutionEngine(self._context)  # AI-AGENT-REF: remove unsupported kwargs
         self._context.execution_engine = _exec_engine
+        # One-time, mandatory model load
+        self._context.model = _load_required_model()
 
         # Propagate the capital_scaler to the risk engine so that position_size
         self._context.risk_engine.capital_scaler = self._context.capital_scaler
@@ -4635,18 +4634,18 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
     now_utc = utc_now_iso()
     stale = []
     for sym in symbols:
-        age = last_minute_bar_age_seconds(sym)
-        if age is None:
+        age_secs = last_minute_bar_age_seconds(sym)
+        if age_secs is None:
             stale.append((sym, "no_cache"))
-        elif age > max_age_seconds:
-            stale.append((sym, f"age={int(age)}s"))
+        else:
+            last_bar_age = as_int(age_secs, 0)
+            if last_bar_age > max_age_seconds:
+                stale.append((sym, f"age={last_bar_age}s"))
     if stale:
         details = ", ".join([f"{s}({r})" for s, r in stale])
         _log.warning("Data staleness detected [UTC now=%s]: %s", now_utc, details)
         raise RuntimeError(f"Stale minute-cache for symbols: {details}")
     _log.debug("Data freshness OK [UTC now=%s]", now_utc)
-
-
 # AI-AGENT-REF: Module-level health check removed to prevent NameError: ctx
 # Health check now happens safely in _initialize_bot_context_post_setup() after context creation
 
@@ -5240,34 +5239,17 @@ def check_pdt_rule(runtime) -> bool:
         return False
 
     # AI-AGENT-REF: Improve API null value handling for PDT checks
-    api_day_trades = (
-        getattr(acct, "pattern_day_trades", None)
-        or getattr(acct, "pattern_day_trades_count", None)
-        or 0  # Default to 0 if API returns null
+    api_day_trades_raw = (
+        getattr(acct, 'pattern_day_trades', None)
+        or getattr(acct, 'pattern_day_trades_count', None)
     )
-    api_buying_pw = (
-        getattr(acct, "daytrade_buying_power", None)
-        or getattr(acct, "day_trade_buying_power", None)
-        or getattr(acct, "buying_power", None)  # Fallback to regular buying power
-        or 0  # Default to 0 if API returns null
+    api_buying_pw_raw = (
+        getattr(acct, 'daytrade_buying_power', None)
+        or getattr(acct, 'day_trade_buying_power', None)
+        or getattr(acct, 'buying_power', None)
     )
-
-    # Convert to proper types and handle potential string values
-    try:
-        api_day_trades = int(api_day_trades) if api_day_trades is not None else 0
-    except (ValueError, TypeError):
-        _log.warning(
-            "Invalid day_trades value from API: %s, defaulting to 0", api_day_trades
-        )
-        api_day_trades = 0
-
-    try:
-        api_buying_pw = float(api_buying_pw) if api_buying_pw is not None else 0.0
-    except (ValueError, TypeError):
-        _log.warning(
-            "Invalid buying_power value from API: %s, defaulting to 0", api_buying_pw
-        )
-        api_buying_pw = 0.0
+    api_day_trades = as_int(api_day_trades_raw, 0)
+    api_buying_pw = as_float(api_buying_pw_raw, 0.0)
 
     _log.info(
         "PDT_CHECK",
@@ -9072,51 +9054,22 @@ def get_stock_bars_safe(api, symbol, timeframe):
 
 
 def load_tickers(path: str = TICKERS_FILE) -> list[str]:
-    """Load tickers from file with fallback to default tickers."""
-    global _warned_missing_tickers
-    tickers: list[str] = []
-
-    # Check if file exists and handle gracefully
-    if not os.path.exists(path):
-        if not _warned_missing_tickers:
-            _warned_missing_tickers = True
-            _log.warning(
-                "TICKERS_FILE_MISSING",
-                extra={"path": str(path), "fallback": "defaults"},
-            )
-        return DEFAULT_TICKERS
-
-    try:
-        with open(path, newline="") as f:
-            reader = csv.reader(f)
-            next(reader, None)
-            for row in reader:
-                t = row[0].strip().upper()
-                if t and t not in tickers:
-                    tickers.append(t)
-    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-        _log.exception(f"[load_tickers] Failed to read {path}: {e}")
-    return tickers
+    """Load tickers from file or CSV list; no fallback."""
+    return load_universe(path)
 
 
 def load_candidate_universe(runtime, *, fallback_symbols=None) -> list[str]:
-    """Load tickers for screening with runtime-aware path and fallback."""
-    # AI-AGENT-REF: runtime-aware tickers loader
-    tickers_path = (
-        os.path.join(runtime.cfg.repo_root, "tickers.csv")
-        if hasattr(runtime.cfg, "repo_root")
-        else "tickers.csv"
-    )
-    if not os.path.exists(tickers_path):
-        global _warned_missing_tickers
-        if not _warned_missing_tickers:
-            _warned_missing_tickers = True
-            _log.warning(
-                "TICKERS_FILE_MISSING",
-                extra={"path": str(tickers_path), "fallback": "defaults"},
-            )
-        return fallback_symbols or DEFAULT_TICKERS
-    return load_tickers(tickers_path)
+    """Load tickers for screening."""
+    del fallback_symbols
+    source = (TICKERS_CSV.strip() if TICKERS_CSV and TICKERS_CSV.strip() else TICKERS_FILE)
+    limit = UNIVERSE_LIMIT if UNIVERSE_LIMIT > 0 else None
+    try:
+        symbols = load_universe(source, limit=limit)
+    except RuntimeError as e:
+        _log.critical("UNIVERSE_LOAD_FAILED", extra={"error": str(e), "source": source})
+        raise
+    _log.info("[SCREEN_UNIVERSE] Starting screening of %d candidates", len(symbols))
+    return symbols
 
 
 def daily_summary() -> None:
@@ -10430,8 +10383,6 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     _log.warning("SUMMARY_FAIL", extra={"cause": e.__class__.__name__, "detail": str(e)})
                 return
 
-            if not getattr(runtime, "model", None):
-                runtime.model = _load_required_model()
             alpha_model = runtime.model
 
             retries = 3
