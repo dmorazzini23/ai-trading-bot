@@ -22,7 +22,7 @@ os.environ.setdefault('PYTEST_RUNNING', '1')
 
 # Import the modules we need to test
 try:
-    import bot_engine
+    from ai_trading.core import bot_engine
     from ai_trading import meta_learning
     import trade_execution
 except ImportError as e:
@@ -78,9 +78,9 @@ class TestOrderExecutionTracking(unittest.TestCase):
         mock_quote.bid_price = 150.00
         mock_quote.spread = 0.10  # High spread to trigger liquidity retry
         
-        with patch('bot_engine.fetch_minute_df_safe', return_value=mock_df), \
+        with patch('ai_trading.core.bot_engine.fetch_minute_df_safe', return_value=mock_df), \
              patch.object(self.mock_ctx.data_client, 'get_stock_latest_quote', return_value=mock_quote), \
-             patch('bot_engine.submit_order', return_value=self.mock_order) as mock_submit:
+             patch('ai_trading.core.bot_engine.submit_order', return_value=self.mock_order) as mock_submit:
             
             # Test that we can access the POV submit function
             if hasattr(bot_engine, 'pov_submit'):
@@ -289,7 +289,7 @@ class TestLiquidityManagement(unittest.TestCase):
         total_qty = 100
         pct = 0.1  # 10% participation rate
         
-        with patch('bot_engine.fetch_minute_df_safe', return_value=mock_df), \
+        with patch('ai_trading.core.bot_engine.fetch_minute_df_safe', return_value=mock_df), \
              patch.object(self.mock_ctx.data_client, 'get_stock_latest_quote', return_value=mock_quote):
             
             # Current logic in pov_submit:

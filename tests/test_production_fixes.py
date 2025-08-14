@@ -35,7 +35,7 @@ class TestSentimentAPIConfiguration(unittest.TestCase):
     
     def test_sentiment_api_env_vars_in_config(self):
         """Test that sentiment API variables are properly configured."""
-        import config
+        import ai_trading.config as config
         
         # Test that the new environment variables are accessible
         self.assertTrue(hasattr(config, 'SENTIMENT_API_KEY') or 'SENTIMENT_API_KEY' in dir(config))

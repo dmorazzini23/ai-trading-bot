@@ -2,7 +2,7 @@ import sys
 import types
 import pandas as pd
 import pytest
-from features import build_features_pipeline
+from ai_trading.features import build_features_pipeline
 
 dotenv_stub = types.ModuleType("dotenv")
 dotenv_stub.load_dotenv = lambda *a, **k: None

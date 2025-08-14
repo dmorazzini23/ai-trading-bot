@@ -20,10 +20,10 @@ import time
 from datetime import datetime, timezone
 
 # Import modules under test
-import sentiment
+import ai_trading.analysis.sentiment as sentiment
 from ai_trading import meta_learning
 from ai_trading import trade_execution
-import config
+import ai_trading.config as config
 
 
 class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
@@ -43,7 +43,7 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
         self.assertEqual(sentiment.SENTIMENT_MAX_RETRIES, 5)
         self.assertEqual(sentiment.SENTIMENT_BASE_DELAY, 5)
     
-    @patch('sentiment.requests.get')
+    @patch('ai_trading.analysis.sentiment.requests.get')
     def test_enhanced_fallback_strategies(self, mock_get):
         """Test that enhanced fallback strategies work when rate limited."""
         # Simulate rate limiting
@@ -60,7 +60,7 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
         # Should return neutral sentiment when all fallbacks fail
         self.assertEqual(result, 0.0)
     
-    @patch('sentiment.requests.get')
+    @patch('ai_trading.analysis.sentiment.requests.get')
     def test_alternative_sentiment_sources(self, mock_get):
         """Test alternative sentiment source functionality."""
         # Mock environment variables for alternative source
@@ -382,7 +382,7 @@ class TestIntegrationScenarios(unittest.TestCase):
         """Test complete flow when sentiment is rate limited but meta-learning works."""
         # This would be a more complex integration test
         # For now, just ensure modules can be imported together
-        import sentiment
+        import ai_trading.analysis.sentiment as sentiment
         from ai_trading import meta_learning
         import trade_execution
         
@@ -588,7 +588,7 @@ def test_risk_management_sector_exposure_logging():
     """Test that sector exposure rejections include clear reasoning."""
     # This is a minimal test - full test would require bot_engine context
     # Testing the structure exists for enhanced logging
-    from ai_trading.bot_engine import sector_exposure_ok
+    from ai_trading.core.bot_engine import sector_exposure_ok
     
     # Mock BotContext
     mock_ctx = Mock()

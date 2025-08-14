@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 import risk_engine
-from strategies import TradeSignal
+from ai_trading.strategies import TradeSignal
 
 
 def test_can_trade_invalid_type(caplog):

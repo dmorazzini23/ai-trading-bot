@@ -28,7 +28,7 @@ def test_disable_daily_retrain_env_parsing():
             del os.sys.modules['config']
         
         # Import config module
-        import config
+        import ai_trading.config as config
         
         # Test the result
         actual = config.DISABLE_DAILY_RETRAIN
@@ -52,7 +52,7 @@ def test_disable_daily_retrain_unset():
         del os.sys.modules['config']
     
     # Import config module
-    import config
+    import ai_trading.config as config
     
     # Should default to False
     assert config.DISABLE_DAILY_RETRAIN == False
@@ -71,7 +71,7 @@ def test_disable_daily_retrain_fallback_settings():
     os.environ["TESTING"] = "1"
     os.environ["DISABLE_DAILY_RETRAIN"] = "true"
     
-    import config
+    import ai_trading.config as config
     
     # Check that fallback settings work
     fallback = config._FallbackSettings()

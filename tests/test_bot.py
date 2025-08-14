@@ -199,7 +199,7 @@ if "pandas_ta" in sys.modules:
     sys.modules["pandas_ta"].obv = lambda *a, **k: pd.Series([0])
     sys.modules["pandas_ta"].vwap = lambda *a, **k: pd.Series([0])
 
-import bot_engine as bot
+from ai_trading.core import bot_engine as bot
 
 
 def test_screen_candidates_empty(monkeypatch):

@@ -23,7 +23,7 @@ test_env = {
 }
 
 with patch.dict(os.environ, test_env):
-    import config
+    import ai_trading.config as config
     from order_health_monitor import OrderHealthMonitor, OrderInfo
     from system_health_checker import SystemHealthChecker, ComponentHealth
 

@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 # AI-AGENT-REF: Replaced unsafe _raise_dynamic_exec_disabled() with direct import from shim module
-from ai_trading.bot_engine import prepare_indicators
+from ai_trading.core.bot_engine import prepare_indicators
 
 
 def test_prepare_indicators_missing_close_column():
@@ -15,7 +15,7 @@ def test_prepare_indicators_missing_close_column():
 
 def test_prepare_indicators_non_numeric_close(monkeypatch):
     print('Testing prepare_indicators with non-numeric Close column')
-    import bot_engine
+    from ai_trading.core import bot_engine
 
     def fake_rsi(close, length=14):
         if not pd.api.types.is_numeric_dtype(close):

@@ -12,8 +12,8 @@ for m in [
 ]:
     sys.modules.pop(m, None)
 
-from strategies import (MeanReversionStrategy, MomentumStrategy,
-                        asset_class_for)
+from ai_trading.strategies import MeanReversionStrategy, MomentumStrategy
+from ai_trading.core.bot_engine import asset_class_for
 
 
 class DummyFetcher:

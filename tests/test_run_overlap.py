@@ -1,7 +1,7 @@
 import threading
 import time
 import types
-import bot_engine
+from ai_trading.core import bot_engine
 
 
 def test_run_all_trades_overlap(monkeypatch, caplog):

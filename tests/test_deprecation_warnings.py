@@ -1,13 +1,14 @@
 """
 Test deprecation warnings for root module imports.
 """
+import importlib
 import warnings
 
 def test_bot_engine_deprecation_warning():
     """Test that importing bot_engine shows deprecation warning."""
     with warnings.catch_warnings(record=True) as w:
         warnings.simplefilter("always")
-        import bot_engine  # noqa: F401
+        importlib.import_module("bot_engine")
         
         # Check that a deprecation warning was raised
         assert len(w) >= 1

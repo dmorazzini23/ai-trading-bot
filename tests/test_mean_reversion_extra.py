@@ -1,6 +1,6 @@
 import pandas as pd
 
-from strategies.mean_reversion import MeanReversionStrategy
+from ai_trading.strategies.mean_reversion import MeanReversionStrategy
 
 
 class DummyFetcher:

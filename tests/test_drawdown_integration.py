@@ -18,7 +18,7 @@ os.environ["PYTEST_RUNNING"] = "1"
 # Add the current directory to the path so we can import modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import config
+import ai_trading.config as config
 from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
 
 
@@ -100,7 +100,7 @@ class TestDrawdownIntegration(unittest.TestCase):
         self.assertEqual(tc.max_drawdown_threshold, 0.15)
         self.assertEqual(tc.daily_loss_limit, 0.03)
 
-    @patch('bot_engine.ctx')
+    @patch('ai_trading.core.bot_engine.ctx')
     def test_bot_context_integration(self, mock_ctx):
         """Test that bot context includes drawdown circuit breaker."""
         # Mock the context with a circuit breaker
