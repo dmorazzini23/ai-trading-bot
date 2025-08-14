@@ -31,11 +31,11 @@ def test_allocator():
     sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
     
     # First call: Build signal history (returns empty list)
-    out1 = alloc.allocate({"s1": [sig]})
+    out1 = alloc.select_signals({"s1": [sig]})
     assert out1 == []  # Should be empty as signal is not yet confirmed
     
     # Second call: Confirm signals (returns confirmed signal)
-    out2 = alloc.allocate({"s1": [sig]})
+    out2 = alloc.select_signals({"s1": [sig]})
     assert out2 and out2[0].symbol == "AAPL"
     
     alloc.update_reward("s1", 0.5)

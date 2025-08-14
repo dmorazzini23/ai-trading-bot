@@ -5,6 +5,7 @@ Provides order lifecycle management, execution algorithms,
 and real-time execution monitoring with institutional controls.
 """
 
+import importlib
 import logging
 import math
 import threading
@@ -17,10 +18,16 @@ from typing import Any, Dict, Optional
 
 _log = logging.getLogger(__name__)
 
-from ai_trading.imports import optional_import
 
-# AI-AGENT-REF: replace ImportError guard with optional_import
-_alpaca_rest = optional_import("alpaca_trade_api.rest")
+def _optional_import(name: str):
+    try:
+        return importlib.import_module(name)
+    except Exception:
+        return None
+
+
+# AI-AGENT-REF: replace ImportError guard with optional import
+_alpaca_rest = _optional_import("alpaca_trade_api.rest")
 if _alpaca_rest is not None:
     APIError = _alpaca_rest.APIError  # type: ignore[attr-defined]
 else:  # pragma: no cover - fallback for dev/test

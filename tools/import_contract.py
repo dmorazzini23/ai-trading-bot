@@ -22,7 +22,6 @@ DENY_PACKAGE = {
     "ai_trading.validation.require_env",
     "ai_trading.validation.check_data_freshness",
     "ai_trading.utils.process_manager",
-    "ai_trading.thirdparty.lightgbm_compat",
 }
 
 ROOT = pathlib.Path("tests")

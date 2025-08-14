@@ -19,8 +19,3 @@ __version__ = "2.0.0"
 
 # Import-light init - only expose version and basic metadata
 __all__ = ["__version__"]
-
-try:  # defensive convenience
-    from . import strategy_allocator  # noqa: F401
-except Exception:
-    pass

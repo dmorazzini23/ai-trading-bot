@@ -1267,9 +1267,6 @@ class StrategyAllocator:
     def allocate_signals(self, *args, **kwargs):
         return self._alloc.allocate(*args, **kwargs)
 
-    # tests do alloc.allocate(...), so alias that to the real method
-    allocate = allocate_signals
-
 
 # AI-AGENT-REF: lazy import heavy data_fetcher module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
@@ -3502,18 +3499,16 @@ def _parse_local_positions() -> dict[str, int]:
     return positions
 
 
-def audit_positions(runtime) -> None:
+def audit_positions(ctx) -> None:
     """
     Fetch local vs. broker positions and submit market orders to correct any mismatch.
     """
-    # Local alias for legacy references; do not export or rely on globals.
-    ctx = runtime
     # 1) Read local open positions from the trade log
     local = _parse_local_positions()
 
     # 2) Fetch remote (broker) positions
     try:
-        remote = {p.symbol: int(p.qty) for p in runtime.api.list_open_positions()}
+        remote = {p.symbol: int(p.qty) for p in ctx.api.list_open_positions()}
     except APIError as e:
         logger = logging.getLogger(__name__)
         _log.exception(
@@ -8689,14 +8684,13 @@ def _market_breadth(ctx: BotContext) -> float:
     return up / total if total else 0.5
 
 
-def detect_regime_state(runtime: BotContext) -> str:
+def detect_regime_state(ctx: BotContext) -> str:
     """
     Inspect recent returns/volatility/volume breadth to classify the regime.
     NOTE: Previously this used a free/global `ctx`. We now pass the explicit
-    runtime. To minimize churn, we alias it locally.
+    runtime.
     """
     try:
-        ctx = runtime  # AI-AGENT-REF: local alias to avoid global context
         df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
         if df is None or len(df) < 200:
             return "sideways"
@@ -9503,10 +9497,8 @@ def start_metrics_server(default_port: int = 9200) -> None:
         _log.warning("Failed to start metrics server on %d: %s", default_port, exc)
 
 
-def run_multi_strategy(runtime) -> None:
+def run_multi_strategy(ctx) -> None:
     """Execute all modular strategies via allocator and risk engine."""
-    # Local alias for legacy references; do not export or rely on globals.
-    ctx = runtime  # AI-AGENT-REF: local alias for legacy ctx usage
     signals_by_strategy: dict[str, list[TradeSignal]] = {}
     for strat in ctx.strategies:
         try:
@@ -9940,10 +9932,8 @@ def _send_heartbeat() -> None:
     )
 
 
-def manage_position_risk(runtime, position) -> None:
+def manage_position_risk(ctx, position) -> None:
     """Adjust trailing stops and position size while halted."""
-    # Local alias for legacy references; do not export or rely on globals.
-    ctx = runtime  # AI-AGENT-REF: local alias for legacy ctx usage
     symbol = position.symbol
     try:
         atr = utils.get_rolling_atr(symbol)
@@ -10013,7 +10003,7 @@ def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
 
 
 @memory_profile  # AI-AGENT-REF: Monitor memory usage of main trading function
-def run_all_trades_worker(state: BotState, runtime) -> None:
+def run_all_trades_worker(state: BotState, ctx) -> None:
     """
     Execute the complete trading cycle for all candidate symbols.
 
@@ -10132,8 +10122,6 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     BotContext : Global context and configuration
     trade_execution : Order execution and monitoring
     """
-    # Local alias for legacy references; do not export or rely on globals.
-    ctx = runtime  # AI-AGENT-REF: local alias for legacy ctx usage
     _init_metrics()
     import uuid
 

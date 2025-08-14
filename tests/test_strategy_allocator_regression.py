@@ -30,11 +30,11 @@ class TestStrategyAllocatorRegression:
         sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
         
         # First call: Build signal history (should return empty list)
-        out1 = alloc.allocate({"s1": [sig]})
+        out1 = alloc.select_signals({"s1": [sig]})
         assert out1 == [], "First call should return empty list (unconfirmed signals)"
         
         # Second call: Confirm signals (should return confirmed signal)
-        out2 = alloc.allocate({"s1": [sig]})
+        out2 = alloc.select_signals({"s1": [sig]})
         assert out2 and out2[0].symbol == "AAPL", "Second call should return confirmed AAPL signal"
         assert len(out2) == 1, "Should return exactly one signal"
         assert out2[0].confidence == 1.0, "Signal confidence should be preserved"
@@ -58,8 +58,8 @@ class TestStrategyAllocatorRegression:
         sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
         
         # Should not raise exception and should use default threshold
-        out1 = alloc.allocate({"s1": [sig]})
-        out2 = alloc.allocate({"s1": [sig]})
+        out1 = alloc.select_signals({"s1": [sig]})
+        out2 = alloc.select_signals({"s1": [sig]})
         
         # With default min_confidence (0.6) and signal confidence (1.0), should confirm
         assert len(out2) == 1, "Should confirm signal with default threshold"
@@ -81,8 +81,8 @@ class TestStrategyAllocatorRegression:
         sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
         
         # Should not raise exception and should use default threshold
-        out1 = alloc.allocate({"s1": [sig]})
-        out2 = alloc.allocate({"s1": [sig]})
+        out1 = alloc.select_signals({"s1": [sig]})
+        out2 = alloc.select_signals({"s1": [sig]})
         
         # With default min_confidence (0.6) and signal confidence (1.0), should confirm
         assert len(out2) == 1, "Should confirm signal with default threshold"
@@ -112,8 +112,8 @@ class TestStrategyAllocatorRegression:
             
             sig = TradeSignal(symbol="AAPL", side="buy", confidence=sig_conf, strategy="s1")
             
-            out1 = alloc.allocate({"s1": [sig]})
-            out2 = alloc.allocate({"s1": [sig]})
+            out1 = alloc.select_signals({"s1": [sig]})
+            out2 = alloc.select_signals({"s1": [sig]})
             
             if should_confirm:
                 assert len(out2) == 1, f"Should confirm with min_conf={min_conf}, sig_conf={sig_conf}"
@@ -136,8 +136,8 @@ class TestStrategyAllocatorRegression:
         # Test high confidence (> 1.0)
         sig_high = TradeSignal(symbol="AAPL", side="buy", confidence=2.0, strategy="s1")
         
-        out1 = alloc.allocate({"s1": [sig_high]})
-        out2 = alloc.allocate({"s1": [sig_high]})
+        out1 = alloc.select_signals({"s1": [sig_high]})
+        out2 = alloc.select_signals({"s1": [sig_high]})
         
         # Should handle gracefully and still confirm
         assert len(out2) == 1, "Should handle high confidence gracefully"
@@ -173,8 +173,8 @@ class TestStrategyAllocatorRegression:
             
             sig = TradeSignal(symbol="AAPL", side="buy", confidence=1.0, strategy="s1")
             
-            out1 = alloc.allocate({"s1": [sig]})
-            out2 = alloc.allocate({"s1": [sig]})
+            out1 = alloc.select_signals({"s1": [sig]})
+            out2 = alloc.select_signals({"s1": [sig]})
             
             assert out1 == [], f"Instance {i}: First call should return empty list"
             assert out2 and out2[0].symbol == "AAPL", f"Instance {i}: Second call should return AAPL signal"
