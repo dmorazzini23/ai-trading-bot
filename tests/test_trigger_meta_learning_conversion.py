@@ -56,7 +56,7 @@ class TradingConfig:
 MockConfig = TradingConfig
 sys.modules['config'] = MockConfig
 
-from ai_trading import meta_learning
+import ai_trading.meta_learning as meta_learning
 
 def test_trigger_meta_learning_conversion_pure_meta_format():
     """Test trigger function with pure meta-learning format - should return True immediately."""

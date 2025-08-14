@@ -87,9 +87,6 @@ class Settings(BaseSettings):
             "APCA-API-SECRET-KEY": self.alpaca_secret_key_plain or "",
         }
 
-    # AI-AGENT-REF: allow missing attributes to default to None
-    def __getattr__(self, name: str) -> Any:  # pragma: no cover - simple fallback
-        return None
 
 
 @lru_cache(maxsize=1)

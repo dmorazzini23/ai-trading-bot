@@ -14,7 +14,7 @@ os.environ.update({
 })
 
 try:
-    from ai_trading import ExecutionEngine
+    from ai_trading.execution.engine import ExecutionEngine
 except Exception:  # pragma: no cover - optional component
     pytest.skip("ExecutionEngine not available", allow_module_level=True)
 

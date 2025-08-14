@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ai_trading import data_fetcher
+import ai_trading.data_fetcher as data_fetcher
 
 
 @pytest.mark.parametrize("value,expected", [

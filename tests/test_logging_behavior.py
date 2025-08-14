@@ -2,7 +2,7 @@ import types
 import time
 import pytest
 
-from ai_trading import utils
+import ai_trading.utils as utils
 from ai_trading.core import bot_engine
 import ai_trading.alpaca_api as alpaca_api  # AI-AGENT-REF: canonical import
 try:

@@ -6,7 +6,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     import pytest
     pytest.skip("risk_engine not available", allow_module_level=True)
-from ai_trading import signals
+import ai_trading.signals as signals
 
 
 def test_dynamic_position_size_scaling():

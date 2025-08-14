@@ -35,15 +35,14 @@ def test_bot_engine_import_fallbacks():
         "from meta_learning import optimize_signals",
         "from ai_trading.pipeline import model_pipeline",
         "from pipeline import model_pipeline",
-        "from ai_trading.trade_execution import ExecutionEngine",
-        "from trade_execution import ExecutionEngine",
+        "from ai_trading.execution.engine import ExecutionEngine",
         "from ai_trading.data_fetcher import",
         "from data_fetcher import",
         "from ai_trading.indicators import rsi",
         "from indicators import rsi",
         "from ai_trading.signals import generate_position_hold_signals",
         "from signals import generate_position_hold_signals",
-        "from ai_trading import portfolio",
+        "import ai_trading.portfolio as portfolio",
         "import portfolio",
         "from ai_trading.alpaca_api import alpaca_get",
         "from alpaca_api import alpaca_get",
@@ -62,8 +61,7 @@ def test_runner_import_fallbacks():
     
     # Check for expected fallback patterns
     expected_patterns = [
-        "from ai_trading.trade_execution import recent_buys",
-        "from trade_execution import recent_buys",
+        "from ai_trading.execution.engine import recent_buys",
         "from ai_trading.indicators import",
         "from indicators import",
     ]

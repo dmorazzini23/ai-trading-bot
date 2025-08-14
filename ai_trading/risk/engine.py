@@ -13,7 +13,7 @@ if not hasattr(np, "NaN"):
 # AI-AGENT-REF: guard pandas import for test environments
 import pandas as pd
 
-from ai_trading.imports import optional_import
+from ai_trading.util.optional_imports import optional_import
 
 # AI-AGENT-REF: lazy optional pandas_ta import
 ta = optional_import("pandas_ta")

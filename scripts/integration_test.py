@@ -161,7 +161,7 @@ def test_import_hardening():
                 "from meta_learning import optimize_signals",
                 "from ai_trading.pipeline import model_pipeline",
                 "from pipeline import model_pipeline",
-                "from ai_trading.trade_execution import ExecutionEngine",
+                "from ai_trading.execution.engine import ExecutionEngine",
                 "from trade_execution import ExecutionEngine",
                 "from ai_trading.data_fetcher import",
                 "from data_fetcher import",

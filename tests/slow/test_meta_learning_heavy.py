@@ -7,7 +7,7 @@ import pydantic
 
 try:
     import pydantic_settings  # noqa: F401
-    from ai_trading import meta_learning
+    import ai_trading.meta_learning as meta_learning
 except Exception:
     pytest.skip("pydantic v2 required", allow_module_level=True)
 import sklearn.linear_model

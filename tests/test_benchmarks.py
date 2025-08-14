@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
 import inspect
-from ai_trading import signals
-from ai_trading import indicators
+import ai_trading.signals as signals
+import ai_trading.indicators as indicators
 import pytest
 
 df = pd.DataFrame({

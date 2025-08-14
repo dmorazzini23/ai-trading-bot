@@ -14,7 +14,7 @@ import pydantic
 try:
     import pydantic_settings  # noqa: F401
     import ai_trading.config as config
-    from ai_trading import meta_learning
+    import ai_trading.meta_learning as meta_learning
 except Exception:
     pytest.skip("pydantic v2 required", allow_module_level=True)
 
@@ -24,7 +24,7 @@ if not all(hasattr(pydantic, attr) for attr in ("AliasChoices", "model_validator
 import ai_trading.ml_model as ml_model  # AI-AGENT-REF: canonical import
 import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
 import ai_trading.main as main
-from ai_trading import utils
+import ai_trading.utils as utils
 from ai_trading.strategies.mean_reversion import MeanReversionStrategy
 
 

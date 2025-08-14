@@ -245,7 +245,7 @@ class SystemHealthChecker:
     def _check_meta_learning_health(self) -> ComponentHealth:
         """Check meta-learning system health."""
         try:
-            from ai_trading import meta_learning
+            import ai_trading.meta_learning as meta_learning
 
             # Check if meta-learning data exists
             trade_log_path = getattr(config, 'TRADE_LOG_FILE', 'trades.csv')

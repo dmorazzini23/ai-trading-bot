@@ -10,8 +10,8 @@ from hypothesis import strategies as st
 # Ensure project root is on path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
-from ai_trading import signals
-from ai_trading import utils
+import ai_trading.signals as signals
+import ai_trading.utils as utils
 
 
 @given(

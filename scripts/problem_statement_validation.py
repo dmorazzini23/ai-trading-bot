@@ -39,15 +39,15 @@ def check_import_hardening():
         "ai_trading/core/bot_engine.py": [
             "from ai_trading.meta_learning import optimize_signals",
             "from ai_trading.pipeline import model_pipeline",
-            "from ai_trading.trade_execution import ExecutionEngine",
+            "from ai_trading.execution.engine import ExecutionEngine",
             "from ai_trading.data_fetcher import",
             "from ai_trading.indicators import rsi",
             "from ai_trading.signals import generate_position_hold_signals",
-            "from ai_trading import portfolio",
+            "import ai_trading.portfolio as portfolio",
             "from ai_trading.alpaca_api import alpaca_get",
         ],
         "runner.py": [
-            "from ai_trading.trade_execution import recent_buys",
+            "from ai_trading.execution.engine import recent_buys",
             "from ai_trading.indicators import",
         ],
         "backtester.py": [

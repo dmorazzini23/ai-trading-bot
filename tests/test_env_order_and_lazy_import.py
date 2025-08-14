@@ -73,7 +73,7 @@ class TestEnvironmentOrderAndLazyImport:
             # Mock sys.exit to capture if it's called during import
             with patch('sys.exit') as mock_exit:
                 # Import runner module - should not crash even with missing env vars
-                from ai_trading import runner
+                import ai_trading.runner as runner
                 
                 # Should not have called sys.exit during import
                 mock_exit.assert_not_called()
@@ -108,7 +108,7 @@ class TestEnvironmentOrderAndLazyImport:
     
     def test_lazy_engine_loading_caches_components(self):
         """Test that engine components are cached after first load."""
-        from ai_trading import runner
+        import ai_trading.runner as runner
         
         # Reset the lazy import cache
         runner._bot_engine = None
@@ -135,7 +135,7 @@ class TestEnvironmentOrderAndLazyImport:
     
     def test_run_cycle_uses_lazy_loading(self):
         """Test that run_cycle uses lazy loading for bot engine."""
-        from ai_trading import runner
+        import ai_trading.runner as runner
         
         # Reset lazy import cache
         runner._bot_engine = None
@@ -227,7 +227,7 @@ class TestEnvironmentOrderAndLazyImport:
     
     def test_lazy_import_error_handling(self):
         """Test that lazy import handles import errors gracefully."""
-        from ai_trading import runner
+        import ai_trading.runner as runner
         
         # Reset cache
         runner._bot_engine = None

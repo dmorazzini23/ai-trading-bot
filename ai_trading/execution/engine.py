@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 
 _log = logging.getLogger(__name__)
 
-from ai_trading.imports import optional_import
+from ai_trading.util.optional_imports import optional_import
 
 # AI-AGENT-REF: replace ImportError guard with optional_import
 _alpaca_rest = optional_import("alpaca_trade_api.rest")

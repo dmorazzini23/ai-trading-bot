@@ -7,7 +7,7 @@ import pytest
 
 def test_runtime_paths_writable():
     """Test that runtime paths are writable."""
-    from ai_trading import paths
+    import ai_trading.paths as paths
     
     # Test DATA_DIR is writable
     test_file = paths.DATA_DIR / "test_write.tmp"
@@ -39,7 +39,7 @@ def test_runtime_paths_writable():
 
 def test_paths_module_imports():
     """Test that paths module can be imported."""
-    from ai_trading import paths
+    import ai_trading.paths as paths
     
     assert hasattr(paths, 'DATA_DIR')
     assert hasattr(paths, 'LOG_DIR')

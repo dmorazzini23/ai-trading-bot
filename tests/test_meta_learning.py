@@ -6,7 +6,7 @@ import pytest
 
 np.random.seed(0)
 
-from ai_trading import meta_learning
+import ai_trading.meta_learning as meta_learning
 from ai_trading.meta_learning import MetaLearning
 
 

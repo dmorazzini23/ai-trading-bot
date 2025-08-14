@@ -1432,7 +1432,7 @@ def reload_module(mod):
 @pytest.fixture(autouse=True)
 def reload_utils_module():
     """Ensure utils is reloaded for each test."""
-    from ai_trading import utils
+    import ai_trading.utils as utils
     importlib.reload(utils)
     yield
 
@@ -1490,7 +1490,7 @@ def stub_capital_scaling(monkeypatch):
     
     # Add missing trade_execution attributes
     try:
-        import ai_trading.trade_execution as trade_execution  # AI-AGENT-REF: normalized import
+        import ai_trading.execution.engine as trade_execution  # AI-AGENT-REF: normalized import
         if not hasattr(trade_execution, 'ExecutionEngine'):
             trade_execution.ExecutionEngine = MockExecutionEngine
     except ImportError:

@@ -31,7 +31,7 @@ def test_no_import_time_crashes():
     
     try:
         from ai_trading.config.management import _resolve_alpaca_env
-        from ai_trading import runner
+        import ai_trading.runner as runner
         logging.info("   ✓ Core modules imported without credentials")
         logging.info("   ✓ No sys.exit() calls during import")
         return True
@@ -169,7 +169,7 @@ def test_lazy_imports():
     """Test lazy import mechanism."""
     logging.info("5. Testing lazy imports...")
     
-    from ai_trading import runner
+    import ai_trading.runner as runner
     
     # Check that lazy loading mechanism exists
     if not hasattr(runner, '_load_engine'):

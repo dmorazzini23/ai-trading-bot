@@ -23,7 +23,7 @@ def run_trade():
         )
         return
 
-    from ai_trading import runner
+    import ai_trading.runner as runner
 
     try:
         runner.run_cycle()
@@ -60,7 +60,7 @@ def run_backtest():
         )
         return
 
-    from ai_trading import runner
+    import ai_trading.runner as runner
 
     try:
         runner.run_cycle()
@@ -120,7 +120,7 @@ def run_healthcheck():
 def main() -> None:
     """Default main entry point."""
     ensure_dotenv_loaded()
-    from ai_trading import runner
+    import ai_trading.runner as runner
 
     try:
         runner.run_cycle()

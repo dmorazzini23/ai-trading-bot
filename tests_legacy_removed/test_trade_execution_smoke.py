@@ -43,5 +43,5 @@ def test_execution_engine(tmp_path, monkeypatch):
     engine._log_slippage("AAPL", expected, (expected or 0) + 0.01)
     assert order
     # Force coverage of the ExecutionEngine module
-    from ai_trading import trade_execution
+    import ai_trading.trade_execution as trade_execution
     force_coverage(trade_execution)

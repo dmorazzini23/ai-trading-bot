@@ -639,7 +639,7 @@ REQUIRED_ENV_VARS = [
 
 # Additional compatibility attributes
 # AI-AGENT-REF: Use proper runtime paths for default file locations
-from ai_trading import paths
+import ai_trading.paths as paths
 
 TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", str(paths.LOG_DIR / "trades.csv"))
 MODEL_PATH = os.getenv(

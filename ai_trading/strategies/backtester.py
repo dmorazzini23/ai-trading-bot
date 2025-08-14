@@ -16,10 +16,8 @@ from ai_trading.core.bot_engine import get_risk_engine
 # Instantiate if needed:
 risk_engine_instance = get_risk_engine()
 
-from ai_trading import (
-    config,
-    signals,  # noqa: F401
-)
+import ai_trading.config as config
+import ai_trading.signals as signals  # noqa: F401
 from ai_trading.core import bot_engine
 from ai_trading.logging import get_logger
 

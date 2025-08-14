@@ -31,7 +31,7 @@ try:
     from ai_trading.config.management import _resolve_alpaca_env
     print("✓ Config management imported")
     
-    from ai_trading import runner
+    import ai_trading.runner as runner
     print("✓ Runner imported")
     
     from ai_trading.utils.timefmt import utc_now_iso
@@ -215,7 +215,7 @@ for key in ["ALPACA_API_KEY", "APCA_API_KEY_ID", "ALPACA_SECRET_KEY", "APCA_API_
     os.environ.pop(key, None)
 
 # Import runner (should work without credentials)
-from ai_trading import runner
+import ai_trading.runner as runner
 
 # Verify lazy loading variables exist
 assert hasattr(runner, '_load_engine')

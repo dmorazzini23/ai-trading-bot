@@ -299,11 +299,9 @@ warnings.filterwarnings("ignore", message=".*_register_pytree_node.*")
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from ai_trading import (
-    paths,  # AI-AGENT-REF: Runtime paths for proper directory separation
-)
+import ai_trading.paths as paths  # AI-AGENT-REF: Runtime paths for proper directory separation
 from ai_trading.config.settings import get_settings, get_settings as get_config_settings
-from ai_trading.config import management as config
+import ai_trading.config.management as config
 from ai_trading.settings import get_settings as get_runtime_settings  # AI-AGENT-REF: runtime env settings
 
 # Initialize settings once for global use
@@ -363,7 +361,7 @@ info_kv(
 def ensure_portfolio_weights(ctx, symbols):
     """Ensure portfolio weights are computed with fallback handling."""
     try:
-        from ai_trading import portfolio
+        import ai_trading.portfolio as portfolio
 
         if hasattr(portfolio, "compute_portfolio_weights"):
             return portfolio.compute_portfolio_weights(ctx, symbols)
@@ -450,7 +448,7 @@ import pandas as pd
 
 
 
-from ai_trading import utils
+import ai_trading.utils as utils
 
 # AI-AGENT-REF: lazy import heavy feature computation modules to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
@@ -3506,8 +3504,6 @@ def audit_positions(runtime) -> None:
     """
     Fetch local vs. broker positions and submit market orders to correct any mismatch.
     """
-    # Local alias for legacy references; do not export or rely on globals.
-    ctx = runtime
     # 1) Read local open positions from the trade log
     local = _parse_local_positions()
 
@@ -7645,7 +7641,7 @@ def compute_portfolio_weights(ctx: BotContext, symbols: list[str]) -> dict[str, 
 
 
 def on_trade_exit_rebalance(ctx: BotContext) -> None:
-    from ai_trading import portfolio
+    import ai_trading.portfolio as portfolio
     from ai_trading.utils import portfolio_lock
 
     try:
@@ -8696,8 +8692,7 @@ def detect_regime_state(runtime: BotContext) -> str:
     runtime. To minimize churn, we alias it locally.
     """
     try:
-        ctx = runtime  # AI-AGENT-REF: local alias to avoid global context
-        df = ctx.data_fetcher.get_daily_df(ctx, REGIME_SYMBOLS[0])
+        df = runtime.data_fetcher.get_daily_df(runtime, REGIME_SYMBOLS[0])
         if df is None or len(df) < 200:
             return "sideways"
         atr14 = ta.atr(df["high"], df["low"], df["close"], length=14).iloc[-1]
@@ -8706,7 +8701,7 @@ def detect_regime_state(runtime: BotContext) -> str:
         sma50 = df["close"].rolling(50).mean().iloc[-1]
         sma200 = df["close"].rolling(200).mean().iloc[-1]
         trend = sma50 - sma200
-        breadth = _market_breadth(ctx)
+        breadth = _market_breadth(runtime)
         if high_vol:
             return "high_volatility"
         if abs(trend) / sma200 < 0.005:
@@ -9505,12 +9500,10 @@ def start_metrics_server(default_port: int = 9200) -> None:
 
 def run_multi_strategy(runtime) -> None:
     """Execute all modular strategies via allocator and risk engine."""
-    # Local alias for legacy references; do not export or rely on globals.
-    ctx = runtime  # AI-AGENT-REF: local alias for legacy ctx usage
     signals_by_strategy: dict[str, list[TradeSignal]] = {}
-    for strat in ctx.strategies:
+    for strat in runtime.strategies:
         try:
-            sigs = strat.generate(ctx)
+            sigs = strat.generate(runtime)
             signals_by_strategy[strat.name] = sigs
         except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.warning(f"Strategy {strat.name} failed: {e}")
@@ -9731,7 +9724,7 @@ def _param(runtime, key, default):
 
 
 def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
-    from ai_trading import portfolio
+    import ai_trading.portfolio as portfolio
     from ai_trading.utils import portfolio_lock
 
     """Prepare trading run by syncing positions and generating symbols."""
@@ -9942,8 +9935,6 @@ def _send_heartbeat() -> None:
 
 def manage_position_risk(runtime, position) -> None:
     """Adjust trailing stops and position size while halted."""
-    # Local alias for legacy references; do not export or rely on globals.
-    ctx = runtime  # AI-AGENT-REF: local alias for legacy ctx usage
     symbol = position.symbol
     try:
         atr = utils.get_rolling_atr(symbol)
@@ -9977,7 +9968,7 @@ def manage_position_risk(runtime, position) -> None:
             new_stop = float(position.avg_entry_price) * (
                 1 + min(0.01 + atr / 100, 0.03)
             )
-        update_trailing_stop(ctx, symbol, price, int(position.qty), atr)
+        update_trailing_stop(runtime, symbol, price, int(position.qty), atr)
         pnl = float(getattr(position, "unrealized_plpc", 0))
         kelly_scale = compute_kelly_scale(atr, 0.0)
         adjust_position_size(position, kelly_scale)
@@ -9987,7 +9978,7 @@ def manage_position_risk(runtime, position) -> None:
             volume_factor > CFG.volume_spike_threshold
             and ml_conf > CFG.ml_confidence_threshold
         ) and side == "long" and price > vwap and pnl > 0.02:
-            pyramid_add_position(ctx, symbol, CFG.pyramid_levels["low"], side)
+            pyramid_add_position(runtime, symbol, CFG.pyramid_levels["low"], side)
         _log.info(
             f"HALT_MANAGE {symbol} stop={new_stop:.2f} vwap={vwap:.2f} vol={volume_factor:.2f} ml={ml_conf:.2f}"
         )
@@ -10132,8 +10123,6 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     BotContext : Global context and configuration
     trade_execution : Order execution and monitoring
     """
-    # Local alias for legacy references; do not export or rely on globals.
-    ctx = runtime  # AI-AGENT-REF: local alias for legacy ctx usage
     _init_metrics()
     import uuid
 
@@ -10437,7 +10426,7 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 positions = runtime.api.list_open_positions()
                 _log.debug("Raw Alpaca positions: %s", positions)
                 # ai_trading.csv:9422 - Replace import guard with hard import (required dependencies)
-                from ai_trading import portfolio
+                import ai_trading.portfolio as portfolio
                 from ai_trading.utils import portfolio_lock
                 try:
                     with portfolio_lock:

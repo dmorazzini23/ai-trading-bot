@@ -1,6 +1,6 @@
 import time
 import pandas as pd
-from ai_trading import signals
+import ai_trading.signals as signals
 
 def test_parallel_vs_serial_prep_speed():
     symbols = ["AAPL", "MSFT", "GOOG", "AMZN", "TSLA"]

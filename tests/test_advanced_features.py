@@ -23,7 +23,7 @@ try:
 except Exception:
     pytest.skip("alpaca_api not available", allow_module_level=True)
 try:
-    from ai_trading import rebalancer
+    import ai_trading.rebalancer as rebalancer
 except Exception:
     pytest.skip("alpaca_trade_api not available", allow_module_level=True)
 try:

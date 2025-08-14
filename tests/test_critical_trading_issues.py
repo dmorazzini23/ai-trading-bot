@@ -23,8 +23,8 @@ os.environ.setdefault('PYTEST_RUNNING', '1')
 # Import the modules we need to test
 try:
     from ai_trading.core import bot_engine
-    from ai_trading import meta_learning
-    import ai_trading.trade_execution as trade_execution  # AI-AGENT-REF: normalized import
+    import ai_trading.meta_learning as meta_learning
+    import ai_trading.execution.engine as trade_execution  # AI-AGENT-REF: normalized import
 except ImportError as e:
     print(f"Import error: {e}")
     # Create minimal mocks for missing imports

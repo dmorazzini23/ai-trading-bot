@@ -15,7 +15,7 @@ os.environ.setdefault('FLASK_PORT', '5000')
 
 # Import the modules we need to test
 try:
-    from ai_trading.trade_execution import (
+    from ai_trading.execution.engine import (
         ExecutionEngine,
         handle_partial_fill,
         safe_submit_order,
