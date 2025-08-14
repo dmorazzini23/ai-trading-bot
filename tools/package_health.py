@@ -60,6 +60,21 @@ def _probe_async_testing() -> bool:
     return ok
 
 
+def _probe_model_and_universe():
+    import os
+    tp = os.getenv('AI_TRADER_TICKERS_FILE', 'tickers.csv')
+    tc = os.getenv('AI_TRADER_TICKERS_CSV')
+    mp = os.getenv('AI_TRADER_MODEL_PATH')
+    mm = os.getenv('AI_TRADER_MODEL_MODULE')
+    print('[health] universe source:', tc and 'CSV(env)' or tp)
+    print('[health] model source:', mp and f'path:{mp}' or (mm and f'module:{mm}') or 'MISSING')
+    try:
+        import joblib  # noqa
+        print('[health] joblib: ok')
+    except Exception as e:
+        print('[health] joblib: MISSING ->', e)
+
+
 def _probe_model_config():
     import os
 
@@ -86,4 +101,5 @@ if __name__ == "__main__":
     _probe_alpaca_trade_api()
     _probe_strategy_allocator()
     _probe_async_testing()
+    _probe_model_and_universe()
     _probe_model_config()

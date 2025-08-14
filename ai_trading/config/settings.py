@@ -9,8 +9,12 @@ from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-MODEL_PATH: Optional[str] = os.getenv("AI_TRADER_MODEL_PATH") or None
-MODEL_MODULE: Optional[str] = os.getenv("AI_TRADER_MODEL_MODULE") or None
+TICKERS_FILE = os.getenv("AI_TRADER_TICKERS_FILE", "tickers.csv")
+TICKERS_CSV = os.getenv("AI_TRADER_TICKERS_CSV")  # optional literal CSV list
+UNIVERSE_LIMIT = int(os.getenv("AI_TRADER_UNIVERSE_LIMIT", "0") or "0")  # 0 => no cap
+
+MODEL_PATH = os.getenv("AI_TRADER_MODEL_PATH")
+MODEL_MODULE = os.getenv("AI_TRADER_MODEL_MODULE")
 
 
 def model_config_source() -> str:
