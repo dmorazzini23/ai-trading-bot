@@ -1189,13 +1189,13 @@ except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, 
 
 class StrategyAllocator:
     def __init__(self, *args, **kwargs):
-        # Package-safe resolution: ai_trading.strategy_allocator -> scripts.strategy_allocator -> fail hard
+        # Package-safe resolution: ai_trading.strategies.performance_allocator -> scripts.strategy_allocator -> fail hard
         from ai_trading.utils.imports import resolve_strategy_allocator_cls
         cls = resolve_strategy_allocator_cls()
         if cls is None:
             raise RuntimeError(
                 "StrategyAllocator not found. Please ensure that either "
-                "ai_trading.strategy_allocator or scripts.strategy_allocator is available. "
+                "ai_trading.strategies.performance_allocator or scripts.strategy_allocator is available. "
                 "Check that scripts/strategy_allocator.py exists and has a StrategyAllocator class."
             )
         self._alloc = cls(*args, **kwargs)
@@ -4141,7 +4141,9 @@ def get_allocator():
     if allocator is None:
         cls = resolve_strategy_allocator_cls()
         if cls is None:
-            _log.error("StrategyAllocator not found (ai_trading.strategy_allocator, scripts.strategy_allocator). Using no-op fallback.")
+            _log.error(
+                "StrategyAllocator not found (ai_trading.strategies.performance_allocator, scripts.strategy_allocator). Using no-op fallback."
+            )
             class StrategyAllocator:
                 def __init__(self, *args, **kwargs):
                     pass

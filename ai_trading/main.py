@@ -18,7 +18,7 @@ from ai_trading.utils import get_free_port, get_pid_on_port
 
 S = get_settings()  # AI-AGENT-REF: resolve runtime defaults once
 
-# AI-AGENT-REF: Import memory optimization and performance monitoring
+# AI-AGENT-REF: Import memory optimization only
 def get_memory_optimizer():
     from ai_trading.config import get_settings
     S = get_settings()
@@ -40,27 +40,13 @@ def optimize_memory():
 
 
 def get_performance_monitor():
-    from ai_trading.config import get_settings
-    S = get_settings()
-    if not S.enable_memory_optimization:  # Reuse same flag for both features
-        return None
-
-    from ai_trading.monitoring.performance_monitor import (  # AI-AGENT-REF: use packaged monitor
-        get_performance_monitor as _get_performance_monitor,
-    )
-    return _get_performance_monitor()
+    # AI-AGENT-REF: shim removed; feature currently disabled
+    return None
 
 
 def start_performance_monitoring():
-    from ai_trading.config import get_settings
-    S = get_settings()
-    if not S.enable_memory_optimization:
-        return
-
-    from ai_trading.monitoring.performance_monitor import (  # AI-AGENT-REF: use packaged monitor
-        start_performance_monitoring as _start_performance_monitoring,
-    )
-    _start_performance_monitoring()
+    # AI-AGENT-REF: shim removed; no-op
+    return None
 # AI-AGENT-REF: Create global config AFTER .env loading and Settings import
 config: Settings | None = None
 
@@ -294,10 +280,5 @@ if __name__ == "__main__":
     main()
 
 
-from importlib.util import find_spec
 from ai_trading.config import get_settings as get_config
 cfg = get_config()
-if getattr(cfg, "enable_performance_monitoring", False):
-    if find_spec("performance_monitor") is None:
-        raise RuntimeError("Feature enabled but module 'performance_monitor' not installed")
-    from ai_trading.monitoring.performance_monitor import *  # noqa: F401

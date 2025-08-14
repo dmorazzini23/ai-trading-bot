@@ -408,14 +408,21 @@ def benchmark_operation(
     """
     import gc
 
-    import psutil
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        psutil = None  # type: ignore  # AI-AGENT-REF: degrade if psutil missing
 
     # Force garbage collection before benchmark
     gc.collect()
 
     # Get initial memory usage
-    process = psutil.Process()
-    initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+    if psutil is not None:
+        process = psutil.Process()
+        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
+    else:
+        process = None
+        initial_memory = 0.0
 
     # Run benchmark
     start_time = time.perf_counter()
@@ -434,8 +441,11 @@ def benchmark_operation(
     throughput = num_operations / (duration_ms / 1000) if duration_ms > 0 else 0
 
     # Memory usage
-    final_memory = process.memory_info().rss / 1024 / 1024  # MB
-    memory_used = final_memory - initial_memory
+    if process is not None:
+        final_memory = process.memory_info().rss / 1024 / 1024  # MB
+        memory_used = final_memory - initial_memory
+    else:
+        memory_used = 0.0
 
     # CPU cores (estimate based on system)
     cpu_cores = mp.cpu_count()

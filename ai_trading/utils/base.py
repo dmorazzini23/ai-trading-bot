@@ -46,7 +46,7 @@ def requires_pandas(func):
 
 logger = logging.getLogger(__name__)
 
-import psutil
+from ai_trading.monitoring.system_health import snapshot_basic  # AI-AGENT-REF: lazy psutil
 
 from tzlocal import get_localzone
 
@@ -80,10 +80,10 @@ def get_phase_logger(name: str, phase: str) -> logging.Logger:
 
 
 def log_cpu_usage(lg: logging.Logger, note: str | None = None) -> None:
-    """Log current process CPU usage if :mod:`psutil` is available."""
-    if psutil is None:
+    """Log current CPU usage using optional psutil snapshot."""  # AI-AGENT-REF: snapshot_basic
+    pct = snapshot_basic().get("cpu_percent")
+    if pct is None:
         return
-    pct = psutil.cpu_percent(interval=None)
     suffix = f"_{note}" if note else ""
     lg.debug("CPU_USAGE%s: %.2f%%", suffix, pct)
 

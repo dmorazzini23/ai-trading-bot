@@ -605,10 +605,13 @@ def _get_system_context() -> dict[str, any]:
     Dict[str, any]
         System context information including performance metrics
     """
-    import psutil
+    # AI-AGENT-REF: optional psutil context
+    try:
+        import psutil  # type: ignore
+    except Exception as e:
+        return {"context_error": f"psutil missing: {e}"}
 
     try:
-        # Basic system metrics
         context = {
             "memory_usage_mb": round(psutil.virtual_memory().used / 1024 / 1024, 1),
             "memory_percent": psutil.virtual_memory().percent,
@@ -616,7 +619,6 @@ def _get_system_context() -> dict[str, any]:
             "disk_usage_percent": psutil.disk_usage("/").percent,
         }
 
-        # Trading bot specific context
         context.update(
             {
                 "python_version": sys.version.split()[0],

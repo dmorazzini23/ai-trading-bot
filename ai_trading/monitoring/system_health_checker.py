@@ -5,7 +5,6 @@ from typing import Any, Dict
 
 # AI-AGENT-REF: lightweight facade for system health tests
 from ai_trading.config import management as config
-from ai_trading.monitoring.performance_monitor import ResourceMonitor
 from ai_trading.monitoring.order_health_monitor import get_order_health_monitor
 
 
@@ -17,10 +16,13 @@ class SystemHealth:
 
 
 def collect_system_health() -> SystemHealth:
-    rm = ResourceMonitor()
-    snap = rm.snapshot()
+    # AI-AGENT-REF: removed ResourceMonitor shim; return basic snapshot
     ohm = get_order_health_monitor()
-    return SystemHealth(cpu=snap.get("cpu", 0.0), mem=snap.get("mem", 0.0), orders_ok=getattr(ohm, "check_orders", lambda: True)())
+    return SystemHealth(
+        cpu=0.0,
+        mem=0.0,
+        orders_ok=getattr(ohm, "check_orders", lambda: True)(),
+    )
 
 
 
