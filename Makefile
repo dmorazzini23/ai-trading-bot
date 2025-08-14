@@ -14,7 +14,7 @@ init:
 	python -m pip install "joblib>=1.3,<2"
 
 test: contract
-	PYTHONPATH=. pytest -q -n auto --maxfail=1 --disable-warnings
+	PYTHONPATH=. pytest -q -n auto --maxfail=20 --disable-warnings
 
 contract:
 	python tools/import_contract.py
