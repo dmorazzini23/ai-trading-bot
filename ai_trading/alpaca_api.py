@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import types
+import uuid
 from typing import Any, Optional
 
 import requests
@@ -11,6 +13,12 @@ from ai_trading.config import get_settings
 
 logger = logging.getLogger(__name__)
 S = get_settings()
+
+# AI-AGENT-REF: lightweight Alpaca API helpers
+SHADOW_MODE = False
+DRY_RUN = False
+partial_fill_tracker: dict[str, Any] = {}
+partial_fills: list[str] = []
 
 # Base endpoints
 _TRADING_BASE = (S.alpaca_base_url or "https://paper-api.alpaca.markets").rstrip("/")
@@ -86,6 +94,36 @@ def start_trade_updates_stream(
         # If already in an event loop (rare here), fall back to a simple loop
         loop = asyncio.new_event_loop()
         try:
-            loop.run_until_complete(_stream_with_sdk(api_key, api_secret, trading_client, state, paper=paper, running=running))
+            loop.run_until_complete(
+                _stream_with_sdk(api_key, api_secret, trading_client, state, paper=paper, running=running)
+            )
         finally:
             loop.close()
+
+
+def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
+    if SHADOW_MODE:
+        return {"status": "shadow"}
+    if DRY_RUN:
+        return {"status": "dry_run"}
+    if getattr(order_data, "client_order_id", None) is None:
+        setattr(order_data, "client_order_id", str(uuid.uuid4()))
+    while True:
+        resp = api.submit_order(order_data)
+        if getattr(resp, "status_code", 200) == 429:
+            time.sleep(1)
+            continue
+        return resp
+
+
+def handle_trade_update(event: Any) -> None:
+    oid = getattr(event.order, "id", None)
+    if event.event == "partial_fill":
+        if oid in partial_fill_tracker:
+            return
+        partial_fill_tracker[oid] = event.order.filled_qty
+        partial_fills.append(oid)
+        logger.debug("ORDER_PARTIAL_FILL")
+    elif event.event == "fill":
+        partial_fill_tracker.pop(oid, None)
+        logger.debug("ORDER_FILLED")

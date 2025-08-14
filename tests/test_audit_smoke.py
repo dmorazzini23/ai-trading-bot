@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-import audit
+import ai_trading.audit as audit  # AI-AGENT-REF: canonical import
 
 
 def force_coverage(mod):

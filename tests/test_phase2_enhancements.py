@@ -24,7 +24,7 @@ test_env = {
 
 with patch.dict(os.environ, test_env):
     import ai_trading.config as config
-    from order_health_monitor import OrderHealthMonitor, OrderInfo
+    from ai_trading.monitoring.order_health_monitor import OrderHealthMonitor, OrderInfo
     from system_health_checker import SystemHealthChecker, ComponentHealth
 
 
@@ -65,8 +65,8 @@ class TestOrderHealthMonitor(unittest.TestCase):
     def test_health_metrics_calculation(self):
         """Test health metrics calculation."""
         # Mock some order data
-        with patch('order_health_monitor._active_orders') as mock_orders, \
-             patch('order_health_monitor._order_tracking_lock'):
+        with patch('ai_trading.monitoring.order_health_monitor._active_orders') as mock_orders, \
+             patch('ai_trading.monitoring.order_health_monitor._order_tracking_lock'):
             
             # Add some mock orders
             mock_orders.__len__ = Mock(return_value=5)

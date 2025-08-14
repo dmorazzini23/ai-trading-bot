@@ -3,7 +3,7 @@ import types
 import pytest
 
 try:
-    import alpaca_api
+    import ai_trading.alpaca_api as alpaca_api  # AI-AGENT-REF: canonical import
 except Exception:
     pytest.skip("alpaca_api not available", allow_module_level=True)
 

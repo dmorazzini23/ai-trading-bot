@@ -306,7 +306,9 @@ class SystemHealthChecker:
         try:
             # Try to import order health monitor
             try:
-                from order_health_monitor import get_order_health_monitor
+                from ai_trading.monitoring.order_health_monitor import (
+                    get_order_health_monitor,
+                )
 
                 monitor = get_order_health_monitor()
                 health_summary = monitor.get_health_summary()

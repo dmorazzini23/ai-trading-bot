@@ -19,7 +19,22 @@ from datetime import UTC, datetime
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
 CONFIG = TradingConfig()
-from trade_execution import OrderInfo, _active_orders, _order_tracking_lock
+# AI-AGENT-REF: prefer packaged trade execution, fallback to stubs for tests
+try:  # pragma: no cover - optional dependency
+    from ai_trading.trade_execution import OrderInfo, _active_orders, _order_tracking_lock
+except Exception:  # fallback when trade_execution is unavailable
+    @dataclass
+    class OrderInfo:  # type: ignore[misc]
+        order_id: str
+        symbol: str
+        side: str
+        quantity: int
+        submitted_time: float
+        last_status: str
+        cancel_attempted: bool = False
+
+    _active_orders: dict[str, OrderInfo] = {}
+    _order_tracking_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
 

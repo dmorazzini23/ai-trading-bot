@@ -27,8 +27,11 @@ from pathlib import Path
 
 import requests
 
-# Optional ML dependencies
-from hmmlearn.hmm import GaussianHMM
+# Optional ML dependency: hmmlearn
+try:
+    from hmmlearn.hmm import GaussianHMM  # type: ignore
+except Exception:  # absent in many CI envs; tests skip if None
+    GaussianHMM = None  # noqa: N816
 
 # Import indicators
 from ai_trading.indicators import atr, mean_reversion_zscore, rsi
@@ -561,9 +564,7 @@ def detect_market_regime_hmm(
     """Annotate ``df`` with HMM-based market regimes."""
     if GaussianHMM is None:
         logger.warning("hmmlearn not installed; skipping regime detection")
-        df["regime"] = np.nan
-        df["Regime"] = df["regime"]
-        return df
+        return None
 
     col = "close" if "close" in df.columns else "Close"
     if col not in df:

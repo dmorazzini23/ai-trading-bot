@@ -10,6 +10,7 @@ import logging
 import signal
 import atexit
 from datetime import datetime, timezone
+from ai_trading.core import bot_engine  # AI-AGENT-REF: use packaged bot_engine
 
 # AI-AGENT-REF: Optimized startup script with performance monitoring
 
@@ -196,22 +197,12 @@ def main():
         
         # Choose startup method based on available modules
         if os.path.exists('ai_trading/main.py'):
-            # Use new modular approach
             from ai_trading.main import main as trading_main
             logging.info("Using ai_trading.main module")
             trading_main()
-        elif os.path.exists('bot_engine.py'):
-            # Fallback to legacy bot_engine
-            logging.info("Using legacy bot_engine module")
-            import bot_engine
-            if hasattr(bot_engine, 'main'):
-                bot_engine.main()
-            else:
-                logging.info("No main function found in bot_engine")
-                return 1
         else:
-            logging.info("No trading module found")
-            return 1
+            logging.info("Using ai_trading.core.bot_engine module")
+            bot_engine.main()
             
     except KeyboardInterrupt:
         logging.info("\nShutdown requested by user")

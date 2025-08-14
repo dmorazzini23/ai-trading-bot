@@ -62,7 +62,7 @@ def test_audit_file_creation_and_permissions(tmp_path, monkeypatch):
         # Import audit after mocking config
         if 'audit' in sys.modules:
             del sys.modules['audit']
-        import audit
+        import ai_trading.audit as audit  # AI-AGENT-REF: canonical import
         
         # Ensure the file doesn't exist initially
         assert not trade_log_path.exists()
@@ -132,7 +132,7 @@ def test_audit_file_multiple_trades(tmp_path, monkeypatch):
     try:
         if 'audit' in sys.modules:
             del sys.modules['audit']
-        import audit
+        import ai_trading.audit as audit  # AI-AGENT-REF: canonical import
         
         # Log first trade
         audit.log_trade("AAPL", 5, "buy", 150.0, "2024-01-01T10:00:00Z", "TEST_MODE")

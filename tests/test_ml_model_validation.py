@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ml_model import MLModel
+from ai_trading.ml_model import MLModel  # AI-AGENT-REF: canonical import
 
 
 class DummyPipe:

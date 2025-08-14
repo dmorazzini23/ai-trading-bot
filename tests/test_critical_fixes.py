@@ -233,10 +233,10 @@ def test_process_manager_multiple_instances_check():
             assert any('CRITICAL' in rec for rec in result['recommendations'])
 
 
-@patch('audit.logger')
+@patch('ai_trading.audit.logger')
 def test_audit_permission_handling(mock_logger):
     """Test that audit module handles permission errors gracefully."""
-    from audit import log_trade
+    from ai_trading.audit import log_trade  # AI-AGENT-REF: canonical import
     
     # This test validates that the permission error handling code exists
     # and would be called in case of permission errors
@@ -251,7 +251,7 @@ def test_audit_permission_handling(mock_logger):
         pass
     
     # The important thing is that the permission handling code exists in audit.py
-    import audit
+    import ai_trading.audit as audit  # AI-AGENT-REF: canonical import
     import inspect
     
     # Check that the enhanced permission handling code is present
