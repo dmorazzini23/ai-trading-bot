@@ -40,7 +40,7 @@ class TestShortSellingImplementation(unittest.TestCase):
     def test_current_sell_logic_blocks_no_position(self):
         """Test that current logic blocks sell orders when no position exists."""
         # This test documents the current behavior that we need to fix
-        from ai_trading.trade_execution import ExecutionEngine  # AI-AGENT-REF: normalized import
+        from ai_trading.execution.engine import ExecutionEngine
         
         # Create mock context
         mock_ctx = Mock()
@@ -62,7 +62,7 @@ class TestShortSellingImplementation(unittest.TestCase):
     
     def test_sell_short_validation_exists(self):
         """Test that _validate_short_selling method exists and works."""
-        from ai_trading.trade_execution import ExecutionEngine  # AI-AGENT-REF: normalized import
+        from ai_trading.execution.engine import ExecutionEngine
         
         # Create mock context
         mock_ctx = Mock()
@@ -80,7 +80,7 @@ class TestShortSellingImplementation(unittest.TestCase):
         
     def test_sell_short_side_should_be_distinguished(self):
         """Test that sell_short orders bypass position checks and validate short selling."""
-        from ai_trading.trade_execution import ExecutionEngine  # AI-AGENT-REF: normalized import
+        from ai_trading.execution.engine import ExecutionEngine
         
         # Create mock context
         mock_ctx = Mock()
@@ -122,7 +122,7 @@ class TestShortSellingImplementation(unittest.TestCase):
         
     def test_order_status_monitoring_needed(self):
         """Test framework for order status monitoring."""
-        from ai_trading.trade_execution import ExecutionEngine  # AI-AGENT-REF: normalized import
+        from ai_trading.execution.engine import ExecutionEngine
         
         # Create mock context
         mock_ctx = Mock()
@@ -162,7 +162,7 @@ class TestShortSellingImplementation(unittest.TestCase):
         
         # Mock the order as old by manipulating the tracking directly
         import time
-        from ai_trading.trade_execution import _active_orders, _order_tracking_lock  # AI-AGENT-REF: normalized import
+        from ai_trading.monitoring.order_health_monitor import _active_orders, _order_tracking_lock
         with _order_tracking_lock:
             if "old_order_456" in _active_orders:
                 _active_orders["old_order_456"].submitted_time = time.time() - 700  # 700 seconds ago

@@ -15,11 +15,8 @@ os.environ.setdefault('FLASK_PORT', '5000')
 
 # Import the modules we need to test
 try:
-    from ai_trading.trade_execution import (
-        ExecutionEngine,
-        handle_partial_fill,
-        safe_submit_order,
-    )  # AI-AGENT-REF: normalized import
+    from ai_trading.execution.engine import ExecutionEngine, Order, OrderSide
+    from ai_trading.math.money import Money
     from ai_trading.risk.engine import RiskEngine  # AI-AGENT-REF: normalized import
     from ai_trading.core import bot_engine
     HAS_FULL_IMPORTS = True
@@ -42,18 +39,15 @@ class TestCriticalIssuesResolution(unittest.TestCase):
         # Create mock execution engine
         engine = Mock(spec=ExecutionEngine)
         engine.logger = self.logger
-        
-        # Mock a scenario where bot thinks it owns 2.1 shares but only 1.6 were filled
+
+        # Mock a scenario where bot thinks it owns 2 shares but only 1 was filled
         symbol = "NVDA"
-        order_id = "test_order_123"
-        filled_qty = 1.6  # What was actually filled
-        price = 150.0
-        
-        # Test partial fill handling
+        order = Order(symbol, OrderSide.BUY, 2, price=Money(150.0))
+
+        # Test partial fill handling via Order model
         try:
-            handle_partial_fill(order_id, symbol, filled_qty, price)
-            # Should not raise exception
-            self.assertTrue(True, "Partial fill handling should work")
+            order.add_fill(1, Money(150.0))
+            self.assertTrue(order.is_partially_filled)
         except Exception as e:
             self.fail(f"Partial fill handling failed: {e}")
     

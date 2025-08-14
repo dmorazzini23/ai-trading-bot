@@ -25,8 +25,32 @@ try:
 except Exception:  # pragma: no cover - optional torch dependency
     pytest.skip("sentiment module unavailable", allow_module_level=True)
 from ai_trading import meta_learning
-from ai_trading import trade_execution
 import ai_trading.config as config
+from ai_trading.broker.alpaca import AlpacaBroker
+from ai_trading.execution.engine import ExecutionEngine, OrderManager
+from ai_trading.monitoring.order_health_monitor import (
+    _active_orders,
+    _order_tracking_lock,
+    OrderInfo,
+)
+
+
+@pytest.fixture
+def broker(monkeypatch):
+    """Provide a mocked AlpacaBroker for tests."""
+    broker = AlpacaBroker()
+    monkeypatch.setattr(broker, "get_orders", lambda *a, **k: [])
+    monkeypatch.setattr(
+        broker,
+        "place_order",
+        lambda **k: {
+            "id": "TEST123",
+            "symbol": k["symbol"],
+            "qty": k["qty"],
+            "side": k.get("side", "buy"),
+        },
+    )
+    return broker
 
 
 class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
@@ -246,13 +270,11 @@ class TestLiquidityManagementFixes(unittest.TestCase):
     """Test enhanced liquidity management fixes."""
     
     def setUp(self):
-        self.mock_ctx = Mock()
         self.mock_api = Mock()
-        self.execution_engine = trade_execution.ExecutionEngine(self.mock_ctx)
-        self.execution_engine.api = self.mock_api
+        self.execution_engine = ExecutionEngine(broker_interface=self.mock_api)
     
-    @patch('ai_trading.trade_execution.ExecutionEngine._latest_quote')
-    @patch('ai_trading.trade_execution.ExecutionEngine._minute_stats')
+    @patch('ai_trading.execution.engine.ExecutionEngine._latest_quote')
+    @patch('ai_trading.execution.engine.ExecutionEngine._minute_stats')
     def test_enhanced_liquidity_assessment(self, mock_minute_stats, mock_quote):
         """Test enhanced liquidity assessment with more granular controls."""
         # Mock quote data - normal spread
@@ -288,10 +310,8 @@ class TestOrderManagementFixes(unittest.TestCase):
     """Test enhanced order management and timeout fixes."""
     
     def setUp(self):
-        self.mock_ctx = Mock()
         self.mock_api = Mock()
-        self.execution_engine = trade_execution.ExecutionEngine(self.mock_ctx)
-        self.execution_engine.api = self.mock_api
+        self.execution_engine = ExecutionEngine(broker_interface=self.mock_api)
     
     def test_order_timeout_configuration(self):
         """Test that order timeout is properly configured."""
@@ -305,8 +325,8 @@ class TestOrderManagementFixes(unittest.TestCase):
         mock_time.return_value = 1000
         
         # Add a stale order to tracking
-        with trade_execution._order_tracking_lock:
-            trade_execution._active_orders['test_order_123'] = trade_execution.OrderInfo(
+        with _order_tracking_lock:
+            _active_orders['test_order_123'] = OrderInfo(
                 order_id='test_order_123',
                 symbol='AAPL',
                 side='buy',
@@ -387,12 +407,12 @@ class TestIntegrationScenarios(unittest.TestCase):
         # For now, just ensure modules can be imported together
         import ai_trading.analysis.sentiment as sentiment
         from ai_trading import meta_learning
-        import ai_trading.trade_execution as trade_execution  # AI-AGENT-REF: normalized import
+        from ai_trading.execution.engine import ExecutionEngine
         
         # Verify key functions exist
         self.assertTrue(callable(sentiment.fetch_sentiment))
         self.assertTrue(callable(meta_learning.retrain_meta_learner))
-        self.assertTrue(callable(trade_execution.ExecutionEngine))
+        self.assertTrue(callable(ExecutionEngine))
 
 
 if __name__ == '__main__':
@@ -471,16 +491,13 @@ def test_meta_learning_price_validation():
 
 def test_order_execution_partial_fill_tracking():
     """Test that partial fills are properly tracked and reconciled."""
-    from ai_trading.trade_execution import TradingEngine  # AI-AGENT-REF: normalized import
-    
-    # Mock the trading context and API
-    mock_ctx = Mock()
-    mock_ctx.data_client = Mock()
-    mock_ctx.data_fetcher = Mock()
+    from ai_trading.execution.engine import ExecutionEngine
+
+    # Mock the trading API
     mock_api = Mock()
-    
-    # Create trading engine instance
-    engine = TradingEngine(mock_ctx, api=mock_api)
+
+    # Create execution engine instance
+    engine = ExecutionEngine(broker_interface=mock_api)
     
     # Mock order result
     mock_order = Mock()
@@ -501,16 +518,10 @@ def test_quantity_tracking_fix():
     import io
     
     # Import trade execution module
-    from ai_trading.trade_execution import ExecutionEngine  # AI-AGENT-REF: normalized import
-    
-    # Create mock context
-    mock_ctx = Mock()
-    mock_ctx.api = Mock()
-    mock_ctx.data_fetcher = Mock()
-    mock_ctx.partial_fill_tracker = {}
-    
+    from ai_trading.execution.engine import ExecutionEngine
+
     # Create execution engine
-    engine = ExecutionEngine(mock_ctx)
+    engine = ExecutionEngine()
     
     # Set up logging capture to verify correct behavior
     log_stream = io.StringIO()

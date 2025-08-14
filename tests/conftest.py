@@ -1488,13 +1488,6 @@ def stub_capital_scaling(monkeypatch):
         # If bot_engine import fails due to config issues, skip it for now
         pass
     
-    # Add missing trade_execution attributes
-    try:
-        import ai_trading.trade_execution as trade_execution  # AI-AGENT-REF: normalized import
-        if not hasattr(trade_execution, 'ExecutionEngine'):
-            trade_execution.ExecutionEngine = MockExecutionEngine
-    except ImportError:
-        pass
         
     yield
 
@@ -1651,4 +1644,14 @@ except Exception:
         pass
 
     _pydantic_settings.BaseSettings = BaseSettings
+    _pydantic_settings.SettingsConfigDict = dict
     _sys.modules["pydantic_settings"] = _pydantic_settings
+
+
+# Fixture for execution engine
+@pytest.fixture
+def exec_engine(monkeypatch):
+    from ai_trading.execution.engine import ExecutionEngine
+
+    engine = ExecutionEngine()
+    return engine
