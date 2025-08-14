@@ -1248,6 +1248,10 @@ Set exactly one of:
 Service example:
 Environment="AI_TRADER_MODEL_PATH=/home/aiuser/ai-trading-bot/trained_model.pkl"
 
+### Universe CSV
+- Optional: `AI_TRADER_TICKERS_CSV=/abs/path/to/tickers.csv`
+- Default: packaged `ai_trading/data/tickers.csv` (S&P-100)
+
 ## Agent & Dev Quickstart
 
 ### Environment

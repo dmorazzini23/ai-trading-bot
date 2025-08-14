@@ -59,6 +59,10 @@ dependencies = [
 
 [tool.setuptools]
 packages = ["ai_trading"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+ai_trading = ["data/tickers.csv"]
 
 [project.scripts]
 ai-trade = "ai_trading.__main__:run_trade"
