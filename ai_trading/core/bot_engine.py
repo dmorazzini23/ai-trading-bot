@@ -12,6 +12,7 @@ import atexit
 import io
 import inspect
 import logging
+from ai_trading.logging import get_logger  # AI-AGENT-REF: use sanitizing adapter
 import math
 import os
 import sys
@@ -27,7 +28,7 @@ from pathlib import Path
 from typing import Any, Optional, Union
 from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 
-_log = logging.getLogger(__name__)
+_log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
 
 # --- path helpers (no imports of heavy deps) ---
 BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
@@ -141,7 +142,10 @@ def _load_required_model() -> Any:
                 f"Module '{modname}' missing get_model()/Model() factory."
             )
         mdl = factory() if callable(factory) else factory
-        _log.info("MODEL_LOADED", extra={"source": "module", "module": modname})
+        _log.info(
+            "MODEL_LOADED",
+            extra={"source": "module", "model_module": modname},  # AI-AGENT-REF: avoid reserved key
+        )
         return mdl
 
     msg = (

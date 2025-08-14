@@ -1,4 +1,11 @@
-"""Logging helpers for the AI trading bot."""
+"""Logging helpers for the AI trading bot.
+
+These helpers centralize logger configuration and now include a sanitizer that
+prevents collisions with reserved :class:`logging.LogRecord` attributes. Any
+key in ``extra`` matching a reserved field is automatically prefixed with
+``x_`` to keep structured logging safe. Use :func:`get_logger` to obtain a
+sanitizing adapter for all modules.
+"""  # AI-AGENT-REF: document extra key sanitization
 
 import atexit
 import csv
@@ -11,7 +18,56 @@ import threading
 import time
 import traceback
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Dict
+
+# Reserved LogRecord attribute names that cannot be overridden by `extra`.
+_RESERVED_LOGRECORD_KEYS = {
+    "name",
+    "msg",
+    "args",
+    "levelname",
+    "levelno",
+    "pathname",
+    "filename",
+    "module",
+    "exc_info",
+    "exc_text",
+    "stack_info",
+    "lineno",
+    "funcName",
+    "created",
+    "msecs",
+    "relativeCreated",
+    "thread",
+    "threadName",
+    "processName",
+    "process",
+    "asctime",
+}  # AI-AGENT-REF: prevent reserved key collisions
+
+
+def _sanitize_extra(extra: Dict[str, Any] | None) -> Dict[str, Any]:
+    """Rename reserved LogRecord keys with ``x_`` prefix."""  # AI-AGENT-REF: sanitizer
+    if not extra:
+        return {}
+    return {
+        (k if k not in _RESERVED_LOGRECORD_KEYS else f"x_{k}"): v
+        for k, v in extra.items()
+    }
+
+
+class SanitizingLoggerAdapter(logging.LoggerAdapter):
+    """Adapter that sanitizes ``extra`` keys to avoid LogRecord collisions."""
+
+    # AI-AGENT-REF: intercept and sanitize extra dicts
+    def process(self, msg, kwargs):
+        extra = kwargs.get("extra")
+        if extra is not None:
+            kwargs["extra"] = _sanitize_extra(extra)
+        return msg, kwargs
+
+
+_ROOT_LOGGER_NAME = "ai_trading"  # AI-AGENT-REF: default root logger name
 
 # AI-AGENT-REF: structured logging helper to avoid stray kwargs
 def with_extra(logger, level, msg: str, *, extra: dict | None = None, **_ignored):
@@ -195,7 +251,7 @@ class EmitOnceLogger:
 
 
 _configured = False
-_loggers: dict[str, logging.Logger] = {}
+_loggers: dict[str, SanitizingLoggerAdapter] = {}  # AI-AGENT-REF: store adapters
 _log_queue: queue.Queue | None = None
 _listener: QueueListener | None = None
 
@@ -310,20 +366,18 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         return logger
 
 
-def get_logger(name: str) -> logging.Logger:
-    """Return a named logger, configuring logging on first use."""
+def get_logger(name: str) -> SanitizingLoggerAdapter:
+    """Return a named logger wrapped with :class:`SanitizingLoggerAdapter`."""
     if name not in _loggers:
-        # Ensure root logging is configured first
-        setup_logging()
-        logger = logging.getLogger(name)
-        # AI-AGENT-REF: Don't copy handlers - let propagation handle it to prevent duplicates
-        logger.propagate = True  # Ensure messages propagate to root logger
-        logger.setLevel(logging.NOTSET)  # Use root logger's level
-        _loggers[name] = logger
+        setup_logging()  # AI-AGENT-REF: ensure root configured once
+        base = logging.getLogger(name or _ROOT_LOGGER_NAME)
+        base.propagate = True
+        base.setLevel(logging.NOTSET)
+        _loggers[name] = SanitizingLoggerAdapter(base, {})
     return _loggers[name]
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)  # AI-AGENT-REF: use sanitizing adapter
 
 # Create emit-once logger instance for preventing duplicate startup messages  
 logger_once = EmitOnceLogger(logger)
@@ -818,4 +872,5 @@ __all__ = [
     "info_kv",
     "warning_kv",
     "error_kv",
+    "SanitizingLoggerAdapter",
 ]

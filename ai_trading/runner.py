@@ -37,7 +37,10 @@ def _preflight_import_health() -> None:
         try:
             importlib.import_module(mod)
         except Exception as exc:  # pragma: no cover - surface import issues
-            log.error("IMPORT_PREFLIGHT_FAILED", extra={"module": mod, "error": repr(exc)})
+            log.error(
+                "IMPORT_PREFLIGHT_FAILED",
+                extra={"module_name": mod, "error": repr(exc)},  # AI-AGENT-REF: avoid reserved key
+            )
             if os.environ.get("FAIL_FAST_IMPORTS", "").lower() in {"1", "true"}:
                 raise SystemExit(1)
     log.info("IMPORT_PREFLIGHT_OK")
