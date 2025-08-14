@@ -6,6 +6,7 @@ from functools import lru_cache
 from datetime import timedelta
 from pydantic import Field, field_validator, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -27,6 +28,14 @@ class Settings(BaseSettings):
     # cooling
     trade_cooldown_min: int = Field(15, alias="TRADE_COOLDOWN_MIN")  # AI-AGENT-REF: cooldown minutes
 
+    # External APIs
+    news_api_key: Optional[str] = None  # AI-AGENT-REF: optional News API key
+    rebalance_interval_min: int = Field(
+        60,
+        ge=1,
+        description="Minutes between portfolio rebalances",
+    )  # AI-AGENT-REF: rebalance interval
+
     @field_validator("model_path", "halt_flag_path", "rl_model_path", mode="before")
     @classmethod
     def _empty_to_default(cls, v, info):  # AI-AGENT-REF: blank string to default
@@ -40,10 +49,24 @@ class Settings(BaseSettings):
     def trade_cooldown(self) -> timedelta:
         return timedelta(minutes=self.trade_cooldown_min)
 
-    model_config = SettingsConfigDict(env_prefix="", extra="ignore")  # AI-AGENT-REF: allow AI_TRADING_* and bare names
+    model_config = SettingsConfigDict(
+        env_prefix="AI_TRADER_",
+        extra="ignore",
+        case_sensitive=False,
+    )  # AI-AGENT-REF: AI_TRADER_ env prefix
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Cached settings accessor."""  # AI-AGENT-REF: cache settings
     return Settings()  # pydantic-settings auto-loads .env when present
+
+
+def get_news_api_key() -> Optional[str]:
+    """Lazy accessor for optional News API key."""  # AI-AGENT-REF: runtime News API key
+    return get_settings().news_api_key
+
+
+def get_rebalance_interval_min() -> int:
+    """Lazy accessor for rebalance interval."""  # AI-AGENT-REF: runtime rebalance interval
+    return int(get_settings().rebalance_interval_min)

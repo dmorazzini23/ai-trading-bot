@@ -12,7 +12,10 @@ _log = logging.getLogger(__name__)
 
 from alpaca_trade_api.rest import APIError  # type: ignore  # AI-AGENT-REF: fail fast on missing Alpaca SDK
 
-from ai_trading.config import get_settings
+from ai_trading.settings import (
+    get_rebalance_interval_min,
+    get_settings,
+)
 from ai_trading.portfolio import compute_portfolio_weights
 
 
@@ -53,8 +56,9 @@ from ai_trading.strategies.regime_detector import (
 # Log availability after imports are guaranteed
 _log.info("Portfolio-first trading capabilities loaded")
 
-S = get_settings()
-REBALANCE_INTERVAL_MIN = S.rebalance_interval_min
+
+def rebalance_interval_min() -> int:
+    return get_rebalance_interval_min()
 
 _last_rebalance = datetime.now(UTC)
 
@@ -79,7 +83,8 @@ class TaxAwareRebalancer:
         self.wash_sale_days = 31  # Days to avoid wash sale rule
 
         # Enhanced features if available via configuration
-        if S.ENABLE_PORTFOLIO_FEATURES:
+        settings = get_settings()
+        if settings.ENABLE_PORTFOLIO_FEATURES:
             self.adaptive_sizer = AdaptivePositionSizer()
             self.max_portfolio_risk = RISK_PARAMETERS["MAX_PORTFOLIO_RISK"]
 
@@ -566,7 +571,8 @@ def rebalance_portfolio(ctx) -> None:
     # AI-AGENT-REF: Enhanced rebalancing with tax optimization
     try:
         # Try to use enhanced tax-aware rebalancing if enabled
-        if S.ENABLE_PORTFOLIO_FEATURES and hasattr(ctx, "account_equity"):
+        settings = get_settings()
+        if settings.ENABLE_PORTFOLIO_FEATURES and hasattr(ctx, "account_equity"):
             tax_rebalancer = TaxAwareRebalancer()
 
             current_positions = getattr(ctx, "current_positions", {})
@@ -613,7 +619,7 @@ def enhanced_maybe_rebalance(ctx) -> None:
     now = datetime.now(UTC)
 
     # AI-AGENT-REF: Enhanced rebalancing with market condition awareness
-    if (now - _last_rebalance) >= timedelta(minutes=REBALANCE_INTERVAL_MIN):
+    if (now - _last_rebalance) >= timedelta(minutes=rebalance_interval_min()):
         try:
             portfolio = getattr(ctx, "portfolio_weights", {})
 
@@ -632,10 +638,11 @@ def enhanced_maybe_rebalance(ctx) -> None:
             )
 
             # Dynamic threshold based on market volatility if available
-            drift_threshold = S.portfolio_drift_threshold
+            settings = get_settings()
+            drift_threshold = settings.portfolio_drift_threshold
 
             # Use portfolio-first rebalancing if enabled
-            if S.ENABLE_PORTFOLIO_FEATURES:
+            if settings.ENABLE_PORTFOLIO_FEATURES:
                 should_rebalance, reason = _check_portfolio_first_rebalancing(
                     ctx, drift, drift_threshold
                 )
@@ -694,7 +701,8 @@ def portfolio_first_rebalance(ctx) -> None:
     global _portfolio_optimizer, _regime_detector
 
     try:
-        if not S.ENABLE_PORTFOLIO_FEATURES:
+        settings = get_settings()
+        if not settings.ENABLE_PORTFOLIO_FEATURES:
             _log.info("Portfolio-first not enabled, using standard rebalancing")
             rebalance_portfolio(ctx)
             return
@@ -743,7 +751,7 @@ def portfolio_first_rebalance(ctx) -> None:
 
         if should_rebalance:
             # Execute tax-aware rebalancing
-            if S.ENABLE_PORTFOLIO_FEATURES:
+            if settings.ENABLE_PORTFOLIO_FEATURES:
                 tax_rebalancer = TaxAwareRebalancer()
 
                 # Calculate account equity
@@ -1047,7 +1055,8 @@ def maybe_rebalance(ctx) -> None:
     """Rebalance when interval has elapsed."""
     global _last_rebalance
     now = datetime.now(UTC)
-    if (now - _last_rebalance) >= timedelta(minutes=REBALANCE_INTERVAL_MIN):
+    if (now - _last_rebalance) >= timedelta(minutes=rebalance_interval_min()):
+        settings = get_settings()
         portfolio = getattr(ctx, "portfolio_weights", {})
         # always trigger at least one rebalance if no existing weights
         if not portfolio:
@@ -1060,7 +1069,7 @@ def maybe_rebalance(ctx) -> None:
                 if current
                 else 0.0
             )
-            if drift > S.portfolio_drift_threshold:
+            if drift > settings.portfolio_drift_threshold:
                 rebalance_portfolio(ctx)
                 _last_rebalance = now
 
@@ -1090,7 +1099,8 @@ def start_rebalancer(ctx) -> threading.Thread:
                     extra={"cause": exc.__class__.__name__, "detail": str(exc)},
                 )  # AI-AGENT-REF: narrow loop error
             # AI-AGENT-REF: configurable sleep interval, shorter for tests
-            sleep_interval = S.rebalance_sleep_seconds
+            settings = get_settings()
+            sleep_interval = settings.rebalance_sleep_seconds
             # Detect test environment and use shorter interval
             import os
 

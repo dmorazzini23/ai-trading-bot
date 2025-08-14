@@ -63,9 +63,9 @@ def test_monitor_slippage_alert(monkeypatch):
 def test_maybe_rebalance(monkeypatch):
     """maybe_rebalance triggers a rebalance after the interval."""
     calls = []
-    monkeypatch.setattr(rebalancer, "REBALANCE_INTERVAL_MIN", 0)
+    monkeypatch.setattr(rebalancer, "rebalance_interval_min", lambda: 0)
     monkeypatch.setattr(rebalancer, "rebalance_portfolio", lambda ctx: calls.append(ctx))
-    rebalancer._last_rebalance = rebalancer.datetime.now(rebalancer.timezone.utc) - rebalancer.timedelta(minutes=1)
+    rebalancer._last_rebalance = rebalancer.datetime.now(rebalancer.UTC) - rebalancer.timedelta(minutes=1)
     rebalancer.maybe_rebalance("ctx")
     assert calls == ["ctx"]
 
