@@ -60,7 +60,6 @@ def default_trade_log_path() -> str:
 
 # AI-AGENT-REF: warn-once flags for config/tickers issues
 _warned_missing_tickers = False
-_warned_no_model_candidates = False
 
 
 def _is_market_open_now(cfg=None) -> bool:
@@ -90,6 +89,11 @@ from ai_trading.logging import (
     warning_kv,
 )  # AI-AGENT-REF: structured logging helper
 from ai_trading.indicators import compute_atr as _compute_atr  # AI-AGENT-REF: fail fast at import-time
+from ai_trading.config.settings import (
+    MODEL_PATH,
+    MODEL_MODULE,
+    model_config_source,
+)
 
 # RL: import the trader wrapper from the correct package
 try:
@@ -97,6 +101,110 @@ try:
 except Exception as e:  # noqa: BLE001 - best-effort import; we log below.
     RLTrader = None  # type: ignore
     warning_kv(_log, "RL_IMPORT_FAILED", extra={"detail": str(e)})
+
+logger = logging.getLogger("ai_trading.core.bot_engine")
+
+
+def _load_required_model() -> Any:
+    src = model_config_source()
+    if src == "path":
+        import joblib
+
+        p = MODEL_PATH
+        assert p, "MODEL_PATH lost after validation"
+        path = Path(p)
+        if not path.exists():
+            logger.error("MODEL_LOAD_ERROR", extra={"reason": "file_not_found", "path": p})
+            raise FileNotFoundError(f"Model file not found: {p}")
+        try:
+            model = joblib.load(p)
+            logger.info(
+                "MODEL_LOADED",
+                extra={"source": p, "model_type": type(model).__name__},
+            )
+            return model
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "MODEL_LOAD_ERROR",
+                extra={"reason": "file_load_failed", "path": p, "err": str(e)},
+            )
+            raise
+    elif src == "module":
+        mod_name = MODEL_MODULE
+        assert mod_name, "MODEL_MODULE lost after validation"
+        try:
+            mod = __import__(mod_name, fromlist=["get_model", "Model"])
+        except Exception as e:  # noqa: BLE001
+            logger.error(
+                "MODEL_LOAD_ERROR",
+                extra={
+                    "reason": "module_import_failed",
+                    "module": mod_name,
+                    "err": str(e),
+                },
+            )
+            raise
+        if hasattr(mod, "get_model"):
+            try:
+                model = mod.get_model()
+                logger.info(
+                    "MODEL_LOADED",
+                    extra={"source": mod_name, "model_type": type(model).__name__},
+                )
+                return model
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    "MODEL_LOAD_ERROR",
+                    extra={
+                        "reason": "get_model_failed",
+                        "module": mod_name,
+                        "err": str(e),
+                    },
+                )
+                raise
+        if hasattr(mod, "Model"):
+            try:
+                model = mod.Model()
+                logger.info(
+                    "MODEL_LOADED",
+                    extra={"source": mod_name, "model_type": type(model).__name__},
+                )
+                return model
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    "MODEL_LOAD_ERROR",
+                    extra={
+                        "reason": "Model_ctor_failed",
+                        "module": mod_name,
+                        "err": str(e),
+                    },
+                )
+                raise
+        logger.error(
+            "MODEL_LOAD_ERROR",
+            extra={
+                "reason": "no_factory",
+                "module": mod_name,
+                "hint": "provide get_model() or Model()",
+            },
+        )
+        raise ImportError(f"No get_model()/Model() in module {mod_name}")
+    else:
+        logger.error(
+            "MODEL_CONFIG_MISSING",
+            extra={
+                "hint_paths": [
+                    "AI_TRADER_MODEL_PATH",
+                    "TradingConfig.ml_model_path",
+                ],
+                "hint_modules": [
+                    "AI_TRADER_MODEL_MODULE",
+                    "TradingConfig.ml_model_module",
+                ],
+                "action": "Set a valid model path (.joblib/.pkl) or module with get_model()/Model().",
+            },
+        )
+        raise RuntimeError("Model required but not configured")
 
 # AI-AGENT-REF: emit-once helper and readiness gate for startup/runtime coordination
 _EMITTED_KEYS: set[str] = set()
@@ -1428,131 +1536,6 @@ def _load_ml_model(symbol: str):
     return model
 
 
-# AI-AGENT-REF: centralized loader for primary ML model
-def _load_primary_model(runtime):
-    """
-    Load and cache the primary ML model for predictions.
-    Resolution order:
-      1) If runtime.model already set -> return it.
-      2) If cfg has an explicit path (cfg.ml_model_path or cfg.model_path) and it exists:
-           - .joblib/.pkl -> joblib.load / pickle.load
-      3) If cfg has a python module path (cfg.ml_model_module or cfg.model_module):
-           - import module, use get_model() or Model() to construct.
-    On success: cache to runtime.model and return it.
-    On failure: log and return None.
-    """
-    # 0) Return cached
-    existing = getattr(runtime, "model", None)
-    if existing is not None:
-        return existing
-
-    # 1) Candidate sources from config
-    cfg = runtime.cfg
-    candidates = []
-    # file paths first
-    for attr in ("ml_model_path", "model_path"):
-        p = getattr(cfg, attr, None)
-        if isinstance(p, str) and p.strip():
-            candidates.append(("path", p.strip()))
-    # module paths next
-    for attr in ("ml_model_module", "model_module"):
-        m = getattr(cfg, attr, None)
-        if isinstance(m, str) and m.strip():
-            candidates.append(("module", m.strip()))
-
-    # AI-AGENT-REF: warn once when no model configuration is provided
-    global _warned_no_model_candidates
-    if not candidates:
-        if not _warned_no_model_candidates:
-            _warned_no_model_candidates = True
-            _log.error(
-                "MODEL_CONFIG_MISSING",
-                extra={
-                    "hint_paths": [
-                        "AI_TRADER_MODEL_PATH",
-                        "TradingConfig.ml_model_path",
-                    ],
-                    "hint_modules": [
-                        "AI_TRADER_MODEL_MODULE",
-                        "TradingConfig.ml_model_module",
-                    ],
-                    "action": (
-                        "Set one of the above to a valid model path (.joblib/.pkl)"
-                        " or module with get_model()/Model()."
-                    ),
-                },
-            )
-        return None
-
-    model = None
-    for kind, value in candidates:
-        try:
-            if kind == "path":
-                path = Path(value)
-                if not path.exists():
-                    raise FileNotFoundError(str(path))
-                # prefer joblib when available for sklearn-like artifacts
-                if path.suffix in (".joblib", ".pkl"):
-                    try:
-                        import joblib  # noqa: F401
-                        model = joblib.load(str(path))
-                    except ModuleNotFoundError:
-                        import pickle
-                        with open(path, "rb") as fh:
-                            model = pickle.load(fh)
-                else:
-                    # Unknown extension; try pickle as a best effort
-                    import pickle
-                    with open(path, "rb") as fh:
-                        model = pickle.load(fh)
-
-                _log.info(
-                    "MODEL_LOADED",
-                    extra={
-                        "source": "path",
-                        "value": str(path),
-                        "model_type": type(model).__name__,
-                    },
-                )
-                runtime.model = model
-                return model
-
-            elif kind == "module":
-                mod = importlib.import_module(value)
-                if hasattr(mod, "get_model") and callable(getattr(mod, "get_model")):
-                    model = mod.get_model(cfg)
-                elif hasattr(mod, "Model"):
-                    model = getattr(mod, "Model")(cfg)
-                else:
-                    raise AttributeError(f"No get_model() or Model in {value}")
-                _log.info(
-                    "MODEL_LOADED",
-                    extra={
-                        "source": "module",
-                        "value": value,
-                        "model_type": type(model).__name__,
-                    },
-                )
-                runtime.model = model
-                return model
-
-        except (
-            FileNotFoundError,
-            ModuleNotFoundError,
-            AttributeError,
-            ValueError,
-        ) as e:
-            _log.error(
-                "MODEL_LOAD_FAILED",
-                extra={"cause": e.__class__.__name__, "detail": str(e)},
-            )
-            raise
-
-    _log.error(
-        "MODEL_LOAD_FAILED",
-        extra={"candidates": candidates, "error": "unresolved"},
-    )
-    return None
 
 
 def fetch_minute_df_safe(symbol: str) -> pd.DataFrame:
@@ -10447,13 +10430,9 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                     _log.warning("SUMMARY_FAIL", extra={"cause": e.__class__.__name__, "detail": str(e)})
                 return
 
-            alpha_model = _load_primary_model(runtime)  # AI-AGENT-REF: load model once per runtime
-            if alpha_model is None:
-                _log.warning(
-                    "SKIP_TRADE_NO_MODEL",
-                    extra={"reason": "model_not_available"},
-                )
-                return
+            if not getattr(runtime, "model", None):
+                runtime.model = _load_required_model()
+            alpha_model = runtime.model
 
             retries = 3
             processed, row_counts = [], {}
