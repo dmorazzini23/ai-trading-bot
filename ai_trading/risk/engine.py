@@ -245,7 +245,7 @@ class RiskEngine:
     def refresh_positions(self, api) -> None:
         """Synchronize exposure with live positions."""
         try:
-            positions = api.get_all_positions()
+            positions = api.list_open_positions()
             logger.debug("Raw Alpaca positions: %s", positions)
             acct = api.get_account()
             equity = float(getattr(acct, "equity", 0) or 0)
@@ -268,7 +268,7 @@ class RiskEngine:
     def position_exists(self, api, symbol: str) -> bool:
         """Return True if ``symbol`` exists in current Alpaca positions."""
         try:
-            for p in api.get_all_positions():
+            for p in api.list_open_positions():
                 if getattr(p, "symbol", "") == symbol:
                     return True
         except (AttributeError, APIError) as exc:  # AI-AGENT-REF: narrow API errors
