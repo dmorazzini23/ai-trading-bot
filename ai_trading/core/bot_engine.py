@@ -4193,70 +4193,60 @@ def _import_all_strategy_submodules(pkg_name: str):
     return pkg
 
 def get_strategies():
-    """
-    Discover and instantiate concrete strategy classes.
-    Preference: ai_trading.strategies (packaged). If none found, provide a safe fallback.
-    If config.strategy_names exists (iterable of class names), use it to filter.
-    """
-    strat_mod = _import_all_strategy_submodules("ai_trading.strategies")
-
-    strategies = []
-    if strat_mod is not None:
-        try:
-            BaseStrategy = getattr(strat_mod, "BaseStrategy")
-        except AttributeError:
-            BaseStrategy = None
-        if BaseStrategy is not None:
-            # discover concrete subclasses in the now-populated package namespace
-            concrete = []
-            for name, obj in vars(strat_mod).items():
-                try:
-                    if _is_concrete_strategy(obj, BaseStrategy):
-                        concrete.append(obj)
-                except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
-                    continue
-            # optional filtering by configured list of class names
-            try:
-                from ai_trading.config.management import TradingConfig
-                cfg = TradingConfig()
-                wanted = getattr(cfg, "strategy_names", None)
-            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
-                cfg = None
-                wanted = None
-
-            if wanted:
-                selected = [cls for cls in concrete if cls.__name__ in set(wanted)]
+    """Load configured strategies with safe defaults."""  # AI-AGENT-REF: robust strategy selection
+    wanted: list[str] | None = None  # AI-AGENT-REF: ensure variable always defined
+    try:
+        from ai_trading.config.settings import get_settings
+        S = get_settings()
+        raw = getattr(S, "STRATEGIES_WANTED", None) or getattr(S, "strategies_wanted", None)
+        if raw:
+            if isinstance(raw, str):
+                wanted = [raw.lower()]
             else:
-                selected = concrete
-
-            names = []
-            for cls in selected:
                 try:
-                    strategies.append(cls())
-                    names.append(cls.__name__)
-                except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-                    _log.error("Failed to instantiate strategy %s: %s", cls.__name__, e)
-            if names:
-                _log.info("Loaded strategies: %s", ", ".join(sorted(names)))
+                    wanted = [str(s).lower() for s in raw]
+                except TypeError:  # not iterable
+                    wanted = [str(raw).lower()]
+    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):
+        wanted = None
 
-    if not strategies:
-        # Only warn if strategy_names was explicitly provided but none were found
-        if wanted:
-            _log.warning("No concrete strategies found from configured strategy_names %s; using FallbackStrategy (no-op).", wanted)
-        else:
-            _log.debug("No concrete strategies found; using FallbackStrategy (no-op).")
-        class FallbackStrategy:
-            """
-            Minimal no-op strategy implementing the expected API so the engine can run.
-            """
-            name = "FallbackStrategy"
-            def generate_signals(self, *args, **kwargs):
-                return []  # no signals
-            def calculate_position_size(self, *args, **kwargs):
-                return 0   # no positions
-        strategies = [FallbackStrategy()]
+    if not wanted:
+        env_raw = os.getenv("STRATEGIES")
+        if env_raw:
+            wanted = [part.strip().lower() for part in env_raw.split(",") if part.strip()]
+    if not wanted:
+        wanted = ["momentum"]
 
-    return strategies
+    try:
+        from ai_trading.strategies import REGISTRY  # type: ignore  # AI-AGENT-REF: lazy import avoids cycles
+    except Exception as e:  # noqa: BLE001 - best-effort import
+        REGISTRY = {}
+        _log.error("Failed to import strategy registry: %s", e)
+
+    selected: list[object] = []
+    names: list[str] = []
+    for name in wanted:
+        cls = REGISTRY.get(name)
+        if cls is None:
+            _log.warning("Unknown strategy %s; skipping.", name)
+            continue
+        try:
+            inst = cls()
+            selected.append(inst)
+            names.append(cls.__name__)
+        except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:
+            _log.error("Failed to instantiate strategy %s: %s", cls.__name__, e)
+
+    if not selected:
+        default_cls = REGISTRY.get("momentum")
+        if default_cls is not None:
+            selected = [default_cls()]
+            names = [default_cls.__name__]
+
+    if names:
+        _log.info("Loaded strategies: %s", ", ".join(sorted(names)))
+
+    return selected
 
 
 # AI-AGENT-REF: Defer credential validation to runtime instead of import-time
