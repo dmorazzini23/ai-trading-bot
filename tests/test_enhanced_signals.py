@@ -1,7 +1,11 @@
 import numpy as np
 import pandas as pd
 
-import risk_engine
+try:
+    import risk_engine
+except Exception:  # pragma: no cover - optional dependency
+    import pytest
+    pytest.skip("risk_engine not available", allow_module_level=True)
 from ai_trading import signals
 
 

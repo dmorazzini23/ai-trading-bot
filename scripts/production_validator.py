@@ -814,7 +814,7 @@ class ProductionValidator:
         """Test trading engine functionality."""
         try:
             # Test imports
-            import bot_engine
+            from ai_trading.core import bot_engine  # AI-AGENT-REF: canonical import
             import trade_execution
             return 95
         except ImportError:

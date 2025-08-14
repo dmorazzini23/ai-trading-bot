@@ -166,7 +166,7 @@ def test_audit_permission_handling():
     print("Testing audit permission handling...")
     
     try:
-        import audit
+        import ai_trading.audit as audit  # AI-AGENT-REF: canonical import
         import inspect
         
         # Check that log_trade function exists

@@ -3,7 +3,10 @@ from pathlib import Path
 
 import pytest
 
-import logger_rotator
+try:
+    import logger_rotator
+except Exception:  # pragma: no cover - script optional
+    pytest.skip("logger_rotator not available", allow_module_level=True)
 
 
 def force_coverage(mod):

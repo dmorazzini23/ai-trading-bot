@@ -20,6 +20,12 @@ DENY_BARE = {
     "models",
     "engine",
     "telemetry",
+    # AI-AGENT-REF: forbid bare imports of packaged modules
+    "alpaca_api",
+    "bot_engine",
+    "audit",
+    "ml_model",
+    "order_health_monitor",
 }
 
 

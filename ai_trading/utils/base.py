@@ -521,7 +521,7 @@ def get_volume_spike_factor(symbol: str) -> float:
 def get_ml_confidence(symbol: str) -> float:
     """Return model confidence for ``symbol``."""
     try:
-        from ml_model import load_model
+        from ai_trading.ml_model import load_model  # AI-AGENT-REF: use packaged ml_model
     except Exception as e:  # pragma: no cover - optional dependency
         logger.error("load_model failed", exc_info=e)
         return 0.5

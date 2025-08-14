@@ -36,6 +36,15 @@ from .performance_dashboard import (
 from .metrics import MetricsCollector, PerformanceMonitor
 from .alerts import AlertType
 from .dashboard import RealtimeMetrics
+# AI-AGENT-REF: expose order health monitor package
+from .order_health_monitor import (
+    OrderHealthMonitor,
+    OrderInfo,
+    get_order_health_monitor,
+    _active_orders,
+    _order_tracking_lock,
+    _order_health_monitor,
+)
 
 
 # Export all monitoring classes
@@ -57,4 +66,13 @@ __all__ = [
     "PerformanceMonitor",
     "AlertType",
     "RealtimeMetrics",
+]
+
+__all__ += [
+    "OrderHealthMonitor",
+    "OrderInfo",
+    "get_order_health_monitor",
+    "_active_orders",
+    "_order_tracking_lock",
+    "_order_health_monitor",
 ]

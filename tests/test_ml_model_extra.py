@@ -6,8 +6,8 @@ import pandas as pd
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import ml_model
-from ml_model import MLModel
+import ai_trading.ml_model as ml_model  # AI-AGENT-REF: canonical import
+from ai_trading.ml_model import MLModel
 
 
 class DummyPipe:

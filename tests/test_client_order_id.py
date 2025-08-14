@@ -1,5 +1,5 @@
 import types
-import alpaca_api
+import ai_trading.alpaca_api as alpaca_api  # AI-AGENT-REF: canonical import
 
 
 class DummyAPI:
