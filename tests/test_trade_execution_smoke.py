@@ -4,7 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from ai_trading import ExecutionEngine
+from ai_trading.execution import ExecutionEngine
 
 
 def force_coverage(mod):

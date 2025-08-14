@@ -13,7 +13,7 @@ os.environ.update({
     'FLASK_PORT': '5000'
 })
 
-from ai_trading import ExecutionEngine
+from ai_trading.execution import ExecutionEngine
 
 
 @pytest.mark.smoke

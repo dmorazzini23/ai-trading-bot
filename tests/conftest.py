@@ -7,9 +7,26 @@ import pytz
 import types
 
 os.environ.setdefault("ALPACA_KEY_ID", "test_key")
+os.environ.setdefault("IMPORT_PREFLIGHT_DISABLED", "1")
+os.environ.setdefault("ALPACA_API_KEY", "test_key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
+
+from ai_trading.imports import optional_import
+
+if optional_import("torch") is None:
+    def pytest_collection_modifyitems(config, items):
+        for item in items:
+            if "requires_torch" in item.keywords:
+                item.add_marker(pytest.mark.skip(reason="torch not installed"))
 # AI-AGENT-REF: seed dummy Finnhub key for tests
 os.environ.setdefault("FINNHUB_API_KEY", "dummy-ci-key")
+
+
+class MockExecutionEngine:
+    """Lightweight stub to satisfy tests needing ExecutionEngine."""
+
+    def submit_order(self, *args, **kwargs):  # pragma: no cover - behavior trivial
+        return None
 
 
 @pytest.fixture
@@ -1444,7 +1461,7 @@ def stub_capital_scaling(monkeypatch):
     
     # Add TradingConfig stub to config module
     try:
-        import config
+        from ai_trading import config
         if not hasattr(config, 'TradingConfig'):
             # Set the attribute on the config module instance, not the class
             if hasattr(config, '__dict__'):
@@ -1584,6 +1601,7 @@ def dummy_data_fetcher_empty():
 import os as _os
 import sys as _sys
 import types as _types
+import importlib.util as _importlib_util
 
 
 def _install_test_config_stub():
@@ -1591,7 +1609,7 @@ def _install_test_config_stub():
     Provide a minimal 'config' module for tests only.
     This avoids coupling to prod secrets/files and keeps CI deterministic.
     """
-    if "config" in _sys.modules:
+    if "config" in _sys.modules or _importlib_util.find_spec("config") is not None:
         return  # real module or prior stub already present
 
     cfg = _types.ModuleType("config")

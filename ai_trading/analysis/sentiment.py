@@ -29,16 +29,20 @@ from tenacity import (
 
 # AI-AGENT-REF: Import config
 from ai_trading.config.settings import get_settings
+from ai_trading.imports import optional_import
+from ai_trading.ml.torch_utils import torch, ensure_torch  # AI-AGENT-REF: lazy torch usage
 
 S = get_settings()
 NEWS_API_KEY = S.news_api_key
 SENTIMENT_API_KEY = S.sentiment_api_key or NEWS_API_KEY
 SENTIMENT_API_URL = S.sentiment_api_url
 
-# FinBERT model initialization
-import torch
+_transformers = optional_import("transformers")
 try:
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    if torch is None or _transformers is None:
+        raise ImportError("transformers or torch missing")
+    AutoModelForSequenceClassification = _transformers.AutoModelForSequenceClassification
+    AutoTokenizer = _transformers.AutoTokenizer
     _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
     _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
         "yiyanghkust/finbert-tone"
@@ -472,6 +476,7 @@ def predict_text_sentiment(text: str) -> float:
         Sentiment score between -1.0 and 1.0
     """
     if _HUGGINGFACE_AVAILABLE and _FINBERT_MODEL and _FINBERT_TOKENIZER:
+        ensure_torch()
         try:
             inputs = _FINBERT_TOKENIZER(
                 text,

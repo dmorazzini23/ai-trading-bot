@@ -17,6 +17,8 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 import numpy as np
+from ai_trading.imports import optional_import
+from ai_trading.ml.torch_utils import torch  # AI-AGENT-REF: optional torch seed support
 logger = logging.getLogger(__name__)
 
 
@@ -31,15 +33,28 @@ def set_random_seeds(seed: int = 42) -> None:
     random.seed(seed)
 
     # NumPy (if available)
-    if HAS_NUMPY:
+    if np is not None:
         np.random.seed(seed)
 
-    # TensorFlow (if available)
-    import tensorflow as tf
-    # PyTorch (if available)
-    import torch
-    # LightGBM (if available)
-    import lightgbm as lgb
+    tf = optional_import("tensorflow")
+    if tf is not None:
+        try:
+            tf.random.set_seed(seed)
+        except Exception:
+            pass
+
+    if torch is not None:
+        try:
+            torch.manual_seed(int(seed))
+        except Exception:
+            pass
+
+    lgb = optional_import("lightgbm")
+    if lgb is not None:
+        try:
+            lgb.random_state = seed
+        except Exception:
+            pass
     # Set environment variables for additional determinism
     os.environ["PYTHONHASHSEED"] = str(seed)
 

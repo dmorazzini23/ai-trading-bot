@@ -1,4 +1,4 @@
-from strategies import TradeSignal
+from ai_trading.strategies.base import StrategySignal as TradeSignal
 import sys
 from pathlib import Path
 import pytest

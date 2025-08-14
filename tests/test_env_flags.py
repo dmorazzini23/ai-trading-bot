@@ -24,19 +24,19 @@ def test_disable_daily_retrain_env_parsing():
         os.environ["TESTING"] = "1"  # Enable testing mode
         
         # Clear module cache to force re-import
-        if 'config' in os.sys.modules:
-            del os.sys.modules['config']
+        if 'ai_trading.config' in os.sys.modules:
+            del os.sys.modules['ai_trading.config']
         
         # Import config module
-        import config
+        from ai_trading import config
         
         # Test the result
         actual = config.DISABLE_DAILY_RETRAIN
         assert actual == expected, f"For env value '{env_value}', expected {expected}, got {actual}"
         
         # Clean up
-        if 'config' in os.sys.modules:
-            del os.sys.modules['config']
+        if 'ai_trading.config' in os.sys.modules:
+            del os.sys.modules['ai_trading.config']
 
 
 def test_disable_daily_retrain_unset():
@@ -48,30 +48,30 @@ def test_disable_daily_retrain_unset():
     os.environ["TESTING"] = "1"  # Enable testing mode
     
     # Clear module cache
-    if 'config' in os.sys.modules:
-        del os.sys.modules['config']
+    if 'ai_trading.config' in os.sys.modules:
+        del os.sys.modules['ai_trading.config']
     
     # Import config module
-    import config
+    from ai_trading import config
     
     # Should default to False
     assert config.DISABLE_DAILY_RETRAIN == False
     
     # Clean up
-    if 'config' in os.sys.modules:
-        del os.sys.modules['config']
+    if 'ai_trading.config' in os.sys.modules:
+        del os.sys.modules['ai_trading.config']
 
 
 def test_disable_daily_retrain_fallback_settings():
     """Test DISABLE_DAILY_RETRAIN through fallback settings."""
     # Test the fallback _FallbackSettings class directly
-    if 'config' in os.sys.modules:
-        del os.sys.modules['config']
+    if 'ai_trading.config' in os.sys.modules:
+        del os.sys.modules['ai_trading.config']
     
     os.environ["TESTING"] = "1"
     os.environ["DISABLE_DAILY_RETRAIN"] = "true"
     
-    import config
+    from ai_trading import config
     
     # Check that fallback settings work
     fallback = config._FallbackSettings()
@@ -90,5 +90,5 @@ def teardown_module():
             del os.environ[var]
     
     # Clear module cache
-    if 'config' in os.sys.modules:
-        del os.sys.modules['config']
+    if 'ai_trading.config' in os.sys.modules:
+        del os.sys.modules['ai_trading.config']

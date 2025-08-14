@@ -52,6 +52,11 @@ class TradingConfig:
             'scaling_factor': self.scaling_factor,
         }
 
+class MockConfig:
+    """Simple namespace exposing TradingConfig for legacy import paths."""
+    TradingConfig = TradingConfig
+    TRADE_LOG_FILE = ""
+
 # Replace the config module with our mock
 sys.modules['config'] = MockConfig
 
@@ -95,6 +100,7 @@ def test_trigger_meta_learning_conversion_pure_meta_format():
     finally:
         if os.path.exists(test_file):
             os.unlink(test_file)
+
 
 
 def test_trigger_meta_learning_conversion_pure_audit_format():

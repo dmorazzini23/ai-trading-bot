@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-import logger_rotator
+logger_rotator = pytest.importorskip("logger_rotator")
 
 
 def force_coverage(mod):

@@ -8,7 +8,7 @@ import os
 os.environ["TESTING"] = "1"
 
 from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
-import config
+from ai_trading import config
 
 def test_integration():
     """Test the basic integration points."""

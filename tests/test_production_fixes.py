@@ -26,16 +26,16 @@ class TestSentimentAPIConfiguration(unittest.TestCase):
         """Set up test environment."""
         # Mock config module to avoid import issues
         self.config_mock = MagicMock()
-        sys.modules['config'] = self.config_mock
+        sys.modules['ai_trading.config'] = self.config_mock
     
     def tearDown(self):
         """Clean up test environment."""
-        if 'config' in sys.modules:
-            del sys.modules['config']
+        if 'ai_trading.config' in sys.modules:
+            del sys.modules['ai_trading.config']
     
     def test_sentiment_api_env_vars_in_config(self):
         """Test that sentiment API variables are properly configured."""
-        import config
+        from ai_trading import config
         
         # Test that the new environment variables are accessible
         self.assertTrue(hasattr(config, 'SENTIMENT_API_KEY') or 'SENTIMENT_API_KEY' in dir(config))

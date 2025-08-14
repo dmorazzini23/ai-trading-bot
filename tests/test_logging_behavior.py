@@ -5,7 +5,7 @@ import pytest
 from ai_trading import utils
 import bot_engine
 import alpaca_api
-from strategies.base import TradeSignal
+from ai_trading.strategies.base import StrategySignal as TradeSignal
 
 
 def test_health_rows_throttle(monkeypatch, caplog):

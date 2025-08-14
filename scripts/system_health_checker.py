@@ -187,7 +187,7 @@ class SystemHealthChecker:
         """Check sentiment analysis component health."""
         try:
             # Import sentiment module to check current state
-            import sentiment
+            from ai_trading.analysis import sentiment
 
             # Analyze sentiment cache and circuit breaker state
             cache_size = len(sentiment._SENTIMENT_CACHE)

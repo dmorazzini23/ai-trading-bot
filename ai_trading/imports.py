@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import logging
+from typing import Optional
 
 # Initialize logger for import messages
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ _ta = None
 
 
 # AI-AGENT-REF: unified optional import helper
-def optional_import(name: str):
+def optional_import(name: str) -> Optional[object]:
     """Return imported module or ``None`` if unavailable."""
     try:
         return importlib.import_module(name)

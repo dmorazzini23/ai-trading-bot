@@ -18,7 +18,7 @@ os.environ["PYTEST_RUNNING"] = "1"
 # Add the current directory to the path so we can import modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import config
+from ai_trading import config
 from ai_trading.risk.circuit_breakers import DrawdownCircuitBreaker
 
 

@@ -1,8 +1,11 @@
 import types
+import pytest
+
+pytestmark = pytest.mark.requires_torch
+torch = pytest.importorskip("torch")
 import torch.nn as nn
 
 import numpy as np
-import pytest
 
 np.random.seed(0)
 

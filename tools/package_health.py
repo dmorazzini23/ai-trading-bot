@@ -17,6 +17,7 @@ PKG = "ai_trading"
 CRITICAL_EXPORTS = [
     ("ai_trading.rl_trading", "RLTrader"),
     ("ai_trading.core.bot_engine", "run_all_trades_worker"),
+    ("ai_trading.config", "TradingConfig"),  # AI-AGENT-REF: ensure config facade export
 ]
 
 if str(ROOT) not in sys.path:

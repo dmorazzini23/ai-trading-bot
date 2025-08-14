@@ -20,10 +20,10 @@ import time
 from datetime import datetime, timezone
 
 # Import modules under test
-import sentiment
+from ai_trading.analysis import sentiment
 from ai_trading import meta_learning
 from ai_trading import trade_execution
-import config
+from ai_trading import config
 
 
 class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
@@ -43,7 +43,7 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
         self.assertEqual(sentiment.SENTIMENT_MAX_RETRIES, 5)
         self.assertEqual(sentiment.SENTIMENT_BASE_DELAY, 5)
     
-    @patch('sentiment.requests.get')
+    @patch('ai_trading.analysis.sentiment.requests.get')
     def test_enhanced_fallback_strategies(self, mock_get):
         """Test that enhanced fallback strategies work when rate limited."""
         # Simulate rate limiting
@@ -60,7 +60,7 @@ class TestSentimentAnalysisRateLimitingFixes(unittest.TestCase):
         # Should return neutral sentiment when all fallbacks fail
         self.assertEqual(result, 0.0)
     
-    @patch('sentiment.requests.get')
+    @patch('ai_trading.analysis.sentiment.requests.get')
     def test_alternative_sentiment_sources(self, mock_get):
         """Test alternative sentiment source functionality."""
         # Mock environment variables for alternative source
@@ -382,7 +382,7 @@ class TestIntegrationScenarios(unittest.TestCase):
         """Test complete flow when sentiment is rate limited but meta-learning works."""
         # This would be a more complex integration test
         # For now, just ensure modules can be imported together
-        import sentiment
+        from ai_trading.analysis import sentiment
         from ai_trading import meta_learning
         import trade_execution
         

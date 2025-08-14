@@ -22,6 +22,8 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
 from ai_trading.config.settings import get_settings as get_config_settings
 from ai_trading.settings import get_settings as get_runtime_settings  # AI-AGENT-REF: runtime settings
 from ai_trading.market import cache as mcache
+from ai_trading.telemetry import metrics_logger as metrics  # AI-AGENT-REF: telemetry stub
+from ai_trading.telemetry.metrics_logger import log_fetch_ok, log_fetch_fail
 
 # Define logger early
 logger = logging.getLogger(__name__)
@@ -329,12 +331,14 @@ def _fetch_bars(
             )
             if attempt == 2:
                 logger.exception("HTTP request error for %s", symbol, exc_info=exc)
+                log_fetch_fail(logger, symbol, None, exc)  # AI-AGENT-REF: record failed fetch
                 raise DataFetchException(symbol, "alpaca", url, str(exc)) from exc
             pytime.sleep(delay)
             delay *= 2
 
     _log_http_response(resp)
     if resp.status_code != 200:
+        log_fetch_fail(logger, symbol, resp.status_code, resp.text[:300])  # AI-AGENT-REF: record failed fetch
         raise DataFetchException(
             symbol,
             "alpaca",
@@ -354,7 +358,14 @@ def _fetch_bars(
         )
         # no new bars yet (e.g. today's bar before market close)
         # fallback: use yesterday's last bar or skip this symbol
-        return get_last_available_bar(symbol)
+        df = get_last_available_bar(symbol)
+        latest_ts = (
+            df["timestamp"].iloc[-1]
+            if isinstance(df, pd.DataFrame) and not df.empty and "timestamp" in df.columns
+            else None
+        )
+        log_fetch_ok(logger, symbol, df, latest_ts)  # AI-AGENT-REF: record successful fetch
+        return df
     df = pd.DataFrame(bars)
     rename_map = {
         "t": "timestamp",
@@ -368,6 +379,8 @@ def _fetch_bars(
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
     df = df[["timestamp", "open", "high", "low", "close", "volume"]]
     df = df.reset_index(drop=True)
+    latest_ts = df["timestamp"].iloc[-1] if not df.empty else None
+    log_fetch_ok(logger, symbol, df, latest_ts)  # AI-AGENT-REF: record successful fetch
     return df
 
 

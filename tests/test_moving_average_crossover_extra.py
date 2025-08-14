@@ -1,8 +1,10 @@
 """Tests for moving average crossover strategy."""
 
 import pandas as pd
+import pytest
 
-from strategies.moving_average_crossover import MovingAverageCrossoverStrategy
+pytest.importorskip("ai_trading.strategies.moving_average_crossover")
+from ai_trading.strategies.moving_average_crossover import MovingAverageCrossoverStrategy
 
 
 class DummyFetcher:

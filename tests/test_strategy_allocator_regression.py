@@ -6,7 +6,7 @@ confirmation bug that was causing test_allocator to fail with empty results
 on the second call when min_confidence=0.0.
 """
 
-from strategies import TradeSignal
+from ai_trading.strategies.base import StrategySignal as TradeSignal
 import strategy_allocator
 
 

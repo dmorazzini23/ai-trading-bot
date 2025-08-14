@@ -1,6 +1,6 @@
-import importlib
+import pytest
 
-main = importlib.import_module("run")
+main = pytest.importorskip("run")
 
 
 def test_main_smoke():

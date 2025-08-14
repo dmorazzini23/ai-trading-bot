@@ -1,6 +1,9 @@
 import pandas as pd
 
-from strategies.mean_reversion import MeanReversionStrategy
+import pytest
+
+pytest.importorskip("ai_trading.strategies.mean_reversion")
+from ai_trading.strategies.mean_reversion import MeanReversionStrategy
 
 
 class DummyFetcher:

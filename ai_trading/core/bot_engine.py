@@ -27,6 +27,8 @@ from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 
 _log = logging.getLogger(__name__)
 
+from ai_trading.ml.torch_utils import torch, ensure_torch  # AI-AGENT-REF: lazy torch dependency
+
 # --- path helpers (no imports of heavy deps) ---
 BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 
@@ -478,11 +480,7 @@ _LAST_SKIP_SYMBOLS: frozenset[str] = frozenset()
 
 # AI-AGENT-REF: optional heavy dependencies loaded lazily
 def _lazy_import_torch() -> bool:
-    try:
-        import torch  # noqa: F401
-        return True
-    except Exception:
-        return False
+    return torch is not None
 
 
 def _lazy_import_hmmlearn() -> bool:
@@ -494,11 +492,11 @@ def _lazy_import_hmmlearn() -> bool:
 
 
 def _seed_torch_if_available(seed: int) -> None:
-    try:
-        import torch
-        torch.manual_seed(int(seed))
-    except Exception:
-        pass
+    if torch is not None:
+        try:
+            torch.manual_seed(int(seed))
+        except Exception:
+            pass
 
 
 RL_MODEL_PATH = (
@@ -1688,13 +1686,13 @@ def ensure_finbert(cfg=None):
             return None, None
 
         # dependency presence check without ImportError guards
-        if importlib.util.find_spec("transformers") is None or importlib.util.find_spec("torch") is None:
+        if importlib.util.find_spec("transformers") is None or torch is None:
             _log.warning("FinBERT requested but transformers/torch not installed; returning neutral sentiment.")
             return None, None
 
         import transformers  # type: ignore
-        import torch  # type: ignore
-        
+        ensure_torch()
+
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
@@ -4995,7 +4993,7 @@ def predict_text_sentiment(text: str, cfg=None) -> float:
     if not pair or pair[0] is None or pair[1] is None:
         return 0.0  # neutral fallback
     tokenizer, model = pair
-    import torch  # safe: ensure_finbert verified presence
+    ensure_torch()
     try:
         inputs = tokenizer(
             text,
@@ -5026,7 +5024,7 @@ def analyze_sentiment(text: str, cfg=None) -> float:
     if not pair or pair[0] is None or pair[1] is None:
         return 0.0  # neutral fallback
     tok, mdl = pair
-    import torch  # safe: ensure_finbert verified presence
+    ensure_torch()
     inputs = tok(text, return_tensors="pt", truncation=True, max_length=256)
     with torch.no_grad():
         logits = mdl(**inputs).logits

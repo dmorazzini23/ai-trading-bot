@@ -9,6 +9,7 @@ import os
 # Set testing environment
 os.environ['TESTING'] = '1'
 
+portfolio_optimizer = pytest.importorskip("portfolio_optimizer")
 from portfolio_optimizer import PortfolioOptimizer, PortfolioDecision, create_portfolio_optimizer
 from transaction_cost_calculator import TradeType, create_transaction_cost_calculator
 from ai_trading.strategies.regime_detector import MarketRegime, create_regime_detector

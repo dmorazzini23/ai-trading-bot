@@ -21,7 +21,7 @@ class TestCriticalFixes(unittest.TestCase):
         """Set up test environment."""
         # Import modules after setting TESTING flag
         import trade_execution
-        import sentiment
+        from ai_trading.analysis import sentiment
         import strategy_allocator
         self.trade_execution = trade_execution
         self.sentiment = sentiment

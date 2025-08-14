@@ -16,15 +16,14 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
+from ai_trading.imports import optional_import
+from ai_trading.ml.torch_utils import torch  # AI-AGENT-REF: lazy torch dependency
 # CSV:17 - Move metrics_logger import to functions that use it
 
-# ai_trading/meta_learning.py:20 - Convert import guard to hard import (torch is in dependencies)
-import torch
-import torch.nn as _nn
-
-# ensure torch.nn and Parameter live on the torch module
-torch.nn = _nn
-torch.nn.Parameter = _nn.Parameter
+_nn = optional_import("torch.nn")
+if torch is not None and _nn is not None:
+    torch.nn = _nn  # type: ignore[attr-defined]
+    torch.nn.Parameter = _nn.Parameter  # type: ignore[attr-defined]
 
 # For type checking only
 if TYPE_CHECKING:

@@ -1,7 +1,7 @@
 import pandas as pd
 
-from strategies import momentum
-from strategies.momentum import MomentumStrategy
+from ai_trading.strategies import momentum
+from ai_trading.strategies.momentum import MomentumStrategy
 
 
 class DummyFetcher:

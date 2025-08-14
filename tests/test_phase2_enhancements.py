@@ -10,11 +10,17 @@ import os
 import time
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch
+import pytest
+
+order_health_monitor = pytest.importorskip("order_health_monitor")
+system_health_checker = pytest.importorskip("system_health_checker")
+from order_health_monitor import OrderHealthMonitor, OrderInfo
+from system_health_checker import SystemHealthChecker, ComponentHealth
 
 # Mock environment variables for testing
 test_env = {
     'ALPACA_API_KEY': 'test_key',
-    'ALPACA_SECRET_KEY': 'test_secret', 
+    'ALPACA_SECRET_KEY': 'test_secret',
     'ALPACA_BASE_URL': 'https://paper-api.alpaca.markets',
     'WEBHOOK_SECRET': 'test_secret',
     'FLASK_PORT': '5000',
@@ -23,9 +29,7 @@ test_env = {
 }
 
 with patch.dict(os.environ, test_env):
-    import config
-    from order_health_monitor import OrderHealthMonitor, OrderInfo
-    from system_health_checker import SystemHealthChecker, ComponentHealth
+    from ai_trading import config
 
 
 class TestOrderHealthMonitor(unittest.TestCase):

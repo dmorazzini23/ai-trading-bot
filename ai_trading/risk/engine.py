@@ -20,6 +20,7 @@ ta = optional_import("pandas_ta")
 
 from ai_trading.config.management import TradingConfig, SEED
 from ai_trading.telemetry import metrics_logger
+from ai_trading.telemetry.metrics_logger import log_fetch_ok, log_fetch_fail  # AI-AGENT-REF: fetch telemetry hooks
 from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: narrow Alpaca exceptions
 from ai_trading.config.settings import get_settings
 try:
@@ -177,6 +178,8 @@ class RiskEngine:
                 )
                 return None
             bars = client.get_bars(symbol, lookback + 10)
+            latest_ts = getattr(bars[-1], "timestamp", None) if bars else None
+            log_fetch_ok(logger, symbol, bars, latest_ts)  # AI-AGENT-REF: record successful fetch
             if len(bars) < lookback:
                 return None
             high = np.array([b.h for b in bars])
@@ -192,6 +195,8 @@ class RiskEngine:
             return atr
         except (APIError, ValueError, KeyError, TypeError, AttributeError) as exc:
             # AI-AGENT-REF: narrow data and API errors
+            code = getattr(getattr(exc, "response", None), "status_code", None)
+            log_fetch_fail(logger, symbol, code, exc)  # AI-AGENT-REF: record failed fetch
             logger.warning(
                 "ATR calculation error for %s: %s",
                 symbol,

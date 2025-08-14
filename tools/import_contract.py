@@ -11,11 +11,13 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PKG = "ai_trading"
+# Explicitly forbid legacy top-level names that caused regressions
 DENY_BARE = {
     "data_client",
     "utils",
     "helpers",
-    "config",
+    "config",     # legacy shim removed
+    "sentiment",  # legacy shim removed
     "settings",
     "models",
     "engine",
