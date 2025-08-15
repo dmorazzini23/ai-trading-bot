@@ -77,3 +77,7 @@ runtime_mocks.csv
 markers_all.csv
 summary.csv
 patch_full_cleanup.patch
+
+# local env & data
+.env*
+*.csv

@@ -1,4 +1,7 @@
 from __future__ import annotations
+from ai_trading.settings import get_buy_threshold, get_capital_cap, get_conf_threshold, get_daily_loss_limit, get_disaster_dd_limit, get_dollar_risk_limit, get_max_drawdown_threshold, get_max_portfolio_positions, get_portfolio_drift_threshold, get_rebalance_interval_min, get_sector_exposure_cap, get_trade_cooldown_min
+from ai_trading.settings import get_max_portfolio_positions
+from ai_trading.settings import get_disaster_dd_limit
 
 # (any existing comments or module docstring go below the future import)
 __all__ = ["pre_trade_health_check", "run_all_trades_worker", "BotState"]
@@ -384,7 +387,7 @@ def ensure_portfolio_weights(ctx, symbols):
 # Log Alpaca availability on startup (only once per process)
 _emit_once(logger, "alpaca_available", logging.INFO, "Alpaca SDK is available")
 # Mirror config to maintain historical constant name
-MIN_CYCLE = CFG.scheduler_sleep_seconds
+# REMOVED: MIN_CYCLE = CFG.scheduler_sleep_seconds
 # AI-AGENT-REF: guard environment validation with explicit error logging
 # AI-AGENT-REF: Move config validation to runtime to prevent import crashes
 # Config validation moved to init_runtime_config()
@@ -514,8 +517,9 @@ if "ALPACA_SECRET_KEY" in os.environ:
 config.reload_env()
 
 # BOT_MODE must be defined before any classes that reference it
-BOT_MODE = CFG.bot_mode
-assert BOT_MODE is not None, "BOT_MODE must be set before using BotState"
+# REMOVED: BOT_MODE = CFG.bot_mode
+if 'BOT_MODE' not in globals() or BOT_MODE is None:
+    BOT_MODE = BotMode.BALANCED  # import-time safe default; runtime may override
 import csv
 import json
 import logging
@@ -1645,10 +1649,7 @@ def ensure_finbert(cfg=None):
     except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error("FinBERT lazy-load failed: %s", e)
         return None, None
-
-
-DISASTER_DD_LIMIT = CFG.disaster_dd_limit
-
+# REMOVED: module-scope get_disaster_dd_limit() = CFG.disaster_dd_limit
 # Paths
 
 def abspath(fname: str) -> str:
@@ -2164,7 +2165,7 @@ POV_SLICE_PCT = params.get("POV_SLICE_PCT",
                        getattr(S, "pov_slice_pct",
                                getattr(state.mode_obj.config, "pov_slice_pct", 0.05)))
 DAILY_LOSS_LIMIT = params.get(
-    "DAILY_LOSS_LIMIT",
+    "get_daily_loss_limit()",
     getattr(state.mode_obj.config, "daily_loss_limit",
             getattr(S, "daily_loss_limit", 0.05))
 )
@@ -2185,14 +2186,14 @@ MIN_SIGNAL_STRENGTH = params.get("MIN_SIGNAL_STRENGTH",
                                  getattr(S, "min_signal_strength",
                                          getattr(state.mode_obj.config, "min_signal_strength", 0.1)))
 # AI-AGENT-REF: Increase default position limit from 10 to 20 for better portfolio utilization
-MAX_PORTFOLIO_POSITIONS = CFG.max_portfolio_positions
+# REMOVED: module-scope MAX_PORTFOLIO_POSITIONS = CFG.max_portfolio_positions
 CORRELATION_THRESHOLD = 0.60
-SECTOR_EXPOSURE_CAP = CFG.sector_exposure_cap
-MAX_OPEN_POSITIONS = CFG.max_open_positions
-WEEKLY_DRAWDOWN_LIMIT = CFG.weekly_drawdown_limit
+# REMOVED: SECTOR_EXPOSURE_CAP = CFG.sector_exposure_cap
+# REMOVED: MAX_OPEN_POSITIONS = CFG.max_open_positions
+# REMOVED: WEEKLY_DRAWDOWN_LIMIT = CFG.weekly_drawdown_limit
 MARKET_OPEN = dt_time(6, 30)
 MARKET_CLOSE = dt_time(13, 0)
-VOLUME_THRESHOLD = CFG.volume_threshold
+# REMOVED: VOLUME_THRESHOLD = CFG.volume_threshold
 ENTRY_START_OFFSET = timedelta(
     minutes=params.get(
         "ENTRY_START_OFFSET_MIN",
@@ -2215,7 +2216,7 @@ RF_ESTIMATORS = 300
 RF_MAX_DEPTH = 3
 RF_MIN_SAMPLES_LEAF = 5
 ATR_LENGTH = 10
-CONF_THRESHOLD = params.get("CONF_THRESHOLD", state.mode_obj.config.conf_threshold)
+CONF_THRESHOLD = params.get("get_conf_threshold()", state.mode_obj.config.conf_threshold)
 CONFIRMATION_COUNT = params.get(
     "CONFIRMATION_COUNT", state.mode_obj.config.confirmation_count
 )
@@ -2231,9 +2232,9 @@ def _env_float(default: float, *keys: str) -> float:
             _log.warning("ENV_COERCE_FLOAT_FAILED", extra={"key": k, "value": v})
     return default
 
-CAPITAL_CAP = _env_float(0.04, "AI_TRADING_CAPITAL_CAP", "CAPITAL_CAP")
-DOLLAR_RISK_LIMIT = _env_float(0.05, "AI_TRADING_DOLLAR_RISK_LIMIT", "DOLLAR_RISK_LIMIT")
-BUY_THRESHOLD = params.get("BUY_THRESHOLD", state.mode_obj.config.buy_threshold)
+CAPITAL_CAP = _env_float(0.04, "AI_TRADING_CAPITAL_CAP", "get_capital_cap()")
+DOLLAR_RISK_LIMIT = _env_float(0.05, "AI_TRADING_DOLLAR_RISK_LIMIT", "get_dollar_risk_limit()")
+BUY_THRESHOLD = params.get("get_buy_threshold()", state.mode_obj.config.buy_threshold)
 
 
 # Coerce MAX_*SIZE to bounded integers to avoid noisy "invalid" logs
@@ -2248,42 +2249,42 @@ def _as_int(v, default, min_v=1, max_v=1_000_000):
 # AI-AGENT-REF: Add comprehensive validation for critical trading parameters
 def validate_trading_parameters():
     """Validate critical trading parameters and log warnings for invalid values."""
-    global CAPITAL_CAP, DOLLAR_RISK_LIMIT, MAX_POSITION_SIZE, CONF_THRESHOLD, BUY_THRESHOLD
+    global get_capital_cap, get_dollar_risk_limit, MAX_POSITION_SIZE, get_conf_threshold, get_buy_threshold
 
-    # Validate CAPITAL_CAP (should be between 0.01 and 0.5)
-    if not isinstance(CAPITAL_CAP, int | float) or not (0.01 <= CAPITAL_CAP <= 0.5):
-        _log.error("Invalid CAPITAL_CAP %s, using default 0.25", CAPITAL_CAP)
+    # Validate get_capital_cap() (should be between 0.01 and 0.5)
+    if not isinstance(get_capital_cap(), int | float) or not (0.01 <= get_capital_cap() <= 0.5):
+        _log.error("Invalid get_capital_cap() %s, using default 0.25", get_capital_cap())
         CAPITAL_CAP = 0.25
 
-    # Validate DOLLAR_RISK_LIMIT (should be between 0.005 and 0.1)
-    if not isinstance(DOLLAR_RISK_LIMIT, int | float) or not (
-        0.005 <= DOLLAR_RISK_LIMIT <= 0.1
+    # Validate get_dollar_risk_limit() (should be between 0.005 and 0.1)
+    if not isinstance(get_dollar_risk_limit(), int | float) or not (
+        0.005 <= get_dollar_risk_limit() <= 0.1
     ):
         _log.error(
-            "Invalid DOLLAR_RISK_LIMIT %s, using default 0.05", DOLLAR_RISK_LIMIT
+            "Invalid get_dollar_risk_limit() %s, using default 0.05", get_dollar_risk_limit()
         )
         DOLLAR_RISK_LIMIT = 0.05
 
     # Validate MAX_POSITION_SIZE (should be between 1 and 10000)
     MAX_POSITION_SIZE = _as_int(MAX_POSITION_SIZE, 8000, min_v=1, max_v=10000)
 
-    # Validate CONF_THRESHOLD (should be between 0.5 and 0.95)
-    if not isinstance(CONF_THRESHOLD, int | float) or not (
-        0.5 <= CONF_THRESHOLD <= 0.95
+    # Validate get_conf_threshold() (should be between 0.5 and 0.95)
+    if not isinstance(get_conf_threshold(), int | float) or not (
+        0.5 <= get_conf_threshold() <= 0.95
     ):
-        _log.error("Invalid CONF_THRESHOLD %s, using default 0.75", CONF_THRESHOLD)
+        _log.error("Invalid get_conf_threshold() %s, using default 0.75", get_conf_threshold())
         CONF_THRESHOLD = 0.75
 
-    # Validate BUY_THRESHOLD (should be between 0.1 and 0.9)
-    if not isinstance(BUY_THRESHOLD, int | float) or not (0.1 <= BUY_THRESHOLD <= 0.9):
-        _log.error("Invalid BUY_THRESHOLD %s, using default 0.2", BUY_THRESHOLD)
+    # Validate get_buy_threshold() (should be between 0.1 and 0.9)
+    if not isinstance(get_buy_threshold(), int | float) or not (0.1 <= get_buy_threshold() <= 0.9):
+        _log.error("Invalid get_buy_threshold() %s, using default 0.2", get_buy_threshold())
         BUY_THRESHOLD = 0.2
 
     _log.info(
         "TRADING_PARAMS_VALIDATED",
         extra={
-            "CAPITAL_CAP": f"{CAPITAL_CAP:.3f}",
-            "DOLLAR_RISK_LIMIT": f"{DOLLAR_RISK_LIMIT:.3f}",
+            "get_capital_cap()": f"{get_capital_cap():.3f}",
+            "get_dollar_risk_limit()": f"{get_dollar_risk_limit():.3f}",
             "MAX_POSITION_SIZE": MAX_POSITION_SIZE,
         },
     )
@@ -2297,7 +2298,7 @@ if not os.getenv("TESTING"):
 PACIFIC = ZoneInfo("America/Los_Angeles")
 PDT_DAY_TRADE_LIMIT = params.get("PDT_DAY_TRADE_LIMIT", 3)
 PDT_EQUITY_THRESHOLD = params.get("PDT_EQUITY_THRESHOLD", 25_000.0)
-FINNHUB_RPM = CFG.finnhub_rpm
+# REMOVED: FINNHUB_RPM = CFG.finnhub_rpm
 
 # Regime symbols (makes SPY configurable)
 REGIME_SYMBOLS = ["SPY"]
@@ -3977,7 +3978,7 @@ class BotContext:
     adv_target_pct: float
     max_position_dollars: float
     params: dict
-    sector_cap: float = SECTOR_EXPOSURE_CAP
+    sector_cap: float = get_sector_exposure_cap()
     correlation_limit: float = CORRELATION_THRESHOLD
     capital_band: str = "small"
     confirmation_count: dict[str, int] = field(default_factory=dict)
@@ -4288,7 +4289,7 @@ class LazyBotContext:
             market_close=MARKET_CLOSE,
             regime_lookback=REGIME_LOOKBACK,
             regime_atr_threshold=REGIME_ATR_THRESHOLD,
-            daily_loss_limit=DAILY_LOSS_LIMIT,
+            daily_loss_limit=get_daily_loss_limit(),
             kelly_fraction=params.get("KELLY_FRACTION", 0.6),
             capital_scaler=CapitalScalingEngine(params),
             adv_target_pct=0.002,
@@ -5086,7 +5087,7 @@ def check_daily_loss(ctx: BotContext, state: BotState) -> bool:
         return False
     equity = float(acct.equity)
     today_date = date.today()
-    limit = params.get("DAILY_LOSS_LIMIT", 0.07)
+    limit = params.get("get_daily_loss_limit()", 0.07)
 
     if state.day_start_equity is None or state.day_start_equity[0] != today_date:
         if state.last_drawdown >= 0.05:
@@ -5277,11 +5278,11 @@ def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
         position_count = len(current_positions)
 
         # If we're not at the limit, allow new positions
-        if position_count < MAX_PORTFOLIO_POSITIONS:
+        if position_count < get_max_portfolio_positions():
             return False
 
         # If we're at the limit, check if this is a rebalancing opportunity
-        if symbol and position_count >= MAX_PORTFOLIO_POSITIONS:
+        if symbol and position_count >= get_max_portfolio_positions():
             # Allow trades for symbols we already have positions in (rebalancing)
             existing_symbols = {pos.symbol for pos in current_positions}
             if symbol in existing_symbols:
@@ -5293,10 +5294,10 @@ def too_many_positions(ctx: BotContext, symbol: str | None = None) -> bool:
             # For new symbols at position limit, check if we can close underperforming positions
             # This implements intelligent position management
             _log.info(
-                f"POSITION_LIMIT_REACHED | current={position_count} max={MAX_PORTFOLIO_POSITIONS} new_symbol={symbol}"
+                f"POSITION_LIMIT_REACHED | current={position_count} max={get_max_portfolio_positions()} new_symbol={symbol}"
             )
 
-        return position_count >= MAX_PORTFOLIO_POSITIONS
+        return position_count >= get_max_portfolio_positions()
 
     except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning(f"[too_many_positions] Could not fetch positions: {e}")
@@ -5559,7 +5560,7 @@ def sector_exposure_ok(ctx: BotContext, symbol: str, qty: int, price: float) -> 
     projected_exposure = (
         current_sector_exposure + (trade_value / total) if total > 0 else 0.0
     )
-    cap = getattr(ctx, "sector_cap", SECTOR_EXPOSURE_CAP)
+    cap = getattr(ctx, "sector_cap", get_sector_exposure_cap())
 
     # AI-AGENT-REF: Enhanced sector cap logic with clear reasoning
     if total <= 0:
@@ -5966,8 +5967,8 @@ def fractional_kelly_size(
 
         # Calculate position sizes with multiple caps
         raw_pos = dollars_to_risk / atr if atr > 0 else 0
-        cap_pos = (balance * CAPITAL_CAP * cap_scale) / price if price > 0 else 0
-        risk_cap = (balance * DOLLAR_RISK_LIMIT) / atr if atr > 0 else raw_pos
+        cap_pos = (balance * get_capital_cap() * cap_scale) / price if price > 0 else 0
+        risk_cap = (balance * get_dollar_risk_limit()) / atr if atr > 0 else raw_pos
         dollar_cap = ctx.max_position_dollars / price if price > 0 else raw_pos
 
         # Apply all limits
@@ -6748,7 +6749,7 @@ def calculate_entry_size(
         _log.warning("Failed to get cash for entry size calculation: %s", exc)
         return 1
 
-    cap_pct = ctx.params.get("CAPITAL_CAP", CAPITAL_CAP)
+    cap_pct = ctx.params.get("get_capital_cap()", get_capital_cap())
     cap_sz = int(round((cash * cap_pct) / price)) if price > 0 else 0
     df = ctx.data_fetcher.get_daily_df(ctx, symbol)
     rets = (
@@ -6901,7 +6902,7 @@ def signal_and_confirm(
 ) -> tuple[int, float, str]:
     """Wrapper that evaluates signals and checks confidence threshold."""
     sig, conf, strat = ctx.signal_manager.evaluate(ctx, state, df, symbol, model)
-    if sig == -1 or conf < CONF_THRESHOLD:
+    if sig == -1 or conf < get_conf_threshold():
         _log.debug(
             "SKIP_LOW_SIGNAL", extra={"symbol": symbol, "sig": sig, "conf": conf}
         )
@@ -7178,7 +7179,7 @@ def _exit_positions_if_needed(
     conf: float,
     current_qty: int,
 ) -> bool:
-    if final_score < 0 and current_qty > 0 and abs(conf) >= CONF_THRESHOLD:
+    if final_score < 0 and current_qty > 0 and abs(conf) >= get_conf_threshold():
         if _should_hold_position(feat_df):
             _log.info("HOLD_SIGNAL_ACTIVE", extra={"symbol": symbol})
         else:
@@ -7193,7 +7194,7 @@ def _exit_positions_if_needed(
                 ctx.take_profit_targets.pop(symbol, None)
             return True
 
-    if final_score > 0 and current_qty < 0 and abs(conf) >= CONF_THRESHOLD:
+    if final_score > 0 and current_qty < 0 and abs(conf) >= get_conf_threshold():
         price = get_latest_close(feat_df)
         _log.info(
             f"SIGNAL_BULLISH_EXIT | symbol={symbol}  final_score={final_score:.4f}  confidence={conf:.4f}"
@@ -7577,7 +7578,7 @@ def trade_logic(
     # AI-AGENT-REF: Add thread-safe locking for trade cooldown access
     with trade_cooldowns_lock:
         cd_ts = state.trade_cooldowns.get(symbol)
-    if cd_ts and (now - cd_ts).total_seconds() < TRADE_COOLDOWN_MIN * 60:
+    if cd_ts and (now - cd_ts).total_seconds() < get_trade_cooldown_min() * 60:
         prev = state.last_trade_direction.get(symbol)
         if prev and (
             (prev == "buy" and signal == "sell") or (prev == "sell" and signal == "buy")
@@ -7592,7 +7593,7 @@ def trade_logic(
         _log.info("SKIP_FREQUENCY_LIMIT", extra={"symbol": symbol})
         return True
 
-    if final_score > 0 and conf >= BUY_THRESHOLD and current_qty == 0:
+    if final_score > 0 and conf >= get_buy_threshold() and current_qty == 0:
         if symbol in state.long_positions:
             held = state.position_cache.get(symbol, 0)
             _log.info(
@@ -7603,7 +7604,7 @@ def trade_logic(
             ctx, state, symbol, balance, feat_df, final_score, conf, strat
         )
 
-    if final_score < 0 and conf >= BUY_THRESHOLD and current_qty == 0:
+    if final_score < 0 and conf >= get_buy_threshold() and current_qty == 0:
         if symbol in state.short_positions:
             held = abs(state.position_cache.get(symbol, 0))
             _log.info(
@@ -9194,7 +9195,7 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
         except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
             equity = 0.0
         ctx.capital_scaler.update(ctx, equity)
-        params["CAPITAL_CAP"] = ctx.params["CAPITAL_CAP"]
+        params["get_capital_cap()"] = ctx.params["get_capital_cap()"]
         frac = params.get("KELLY_FRACTION", 0.6)
         if spy_atr and vol and spy_atr > vol * 1.5:
             frac *= 0.5
@@ -9203,8 +9204,8 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
         if dd > 0.1:
             frac *= 0.5
         ctx.kelly_fraction = round(max(0.2, min(frac, 1.0)), 2)
-        params["CAPITAL_CAP"] = round(
-            max(0.02, min(0.1, params.get("CAPITAL_CAP", 0.25) * (1 - dd))), 3
+        params["get_capital_cap()"] = round(
+            max(0.02, min(0.1, params.get("get_capital_cap()", 0.25) * (1 - dd))), 3
         )
         _log.info(
             "RISK_SCALED",
@@ -9222,7 +9223,7 @@ def adaptive_risk_scaling(ctx: BotContext) -> None:
 def check_disaster_halt() -> None:
     try:
         dd = _current_drawdown()
-        if dd >= DISASTER_DD_LIMIT:
+        if dd >= get_disaster_dd_limit():
             set_halt_flag(f"DISASTER_DRAW_DOWN_{dd:.2%}")
             _log.error("DISASTER_HALT_TRIGGERED", extra={"drawdown": dd})
     except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
@@ -9731,7 +9732,7 @@ def _prepare_run(runtime, state: BotState) -> tuple[float, bool, list[str]]:
         _log.warning("ACCOUNT_INFO_FAILED", extra={"cause": e.__class__.__name__, "detail": str(e)})
         equity = 0.0
     runtime.capital_scaler.update(runtime, equity)
-    params["CAPITAL_CAP"] = _param(runtime, "CAPITAL_CAP", 0.04)
+    params["get_capital_cap()"] = _param(runtime, "get_capital_cap()", 0.04)
     compute_spy_vol_stats(runtime)
 
     full_watchlist = load_candidate_universe(runtime)
@@ -10145,7 +10146,7 @@ def run_all_trades_worker(state: BotState, ctx) -> None:
             return
         now = datetime.now(UTC)
         for sym, ts in list(state.trade_cooldowns.items()):
-            if (now - ts).total_seconds() > TRADE_COOLDOWN_MIN * 60:
+            if (now - ts).total_seconds() > get_trade_cooldown_min() * 60:
                 state.trade_cooldowns.pop(sym, None)
         if (
             state.last_run_at
