@@ -669,9 +669,10 @@ class TradingConfig:
                  max_position_size: float = 1.0, stop_loss: float = 0.05, take_profit: float = 0.10,
                  take_profit_factor: float = 2.0, lookback_days: int = 60,
                  min_signal_strength: float = 0.1, scaling_factor: float = 1.0,
-                 limit_order_slippage: float = 0.001, pov_slice_pct: float = 0.05,
-                 daily_loss_limit: float = 0.05,
-                 entry_start_offset_min: int = 0,
+                limit_order_slippage: float = 0.001, pov_slice_pct: float = 0.05,
+                daily_loss_limit: float = 0.03,
+                max_portfolio_risk: float = 0.10,
+                entry_start_offset_min: int = 0,
                  entry_end_offset_min: int = 0,
                  conf_threshold: float = 0.75,
                  buy_threshold: float = 0.50,
@@ -729,6 +730,7 @@ class TradingConfig:
         self.limit_order_slippage = limit_order_slippage
         self.pov_slice_pct = pov_slice_pct
         self.daily_loss_limit = daily_loss_limit
+        self.max_portfolio_risk = max_portfolio_risk
         self.entry_start_offset_min = entry_start_offset_min
         self.entry_end_offset_min = entry_end_offset_min
         self.conf_threshold = conf_threshold
@@ -811,9 +813,17 @@ class TradingConfig:
             get_settings as get_config_settings,
         )
         # extract values using normalization helpers
-        conf_threshold = _to_float(
-            getenv("CONF_THRESHOLD", overrides.get("conf_threshold", 0.55)),
-            overrides.get("conf_threshold", 0.55),
+        k_env = getenv("KELLY_FRACTION")
+        c_env = getenv("CONF_THRESHOLD")
+        kelly_fraction = float(k_env) if k_env is not None else overrides.get("kelly_fraction", 0.60)
+        conf_threshold = float(c_env) if c_env is not None else overrides.get("conf_threshold", 0.75)
+        daily_loss_limit = _to_float(
+            getenv("DAILY_LOSS_LIMIT", overrides.get("daily_loss_limit", 0.03)),
+            overrides.get("daily_loss_limit", 0.03),
+        )
+        max_portfolio_risk = _to_float(
+            getenv("MAX_PORTFOLIO_RISK", overrides.get("max_portfolio_risk", 0.10)),
+            overrides.get("max_portfolio_risk", 0.10),
         )
         buy_threshold = _to_float(
             getenv("BUY_THRESHOLD", overrides.get("buy_threshold", 0.60)),
@@ -995,6 +1005,9 @@ class TradingConfig:
             intraday_lookback_minutes=intraday_lookback_minutes,
             data_warmup_lookback_days=data_warmup_lookback_days,
             disable_daily_retrain=disable_daily_retrain,
+            kelly_fraction=kelly_fraction,
+            daily_loss_limit=daily_loss_limit,
+            max_portfolio_risk=max_portfolio_risk,
             REGIME_MIN_ROWS=REGIME_MIN_ROWS,
             **{k: v for k, v in overrides.items() if k not in excluded_keys}
         )
@@ -1019,7 +1032,7 @@ class TradingConfig:
         cfg.TIMEZONE = getattr(s_rt, "timezone", "UTC")
         cfg.MAX_DRAWDOWN_THRESHOLD = get_max_drawdown_threshold()
         cfg.max_drawdown_threshold = cfg.MAX_DRAWDOWN_THRESHOLD
-        cfg.DAILY_LOSS_LIMIT = get_daily_loss_limit()
+        cfg.DAILY_LOSS_LIMIT = daily_loss_limit
         cfg.daily_loss_limit = cfg.DAILY_LOSS_LIMIT
         cfg.CAPITAL_CAP = capital_cap
         cfg.capital_cap = cfg.CAPITAL_CAP
@@ -1029,6 +1042,7 @@ class TradingConfig:
         cfg.max_position_size = cfg.MAX_POSITION_SIZE
         cfg.KELLY_FRACTION = cfg.kelly_fraction
         cfg.CONF_THRESHOLD = cfg.conf_threshold
+        cfg.MAX_PORTFOLIO_RISK = cfg.max_portfolio_risk
         cfg.LIMIT_ORDER_SLIPPAGE = cfg.limit_order_slippage
         cfg.POV_SLICE_PCT = cfg.pov_slice_pct
         cfg.ENTRY_START_OFFSET_MIN = cfg.entry_start_offset_min
@@ -1060,12 +1074,27 @@ class TradingConfig:
         )
 
         if cfg.mode == "conservative":
-            cfg.kelly_fraction = 0.25
+            if k_env is None:
+                cfg.kelly_fraction = 0.25
+            if c_env is None:
+                cfg.conf_threshold = 0.85
+            cfg.daily_loss_limit = 0.03
+            cfg.DAILY_LOSS_LIMIT = 0.03
         elif cfg.mode == "balanced":
-            cfg.kelly_fraction = 0.60
-            cfg.conf_threshold = 0.75
+            if k_env is None:
+                cfg.kelly_fraction = 0.60
+            if c_env is None:
+                cfg.conf_threshold = 0.75
+            cfg.daily_loss_limit = 0.05
+            cfg.DAILY_LOSS_LIMIT = 0.05
         elif cfg.mode == "aggressive":
-            cfg.kelly_fraction = 0.75
+            if k_env is None:
+                cfg.kelly_fraction = 0.75
+            if c_env is None:
+                cfg.conf_threshold = 0.65
+
+        cfg.KELLY_FRACTION = cfg.kelly_fraction
+        cfg.CONF_THRESHOLD = cfg.conf_threshold
 
         s_cfg = get_config_settings()
 
@@ -1178,6 +1207,8 @@ class TradingConfig:
             "ENTRY_END_OFFSET_MIN": self.entry_end_offset_min,
             "TRADING_MODE": getattr(self, "trading_mode", "balanced"),
             "ALPACA_BASE_URL": getattr(self, "alpaca_base_url", ""),
+            "CONFIRMATION_COUNT": getattr(self, "confirmation_count", 3),
+            "MAX_PORTFOLIO_RISK": getattr(self, "max_portfolio_risk", 0.10),
         }
 
 

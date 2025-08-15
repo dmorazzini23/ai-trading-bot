@@ -34,6 +34,34 @@ def _require_env_vars(*names: str) -> None:
         logger.critical(msg)
         raise RuntimeError(msg)
 
+
+def validate_environment() -> None:
+    TradingConfig.from_env().validate_environment()
+
+
+def validate_alpaca_credentials() -> None:
+    cfg = TradingConfig.from_env()
+    missing = []
+    if not getattr(cfg, "ALPACA_API_KEY", None):
+        missing.append("ALPACA_API_KEY")
+    if not getattr(cfg, "ALPACA_SECRET_KEY", None):
+        missing.append("ALPACA_SECRET_KEY")
+    if not getattr(cfg, "ALPACA_BASE_URL", None):
+        missing.append("ALPACA_BASE_URL")
+    if missing:
+        raise RuntimeError("Missing required settings: " + ", ".join(missing))
+
+
+def log_config(redact_keys=None):
+    cfg = TradingConfig.from_env()
+    d = cfg.to_dict(safe=True)
+    for k in (redact_keys or []):
+        if k in d:
+            d[k] = "***"
+    logging.getLogger("ai_trading.logging").info(
+        "CONFIG_SNAPSHOT", extra={"config": d}
+    )
+
 __all__ = [
     "Settings",
     "get_settings",
@@ -44,5 +72,8 @@ __all__ = [
     "get_env",
     "_require_env_vars",
     "reload_env",
+    "validate_environment",
+    "validate_alpaca_credentials",
+    "log_config",
 ]
 

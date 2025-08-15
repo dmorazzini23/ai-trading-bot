@@ -61,11 +61,14 @@ from .position_reconciler import (
     stop_position_monitoring,
     update_bot_position,
 )
-from .production_engine import (
-    ExecutionResult,
-    OrderRequest,
-    ProductionExecutionCoordinator,
-)
+try:  # AI-AGENT-REF: optional production engine when Alpaca deps missing
+    from .production_engine import (
+        ExecutionResult,
+        OrderRequest,
+        ProductionExecutionCoordinator,
+    )
+except Exception:  # pragma: no cover
+    ExecutionResult = OrderRequest = ProductionExecutionCoordinator = None  # type: ignore
 
 # Export all execution classes
 __all__ = [

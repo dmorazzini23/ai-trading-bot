@@ -17,6 +17,8 @@ All notable changes to this project will be documented in this file.
   - **Breaking**: Root imports are no longer supported as of this version
 
 ### Fixed
+- **Runtime safety**: improved Alpaca availability checks, stable logging shutdown,
+  lazy client init, config parity, and added utility/environment helpers.
 - **ExecutionEngine**: Removed unsupported slippage metrics kwargs from initialization to prevent runtime `TypeError`.
 - **Import Blocker**: Replaced corrupted `ai_trading/model_registry.py` with clean, minimal, typed model registry implementation
 - Removed hard `data_client` dependency in risk engine with optional Alpaca client.

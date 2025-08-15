@@ -16,6 +16,21 @@ from ai_trading.config import get_settings as get_config
 from ai_trading.settings import get_settings, get_seed_int  # AI-AGENT-REF: runtime env settings
 from ai_trading.utils import get_free_port, get_pid_on_port
 
+# AI-AGENT-REF: expose run_cycle for monkeypatching
+def _default_run_cycle():
+    return None
+
+
+run_cycle = _default_run_cycle
+
+
+def _get_run_cycle():
+    global run_cycle
+    if run_cycle is _default_run_cycle:
+        from ai_trading.runner import run_cycle as _runner_run_cycle
+        run_cycle = _runner_run_cycle
+    return run_cycle
+
 # AI-AGENT-REF: Import memory optimization only
 def get_memory_optimizer():
     from ai_trading.config import get_settings
@@ -131,9 +146,8 @@ def run_bot(*_a, **_k) -> int:
             logger.info("Performance monitoring started")
 
         logger.info("Bot startup complete - entering main loop")
-        # Defer runner import to avoid import-time side effects
-        from ai_trading.runner import run_cycle
-        return run_cycle()
+        rc = _get_run_cycle()
+        return rc()
 
     except Exception as e:
         logger.error("Bot startup failed: %s", e, exc_info=True)
@@ -190,9 +204,8 @@ def main() -> None:
     load_dotenv()
     global config
     config = get_config()
-    # Defer runner import to avoid import-time side effects
-    from ai_trading.runner import run_cycle
-    run_cycle()
+    rc = _get_run_cycle()
+    rc()
 
     # Ensure API is ready before starting trading cycles
     api_ready = threading.Event()
@@ -281,9 +294,7 @@ def main() -> None:
                         f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects"
                     )
 
-            # Defer runner import to avoid import-time side effects
-            from ai_trading.runner import run_cycle
-            run_cycle()
+            rc()
         except Exception:  # pragma: no cover - log unexpected errors
             logger.exception("run_cycle failed")
         count += 1

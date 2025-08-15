@@ -254,6 +254,7 @@ _configured = False
 _loggers: dict[str, SanitizingLoggerAdapter] = {}  # AI-AGENT-REF: store adapters
 _log_queue: queue.Queue | None = None
 _listener: QueueListener | None = None
+_LOGGING_LISTENER: QueueListener | None = None
 
 # AI-AGENT-REF: Global thread-safe protection flag to prevent multiple logging setup calls
 _LOGGING_LOCK = threading.Lock()
@@ -341,18 +342,13 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
         # AI-AGENT-REF: use background queue listener to reduce I/O blocking
         _listener = QueueListener(_log_queue, *handlers, respect_handler_level=True)
         _listener.start()
-
-        def _stop_listener() -> None:
-            if _listener:
-                try:
-                    _listener.stop()
-                except Exception as e:
-                    # Log cleanup errors but don't fail shutdown
-                    logging.getLogger(__name__).warning(
-                        "Failed to stop logging listener during shutdown: %s", e
-                    )
-
-        atexit.register(_stop_listener)
+        try:
+            if _listener._thread is not None:
+                _listener._thread.daemon = True
+        except Exception:
+            pass
+        _LOGGING_LISTENER = _listener
+        atexit.register(_safe_shutdown_logging)
 
         _configured = True
         _LOGGING_CONFIGURED = (
@@ -364,6 +360,42 @@ def setup_logging(debug: bool = False, log_file: str | None = None) -> logging.L
             "Logging configured successfully - no duplicates possible"
         )
         return logger
+
+
+def _safe_shutdown_logging():
+    try:
+        listener = globals().get("_LOGGING_LISTENER", None)
+        try:
+            if listener is not None:
+                try:
+                    listener.stop()
+                except Exception:
+                    pass
+                try:
+                    t = getattr(listener, "_thread", None)
+                    if t is not None and hasattr(t, "join"):
+                        t.join(timeout=1.0)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        root = logging.getLogger()
+        for h in list(root.handlers):
+            try:
+                root.removeHandler(h)
+                try:
+                    h.flush()
+                except Exception:
+                    pass
+                try:
+                    if hasattr(h, "close"):
+                        h.close()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def get_logger(name: str) -> SanitizingLoggerAdapter:
