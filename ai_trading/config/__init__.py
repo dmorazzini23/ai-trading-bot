@@ -96,11 +96,13 @@ def validate_env_vars() -> None:
     return validate_environment()
 
 
-def log_config(secrets_to_redact: list[str] | None = None) -> dict:
+def log_config(masked_keys: list[str] | None = None, secrets_to_redact: list[str] | None = None) -> dict:
     """
     Return a sanitized snapshot of current config for diagnostics.
     MUST NOT log or print in tests.
     """
+    global _CONFIG_LOGGED
+    _CONFIG_LOGGED = True
     s = get_settings()
     conf = {
         "ALPACA_API_KEY": "***" if s.alpaca_api_key else "",
@@ -110,12 +112,13 @@ def log_config(secrets_to_redact: list[str] | None = None) -> dict:
         "CONF_THRESHOLD": getattr(s, "conf_threshold", None) or 0.75,
         "DAILY_LOSS_LIMIT": getattr(s, "daily_loss_limit", None) or 0.03,
     }
-    if secrets_to_redact:
-        for key in secrets_to_redact:
+    # Support legacy parameter name
+    if masked_keys is None and secrets_to_redact is not None:
+        masked_keys = secrets_to_redact
+    if masked_keys:
+        for key in masked_keys:
             if key in conf:
                 conf[key] = "***"
-    global _CONFIG_LOGGED
-    _CONFIG_LOGGED = True
     return conf
 
 __all__ = [

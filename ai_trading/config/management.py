@@ -1372,58 +1372,117 @@ def reload_env(env_file: str | os.PathLike[str] | None = None) -> None:
 
 
 class TradingConfig(BaseModel):
-    """Simplified trading configuration with mode-based overrides."""
+    """Trading parameters with mode-based defaults and env overrides."""
 
-    kelly_fraction: float = 0.6
-    conf_threshold: float = 0.75
-    daily_loss_limit: float = 0.03
-    capital_cap: float = 0.25
-    max_position_size: int = 8000
-    signal_confirmation_bars: int = 2
-    signal_period: int = 20
-    fast_period: int = 5
-    buy_threshold: float = 0.5
-    confirmation_count: int = 2
-    take_profit_factor: float = 2.0
-    trailing_factor: float = 1.0
-    max_drawdown_threshold: float = 0.2
+    # Risk controls
+    max_drawdown_threshold: float = 0.20
+    daily_loss_limit: float = 0.05
     dollar_risk_limit: float = 0.05
-    max_portfolio_risk: float = 0.1
+    max_portfolio_risk: float = 0.20
+    max_position_size: int = 8000
+    position_size_min_usd: int = 50
+
+    # Position sizing
+    kelly_fraction: float = 0.60
+    capital_cap: float = 0.25
+
+    # Trading behaviour
+    conf_threshold: float = 0.75
+    buy_threshold: float = 0.75
+    confirmation_count: int = 3
+    take_profit_factor: float = 2.0
+    trailing_factor: float = 0.8
+
+    # Signal processing
+    signal_confirmation_bars: int = 2
+    signal_period: int = 14
+    fast_period: int = 5
 
     @classmethod
-    def from_env(cls, mode: str) -> "TradingConfig":
-        """Return configuration overrides for a given trading ``mode``."""
-        mode = (mode or "").lower()
-        overrides = {
-            "conservative": {"kelly_fraction": 0.25, "conf_threshold": 0.85},
-            "balanced": {"kelly_fraction": 0.60, "conf_threshold": 0.75},
-            "aggressive": {"kelly_fraction": 0.75, "conf_threshold": 0.65},
-        }
-        base = cls()
-        if mode in overrides:
-            return base.copy(update=overrides[mode])
-        return base
+    def from_env(cls, mode: str | None = None) -> "TradingConfig":
+        import os
 
-    def to_legacy_dict(self) -> dict[str, Any]:
-        """Return legacy UPPERCASE mapping for backward compatibility."""
-        return {
-            "KELLY_FRACTION": self.kelly_fraction,
-            "CONF_THRESHOLD": self.conf_threshold,
-            "DAILY_LOSS_LIMIT": self.daily_loss_limit,
-            "CAPITAL_CAP": self.capital_cap,
-            "MAX_POSITION_SIZE": self.max_position_size,
-            "SIGNAL_CONFIRMATION_BARS": self.signal_confirmation_bars,
-            "SIGNAL_PERIOD": self.signal_period,
-            "FAST_PERIOD": self.fast_period,
-            "BUY_THRESHOLD": self.buy_threshold,
-            "CONFIRMATION_COUNT": self.confirmation_count,
-            "TAKE_PROFIT_FACTOR": self.take_profit_factor,
-            "TRAILING_FACTOR": self.trailing_factor,
-            "MAX_DRAWDOWN_THRESHOLD": self.max_drawdown_threshold,
-            "DOLLAR_RISK_LIMIT": self.dollar_risk_limit,
-            "MAX_PORTFOLIO_RISK": self.max_portfolio_risk,
+        mode = (mode or os.getenv("TRADING_MODE", "balanced")).lower()
+        overrides = {
+            "conservative": {
+                "kelly_fraction": 0.20,
+                "conf_threshold": 0.85,
+                "daily_loss_limit": 0.02,
+                "confirmation_count": 3,
+            },
+            "balanced": {
+                "kelly_fraction": 0.60,
+                "conf_threshold": 0.75,
+                "daily_loss_limit": 0.05,
+                "confirmation_count": 3,
+            },
+            "aggressive": {
+                "kelly_fraction": 0.75,
+                "conf_threshold": 0.65,
+                "daily_loss_limit": 0.08,
+                "confirmation_count": 2,
+            },
         }
+        cfg = cls()
+        if mode in overrides:
+            cfg = cfg.copy(update=overrides[mode])
+
+        env_float = {
+            "KELLY_FRACTION": "kelly_fraction",
+            "TRADING_KELLY_FRACTION": "kelly_fraction",
+            "CONF_THRESHOLD": "conf_threshold",
+            "BUY_THRESHOLD": "buy_threshold",
+            "DAILY_LOSS_LIMIT": "daily_loss_limit",
+            "CAPITAL_CAP": "capital_cap",
+            "TAKE_PROFIT_FACTOR": "take_profit_factor",
+            "TRAILING_FACTOR": "trailing_factor",
+            "DOLLAR_RISK_LIMIT": "dollar_risk_limit",
+            "MAX_PORTFOLIO_RISK": "max_portfolio_risk",
+        }
+        env_int = {
+            "MAX_POSITION_SIZE": "max_position_size",
+            "POSITION_SIZE_MIN_USD": "position_size_min_usd",
+            "CONFIRMATION_COUNT": "confirmation_count",
+            "SIGNAL_CONFIRMATION_BARS": "signal_confirmation_bars",
+            "SIGNAL_PERIOD": "signal_period",
+            "FAST_PERIOD": "fast_period",
+        }
+        for key, field in env_float.items():
+            val = os.getenv(key)
+            if val is not None:
+                try:
+                    cfg = cfg.copy(update={field: float(val)})
+                except ValueError:
+                    continue
+        for key, field in env_int.items():
+            val = os.getenv(key)
+            if val is not None:
+                try:
+                    cfg = cfg.copy(update={field: int(val)})
+                except ValueError:
+                    continue
+        return cfg
+
+    def to_dict(self) -> dict[str, object]:
+        return self.model_dump()
+
+    def to_legacy_dict(self) -> dict[str, object]:
+        return {name.upper(): getattr(self, name) for name in self.model_fields}
+
+    @classmethod
+    def from_optimization(cls, method: str) -> "TradingConfig":
+        method = (method or "").lower()
+        if method == "kelly":
+            return cls.from_env("aggressive").copy(
+                update={"kelly_fraction": 0.75, "conf_threshold": 0.7}
+            )
+        if method == "risk_parity":
+            return cls.from_env("balanced").copy(
+                update={"kelly_fraction": 0.35, "conf_threshold": 0.75}
+            )
+        if method == "mean_variance":
+            return cls.from_env("balanced")
+        raise ValueError(f"Unknown optimization method: {method}")
 
     def get_legacy_params(self) -> dict[str, Any]:
-        """Alias for :meth:`to_legacy_dict` used by older code paths."""
         return self.to_legacy_dict()

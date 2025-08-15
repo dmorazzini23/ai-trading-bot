@@ -121,7 +121,7 @@ def _fetch_api(url: str, retries: int = 3, delay: float = 1.0) -> dict:
             resp.raise_for_status()
             return resp.json()
         except (
-            requests.RequestException
+            requests.exceptions.RequestException
         ) as exc:  # pragma: no cover - network may be mocked
             logger.warning("API request failed (%s/%s): %s", attempt, retries, exc)
             time.sleep(delay * attempt)

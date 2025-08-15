@@ -233,7 +233,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             for filing in form4:
                 if filing["type"] == "buy" and filing["dollar_amount"] > 50_000:
                     form4_score += 0.1
-        except (requests.RequestException, requests.HTTPError) as e:
+        except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
             logger.debug("Form4 fetch failed for %s - network error: %s", ticker, e)
         except (KeyError, ValueError, TypeError) as e:
             logger.debug("Form4 fetch failed for %s - data parsing error: %s", ticker, e)
