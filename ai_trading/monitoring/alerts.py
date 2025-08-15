@@ -8,6 +8,7 @@ management for institutional trading operations.
 import logging
 import threading
 import time
+from ai_trading.utils import sleep as psleep
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from enum import Enum
@@ -277,11 +278,11 @@ class AlertManager:
                     self.alerts = [a for a in self.alerts if a.timestamp >= cutoff_time]
 
                 # Sleep for an hour
-                time.sleep(3600)
+                psleep(3600)
 
             except Exception as e:
                 logger.error(f"Error in alert cleanup: {e}")
-                time.sleep(300)  # Sleep 5 minutes on error
+                psleep(300)  # Sleep 5 minutes on error
 
 
 class RiskAlertEngine:

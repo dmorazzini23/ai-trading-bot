@@ -18,6 +18,7 @@ from enum import Enum
 from typing import Any
 
 import requests
+from ai_trading.utils import clamp_timeout
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
@@ -267,7 +268,11 @@ class SlackAlerter:
                     )
 
             # Send to Slack
-            response = requests.post(self.webhook_url, json=payload, timeout=10)
+            response = requests.post(
+                self.webhook_url,
+                json=payload,
+                timeout=clamp_timeout(10, 10, 0.5),
+            )
             response.raise_for_status()
 
             logger.info(f"Slack alert sent: {alert.title}")

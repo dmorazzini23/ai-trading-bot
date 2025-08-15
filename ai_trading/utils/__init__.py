@@ -38,6 +38,8 @@ from .determinism import (
     unlock_model_spec,
 )
 from .time import now_utc
+from .timing import sleep, clamp_timeout  # AI-AGENT-REF: test-aware timing helpers
+from .process_manager import acquire_lock, release_lock, file_lock
 from . import process_manager
 
 
@@ -63,6 +65,11 @@ __all__ = [
     "lock_model_spec",
     "unlock_model_spec",
     "now_utc",
+    "sleep",
+    "clamp_timeout",
+    "acquire_lock",
+    "release_lock",
+    "file_lock",
     "get_latest_close",
     "EASTERN_TZ",
     "health_check",
