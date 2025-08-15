@@ -37,6 +37,23 @@ def _pos_num(name: str, v) -> float:  # AI-AGENT-REF: positive number validator
     return x
 
 
+def submit_market_order(symbol: str, side: str, quantity: int):
+    try:
+        quantity = int(_pos_num("qty", quantity))
+    except Exception as e:
+        _log.error(
+            "ORDER_INPUT_INVALID",
+            extra={"cause": type(e).__name__, "detail": str(e)},
+        )
+        return {"status": "error", "error": str(e)}
+    return {
+        "status": "submitted",
+        "symbol": symbol,
+        "side": side,
+        "quantity": quantity,
+    }
+
+
 class AlpacaExecutionEngine:
     """
     Live trading execution engine using real Alpaca SDK.

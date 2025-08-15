@@ -140,26 +140,24 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
         kwargs[key] = val
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
+    attempt = 0
     while True:
         try:
             resp = api.submit_order(**kwargs)
-        except TypeError:
-            reduced = {
-                k: v
-                for k, v in kwargs.items()
-                if k in ("symbol", "qty", "side", "time_in_force")
-            }
-            try:
-                resp = api.submit_order(**reduced)
-            except TypeError:
+        except Exception:
+            attempt += 1
+            if attempt >= 3:
                 try:
-                    resp = api.submit_order(
-                        kwargs.get("symbol"),
-                        kwargs.get("qty"),
-                        kwargs.get("side"),
-                    )
-                except TypeError:
-                    resp = api.submit_order(order_data)
+                    reduced = {
+                        k: kwargs[k]
+                        for k in ("symbol", "qty", "side", "time_in_force")
+                        if k in kwargs
+                    }
+                    return api.submit_order(**reduced)
+                except Exception:
+                    raise
+            time.sleep(0.01)
+            continue
         if getattr(resp, "status_code", 200) == 429:
             time.sleep(1)
             continue

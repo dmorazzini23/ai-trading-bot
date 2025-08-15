@@ -1,5 +1,22 @@
 from __future__ import annotations
-from ai_trading.settings import get_buy_threshold, get_capital_cap, get_conf_threshold, get_daily_loss_limit, get_disaster_dd_limit, get_dollar_risk_limit, get_max_drawdown_threshold, get_max_portfolio_positions, get_portfolio_drift_threshold, get_rebalance_interval_min, get_sector_exposure_cap, get_trade_cooldown_min, get_max_trades_per_hour, get_max_trades_per_day, get_finnhub_rpm
+from ai_trading.settings import (
+    get_buy_threshold,
+    get_capital_cap,
+    get_conf_threshold,
+    get_daily_loss_limit,
+    get_disaster_dd_limit,
+    get_dollar_risk_limit,
+    get_max_drawdown_threshold,
+    get_max_portfolio_positions,
+    get_portfolio_drift_threshold,
+    get_rebalance_interval_min,
+    get_sector_exposure_cap,
+    get_trade_cooldown_min,
+    get_max_trades_per_hour,
+    get_max_trades_per_day,
+    get_finnhub_rpm,
+    get_volume_threshold,
+)
 from ai_trading.settings import get_max_portfolio_positions
 from ai_trading.settings import get_disaster_dd_limit
 from enum import Enum
@@ -7,6 +24,8 @@ from enum import Enum
 
 # Rate limit for Finnhub (calls/min); resolved at import time via settings
 FINNHUB_RPM = get_finnhub_rpm()
+# (ensure these appear before any usage)
+VOLUME_THRESHOLD = get_volume_threshold()
 # (any existing comments or module docstring go below the future import)
 __all__ = ['pre_trade_health_check', 'run_all_trades_worker', 'BotState', 'BotMode']
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed

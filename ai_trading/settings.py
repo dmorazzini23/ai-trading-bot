@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     # Upper bound on concurrent open positions
     max_portfolio_positions: int = Field(default=10, env="AI_TRADER_MAX_PORTFOLIO_POSITIONS")
     disaster_dd_limit: float = Field(default=0.25, env="AI_TRADER_DISASTER_DD_LIMIT")
+    # Toggle dataframe/bars cache in data_fetcher
+    data_cache_enable: bool = Field(default=True, env="AI_TRADER_DATA_CACHE_ENABLE")
+    # Plotting (matplotlib) allowed in environments that support it
+    enable_plotting: bool = Field(default=False, env="AI_TRADER_ENABLE_PLOTTING")
+    # Minimum absolute USD size for a position
+    position_size_min_usd: float = Field(default=0.0, env="AI_TRADER_POSITION_SIZE_MIN_USD")
+    # Global volume threshold used by bot_engine init
+    volume_threshold: float = Field(default=0.0, env="AI_TRADER_VOLUME_THRESHOLD")
     """Single source of truth for runtime configuration."""  # AI-AGENT-REF: runtime config model
 
     # loop control
@@ -152,4 +160,20 @@ def get_max_trades_per_day() -> int:
 # ---- Lazy getters ----
 def get_finnhub_rpm() -> int:
     return int(get_settings().finnhub_rpm)
+
+
+def get_data_cache_enable() -> bool:
+    return bool(get_settings().data_cache_enable)
+
+
+def get_enable_plotting() -> bool:
+    return bool(get_settings().enable_plotting)
+
+
+def get_position_size_min_usd() -> float:
+    return float(get_settings().position_size_min_usd)
+
+
+def get_volume_threshold() -> float:
+    return float(get_settings().volume_threshold)
 

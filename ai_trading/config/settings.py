@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     enable_numba_optimization: bool = Field(False, alias="ENABLE_NUMBA_OPTIMIZATION")
     alpaca_data_feed: str | None = Field(default=None, alias="ALPACA_DATA_FEED")
     scheduler_sleep_seconds: int = Field(60, alias="SCHEDULER_SLEEP_SECONDS")
+    # Feature flags and thresholds
+    data_cache_enable: bool = Field(True, env="AI_TRADER_DATA_CACHE_ENABLE")
+    enable_plotting: bool = Field(False, env="AI_TRADER_ENABLE_PLOTTING")
+    position_size_min_usd: float = Field(
+        0.0, env="AI_TRADER_POSITION_SIZE_MIN_USD"
+    )
+    volume_threshold: float = Field(0.0, env="AI_TRADER_VOLUME_THRESHOLD")
 
     # AI-AGENT-REF: rebalancer defaults
     rebalance_interval_min: int = Field(

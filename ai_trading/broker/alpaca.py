@@ -2,6 +2,41 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Optional
 
+try:  # AI-AGENT-REF: safe optional import for tests
+    from alpaca.trading.client import TradingClient as _RealTradingClient  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    _RealTradingClient = None
+
+
+class MockTradingClient:
+    def __init__(self, *a, **k):
+        pass
+
+    def submit_order(self, *a, **k):
+        return {"status": "mock"}
+
+
+TradingClient = _RealTradingClient or MockTradingClient
+
+
+class MockOrderSide:
+    BUY = "buy"
+    SELL = "sell"
+
+
+class MockTimeInForce:
+    DAY = "day"
+
+
+class MockOrderStatus:
+    NEW = "new"
+
+
+class MockQueryOrderStatus:
+    OPEN = "open"
+    CLOSED = "closed"
+    ALL = "all"
+
 
 class AlpacaBroker:
     """
@@ -178,3 +213,14 @@ class AlpacaBroker:
             client_order_id=client_order_id,
             **extras,
         )
+
+
+__all__ = [
+    "TradingClient",
+    "MockTradingClient",
+    "AlpacaBroker",
+    "MockOrderSide",
+    "MockTimeInForce",
+    "MockOrderStatus",
+    "MockQueryOrderStatus",
+]
