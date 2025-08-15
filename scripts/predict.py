@@ -15,7 +15,6 @@ import pandas as pd
 
 # AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
 from ai_trading.config.management import TradingConfig, reload_env
-from ai_trading.telemetry.metrics_logger import log_metrics
 from scripts.retrain import prepare_indicators
 CONFIG = TradingConfig()
 
@@ -218,13 +217,17 @@ def predict(csv_path: str, freq: str = "intraday") -> tuple[int | None, float | 
         pred,
         proba,
     )
-    log_metrics({
-        "timestamp": pd.Timestamp.now(tz="UTC").isoformat(),
-        "symbol": symbol,
-        "regime": regime,
-        "prediction": int(pred),
-        "probability": float(proba),
-    }, filename="metrics/predictions.csv")
+    from ai_trading.logging import _get_metrics_logger  # AI-AGENT-REF: lazy metrics import
+    _get_metrics_logger().log_metrics(
+        {
+            "timestamp": pd.Timestamp.now(tz="UTC").isoformat(),
+            "symbol": symbol,
+            "regime": regime,
+            "prediction": int(pred),
+            "probability": float(proba),
+        },
+        filename="metrics/predictions.csv",
+    )
     return pred, proba
 
 

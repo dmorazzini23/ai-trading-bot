@@ -34,7 +34,10 @@ import atexit
 import io
 import inspect
 import logging
-from ai_trading.logging import get_logger  # AI-AGENT-REF: use sanitizing adapter
+from ai_trading.logging import (
+    get_logger,  # AI-AGENT-REF: use sanitizing adapter
+    _get_metrics_logger,
+)
 import math
 import os
 import sys
@@ -1006,8 +1009,6 @@ from ai_trading.rebalancer import (
 )
 
 
-# Use base URL from configuration
-ALPACA_BASE_URL = get_settings().alpaca_base_url
 import pickle
 
 # AI-AGENT-REF: Optional meta-learning — do not crash if unavailable
@@ -1026,7 +1027,6 @@ else:
     # AI-AGENT-REF: mock optimize_signals for test environments
     def optimize_signals(*args, **kwargs):
         return args[0] if args else []  # Return signals as-is
-from ai_trading.telemetry.metrics_logger import log_metrics
 
 # AI-AGENT-REF: robust model_pipeline import with legacy fallback
 try:  # pragma: no cover - import path resolution
@@ -1047,11 +1047,7 @@ from ai_trading.utils import log_warning, model_lock, safe_to_datetime, validate
 
 # ai_trading/core/bot_engine.py:670 - Move retrain_meta_learner import to lazy location
 
-ALPACA_API_KEY = get_settings().alpaca_api_key
-ALPACA_SECRET_KEY = get_settings().alpaca_secret_key_plain  # AI-AGENT-REF: use plain secret string
-ALPACA_PAPER = getattr(config, "ALPACA_PAPER", None)
 validate_alpaca_credentials = getattr(config, "validate_alpaca_credentials", None)
-FINNHUB_API_KEY = get_settings().finnhub_api_key
 BOT_MODE_ENV = getattr(config, "BOT_MODE", BOT_MODE)
 RUN_HEALTHCHECK = getattr(config, "RUN_HEALTHCHECK", None)
 
@@ -2377,29 +2373,40 @@ finnhub_breaker = pybreaker.CircuitBreaker(
     reset_timeout=300,  # 5 minutes for external services
     name="finnhub_api",
 )
-# Bounded, CPU-aware executors sized via Settings
-_cpu = os.cpu_count() or 2
-_S = get_settings()
-_exec_fn = getattr(_S, "effective_executor_workers", None)
-_exec_workers = _exec_fn(_cpu) if callable(_exec_fn) else _cpu
-_pred_fn = getattr(_S, "effective_prediction_workers", None)
-_pred_workers = _pred_fn(_cpu) if callable(_pred_fn) else _cpu
-executor = ThreadPoolExecutor(max_workers=_exec_workers)
-prediction_executor = ThreadPoolExecutor(max_workers=_pred_workers)
+
+# AI-AGENT-REF: lazy executor init avoids import-time settings
+executor: ThreadPoolExecutor | None = None
+prediction_executor: ThreadPoolExecutor | None = None
+
+def _ensure_executors() -> None:
+    """Create thread pool executors on demand."""  # AI-AGENT-REF: deferred init
+    global executor, prediction_executor
+    if executor is not None and prediction_executor is not None:
+        return
+    from ai_trading.config.settings import get_settings
+
+    cpu = os.cpu_count() or 2
+    s = get_settings()
+    exec_fn = getattr(s, "effective_executor_workers", None)
+    exec_workers = exec_fn(cpu) if callable(exec_fn) else cpu
+    pred_fn = getattr(s, "effective_prediction_workers", None)
+    pred_workers = pred_fn(cpu) if callable(pred_fn) else cpu
+    executor = ThreadPoolExecutor(max_workers=exec_workers)
+    prediction_executor = ThreadPoolExecutor(max_workers=pred_workers)
 
 
 # AI-AGENT-REF: Add proper cleanup with atexit handlers for ThreadPoolExecutor resource leak
 def cleanup_executors():
     """Cleanup ThreadPoolExecutor resources to prevent resource leaks."""
     try:
-        if executor:
+        if executor is not None:
             executor.shutdown(wait=True, cancel_futures=True)
             _log.debug("Main executor shutdown successfully")
     except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning("Error shutting down main executor: %s", e)
 
     try:
-        if prediction_executor:
+        if prediction_executor is not None:
             prediction_executor.shutdown(wait=True, cancel_futures=True)
             _log.debug("Prediction executor shutdown successfully")
     except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
@@ -4206,15 +4213,6 @@ def get_strategies():
 
 # AI-AGENT-REF: Defer credential validation to runtime instead of import-time
 # This prevents crashes during import when environment variables are missing
-API_KEY = ALPACA_API_KEY
-API_SECRET = ALPACA_SECRET_KEY
-BASE_URL = get_settings().alpaca_base_url
-paper = ALPACA_PAPER
-
-# AI-AGENT-REF: Remove import-time credential validation - moved to runtime
-# Credential validation is now handled by _ensure_alpaca_env_or_raise() at runtime
-
-# AI-AGENT-REF: conditional client initialization with graceful fallback
 trading_client = None
 data_client = None
 stream = None
@@ -7855,7 +7853,8 @@ def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
             return
     pred = model_pipeline.predict(X_new)
     online_error = float(np.mean((pred - y_new) ** 2))
-    log_metrics(
+    ml = _get_metrics_logger()  # AI-AGENT-REF: lazy metrics import
+    ml.log_metrics(
         {
             "timestamp": utc_now_iso(),
             "type": "online_update",
@@ -8027,7 +8026,7 @@ def run_meta_learning_weight_optimizer(
         model.fit(X, y, sample_weight=sample_w)
         atomic_joblib_dump(model, META_MODEL_PATH)
         _log.info("META_MODEL_TRAINED", extra={"samples": len(y)})
-        log_metrics(
+        _get_metrics_logger().log_metrics(  # AI-AGENT-REF: lazy metrics import
             {
                 "timestamp": utc_now_iso(),
                 "type": "meta_model_train",
@@ -8093,7 +8092,7 @@ def run_bayesian_meta_learning_optimizer(
         model.fit(X, y)
         atomic_joblib_dump(model, abspath("meta_model_bayes.pkl"))
         _log.info("META_MODEL_BAYESIAN_TRAINED", extra={"samples": len(y)})
-        log_metrics(
+        _get_metrics_logger().log_metrics(  # AI-AGENT-REF: lazy metrics import
             {
                 "timestamp": utc_now_iso(),
                 "type": "meta_model_bayes_train",
@@ -9393,7 +9392,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                     os.remove(os.path.join("models", f))
 
         batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
-        log_metrics(
+        _get_metrics_logger().log_metrics(  # AI-AGENT-REF: lazy metrics import
             {
                 "timestamp": utc_now_iso(),
                 "type": "daily_retrain",
@@ -9904,6 +9903,8 @@ def _process_symbols(
         filtered.append(symbol)
 
     symbols = filtered  # replace with filtered list
+
+    _ensure_executors()  # AI-AGENT-REF: lazy executor creation
 
     if cd_skipped:
         log_skip_cooldown(cd_skipped)
@@ -10972,8 +10973,8 @@ def main() -> None:
         threading.Thread(
             target=lambda: asyncio.run(
                 start_trade_updates_stream(
-                    API_KEY,
-                    API_SECRET,
+                    ALPACA_API_KEY,
+                    ALPACA_SECRET_KEY,
                     trading_client,
                     state,
                     paper=True,

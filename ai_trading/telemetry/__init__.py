@@ -1,13 +1,5 @@
-from .metrics_logger import (
-    log_metrics,
-    compute_max_drawdown,
-    log_volatility,
-    log_regime_toggle,
-)
+"""Telemetry package public API."""
 
-__all__ = [
-    "log_metrics",
-    "compute_max_drawdown",
-    "log_volatility",
-    "log_regime_toggle",
-]
+# AI-AGENT-REF: avoid import-time heavy re-exports
+__all__ = ("metrics_logger",)
+
