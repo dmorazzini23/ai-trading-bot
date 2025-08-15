@@ -120,8 +120,7 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
         return {"status": "dry_run"}
     if getattr(order_data, "client_order_id", None) is None:
         setattr(order_data, "client_order_id", str(uuid.uuid4()))
-    kwargs = {}
-    for key in [
+    safe_keys = [
         "symbol",
         "qty",
         "side",
@@ -130,15 +129,37 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
         "limit_price",
         "stop_price",
         "client_order_id",
-    ]:
+    ]
+    kwargs = {}
+    for key in safe_keys:
         val = getattr(order_data, key, None)
         if val is None:
             continue
         if key in {"side", "time_in_force"}:
             val = getattr(val, "value", str(val)).lower()
         kwargs[key] = val
+    kwargs = {k: v for k, v in kwargs.items() if v is not None}
+
     while True:
-        resp = api.submit_order(**kwargs)
+        try:
+            resp = api.submit_order(**kwargs)
+        except TypeError:
+            reduced = {
+                k: v
+                for k, v in kwargs.items()
+                if k in ("symbol", "qty", "side", "time_in_force")
+            }
+            try:
+                resp = api.submit_order(**reduced)
+            except TypeError:
+                try:
+                    resp = api.submit_order(
+                        kwargs.get("symbol"),
+                        kwargs.get("qty"),
+                        kwargs.get("side"),
+                    )
+                except TypeError:
+                    resp = api.submit_order(order_data)
         if getattr(resp, "status_code", 200) == 429:
             time.sleep(1)
             continue

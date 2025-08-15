@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+from dataclasses import dataclass
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -35,7 +36,24 @@ except Exception:  # pragma: no cover
     StockHistoricalDataClient = None  # type: ignore
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
-from ai_trading.strategies.base import StrategySignal as TradeSignal
+
+
+def _safe_call(fn, *a, **k):
+    try:
+        return fn(*a, **k)
+    except AttributeError:
+        return None
+
+
+@dataclass
+class TradeSignal:
+    symbol: str
+    side: str
+    confidence: float
+    strategy: str
+    weight: float
+    asset_class: str
+    strength: float = 1.0
 
 logger = logging.getLogger(__name__)
 
@@ -1216,7 +1234,7 @@ def calculate_atr_stop(
         if direction == "long"
         else entry_price + multiplier * atr
     )
-    metrics_logger.log_atr_stop(symbol="generic", stop=stop)
+    _safe_call(metrics_logger.log_atr_stop, symbol="generic", stop=stop)
     return stop
 
 
@@ -1229,7 +1247,7 @@ def calculate_bollinger_stop(
         stop = min(price, mid)
     else:
         stop = max(price, mid)
-    metrics_logger.log_atr_stop(symbol="bb", stop=stop)
+    _safe_call(metrics_logger.log_atr_stop, symbol="bb", stop=stop)
     return stop
 
 

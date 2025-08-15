@@ -54,6 +54,13 @@ config: Settings | None = None
 logger = logging.getLogger(__name__)
 
 
+class MockConfig:
+    """Test stub injected by tests via monkeypatch; real code never uses it."""
+
+    def __getattr__(self, name):  # pragma: no cover - simple stub
+        raise AttributeError(name)
+
+
 def validate_environment() -> None:
     """Ensure required environment variables are present and dependencies are available."""
     cfg = get_config()

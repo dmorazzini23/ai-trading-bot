@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Utility functions and helpers for the AI trading bot."""
 
 """
@@ -40,6 +42,19 @@ from .determinism import (
     unlock_model_spec,
 )
 from .time import now_utc
+
+
+def get_latest_close(df: pd.DataFrame | None) -> float:
+    if df is None or getattr(df, "empty", True):
+        return 0.0
+    for col in ("close", "Close", "adj_close", "Adj Close"):
+        if col in df.columns:
+            try:
+                v = float(pd.to_numeric(df[col].iloc[-1], errors="coerce"))
+                return 0.0 if pd.isna(v) else v
+            except Exception:
+                continue
+    return 0.0
 __all__ = [
     "log_warning",
     "model_lock",
@@ -62,4 +77,5 @@ __all__ = [
     "lock_model_spec",
     "unlock_model_spec",
     "now_utc",
+    "get_latest_close",
 ]
