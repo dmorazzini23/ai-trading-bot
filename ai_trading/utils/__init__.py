@@ -38,6 +38,7 @@ from .determinism import (
     unlock_model_spec,
 )
 from .time import now_utc
+from . import process_manager
 
 
 __all__ = [
@@ -68,4 +69,5 @@ __all__ = [
     "ensure_utc",
     "get_ohlcv_columns",
     "ensure_utc_index",
+    "process_manager",
 ]

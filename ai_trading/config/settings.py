@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     # AI-AGENT-REF: runtime defaults for deterministic behavior and loops
     seed: int | None = 42
     loop_interval_seconds: int = 60
-    iterations: int | None = 0  # 0 => run forever
+    iterations: int = 0  # 0 => run forever
     api_port: int | None = 9001
 
     # AI-AGENT-REF: optional Finnhub API config
@@ -114,6 +114,11 @@ class Settings(BaseSettings):
             "APCA-API-KEY-ID": self.alpaca_api_key or "",
             "APCA-API-SECRET-KEY": self.alpaca_secret_key_plain or "",
         }
+
+    @property
+    def scheduler_iterations(self) -> int:
+        """Back-compat alias used by main.py and tests."""
+        return self.iterations
 
 
 @lru_cache(maxsize=1)

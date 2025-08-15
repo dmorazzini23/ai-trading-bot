@@ -36,11 +36,28 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "ensure_datetime",
-    "ensure_utc",
     "get_historical_data",
-    "get_minute_df",
     "get_daily_df",
+    "get_minute_df",
+    "get_cache_stats",
+    "get_last_available_bar",
+    "finnhub_client",
 ]
+
+# Lightweight placeholders for optional Alpaca SDK components. The real
+# modules are imported lazily via ``_get_alpaca_client`` to avoid import-time
+# side effects during testing when Alpaca or requests are intentionally
+# unavailable.
+StockBarsRequest = None  # type: ignore
+TimeFrame = None  # type: ignore
+TimeFrameUnit = None  # type: ignore
+
+
+class APIError(Exception):
+    """Placeholder Alpaca API error used for retry logic."""
+
+
+_DATA_CLIENT = None
 
 
 def ensure_utc(dt: datetime | "pd.Timestamp") -> datetime:
@@ -129,21 +146,40 @@ ALPACA_SECRET_KEY = CFG.alpaca_secret_key_plain  # AI-AGENT-REF: use plain secre
 ALPACA_BASE_URL = CFG.alpaca_base_url
 ALPACA_DATA_FEED = CFG.alpaca_data_feed or "iex"
 
-try:
-    from alpaca.data.historical import StockHistoricalDataClient
-except Exception:  # pragma: no cover - optional dependency
-    StockHistoricalDataClient = object  # type: ignore
-    client = None
-else:
-    # Global Alpaca data client using config credentials
+
+def _get_alpaca_client():
+    """Lazily import and initialize the Alpaca data client.
+
+    Returns ``None`` if the SDK or credentials are unavailable. Importing is
+    deferred to runtime to keep module import side-effect free, particularly in
+    test environments that intentionally mask Alpaca dependencies.
+    """
+
+    global _DATA_CLIENT, StockBarsRequest, TimeFrame, TimeFrameUnit, APIError
+    if _DATA_CLIENT is not None:
+        return _DATA_CLIENT
     try:
-        client = StockHistoricalDataClient(
-            api_key=ALPACA_API_KEY,
-            secret_key=ALPACA_SECRET_KEY,
-        )
-    except Exception as e:
-        logger.error("Failed to initialize Alpaca client: %s", e)
-        client = None
+        from alpaca.data.historical import StockHistoricalDataClient as _SHDC
+        from alpaca.data.requests import StockBarsRequest as _SBR
+        from alpaca.data.timeframe import TimeFrame as _TF, TimeFrameUnit as _TFU
+        from alpaca.common.exceptions import APIError as _APIError
+    except Exception as exc:  # pragma: no cover - optional dependency
+        logger.debug("Alpaca SDK unavailable: %s", exc)
+        _DATA_CLIENT = None
+        return None
+
+    try:
+        _DATA_CLIENT = _SHDC(api_key=ALPACA_API_KEY, secret_key=ALPACA_SECRET_KEY)
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.error("Failed to initialize Alpaca client: %s", exc)
+        _DATA_CLIENT = None
+        return None
+
+    StockBarsRequest = _SBR
+    TimeFrame = _TF
+    TimeFrameUnit = _TFU
+    APIError = _APIError
+    return _DATA_CLIENT
 
 # Session management for HTTP requests
 _session = None
@@ -244,6 +280,7 @@ except Exception as e:  # pragma: no cover - allow missing in test env
     urllib3 = types.SimpleNamespace(
         exceptions=types.SimpleNamespace(HTTPError=Exception)
     )
+    RequestException = Exception
 from ai_trading.utils.base import is_market_open, safe_to_datetime
 
 MINUTES_REQUIRED = 31
@@ -253,28 +290,19 @@ HISTORICAL_END = "2025-06-06"
 
 # FutureWarning now filtered globally in pytest.ini
 
-try:
-    import finnhub
-    from finnhub import FinnhubAPIException
-except Exception:  # pragma: no cover - optional dependency
-    finnhub = types.SimpleNamespace(Client=lambda *a, **k: None)
+class FinnhubAPIException(Exception):
+    """Fallback Finnhub exception used when SDK isn't available."""
 
-    class FinnhubAPIException(Exception):
-        """Fallback exception with status code attribute."""
-
-        def __init__(
-            self, *args, status_code=None, **kwargs
-        ) -> None:  # AI-AGENT-REF: flex init
-            code = (
-                status_code if status_code is not None else (args[0] if args else None)
-            )
-            self.status_code = code
-            super().__init__(f"FinnhubAPIException: {code}")
+    def __init__(self, *args, status_code: int | None = None, **kwargs) -> None:
+        self.status_code = status_code if status_code is not None else 0
+        super().__init__(*args or ("FinnhubAPIException",))
 
 
 def _get_finnhub_client():
     try:
         import finnhub as fh
+        from finnhub import FinnhubAPIException as _FHExc
+        globals()["FinnhubAPIException"] = _FHExc
         api_key = os.getenv("FINNHUB_API_KEY", "") or getattr(CFG, "finnhub_api_key", "")
         if not hasattr(fh, "Client") or not api_key:
             return None
@@ -283,18 +311,11 @@ def _get_finnhub_client():
         return None
 
 
+finnhub_client = _get_finnhub_client()
+
+
 # AI-AGENT-REF: import pandas as hard dependency
 import pandas as pd
-
-try:
-    from alpaca.common.exceptions import APIError
-    from alpaca.data.requests import StockBarsRequest
-    from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
-except Exception:  # pragma: no cover - optional dependency
-    APIError = Exception  # type: ignore
-    def StockBarsRequest(*a, **k):
-        return None
-    TimeFrame = TimeFrameUnit = types.SimpleNamespace()
 from tenacity import (
     RetryError,
     retry,
@@ -441,10 +462,6 @@ def _fetch_bars(
     df = df[["timestamp", "open", "high", "low", "close", "volume"]]
     df = df.reset_index(drop=True)
     return df
-
-
-# Alpaca historical data client
-_DATA_CLIENT = client
 
 
 class DataFetchError(Exception):
@@ -656,6 +673,10 @@ def get_historical_data(
         logger.error("get_historical_data end_date error: %s", e, exc_info=True)
         raise
 
+    client = _get_alpaca_client()
+    if client is None:
+        raise DataFetchError("Alpaca client not available")
+
     tf_map = {
         "1MIN": TimeFrame.Minute,
         "5MIN": TimeFrame(5, TimeFrameUnit.Minute),
@@ -676,7 +697,7 @@ def get_historical_data(
             feed=feed,
         )
         try:
-            return _DATA_CLIENT.get_stock_bars(req).df
+            return client.get_stock_bars(req).df
         except Exception as err:
             logger.exception("Historical data fetch failed for %s: %s", symbol, err)
             raise
@@ -1035,20 +1056,46 @@ def get_minute_df(
     alpaca_exc = finnhub_exc = None
     try:
         logger.debug("Trying data source: Alpaca")
-        # AI-AGENT-REF: Reduce redundant logging - only log actual fallbacks
         logger.debug("FETCH_ALPACA_MINUTE_BARS: start", extra={"symbol": symbol})
-        df = _fetch_bars(symbol, start_dt, end_dt, "1Min", _DEFAULT_FEED)
+        client = _get_alpaca_client()
+        if client is not None and StockBarsRequest and TimeFrame:
+            req = StockBarsRequest(
+                symbol_or_symbols=[symbol],
+                start=start_dt,
+                end=end_dt,
+                timeframe=TimeFrame.Minute,
+                feed=_DEFAULT_FEED,
+            )
+            try:
+                bars = client.get_stock_bars(req).df
+                df = bars.reset_index().rename(
+                    columns={
+                        "t": "timestamp",
+                        "timestamp": "timestamp",
+                        "o": "open",
+                        "h": "high",
+                        "l": "low",
+                        "c": "close",
+                        "v": "volume",
+                    }
+                )
+            except Exception as e:
+                if "invalid format for parameter start" in str(e).lower():
+                    raise
+                raise DataFetchException(symbol, "alpaca", "", str(e)) from e
+        else:
+            df = _fetch_bars(symbol, start_dt, end_dt, "1Min", _DEFAULT_FEED)
         logger.debug(
             "FETCH_ALPACA_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
         )
-        if df is None or df.empty:  # AI-AGENT-REF: raise on empty result for fallback
+        if df is None or df.empty:
             raise DataFetchException(
                 symbol,
                 "alpaca",
                 "",
                 f"No minute bars returned for {symbol} from Alpaca",
             )
-        required = ["open", "high", "low", "close", "volume"]
+        required = ["open", "high", "low", "close", "volume", "timestamp"]
         missing = set(required) - set(df.columns)
         if missing:
             logger.error("get_minute_df missing columns %s", missing)
@@ -1058,7 +1105,9 @@ def get_minute_df(
                 "",
                 f"Alpaca minute bars for {symbol} missing columns {missing}",
             )
-    except DataFetchException as primary_err:
+    except Exception as primary_err:
+        if "invalid format for parameter start" in str(primary_err).lower():
+            raise
         alpaca_exc = primary_err
         logger.debug("Alpaca fetch error: %s", primary_err)
         logger.debug("Falling back to Finnhub")
@@ -1168,6 +1217,8 @@ def get_minute_df(
             "get_minute_df missing columns: %s", sorted(missing)
         )  # AI-AGENT-REF: early validation
         raise KeyError(f"missing columns: {sorted(missing)}")
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = df.set_index("timestamp").sort_index()
     if len(df) < MIN_EXPECTED_ROWS:
         logger.critical("INCOMPLETE_DATA", extra={"symbol": symbol, "rows": len(df)})
     # AI-AGENT-REF: Update cache with fresh data and log performance metrics
