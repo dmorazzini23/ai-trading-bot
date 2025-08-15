@@ -798,9 +798,12 @@ class TradingConfig:
         import os
         getenv = os.getenv
         from ai_trading.settings import (  # AI-AGENT-REF: canonical settings access
-            get_settings,
+            get_settings as get_runtime_settings,
             get_max_drawdown_threshold,
             get_daily_loss_limit,
+        )
+        from ai_trading.config.settings import (
+            get_settings as get_config_settings,
         )
         # extract values (preserve your current logic; below is a template)
         conf_threshold = float(getenv("CONF_THRESHOLD", overrides.get("conf_threshold", 0.55)))
@@ -916,36 +919,72 @@ class TradingConfig:
         cfg.ALPACA_SECRET_KEY = getenv("ALPACA_SECRET_KEY", "test_secret")
 
         # AI-AGENT-REF: sync with canonical settings
-        s = get_settings()
-        cfg.ALPACA_API_KEY = getattr(s, "alpaca_api_key", cfg.ALPACA_API_KEY)
+        s_rt = get_runtime_settings()
+        cfg.ALPACA_API_KEY = getattr(s_rt, "alpaca_api_key", cfg.ALPACA_API_KEY)
         cfg.ALPACA_SECRET_KEY = getattr(
-            s, "alpaca_secret_key_plain", cfg.ALPACA_SECRET_KEY
+            s_rt, "alpaca_secret_key_plain", cfg.ALPACA_SECRET_KEY
         )
-        cfg.ALPACA_BASE_URL = getattr(s, "alpaca_base_url", cfg.alpaca_base_url)
-        cfg.TRADING_MODE = getattr(s, "bot_mode", cfg.trading_mode)
+        cfg.ALPACA_BASE_URL = getattr(s_rt, "alpaca_base_url", cfg.alpaca_base_url)
+        cfg.TRADING_MODE = getattr(s_rt, "bot_mode", cfg.trading_mode)
         cfg.trading_mode = cfg.TRADING_MODE  # AI-AGENT-REF: keep internal field synced
-        cfg.TRADE_LOG_FILE = getattr(s, "trade_log_file", TRADE_LOG_FILE)
-        cfg.TIMEZONE = getattr(s, "timezone", "UTC")
+        cfg.TRADE_LOG_FILE = getattr(s_rt, "trade_log_file", TRADE_LOG_FILE)
+        cfg.TIMEZONE = getattr(s_rt, "timezone", "UTC")
         cfg.MAX_DRAWDOWN_THRESHOLD = get_max_drawdown_threshold()
         cfg.DAILY_LOSS_LIMIT = get_daily_loss_limit()
-        cfg.NEWS_API_KEY = getattr(s, "news_api_key", None)
+        cfg.NEWS_API_KEY = getattr(s_rt, "news_api_key", None)
         cfg.SYSTEM_HEALTH_CHECK_INTERVAL = getattr(
-            s, "system_health_check_interval", 60
+            s_rt, "system_health_check_interval", 60
         )
         cfg.SYSTEM_HEALTH_ALERT_THRESHOLD = getattr(
-            s, "system_health_alert_threshold", 3
+            s_rt, "system_health_alert_threshold", 3
         )
         cfg.SYSTEM_HEALTH_EXPORT_ENABLED = getattr(
-            s, "system_health_export_enabled", False
+            s_rt, "system_health_export_enabled", False
         )
-        cfg.ORDER_MAX_RETRY_ATTEMPTS = getattr(s, "order_max_retry_attempts", 3)
-        cfg.ORDER_TIMEOUT_SECONDS = getattr(s, "order_timeout_seconds", 30)
+        cfg.ORDER_MAX_RETRY_ATTEMPTS = getattr(s_rt, "order_max_retry_attempts", 3)
+        cfg.ORDER_TIMEOUT_SECONDS = getattr(s_rt, "order_timeout_seconds", 30)
         cfg.ORDER_STALE_CLEANUP_INTERVAL = getattr(
-            s, "order_stale_cleanup_interval", 600
+            s_rt, "order_stale_cleanup_interval", 600
         )
-        cfg.ORDER_FILL_RATE_TARGET = getattr(s, "order_fill_rate_target", 0.95)
+        cfg.ORDER_FILL_RATE_TARGET = getattr(s_rt, "order_fill_rate_target", 0.95)
         cfg.SENTIMENT_SUCCESS_RATE_TARGET = getattr(
-            s, "sentiment_success_rate_target", 0.6
+            s_rt, "sentiment_success_rate_target", 0.90
+        )
+
+        s_cfg = get_config_settings()
+
+        # --- Optional providers / flags ---
+        cfg.FINNHUB_API_KEY = getattr(s_cfg, "finnhub_api_key", None)
+        cfg.DISABLE_DAILY_RETRAIN = bool(getattr(s_cfg, "disable_daily_retrain", False))
+
+        # --- Reproducibility ---
+        cfg.SEED = int(getattr(s_rt, "seed", 42))
+
+        # --- Audit / logging ---
+        cfg.TRADE_AUDIT_DIR = os.getenv("TRADE_AUDIT_DIR", "logs/audit")
+        cfg._CONFIG_LOGGED = False
+        cfg._LOCK_TIMEOUT = 30
+
+        # --- Liquidity controls (defaults aligned with tests) ---
+        cfg.LIQUIDITY_SPREAD_THRESHOLD = float(os.getenv("LIQUIDITY_SPREAD_THRESHOLD", "0.01"))
+        cfg.LIQUIDITY_VOL_THRESHOLD = float(os.getenv("LIQUIDITY_VOL_THRESHOLD", "0.0"))
+        cfg.LIQUIDITY_REDUCTION_AGGRESSIVE = float(
+            os.getenv("LIQUIDITY_REDUCTION_AGGRESSIVE", "0.75")
+        )
+        cfg.LIQUIDITY_REDUCTION_MODERATE = float(
+            os.getenv("LIQUIDITY_REDUCTION_MODERATE", "0.90")
+        )
+
+        # --- Meta-learning bootstrap (tests expect presence + values) ---
+        cfg.META_LEARNING_BOOTSTRAP_ENABLED = bool(
+            os.getenv("META_LEARNING_BOOTSTRAP_ENABLED", "1")
+            not in ("0", "false", "False")
+        )
+        cfg.META_LEARNING_MIN_TRADES_REDUCED = int(
+            os.getenv("META_LEARNING_MIN_TRADES_REDUCED", "10")
+        )
+        cfg.META_LEARNING_BOOTSTRAP_WIN_RATE = float(
+            os.getenv("META_LEARNING_BOOTSTRAP_WIN_RATE", "0.66")
         )
 
         return cfg

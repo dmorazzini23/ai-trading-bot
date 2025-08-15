@@ -1,6 +1,5 @@
 from ai_trading.config import get_settings
 
-S = get_settings()
 """Utility functions for common operations across the bot."""
 
 import datetime as dt
@@ -523,6 +522,7 @@ def get_ml_confidence(symbol: str) -> float:
         logger.error("load_model failed", exc_info=e)
         return 0.5
 
+    S = get_settings()
     model_path = S.model_path
     model = load_model(model_path)
     if model is None:
@@ -858,10 +858,18 @@ def pre_trade_health_check(symbols: list[str], api: Any) -> dict[str, bool]:
     return symbol_health
 
 
-from importlib.util import find_spec
-from ai_trading.config import get_settings
-S = get_settings()
-if getattr(S, "use_market_calendar_lib", False):
-    if find_spec("pandas_market_calendars") is None:
-        raise RuntimeError("Feature enabled but module 'pandas_market_calendars' not installed")
-    from pandas_market_calendars import *  # noqa: F401
+def enable_market_calendar_lib() -> None:
+    """Optionally import pandas_market_calendars when configured."""
+    from importlib.util import find_spec
+
+    S = get_settings()
+    if getattr(S, "use_market_calendar_lib", False):
+        if find_spec("pandas_market_calendars") is None:
+            raise RuntimeError(
+                "Feature enabled but module 'pandas_market_calendars' not installed"
+            )
+        import pandas_market_calendars as _pmc
+
+        globals().update(
+            {k: getattr(_pmc, k) for k in dir(_pmc) if not k.startswith("_")}
+        )

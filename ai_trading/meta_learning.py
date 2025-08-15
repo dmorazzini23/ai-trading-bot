@@ -1,8 +1,6 @@
 from ai_trading.config import get_settings
 from importlib.util import find_spec
 
-S = get_settings()
-
 # AI-AGENT-REF: detect sklearn availability at import time
 try:  # pragma: no cover - optional dependency
     import sklearn  # type: ignore  # noqa: F401
@@ -588,7 +586,8 @@ def retrain_meta_learner(
 
     # Set default trade log path
     if trade_log_path is None:
-        trade_log_path = S.trade_log_file if config else "trades.csv"
+        settings = get_settings()
+        trade_log_path = settings.trade_log_file if config else "trades.csv"
 
     logger.info(
         "META_RETRAIN_START",

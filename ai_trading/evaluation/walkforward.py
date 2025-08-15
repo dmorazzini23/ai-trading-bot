@@ -17,17 +17,27 @@ import pandas as pd
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
 
-# Optional plotting with feature flag
-from ai_trading.config import get_settings
-_S = get_settings()
+matplotlib_available = False
+plt = None
+mdates = None
 
-if _S.enable_plotting:
-    import matplotlib.dates as mdates
-    import matplotlib.pyplot as plt
-    matplotlib_available = True
-else:
-    matplotlib_available = False
-    logger.debug("Matplotlib plotting disabled by configuration")
+
+def _ensure_matplotlib() -> None:
+    """Lazy import matplotlib if plotting is enabled."""
+    global matplotlib_available, plt, mdates
+    if matplotlib_available:
+        return
+    from ai_trading.config import get_settings
+
+    if getattr(get_settings(), "enable_plotting", False):
+        import matplotlib.dates as mdates_module
+        import matplotlib.pyplot as plt_module
+
+        mdates = mdates_module
+        plt = plt_module
+        matplotlib_available = True
+    else:
+        logger.debug("Matplotlib plotting disabled by configuration")
 
 from ..data.splits import walkforward_splits
 from ..features.pipeline import create_feature_pipeline
@@ -492,6 +502,7 @@ class WalkForwardEvaluator:
     def _create_plots(self, timestamp: str) -> None:
         """Create and save visualization plots."""
         try:
+            _ensure_matplotlib()
             if not matplotlib_available:
                 logger.warning("Matplotlib not available - skipping plots")
                 return

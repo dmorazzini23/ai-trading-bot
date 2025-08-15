@@ -9,10 +9,7 @@ from typing import Any, Optional
 
 import requests
 
-from ai_trading.config.settings import get_settings
-
 logger = logging.getLogger(__name__)
-S = get_settings()
 
 # AI-AGENT-REF: lightweight Alpaca API helpers
 SHADOW_MODE = False
@@ -20,30 +17,30 @@ DRY_RUN = False
 partial_fill_tracker: dict[str, Any] = {}
 partial_fills: list[str] = []
 
-# Base endpoints
-try:
-    _TRADING_BASE = (S.alpaca_base_url or "https://paper-api.alpaca.markets").rstrip("/")
-except Exception:
-    _TRADING_BASE = "https://paper-api.alpaca.markets"
 _DATA_BASE = "https://data.alpaca.markets"  # market data v2
-
-try:
-    _HEADERS = S.alpaca_headers  # AI-AGENT-REF: canonical Alpaca headers
-except Exception:
-    _HEADERS = {}
 
 def _resolve_url(path_or_url: str) -> str:
     if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
         return path_or_url
+    from ai_trading.config.settings import get_settings
+    S = get_settings()
+    trading_base = (
+        getattr(S, "alpaca_base_url", "https://paper-api.alpaca.markets")
+        or "https://paper-api.alpaca.markets"
+    ).rstrip("/")
     # quotes, bars, trades → market data; otherwise default to trading
     if path_or_url.startswith("/v2/stocks/"):
         return _DATA_BASE + path_or_url
-    return _TRADING_BASE + path_or_url
+    return trading_base + path_or_url
 
 def alpaca_get(path_or_url: str, *, params: Optional[dict] = None, timeout: int = 10) -> Any:
     """Tiny helper for authenticated GET to Alpaca endpoints."""
+    from ai_trading.config.settings import get_settings
+
+    S = get_settings()
+    headers = getattr(S, "alpaca_headers", {})
     url = _resolve_url(path_or_url)
-    resp = requests.get(url, headers=_HEADERS, params=params or {}, timeout=timeout)
+    resp = requests.get(url, headers=headers, params=params or {}, timeout=timeout)
     resp.raise_for_status()
     ctype = resp.headers.get("content-type", "")
     return resp.json() if "json" in ctype else resp.text
