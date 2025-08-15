@@ -35,6 +35,12 @@ Series = pd.Series
 Index = pd.Index
 
 
+def get_ohlcv_columns(df) -> list[str]:
+    cols = [str(c).lower() for c in getattr(df, "columns", [])]
+    wanted = ("open", "high", "low", "close", "volume", "vwap")
+    return [w for w in wanted if w in cols]
+
+
 def requires_pandas(func):
     """Decorator to ensure pandas is available for a function."""
 

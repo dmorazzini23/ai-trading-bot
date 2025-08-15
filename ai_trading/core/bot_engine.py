@@ -114,7 +114,10 @@ from ai_trading.indicators import compute_atr as _compute_atr  # AI-AGENT-REF: f
 from ai_trading.utils.universe import load_universe as load_universe_from_path
 from ai_trading.data.universe import load_universe  # AI-AGENT-REF: packaged tickers loader
 from ai_trading.utils.safe_cast import as_int, as_float
-from ai_trading.risk.engine import RiskEngine
+try:
+    from ai_trading.risk.engine import RiskEngine
+except Exception:  # pragma: no cover - optional during import probing
+    RiskEngine = None  # type: ignore
 from ai_trading.config.settings import (
     MODEL_PATH,
     MODEL_MODULE,
@@ -132,18 +135,17 @@ except Exception as e:  # noqa: BLE001 - best-effort import; we log below.
 logger = logging.getLogger("ai_trading.core.bot_engine")
 # AI-AGENT-REF: expose Alpaca availability without triggering client init
 from importlib.util import find_spec as _find_spec
-def _safe_find_spec(name: str):  # AI-AGENT-REF: guard polluted sys.modules
-    try:
-        return _find_spec(name)
-    except ValueError:
-        return None
 
 
-ALPACA_AVAILABLE = bool(
-    _safe_find_spec("alpaca_trade_api")
-    or _safe_find_spec("alpaca")
-    or _safe_find_spec("alpaca.trading")
-)
+def _alpaca_available() -> bool:
+    names = ("alpaca_trade_api", "alpaca.trading", "alpaca.data", "alpaca")
+    for n in names:
+        if n in sys.modules and sys.modules[n] is None:
+            return False
+    return any(_find_spec(n) is not None for n in names)
+
+
+ALPACA_AVAILABLE = _alpaca_available()
 
 
 def _sha256_file(path: str) -> str:
@@ -931,12 +933,12 @@ def is_holiday(ts: pd.Timestamp) -> bool:
 
 
 # AI-AGENT-REF: lazy import heavy signal calculation module to speed up import for tests
-if not os.getenv("PYTEST_RUNNING"):
+if not os.getenv("PYTEST_RUNNING") and ALPACA_AVAILABLE:
     from ai_trading.signals import (
         calculate_macd as signals_calculate_macd,  # type: ignore
     )
 else:
-    # AI-AGENT-REF: mock signals_calculate_macd for test environments
+    # AI-AGENT-REF: mock signals_calculate_macd for test environments or when Alpaca unavailable
     def signals_calculate_macd(*args, **kwargs):
         return [0.0] * 20  # Mock MACD signal values
 
@@ -979,23 +981,26 @@ from ai_trading.data_providers import get_yfinance, has_yfinance
 YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availability
 
 # Production imports - real Alpaca SDK
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.models import Quote
-from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
-from alpaca.data.timeframe import TimeFrame
-from alpaca.trading.client import TradingClient
-from alpaca.trading.enums import (
-    OrderSide,
-    OrderStatus,
-    TimeInForce,
-)
-from alpaca.trading.models import Order
-from alpaca.trading.requests import (
-    MarketOrderRequest,
-)
-from alpaca_trade_api.rest import (
-    APIError,  # kept for legacy exception compatibility
-)
+if ALPACA_AVAILABLE:
+    from alpaca.data.historical import StockHistoricalDataClient
+    from alpaca.data.models import Quote
+    from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
+    from alpaca.data.timeframe import TimeFrame
+    from alpaca.trading.client import TradingClient
+    from alpaca.trading.enums import (
+        OrderSide,
+        OrderStatus,
+        TimeInForce,
+    )
+    from alpaca.trading.models import Order
+    from alpaca.trading.requests import (
+        MarketOrderRequest,
+    )
+    from alpaca_trade_api.rest import (
+        APIError,  # kept for legacy exception compatibility
+    )
+else:  # pragma: no cover - Alpaca SDK absent
+    StockHistoricalDataClient = Quote = StockBarsRequest = StockLatestQuoteRequest = TimeFrame = TradingClient = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = APIError = None  # type: ignore
 
 _emit_once(logger, "real_alpaca_imported", logging.INFO, "Real Alpaca Trading SDK imported successfully")
 _log.debug("Production trading ready with Python %s", sys.version)
@@ -1009,15 +1014,19 @@ from flask import Flask
 from ai_trading.alpaca_api import alpaca_get, start_trade_updates_stream
 from ai_trading.broker.alpaca import AlpacaBroker
 
-from ai_trading.rebalancer import (
-    maybe_rebalance as original_rebalance,  # type: ignore
-)
+if ALPACA_AVAILABLE:
+    from ai_trading.rebalancer import (
+        maybe_rebalance as original_rebalance,  # type: ignore
+    )
+else:  # pragma: no cover - no rebalance without Alpaca
+    def original_rebalance(*args, **kwargs):
+        return None
 
 
 import pickle
 
 # AI-AGENT-REF: Optional meta-learning — do not crash if unavailable
-if not os.getenv("PYTEST_RUNNING"):
+if not os.getenv("PYTEST_RUNNING") and ALPACA_AVAILABLE:
     try:
         from ai_trading.meta_learning import optimize_signals  # type: ignore
     except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as _e:  # AI-AGENT-REF: narrow exception
