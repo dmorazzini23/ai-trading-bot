@@ -18,7 +18,6 @@ import pandas as pd
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
 CONFIG = TradingConfig()
-from ai_trading.telemetry.metrics_logger import log_metrics
 
 from ai_trading.utils.base import safe_to_datetime
 
@@ -640,7 +639,8 @@ def save_model_version(clf, regime: str) -> str:
         logger.exception("Failed to save model %s: %s", regime, e)
         raise
     log_hyperparam_result(regime, -1, {"model_path": filename}, 0.0)
-    log_metrics(
+    from ai_trading.logging import _get_metrics_logger  # AI-AGENT-REF: lazy metrics import
+    _get_metrics_logger().log_metrics(
         {
             "timestamp": datetime.now(UTC).isoformat(),
             "type": "model_checkpoint",
@@ -902,7 +902,8 @@ def retrain_meta_learner(
         try:
             path = save_model_version(pipe, regime)
             logger.info("Saved %s model to %s", regime, path)
-            log_metrics(
+            from ai_trading.logging import _get_metrics_logger  # AI-AGENT-REF: lazy metrics import
+            _get_metrics_logger().log_metrics(
                 {
                     "timestamp": datetime.now(UTC).isoformat(),
                     "type": "retrain_model",
