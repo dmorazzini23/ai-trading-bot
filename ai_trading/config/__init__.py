@@ -3,6 +3,9 @@ from .alpaca import get_alpaca_config, AlpacaConfig  # noqa: F401
 from .management import TradingConfig  # AI-AGENT-REF: expose TradingConfig
 import os
 from typing import Any
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def reload_env() -> None:
@@ -27,9 +30,9 @@ def get_env(name: str, default: Any = None, *, reload: bool = False, required: b
 def _require_env_vars(*names: str) -> None:
     missing = [n for n in names if not os.getenv(n)]
     if missing:
-        raise RuntimeError(
-            f"Missing required environment variables: {', '.join(missing)}"
-        )
+        msg = f"Missing required environment variables: {', '.join(missing)}"
+        logger.critical(msg)
+        raise RuntimeError(msg)
 
 __all__ = [
     "Settings",

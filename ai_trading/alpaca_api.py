@@ -21,10 +21,16 @@ partial_fill_tracker: dict[str, Any] = {}
 partial_fills: list[str] = []
 
 # Base endpoints
-_TRADING_BASE = (S.alpaca_base_url or "https://paper-api.alpaca.markets").rstrip("/")
+try:
+    _TRADING_BASE = (S.alpaca_base_url or "https://paper-api.alpaca.markets").rstrip("/")
+except Exception:
+    _TRADING_BASE = "https://paper-api.alpaca.markets"
 _DATA_BASE = "https://data.alpaca.markets"  # market data v2
 
-_HEADERS = S.alpaca_headers  # AI-AGENT-REF: canonical Alpaca headers
+try:
+    _HEADERS = S.alpaca_headers  # AI-AGENT-REF: canonical Alpaca headers
+except Exception:
+    _HEADERS = {}
 
 def _resolve_url(path_or_url: str) -> str:
     if path_or_url.startswith("http://") or path_or_url.startswith("https://"):

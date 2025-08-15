@@ -111,6 +111,7 @@ from ai_trading.indicators import compute_atr as _compute_atr  # AI-AGENT-REF: f
 from ai_trading.utils.universe import load_universe as load_universe_from_path
 from ai_trading.data.universe import load_universe  # AI-AGENT-REF: packaged tickers loader
 from ai_trading.utils.safe_cast import as_int, as_float
+from ai_trading.risk.engine import RiskEngine
 from ai_trading.config.settings import (
     MODEL_PATH,
     MODEL_MODULE,
@@ -126,6 +127,13 @@ except Exception as e:  # noqa: BLE001 - best-effort import; we log below.
     warning_kv(_log, "RL_IMPORT_FAILED", extra={"detail": str(e)})
 
 logger = logging.getLogger("ai_trading.core.bot_engine")
+
+# AI-AGENT-REF: expose Alpaca availability without triggering client init
+try:  # pragma: no cover - detection only
+    import alpaca  # type: ignore  # noqa: F401
+    ALPACA_AVAILABLE = True
+except Exception:  # pragma: no cover - missing dependency
+    ALPACA_AVAILABLE = False
 
 
 def _sha256_file(path: str) -> str:
@@ -1020,7 +1028,15 @@ else:
         return args[0] if args else []  # Return signals as-is
 from ai_trading.telemetry.metrics_logger import log_metrics
 
-from ai_trading.pipeline import model_pipeline  # type: ignore
+# AI-AGENT-REF: robust model_pipeline import with legacy fallback
+try:  # pragma: no cover - import path resolution
+    from ai_trading.pipeline import model_pipeline  # type: ignore
+except Exception as _pkg_err:  # pragma: no cover
+    try:
+        from pipeline import model_pipeline  # type: ignore
+    except Exception as _legacy_err:  # pragma: no cover
+        logger.error("model_pipeline import failed: %s", _pkg_err)
+        raise ImportError("model_pipeline import failed") from _legacy_err
 
 # ML dependencies - sklearn is a hard dependency
 from sklearn.decomposition import PCA
@@ -4213,7 +4229,7 @@ def _initialize_alpaca_clients():
     key, secret, base_url = _ensure_alpaca_env_or_raise()
     if not (key and secret):
         # In SHADOW_MODE we may not have creds; skip client init
-        _log.info(
+        logger.info(
             "Shadow mode or missing credentials: skipping Alpaca client initialization"
         )
         return
@@ -10132,6 +10148,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
     BotContext : Global context and configuration
     trade_execution : Order execution and monitoring
     """
+    if getattr(runtime, "risk_engine", None) is None:
+        runtime.risk_engine = RiskEngine()
     _init_metrics()
     import uuid
 

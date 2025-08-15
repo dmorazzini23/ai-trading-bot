@@ -38,6 +38,9 @@ def _pos_num(name: str, v) -> float:  # AI-AGENT-REF: positive number validator
 
 
 def submit_market_order(symbol: str, side: str, quantity: int):
+    symbol = str(symbol)
+    if not symbol or len(symbol) > 5 or not symbol.isalpha():
+        return {"status": "error", "code": "SYMBOL_INVALID", "error": symbol}
     try:
         quantity = int(_pos_num("qty", quantity))
     except Exception as e:
@@ -45,7 +48,7 @@ def submit_market_order(symbol: str, side: str, quantity: int):
             "ORDER_INPUT_INVALID",
             extra={"cause": type(e).__name__, "detail": str(e)},
         )
-        return {"status": "error", "error": str(e)}
+        return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e)}
     return {
         "status": "submitted",
         "symbol": symbol,
@@ -176,13 +179,15 @@ class AlpacaExecutionEngine:
 
         try:  # AI-AGENT-REF: validate submit inputs
             symbol = _req_str("symbol", symbol)
+            if len(symbol) > 5 or not symbol.isalpha():
+                return {"status": "error", "code": "SYMBOL_INVALID", "error": symbol, "order_id": None}
             quantity = int(_pos_num("qty", quantity))
         except (ValueError, TypeError) as e:
             logger.error(
                 "ORDER_INPUT_INVALID",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )
-            return {"status": "error", "error": str(e), "order_id": None}
+            return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
 
         start_time = time.time()
         order_data = {
@@ -240,6 +245,8 @@ class AlpacaExecutionEngine:
 
         try:  # AI-AGENT-REF: validate submit inputs
             symbol = _req_str("symbol", symbol)
+            if len(symbol) > 5 or not symbol.isalpha():
+                return {"status": "error", "code": "SYMBOL_INVALID", "error": symbol, "order_id": None}
             quantity = int(_pos_num("qty", quantity))
             limit_price = _pos_num("limit_price", limit_price)
         except (ValueError, TypeError) as e:
@@ -247,7 +254,7 @@ class AlpacaExecutionEngine:
                 "ORDER_INPUT_INVALID",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )
-            return {"status": "error", "error": str(e), "order_id": None}
+            return {"status": "error", "code": "ORDER_INPUT_INVALID", "error": str(e), "order_id": None}
 
         start_time = time.time()
         order_data = {

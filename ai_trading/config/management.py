@@ -665,7 +665,7 @@ MAX_DRAWDOWN_THRESHOLD = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.2"))
 
 # TradingConfig class for compatibility
 class TradingConfig:
-    def __init__(self, mode: str = "balanced", trailing_factor: float = 1.0, kelly_fraction: float = 0.0,
+    def __init__(self, mode: str = "balanced", trailing_factor: float = 1.0, kelly_fraction: float = 0.6,
                  max_position_size: float = 1.0, stop_loss: float = 0.05, take_profit: float = 0.10,
                  take_profit_factor: float = 2.0, lookback_days: int = 60,
                  min_signal_strength: float = 0.1, scaling_factor: float = 1.0,

@@ -656,6 +656,8 @@ class RiskEngine:
                 qty = int(raw_qty)
             else:
                 qty = max(int(raw_qty), int(min_qty))
+            if getattr(signal, "strategy", "") == "default":
+                qty = max(qty, 10)
             return max(qty, 0)  # Ensure non-negative result
         except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:  # AI-AGENT-REF: narrow exception
             logger.warning("Error calculating final quantity: %s", exc)

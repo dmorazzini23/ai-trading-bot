@@ -1,7 +1,9 @@
 import csv
+import logging
 from pathlib import Path
 
 # AI-AGENT-REF: minimal audit logger stub for tests
+logger = logging.getLogger(__name__)
 TRADE_LOG_FILE = "trades.csv"
 
 

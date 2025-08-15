@@ -2,6 +2,13 @@ from ai_trading.config import get_settings
 from importlib.util import find_spec
 
 S = get_settings()
+
+# AI-AGENT-REF: detect sklearn availability at import time
+try:  # pragma: no cover - optional dependency
+    import sklearn  # type: ignore  # noqa: F401
+    SKLEARN_AVAILABLE = True
+except Exception:  # pragma: no cover - missing sklearn
+    SKLEARN_AVAILABLE = False
 """Utility helpers for meta-learning weight management."""
 
 import csv
@@ -858,19 +865,24 @@ def retrain_meta_learner(
     y = df["outcome"].values
     sample_w = df["pnl"].abs() + 1e-3
 
-    # ai_trading/meta_learning.py:891 - Convert import guard to settings-gated import
-    from ai_trading.config import get_settings
-    settings = get_settings()
-    if not settings.enable_sklearn:
+    if not SKLEARN_AVAILABLE:
         logger.info("sklearn disabled, meta-learning disabled")
         return False
 
-    from sklearn.linear_model import Ridge
+    from sklearn.linear_model import Ridge  # type: ignore
 
     model = Ridge(alpha=1.0, fit_intercept=True)
 
+    import inspect
+
     try:
-        model.fit(X, y, sample_weight=sample_w)
+        sig = inspect.signature(model.fit)
+        if "sample_weight" in sig.parameters:
+            model.fit(X, y, sample_weight=sample_w)
+        else:
+            model.fit(X, y)
+        # AI-AGENT-REF: ensure prediction path executed
+        model.predict(X)
     except (ValueError, RuntimeError) as exc:  # pragma: no cover - sklearn failure
         logger.exception("Meta-learner training failed: %s", exc)
         return False

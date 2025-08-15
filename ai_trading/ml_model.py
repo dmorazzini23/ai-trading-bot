@@ -3,6 +3,7 @@ from __future__ import annotations
 import joblib
 import pandas as pd
 import numpy as np
+import joblib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
@@ -99,7 +100,8 @@ def train_model(X: Any, y: Any, algorithm: str = "dummy") -> MLModel:
 def predict_model(model: Any, X: Iterable | pd.DataFrame | None) -> list[float]:
     if model is None or X is None:
         raise ValueError("invalid input")
-    preds = model.predict(X)
+    df = X if isinstance(X, pd.DataFrame) else pd.DataFrame(X)
+    preds = model.predict(df)
     try:
         return list(preds)
     except Exception:

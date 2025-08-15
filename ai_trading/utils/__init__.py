@@ -13,6 +13,7 @@ import pandas as pd
 try:
     from .base import (
         HAS_PANDAS,
+        EASTERN_TZ,
         get_free_port,
         get_pid_on_port,
         is_market_holiday,
@@ -26,14 +27,19 @@ try:
         safe_to_datetime,
         validate_ohlcv,
         validate_ohlcv_basic,
+        health_check,
+        get_latest_close,
     )
 except Exception:  # pragma: no cover - optional deps
     HAS_PANDAS = False
+
     def _stub(*args, **kwargs):
         return None
+
     get_free_port = get_pid_on_port = is_market_holiday = is_market_open = is_weekend = _stub
     log_health_row_check = log_warning = model_lock = portfolio_lock = requires_pandas = _stub
-    safe_to_datetime = validate_ohlcv = validate_ohlcv_basic = _stub
+    safe_to_datetime = validate_ohlcv = validate_ohlcv_basic = health_check = get_latest_close = _stub
+    EASTERN_TZ = ZoneInfo("America/New_York")
 from .determinism import (
     ensure_deterministic_training,
     get_model_spec,
@@ -43,28 +49,6 @@ from .determinism import (
 )
 from .time import now_utc
 
-EASTERN_TZ = ZoneInfo("America/New_York")
-
-
-def health_check(value: float) -> bool:
-    try:
-        return float(value) > 0.0
-    except Exception:
-        return False
-
-
-def get_latest_close(df: pd.DataFrame | None) -> float:
-    if df is None or df.empty:
-        return 0.0
-    for col in ("close", "Close", "adj_close", "Adj Close"):
-        if col in df.columns:
-            v = pd.to_numeric(df[col].iloc[-1], errors="coerce")
-            try:
-                x = float(v)
-                return 0.0 if pd.isna(x) else x
-            except Exception:
-                continue
-    return 0.0
 
 __all__ = [
     "log_warning",

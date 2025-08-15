@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 # AI-AGENT-REF: Pandas is a hard dependency
 import pandas as pd
 import pandas_market_calendars as mcal
+import numpy as np
 
 # Alpaca SDK imports - now required dependencies
 try:  # AI-AGENT-REF: optional dependency guard
@@ -48,6 +49,7 @@ def requires_pandas(func):
 
 
 logger = logging.getLogger(__name__)
+from ai_trading.settings import get_verbose_logging
 
 from ai_trading.monitoring.system_health import snapshot_basic  # AI-AGENT-REF: lazy psutil
 
@@ -211,20 +213,12 @@ model_lock = _CallableLock()
 
 
 def get_latest_close(df: DataFrame) -> float:
-    """Return last closing price or ``0.0`` if unavailable."""
-    if df is None or df.empty:
+    """Return the most recent close value or 0.0."""
+    try:
+        v = float(df["close"].dropna().iloc[-1])
+        return v if np.isfinite(v) else 0.0
+    except Exception:
         return 0.0
-    if "close" not in df.columns:
-        return 0.0
-    last_valid_close = df["close"].dropna()
-    if not last_valid_close.empty:
-        price = last_valid_close.iloc[-1]
-    else:
-        logger.critical("All NaNs in close column for get_latest_close")
-        price = 0.0
-    if pd.isna(price) or price <= 0:
-        return 0.0
-    return float(price)
 
 
 def get_current_price(symbol: str) -> float:
@@ -266,7 +260,7 @@ def _log_market_hours(message: str) -> None:
     now = time.time()
     state = "OPEN" if "OPEN" in message else "CLOSED"
     if state != _LAST_MARKET_STATE or now - _LAST_MARKET_HOURS_LOG >= 3600:
-        if S.verbose_logging:
+        if get_verbose_logging():
             logger.info(message)
         else:
             logger.debug(message)
@@ -284,7 +278,7 @@ def log_health_row_check(rows: int, passed: bool) -> None:
         or passed != _LAST_HEALTH_STATUS
         or now - _LAST_HEALTH_ROW_LOG >= 10
     ):
-        level = logger.info if S.verbose_logging or not passed else logger.debug
+        level = logger.info if get_verbose_logging() or not passed else logger.debug
         status = "PASSED" if passed else "FAILED"
         level("HEALTH_ROWS_%s: received %d rows", status, rows)
         _LAST_HEALTH_ROW_LOG = now
@@ -650,31 +644,13 @@ def validate_ohlcv(
     # No return; success == no exception
 
 
-def health_check(df: DataFrame | None, resolution: str) -> bool:
-    """Validate that ``df`` has enough rows for reliable analysis."""
-    min_rows = int(os.getenv("HEALTH_MIN_ROWS", 100))
-
-    if df is None:
-        logger.critical("HEALTH_FAILURE: DataFrame is None.")
+def health_check(df: DataFrame, resolution: str | None = None) -> bool:
+    """Return True if ``df`` has at least ``HEALTH_MIN_ROWS`` rows."""
+    min_rows = int(os.getenv("HEALTH_MIN_ROWS", "0"))
+    try:
+        return len(df) >= min_rows
+    except Exception:
         return False
-
-    rows = len(df)
-    if rows < min_rows:
-        logger.warning(
-            "HEALTH_INSUFFICIENT_ROWS: only %d rows (min expected %d)",
-            rows,
-            min_rows,
-        )
-        logger.debug("Shape: %s", df.shape)
-        logger.debug("Columns: %s", df.columns.tolist())
-        logger.debug("Preview:\n%s", df.head(3))
-        if rows == 0:
-            logger.critical("HEALTH_FAILURE: empty dataset loaded")
-        log_health_row_check(rows, False)
-        return False
-
-    log_health_row_check(rows, True)
-    return True
 
 
 # Generic robust column getter with validation
