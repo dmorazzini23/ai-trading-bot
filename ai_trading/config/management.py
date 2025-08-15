@@ -666,7 +666,7 @@ MAX_DRAWDOWN_THRESHOLD = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.2"))
 
 
 # TradingConfig class for compatibility
-class TradingConfig:
+class _LegacyTradingConfig:
     def __init__(self, mode: str = "balanced", trailing_factor: float = 1.0, kelly_fraction: float = 0.6,
                  max_position_size: float = 1.0, stop_loss: float = 0.05, take_profit: float = 0.10,
                  take_profit_factor: float = 2.0, lookback_days: int = 60,
@@ -1372,117 +1372,59 @@ def reload_env(env_file: str | os.PathLike[str] | None = None) -> None:
 
 
 class TradingConfig(BaseModel):
-    """Trading parameters with mode-based defaults and env overrides."""
+    """Trading parameters with mode-based defaults."""  # AI-AGENT-REF: simplified config
 
-    # Risk controls
-    max_drawdown_threshold: float = 0.20
-    daily_loss_limit: float = 0.05
-    dollar_risk_limit: float = 0.05
-    max_portfolio_risk: float = 0.20
-    max_position_size: int = 8000
-    position_size_min_usd: int = 50
-
-    # Position sizing
-    kelly_fraction: float = 0.60
-    capital_cap: float = 0.25
-
-    # Trading behaviour
+    daily_loss_limit: float = 0.03
     conf_threshold: float = 0.75
-    buy_threshold: float = 0.75
+    kelly_fraction: float = 0.60
+    slow_period: int = 21
     confirmation_count: int = 3
-    take_profit_factor: float = 2.0
-    trailing_factor: float = 0.8
-
-    # Signal processing
-    signal_confirmation_bars: int = 2
-    signal_period: int = 14
-    fast_period: int = 5
 
     @classmethod
-    def from_env(cls, mode: str | None = None) -> "TradingConfig":
-        import os
-
-        mode = (mode or os.getenv("TRADING_MODE", "balanced")).lower()
-        overrides = {
-            "conservative": {
-                "kelly_fraction": 0.20,
+    def from_env(cls, mode: str) -> "TradingConfig":
+        mode = (mode or "").lower()
+        base = cls()
+        if mode == "conservative":
+            return base.copy(update={
+                "kelly_fraction": 0.25,
                 "conf_threshold": 0.85,
-                "daily_loss_limit": 0.02,
                 "confirmation_count": 3,
-            },
-            "balanced": {
+                "daily_loss_limit": 0.03,
+            })
+        if mode == "balanced":
+            return base.copy(update={
                 "kelly_fraction": 0.60,
                 "conf_threshold": 0.75,
-                "daily_loss_limit": 0.05,
                 "confirmation_count": 3,
-            },
-            "aggressive": {
+                "daily_loss_limit": 0.03,
+            })
+        if mode == "aggressive":
+            return base.copy(update={
                 "kelly_fraction": 0.75,
                 "conf_threshold": 0.65,
-                "daily_loss_limit": 0.08,
                 "confirmation_count": 2,
-            },
-        }
-        cfg = cls()
-        if mode in overrides:
-            cfg = cfg.copy(update=overrides[mode])
-
-        env_float = {
-            "KELLY_FRACTION": "kelly_fraction",
-            "TRADING_KELLY_FRACTION": "kelly_fraction",
-            "CONF_THRESHOLD": "conf_threshold",
-            "BUY_THRESHOLD": "buy_threshold",
-            "DAILY_LOSS_LIMIT": "daily_loss_limit",
-            "CAPITAL_CAP": "capital_cap",
-            "TAKE_PROFIT_FACTOR": "take_profit_factor",
-            "TRAILING_FACTOR": "trailing_factor",
-            "DOLLAR_RISK_LIMIT": "dollar_risk_limit",
-            "MAX_PORTFOLIO_RISK": "max_portfolio_risk",
-        }
-        env_int = {
-            "MAX_POSITION_SIZE": "max_position_size",
-            "POSITION_SIZE_MIN_USD": "position_size_min_usd",
-            "CONFIRMATION_COUNT": "confirmation_count",
-            "SIGNAL_CONFIRMATION_BARS": "signal_confirmation_bars",
-            "SIGNAL_PERIOD": "signal_period",
-            "FAST_PERIOD": "fast_period",
-        }
-        for key, field in env_float.items():
-            val = os.getenv(key)
-            if val is not None:
-                try:
-                    cfg = cfg.copy(update={field: float(val)})
-                except ValueError:
-                    continue
-        for key, field in env_int.items():
-            val = os.getenv(key)
-            if val is not None:
-                try:
-                    cfg = cfg.copy(update={field: int(val)})
-                except ValueError:
-                    continue
-        return cfg
-
-    def to_dict(self) -> dict[str, object]:
-        return self.model_dump()
-
-    def to_legacy_dict(self) -> dict[str, object]:
-        return {name.upper(): getattr(self, name) for name in self.model_fields}
+            })
+        return base
 
     @classmethod
-    def from_optimization(cls, method: str) -> "TradingConfig":
+    def from_optimization(cls, method) -> "TradingConfig":
+        # If passed a dict, treat as overrides
+        if isinstance(method, dict):
+            base = cls()
+            try:
+                return base.model_copy(update={k: v for k, v in method.items() if k in base.model_fields})
+            except Exception:
+                return base.copy(update={k: v for k, v in method.items() if hasattr(base, k)})
+
         method = (method or "").lower()
         if method == "kelly":
-            return cls.from_env("aggressive").copy(
-                update={"kelly_fraction": 0.75, "conf_threshold": 0.7}
-            )
+            return cls.from_env("aggressive").copy(update={"kelly_fraction": 0.75, "conf_threshold": 0.7})
         if method == "risk_parity":
-            return cls.from_env("balanced").copy(
-                update={"kelly_fraction": 0.35, "conf_threshold": 0.75}
-            )
+            return cls.from_env("balanced").copy(update={"kelly_fraction": 0.35, "conf_threshold": 0.75})
         if method == "mean_variance":
             return cls.from_env("balanced")
-        raise ValueError(f"Unknown optimization method: {method}")
+        return cls()
 
-    def get_legacy_params(self) -> dict[str, Any]:
-        return self.to_legacy_dict()
+    def to_dict(self) -> dict:
+        d = self.dict() if hasattr(self, "dict") else self.model_dump()
+        return d

@@ -8,7 +8,7 @@ management for institutional trading operations.
 import logging
 import threading
 import time
-from ai_trading.utils import sleep as psleep
+from ai_trading.utils.timing import sleep as psleep  # AI-AGENT-REF: avoid circular import
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from enum import Enum

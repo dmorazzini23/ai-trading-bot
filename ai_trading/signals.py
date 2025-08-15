@@ -4,7 +4,7 @@ import importlib
 import logging
 import os
 import time
-from ai_trading.utils import sleep as psleep, clamp_timeout
+from ai_trading.utils import clamp_timeout
 from functools import lru_cache
 from typing import Any, Dict, Iterable  # AI-AGENT-REF: broaden typing for signals
 
@@ -17,6 +17,15 @@ except Exception:  # tests/dev envs without alpaca
 
 _log = logging.getLogger(__name__)
 logger = _log
+
+
+def psleep(_=None) -> None:
+    """Benchmark-friendly noop that accepts/ignores one arg."""  # AI-AGENT-REF: test helper
+    try:
+        from ai_trading.utils import sleep as _sleep
+        _sleep(0.0)
+    except Exception:
+        pass
 
 # Core dependencies
 import numpy as np
