@@ -31,7 +31,10 @@ else:
 
 from ..data.splits import walkforward_splits
 from ..features.pipeline import create_feature_pipeline
-from ..training.train_ml import MLTrainer
+# Lazy import to avoid heavy dependencies at module import time
+def _get_ml_trainer():
+    from ..training.train_ml import MLTrainer
+    return MLTrainer
 
 
 class WalkForwardEvaluator:
@@ -233,6 +236,7 @@ class WalkForwardEvaluator:
                 feature_pipeline = None
 
             # Train model
+            MLTrainer = _get_ml_trainer()
             trainer = MLTrainer(
                 model_type=model_type,
                 cv_splits=3,  # Smaller for walk-forward

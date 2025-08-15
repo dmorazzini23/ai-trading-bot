@@ -29,41 +29,47 @@ class _DummyPipe:
 
 class MLModel:
     def __init__(self, model: Any | None = None):
-        self.pipeline = model or _DummyPipe()
-        self._validate_model()
+        self.model = model or _DummyPipe()
 
-    def _validate_model(self) -> None:
-        missing = [m for m in ("fit", "predict") if not hasattr(self.pipeline, m)]
-        if missing:
-            raise TypeError(
-                f"Model missing required methods: {', '.join(missing)}"
-            )
+    def _require(self, name: str) -> None:
+        if not hasattr(self.model, name):
+            raise TypeError(f"Model missing required method: {name}")
 
-    def fit(self, X: Sequence, y: Sequence) -> "MLModel":
-        return self.pipeline.fit(X, y)
+    def fit(self, X: Sequence, y: Sequence, sample_weight=None) -> "MLModel":
+        self._require("fit")
+        return self.model.fit(X, y, sample_weight=sample_weight)
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
+        self._require("predict")
         if not isinstance(df, pd.DataFrame):
             raise TypeError("df must be a pandas DataFrame")
         if df.isna().any().any():
             raise ValueError("NaN values present")
         if not all(pd.api.types.is_numeric_dtype(t) for t in df.dtypes):
             raise TypeError("Non-numeric data present")
-        return self.pipeline.predict(df)
+        return self.model.predict(df)
 
     def save(self, path: str | Path) -> str:
-        joblib.dump(self.pipeline, path)
+        joblib.dump(self.model, path)
         return str(path)
 
     @classmethod
     def load(cls, path: str | Path) -> "MLModel":
-        pipeline = joblib.load(path)
-        return cls(pipeline)
+        return cls(joblib.load(path))
 
     @property
     def version(self) -> str:
-        v = getattr(self.pipeline, "version", None)
+        v = getattr(self.model, "version", None)
         return str(v) if v is not None else "unknown"
+
+    # Backward-compatible alias used in some tests
+    @property
+    def pipeline(self):
+        return self.model
+
+    @pipeline.setter
+    def pipeline(self, value):
+        self.model = value
 
 
 def save_model(model: Any, path: str | Path) -> None:

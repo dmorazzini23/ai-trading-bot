@@ -602,21 +602,21 @@ def retrain_meta_learner(
 
     has_required_cols = {"entry_price", "exit_price", "side"}.issubset(df.columns)
     total_rows = len(df)
-    valid_prices = (
+    price_ok = (
         df[["entry_price", "exit_price"]]
         .apply(pd.to_numeric, errors="coerce")
         .notna()
         .all(axis=1)
-        .sum()
     )
+    valid_rows = int(price_ok.sum())
 
     quality_report.update(
         {
             "file_exists": bool(total_rows),
             "has_valid_format": has_required_cols,
             "row_count": total_rows,
-            "valid_price_rows": valid_prices,
-            "data_quality_score": (valid_prices / total_rows) if total_rows else 0.0,
+            "valid_price_rows": valid_rows,
+            "data_quality_score": (valid_rows / total_rows) if total_rows else 0.0,
         }
     )
     if total_rows > 0 and "Trade log file is empty" in quality_report["issues"]:
@@ -641,11 +641,15 @@ def retrain_meta_learner(
     for rec in quality_report["recommendations"]:
         logger.info(f"META_LEARNING_RECOMMENDATION: {rec}")
 
-    if not (
-        total_rows >= min_samples
-        and valid_prices >= min_samples
-        and has_required_cols
-    ):
+    if not has_required_cols:
+        logger.error(
+            "META_LEARNING_CRITICAL_ISSUES: Missing required columns"
+        )
+        return False
+
+    if total_rows >= min_samples and valid_rows >= min_samples:
+        pass
+    else:
         logger.error(
             "META_LEARNING_CRITICAL_ISSUES: Cannot proceed with training due to data quality issues"
         )

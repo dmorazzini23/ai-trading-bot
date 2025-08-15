@@ -10,6 +10,7 @@ import pickle
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+import os
 
 try:
     from ai_trading.logging import logger  # project logger
@@ -23,7 +24,7 @@ class ModelRegistry:
     """Centralized registry for trained models."""
 
     def __init__(self, base_path: str | None = None):
-        base = base_path or Path.cwd() / "models"
+        base = base_path or os.getenv("MODEL_REGISTRY_DIR") or Path.cwd() / "models"
         self.base_path = Path(base)
         self.base_path.mkdir(parents=True, exist_ok=True)
         self.index_file = self.base_path / "registry_index.json"

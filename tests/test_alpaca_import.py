@@ -23,7 +23,8 @@ def test_ai_trading_import_without_alpaca():
     try:
         # This should not raise an exception
         import ai_trading
-        
+        import ai_trading.core.bot_engine
+
         # Check that ALPACA_AVAILABLE is False
         assert hasattr(ai_trading.core.bot_engine, 'ALPACA_AVAILABLE')
         assert ai_trading.core.bot_engine.ALPACA_AVAILABLE is False

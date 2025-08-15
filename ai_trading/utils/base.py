@@ -22,8 +22,11 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pandas_market_calendars as mcal
 
-# Alpaca SDK imports - now required dependencies  
-from alpaca_trade_api.rest import REST
+# Alpaca SDK imports - now required dependencies
+try:  # AI-AGENT-REF: optional dependency guard
+    from alpaca_trade_api.rest import REST
+except Exception:  # pragma: no cover
+    REST = object
 
 HAS_PANDAS = True
 Timestamp = pd.Timestamp
