@@ -11,7 +11,7 @@ import json
 import logging
 import threading
 import time
-from ai_trading.utils import sleep as psleep
+from ai_trading.utils.timing import sleep as psleep  # AI-AGENT-REF: avoid circular import
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime

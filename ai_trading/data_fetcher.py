@@ -84,46 +84,15 @@ def ensure_utc(dt: datetime | "pd.Timestamp") -> datetime:
     return dt.replace(tzinfo=UTC)
 
 
-def ensure_datetime(dt: date | datetime | "pd.Timestamp" | str) -> datetime:
-    """
-    Coerce input to a timezone-aware datetime in UTC (RFC3339 compatible).
-    Accepts datetime, pandas.Timestamp, date, or string (ISO8601, '%Y-%m-%d',
-    '%Y-%m-%d %H:%M:%S', '%Y%m%d').
-    """
-    import pandas as pd  # local import; no global dependency side-effects
-
-    logger.debug("ensure_datetime called with %r (%s)", dt, type(dt).__name__)
-    if dt is None or (isinstance(dt, str) and not dt.strip()):
-        logger.error("ensure_datetime received None/empty", stack_info=True)
-        raise ValueError("datetime value cannot be None or empty")
-
-    if isinstance(dt, datetime):
-        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
-    if isinstance(dt, pd.Timestamp):
-        return (
-            dt.to_pydatetime().astimezone(UTC)
-            if dt.tzinfo
-            else dt.to_pydatetime().replace(tzinfo=UTC)
-        )
-    if isinstance(dt, date):
-        return datetime.combine(dt, datetime.min.time()).replace(tzinfo=UTC)
-    if isinstance(dt, str):
-        value = dt.strip()
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-        except ValueError:
-            pass
-        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y%m%d"):
-            try:
-                parsed = datetime.strptime(value, fmt).replace(tzinfo=UTC)
-                return parsed
-            except ValueError:
-                continue
-        raise ValueError(
-            f"Invalid datetime string {value!r}; tried ISO, %Y-%m-%d, %Y-%m-%d %H:%M:%S, %Y%m%d",
-        )
-    raise TypeError(f"Unsupported type for ensure_datetime: {type(dt)!r}")
+def ensure_datetime(dt):
+    """Normalize any naive/aware datetime into UTC pandas.Timestamp."""  # AI-AGENT-REF: simplify
+    import pandas as pd
+    ts = pd.Timestamp(dt)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts
 
 
 # Prometheus metrics (optional)
@@ -1580,3 +1549,6 @@ __all__ = [
     "last_minute_bar_age_seconds",
     "_MINUTE_CACHE",
 ]
+
+# AI-AGENT-REF: ensure ensure_datetime is exported
+__all__ = list(set([*globals().get("__all__", []), "ensure_datetime"]))

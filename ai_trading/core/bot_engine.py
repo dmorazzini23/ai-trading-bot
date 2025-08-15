@@ -50,19 +50,20 @@ import uuid
 import warnings
 import hashlib  # AI-AGENT-REF: model hash helper
 import joblib  # AI-AGENT-REF: model loader
+import importlib as _importlib  # AI-AGENT-REF: explicit dynamic imports
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional, Union
 from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 
 # AI-AGENT-REF: ensure pipeline import contract is enforced
-try:  # primary import path
-    import ai_trading.pipeline as pipeline  # type: ignore  # noqa: F401
+try:
+    pipeline = _importlib.import_module("ai_trading.pipeline")  # type: ignore
 except ImportError:  # pragma: no cover - handled in tests
     try:
-        import pipeline as pipeline  # type: ignore  # noqa: F401
+        pipeline = _importlib.import_module("pipeline")  # type: ignore
     except ImportError:  # pragma: no cover
-        pipeline = types.SimpleNamespace()  # type: ignore
+        raise
 
 _log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
 
@@ -144,27 +145,30 @@ except Exception as e:  # noqa: BLE001 - best-effort import; we log below.
     warning_kv(_log, "RL_IMPORT_FAILED", extra={"detail": str(e)})
 
 logger = logging.getLogger("ai_trading.core.bot_engine")
-# AI-AGENT-REF: expose Alpaca availability without triggering client init
-import importlib
-import importlib.util
-import sys
+
+# AI-AGENT-REF: defer Alpaca client initialization
+trading_client = None
+data_client = None
+ALPACA_AVAILABLE = False
 
 
 def _module_ok(name: str) -> bool:
+    """Check module availability without importing it."""  # AI-AGENT-REF: robust module check
     try:
-        mod = importlib.import_module(name)
-        return bool(getattr(mod, "__spec__", None))
+        import sys
+        if name in sys.modules and sys.modules[name] is None:
+            return False
+        import importlib.util
+        return importlib.util.find_spec(name) is not None
     except Exception:
         return False
 
 
 ALPACA_AVAILABLE = (
     _module_ok("alpaca")
-    and _module_ok("alpaca.trading")
-    and _module_ok("alpaca.data")
+    or _module_ok("alpaca_trade_api")
+    or (_module_ok("alpaca.trading") and _module_ok("alpaca.data"))
 )
-
-trading_client = None  # AI-AGENT-REF: defer Alpaca client init
 
 
 def _sha256_file(path: str) -> str:
@@ -4226,7 +4230,6 @@ def get_strategies():
 
 # AI-AGENT-REF: Defer credential validation to runtime instead of import-time
 # This prevents crashes during import when environment variables are missing
-data_client = None
 stream = None
 
 

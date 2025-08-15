@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import threading
+import time  # AI-AGENT-REF: tests patch main.time.sleep
 from threading import Thread
 
 # AI-AGENT-REF: Load .env BEFORE importing any heavy modules or Settings

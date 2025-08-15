@@ -18,7 +18,7 @@ from enum import Enum
 from typing import Any
 
 import requests
-from ai_trading.utils import clamp_timeout
+from ai_trading.utils.timing import clamp_timeout  # AI-AGENT-REF: avoid circular import
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
