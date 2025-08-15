@@ -4,8 +4,22 @@ from .management import TradingConfig  # AI-AGENT-REF: expose TradingConfig
 import os
 from typing import Any
 import logging
+import threading
+from .locks import LockWithTimeout
 
 logger = logging.getLogger(__name__)
+
+_LOCK_TIMEOUT = 30
+_ENV_LOCK = LockWithTimeout(_LOCK_TIMEOUT)
+_lock_state = threading.local()
+
+
+def _is_lock_held_by_current_thread() -> bool:
+    return bool(getattr(_lock_state, "held", False))
+
+
+def _set_lock_held_by_current_thread(val: bool) -> None:
+    _lock_state.held = bool(val)
 
 
 def reload_env() -> None:
@@ -35,54 +49,45 @@ def _require_env_vars(*names: str) -> None:
         raise RuntimeError(msg)
 
 
-def validate_environment() -> None:
-    """
-    Validate that required environment/config values are available and non-empty.
-    Raise RuntimeError on failure. Should be idempotent, no blocking/locks.
-    """
-    s = get_settings()
-    missing = []
-    required = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL", "WEBHOOK_SECRET"]
-    env = os.environ
-    for k in required:
-        v = env.get(k, "") or getattr(
-            s,
-            {
-                "ALPACA_API_KEY": "alpaca_api_key",
-                "ALPACA_SECRET_KEY": "alpaca_secret_key",
-                "ALPACA_BASE_URL": "alpaca_base_url",
-                "WEBHOOK_SECRET": "webhook_secret",
-            }[k],
-            "",
-        )
-        if not isinstance(v, str) or not v.strip():
-            missing.append(k)
+def _perform_env_validation() -> None:
+    required = [
+        "ALPACA_API_KEY",
+        "ALPACA_SECRET_KEY",
+        "ALPACA_BASE_URL",
+        "WEBHOOK_SECRET",
+    ]
+    missing: list[str] = []
+    for env_key in required:
+        if not os.getenv(env_key, "").strip():
+            missing.append(env_key)
     if missing:
-        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+        raise RuntimeError(
+            f"Missing required environment variables: {', '.join(missing)}"
+        )
+
+
+def validate_environment() -> None:
+    """Validate required environment variables with deadlock-safe locking."""
+    if _is_lock_held_by_current_thread():
+        _perform_env_validation()
+        return
+    with _ENV_LOCK:
+        _set_lock_held_by_current_thread(True)
+        try:
+            try:
+                get_settings.cache_clear()
+            except Exception:
+                pass
+            _perform_env_validation()
+        finally:
+            _set_lock_held_by_current_thread(False)
 
 
 def validate_alpaca_credentials() -> None:
-    """
-    Raise RuntimeError if ALPACA_API_KEY / ALPACA_SECRET_KEY / ALPACA_BASE_URL
-    are missing or empty. Prefer module attributes if present (tests patch them),
-    otherwise read os.environ or settings.
-    """
-    api = (
-        globals().get("ALPACA_API_KEY")
-        or os.getenv("ALPACA_API_KEY", "")
-        or getattr(get_settings(), "alpaca_api_key", "")
-    )
-    sec = (
-        globals().get("ALPACA_SECRET_KEY")
-        or os.getenv("ALPACA_SECRET_KEY", "")
-        or getattr(get_settings(), "alpaca_secret_key", "")
-    )
-    url = (
-        globals().get("ALPACA_BASE_URL")
-        or os.getenv("ALPACA_BASE_URL", "")
-        or getattr(get_settings(), "alpaca_base_url", "")
-    )
-    if not (str(api).strip() and str(sec).strip() and str(url).strip()):
+    api = str(globals().get("ALPACA_API_KEY", os.getenv("ALPACA_API_KEY", ""))).strip()
+    sec = str(globals().get("ALPACA_SECRET_KEY", os.getenv("ALPACA_SECRET_KEY", ""))).strip()
+    url = str(globals().get("ALPACA_BASE_URL", os.getenv("ALPACA_BASE_URL", ""))).strip()
+    if not (api and sec and url):
         raise RuntimeError("Alpaca credentials are missing or empty")
 
 

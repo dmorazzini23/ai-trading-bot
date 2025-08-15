@@ -805,6 +805,12 @@ class TradingConfig:
         mode = (mode or overrides.get("mode") or getenv("TRADING_MODE", "balanced")).lower()
         if mode not in {"conservative", "balanced", "aggressive"}:
             mode = "balanced"
+        defaults = {
+            "conservative": {"kelly_fraction": 0.25, "conf_threshold": 0.85},
+            "balanced": {"kelly_fraction": 0.60, "conf_threshold": 0.75},
+            "aggressive": {"kelly_fraction": 0.75, "conf_threshold": 0.65},
+        }
+        mode_defaults = defaults[mode]
         from ai_trading.settings import (
             get_settings as get_runtime_settings,
             get_max_drawdown_threshold,
@@ -821,8 +827,16 @@ class TradingConfig:
         # extract values using normalization helpers
         k_env = getenv("KELLY_FRACTION")
         c_env = getenv("CONF_THRESHOLD")
-        kelly_fraction = float(k_env) if k_env is not None else overrides.get("kelly_fraction", 0.60)
-        conf_threshold = float(c_env) if c_env is not None else overrides.get("conf_threshold", 0.75)
+        kelly_fraction = (
+            float(k_env)
+            if k_env is not None
+            else overrides.get("kelly_fraction", mode_defaults["kelly_fraction"])
+        )
+        conf_threshold = (
+            float(c_env)
+            if c_env is not None
+            else overrides.get("conf_threshold", mode_defaults["conf_threshold"])
+        )
         daily_loss_limit = _to_float(
             getenv("DAILY_LOSS_LIMIT", overrides.get("daily_loss_limit", 0.03)),
             overrides.get("daily_loss_limit", 0.03),
@@ -1206,6 +1220,7 @@ class TradingConfig:
             "TAKE_PROFIT": self.take_profit,
             "TAKE_PROFIT_FACTOR": self.take_profit_factor,
             "TRAILING_FACTOR": getattr(self, "trailing_factor", 1.0),
+            "BUY_THRESHOLD": getattr(self, "buy_threshold", 0.0),
             "LOOKBACK_DAYS": self.lookback_days,
             "MIN_SIGNAL_STRENGTH": self.min_signal_strength,
             "SCALING_FACTOR": self.scaling_factor,

@@ -145,22 +145,20 @@ except Exception as e:  # noqa: BLE001 - best-effort import; we log below.
 
 logger = logging.getLogger("ai_trading.core.bot_engine")
 # AI-AGENT-REF: expose Alpaca availability without triggering client init
-from importlib.util import find_spec as _find_spec
+import importlib.util
+import sys
 
 
 def _alpaca_available() -> bool:
-    names = ("alpaca_trade_api", "alpaca.trading", "alpaca.data", "alpaca")
-    for n in names:
-        mod = sys.modules.get(n)
-        if mod is None and n in sys.modules:
+    # AI-AGENT-REF: robust Alpaca availability check with sys.modules override
+    for name in ("alpaca", "alpaca_trade_api", "alpaca.trading", "alpaca.data"):
+        if name in sys.modules and sys.modules[name] is None:
             return False
-        if mod is not None and getattr(mod, "__spec__", None) is None:
-            return False
-    for n in names:
+    for name in ("alpaca_trade_api", "alpaca.trading", "alpaca.data", "alpaca"):
         try:
-            if _find_spec(n) is not None:
+            if importlib.util.find_spec(name) is not None:
                 return True
-        except (ModuleNotFoundError, ValueError):
+        except ValueError:
             continue
     return False
 
@@ -685,7 +683,10 @@ class _LazyModule(types.ModuleType):
 
     def _load(self):
         if self._module is None and not self._failed:
-            self._module = importlib.import_module(self.__name__)
+            try:
+                self._module = importlib.import_module(self.__name__)
+            except Exception:
+                self._failed = True
 
     def _create_fallback(self):
         """Create a fallback module object with common methods."""
