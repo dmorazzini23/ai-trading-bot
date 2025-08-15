@@ -28,10 +28,12 @@ from pathlib import Path
 import requests
 
 # Optional ML dependency: hmmlearn
-try:
+try:  # pragma: no cover - optional dependency
     from hmmlearn.hmm import GaussianHMM  # type: ignore
+    SKLEARN_HMM_AVAILABLE = True
 except Exception:  # absent in many CI envs; tests skip if None
     GaussianHMM = None  # noqa: N816
+    SKLEARN_HMM_AVAILABLE = False
 
 # Import indicators
 from ai_trading.indicators import atr, mean_reversion_zscore, rsi
@@ -562,23 +564,20 @@ def detect_market_regime_hmm(
     max_iter: int = 10,
 ) -> np.ndarray:
     """Return HMM-based market regime labels for ``df``."""
-    if GaussianHMM is None:
-        logger.warning("hmmlearn not installed; skipping regime detection")
-        return np.asarray([])
+    if not SKLEARN_HMM_AVAILABLE:
+        return np.zeros(len(df), dtype=int)
 
     col = "close" if "close" in df.columns else "Close"
     if col not in df:
-        return np.asarray([np.nan] * len(df))
+        return np.zeros(len(df), dtype=int)
 
-    all_returns = np.log(df[col]).diff().dropna().values.reshape(-1, 1)
-    if all_returns.size == 0:
-        return np.asarray([np.nan] * len(df))
+    series = pd.to_numeric(df[col], errors="coerce")
+    returns = np.log(series).diff().dropna()
+    if returns.size < n_components or not np.isfinite(returns).all():
+        return np.zeros(len(df), dtype=int)
 
-    train = (
-        all_returns[-window_size:]
-        if all_returns.shape[0] > window_size
-        else all_returns
-    )
+    arr = returns.values.reshape(-1, 1)
+    train = arr[-window_size:] if arr.shape[0] > window_size else arr
 
     try:
         model = GaussianHMM(
@@ -588,16 +587,16 @@ def detect_market_regime_hmm(
             random_state=42,
         )
         model.fit(train)
-        hidden_full = model.predict(all_returns)
+        hidden_full = model.predict(arr)
         result = np.concatenate([[hidden_full[0]], hidden_full])
-    except (ValueError, KeyError, TypeError, ZeroDivisionError) as exc:  # pragma: no cover
+    except Exception as exc:  # pragma: no cover - robustness
         logger.warning(
             "MODEL_FIT_FAILED",
             extra={"cause": exc.__class__.__name__, "detail": str(exc)},
         )
-        result = np.asarray([np.nan] * len(df))
+        return np.zeros(len(df), dtype=int)
 
-    return np.asarray(result).astype(int)
+    return np.asarray(result, dtype=int)
 
 
 def compute_signal_matrix(df) -> Any | None:

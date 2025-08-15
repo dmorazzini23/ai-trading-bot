@@ -255,15 +255,15 @@ def get_cached_minute_timestamp(symbol: str) -> "pd.Timestamp | None":
     return ts if isinstance(ts, pd.Timestamp) else None
 
 
-def last_minute_bar_age_seconds(symbol: str) -> "int | None":
-    """
-    Return the age (in seconds) of the cached minute dataset for `symbol`.
-    Returns None if no cache entry is present.
-    """
+def last_minute_bar_age_seconds(symbol: str) -> int:
+    """Return age in seconds of latest cached minute bar for ``symbol``; 0 if unknown."""
     ts = get_cached_minute_timestamp(symbol)
     if ts is None:
-        return None
-    return int((pd.Timestamp.now(tz="UTC") - ts).total_seconds())
+        return 0
+    try:
+        return int((pd.Timestamp.now(tz="UTC") - ts).total_seconds())
+    except Exception:
+        return 0
 
 
 def get_cache_stats() -> dict:
