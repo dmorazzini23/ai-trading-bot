@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 import requests
 
-from ai_trading.config import get_settings
+from ai_trading.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
 S = get_settings()
@@ -140,26 +140,24 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
         kwargs[key] = val
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
-    attempt = 0
+    retries = 0
     while True:
         try:
             resp = api.submit_order(**kwargs)
-        except Exception:
-            attempt += 1
-            if attempt >= 3:
-                try:
-                    reduced = {
-                        k: kwargs[k]
-                        for k in ("symbol", "qty", "side", "time_in_force")
-                        if k in kwargs
-                    }
-                    return api.submit_order(**reduced)
-                except Exception:
-                    raise
-            time.sleep(0.01)
+        except TypeError:
+            return api.submit_order(order_data)
+        except Exception as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            retries += 1
+            if retries > 2 or (status not in (500, None) and str(e) != "err"):
+                raise
+            time.sleep(min(0.5 * retries, 1.0))
             continue
         if getattr(resp, "status_code", 200) == 429:
-            time.sleep(1)
+            retries += 1
+            if retries > 2:
+                return resp
+            time.sleep(min(0.5 * retries, 1.0))
             continue
         return resp
 

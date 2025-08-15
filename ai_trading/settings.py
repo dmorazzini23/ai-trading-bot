@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     disaster_dd_limit: float = Field(default=0.25, env="AI_TRADER_DISASTER_DD_LIMIT")
     # Toggle dataframe/bars cache in data_fetcher
     data_cache_enable: bool = Field(default=True, env="AI_TRADER_DATA_CACHE_ENABLE")
+    data_cache_ttl_seconds: int = Field(
+        default=300, env="AI_TRADER_DATA_CACHE_TTL_SECONDS"
+    )
+    verbose_logging: bool = Field(default=False, env="AI_TRADER_VERBOSE_LOGGING")
     # Plotting (matplotlib) allowed in environments that support it
     enable_plotting: bool = Field(default=False, env="AI_TRADER_ENABLE_PLOTTING")
     # Minimum absolute USD size for a position
@@ -164,6 +168,14 @@ def get_finnhub_rpm() -> int:
 
 def get_data_cache_enable() -> bool:
     return bool(get_settings().data_cache_enable)
+
+
+def get_data_cache_ttl_seconds() -> int:
+    return int(get_settings().data_cache_ttl_seconds)
+
+
+def get_verbose_logging() -> bool:
+    return bool(get_settings().verbose_logging)
 
 
 def get_enable_plotting() -> bool:

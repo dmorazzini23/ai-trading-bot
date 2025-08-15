@@ -560,24 +560,19 @@ def detect_market_regime_hmm(
     n_components: int = 3,
     window_size: int = 1000,
     max_iter: int = 10,
-) -> Any | None:
-    """Annotate ``df`` with HMM-based market regimes."""
+) -> np.ndarray:
+    """Return HMM-based market regime labels for ``df``."""
     if GaussianHMM is None:
         logger.warning("hmmlearn not installed; skipping regime detection")
-        return None
+        return np.asarray([])
 
     col = "close" if "close" in df.columns else "Close"
     if col not in df:
-        df["regime"] = np.nan
-        df["Regime"] = df["regime"]
-        return df
+        return np.asarray([np.nan] * len(df))
 
-    # AI-AGENT-REF: train on rolling window for speed
     all_returns = np.log(df[col]).diff().dropna().values.reshape(-1, 1)
     if all_returns.size == 0:
-        df["regime"] = np.nan
-        df["Regime"] = df["regime"]
-        return df
+        return np.asarray([np.nan] * len(df))
 
     train = (
         all_returns[-window_size:]
@@ -594,16 +589,15 @@ def detect_market_regime_hmm(
         )
         model.fit(train)
         hidden_full = model.predict(all_returns)
-        df["regime"] = np.concatenate([[hidden_full[0]], hidden_full])
-    except (ValueError, KeyError, TypeError, ZeroDivisionError) as exc:  # pragma: no cover - hmmlearn may fail  # AI-AGENT-REF: narrow exception
+        result = np.concatenate([[hidden_full[0]], hidden_full])
+    except (ValueError, KeyError, TypeError, ZeroDivisionError) as exc:  # pragma: no cover
         logger.warning(
             "MODEL_FIT_FAILED",
             extra={"cause": exc.__class__.__name__, "detail": str(exc)},
         )
-        df["regime"] = np.nan
+        result = np.asarray([np.nan] * len(df))
 
-    df["Regime"] = df["regime"]
-    return df
+    return np.asarray(result).astype(int)
 
 
 def compute_signal_matrix(df) -> Any | None:

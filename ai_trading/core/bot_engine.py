@@ -16,6 +16,7 @@ from ai_trading.settings import (
     get_max_trades_per_day,
     get_finnhub_rpm,
     get_volume_threshold,
+    get_verbose_logging,
 )
 from ai_trading.settings import get_max_portfolio_positions
 from ai_trading.settings import get_disaster_dd_limit
@@ -24,9 +25,6 @@ from enum import Enum
 
 # Rate limit for Finnhub (calls/min); resolved at import time via settings
 FINNHUB_RPM = get_finnhub_rpm()
-# (ensure these appear before any usage)
-VOLUME_THRESHOLD = get_volume_threshold()
-# (any existing comments or module docstring go below the future import)
 __all__ = ['pre_trade_health_check', 'run_all_trades_worker', 'BotState', 'BotMode']
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
 # Using a mutable dict to avoid fragile `global` declarations inside functions.
@@ -4072,19 +4070,16 @@ def get_risk_engine():
                 from ai_trading.risk.manager import RiskManager as _RM  # in-package fallback
                 _emit_once(_log, "risk_engine_fallback", logging.INFO, "Risk engine: RiskManager (in-package fallback)")
                 risk_engine = _RM()
-            except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
-                _log.warning("No RiskEngine available: %s", e)
-                # minimal stub to keep service alive
-                class RiskEngine:  
-                    def __init__(self, *args, **kwargs):
-                        pass
-                    def assess(self, *args, **kwargs):
-                        return {"risk": "unknown", "score": 0.0}
-                    def update_exposure(self, *args, **kwargs):
-                        pass
-                risk_engine = RiskEngine()
+            except Exception as e:  # noqa: BLE001 - propagate after logging
+                _log.error("RISK_ENGINE_IMPORT_FAILED", extra={"detail": str(e)})
+                raise ImportError("Risk engine unavailable") from e
         else:
-            _emit_once(_log, "risk_engine_resolved", logging.INFO, f"Risk engine: {cls.__module__}.{cls.__name__}")
+            _emit_once(
+                _log,
+                "risk_engine_resolved",
+                logging.INFO,
+                f"Risk engine: {cls.__module__}.{cls.__name__}",
+            )
             risk_engine = cls()
     return risk_engine
 
@@ -4095,19 +4090,10 @@ def get_allocator():
         cls = resolve_strategy_allocator_cls()
         if cls is None:
             _log.error(
-                "StrategyAllocator not found (ai_trading.strategies.performance_allocator, scripts.strategy_allocator). Using no-op fallback."
+                "StrategyAllocator not found (ai_trading.strategies.performance_allocator, scripts.strategy_allocator)."
             )
-            class StrategyAllocator:
-                def __init__(self, *args, **kwargs):
-                    pass
-                # Provide a minimal API surface to keep upstream code alive
-                def select(self, *args, **kwargs):
-                    return []
-                def rebalance(self, *args, **kwargs):
-                    return []
-            allocator = StrategyAllocator()
-        else:
-            allocator = cls()
+            raise ImportError("StrategyAllocator unavailable")
+        allocator = cls()
     return allocator
 
 
@@ -4310,7 +4296,7 @@ class LazyBotContext:
             signal_manager=signal_manager,
             trade_logger=get_trade_logger(),
             sem=Semaphore(4),
-            volume_threshold=VOLUME_THRESHOLD,
+            volume_threshold=get_volume_threshold(),
             entry_start_offset=ENTRY_START_OFFSET,
             entry_end_offset=ENTRY_END_OFFSET,
             market_open=MARKET_OPEN,
@@ -10027,7 +10013,7 @@ def reduce_position_size(ctx: BotContext, symbol: str, fraction: float) -> None:
 
 
 @memory_profile  # AI-AGENT-REF: Monitor memory usage of main trading function
-def run_all_trades_worker(state: BotState, ctx) -> None:
+def run_all_trades_worker(state: BotState, runtime) -> None:
     """
     Execute the complete trading cycle for all candidate symbols.
 
@@ -10191,6 +10177,9 @@ def run_all_trades_worker(state: BotState, ctx) -> None:
         state.running = True
         state.last_run_at = now
         loop_start = time.monotonic()
+        if not getattr(state, "_strategies_loaded", False):
+            runtime.strategies = get_strategies()
+            state._strategies_loaded = True
         try:
             # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
             try:
@@ -10204,7 +10193,7 @@ def run_all_trades_worker(state: BotState, ctx) -> None:
             if any(o.status in ("new", "pending_new") for o in open_orders):
                 _log.warning("Detected pending orders; skipping this trade cycle")
                 return
-            if CFG.verbose:
+            if get_verbose_logging():
                 _log.info(
                     "RUN_ALL_TRADES_START",
                     extra={"timestamp": utc_now_iso()},
@@ -10489,7 +10478,7 @@ def run_all_trades_worker(state: BotState, ctx) -> None:
                     },
                 )
                 try:
-                    adaptive_cap = ctx.risk_engine._adaptive_global_cap()
+                    adaptive_cap = runtime.risk_engine._adaptive_global_cap()
                 except (ZeroDivisionError, ValueError, KeyError) as e:  # AI-AGENT-REF: tighten adaptive cap errors
                     _log.warning(
                         "ADAPTIVE_CAP_FAILED",
@@ -10507,7 +10496,7 @@ def run_all_trades_worker(state: BotState, ctx) -> None:
             except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten summary fetch errors
                 _log.warning("SUMMARY_FAIL", extra={"cause": e.__class__.__name__, "detail": str(e)})
             try:
-                acct = ctx.api.get_account()
+                acct = runtime.api.get_account()
                 # Handle case where account object might not have last_equity attribute
                 last_equity = getattr(acct, "last_equity", acct.equity)
                 pnl = float(acct.equity) - float(last_equity)
@@ -10534,6 +10523,7 @@ def run_all_trades_worker(state: BotState, ctx) -> None:
         finally:
             # Always reset running flag
             state.running = False
+            state._strategies_loaded = False
             state.last_loop_duration = time.monotonic() - loop_start
             _log_loop_heartbeat(loop_id, loop_start)
 
