@@ -142,7 +142,7 @@ class Settings(BaseSettings):
     @computed_field
     @property
     def trade_cooldown(self) -> timedelta:
-        return timedelta(minutes=self.trade_cooldown_min)
+        return timedelta(minutes=_to_int(getattr(self, "trade_cooldown_min", 15), 15))
 
     model_config = SettingsConfigDict(
         env_prefix="AI_TRADER_",

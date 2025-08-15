@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import random
 import sys
 import threading
@@ -9,11 +10,13 @@ import time as pytime
 import types
 from collections import deque
 from collections.abc import Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import datetime, date, timezone, timedelta
 from typing import Any, Union
 
 import requests  # AI-AGENT-REF: ensure requests import for function annotations
 from pathlib import Path
+
+UTC = timezone.utc
 
 # Do not hard fail when running under older Python versions in tests
 if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
@@ -30,6 +33,62 @@ from ai_trading.settings import (
 
 # Define logger early
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "ensure_datetime",
+    "ensure_utc",
+    "get_historical_data",
+    "get_minute_df",
+    "get_daily_df",
+]
+
+
+def ensure_utc(dt: datetime | "pd.Timestamp") -> datetime:
+    if hasattr(dt, "tzinfo") and dt.tzinfo is not None:
+        return dt.astimezone(UTC)
+    return dt.replace(tzinfo=UTC)
+
+
+def ensure_datetime(dt: date | datetime | "pd.Timestamp" | str) -> datetime:
+    """
+    Coerce input to a timezone-aware datetime in UTC (RFC3339 compatible).
+    Accepts datetime, pandas.Timestamp, date, or string (ISO8601, '%Y-%m-%d',
+    '%Y-%m-%d %H:%M:%S', '%Y%m%d').
+    """
+    import pandas as pd  # local import; no global dependency side-effects
+
+    logger.debug("ensure_datetime called with %r (%s)", dt, type(dt).__name__)
+    if dt is None or (isinstance(dt, str) and not dt.strip()):
+        logger.error("ensure_datetime received None/empty", stack_info=True)
+        raise ValueError("datetime value cannot be None or empty")
+
+    if isinstance(dt, datetime):
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+    if isinstance(dt, pd.Timestamp):
+        return (
+            dt.to_pydatetime().astimezone(UTC)
+            if dt.tzinfo
+            else dt.to_pydatetime().replace(tzinfo=UTC)
+        )
+    if isinstance(dt, date):
+        return datetime.combine(dt, datetime.min.time()).replace(tzinfo=UTC)
+    if isinstance(dt, str):
+        value = dt.strip()
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+        except ValueError as e:
+            logger.debug("ensure_datetime ISO parse failed for %r: %s", value, e)
+        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y%m%d"):
+            try:
+                return datetime.strptime(value, fmt).replace(tzinfo=UTC)
+            except ValueError:
+                continue
+        raise ValueError(
+            f"Invalid datetime string {value!r}; tried ISO, %Y-%m-%d, %Y-%m-%d %H:%M:%S, %Y%m%d"
+        )
+    raise TypeError(f"Unsupported type for ensure_datetime: {type(dt)!r}")
+
 
 # Prometheus metrics (optional)
 try:
@@ -185,13 +244,12 @@ except Exception as e:  # pragma: no cover - allow missing in test env
     urllib3 = types.SimpleNamespace(
         exceptions=types.SimpleNamespace(HTTPError=Exception)
     )
-from ai_trading.utils.base import ensure_utc, is_market_open, safe_to_datetime
+from ai_trading.utils.base import is_market_open, safe_to_datetime
 
 MINUTES_REQUIRED = 31
 MIN_EXPECTED_ROWS = 5
 HISTORICAL_START = "2025-06-01"
 HISTORICAL_END = "2025-06-06"
-import logging
 
 # FutureWarning now filtered globally in pytest.ini
 
@@ -212,6 +270,17 @@ except Exception:  # pragma: no cover - optional dependency
             )
             self.status_code = code
             super().__init__(f"FinnhubAPIException: {code}")
+
+
+def _get_finnhub_client():
+    try:
+        import finnhub as fh
+        api_key = os.getenv("FINNHUB_API_KEY", "") or getattr(CFG, "finnhub_api_key", "")
+        if not hasattr(fh, "Client") or not api_key:
+            return None
+        return fh.Client(api_key=api_key)
+    except Exception:
+        return None
 
 
 # AI-AGENT-REF: import pandas as hard dependency
@@ -372,92 +441,6 @@ def _fetch_bars(
     df = df[["timestamp", "open", "high", "low", "close", "volume"]]
     df = df.reset_index(drop=True)
     return df
-
-
-# Helper to coerce dates into datetimes
-def ensure_datetime(dt: date | datetime | pd.Timestamp | str | None) -> datetime:
-    """Coerce ``dt`` into a timezone-aware ``datetime`` instance.
-
-    Accepts ``datetime`` objects, ``pandas.Timestamp`` objects, ``date`` objects,
-    or strings in several supported formats. Strings may be ISO 8601
-    (with optional timezone), ``"%Y-%m-%d"``, ``"%Y-%m-%d %H:%M:%S"`` or
-    ``"%Y%m%d"``.
-
-    Returns a timezone-aware datetime in UTC for Alpaca API compatibility.
-
-    Raises
-    ------
-    ValueError
-        If ``dt`` is ``None``, an empty string, or a string that cannot be
-        parsed using the supported formats.
-    TypeError
-        If ``dt`` is of an unsupported type.
-    """
-
-    logger.debug("ensure_datetime called with %r (%s)", dt, type(dt).__name__)
-
-    if dt is None:
-        logger.error("ensure_datetime received None", stack_info=True)
-        raise ValueError("datetime value cannot be None")
-
-    # Handle pandas availability check
-    import pandas as pd_real
-    if isinstance(dt, datetime):
-        logger.debug("ensure_datetime received datetime %r", dt)
-        # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
-        if dt.tzinfo is None:
-            logger.debug("ensure_datetime converting naive datetime to UTC")
-            return dt.replace(tzinfo=UTC)
-        return dt
-
-    if isinstance(dt, date):
-        logger.debug("ensure_datetime converting date %r", dt)
-        # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
-        return datetime.combine(dt, datetime.min.time()).replace(tzinfo=UTC)
-
-    if isinstance(dt, str):
-        value = dt.strip()
-        if not value:
-            logger.error("ensure_datetime received empty string", stack_info=True)
-            raise ValueError("datetime string is empty")
-
-        formats = [
-            "ISO 8601",
-            "%Y-%m-%d",
-            "%Y-%m-%d %H:%M:%S",
-            "%Y%m%d",
-        ]
-
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-            logger.debug("ensure_datetime parsed %r via ISO", value)
-            # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=UTC)
-            return parsed
-        except ValueError as e:
-            # Date parsing failed with this format, try next format
-            logger.debug("Date parsing failed for %r with format %s: %s", value, fmt, e)
-
-        for fmt in formats[1:]:
-            try:
-                parsed = datetime.strptime(value, fmt)
-                logger.debug("ensure_datetime parsed %r with %s", value, fmt)
-                # AI-AGENT-REF: ensure timezone-aware for Alpaca API RFC3339 compatibility
-                return parsed.replace(tzinfo=UTC)
-            except ValueError:
-                continue
-
-        logger.error(
-            "ensure_datetime failed to parse %r with formats %s",
-            value,
-            formats,
-            stack_info=True,
-        )
-        raise ValueError(f"Invalid datetime string {value!r}; tried {formats}")
-
-    logger.error("ensure_datetime unsupported type: %r", dt, stack_info=True)
-    raise TypeError(f"Unsupported type for ensure_datetime: {type(dt)!r}")
 
 
 # Alpaca historical data client
@@ -818,7 +801,7 @@ def get_daily_df(
             "Primary daily fetch failed for %s: %s", symbol, primary_err.message
         )
         try:
-            df = fh_fetcher.fetch(symbol, period="6mo", interval="1d")
+            df = _get_fh_fetcher().fetch(symbol, period="6mo", interval="1d")
         except Exception as fh_err:
             logger.critical("Secondary provider failed for %s: %s", symbol, fh_err)
             raise DataSourceDownException(symbol) from fh_err
@@ -1082,7 +1065,7 @@ def get_minute_df(
         try:
             logger.info("DATA_SOURCE_FALLBACK: trying %s", "Finnhub")
             logger.debug("FETCH_FINNHUB_MINUTE_BARS: start", extra={"symbol": symbol})
-            df = fh_fetcher.fetch(symbol, period="1d", interval="1")
+            df = _get_fh_fetcher().fetch(symbol, period="1d", interval="1")
             logger.debug(
                 "FETCH_FINNHUB_MINUTE_BARS: got %s bars",
                 len(df) if df is not None else 0,
@@ -1233,9 +1216,6 @@ def get_minute_df(
     return df[required].copy()
 
 
-finnhub_client = finnhub.Client(api_key=FINNHUB_API_KEY)
-
-
 class FinnhubFetcher:
     """Thin wrapper around the Finnhub client with basic rate limiting."""
 
@@ -1243,7 +1223,7 @@ class FinnhubFetcher:
         """Initialize the fetcher with an API rate limit."""
         self.max_calls = calls_per_minute
         self._timestamps = deque()
-        self.client = finnhub_client
+        self.client = _get_finnhub_client()
 
     def _throttle(self) -> None:
         while True:
@@ -1283,6 +1263,8 @@ class FinnhubFetcher:
     ) -> pd.DataFrame:
         """Fetch OHLCV data for ``symbols`` over the given period."""
         syms = symbols if isinstance(symbols, list | tuple) else [symbols]
+        if self.client is None:
+            return pd.DataFrame()
         now_ts = int(pytime.time())
         span = self._parse_period(period)
         start_ts = now_ts - span
@@ -1327,7 +1309,14 @@ class FinnhubFetcher:
         )
 
 
-fh_fetcher = FinnhubFetcher()
+_fh_fetcher: FinnhubFetcher | None = None
+
+
+def _get_fh_fetcher() -> FinnhubFetcher:
+    global _fh_fetcher
+    if _fh_fetcher is None:
+        _fh_fetcher = FinnhubFetcher()
+    return _fh_fetcher
 
 
 def fetch_minute_yfinance(symbol: str) -> pd.DataFrame:

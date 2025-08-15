@@ -80,20 +80,23 @@ class TestBotEngineImports:
     def test_import_robustness_when_both_fail(self):
         """Test behavior when both import paths fail."""
         # This tests the error handling when neither import works
-        with patch('builtins.__import__') as mock_import:
+        import importlib
+        real_import = importlib.import_module
+        with patch('importlib.import_module') as mock_import:
             def side_effect(name, *args, **kwargs):
                 if name in ('ai_trading.pipeline', 'pipeline'):
                     raise ImportError(f"Module {name} not found")
-                return MagicMock()
-            
+                return real_import(name, *args, **kwargs)
+
             mock_import.side_effect = side_effect
-            
+
             # Both imports should fail
             with pytest.raises(ImportError):
-                try:
-                    pass  # type: ignore
-                except Exception:  # pragma: no cover
-                    pass  # type: ignore
+                import sys
+                sys.modules.pop('ai_trading.core.bot_engine', None)
+                sys.modules.pop('ai_trading.pipeline', None)
+                sys.modules.pop('pipeline', None)
+                importlib.import_module('ai_trading.core.bot_engine')
 
     def test_import_types_annotation(self):
         """Test that type annotations are preserved in import statements."""

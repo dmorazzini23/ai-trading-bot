@@ -41,6 +41,18 @@ def get_ohlcv_columns(df) -> list[str]:
     return [w for w in wanted if w in cols]
 
 
+def ensure_utc_index(df: DataFrame) -> DataFrame:
+    """Return DataFrame with UTC tz-aware DatetimeIndex if applicable."""
+    if not isinstance(df.index, pd.DatetimeIndex):
+        return df
+    if df.index.tz is None:
+        df = df.copy()
+        df.index = df.index.tz_localize("UTC")
+    else:
+        df.index = df.index.tz_convert("UTC")
+    return df
+
+
 def requires_pandas(func):
     """Decorator to ensure pandas is available for a function."""
 

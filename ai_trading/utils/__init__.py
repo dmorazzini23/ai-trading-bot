@@ -28,6 +28,7 @@ from .base import (
     get_latest_close,
     ensure_utc,
     get_ohlcv_columns,
+    ensure_utc_index,
 )
 from .determinism import (
     ensure_deterministic_training,
@@ -66,4 +67,5 @@ __all__ = [
     "health_check",
     "ensure_utc",
     "get_ohlcv_columns",
+    "ensure_utc_index",
 ]

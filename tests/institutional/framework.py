@@ -304,12 +304,14 @@ class TradingScenarioRunner:
         try:
             # Try invalid symbol
             result1 = self.execution_engine.submit_market_order("INVALID", "buy", 100)
-            
-            # Try invalid quantity
             result2 = self.execution_engine.submit_market_order("AAPL", "buy", -100)
-            
-            # Both should fail gracefully
-            errors_handled = (result1 is None) and (result2 is None)
+
+            errors_handled = (
+                isinstance(result1, dict)
+                and result1.get("status") == "error"
+                and isinstance(result2, dict)
+                and result2.get("status") == "error"
+            )
             
             return {
                 "status": "passed" if errors_handled else "failed",
