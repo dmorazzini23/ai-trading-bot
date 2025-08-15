@@ -797,6 +797,11 @@ class TradingConfig:
         # read env safely; example pattern (adapt to your existing keys):
         import os
         getenv = os.getenv
+        from ai_trading.settings import (  # AI-AGENT-REF: canonical settings access
+            get_settings,
+            get_max_drawdown_threshold,
+            get_daily_loss_limit,
+        )
         # extract values (preserve your current logic; below is a template)
         conf_threshold = float(getenv("CONF_THRESHOLD", overrides.get("conf_threshold", 0.55)))
         buy_threshold  = float(getenv("BUY_THRESHOLD",  overrides.get("buy_threshold",  0.60)))
@@ -905,11 +910,44 @@ class TradingConfig:
         # set mode last so downstream logic sees it
         if mode is not None:
             setattr(cfg, "mode", mode)
-        
+
         # Set legacy API keys for compatibility
         cfg.ALPACA_API_KEY = getenv("ALPACA_API_KEY", "test_key")
         cfg.ALPACA_SECRET_KEY = getenv("ALPACA_SECRET_KEY", "test_secret")
-        
+
+        # AI-AGENT-REF: sync with canonical settings
+        s = get_settings()
+        cfg.ALPACA_API_KEY = getattr(s, "alpaca_api_key", cfg.ALPACA_API_KEY)
+        cfg.ALPACA_SECRET_KEY = getattr(
+            s, "alpaca_secret_key_plain", cfg.ALPACA_SECRET_KEY
+        )
+        cfg.ALPACA_BASE_URL = getattr(s, "alpaca_base_url", cfg.alpaca_base_url)
+        cfg.TRADING_MODE = getattr(s, "bot_mode", cfg.trading_mode)
+        cfg.trading_mode = cfg.TRADING_MODE  # AI-AGENT-REF: keep internal field synced
+        cfg.TRADE_LOG_FILE = getattr(s, "trade_log_file", TRADE_LOG_FILE)
+        cfg.TIMEZONE = getattr(s, "timezone", "UTC")
+        cfg.MAX_DRAWDOWN_THRESHOLD = get_max_drawdown_threshold()
+        cfg.DAILY_LOSS_LIMIT = get_daily_loss_limit()
+        cfg.NEWS_API_KEY = getattr(s, "news_api_key", None)
+        cfg.SYSTEM_HEALTH_CHECK_INTERVAL = getattr(
+            s, "system_health_check_interval", 60
+        )
+        cfg.SYSTEM_HEALTH_ALERT_THRESHOLD = getattr(
+            s, "system_health_alert_threshold", 3
+        )
+        cfg.SYSTEM_HEALTH_EXPORT_ENABLED = getattr(
+            s, "system_health_export_enabled", False
+        )
+        cfg.ORDER_MAX_RETRY_ATTEMPTS = getattr(s, "order_max_retry_attempts", 3)
+        cfg.ORDER_TIMEOUT_SECONDS = getattr(s, "order_timeout_seconds", 30)
+        cfg.ORDER_STALE_CLEANUP_INTERVAL = getattr(
+            s, "order_stale_cleanup_interval", 600
+        )
+        cfg.ORDER_FILL_RATE_TARGET = getattr(s, "order_fill_rate_target", 0.95)
+        cfg.SENTIMENT_SUCCESS_RATE_TARGET = getattr(
+            s, "sentiment_success_rate_target", 0.6
+        )
+
         return cfg
 
     def to_dict(self, safe=True):
@@ -932,6 +970,19 @@ class TradingConfig:
                 else:
                     config_dict[attr] = value
         return config_dict
+
+    def validate_environment(self) -> None:  # AI-AGENT-REF: runtime settings validation
+        missing = []
+        if not getattr(self, "ALPACA_API_KEY", None):
+            missing.append("ALPACA_API_KEY")
+        if not getattr(self, "ALPACA_SECRET_KEY", None):
+            missing.append("ALPACA_SECRET_KEY")
+        if getattr(self, "enable_finbert", False) and not getattr(
+            self, "NEWS_API_KEY", None
+        ):
+            missing.append("NEWS_API_KEY")
+        if missing:
+            raise RuntimeError(f"Missing required settings: {', '.join(missing)}")
 
     def get_legacy_params(self):
         """Return legacy parameters for backward compatibility."""
