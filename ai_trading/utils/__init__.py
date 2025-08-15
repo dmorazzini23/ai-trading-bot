@@ -46,6 +46,13 @@ from .time import now_utc
 EASTERN_TZ = ZoneInfo("America/New_York")
 
 
+def health_check(value: float) -> bool:
+    try:
+        return float(value) > 0.0
+    except Exception:
+        return False
+
+
 def get_latest_close(df: pd.DataFrame | None) -> float:
     if df is None or df.empty:
         return 0.0
@@ -83,4 +90,5 @@ __all__ = [
     "now_utc",
     "get_latest_close",
     "EASTERN_TZ",
+    "health_check",
 ]

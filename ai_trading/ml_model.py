@@ -36,8 +36,16 @@ class MLModel:
             raise TypeError(f"Model missing required method: {name}")
 
     def fit(self, X: Sequence, y: Sequence, sample_weight=None) -> "MLModel":
-        self._require("fit")
-        return self.model.fit(X, y, sample_weight=sample_weight)
+        if not all(hasattr(self.model, m) for m in ("fit", "predict")):
+            raise TypeError("Model missing required methods: fit, predict")
+        import inspect
+
+        sig = inspect.signature(self.model.fit)
+        if "sample_weight" in sig.parameters and sample_weight is not None:
+            self.model.fit(X, y, sample_weight=sample_weight)
+        else:
+            self.model.fit(X, y)
+        return self
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
         self._require("predict")

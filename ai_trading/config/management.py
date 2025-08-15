@@ -679,6 +679,7 @@ class TradingConfig:
                  # Required trading risk parameters
                  capital_cap: float = 0.04,
                  dollar_risk_limit: float = 0.05,
+                 position_size_min_usd: float = 0.0,
                  # model/feature toggles
                  enable_finbert: bool = False,
                  enable_sklearn: bool = False,
@@ -737,6 +738,7 @@ class TradingConfig:
         # Required trading risk parameters
         self.capital_cap = capital_cap
         self.dollar_risk_limit = dollar_risk_limit
+        self.position_size_min_usd = position_size_min_usd
         
         # feature toggles
         self.enable_finbert = bool(enable_finbert)

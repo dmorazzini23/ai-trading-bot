@@ -4,8 +4,10 @@ from typing import Any, Iterable, Optional
 
 try:  # AI-AGENT-REF: safe optional import for tests
     from alpaca.trading.client import TradingClient as _RealTradingClient  # type: ignore
+    ALPACA_SDK_AVAILABLE = True
 except Exception:  # pragma: no cover - optional dependency
     _RealTradingClient = None
+    ALPACA_SDK_AVAILABLE = False
 
 
 class MockTradingClient:
@@ -161,6 +163,14 @@ class AlpacaBroker:
         if self._is_new:
             return self._api.get_account()
         return self._api.get_account()
+
+
+def initialize(*args, **kwargs) -> "AlpacaBroker | None":
+    """Create an :class:`AlpacaBroker` if the SDK is available."""
+    if not ALPACA_SDK_AVAILABLE:
+        return None
+    client = _RealTradingClient(*args, **kwargs)
+    return AlpacaBroker(client)
 
     # ---------- Submit orders ----------
     def submit_order(

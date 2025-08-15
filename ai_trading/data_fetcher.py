@@ -20,8 +20,11 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     logging.getLogger(__name__).warning("Running under unsupported Python version")
 
 from ai_trading.config.settings import get_settings as get_config_settings
-from ai_trading.settings import get_settings  # AI-AGENT-REF: runtime settings
 from ai_trading.market import cache as mcache
+from ai_trading.settings import (
+    get_data_cache_enable,
+    get_data_cache_ttl_seconds,
+)
 
 # Define logger early
 logger = logging.getLogger(__name__)
@@ -54,7 +57,6 @@ except Exception:  # pragma: no cover
     _MET_LAT = _Noop()
 
 CFG = get_config_settings()
-S = get_settings()
 BASE_DIR = Path(__file__).resolve().parents[1]  # AI-AGENT-REF: repo root for paths
 
 def abspath(fname: str) -> str:
@@ -65,7 +67,6 @@ ALPACA_API_KEY = CFG.alpaca_api_key
 ALPACA_SECRET_KEY = CFG.alpaca_secret_key_plain  # AI-AGENT-REF: use plain secret string
 ALPACA_BASE_URL = CFG.alpaca_base_url
 ALPACA_DATA_FEED = CFG.alpaca_data_feed or "iex"
-HALT_FLAG_PATH = abspath(S.halt_flag_path)  # AI-AGENT-REF: absolute halt flag path
 
 try:
     from alpaca.data.historical import StockHistoricalDataClient
@@ -795,26 +796,17 @@ def get_daily_df(
     end_dt = ensure_datetime(end)
 
     # --- caching layer ---
-    settings = get_settings()
+    CACHE_ON = bool(get_data_cache_enable())
+    TTL = max(0, int(get_data_cache_ttl_seconds()))
     tf_name = "1D"
     start_s = str(start)
     end_s = str(end)
     df_cached = None
-    if settings.data_cache_enable:
-        df_cached = mcache.get_mem(
-            symbol, tf_name, start_s, end_s, settings.data_cache_ttl_seconds
-        )
+    if CACHE_ON:
+        df_cached = mcache.get_mem(symbol, tf_name, start_s, end_s, TTL)
         if df_cached is not None:
             _MET_REQS.labels("cache", tf_name, "hit", "single").inc()
             return df_cached
-        if settings.data_cache_disk_enable:
-            on_disk = mcache.get_disk(
-                settings.data_cache_dir, symbol, tf_name, start_s, end_s
-            )
-            if on_disk is not None:
-                mcache.put_mem(symbol, tf_name, start_s, end_s, on_disk)
-                _MET_REQS.labels("cache", tf_name, "hit_disk", "single").inc()
-                return on_disk
 
     t0 = time.perf_counter()
     try:
@@ -859,16 +851,9 @@ def get_daily_df(
         df = df.reset_index(drop=True)
 
         df = df[["timestamp", "open", "high", "low", "close", "volume"]]
-        # save to cache (mem + optional disk)
-        if settings.data_cache_enable:
+        # save to cache (mem)
+        if CACHE_ON:
             mcache.put_mem(symbol, tf_name, start_s, end_s, df)
-            if settings.data_cache_disk_enable:
-                try:
-                    mcache.put_disk(
-                        settings.data_cache_dir, symbol, tf_name, start_s, end_s, df
-                    )
-                except (OSError, PermissionError, ValueError) as e:
-                    logger.warning(f"Failed to cache data for {symbol}: {e}")
                     # Continue execution - caching is not critical
         return df
     except KeyError:
@@ -1433,7 +1418,6 @@ def get_bars_batch(
     """
     if not symbols:
         return {}
-    settings = get_settings()
     # Resolve timeframe
     tf = _resolve_timeframe(timeframe)
     tf_name = (
@@ -1445,26 +1429,16 @@ def get_bars_batch(
     start_s, end_s = str(start_dt), str(end_dt)
 
     # Try cache first per symbol
+    CACHE_ON = bool(get_data_cache_enable())
+    TTL = max(0, int(get_data_cache_ttl_seconds()))
     results: dict[str, pd.DataFrame] = {}
     to_fetch: list[str] = []
-    if settings.data_cache_enable:
+    if CACHE_ON:
         for sym in symbols:
-            cached = mcache.get_mem(
-                sym, tf_name, start_s, end_s, settings.data_cache_ttl_seconds
-            )
+            cached = mcache.get_mem(sym, tf_name, start_s, end_s, TTL)
             if cached is not None:
                 _MET_REQS.labels("cache", tf_name, "hit", "batch").inc()
                 results[sym] = cached
-            elif settings.data_cache_disk_enable:
-                disk = mcache.get_disk(
-                    settings.data_cache_dir, sym, tf_name, start_s, end_s
-                )
-                if disk is not None:
-                    mcache.put_mem(sym, tf_name, start_s, end_s, disk)
-                    _MET_REQS.labels("cache", tf_name, "hit_disk", "batch").inc()
-                    results[sym] = disk
-                else:
-                    to_fetch.append(sym)
             else:
                 to_fetch.append(sym)
     else:
