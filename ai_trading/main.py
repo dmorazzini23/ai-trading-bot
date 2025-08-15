@@ -237,17 +237,10 @@ def main() -> None:
             # Check if thread is still alive - if not, there might be an unhandled exception
             if not t.is_alive():
                 raise RuntimeError("API thread terminated unexpectedly during startup")
-            else:
-                # Thread is alive but not ready - this is a true timeout
-                logger.warning(
-                    "API startup taking longer than expected, proceeding with degraded functionality"
-                )
-                # In test environments, we might want to continue without the API
-                test_mode = config.scheduler_iterations != 0
-                if not test_mode:
-                    raise RuntimeError(
-                        "API startup timeout - trading cannot proceed without API ready"
-                    )
+            # Thread is alive but not ready - log and continue in degraded mode
+            logger.warning(
+                "API startup taking longer than expected, proceeding with degraded functionality"
+            )
     except RuntimeError:
         # Re-raise runtime errors as-is
         raise

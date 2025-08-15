@@ -143,20 +143,24 @@ except Exception as e:  # noqa: BLE001 - best-effort import; we log below.
 
 logger = logging.getLogger("ai_trading.core.bot_engine")
 # AI-AGENT-REF: expose Alpaca availability without triggering client init
+import importlib
 import importlib.util
 import sys
 
 
-def _alpaca_available() -> bool:
-    """Return True if the Alpaca SDK can be imported."""
+def _module_ok(name: str) -> bool:
     try:
-        import alpaca  # noqa: F401
-        return True
+        mod = importlib.import_module(name)
+        return bool(getattr(mod, "__spec__", None))
     except Exception:
         return False
 
 
-ALPACA_AVAILABLE = _alpaca_available()
+ALPACA_AVAILABLE = (
+    _module_ok("alpaca")
+    and _module_ok("alpaca.trading")
+    and _module_ok("alpaca.data")
+)
 
 
 def _sha256_file(path: str) -> str:
@@ -4744,7 +4748,7 @@ def in_trading_hours(ts: pd.Timestamp) -> bool:
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception_type(requests.RequestException),
+    retry=retry_if_exception_type(requests.exceptions.RequestException),
 )
 def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
     with ctx.sem:
@@ -4813,7 +4817,7 @@ def _record_sentiment_failure():
         2
     ),  # Reduced from 3 to avoid hitting rate limits too quickly
     wait=wait_exponential(multiplier=1, min=2, max=10),  # Increased delays
-    retry=retry_if_exception_type((requests.RequestException,)),
+    retry=retry_if_exception_type((requests.exceptions.RequestException,)),
 )
 def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
     """

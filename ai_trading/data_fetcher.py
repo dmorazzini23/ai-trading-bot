@@ -41,7 +41,6 @@ __all__ = [
     "get_minute_df",
     "get_cache_stats",
     "get_last_available_bar",
-    "finnhub_client",
 ]
 
 # Lightweight placeholders for optional Alpaca SDK components. The real
@@ -309,9 +308,6 @@ def _get_finnhub_client():
         return fh.Client(api_key=api_key)
     except Exception:
         return None
-
-
-finnhub_client = _get_finnhub_client()
 
 
 # AI-AGENT-REF: import pandas as hard dependency
@@ -990,10 +986,8 @@ def get_minute_df(
     if not is_market_open():
         logger.info("MARKET_CLOSED_MINUTE_FETCH", extra={"symbol": symbol})
         _MINUTE_CACHE.pop(symbol, None)
-        # AI-AGENT-REF: Return DataFrame with proper DatetimeIndex to prevent index mismatch
         return pd.DataFrame(
-            columns=["open", "high", "low", "close", "volume"],
-            index=pd.DatetimeIndex([], tz=UTC),
+            columns=["timestamp", "open", "high", "low", "close", "volume"]
         )
 
     start_dt = ensure_utc(start_date) - timedelta(minutes=1)
@@ -1034,9 +1028,9 @@ def get_minute_df(
                         ),
                     },
                 )
-                # AI-AGENT-REF: Filter to only return required columns to prevent shape mismatch
-                required = ["open", "high", "low", "close", "volume"]
-                return df_cached[required].copy()
+                # AI-AGENT-REF: Return required columns with explicit timestamp column
+                required = ["timestamp", "open", "high", "low", "close", "volume"]
+                return df_cached.reset_index()[required].copy()
             else:
                 # Cache expired, remove it
                 _MINUTE_CACHE.pop(symbol, None)
@@ -1081,7 +1075,7 @@ def get_minute_df(
                 )
             except Exception as e:
                 if "invalid format for parameter start" in str(e).lower():
-                    raise
+                    raise APIError(str(e)) from e
                 raise DataFetchException(symbol, "alpaca", "", str(e)) from e
         else:
             df = _fetch_bars(symbol, start_dt, end_dt, "1Min", _DEFAULT_FEED)
@@ -1089,25 +1083,28 @@ def get_minute_df(
             "FETCH_ALPACA_MINUTE_BARS: got %s bars", len(df) if df is not None else 0
         )
         if df is None or df.empty:
-            raise DataFetchException(
+            alpaca_exc = DataFetchException(
                 symbol,
                 "alpaca",
                 "",
                 f"No minute bars returned for {symbol} from Alpaca",
             )
-        required = ["open", "high", "low", "close", "volume", "timestamp"]
-        missing = set(required) - set(df.columns)
-        if missing:
-            logger.error("get_minute_df missing columns %s", missing)
-            raise DataFetchException(
-                symbol,
-                "alpaca",
-                "",
-                f"Alpaca minute bars for {symbol} missing columns {missing}",
-            )
+            df = None
+        else:
+            required = ["open", "high", "low", "close", "volume", "timestamp"]
+            missing = set(required) - set(df.columns)
+            if missing:
+                logger.error("get_minute_df missing columns %s", missing)
+                alpaca_exc = DataFetchException(
+                    symbol,
+                    "alpaca",
+                    "",
+                    f"Alpaca minute bars for {symbol} missing columns {missing}",
+                )
+                df = None
     except Exception as primary_err:
         if "invalid format for parameter start" in str(primary_err).lower():
-            raise
+            raise APIError(str(primary_err)) from primary_err
         alpaca_exc = primary_err
         logger.debug("Alpaca fetch error: %s", primary_err)
         logger.debug("Falling back to Finnhub")
@@ -1145,17 +1142,13 @@ def get_minute_df(
                         "FETCH_YFINANCE_MINUTE_BARS: got %s bars",
                         len(df) if df is not None else 0,
                     )
-                    required = ["open", "high", "low", "close", "volume"]
+                    required = ["timestamp", "open", "high", "low", "close", "volume"]
                     missing = set(required) - set(df.columns)
                     if missing:
                         logger.error("get_minute_df missing columns %s", missing)
-                        # AI-AGENT-REF: Return DataFrame with proper DatetimeIndex to prevent index mismatch
-                        return pd.DataFrame(
-                            columns=required, index=pd.DatetimeIndex([], tz=UTC)
-                        )
+                        return pd.DataFrame(columns=required)
                     # Successfully fetched data from yfinance, return it
-                    # AI-AGENT-REF: Filter to only return required columns while preserving index
-                    return df[required].copy()
+                    return df.reset_index()[required].copy()
                 except Exception as exc:
                     logger.error("[DataFetcher] yfinance failed: %s", exc)
                     logger.error(
@@ -1185,17 +1178,13 @@ def get_minute_df(
                     "FETCH_YFINANCE_MINUTE_BARS: got %s bars",
                     len(df) if df is not None else 0,
                 )
-                required = ["open", "high", "low", "close", "volume"]
+                required = ["timestamp", "open", "high", "low", "close", "volume"]
                 missing = set(required) - set(df.columns)
                 if missing:
                     logger.error("get_minute_df missing columns %s", missing)
-                    # AI-AGENT-REF: Return DataFrame with proper DatetimeIndex to prevent index mismatch
-                    return pd.DataFrame(
-                        columns=required, index=pd.DatetimeIndex([], tz=UTC)
-                    )
+                    return pd.DataFrame(columns=required)
                 # Successfully fetched data from yfinance, return it
-                # AI-AGENT-REF: Filter to only return required columns while preserving index
-                return df[required].copy()
+                return df.reset_index()[required].copy()
             except Exception as exc:
                 logger.error("[DataFetcher] yfinance failed: %s", exc)
                 logger.error(
@@ -1210,7 +1199,7 @@ def get_minute_df(
     if df is None or df.empty:
         # AI-AGENT-REF: raise explicit error when all providers return empty
         raise DataSourceEmpty(symbol)
-    required_cols = {"open", "high", "low", "close", "volume"}
+    required_cols = {"timestamp", "open", "high", "low", "close", "volume"}
     missing = required_cols - set(df.columns)
     if missing:
         logger.error(
@@ -1263,7 +1252,8 @@ def get_minute_df(
         )
 
     # AI-AGENT-REF: Filter to only return required columns while preserving index
-    required = ["open", "high", "low", "close", "volume"]
+    df = df.reset_index()
+    required = ["timestamp", "open", "high", "low", "close", "volume"]
     return df[required].copy()
 
 
