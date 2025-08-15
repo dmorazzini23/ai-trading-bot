@@ -48,7 +48,12 @@ def submit_market_order(symbol: str, side: str, quantity: int):
             "ORDER_INPUT_INVALID",
             extra={"cause": type(e).__name__, "detail": str(e)},
         )
-        raise ValueError("ORDER_INPUT_INVALID") from e
+        return {
+            "status": "error",
+            "code": "ORDER_INPUT_INVALID",
+            "error": str(e),
+            "order_id": None,
+        }
     return {
         "status": "submitted",
         "symbol": symbol,
@@ -187,7 +192,12 @@ class AlpacaExecutionEngine:
                 "ORDER_INPUT_INVALID",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )
-            raise ValueError("ORDER_INPUT_INVALID") from e
+            return {
+                "status": "error",
+                "code": "ORDER_INPUT_INVALID",
+                "error": str(e),
+                "order_id": None,
+            }
 
         start_time = time.time()
         order_data = {
@@ -254,7 +264,12 @@ class AlpacaExecutionEngine:
                 "ORDER_INPUT_INVALID",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )
-            raise ValueError("ORDER_INPUT_INVALID") from e
+            return {
+                "status": "error",
+                "code": "ORDER_INPUT_INVALID",
+                "error": str(e),
+                "order_id": None,
+            }
 
         start_time = time.time()
         order_data = {

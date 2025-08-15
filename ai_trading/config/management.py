@@ -678,7 +678,7 @@ class TradingConfig:
                  buy_threshold: float = 0.50,
                  confirmation_count: int = 2,
                  # Required trading risk parameters
-                 capital_cap: float = 0.04,
+                 capital_cap: float = 0.25,
                  dollar_risk_limit: float = 0.05,
                  position_size_min_usd: float = 0.0,
                  # model/feature toggles
@@ -716,6 +716,7 @@ class TradingConfig:
                  data_warmup_lookback_days: int = 60,
                  disable_daily_retrain: bool = False,
                  REGIME_MIN_ROWS: int = 200,
+                 signal_period: int = 20,
                  **kwargs):
         self.mode = mode
         self.trailing_factor = trailing_factor
@@ -736,6 +737,8 @@ class TradingConfig:
         self.conf_threshold = conf_threshold
         self.buy_threshold = buy_threshold
         self.confirmation_count = confirmation_count
+
+        self.signal_period = signal_period
         
         # Required trading risk parameters
         self.capital_cap = capital_cap
@@ -796,9 +799,12 @@ class TradingConfig:
         Build a TradingConfig from environment variables and optional overrides.
         Must be a classmethod so callers can use TradingConfig.from_env(...).
         """
-        # read env safely; example pattern (adapt to your existing keys):
         import os
         getenv = os.getenv
+
+        mode = (mode or overrides.get("mode") or getenv("TRADING_MODE", "balanced")).lower()
+        if mode not in {"conservative", "balanced", "aggressive"}:
+            mode = "balanced"
         from ai_trading.settings import (
             get_settings as get_runtime_settings,
             get_max_drawdown_threshold,
@@ -835,8 +841,8 @@ class TradingConfig:
 
         # Required trading risk parameters
         capital_cap = _to_float(
-            getenv("CAPITAL_CAP", overrides.get("capital_cap", 0.04)),
-            overrides.get("capital_cap", 0.04),
+            getenv("CAPITAL_CAP", overrides.get("capital_cap", 0.25)),
+            overrides.get("capital_cap", 0.25),
         )
         dollar_risk_limit = _to_float(
             getenv("DOLLAR_RISK_LIMIT", overrides.get("dollar_risk_limit", 0.05)),
@@ -892,6 +898,10 @@ class TradingConfig:
         min_confidence = _to_float(
             getenv("MIN_CONFIDENCE", overrides.get("min_confidence", 0.60)),
             overrides.get("min_confidence", 0.60),
+        )
+        signal_period = _to_int(
+            getenv("SIGNAL_PERIOD", overrides.get("signal_period", 20)),
+            overrides.get("signal_period", 20),
         )
 
         # Required new attributes from environment variables
@@ -969,7 +979,7 @@ class TradingConfig:
             "scheduler_sleep_seconds", "window", "enabled", "capacity", "refill_rate",
             "queue_timeout", "ml_model_path", "ml_model_module", "halt_file",
             "enable_sklearn", "intraday_lookback_minutes", "data_warmup_lookback_days",
-            "disable_daily_retrain", "REGIME_MIN_ROWS"
+            "disable_daily_retrain", "REGIME_MIN_ROWS", "signal_period"
         }
         cfg = cls(
             mode=mode,
@@ -1009,6 +1019,7 @@ class TradingConfig:
             daily_loss_limit=daily_loss_limit,
             max_portfolio_risk=max_portfolio_risk,
             REGIME_MIN_ROWS=REGIME_MIN_ROWS,
+            signal_period=signal_period,
             **{k: v for k, v in overrides.items() if k not in excluded_keys}
         )
         # set mode last so downstream logic sees it
@@ -1078,15 +1089,11 @@ class TradingConfig:
                 cfg.kelly_fraction = 0.25
             if c_env is None:
                 cfg.conf_threshold = 0.85
-            cfg.daily_loss_limit = 0.03
-            cfg.DAILY_LOSS_LIMIT = 0.03
         elif cfg.mode == "balanced":
             if k_env is None:
                 cfg.kelly_fraction = 0.60
             if c_env is None:
                 cfg.conf_threshold = 0.75
-            cfg.daily_loss_limit = 0.05
-            cfg.DAILY_LOSS_LIMIT = 0.05
         elif cfg.mode == "aggressive":
             if k_env is None:
                 cfg.kelly_fraction = 0.75
@@ -1198,6 +1205,7 @@ class TradingConfig:
             "STOP_LOSS": self.stop_loss,
             "TAKE_PROFIT": self.take_profit,
             "TAKE_PROFIT_FACTOR": self.take_profit_factor,
+            "TRAILING_FACTOR": getattr(self, "trailing_factor", 1.0),
             "LOOKBACK_DAYS": self.lookback_days,
             "MIN_SIGNAL_STRENGTH": self.min_signal_strength,
             "SCALING_FACTOR": self.scaling_factor,

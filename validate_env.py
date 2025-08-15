@@ -1,15 +1,10 @@
-import importlib.util
-import pathlib
-
-if __spec__ is None:  # pragma: no cover
-    __spec__ = importlib.util.spec_from_file_location("validate_env", pathlib.Path(__file__).resolve())
+from ai_trading.config import validate_environment
 
 
 def _main() -> None:
-    from ai_trading.config.management import TradingConfig
-    TradingConfig.from_env().validate_environment()
-    print("Environment OK")
+    validate_environment()
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     _main()
+

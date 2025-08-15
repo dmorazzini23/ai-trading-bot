@@ -8,40 +8,27 @@ Only re-export light symbols needed by production modules to avoid import-time h
 """
 from zoneinfo import ZoneInfo
 import pandas as pd
-# Keep this import small; base.py already imports get_settings safely.
-# AI-AGENT-REF: tolerate missing heavy dependencies
-try:
-    from .base import (
-        HAS_PANDAS,
-        EASTERN_TZ,
-        get_free_port,
-        get_pid_on_port,
-        is_market_holiday,
-        is_market_open,
-        is_weekend,
-        log_health_row_check,
-        log_warning,
-        model_lock,
-        portfolio_lock,
-        requires_pandas,
-        safe_to_datetime,
-        validate_ohlcv,
-        validate_ohlcv_basic,
-        health_check,
-        get_latest_close,
-        ensure_utc,
-        get_ohlcv_columns,
-    )
-except Exception:  # pragma: no cover - optional deps
-    HAS_PANDAS = False
-
-    def _stub(*args, **kwargs):
-        return None
-
-    get_free_port = get_pid_on_port = is_market_holiday = is_market_open = is_weekend = _stub
-    log_health_row_check = log_warning = model_lock = portfolio_lock = requires_pandas = _stub
-    safe_to_datetime = validate_ohlcv = validate_ohlcv_basic = health_check = get_latest_close = ensure_utc = get_ohlcv_columns = _stub
-    EASTERN_TZ = ZoneInfo("America/New_York")
+from .base import (
+    HAS_PANDAS,
+    EASTERN_TZ,
+    get_free_port,
+    get_pid_on_port,
+    is_market_holiday,
+    is_market_open,
+    is_weekend,
+    log_health_row_check,
+    log_warning,
+    model_lock,
+    portfolio_lock,
+    requires_pandas,
+    safe_to_datetime,
+    validate_ohlcv,
+    validate_ohlcv_basic,
+    health_check,
+    get_latest_close,
+    ensure_utc,
+    get_ohlcv_columns,
+)
 from .determinism import (
     ensure_deterministic_training,
     get_model_spec,
