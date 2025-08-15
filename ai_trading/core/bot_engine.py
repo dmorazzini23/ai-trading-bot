@@ -53,6 +53,17 @@ from pathlib import Path
 from typing import Any, Optional, Union
 from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 
+# AI-AGENT-REF: ensure pipeline import contract is enforced
+try:  # primary import path
+    import ai_trading.pipeline as pipeline  # type: ignore  # noqa: F401
+except ImportError as e1:  # pragma: no cover - handled in tests
+    try:
+        import pipeline as pipeline  # type: ignore  # noqa: F401
+    except ImportError as e2:  # pragma: no cover
+        raise ImportError(
+            "Failed to import pipeline via 'ai_trading.pipeline' or 'pipeline'"
+        ) from e2
+
 _log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
 
 # --- path helpers (no imports of heavy deps) ---
@@ -140,9 +151,18 @@ from importlib.util import find_spec as _find_spec
 def _alpaca_available() -> bool:
     names = ("alpaca_trade_api", "alpaca.trading", "alpaca.data", "alpaca")
     for n in names:
-        if n in sys.modules and sys.modules[n] is None:
+        mod = sys.modules.get(n)
+        if mod is None and n in sys.modules:
             return False
-    return any(_find_spec(n) is not None for n in names)
+        if mod is not None and getattr(mod, "__spec__", None) is None:
+            return False
+    for n in names:
+        try:
+            if _find_spec(n) is not None:
+                return True
+        except (ModuleNotFoundError, ValueError):
+            continue
+    return False
 
 
 ALPACA_AVAILABLE = _alpaca_available()

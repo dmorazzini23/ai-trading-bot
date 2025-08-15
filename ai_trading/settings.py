@@ -108,6 +108,8 @@ class Settings(BaseSettings):
     # loop control
     interval: int = Field(60, alias="AI_TRADING_INTERVAL")  # AI-AGENT-REF: interval alias
     iterations: int = Field(0, alias="AI_TRADING_ITERATIONS")  # AI-AGENT-REF: iterations alias
+    scheduler_iterations: int = Field(0, validation_alias="SCHEDULER_ITERATIONS")
+    scheduler_sleep_seconds: int = Field(60, validation_alias="SCHEDULER_SLEEP_SECONDS")
     seed: int = Field(42, alias="AI_TRADING_SEED")  # AI-AGENT-REF: seed alias
 
     # paths

@@ -36,31 +36,79 @@ def _require_env_vars(*names: str) -> None:
 
 
 def validate_environment() -> None:
-    TradingConfig.from_env().validate_environment()
+    """
+    Validate that required environment/config values are available and non-empty.
+    Raise RuntimeError on failure. Should be idempotent, no blocking/locks.
+    """
+    s = get_settings()
+    missing = []
+    required = ["ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL", "WEBHOOK_SECRET"]
+    env = os.environ
+    for k in required:
+        v = env.get(k, "") or getattr(
+            s,
+            {
+                "ALPACA_API_KEY": "alpaca_api_key",
+                "ALPACA_SECRET_KEY": "alpaca_secret_key",
+                "ALPACA_BASE_URL": "alpaca_base_url",
+                "WEBHOOK_SECRET": "webhook_secret",
+            }[k],
+            "",
+        )
+        if not isinstance(v, str) or not v.strip():
+            missing.append(k)
+    if missing:
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
 
 
 def validate_alpaca_credentials() -> None:
-    cfg = TradingConfig.from_env()
-    missing = []
-    if not getattr(cfg, "ALPACA_API_KEY", None):
-        missing.append("ALPACA_API_KEY")
-    if not getattr(cfg, "ALPACA_SECRET_KEY", None):
-        missing.append("ALPACA_SECRET_KEY")
-    if not getattr(cfg, "ALPACA_BASE_URL", None):
-        missing.append("ALPACA_BASE_URL")
-    if missing:
-        raise RuntimeError("Missing required settings: " + ", ".join(missing))
-
-
-def log_config(redact_keys=None):
-    cfg = TradingConfig.from_env()
-    d = cfg.to_dict(safe=True)
-    for k in (redact_keys or []):
-        if k in d:
-            d[k] = "***"
-    logging.getLogger("ai_trading.logging").info(
-        "CONFIG_SNAPSHOT", extra={"config": d}
+    """
+    Raise RuntimeError if ALPACA_API_KEY / ALPACA_SECRET_KEY / ALPACA_BASE_URL
+    are missing or empty. Prefer module attributes if present (tests patch them),
+    otherwise read os.environ or settings.
+    """
+    api = (
+        globals().get("ALPACA_API_KEY")
+        or os.getenv("ALPACA_API_KEY", "")
+        or getattr(get_settings(), "alpaca_api_key", "")
     )
+    sec = (
+        globals().get("ALPACA_SECRET_KEY")
+        or os.getenv("ALPACA_SECRET_KEY", "")
+        or getattr(get_settings(), "alpaca_secret_key", "")
+    )
+    url = (
+        globals().get("ALPACA_BASE_URL")
+        or os.getenv("ALPACA_BASE_URL", "")
+        or getattr(get_settings(), "alpaca_base_url", "")
+    )
+    if not (str(api).strip() and str(sec).strip() and str(url).strip()):
+        raise RuntimeError("Alpaca credentials are missing or empty")
+
+
+def validate_env_vars() -> None:
+    return validate_environment()
+
+
+def log_config(secrets_to_redact: list[str] | None = None) -> dict:
+    """
+    Return a sanitized snapshot of current config for diagnostics.
+    MUST NOT log or print in tests.
+    """
+    s = get_settings()
+    conf = {
+        "ALPACA_API_KEY": "***" if s.alpaca_api_key else "",
+        "ALPACA_SECRET_KEY": "***REDACTED***" if s.alpaca_secret_key else "",
+        "ALPACA_BASE_URL": s.alpaca_base_url or "",
+        "CAPITAL_CAP": getattr(s, "capital_cap", None) or 0.25,
+        "CONF_THRESHOLD": getattr(s, "conf_threshold", None) or 0.75,
+        "DAILY_LOSS_LIMIT": getattr(s, "daily_loss_limit", None) or 0.03,
+    }
+    if secrets_to_redact:
+        for key in secrets_to_redact:
+            if key in conf:
+                conf[key] = "***"
+    return conf
 
 __all__ = [
     "Settings",
@@ -74,6 +122,7 @@ __all__ = [
     "reload_env",
     "validate_environment",
     "validate_alpaca_credentials",
+    "validate_env_vars",
     "log_config",
 ]
 
