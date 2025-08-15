@@ -1,12 +1,12 @@
 from __future__ import annotations
-import pickle
+
+import joblib
+import pandas as pd
+import numpy as np
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
-import numpy as np
-import pandas as pd
 
-# AI-AGENT-REF: minimal ML model stub
 
 @dataclass
 class _DummyPipe:
@@ -28,50 +28,50 @@ class _DummyPipe:
 
 
 class MLModel:
-    def __init__(self, pipe: Any | None = None):
-        self.pipe = pipe or _DummyPipe()
+    def __init__(self, model: Any | None = None):
+        self.pipeline = model or _DummyPipe()
+        self._validate_model()
+
+    def _validate_model(self) -> None:
+        missing = [m for m in ("fit", "predict") if not hasattr(self.pipeline, m)]
+        if missing:
+            raise TypeError(
+                f"Model missing required methods: {', '.join(missing)}"
+            )
 
     def fit(self, X: Sequence, y: Sequence) -> "MLModel":
-        self.pipe.fit(X, y)
-        return self
+        return self.pipeline.fit(X, y)
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
-        if isinstance(df, pd.DataFrame) and df.isna().any().any():
+        if not isinstance(df, pd.DataFrame):
+            raise TypeError("df must be a pandas DataFrame")
+        if df.isna().any().any():
             raise ValueError("NaN values present")
-        return self.pipe.predict(df)
+        if not all(pd.api.types.is_numeric_dtype(t) for t in df.dtypes):
+            raise TypeError("Non-numeric data present")
+        return self.pipeline.predict(df)
 
     def save(self, path: str | Path) -> str:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("wb") as f:
-            pickle.dump(self.pipe, f)
+        joblib.dump(self.pipeline, path)
         return str(path)
 
     @classmethod
     def load(cls, path: str | Path) -> "MLModel":
-        with Path(path).open("rb") as f:
-            pipe = pickle.load(f)
-        return cls(pipe)
+        pipeline = joblib.load(path)
+        return cls(pipeline)
 
     @property
     def version(self) -> str:
-        v = getattr(self.pipe, "version", None)
+        v = getattr(self.pipeline, "version", None)
         return str(v) if v is not None else "unknown"
 
 
 def save_model(model: Any, path: str | Path) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as f:
-        pickle.dump(model, f)
+    joblib.dump(model, path)
 
 
 def load_model(path: str | Path) -> Any:
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(str(path))
-    with path.open("rb") as f:
-        return pickle.load(f)
+    return joblib.load(path)
 
 
 def train_model(X: Any, y: Any, algorithm: str = "dummy") -> MLModel:

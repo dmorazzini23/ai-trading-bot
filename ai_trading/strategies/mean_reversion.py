@@ -1,14 +1,22 @@
 from __future__ import annotations
-from dataclasses import dataclass
 import pandas as pd
 from .base import StrategySignal
 from ai_trading.logging import logger as log
 
 
-@dataclass
 class MeanReversionStrategy:
-    lookback: int = 5
-    z_entry: float = 1.0
+    def __init__(
+        self,
+        lookback: int = 5,
+        z_entry: float = 1.0,
+        *,
+        z: float | None = None,
+        **_: dict,
+    ) -> None:
+        if z is not None:
+            z_entry = z
+        self.lookback = lookback
+        self.z_entry = z_entry
 
     def _latest_stats(self, series: pd.Series, window: int):
         # AI-AGENT-REF: guard insufficient data

@@ -590,6 +590,41 @@ def retrain_meta_learner(
 
     # AI-AGENT-REF: Perform comprehensive data quality validation before training
     quality_report = validate_trade_data_quality(trade_log_path)
+
+    try:
+        if pd is None:
+            logger.error("pandas not available for meta learning")
+            return False
+        df = pd.read_csv(trade_log_path)
+    except (OSError, AttributeError) as exc:  # pragma: no cover - I/O failures
+        logger.error("Failed reading trade log: %s", exc, exc_info=True)
+        return False
+
+    has_required_cols = {"entry_price", "exit_price", "side"}.issubset(df.columns)
+    total_rows = len(df)
+    valid_prices = (
+        df[["entry_price", "exit_price"]]
+        .apply(pd.to_numeric, errors="coerce")
+        .notna()
+        .all(axis=1)
+        .sum()
+    )
+
+    quality_report.update(
+        {
+            "file_exists": bool(total_rows),
+            "has_valid_format": has_required_cols,
+            "row_count": total_rows,
+            "valid_price_rows": valid_prices,
+            "data_quality_score": (valid_prices / total_rows) if total_rows else 0.0,
+        }
+    )
+    if total_rows > 0 and "Trade log file is empty" in quality_report["issues"]:
+        try:
+            quality_report["issues"].remove("Trade log file is empty")
+        except ValueError:
+            pass
+
     logger.info(
         "META_LEARNING_QUALITY_CHECK",
         extra={
@@ -601,87 +636,19 @@ def retrain_meta_learner(
         },
     )
 
-    # Log any data quality issues
-    if quality_report["issues"]:
-        for issue in quality_report["issues"]:
-            logger.warning(f"META_LEARNING_DATA_ISSUE: {issue}")
+    for issue in quality_report["issues"]:
+        logger.warning(f"META_LEARNING_DATA_ISSUE: {issue}")
+    for rec in quality_report["recommendations"]:
+        logger.info(f"META_LEARNING_RECOMMENDATION: {rec}")
 
-    # Log recommendations
-    if quality_report["recommendations"]:
-        for rec in quality_report["recommendations"]:
-            logger.info(f"META_LEARNING_RECOMMENDATION: {rec}")
-
-    # Early exit if fundamental issues exist, but be more lenient for test data
-    if not quality_report["file_exists"]:
+    if not (
+        total_rows >= min_samples
+        and valid_prices >= min_samples
+        and has_required_cols
+    ):
         logger.error(
             "META_LEARNING_CRITICAL_ISSUES: Cannot proceed with training due to data quality issues"
         )
-        return False
-
-    # For test data or small datasets, be more lenient about format validation
-    if not quality_report["has_valid_format"]:
-        # Check if this might be simple test data
-        if quality_report["row_count"] > 0 and quality_report["row_count"] <= 10:
-            logger.warning(
-                "META_LEARNING_SIMPLE_DATA: Detected small dataset, attempting lenient parsing"
-            )
-            # Allow processing to continue for small test datasets
-        else:
-            logger.error(
-                "META_LEARNING_CRITICAL_ISSUES: Cannot proceed with training due to data quality issues"
-            )
-            return False
-
-    # Check if we have sufficient quality data - AI-AGENT-REF: Enhanced fallback with bootstrap data generation
-    if quality_report["valid_price_rows"] < min_samples:
-        logger.warning(
-            f"META_LEARNING_INSUFFICIENT_DATA: Only {quality_report['valid_price_rows']} valid rows, need {min_samples}"
-        )
-
-        # AI-AGENT-REF: Attempt bootstrap data generation if we have some data but not enough
-        if (
-            quality_report["valid_price_rows"] >= 3
-        ):  # Have some real data to bootstrap from
-            logger.info(
-                "META_LEARNING_BOOTSTRAP_ATTEMPT: Trying to generate bootstrap data for faster activation"
-            )
-            try:
-                _generate_bootstrap_training_data(trade_log_path, min_samples)
-                # Re-validate after bootstrap data generation
-                updated_quality = validate_trade_data_quality(trade_log_path)
-                if updated_quality["valid_price_rows"] >= min_samples:
-                    logger.info(
-                        f"META_LEARNING_BOOTSTRAP_SUCCESS: Now have {updated_quality['valid_price_rows']} valid rows"
-                    )
-                else:
-                    logger.warning(
-                        "META_LEARNING_BOOTSTRAP_INSUFFICIENT: Still insufficient data after bootstrap"
-                    )
-                    return False
-            except Exception as e:
-                logger.error(f"META_LEARNING_BOOTSTRAP_ERROR: {e}")
-                return False
-        elif quality_report["valid_price_rows"] == 0:
-            # No valid data at all, trigger fallback
-            _implement_fallback_data_recovery(trade_log_path, min_samples)
-            return False
-        else:
-            # Very little data (1-2 trades), not enough to bootstrap reliably
-            logger.info(
-                f"META_LEARNING_WAITING_FOR_MORE_DATA: Only {quality_report['valid_price_rows']} trades, waiting for at least 3 before bootstrap"
-            )
-            return False
-
-    if not Path(trade_log_path).exists():
-        logger.error("Training data not found: %s", trade_log_path)
-        return False
-    try:
-        if pd is None:
-            logger.error("pandas not available for meta learning")
-            return False
-        df = pd.read_csv(trade_log_path)
-    except (OSError, AttributeError) as exc:  # pragma: no cover - I/O failures
-        logger.error("Failed reading trade log: %s", exc, exc_info=True)
         return False
 
     # AI-AGENT-REF: Enhanced parsing for mixed audit/meta-learning log formats

@@ -20,7 +20,7 @@ if sys.version_info < (3, 12, 3):  # pragma: no cover - compat check
     logging.getLogger(__name__).warning("Running under unsupported Python version")
 
 from ai_trading.config.settings import get_settings as get_config_settings
-from ai_trading.settings import get_settings as get_runtime_settings  # AI-AGENT-REF: runtime settings
+from ai_trading.settings import get_settings  # AI-AGENT-REF: runtime settings
 from ai_trading.market import cache as mcache
 
 # Define logger early
@@ -54,7 +54,7 @@ except Exception:  # pragma: no cover
     _MET_LAT = _Noop()
 
 CFG = get_config_settings()
-S = get_runtime_settings()
+S = get_settings()
 BASE_DIR = Path(__file__).resolve().parents[1]  # AI-AGENT-REF: repo root for paths
 
 def abspath(fname: str) -> str:

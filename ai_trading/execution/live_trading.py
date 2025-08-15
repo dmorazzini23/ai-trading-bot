@@ -8,7 +8,7 @@ retry mechanisms, circuit breakers, and comprehensive monitoring.
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Optional, Dict, Any  # AI-AGENT-REF: typed helpers
+from typing import Any, Dict, Optional  # AI-AGENT-REF: typed helpers
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
@@ -161,11 +161,11 @@ class AlpacaExecutionEngine:
             symbol = _req_str("symbol", symbol)
             quantity = int(_pos_num("qty", quantity))
         except (ValueError, TypeError) as e:
-            _log.error(
+            logger.error(
                 "ORDER_INPUT_INVALID",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )
-            raise
+            return {"status": "error", "error": str(e), "order_id": None}
 
         start_time = time.time()
         order_data = {
@@ -226,11 +226,11 @@ class AlpacaExecutionEngine:
             quantity = int(_pos_num("qty", quantity))
             limit_price = _pos_num("limit_price", limit_price)
         except (ValueError, TypeError) as e:
-            _log.error(
+            logger.error(
                 "ORDER_INPUT_INVALID",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )
-            raise
+            return {"status": "error", "error": str(e), "order_id": None}
 
         start_time = time.time()
         order_data = {
@@ -288,11 +288,11 @@ class AlpacaExecutionEngine:
         try:  # AI-AGENT-REF: validate cancel inputs
             order_id = _req_str("order_id", order_id)
         except (ValueError, TypeError) as e:
-            _log.error(
+            logger.error(
                 "ORDER_INPUT_INVALID",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
             )
-            raise
+            return False
 
         logger.info(f"Cancelling order: {order_id}")
 
