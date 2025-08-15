@@ -10,6 +10,12 @@ from typing import Optional
 
 
 class Settings(BaseSettings):
+    # Finnhub API calls per minute (rate limit budget)
+    finnhub_rpm: int = Field(default=55, env="AI_TRADER_FINNHUB_RPM")
+    # Upper bound on trade submissions per day (rate limit)
+    max_trades_per_day: int = Field(default=200, env="AI_TRADER_MAX_TRADES_PER_DAY")
+    # Upper bound on trade submissions per hour (rate limit)
+    max_trades_per_hour: int = Field(default=30, env="AI_TRADER_MAX_TRADES_PER_HOUR")
     # Min confidence threshold
     conf_threshold: float = Field(default=0.8, env="AI_TRADER_CONF_THRESHOLD")
     # Min model buy score
@@ -134,3 +140,16 @@ def get_conf_threshold() -> float:
 
 def get_trade_cooldown_min() -> int:
     return int(get_settings().trade_cooldown_min)
+
+# ---- Lazy getters ----
+def get_max_trades_per_hour() -> int:
+    return int(get_settings().max_trades_per_hour)
+
+# ---- Lazy getters ----
+def get_max_trades_per_day() -> int:
+    return int(get_settings().max_trades_per_day)
+
+# ---- Lazy getters ----
+def get_finnhub_rpm() -> int:
+    return int(get_settings().finnhub_rpm)
+

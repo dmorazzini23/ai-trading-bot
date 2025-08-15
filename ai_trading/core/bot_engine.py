@@ -1,12 +1,14 @@
 from __future__ import annotations
-from ai_trading.settings import get_buy_threshold, get_capital_cap, get_conf_threshold, get_daily_loss_limit, get_disaster_dd_limit, get_dollar_risk_limit, get_max_drawdown_threshold, get_max_portfolio_positions, get_portfolio_drift_threshold, get_rebalance_interval_min, get_sector_exposure_cap, get_trade_cooldown_min
+from ai_trading.settings import get_buy_threshold, get_capital_cap, get_conf_threshold, get_daily_loss_limit, get_disaster_dd_limit, get_dollar_risk_limit, get_max_drawdown_threshold, get_max_portfolio_positions, get_portfolio_drift_threshold, get_rebalance_interval_min, get_sector_exposure_cap, get_trade_cooldown_min, get_max_trades_per_hour, get_max_trades_per_day, get_finnhub_rpm
 from ai_trading.settings import get_max_portfolio_positions
 from ai_trading.settings import get_disaster_dd_limit
+from enum import Enum
 
+
+# Rate limit for Finnhub (calls/min); resolved at import time via settings
+FINNHUB_RPM = get_finnhub_rpm()
 # (any existing comments or module docstring go below the future import)
-__all__ = ["pre_trade_health_check", "run_all_trades_worker", "BotState"]
-
-
+__all__ = ['pre_trade_health_check', 'run_all_trades_worker', 'BotState', 'BotMode']
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
 # Using a mutable dict to avoid fragile `global` declarations inside functions.
 _REGIME_INSUFFICIENT_DATA_WARNED = {"done": False}
@@ -249,6 +251,8 @@ def _get_memory_optimization():
     if S.enable_memory_optimization:
         try:
             from ai_trading.utils import memory_optimizer  # AI-AGENT-REF: stable import path
+
+# Rate limit for Finnhub (calls/min); resolved at import time via settings
         except Exception:
             def memory_profile(func):
                 return func
@@ -517,9 +521,15 @@ if "ALPACA_SECRET_KEY" in os.environ:
 config.reload_env()
 
 # BOT_MODE must be defined before any classes that reference it
-# REMOVED: BOT_MODE = CFG.bot_mode
-if 'BOT_MODE' not in globals() or BOT_MODE is None:
-    BOT_MODE = BotMode.BALANCED  # import-time safe default; runtime may override
+# Define BotMode and a safe default at import time. Runtime may override later.
+class BotMode(str, Enum):
+    AGGRESSIVE   = 'aggressive'
+    BALANCED     = 'balanced'
+    CONSERVATIVE = 'conservative'
+
+# Import-time safe default; runtime code may overwrite this
+BOT_MODE = BotMode.BALANCED
+
 import csv
 import json
 import logging
@@ -2298,7 +2308,6 @@ if not os.getenv("TESTING"):
 PACIFIC = ZoneInfo("America/Los_Angeles")
 PDT_DAY_TRADE_LIMIT = params.get("PDT_DAY_TRADE_LIMIT", 3)
 PDT_EQUITY_THRESHOLD = params.get("PDT_EQUITY_THRESHOLD", 25_000.0)
-# REMOVED: FINNHUB_RPM = CFG.finnhub_rpm
 
 # Regime symbols (makes SPY configurable)
 REGIME_SYMBOLS = ["SPY"]
@@ -2376,8 +2385,8 @@ TRADE_COOLDOWN = S.trade_cooldown  # AI-AGENT-REF: validated timedelta
 TRADE_COOLDOWN_MIN = S.trade_cooldown_min  # minutes
 
 # AI-AGENT-REF: Enhanced overtrading prevention with frequency limits
-MAX_TRADES_PER_HOUR = CFG.max_trades_per_hour  # limit high-frequency trading
-MAX_TRADES_PER_DAY = CFG.max_trades_per_day  # daily limit to prevent excessive trading
+MAX_TRADES_PER_HOUR = get_max_trades_per_hour()# limit high-frequency trading
+MAX_TRADES_PER_DAY = get_max_trades_per_day()# daily limit to prevent excessive trading
 TRADE_FREQUENCY_WINDOW_HOURS = 1  # rolling window for hourly limits
 
 # Loss streak kill-switch (managed via BotState)
