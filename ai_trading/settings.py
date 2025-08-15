@@ -10,6 +10,25 @@ from typing import Optional
 
 
 class Settings(BaseSettings):
+    # Min confidence threshold
+    conf_threshold: float = Field(default=0.8, env="AI_TRADER_CONF_THRESHOLD")
+    # Min model buy score
+    buy_threshold: float = Field(default=0.4, env="AI_TRADER_BUY_THRESHOLD")
+    # Max daily loss fraction before halt
+    daily_loss_limit: float = Field(default=0.03, env="AI_TRADER_DAILY_LOSS_LIMIT")
+    # Max running drawdown before action
+    max_drawdown_threshold: float = Field(default=0.08, env="AI_TRADER_MAX_DRAWDOWN_THRESHOLD")
+    # Rebalance drift threshold
+    portfolio_drift_threshold: float = Field(default=0.15, env="AI_TRADER_PORTFOLIO_DRIFT_THRESHOLD")
+    # Max fraction of equity at risk per trade
+    dollar_risk_limit: float = Field(default=0.05, env="AI_TRADER_DOLLAR_RISK_LIMIT")
+    # Max fraction of equity per new position
+    capital_cap: float = Field(default=0.04, env="AI_TRADER_CAPITAL_CAP")
+    # Max fraction of equity in one sector
+    sector_exposure_cap: float = Field(default=0.33, env="AI_TRADER_SECTOR_EXPOSURE_CAP")
+    # Upper bound on concurrent open positions
+    max_portfolio_positions: int = Field(default=10, env="AI_TRADER_MAX_PORTFOLIO_POSITIONS")
+    disaster_dd_limit: float = Field(default=0.25, env="AI_TRADER_DISASTER_DD_LIMIT")
     """Single source of truth for runtime configuration."""  # AI-AGENT-REF: runtime config model
 
     # loop control
@@ -70,3 +89,48 @@ def get_news_api_key() -> Optional[str]:
 def get_rebalance_interval_min() -> int:
     """Lazy accessor for rebalance interval."""  # AI-AGENT-REF: runtime rebalance interval
     return int(get_settings().rebalance_interval_min)
+
+# ---- Lazy getters (access only at runtime; never at module import) ----
+def get_disaster_dd_limit() -> float:
+    return float(get_settings().disaster_dd_limit)
+
+# ---- Lazy getters (access only at runtime; never at module import) ----
+def get_max_portfolio_positions() -> int:
+    return int(get_settings().max_portfolio_positions)
+
+
+
+def get_sector_exposure_cap() -> float:
+    return float(get_settings().sector_exposure_cap)
+
+
+def get_capital_cap() -> float:
+    return float(get_settings().capital_cap)
+
+
+def get_dollar_risk_limit() -> float:
+    return float(get_settings().dollar_risk_limit)
+
+
+def get_portfolio_drift_threshold() -> float:
+    return float(get_settings().portfolio_drift_threshold)
+
+
+def get_max_drawdown_threshold() -> float:
+    return float(get_settings().max_drawdown_threshold)
+
+
+def get_daily_loss_limit() -> float:
+    return float(get_settings().daily_loss_limit)
+
+
+def get_buy_threshold() -> float:
+    return float(get_settings().buy_threshold)
+
+
+def get_conf_threshold() -> float:
+    return float(get_settings().conf_threshold)
+
+
+def get_trade_cooldown_min() -> int:
+    return int(get_settings().trade_cooldown_min)
