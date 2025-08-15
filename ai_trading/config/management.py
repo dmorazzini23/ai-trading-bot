@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
+
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -1367,3 +1369,61 @@ def reload_env(env_file: str | os.PathLike[str] | None = None) -> None:
     for key, value in current_alpaca_vars.items():
         if value is None and key in os.environ:
             del os.environ[key]
+
+
+class TradingConfig(BaseModel):
+    """Simplified trading configuration with mode-based overrides."""
+
+    kelly_fraction: float = 0.6
+    conf_threshold: float = 0.75
+    daily_loss_limit: float = 0.03
+    capital_cap: float = 0.25
+    max_position_size: int = 8000
+    signal_confirmation_bars: int = 2
+    signal_period: int = 20
+    fast_period: int = 5
+    buy_threshold: float = 0.5
+    confirmation_count: int = 2
+    take_profit_factor: float = 2.0
+    trailing_factor: float = 1.0
+    max_drawdown_threshold: float = 0.2
+    dollar_risk_limit: float = 0.05
+    max_portfolio_risk: float = 0.1
+
+    @classmethod
+    def from_env(cls, mode: str) -> "TradingConfig":
+        """Return configuration overrides for a given trading ``mode``."""
+        mode = (mode or "").lower()
+        overrides = {
+            "conservative": {"kelly_fraction": 0.25, "conf_threshold": 0.85},
+            "balanced": {"kelly_fraction": 0.60, "conf_threshold": 0.75},
+            "aggressive": {"kelly_fraction": 0.75, "conf_threshold": 0.65},
+        }
+        base = cls()
+        if mode in overrides:
+            return base.copy(update=overrides[mode])
+        return base
+
+    def to_legacy_dict(self) -> dict[str, Any]:
+        """Return legacy UPPERCASE mapping for backward compatibility."""
+        return {
+            "KELLY_FRACTION": self.kelly_fraction,
+            "CONF_THRESHOLD": self.conf_threshold,
+            "DAILY_LOSS_LIMIT": self.daily_loss_limit,
+            "CAPITAL_CAP": self.capital_cap,
+            "MAX_POSITION_SIZE": self.max_position_size,
+            "SIGNAL_CONFIRMATION_BARS": self.signal_confirmation_bars,
+            "SIGNAL_PERIOD": self.signal_period,
+            "FAST_PERIOD": self.fast_period,
+            "BUY_THRESHOLD": self.buy_threshold,
+            "CONFIRMATION_COUNT": self.confirmation_count,
+            "TAKE_PROFIT_FACTOR": self.take_profit_factor,
+            "TRAILING_FACTOR": self.trailing_factor,
+            "MAX_DRAWDOWN_THRESHOLD": self.max_drawdown_threshold,
+            "DOLLAR_RISK_LIMIT": self.dollar_risk_limit,
+            "MAX_PORTFOLIO_RISK": self.max_portfolio_risk,
+        }
+
+    def get_legacy_params(self) -> dict[str, Any]:
+        """Alias for :meth:`to_legacy_dict` used by older code paths."""
+        return self.to_legacy_dict()

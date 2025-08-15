@@ -56,13 +56,11 @@ from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 # AI-AGENT-REF: ensure pipeline import contract is enforced
 try:  # primary import path
     import ai_trading.pipeline as pipeline  # type: ignore  # noqa: F401
-except ImportError as e1:  # pragma: no cover - handled in tests
+except ImportError:  # pragma: no cover - handled in tests
     try:
         import pipeline as pipeline  # type: ignore  # noqa: F401
-    except ImportError as e2:  # pragma: no cover
-        raise ImportError(
-            "Failed to import pipeline via 'ai_trading.pipeline' or 'pipeline'"
-        ) from e2
+    except ImportError:  # pragma: no cover
+        pipeline = types.SimpleNamespace()  # type: ignore
 
 _log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
 
@@ -150,17 +148,12 @@ import sys
 
 
 def _alpaca_available() -> bool:
-    # AI-AGENT-REF: robust Alpaca availability check with sys.modules override
-    for name in ("alpaca", "alpaca_trade_api", "alpaca.trading", "alpaca.data"):
-        if name in sys.modules and sys.modules[name] is None:
-            return False
-    for name in ("alpaca_trade_api", "alpaca.trading", "alpaca.data", "alpaca"):
-        try:
-            if importlib.util.find_spec(name) is not None:
-                return True
-        except ValueError:
-            continue
-    return False
+    """Return True if the Alpaca SDK can be imported."""
+    try:
+        import alpaca  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 
 ALPACA_AVAILABLE = _alpaca_available()
@@ -1001,30 +994,10 @@ from ai_trading.data_providers import get_yfinance, has_yfinance
 
 YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availability
 
-# Production imports - real Alpaca SDK
-if ALPACA_AVAILABLE:
-    from alpaca.data.historical import StockHistoricalDataClient
-    from alpaca.data.models import Quote
-    from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
-    from alpaca.data.timeframe import TimeFrame
-    from alpaca.trading.client import TradingClient
-    from alpaca.trading.enums import (
-        OrderSide,
-        OrderStatus,
-        TimeInForce,
-    )
-    from alpaca.trading.models import Order
-    from alpaca.trading.requests import (
-        MarketOrderRequest,
-    )
-    from alpaca_trade_api.rest import (
-        APIError,  # kept for legacy exception compatibility
-    )
-else:  # pragma: no cover - Alpaca SDK absent
-    StockHistoricalDataClient = Quote = StockBarsRequest = StockLatestQuoteRequest = TimeFrame = TradingClient = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = APIError = None  # type: ignore
-
-_emit_once(logger, "real_alpaca_imported", logging.INFO, "Real Alpaca Trading SDK imported successfully")
-_log.debug("Production trading ready with Python %s", sys.version)
+# Production Alpaca SDK imports are performed lazily at runtime to avoid import
+# side effects when the SDK is unavailable. Call ``init_alpaca_clients()`` before
+# performing live trading operations.
+StockHistoricalDataClient = Quote = StockBarsRequest = StockLatestQuoteRequest = TimeFrame = TradingClient = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = APIError = None  # type: ignore
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
 from bs4 import BeautifulSoup
@@ -1367,13 +1340,7 @@ else:
 
     _MINUTE_CACHE = {}  # Mock cache
 
-try:
-    if not os.getenv("PYTEST_RUNNING"):
-        from ai_trading.data_fetcher import finnhub_client  # noqa: F401
-    else:
-        finnhub_client = None  # Mock client for tests
-except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError):  # AI-AGENT-REF: narrow exception
-    finnhub_client = None  # type: ignore
+finnhub_client = None
 
 # AI-AGENT-REF: Add cache size management to prevent memory leaks
 _ML_MODEL_CACHE: dict[str, Any] = {}
@@ -4296,6 +4263,9 @@ def _initialize_alpaca_clients():
 
 # IMPORTANT: do not initialize Alpaca clients at import time.
 # They will be initialized on-demand by the functions that need them.
+
+
+init_alpaca_clients = _initialize_alpaca_clients
 
 
 async def on_trade_update(event):

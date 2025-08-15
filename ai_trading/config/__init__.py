@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 _LOCK_TIMEOUT = 30
 _ENV_LOCK = LockWithTimeout(_LOCK_TIMEOUT)
 _lock_state = threading.local()
+_CONFIG_LOGGED = False
 
 
 def _is_lock_held_by_current_thread() -> bool:
@@ -113,6 +114,8 @@ def log_config(secrets_to_redact: list[str] | None = None) -> dict:
         for key in secrets_to_redact:
             if key in conf:
                 conf[key] = "***"
+    global _CONFIG_LOGGED
+    _CONFIG_LOGGED = True
     return conf
 
 __all__ = [
