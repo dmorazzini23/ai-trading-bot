@@ -16,8 +16,6 @@ from ai_trading.config import Settings, get_settings as get_config
 from ai_trading.settings import get_settings  # AI-AGENT-REF: runtime env settings
 from ai_trading.utils import get_free_port, get_pid_on_port
 
-S = get_settings()  # AI-AGENT-REF: resolve runtime defaults once
-
 # AI-AGENT-REF: Import memory optimization only
 def get_memory_optimizer():
     from ai_trading.config import get_settings
@@ -235,6 +233,8 @@ def main() -> None:
         # Handle any other synchronization errors
         logger.error("Unexpected error during API startup synchronization: %s", e)
         raise RuntimeError(f"API startup synchronization failed: {e}")
+
+    S = get_settings()
 
     # CLI takes precedence; then settings
     iterations = args.iterations if args.iterations is not None else S.iterations

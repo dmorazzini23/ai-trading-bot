@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 
 from flask import Flask, jsonify
-from ai_trading.config.settings import get_settings
 
 
 def create_app():
@@ -19,6 +18,8 @@ def create_app():
 
 
 if __name__ == "__main__":
+    from ai_trading.config.settings import get_settings
+
     s = get_settings()
     port = int(s.api_port or 9001)  # AI-AGENT-REF: default Flask port fallback
     app = create_app()

@@ -12,20 +12,34 @@ import logging
 from functools import lru_cache
 from typing import Any
 
-from ai_trading.config.settings import get_settings
-
 logger = logging.getLogger(__name__)
 
 # Optional numba optimization based on settings
-S = get_settings()
-if S.enable_numba_optimization:
-    from numba import jit
-else:
-    # Fallback decorator when numba optimization is disabled
-    def jit(*args, **kwargs):
-        def decorator(func):
-            return func
-        return decorator
+try:  # pragma: no cover - optional dependency
+    from numba import jit as _numba_jit
+except Exception:  # pragma: no cover - numba not installed
+    _numba_jit = None
+
+
+def jit(*args, **kwargs):  # AI-AGENT-REF: runtime settings check
+    """Lazily apply numba JIT based on configuration."""
+
+    def decorator(func):
+        from functools import wraps
+
+        @wraps(func)
+        def wrapper(*f_args, **f_kwargs):
+            from ai_trading.config.settings import get_settings
+
+            if _numba_jit and getattr(
+                get_settings(), "enable_numba_optimization", False
+            ):
+                return _numba_jit(*args, **kwargs)(func)(*f_args, **f_kwargs)
+            return func(*f_args, **f_kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 _INDICATOR_CACHE: dict[tuple[str, Any], Any] = {}
