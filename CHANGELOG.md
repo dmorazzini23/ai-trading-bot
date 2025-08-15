@@ -29,6 +29,12 @@ All notable changes to this project will be documented in this file.
 - **Import Hardening**: Made `model_pipeline` imports robust in `ai_trading/core/bot_engine.py`
   - Package-first import with graceful fallback to legacy root import
   - Works both as package import and when executed from repo root
+- **Trading Loop**: guard missing Alpaca client and dedupe strategy logs
+- **Alpaca API**: fix submit/retry logic including 429 handling
+- **Config**: unify centralized defaults and add `from_optimization`
+- **Utils**: re-export `ensure_utc` and enforce type assertions
+- **validate_env**: support execution via `runpy.run_module`
+- **Settings**: centralize value normalization and eliminate `FieldInfo` leaks
 
 ### Added
 - **Parallel Predictions**: Replaced single-threaded prediction executor with auto-sized thread pool

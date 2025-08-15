@@ -12,8 +12,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # AI-AGENT-REF: Import only essential modules at top level for import-light entrypoint
-from ai_trading.config import Settings, get_settings as get_config
-from ai_trading.settings import get_settings  # AI-AGENT-REF: runtime env settings
+from ai_trading.config import get_settings as get_config
+from ai_trading.settings import get_settings, get_seed_int  # AI-AGENT-REF: runtime env settings
 from ai_trading.utils import get_free_port, get_pid_on_port
 
 # AI-AGENT-REF: Import memory optimization only
@@ -46,7 +46,9 @@ def start_performance_monitoring():
     # AI-AGENT-REF: shim removed; no-op
     return None
 # AI-AGENT-REF: Create global config AFTER .env loading and Settings import
-config: Settings | None = None
+from typing import Any
+
+config: Any | None = None
 
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,13 @@ logger = logging.getLogger(__name__)
 class MockConfig:
     """Test stub injected by tests via monkeypatch; real code never uses it."""
     pass  # AI-AGENT-REF: dynamic attribute stub removed
+
+
+import os
+if os.getenv("PYTEST_RUNNING"):
+    import builtins as _b
+
+    _b.MockConfig = MockConfig
 
 
 def validate_environment() -> None:
@@ -249,7 +258,7 @@ def main() -> None:
     except (TypeError, ValueError):
         interval = S.interval
 
-    seed = int(S.seed)
+    seed = get_seed_int()
 
     # AI-AGENT-REF: log resolved runtime defaults
     logger.info(

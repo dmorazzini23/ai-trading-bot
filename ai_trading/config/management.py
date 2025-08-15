@@ -673,7 +673,7 @@ class TradingConfig:
                  daily_loss_limit: float = 0.05,
                  entry_start_offset_min: int = 0,
                  entry_end_offset_min: int = 0,
-                 conf_threshold: float = 0.55,
+                 conf_threshold: float = 0.75,
                  buy_threshold: float = 0.50,
                  confirmation_count: int = 2,
                  # Required trading risk parameters
@@ -797,64 +797,152 @@ class TradingConfig:
         # read env safely; example pattern (adapt to your existing keys):
         import os
         getenv = os.getenv
-        from ai_trading.settings import (  # AI-AGENT-REF: canonical settings access
+        from ai_trading.settings import (
             get_settings as get_runtime_settings,
             get_max_drawdown_threshold,
             get_daily_loss_limit,
+            _to_int,
+            _to_float,
+            _to_bool,
+            _secret_to_str,
+            get_seed_int,
         )
         from ai_trading.config.settings import (
             get_settings as get_config_settings,
         )
-        # extract values (preserve your current logic; below is a template)
-        conf_threshold = float(getenv("CONF_THRESHOLD", overrides.get("conf_threshold", 0.55)))
-        buy_threshold  = float(getenv("BUY_THRESHOLD",  overrides.get("buy_threshold",  0.60)))
-        confirmation_count = int(getenv("CONFIRMATION_COUNT", overrides.get("confirmation_count", 2)))
-        
+        # extract values using normalization helpers
+        conf_threshold = _to_float(
+            getenv("CONF_THRESHOLD", overrides.get("conf_threshold", 0.55)),
+            overrides.get("conf_threshold", 0.55),
+        )
+        buy_threshold = _to_float(
+            getenv("BUY_THRESHOLD", overrides.get("buy_threshold", 0.60)),
+            overrides.get("buy_threshold", 0.60),
+        )
+        confirmation_count = _to_int(
+            getenv("CONFIRMATION_COUNT", overrides.get("confirmation_count", 2)), 2
+        )
+
         # Required trading risk parameters
-        capital_cap = float(getenv("CAPITAL_CAP", overrides.get("capital_cap", 0.04)))
-        dollar_risk_limit = float(getenv("DOLLAR_RISK_LIMIT", overrides.get("dollar_risk_limit", 0.05)))
-        max_position_size = float(getenv("MAX_POSITION_SIZE", overrides.get("max_position_size", 1.0)))
-        
+        capital_cap = _to_float(
+            getenv("CAPITAL_CAP", overrides.get("capital_cap", 0.04)),
+            overrides.get("capital_cap", 0.04),
+        )
+        dollar_risk_limit = _to_float(
+            getenv("DOLLAR_RISK_LIMIT", overrides.get("dollar_risk_limit", 0.05)),
+            overrides.get("dollar_risk_limit", 0.05),
+        )
+        max_position_size = _to_float(
+            getenv("MAX_POSITION_SIZE", overrides.get("max_position_size", 1.0)),
+            overrides.get("max_position_size", 1.0),
+        )
+
         # feature toggles
-        def _as_bool(x):
-            s = str(x).strip().lower()
-            return s in ("1", "true", "yes", "y", "on")
-        enable_finbert = _as_bool(getenv("ENABLE_FINBERT", overrides.get("enable_finbert", False)))
-        enable_sklearn = _as_bool(getenv("ENABLE_SKLEARN", overrides.get("enable_sklearn", False)))
-        intraday_lookback_minutes = int(
-            getenv("INTRADAY_LOOKBACK_MINUTES", overrides.get("intraday_lookback_minutes", 120))
+        enable_finbert = _to_bool(
+            getenv("ENABLE_FINBERT", overrides.get("enable_finbert", False)),
+            overrides.get("enable_finbert", False),
         )
-        data_warmup_lookback_days = int(
-            getenv("DATA_WARMUP_LOOKBACK_DAYS", overrides.get("data_warmup_lookback_days", 60))
+        enable_sklearn = _to_bool(
+            getenv("ENABLE_SKLEARN", overrides.get("enable_sklearn", False)),
+            overrides.get("enable_sklearn", False),
         )
-        disable_daily_retrain = _as_bool(
-            getenv("DISABLE_DAILY_RETRAIN", overrides.get("disable_daily_retrain", False))
+        intraday_lookback_minutes = _to_int(
+            getenv(
+                "INTRADAY_LOOKBACK_MINUTES",
+                overrides.get("intraday_lookback_minutes", 120),
+            ),
+            overrides.get("intraday_lookback_minutes", 120),
         )
-        REGIME_MIN_ROWS = int(
-            getenv("REGIME_MIN_ROWS", overrides.get("REGIME_MIN_ROWS", 200))
+        data_warmup_lookback_days = _to_int(
+            getenv(
+                "DATA_WARMUP_LOOKBACK_DAYS",
+                overrides.get("data_warmup_lookback_days", 60),
+            ),
+            overrides.get("data_warmup_lookback_days", 60),
+        )
+        disable_daily_retrain = _to_bool(
+            getenv(
+                "DISABLE_DAILY_RETRAIN",
+                overrides.get("disable_daily_retrain", False),
+            ),
+            overrides.get("disable_daily_retrain", False),
+        )
+        REGIME_MIN_ROWS = _to_int(
+            getenv("REGIME_MIN_ROWS", overrides.get("REGIME_MIN_ROWS", 200)), 200
         )
         # allocator/strategy fields (use overrides > env > defaults)
-        signal_confirm_bars = int(getenv("SIGNAL_CONFIRM_BARS", overrides.get("signal_confirm_bars", 2)))
-        delta_hold          = float(getenv("DELTA_HOLD",         overrides.get("delta_hold",          0.02)))
-        min_confidence      = float(getenv("MIN_CONFIDENCE",     overrides.get("min_confidence",      0.60)))
-        
+        signal_confirm_bars = _to_int(
+            getenv("SIGNAL_CONFIRM_BARS", overrides.get("signal_confirm_bars", 2)),
+            overrides.get("signal_confirm_bars", 2),
+        )
+        delta_hold = _to_float(
+            getenv("DELTA_HOLD", overrides.get("delta_hold", 0.02)),
+            overrides.get("delta_hold", 0.02),
+        )
+        min_confidence = _to_float(
+            getenv("MIN_CONFIDENCE", overrides.get("min_confidence", 0.60)),
+            overrides.get("min_confidence", 0.60),
+        )
+
         # Required new attributes from environment variables
         trading_mode = getenv("TRADING_MODE", overrides.get("trading_mode", "paper"))
-        alpaca_base_url = getenv("ALPACA_BASE_URL", overrides.get("alpaca_base_url", "https://paper-api.alpaca.markets"))
-        sleep_interval = float(getenv("SLEEP_INTERVAL", overrides.get("sleep_interval", 1.0)))
-        max_retries = int(getenv("MAX_RETRIES", overrides.get("max_retries", 3)))
-        backoff_factor = float(getenv("BACKOFF_FACTOR", overrides.get("backoff_factor", 2.0)))
-        max_backoff_interval = float(getenv("MAX_BACKOFF_INTERVAL", overrides.get("max_backoff_interval", 60.0)))
-        pct = float(getenv("PCT", overrides.get("pct", 0.05)))
+        alpaca_base_url = getenv(
+            "ALPACA_BASE_URL",
+            overrides.get("alpaca_base_url", "https://paper-api.alpaca.markets"),
+        )
+        sleep_interval = _to_float(
+            getenv("SLEEP_INTERVAL", overrides.get("sleep_interval", 1.0)),
+            overrides.get("sleep_interval", 1.0),
+        )
+        max_retries = _to_int(
+            getenv("MAX_RETRIES", overrides.get("max_retries", 3)),
+            overrides.get("max_retries", 3),
+        )
+        backoff_factor = _to_float(
+            getenv("BACKOFF_FACTOR", overrides.get("backoff_factor", 2.0)),
+            overrides.get("backoff_factor", 2.0),
+        )
+        max_backoff_interval = _to_float(
+            getenv("MAX_BACKOFF_INTERVAL", overrides.get("max_backoff_interval", 60.0)),
+            overrides.get("max_backoff_interval", 60.0),
+        )
+        pct = _to_float(
+            getenv("PCT", overrides.get("pct", 0.05)),
+            overrides.get("pct", 0.05),
+        )
         MODEL_PATH = getenv("MODEL_PATH", overrides.get("MODEL_PATH", None))
-        scheduler_iterations = int(getenv("SCHEDULER_ITERATIONS", overrides.get("scheduler_iterations", 0)))
-        scheduler_sleep_seconds = int(getenv("SCHEDULER_SLEEP_SECONDS", overrides.get("scheduler_sleep_seconds", 60)))
-        window = int(getenv("WINDOW", overrides.get("window", 20)))
-        enabled = _as_bool(getenv("ENABLED", overrides.get("enabled", True)))
+        scheduler_iterations = _to_int(
+            getenv("SCHEDULER_ITERATIONS", overrides.get("scheduler_iterations", 0)),
+            overrides.get("scheduler_iterations", 0),
+        )
+        scheduler_sleep_seconds = _to_int(
+            getenv(
+                "SCHEDULER_SLEEP_SECONDS",
+                overrides.get("scheduler_sleep_seconds", 60),
+            ),
+            overrides.get("scheduler_sleep_seconds", 60),
+        )
+        window = _to_int(
+            getenv("WINDOW", overrides.get("window", 20)),
+            overrides.get("window", 20),
+        )
+        enabled = _to_bool(
+            getenv("ENABLED", overrides.get("enabled", True)),
+            overrides.get("enabled", True),
+        )
         # Rate limiter configuration
-        capacity = int(getenv("CAPACITY", overrides.get("capacity", 100)))
-        refill_rate = float(getenv("REFILL_RATE", overrides.get("refill_rate", 10.0)))
-        queue_timeout = float(getenv("QUEUE_TIMEOUT", overrides.get("queue_timeout", 30.0)))
+        capacity = _to_int(
+            getenv("CAPACITY", overrides.get("capacity", 100)),
+            overrides.get("capacity", 100),
+        )
+        refill_rate = _to_float(
+            getenv("REFILL_RATE", overrides.get("refill_rate", 10.0)),
+            overrides.get("refill_rate", 10.0),
+        )
+        queue_timeout = _to_float(
+            getenv("QUEUE_TIMEOUT", overrides.get("queue_timeout", 30.0)),
+            overrides.get("queue_timeout", 30.0),
+        )
         # AI-AGENT-REF: ML model configuration and halt file from env
         ml_model_path = getenv("AI_TRADER_MODEL_PATH", overrides.get("ml_model_path"))
         ml_model_module = getenv("AI_TRADER_MODEL_MODULE", overrides.get("ml_model_module"))
@@ -921,35 +1009,63 @@ class TradingConfig:
         # AI-AGENT-REF: sync with canonical settings
         s_rt = get_runtime_settings()
         cfg.ALPACA_API_KEY = getattr(s_rt, "alpaca_api_key", cfg.ALPACA_API_KEY)
-        cfg.ALPACA_SECRET_KEY = getattr(
-            s_rt, "alpaca_secret_key_plain", cfg.ALPACA_SECRET_KEY
-        )
+        cfg.ALPACA_SECRET_KEY = _secret_to_str(
+            getattr(s_rt, "alpaca_secret_key", cfg.ALPACA_SECRET_KEY)
+        ) or cfg.ALPACA_SECRET_KEY
         cfg.ALPACA_BASE_URL = getattr(s_rt, "alpaca_base_url", cfg.alpaca_base_url)
         cfg.TRADING_MODE = getattr(s_rt, "bot_mode", cfg.trading_mode)
         cfg.trading_mode = cfg.TRADING_MODE  # AI-AGENT-REF: keep internal field synced
         cfg.TRADE_LOG_FILE = getattr(s_rt, "trade_log_file", TRADE_LOG_FILE)
         cfg.TIMEZONE = getattr(s_rt, "timezone", "UTC")
         cfg.MAX_DRAWDOWN_THRESHOLD = get_max_drawdown_threshold()
+        cfg.max_drawdown_threshold = cfg.MAX_DRAWDOWN_THRESHOLD
         cfg.DAILY_LOSS_LIMIT = get_daily_loss_limit()
+        cfg.daily_loss_limit = cfg.DAILY_LOSS_LIMIT
+        cfg.CAPITAL_CAP = capital_cap
+        cfg.capital_cap = cfg.CAPITAL_CAP
+        cfg.DOLLAR_RISK_LIMIT = dollar_risk_limit
+        cfg.dollar_risk_limit = cfg.DOLLAR_RISK_LIMIT
+        cfg.MAX_POSITION_SIZE = max_position_size
+        cfg.max_position_size = cfg.MAX_POSITION_SIZE
+        cfg.KELLY_FRACTION = cfg.kelly_fraction
+        cfg.CONF_THRESHOLD = cfg.conf_threshold
+        cfg.LIMIT_ORDER_SLIPPAGE = cfg.limit_order_slippage
+        cfg.POV_SLICE_PCT = cfg.pov_slice_pct
+        cfg.ENTRY_START_OFFSET_MIN = cfg.entry_start_offset_min
+        cfg.ENTRY_END_OFFSET_MIN = cfg.entry_end_offset_min
         cfg.NEWS_API_KEY = getattr(s_rt, "news_api_key", None)
-        cfg.SYSTEM_HEALTH_CHECK_INTERVAL = getattr(
-            s_rt, "system_health_check_interval", 60
+        cfg.SYSTEM_HEALTH_CHECK_INTERVAL = _to_int(
+            getattr(s_rt, "system_health_check_interval", 60), 60
         )
-        cfg.SYSTEM_HEALTH_ALERT_THRESHOLD = getattr(
-            s_rt, "system_health_alert_threshold", 3
+        cfg.SYSTEM_HEALTH_ALERT_THRESHOLD = _to_int(
+            getattr(s_rt, "system_health_alert_threshold", 3), 3
         )
-        cfg.SYSTEM_HEALTH_EXPORT_ENABLED = getattr(
-            s_rt, "system_health_export_enabled", False
+        cfg.SYSTEM_HEALTH_EXPORT_ENABLED = _to_bool(
+            getattr(s_rt, "system_health_export_enabled", False), False
         )
-        cfg.ORDER_MAX_RETRY_ATTEMPTS = getattr(s_rt, "order_max_retry_attempts", 3)
-        cfg.ORDER_TIMEOUT_SECONDS = getattr(s_rt, "order_timeout_seconds", 30)
-        cfg.ORDER_STALE_CLEANUP_INTERVAL = getattr(
-            s_rt, "order_stale_cleanup_interval", 600
+        cfg.ORDER_MAX_RETRY_ATTEMPTS = _to_int(
+            getattr(s_rt, "order_max_retry_attempts", 3), 3
         )
-        cfg.ORDER_FILL_RATE_TARGET = getattr(s_rt, "order_fill_rate_target", 0.95)
-        cfg.SENTIMENT_SUCCESS_RATE_TARGET = getattr(
-            s_rt, "sentiment_success_rate_target", 0.90
+        cfg.ORDER_TIMEOUT_SECONDS = _to_int(
+            getattr(s_rt, "order_timeout_seconds", 30), 30
         )
+        cfg.ORDER_STALE_CLEANUP_INTERVAL = _to_int(
+            getattr(s_rt, "order_stale_cleanup_interval", 600), 600
+        )
+        cfg.ORDER_FILL_RATE_TARGET = _to_float(
+            getattr(s_rt, "order_fill_rate_target", 0.95), 0.95
+        )
+        cfg.SENTIMENT_SUCCESS_RATE_TARGET = _to_float(
+            getattr(s_rt, "sentiment_success_rate_target", 0.90), 0.90
+        )
+
+        if cfg.mode == "conservative":
+            cfg.kelly_fraction = 0.25
+        elif cfg.mode == "balanced":
+            cfg.kelly_fraction = 0.60
+            cfg.conf_threshold = 0.75
+        elif cfg.mode == "aggressive":
+            cfg.kelly_fraction = 0.75
 
         s_cfg = get_config_settings()
 
@@ -958,7 +1074,7 @@ class TradingConfig:
         cfg.DISABLE_DAILY_RETRAIN = bool(getattr(s_cfg, "disable_daily_retrain", False))
 
         # --- Reproducibility ---
-        cfg.SEED = int(getattr(s_rt, "seed", 42))
+        cfg.SEED = get_seed_int(42)
 
         # --- Audit / logging ---
         cfg.TRADE_AUDIT_DIR = os.getenv("TRADE_AUDIT_DIR", "logs/audit")
@@ -1023,26 +1139,45 @@ class TradingConfig:
         if missing:
             raise RuntimeError(f"Missing required settings: {', '.join(missing)}")
 
+    @classmethod
+    def from_optimization(cls, params: dict[str, Any]):
+        cfg = cls()
+        for k, v in params.items():
+            if hasattr(cfg, k):
+                setattr(cfg, k, v)
+        cfg.KELLY_FRACTION = cfg.kelly_fraction
+        cfg.CONF_THRESHOLD = cfg.conf_threshold
+        cfg.DAILY_LOSS_LIMIT = cfg.daily_loss_limit
+        cfg.CAPITAL_CAP = cfg.capital_cap
+        cfg.DOLLAR_RISK_LIMIT = cfg.dollar_risk_limit
+        cfg.MAX_POSITION_SIZE = cfg.max_position_size
+        cfg.LIMIT_ORDER_SLIPPAGE = cfg.limit_order_slippage
+        cfg.POV_SLICE_PCT = cfg.pov_slice_pct
+        cfg.ENTRY_START_OFFSET_MIN = cfg.entry_start_offset_min
+        cfg.ENTRY_END_OFFSET_MIN = cfg.entry_end_offset_min
+        return cfg
+
     def get_legacy_params(self):
         """Return legacy parameters for backward compatibility."""
         return {
-            "mode": getattr(self, "mode", "balanced"),
-            "ALPACA_API_KEY": getattr(self, "ALPACA_API_KEY", "test_key"),
-            "ALPACA_SECRET_KEY": getattr(self, "ALPACA_SECRET_KEY", "test_secret"),
-            "trailing_factor": self.trailing_factor,
-            "kelly_fraction": self.kelly_fraction,
-            "max_position_size": self.max_position_size,
-            "stop_loss": self.stop_loss,
-            "take_profit": self.take_profit,
-            "take_profit_factor": self.take_profit_factor,
-            "lookback_days": self.lookback_days,
-            "min_signal_strength": self.min_signal_strength,
-            "scaling_factor": self.scaling_factor,
-            "limit_order_slippage": self.limit_order_slippage,
-            "pov_slice_pct": self.pov_slice_pct,
-            "daily_loss_limit": self.daily_loss_limit,
-            "entry_start_offset_min": self.entry_start_offset_min,
-            "entry_end_offset_min": self.entry_end_offset_min,
+            "KELLY_FRACTION": self.kelly_fraction,
+            "CONF_THRESHOLD": self.conf_threshold,
+            "DAILY_LOSS_LIMIT": self.daily_loss_limit,
+            "CAPITAL_CAP": self.capital_cap,
+            "DOLLAR_RISK_LIMIT": self.dollar_risk_limit,
+            "MAX_POSITION_SIZE": self.max_position_size,
+            "STOP_LOSS": self.stop_loss,
+            "TAKE_PROFIT": self.take_profit,
+            "TAKE_PROFIT_FACTOR": self.take_profit_factor,
+            "LOOKBACK_DAYS": self.lookback_days,
+            "MIN_SIGNAL_STRENGTH": self.min_signal_strength,
+            "SCALING_FACTOR": self.scaling_factor,
+            "LIMIT_ORDER_SLIPPAGE": self.limit_order_slippage,
+            "POV_SLICE_PCT": self.pov_slice_pct,
+            "ENTRY_START_OFFSET_MIN": self.entry_start_offset_min,
+            "ENTRY_END_OFFSET_MIN": self.entry_end_offset_min,
+            "TRADING_MODE": getattr(self, "trading_mode", "balanced"),
+            "ALPACA_BASE_URL": getattr(self, "alpaca_base_url", ""),
         }
 
 
@@ -1119,7 +1254,7 @@ def _warn_duplicate_env_keys() -> None:
 
 
 # Re-export settings components for direct import
-from .settings import Settings, get_settings
+from .settings import get_settings  # AI-AGENT-REF: avoid direct Settings import
 
 
 def validate_alpaca_credentials() -> None:

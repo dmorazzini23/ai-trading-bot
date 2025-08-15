@@ -144,11 +144,15 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
     retries = 0
+    use_kwargs = True
     while True:
         try:
-            resp = api.submit_order(**kwargs)
+            resp = api.submit_order(**kwargs) if use_kwargs else api.submit_order(order_data)
         except TypeError:
-            return api.submit_order(order_data)
+            if use_kwargs:
+                use_kwargs = False
+                continue
+            raise
         except Exception as e:
             status = getattr(getattr(e, "response", None), "status_code", None)
             retries += 1
@@ -156,7 +160,8 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
                 raise
             time.sleep(min(0.5 * retries, 1.0))
             continue
-        if getattr(resp, "status_code", 200) == 429:
+        code = getattr(resp, "status_code", 200)
+        if code == 429:
             retries += 1
             if retries > 2:
                 return resp

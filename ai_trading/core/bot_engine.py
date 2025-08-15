@@ -130,13 +130,20 @@ except Exception as e:  # noqa: BLE001 - best-effort import; we log below.
     warning_kv(_log, "RL_IMPORT_FAILED", extra={"detail": str(e)})
 
 logger = logging.getLogger("ai_trading.core.bot_engine")
-
 # AI-AGENT-REF: expose Alpaca availability without triggering client init
-try:  # pragma: no cover - detection only
-    import alpaca  # type: ignore  # noqa: F401
-    ALPACA_AVAILABLE = True
-except Exception:  # pragma: no cover - missing dependency
-    ALPACA_AVAILABLE = False
+from importlib.util import find_spec as _find_spec
+def _safe_find_spec(name: str):  # AI-AGENT-REF: guard polluted sys.modules
+    try:
+        return _find_spec(name)
+    except ValueError:
+        return None
+
+
+ALPACA_AVAILABLE = bool(
+    _safe_find_spec("alpaca_trade_api")
+    or _safe_find_spec("alpaca")
+    or _safe_find_spec("alpaca.trading")
+)
 
 
 def _sha256_file(path: str) -> str:
@@ -342,12 +349,15 @@ from ai_trading.config import management as config
 from ai_trading.settings import (
     get_news_api_key,
     get_settings as get_runtime_settings,
+    get_seed_int,
+    _secret_to_str,
 )  # AI-AGENT-REF: runtime env settings
 
 # Initialize settings once for global use
 CFG = get_config_settings()
 # AI-AGENT-REF: cached runtime settings for env aliases
 S = get_runtime_settings()
+SEED = get_seed_int()  # AI-AGENT-REF: deterministic seed from runtime settings
 from ai_trading.data_fetcher import (
     get_bars,
     get_bars_batch,
@@ -578,8 +588,6 @@ from datetime import time as dt_time
 from threading import Lock, Semaphore, Thread
 from typing import Any
 from zoneinfo import ZoneInfo
-SEED = S.seed  # AI-AGENT-REF: deterministic seed from runtime settings
-
 random.seed(SEED)
 # AI-AGENT-REF: guard numpy random seed for test environments
 if hasattr(np, "random"):
@@ -614,11 +622,8 @@ def _seed_torch_if_available(seed: int) -> None:
         pass
 
 
-RL_MODEL_PATH = (
-    (Path(BASE_DIR) / S.rl_model_path).resolve()
-    if getattr(S, "rl_model_path", None)
-    else None
-)  # AI-AGENT-REF: resolve RL model path
+_rl_path = _secret_to_str(getattr(S, "rl_model_path", None))
+RL_MODEL_PATH = (Path(BASE_DIR) / _rl_path).resolve() if _rl_path else None  # AI-AGENT-REF: resolve RL model path
 RL_AGENT: Optional[Any] = None
 if S.use_rl_agent and RL_MODEL_PATH:
     if RLTrader is not None:
@@ -1028,15 +1033,18 @@ else:
     def optimize_signals(*args, **kwargs):
         return args[0] if args else []  # Return signals as-is
 
-# AI-AGENT-REF: robust model_pipeline import with legacy fallback
-try:  # pragma: no cover - import path resolution
-    from ai_trading.pipeline import model_pipeline  # type: ignore
-except Exception as _pkg_err:  # pragma: no cover
-    try:
-        from pipeline import model_pipeline  # type: ignore
-    except Exception as _legacy_err:  # pragma: no cover
-        logger.error("model_pipeline import failed: %s", _pkg_err)
-        raise ImportError("model_pipeline import failed") from _legacy_err
+# AI-AGENT-REF: late import for model pipeline with legacy fallback
+def _import_model_pipeline():  # AI-AGENT-REF: import helper for tests
+    try:  # pragma: no cover - import path resolution
+        from ai_trading.pipeline import model_pipeline  # type: ignore
+        return model_pipeline
+    except Exception as _pkg_err:  # pragma: no cover
+        try:
+            from pipeline import model_pipeline  # type: ignore
+            return model_pipeline
+        except Exception as _legacy_err:  # pragma: no cover
+            logger.error("model_pipeline import failed: %s", _pkg_err)
+            raise ImportError("model_pipeline import failed") from _legacy_err
 
 # ML dependencies - sklearn is a hard dependency
 from sklearn.decomposition import PCA
@@ -1113,9 +1121,9 @@ def _ensure_alpaca_env_or_raise():
 
 def init_runtime_config():
     """Initialize runtime configuration and validate critical keys."""
-    from ai_trading.config import Settings
+    from ai_trading.config import get_settings as get_config_settings
 
-    cfg = Settings()
+    cfg = get_config_settings()
 
     # Validate critical keys at runtime, not import time
     global ALPACA_API_KEY, ALPACA_SECRET_KEY, BOT_MODE_ENV
@@ -1387,7 +1395,7 @@ def market_is_open(now: datetime | None = None) -> bool:
     except TimeoutError:
         _log.error("Market status check timed out, assuming market closed")
         return False
-    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
+    except (ImportError, FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error("Market status check failed: %s", e)
         return False
 
@@ -1485,7 +1493,7 @@ def get_latest_close(df: pd.DataFrame) -> float:
         _log.debug("get_latest_close returning: %s", result)
         return result
 
-    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
+    except (ImportError, FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning("get_latest_close exception: %s", e)
         return 0.0
 
@@ -1685,7 +1693,7 @@ def ensure_finbert(cfg=None):
         _finbert_tokenizer, _finbert_model = tok, mdl
         _emit_once(_log, "finbert_loaded", logging.INFO, "FinBERT loaded successfully")
         return _finbert_tokenizer, _finbert_model
-    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
+    except (ImportError, FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.error("FinBERT lazy-load failed: %s", e)
         return None, None
 # REMOVED: module-scope get_disaster_dd_limit() = CFG.disaster_dd_limit
@@ -4206,7 +4214,7 @@ def get_strategies():
             names = [default_cls.__name__]
 
     if names:
-        _log.info("Loaded strategies: %s", ", ".join(sorted(names)))
+        logger_once.info("Loaded strategies: %s", ", ".join(sorted(names)))
 
     return selected
 
@@ -4603,7 +4611,7 @@ def _ensure_data_fresh(symbols, max_age_seconds: int) -> None:
         from ai_trading.data_fetcher import (
             last_minute_bar_age_seconds,
         )  # type: ignore
-    except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
+    except (ImportError, FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
         _log.warning("Data freshness check unavailable; skipping", exc_info=e)
         return
     now_utc = utc_now_iso()
@@ -7847,11 +7855,11 @@ def online_update(state: BotState, symbol: str, X_new, y_new) -> None:
         return
     with model_lock:
         try:
-            model_pipeline.partial_fit(X_new, y_new)
+            _import_model_pipeline().partial_fit(X_new, y_new)
         except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             _log.error(f"Online update failed for {symbol}: {e}")
             return
-    pred = model_pipeline.predict(X_new)
+    pred = _import_model_pipeline().predict(X_new)
     online_error = float(np.mean((pred - y_new) ** 2))
     ml = _get_metrics_logger()  # AI-AGENT-REF: lazy metrics import
     ml.log_metrics(
@@ -9364,14 +9372,15 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
             .fillna(0)
             .values[:-1]
         )
+        mp = _import_model_pipeline()
         with model_lock:
             try:
                 if len(X_train) == 0:
                     _log.warning("DAILY_MODEL_TRAIN_SKIPPED_EMPTY")
                 else:
-                    model_pipeline.fit(X_train, y_train)
+                    mp.fit(X_train, y_train)
                     mse = float(
-                        np.mean((model_pipeline.predict(X_train) - y_train) ** 2)
+                        np.mean((mp.predict(X_train) - y_train) ** 2)
                     )
                     _log.info("TRAIN_METRIC", extra={"mse": mse})
             except (FileNotFoundError, PermissionError, IsADirectoryError, JSONDecodeError, ValueError, KeyError, TypeError, OSError) as e:  # AI-AGENT-REF: narrow exception
@@ -9380,7 +9389,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         date_str = datetime.now(UTC).strftime("%Y%m%d_%H%M")
         os.makedirs("models", exist_ok=True)
         path = f"models/sgd_{date_str}.pkl"
-        atomic_joblib_dump(model_pipeline, path)
+        atomic_joblib_dump(mp, path)
         _log.info(f"Model checkpoint saved: {path}")
 
         for f in os.listdir("models"):
@@ -9391,7 +9400,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
                 if datetime.now(UTC) - dt > timedelta(days=30):
                     os.remove(os.path.join("models", f))
 
-        batch_mse = float(np.mean((model_pipeline.predict(X_train) - y_train) ** 2))
+        batch_mse = float(np.mean((mp.predict(X_train) - y_train) ** 2))
         _get_metrics_logger().log_metrics(  # AI-AGENT-REF: lazy metrics import
             {
                 "timestamp": utc_now_iso(),
@@ -9406,7 +9415,7 @@ def load_or_retrain_daily(ctx: BotContext) -> Any:
         state.updates_halted = False
         state.rolling_losses.clear()
 
-    return model_pipeline
+    return mp
 
 
 def on_market_close() -> None:
@@ -10201,9 +10210,13 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             state._strategies_loaded = True
         try:
             # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
+            api = getattr(runtime, "api", None)
+            if not api or not hasattr(api, "list_open_orders"):
+                _log.warning("ctx.api is None - Alpaca trading client unavailable")
+                return
             try:
-                open_orders = runtime.api.list_open_orders()
-            except (APIError, TimeoutError, ConnectionError) as e:  # AI-AGENT-REF: tighten order check errors
+                open_orders = api.list_open_orders()
+            except (APIError, TimeoutError, ConnectionError, AttributeError) as e:  # AI-AGENT-REF: tighten order check errors
                 _log.debug(
                     "ORDER_CHECK_FAILED",
                     extra={"cause": e.__class__.__name__, "detail": str(e)},
