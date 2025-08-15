@@ -10,6 +10,7 @@ import logging
 import random
 import threading
 import time
+from ai_trading.utils import sleep as psleep
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -330,7 +331,7 @@ class RateLimiter:
 
         # Wait outside the lock
         self.logger.debug(f"Rate limiting {route}: waiting {wait_time:.2f}s")
-        time.sleep(wait_time)
+        psleep(wait_time)
 
         # Try again after waiting
         with self._lock:

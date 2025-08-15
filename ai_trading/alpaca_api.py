@@ -2,7 +2,7 @@
 from __future__ import annotations
 import asyncio
 import logging
-import time
+from ai_trading.utils import sleep as psleep, clamp_timeout
 import types
 import uuid
 from typing import Any, Optional
@@ -33,13 +33,14 @@ def _resolve_url(path_or_url: str) -> str:
         return _DATA_BASE + path_or_url
     return trading_base + path_or_url
 
-def alpaca_get(path_or_url: str, *, params: Optional[dict] = None, timeout: int = 10) -> Any:
+def alpaca_get(path_or_url: str, *, params: Optional[dict] = None, timeout: int | None = None) -> Any:
     """Tiny helper for authenticated GET to Alpaca endpoints."""
     from ai_trading.config.settings import get_settings
 
     S = get_settings()
     headers = getattr(S, "alpaca_headers", {})
     url = _resolve_url(path_or_url)
+    timeout = clamp_timeout(timeout, 10, 0.5)
     resp = requests.get(url, headers=headers, params=params or {}, timeout=timeout)
     resp.raise_for_status()
     ctype = resp.headers.get("content-type", "")
@@ -158,14 +159,14 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
             retries += 1
             if retries > 2 or (status not in (500, None) and str(e) != "err"):
                 raise
-            time.sleep(min(0.5 * retries, 1.0))
+            psleep(min(0.5 * retries, 1.0))
             continue
         code = getattr(resp, "status_code", 200)
         if code == 429:
             retries += 1
             if retries > 2:
                 return resp
-            time.sleep(min(0.5 * retries, 1.0))
+            psleep(min(0.5 * retries, 1.0))
             continue
         return resp
 

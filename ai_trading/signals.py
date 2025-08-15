@@ -4,6 +4,7 @@ import importlib
 import logging
 import os
 import time
+from ai_trading.utils import sleep as psleep, clamp_timeout
 from functools import lru_cache
 from typing import Any, Dict, Iterable  # AI-AGENT-REF: broaden typing for signals
 
@@ -117,14 +118,14 @@ def _fetch_api(url: str, retries: int = 3, delay: float = 1.0) -> dict:
     """Fetch JSON from an API with simple retry logic and backoff."""
     for attempt in range(1, retries + 1):
         try:
-            resp = requests.get(url, timeout=5)
+            resp = requests.get(url, timeout=clamp_timeout(5, 5, 0.5))
             resp.raise_for_status()
             return resp.json()
         except (
             requests.exceptions.RequestException
         ) as exc:  # pragma: no cover - network may be mocked
             logger.warning("API request failed (%s/%s): %s", attempt, retries, exc)
-            time.sleep(delay * attempt)
+            psleep(delay * attempt)
     return {}
 
 

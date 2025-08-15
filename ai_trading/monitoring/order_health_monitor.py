@@ -11,6 +11,7 @@ import json
 import logging
 import threading
 import time
+from ai_trading.utils import sleep as psleep
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -151,11 +152,11 @@ class OrderHealthMonitor:
                     self._order_metrics.append(metrics)
 
                 # Sleep until next check
-                time.sleep(self.cleanup_interval)
+                psleep(self.cleanup_interval)
 
             except Exception as e:
                 self.logger.error("Error in order monitoring loop: %s", e, exc_info=True)
-                time.sleep(10)  # Back off on errors
+                psleep(10)  # Back off on errors
 
     def _check_stale_orders(self) -> None:
         """Check for and handle stale orders."""

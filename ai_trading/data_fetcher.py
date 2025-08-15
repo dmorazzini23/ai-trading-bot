@@ -13,8 +13,27 @@ from collections.abc import Sequence
 from datetime import datetime, date, timezone, timedelta
 from typing import Any, Union
 
-import requests  # AI-AGENT-REF: ensure requests import for function annotations
+import requests
 from pathlib import Path
+
+from ai_trading.utils import sleep as psleep, clamp_timeout
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    wait_fixed,
+    retry_if_exception_type,
+    wait_random,
+)
+
+_TESTING = os.getenv("PYTEST_RUNNING", "").lower() in {"1", "true", "yes"} or os.getenv(
+    "TESTING", ""
+).lower() in {"1", "true", "yes"}
+
+_RETRY_STOP = stop_after_attempt(3 if not _TESTING else 2)
+_RETRY_WAIT = (
+    wait_exponential(multiplier=1, min=1, max=8) if not _TESTING else wait_fixed(0.05)
+)
 
 UTC = timezone.utc
 
@@ -93,15 +112,16 @@ def ensure_datetime(dt: date | datetime | "pd.Timestamp" | str) -> datetime:
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
             return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-        except ValueError as e:
-            logger.debug("ensure_datetime ISO parse failed for %r: %s", value, e)
+        except ValueError:
+            pass
         for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y%m%d"):
             try:
-                return datetime.strptime(value, fmt).replace(tzinfo=UTC)
+                parsed = datetime.strptime(value, fmt).replace(tzinfo=UTC)
+                return parsed
             except ValueError:
                 continue
         raise ValueError(
-            f"Invalid datetime string {value!r}; tried ISO, %Y-%m-%d, %Y-%m-%d %H:%M:%S, %Y%m%d"
+            f"Invalid datetime string {value!r}; tried ISO, %Y-%m-%d, %Y-%m-%d %H:%M:%S, %Y%m%d",
         )
     raise TypeError(f"Unsupported type for ensure_datetime: {type(dt)!r}")
 
@@ -312,14 +332,7 @@ def _get_finnhub_client():
 
 # AI-AGENT-REF: import pandas as hard dependency
 import pandas as pd
-from tenacity import (
-    RetryError,
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-    wait_random,
-)
+from tenacity import RetryError
 
 # Refresh environment in case this module is executed as a script
 # Note: config module is no longer imported; using settings instead
@@ -398,9 +411,10 @@ def _fetch_bars(
     headers = CFG.alpaca_headers  # AI-AGENT-REF: canonical Alpaca headers
     _log_http_request("GET", url, params, headers)
     delay = 1.0
+    timeout = clamp_timeout(None, 10, 0.5)
     for attempt in range(3):
         try:
-            resp = requests.get(url, params=params, headers=headers, timeout=10)
+            resp = requests.get(url, params=params, headers=headers, timeout=timeout)
             if (
                 resp.status_code == 400
                 and "invalid feed" in resp.text.lower()
@@ -410,7 +424,9 @@ def _fetch_bars(
                     "Alpaca invalid feed %s for %s; retrying with SIP", feed, symbol
                 )
                 params["feed"] = "sip"
-                resp = requests.get(url, params=params, headers=headers, timeout=10)
+                resp = requests.get(
+                    url, params=params, headers=headers, timeout=timeout
+                )
             break
         except requests.exceptions.RequestException as exc:
             logger.warning(
@@ -419,7 +435,7 @@ def _fetch_bars(
             if attempt == 2:
                 logger.exception("HTTP request error for %s", symbol, exc_info=exc)
                 raise DataFetchException(symbol, "alpaca", url, str(exc)) from exc
-            pytime.sleep(delay)
+            psleep(delay)
             delay *= 2
 
     _log_http_response(resp)
@@ -504,7 +520,7 @@ def get_last_available_bar(symbol: str) -> pd.DataFrame:
     return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
+@retry(stop=_RETRY_STOP, wait=_RETRY_WAIT)
 def get_historical_data(
     symbol: str,
     start_date: str | date | datetime | pd.Timestamp,
@@ -721,7 +737,7 @@ def get_historical_data(
     if df.empty:
         logger.warning(f"Empty primary data for {symbol}; falling back to Alpaca")
         for attempt in range(3):
-            pytime.sleep(0.5 * (attempt + 1))
+            psleep(0.5 * (attempt + 1))
             bars = _fetch(_DEFAULT_FEED)
             df = pd.DataFrame(bars)
             if not df.empty:
@@ -896,14 +912,20 @@ def fetch_daily_data_async(
     threads = [threading.Thread(target=worker, args=(s,)) for s in symbols]
     for t in threads:
         t.start()
+    deadline = 5.0 if not _TESTING else 0.5
     for t in threads:
-        t.join()
+        waited = 0.0
+        while t.is_alive() and waited < deadline:
+            psleep(0.05)
+            waited += 0.05
+        if t.is_alive():
+            logger.warning("fetch_daily_data_async thread still alive for %s", t)
     return results
 
 
 @retry(
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    stop=stop_after_attempt(3),
+    wait=_RETRY_WAIT,
+    stop=_RETRY_STOP,
     retry=retry_if_exception_type((APIError, KeyError, ConnectionError)),
     reraise=True,
 )
@@ -1283,7 +1305,7 @@ class FinnhubFetcher:
                 )
             # Sleep outside the lock to avoid blocking other threads
             if wait_secs is not None:
-                pytime.sleep(wait_secs)
+                psleep(wait_secs)
 
     def _parse_period(self, period: str) -> int:
         if period.endswith("mo"):
@@ -1295,8 +1317,8 @@ class FinnhubFetcher:
         raise ValueError(f"Unsupported period: {period}")
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=1, max=10) + wait_random(0.1, 1),
+        stop=_RETRY_STOP,
+        wait=_RETRY_WAIT + wait_random(0.1, 1),
         retry=retry_if_exception_type((RequestException, urllib3.exceptions.HTTPError)),
     )
     def fetch(

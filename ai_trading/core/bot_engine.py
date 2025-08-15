@@ -34,6 +34,8 @@ import atexit
 import io
 import inspect
 import logging
+import requests
+from ai_trading.utils import clamp_timeout  # AI-AGENT-REF: enforce request timeouts
 from ai_trading.logging import (
     get_logger,  # AI-AGENT-REF: use sanitizing adapter
     _get_metrics_logger,
@@ -161,6 +163,8 @@ ALPACA_AVAILABLE = (
     and _module_ok("alpaca.trading")
     and _module_ok("alpaca.data")
 )
+
+trading_client = None  # AI-AGENT-REF: defer Alpaca client init
 
 
 def _sha256_file(path: str) -> str:
@@ -4222,7 +4226,6 @@ def get_strategies():
 
 # AI-AGENT-REF: Defer credential validation to runtime instead of import-time
 # This prevents crashes during import when environment variables are missing
-trading_client = None
 data_client = None
 stream = None
 
@@ -4756,7 +4759,7 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
             f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
             f"&CIK={ticker}&type=8-K&count=5",
             headers={"User-Agent": "AI Trading Bot"},
-            timeout=10,
+            timeout=clamp_timeout(10, 10, 0.5),
         )
         r.raise_for_status()
 
@@ -4878,7 +4881,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
             f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
             f"&apiKey={api_key}"
         )
-        resp = requests.get(url, timeout=10)
+        resp = requests.get(url, timeout=clamp_timeout(10, 10, 0.5))
 
         if resp.status_code == 429:
             # AI-AGENT-REF: Enhanced rate limiting handling
@@ -5004,7 +5007,11 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
     Returns a list of dicts: {"date": datetime, "type": "buy"/"sell", "dollar_amount": float}.
     """
     url = f"https://www.sec.gov/cgi-bin/own-disp?action=getowner&CIK={ticker}&type=4"
-    r = requests.get(url, headers={"User-Agent": "AI Trading Bot"}, timeout=10)
+    r = requests.get(
+        url,
+        headers={"User-Agent": "AI Trading Bot"},
+        timeout=clamp_timeout(10, 10, 0.5),
+    )
     r.raise_for_status()
     soup = BeautifulSoup(r.content, "lxml")
     filings = []
@@ -9507,7 +9514,10 @@ def start_metrics_server(default_port: int = 9200) -> None:
             try:
                 import requests
 
-                resp = requests.get(f"http://localhost:{default_port}", timeout=2)
+                resp = requests.get(
+                    f"http://localhost:{default_port}",
+                    timeout=clamp_timeout(2, 10, 0.5),
+                )
                 if resp.ok:
                     _log.info(
                         "Metrics port %d already serving; reusing", default_port

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import logging
 import threading
-import time
 from threading import Thread
 
 # AI-AGENT-REF: Load .env BEFORE importing any heavy modules or Settings
@@ -14,7 +13,7 @@ load_dotenv()
 # AI-AGENT-REF: Import only essential modules at top level for import-light entrypoint
 from ai_trading.config import get_settings as get_config
 from ai_trading.settings import get_settings, get_seed_int  # AI-AGENT-REF: runtime env settings
-from ai_trading.utils import get_free_port, get_pid_on_port
+from ai_trading.utils import get_free_port, get_pid_on_port, sleep as psleep
 
 # AI-AGENT-REF: expose run_cycle for monkeypatching
 def _default_run_cycle():
@@ -291,7 +290,7 @@ def main() -> None:
         except Exception:  # pragma: no cover - log unexpected errors
             logger.exception("run_cycle failed")
         count += 1
-        time.sleep(int(max(1, interval)))
+        psleep(int(max(1, interval)))
 
 
 if __name__ == "__main__":
@@ -300,3 +299,4 @@ if __name__ == "__main__":
 
 from ai_trading.config import get_settings as get_config
 cfg = get_config()
+test_mode = getattr(cfg, "scheduler_iterations", 0) != 0
