@@ -29,6 +29,7 @@ try:
         validate_ohlcv_basic,
         health_check,
         get_latest_close,
+        ensure_utc,
     )
 except Exception:  # pragma: no cover - optional deps
     HAS_PANDAS = False
@@ -38,7 +39,7 @@ except Exception:  # pragma: no cover - optional deps
 
     get_free_port = get_pid_on_port = is_market_holiday = is_market_open = is_weekend = _stub
     log_health_row_check = log_warning = model_lock = portfolio_lock = requires_pandas = _stub
-    safe_to_datetime = validate_ohlcv = validate_ohlcv_basic = health_check = get_latest_close = _stub
+    safe_to_datetime = validate_ohlcv = validate_ohlcv_basic = health_check = get_latest_close = ensure_utc = _stub
     EASTERN_TZ = ZoneInfo("America/New_York")
 from .determinism import (
     ensure_deterministic_training,
@@ -75,4 +76,5 @@ __all__ = [
     "get_latest_close",
     "EASTERN_TZ",
     "health_check",
+    "ensure_utc",
 ]

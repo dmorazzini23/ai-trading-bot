@@ -4,9 +4,65 @@ from __future__ import annotations
 
 from functools import lru_cache
 from datetime import timedelta
-from pydantic import Field, field_validator, computed_field
+from typing import Any, Optional
+
+from pydantic import Field, SecretStr, field_validator, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from typing import Optional
+
+try:  # AI-AGENT-REF: tolerate pydantic internals missing
+    from pydantic.fields import FieldInfo
+except Exception:  # pragma: no cover
+    FieldInfo = object
+
+
+def _secret_to_str(val: Any) -> Optional[str]:
+    """Return a plain string for SecretStr or str; None if unset."""  # AI-AGENT-REF: safe secret unwrap
+    if val is None or isinstance(val, FieldInfo):
+        return None
+    if isinstance(val, SecretStr):
+        return val.get_secret_value()
+    if isinstance(val, str):
+        return val
+    return str(val)
+
+
+def _to_int(val: Any, default: int | None = None) -> int:
+    """Robust int conversion handling FieldInfo and bool."""  # AI-AGENT-REF: int normalization
+    if isinstance(val, FieldInfo) or val is None:
+        if default is None:
+            raise ValueError("int value missing")
+        return int(default)
+    if isinstance(val, bool):
+        return int(val)
+    try:
+        return int(val)
+    except Exception:
+        if default is None:
+            raise
+        return int(default)
+
+
+def _to_float(val: Any, default: float | None = None) -> float:
+    """Robust float conversion handling FieldInfo."""  # AI-AGENT-REF: float normalization
+    if isinstance(val, FieldInfo) or val is None:
+        if default is None:
+            raise ValueError("float value missing")
+        return float(default)
+    try:
+        return float(val)
+    except Exception:
+        if default is None:
+            raise
+        return float(default)
+
+
+def _to_bool(val: Any, default: bool | None = None) -> bool:
+    """Best effort bool conversion."""  # AI-AGENT-REF: bool normalization
+    if isinstance(val, FieldInfo) or val is None:
+        return bool(default) if default is not None else False
+    if isinstance(val, str):
+        return val.strip().lower() not in ("0", "false", "no", "")
+    return bool(val)
 
 
 class Settings(BaseSettings):
@@ -110,82 +166,94 @@ def get_rebalance_interval_min() -> int:
 
 # ---- Lazy getters (access only at runtime; never at module import) ----
 def get_disaster_dd_limit() -> float:
-    return float(get_settings().disaster_dd_limit)
+    return _to_float(getattr(get_settings(), "disaster_dd_limit", 0.25), 0.25)
 
 # ---- Lazy getters (access only at runtime; never at module import) ----
 def get_max_portfolio_positions() -> int:
-    return int(get_settings().max_portfolio_positions)
+    return _to_int(getattr(get_settings(), "max_portfolio_positions", 10), 10)
 
 
 
 def get_sector_exposure_cap() -> float:
-    return float(get_settings().sector_exposure_cap)
+    return _to_float(getattr(get_settings(), "sector_exposure_cap", 0.33), 0.33)
 
 
 def get_capital_cap() -> float:
-    return float(get_settings().capital_cap)
+    return _to_float(getattr(get_settings(), "capital_cap", 0.04), 0.04)
 
 
 def get_dollar_risk_limit() -> float:
-    return float(get_settings().dollar_risk_limit)
+    return _to_float(getattr(get_settings(), "dollar_risk_limit", 0.05), 0.05)
 
 
 def get_portfolio_drift_threshold() -> float:
-    return float(get_settings().portfolio_drift_threshold)
+    return _to_float(getattr(get_settings(), "portfolio_drift_threshold", 0.15), 0.15)
 
 
 def get_max_drawdown_threshold() -> float:
-    return float(get_settings().max_drawdown_threshold)
+    return _to_float(getattr(get_settings(), "max_drawdown_threshold", 0.08), 0.08)
 
 
 def get_daily_loss_limit() -> float:
-    return float(get_settings().daily_loss_limit)
+    return _to_float(getattr(get_settings(), "daily_loss_limit", 0.03), 0.03)
 
 
 def get_buy_threshold() -> float:
-    return float(get_settings().buy_threshold)
+    return _to_float(getattr(get_settings(), "buy_threshold", 0.4), 0.4)
 
 
 def get_conf_threshold() -> float:
-    return float(get_settings().conf_threshold)
+    return _to_float(getattr(get_settings(), "conf_threshold", 0.8), 0.8)
 
 
 def get_trade_cooldown_min() -> int:
-    return int(get_settings().trade_cooldown_min)
+    return _to_int(getattr(get_settings(), "trade_cooldown_min", 15), 15)
 
 # ---- Lazy getters ----
 def get_max_trades_per_hour() -> int:
-    return int(get_settings().max_trades_per_hour)
+    return _to_int(getattr(get_settings(), "max_trades_per_hour", 30), 30)
 
 # ---- Lazy getters ----
 def get_max_trades_per_day() -> int:
-    return int(get_settings().max_trades_per_day)
+    return _to_int(getattr(get_settings(), "max_trades_per_day", 200), 200)
 
 # ---- Lazy getters ----
 def get_finnhub_rpm() -> int:
-    return int(get_settings().finnhub_rpm)
+    return _to_int(getattr(get_settings(), "finnhub_rpm", 55), 55)
 
 
 def get_data_cache_enable() -> bool:
-    return bool(get_settings().data_cache_enable)
+    return _to_bool(getattr(get_settings(), "data_cache_enable", True), True)
 
 
 def get_data_cache_ttl_seconds() -> int:
-    return int(get_settings().data_cache_ttl_seconds)
+    return _to_int(getattr(get_settings(), "data_cache_ttl_seconds", 300), 300)
 
 
 def get_verbose_logging() -> bool:
-    return bool(get_settings().verbose_logging)
+    return _to_bool(getattr(get_settings(), "verbose_logging", False), False)
 
 
 def get_enable_plotting() -> bool:
-    return bool(get_settings().enable_plotting)
+    return _to_bool(getattr(get_settings(), "enable_plotting", False), False)
 
 
 def get_position_size_min_usd() -> float:
-    return float(get_settings().position_size_min_usd)
+    return _to_float(getattr(get_settings(), "position_size_min_usd", 0.0), 0.0)
 
 
 def get_volume_threshold() -> float:
-    return float(get_settings().volume_threshold)
+    return _to_float(getattr(get_settings(), "volume_threshold", 0.0), 0.0)
+
+
+def get_alpaca_secret_key_plain() -> Optional[str]:
+    """Return Alpaca secret key as plain string if present."""  # AI-AGENT-REF: helper for secrets
+    s = get_settings()
+    return _secret_to_str(getattr(s, "alpaca_secret_key", None))
+
+
+def get_seed_int(default: int = 42) -> int:
+    """Fetch deterministic seed as int."""  # AI-AGENT-REF: robust seed accessor
+    s = get_settings()
+    return _to_int(getattr(s, "seed", default), default)
 

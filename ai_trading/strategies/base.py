@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 
 # Use the centralized logger as per AGENTS.md
-from ai_trading.logging import logger
+from ai_trading.logging import logger, logger_once
 
 from ..core.enums import OrderSide, RiskLevel
 
@@ -122,7 +122,7 @@ class BaseStrategy(ABC):
         self.max_position_size = risk_level.max_position_size
         self.max_drawdown_threshold = risk_level.max_drawdown_threshold
 
-        logger.info(
+        logger_once.info(
             f"Strategy {self.name} ({self.strategy_id}) initialized with risk level {risk_level}"
         )
 

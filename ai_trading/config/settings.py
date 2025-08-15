@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from ai_trading.settings import _secret_to_str  # AI-AGENT-REF: centralized normalization
 
 
 TICKERS_FILE = os.getenv("AI_TRADER_TICKERS_FILE", "tickers.csv")
@@ -104,7 +105,7 @@ class Settings(BaseSettings):
 
     @property
     def alpaca_secret_key_plain(self) -> str:
-        return self.alpaca_secret_key.get_secret_value()
+        return _secret_to_str(self.alpaca_secret_key) or ""
 
     @property
     def alpaca_headers(self) -> dict[str, str]:
