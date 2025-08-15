@@ -56,9 +56,7 @@ logger = logging.getLogger(__name__)
 
 class MockConfig:
     """Test stub injected by tests via monkeypatch; real code never uses it."""
-
-    def __getattr__(self, name):  # pragma: no cover - simple stub
-        raise AttributeError(name)
+    pass  # AI-AGENT-REF: dynamic attribute stub removed
 
 
 def validate_environment() -> None:

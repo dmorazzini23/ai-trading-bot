@@ -233,31 +233,7 @@ else:
             self.FLASK_PORT = int(os.getenv("FLASK_PORT", "9001"))
             # AI-AGENT-REF: Increase default position limit for better portfolio utilization
             self.MAX_PORTFOLIO_POSITIONS = int(os.getenv("MAX_PORTFOLIO_POSITIONS", "20"))
-            
-        def __getattr__(self, name):
-            # AI-AGENT-REF: Dynamic fallback for any missing attributes
-            # Provide sensible defaults for common numeric fields
-            numeric_fields = [
-                'SEED', 'HEALTHCHECK_PORT', 'MIN_HEALTH_ROWS', 'MIN_HEALTH_ROWS_DAILY',
-                'RATE_LIMIT_BUDGET', 'SCHEDULER_SLEEP_SECONDS', 'POSITION_SCALE_FACTOR',
-                'VOLATILITY_LOOKBACK_DAYS', 'SIGNAL_CONFIRMATION_BARS', 'TRADE_COOLDOWN_MIN'
-            ]
-            float_fields = [
-                'BUY_THRESHOLD', 'LIMIT_ORDER_SLIPPAGE', 'DELTA_THRESHOLD', 'MIN_CONFIDENCE',
-                'ATR_MULTIPLIER', 'MAX_EXPOSURE', 'RISK_BUDGET'
-            ]
-            bool_fields = [
-                'RUN_HEALTHCHECK', 'USE_RL_AGENT', 'FORCE_TRADES', 'MEMORY_OPTIMIZED',
-                'DRY_RUN', 'SHADOW_MODE', 'ENABLE_CACHE'
-            ]
-            
-            if name.upper() in numeric_fields:
-                return 42  # Default numeric value
-            elif name.upper() in float_fields:
-                return 0.5  # Default float value
-            elif name.upper() in bool_fields:
-                return 0  # Default boolean (as int)
-            return os.getenv(name, "")
+            # AI-AGENT-REF: dynamic attribute fallback removed; explicit fields only
     
     settings = FallbackSettings()
     logger.warning("Using fallback settings - pydantic-settings not available")

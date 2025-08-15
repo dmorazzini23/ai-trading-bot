@@ -10960,9 +10960,9 @@ def main() -> None:
                 target=adaptive_risk_scaling, args=(ctx,), daemon=True
             ).start()
         )
-        schedule.every(CFG.rebalance_interval_min).minutes.do(
+        schedule.every(get_rebalance_interval_min()).minutes.do(
             lambda: Thread(target=maybe_rebalance, args=(ctx,), daemon=True).start()
-        )
+        )  # AI-AGENT-REF: standardize rebalance interval access
         schedule.every().day.at("23:55").do(
             lambda: Thread(target=check_disaster_halt, daemon=True).start()
         )
