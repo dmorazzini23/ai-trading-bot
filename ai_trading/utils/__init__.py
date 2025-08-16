@@ -6,13 +6,21 @@ from __future__ import annotations
 Unified utilities export layer.
 Only re-export light symbols needed by production modules to avoid import-time heaviness.
 """
+import os
 from zoneinfo import ZoneInfo
+
 import pandas as pd
+
 from .base import (
-    HAS_PANDAS,
     EASTERN_TZ,
+    HAS_PANDAS,
+    ensure_utc,
+    ensure_utc_index,
     get_free_port,
+    get_latest_close,
+    get_ohlcv_columns,
     get_pid_on_port,
+    health_check,
     is_market_holiday,
     is_market_open,
     is_weekend,
@@ -24,11 +32,6 @@ from .base import (
     safe_to_datetime,
     validate_ohlcv,
     validate_ohlcv_basic,
-    health_check,
-    get_latest_close,
-    ensure_utc,
-    get_ohlcv_columns,
-    ensure_utc_index,
 )
 from .determinism import (
     ensure_deterministic_training,
@@ -37,11 +40,13 @@ from .determinism import (
     set_random_seeds,
     unlock_model_spec,
 )
+from .process_manager import acquire_lock, file_lock, release_lock
 from .time import now_utc
-from .timing import sleep, clamp_timeout  # AI-AGENT-REF: test-aware timing helpers
-from .process_manager import acquire_lock, release_lock, file_lock
-from . import process_manager
+from .timing import clamp_timeout, sleep  # AI-AGENT-REF: test-aware timing helpers
 
+HTTP_TIMEOUT_S = float(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
+
+import ai_trading.utils.process_manager as process_manager  # noqa: E402
 
 __all__ = [
     "log_warning",
@@ -77,4 +82,5 @@ __all__ = [
     "get_ohlcv_columns",
     "ensure_utc_index",
     "process_manager",
+    "HTTP_TIMEOUT_S",
 ]
