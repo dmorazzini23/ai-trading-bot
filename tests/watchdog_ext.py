@@ -1,8 +1,10 @@
-import os
-import time
-import socket
-import faulthandler
 import contextlib
+import faulthandler
+import importlib
+import os
+import socket
+import sys
+import time
 
 import pytest
 
@@ -15,42 +17,61 @@ def _watchdog():
         yield
     finally:
         with contextlib.suppress(Exception):
-            faulthandler.cancel_dump_traceback_later()  # AI-AGENT-REF: ensure watchdog cleanup
+            faulthandler.cancel_dump_traceback_later()
 
 
 @pytest.fixture(autouse=True)
 def _short_sleep(monkeypatch):
-    orig = time.sleep
+    orig_sleep = time.sleep
 
     def fast_sleep(s):
-        return orig(0 if s <= 0 else min(s, 0.02))
+        return orig_sleep(0 if s <= 0 else min(s, 0.02))
 
     monkeypatch.setattr(time, "sleep", fast_sleep)
     yield
 
 
+def _resolve_requests_session():
+    """Locate requests.Session in a robust way."""  # AI-AGENT-REF: fallback lookup
+    try:
+        import requests  # noqa: F401
+    except Exception:
+        return None, None
+    Session = getattr(sys.modules["requests"], "Session", None)
+    if Session is None:
+        try:
+            sess_mod = importlib.import_module("requests.sessions")
+            Session = getattr(sess_mod, "Session", None)
+        except Exception:  # pragma: no cover - defensive
+            Session = None
+    return Session, sys.modules.get("requests")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _requests_default_timeout():
-    try:
-        import requests
-    except Exception:
-        # requests not present – nothing to do
+    Session, _ = _resolve_requests_session()
+    if Session is None:
+        sys.stderr.write(
+            "[watchdog_ext] Warning: could not locate requests.Session; "
+            "default-timeout patch disabled. Check for local module shadowing.\n"
+        )
         yield
         return
 
     default_timeout = float(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
-    orig_request = requests.Session.request
+
+    orig_request = Session.request
 
     def request_with_default_timeout(self, method, url, **kwargs):
         if "timeout" not in kwargs or kwargs["timeout"] is None:
             kwargs["timeout"] = default_timeout
         return orig_request(self, method, url, **kwargs)
 
-    requests.Session.request = request_with_default_timeout  # AI-AGENT-REF: manual patch to avoid session monkeypatch
+    Session.request = request_with_default_timeout  # AI-AGENT-REF: manual patch to inject default timeout
     try:
         yield
     finally:
-        requests.Session.request = orig_request  # AI-AGENT-REF: restore original
+        Session.request = orig_request  # AI-AGENT-REF: restore original request method
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -74,11 +95,13 @@ def _block_external_network():
             f"Set ALLOW_EXTERNAL_NETWORK=1 to override."
         )
 
-    socket.socket.connect = guarded_connect  # AI-AGENT-REF: manual patch to enforce network sandbox
+    socket.socket.connect = (
+        guarded_connect  # AI-AGENT-REF: manual patch to block external network
+    )
     try:
         yield
     finally:
-        socket.socket.connect = orig_connect  # AI-AGENT-REF: restore original
+        socket.socket.connect = orig_connect  # AI-AGENT-REF: restore network connect
 
 
 @pytest.fixture(scope="session", autouse=True)

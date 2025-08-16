@@ -9,6 +9,18 @@ import ai_trading.utils.http as http
 pytest_plugins = ("tests.watchdog_ext",)
 
 
+def _get_session_type():
+    """Resolve the requests Session type robustly."""  # AI-AGENT-REF: mirror plugin lookup
+    import importlib
+
+    import requests  # noqa: F401
+
+    Session = getattr(requests, "Session", None)
+    if Session is None:
+        Session = getattr(importlib.import_module("requests.sessions"), "Session", None)
+    return Session
+
+
 def test_httpsession_sets_default_timeout(monkeypatch):
     s = http.HTTPSession(timeout=7)
 
@@ -36,9 +48,11 @@ def test_requests_can_still_be_patched_via_session():
     even when the caller does not pass `timeout`.
     We avoid patching internals and instead mount a spy adapter to observe kwargs.
     """
-    import requests
     from requests.adapters import HTTPAdapter
     from requests.models import Response
+
+    Session = _get_session_type()
+    assert Session is not None, "requests Session type must be importable for this test"
 
     seen = {}
 
@@ -52,11 +66,15 @@ def test_requests_can_still_be_patched_via_session():
             resp.url = request.url
             return resp
 
-    s = requests.Session()
+    s = Session()
     s.mount("http://", SpyAdapter())
     s.mount("https://", SpyAdapter())
 
     # Do not pass timeout -> plugin should inject default
-    r = s.get("http://localhost/_probe_ok")  # AI-AGENT-REF: trigger plugin default timeout
+    r = s.get(
+        "http://localhost/_probe_ok"
+    )  # AI-AGENT-REF: trigger plugin default timeout
     assert r.status_code == 200
-    assert seen.get("timeout") is not None, "Default timeout should be injected by the plugin"
+    assert (
+        seen.get("timeout") is not None
+    ), "Default timeout should be injected by the plugin"
