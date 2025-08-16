@@ -122,6 +122,10 @@ class Settings(BaseSettings):
 
     # cooling
     trade_cooldown_min: int = Field(15, alias="TRADE_COOLDOWN_MIN")  # AI-AGENT-REF: cooldown minutes
+    health_tick_seconds: int = Field(
+        default=300, env="AI_TRADER_HEALTH_TICK_SECONDS"
+    )  # AI-AGENT-REF: scheduler heartbeat
+    cpu_only: bool = Field(default=False, validation_alias="CPU_ONLY")  # AI-AGENT-REF: ML device override
 
     # External APIs
     news_api_key: Optional[str] = None  # AI-AGENT-REF: optional News API key

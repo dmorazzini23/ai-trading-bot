@@ -52,7 +52,7 @@ import joblib  # AI-AGENT-REF: model loader
 import importlib as _importlib  # AI-AGENT-REF: explicit dynamic imports
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union  # AI-AGENT-REF: now_provider hooks
 from json import JSONDecodeError  # AI-AGENT-REF: narrow exception imports
 
 # AI-AGENT-REF: ensure pipeline import contract is enforced
@@ -1412,9 +1412,16 @@ is_market_open = market_is_open
 PORTFOLIO_FILE = "portfolio_snapshot.json"
 
 
-def save_portfolio_snapshot(portfolio: dict[str, int]) -> None:
+def save_portfolio_snapshot(
+    portfolio: dict[str, int],
+    now_provider: Optional[Callable[[], "datetime"]] = None,
+) -> None:
+    from datetime import UTC, datetime
+    from ai_trading.utils.timefmt import utc_now_iso_from
+
+    now_fn = now_provider or (lambda: datetime.now(UTC))
     data = {
-        "timestamp": utc_now_iso(),  # AI-AGENT-REF: Use UTC timestamp utility
+        "timestamp": utc_now_iso_from(now_fn()),  # AI-AGENT-REF: injectable clock
         "positions": portfolio,
     }
     with open(PORTFOLIO_FILE, "w") as f:
@@ -2195,7 +2202,30 @@ class BotState:
     )  # (symbol, timestamp)
 
 
-state = BotState()
+class _LazyState:
+    __slots__ = ("_inst",)  # AI-AGENT-REF: defer heavy state init
+
+    def __init__(self) -> None:
+        object.__setattr__(self, "_inst", None)
+
+    def _ensure(self):
+        inst = object.__getattribute__(self, "_inst")
+        if inst is None:
+            inst = BotState()
+            object.__setattr__(self, "_inst", inst)
+        return inst
+
+    def __getattr__(self, name):
+        return getattr(self._ensure(), name)
+
+    def __setattr__(self, name, value):
+        return setattr(self._ensure(), name, value)
+
+    def __repr__(self) -> str:  # AI-AGENT-REF: debug helper
+        return f"<Lazy(BotState) initialized={object.__getattribute__(self, '_inst') is not None}>"
+
+
+state = _LazyState()
 _log.info(f"Trading mode is set to '{state.mode_obj.mode}'")
 params = state.mode_obj.get_config()
 params.update(load_hyperparams())
@@ -7579,6 +7609,7 @@ def trade_logic(
     balance: float,
     model: Any,
     regime_ok: bool,
+    now_provider: Optional[Callable[[], "datetime"]] = None,
 ) -> bool:
     """
     Core per-symbol logic: fetch data, compute features, evaluate signals, enter/exit orders.
@@ -7619,7 +7650,9 @@ def trade_logic(
 
     current_qty = _current_position_qty(ctx, symbol)
 
-    now = datetime.now(UTC)
+    from datetime import UTC, datetime
+    now_fn = now_provider or (lambda: datetime.now(UTC))
+    now = now_fn()  # AI-AGENT-REF: injectable clock
 
     signal = "buy" if final_score > 0 else "sell" if final_score < 0 else "hold"
 
