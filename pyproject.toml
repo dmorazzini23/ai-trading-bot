@@ -5,7 +5,7 @@ description = "AI trading bot"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "pydantic>=2.6,<3",
-    "pydantic-settings>=2.2,<3", 
+    "pydantic-settings>=2.2,<3",
     "requests>=2.31,<3",
     "numpy>=1.24,<3.0",
     "pandas>=2",
@@ -72,7 +72,7 @@ ai-health = "ai_trading.__main__:run_healthcheck"
 [project.optional-dependencies]
 dev = [
   "pytest>=7.0.0",
-  "pytest-cov>=4.0.0", 
+  "pytest-cov>=4.0.0",
   "pytest-xdist>=3.0.0",
   "pytest-benchmark>=4.0.0",
   "pytest-asyncio>=0.20.2",
@@ -104,7 +104,9 @@ rl = [  # AI-AGENT-REF: optional RL dependencies
 ]
 
 [tool.ruff]
-exclude = ["tests/**/*.py"]  # Allow print in tests
+line-length = 100
+target-version = "py312"
+extend-select = ["I"]
 
 [tool.ruff.lint]
 select = [
@@ -126,3 +128,6 @@ ignore = [
     "S603",  # subprocess without shell=False check (handled by guard)
     "S607",  # subprocess calls with partial path
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101","D","ANN","PLR2004","T201"]

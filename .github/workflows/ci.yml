@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Compile
+        run: python - <<'PY'
+import subprocess, sys, pathlib
+files = [str(p) for p in pathlib.Path('.').rglob('*.py')]
+subprocess.check_call([sys.executable, '-m', 'py_compile', *files])
+PY
+      - name: Lint + Format + Types
+        run: |
+          ruff --version
+          ruff check .
+          ruff format --check .
+          mypy ai_trading
+      - name: Tests
+        run: pytest -q -n auto --maxfail=1

@@ -1,6 +1,5 @@
 import builtins
 import importlib
-import os
 import runpy
 import sys
 import types
@@ -8,11 +7,12 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-import pytest
 import pydantic
+import pytest
 
 try:
     import pydantic_settings  # noqa: F401
+
     import ai_trading.config as config
     from ai_trading import meta_learning
 except Exception:
@@ -21,13 +21,12 @@ except Exception:
 if not all(hasattr(pydantic, attr) for attr in ("AliasChoices", "model_validator")):
     pytest.skip("pydantic v2 required", allow_module_level=True)
 
+import ai_trading.main as main
 import ai_trading.ml_model as ml_model  # AI-AGENT-REF: canonical import
 import ai_trading.risk.engine as risk_engine  # AI-AGENT-REF: normalized import
-import ai_trading.main as main
 from ai_trading import utils
 from ai_trading.strategies.mean_reversion import MeanReversionStrategy
-
-
+from tests.mocks.app_mocks import MockConfig
 
 
 def test_config_missing_vars(monkeypatch):
@@ -48,32 +47,41 @@ def test_get_env_reload(monkeypatch):
 def test_create_flask_routes():
     """Health endpoints respond correctly."""
     flask_mod = types.ModuleType("flask")
+
     class DummyClient:
         def __init__(self, *a, **k):
             pass
+
         def get(self, *a, **k):
             return types.SimpleNamespace(status_code=200, json=lambda: {"status": "ok"})
+
     class Flask:
         def __init__(self, *a, **k):
             pass
+
         def route(self, *a, **k):
             def deco(f):
                 return f
+
             return deco
+
         def run(self, *a, **k):
             pass
+
         def test_client(self):
             return DummyClient()
+
     flask_mod.Flask = Flask
     flask_mod.jsonify = lambda **kw: kw
     flask_mod.testing = types.SimpleNamespace(FlaskClient=DummyClient)
-    sys.modules['flask'] = flask_mod
-    sys.modules['flask.testing'] = types.ModuleType('flask.testing')
-    sys.modules['flask.testing'].FlaskClient = DummyClient
-    sys.modules.pop('ai_trading.main', None)
-    sys.modules.pop('ai_trading.app', None)  # Also remove app module
-    main_mod = importlib.import_module('ai_trading.main')
+    sys.modules["flask"] = flask_mod
+    sys.modules["flask.testing"] = types.ModuleType("flask.testing")
+    sys.modules["flask.testing"].FlaskClient = DummyClient
+    sys.modules.pop("ai_trading.main", None)
+    sys.modules.pop("ai_trading.app", None)  # Also remove app module
+    main_mod = importlib.import_module("ai_trading.main")
     import ai_trading.app as app_mod
+
     app = app_mod.create_app()
     client = app.test_client()
     assert client is not None, "test_client() returned None"
@@ -89,10 +97,10 @@ def test_main_starts_api_thread(monkeypatch):
     monkeypatch.setenv("ALPACA_API_KEY", "test_key")
     # AI-AGENT-REF: Use environment variables to avoid hardcoded secrets
     monkeypatch.setenv("TEST_ALPACA_SECRET_KEY", "test_secret_key")
-    
+
     # AI-AGENT-REF: Mock the config object directly to ensure environment validation passes
     monkeypatch.setattr(main, "config", MockConfig())
-    
+
     called = {}
 
     class DummyThread:
@@ -110,9 +118,16 @@ def test_main_starts_api_thread(monkeypatch):
             return True
 
     monkeypatch.setattr(main, "Thread", DummyThread)
-    # AI-AGENT-REF: Fix lambda signature to accept ready_signal parameter  
-    monkeypatch.setattr(main, "start_api", lambda ready_signal=None: called.setdefault("api", True))
-    monkeypatch.setattr(main, "run_cycle", lambda: called.setdefault("cycle", 0) or called.update(cycle=called.get("cycle", 0) + 1))
+    # AI-AGENT-REF: Fix lambda signature to accept ready_signal parameter
+    monkeypatch.setattr(
+        main, "start_api", lambda ready_signal=None: called.setdefault("api", True)
+    )
+    monkeypatch.setattr(
+        main,
+        "run_cycle",
+        lambda: called.setdefault("cycle", 0)
+        or called.update(cycle=called.get("cycle", 0) + 1),
+    )
     monkeypatch.setattr(main.time, "sleep", lambda s: None)
 
     main.main()
@@ -139,14 +154,18 @@ def test_meta_load_checkpoint_missing(tmp_path, caplog):
 
 def test_meta_retrain_missing_file(tmp_path):
     """retrain_meta_learner returns False when data file missing."""
-    assert not meta_learning.retrain_meta_learner(str(tmp_path/"no.csv"))
+    assert not meta_learning.retrain_meta_learner(str(tmp_path / "no.csv"))
 
 
 def test_meta_retrain_insufficient(tmp_path):
     """retrain_meta_learner aborts when not enough rows."""
     data = tmp_path / "t.csv"
-    pd.DataFrame({"entry_price":[1],"exit_price":[2],"signal_tags":["a"],"side":["buy"]}).to_csv(data, index=False)
-    assert not meta_learning.retrain_meta_learner(str(data), str(tmp_path/"m.pkl"), str(tmp_path/"h.pkl"), min_samples=5)
+    pd.DataFrame(
+        {"entry_price": [1], "exit_price": [2], "signal_tags": ["a"], "side": ["buy"]}
+    ).to_csv(data, index=False)
+    assert not meta_learning.retrain_meta_learner(
+        str(data), str(tmp_path / "m.pkl"), str(tmp_path / "h.pkl"), min_samples=5
+    )
 
 
 def test_meta_update_weights_error(monkeypatch, tmp_path):
@@ -154,32 +173,41 @@ def test_meta_update_weights_error(monkeypatch, tmp_path):
     path = tmp_path / "w.csv"
     hist = tmp_path / "h.json"
     monkeypatch.setattr(meta_learning.Path, "exists", lambda self: False)
-    monkeypatch.setattr(meta_learning.np, "savetxt", lambda *a, **k: (_ for _ in ()).throw(IOError("fail")))
+    monkeypatch.setattr(
+        meta_learning.np,
+        "savetxt",
+        lambda *a, **k: (_ for _ in ()).throw(OSError("fail")),
+    )
     assert not meta_learning.update_weights(str(path), np.array([1.0]), {}, str(hist))
 
 
 def test_mlmodel_validation_errors():
     """Validation checks raise appropriate errors."""
-    model = ml_model.MLModel(types.SimpleNamespace(predict=lambda X: X, fit=lambda X,y: None))
+    model = ml_model.MLModel(
+        types.SimpleNamespace(predict=lambda X: X, fit=lambda X, y: None)
+    )
     with pytest.raises(TypeError):
         model.predict([1])
-    df = pd.DataFrame({"a":[np.nan]})
+    df = pd.DataFrame({"a": [np.nan]})
     with pytest.raises(ValueError):
         model.predict(df)
-    df = pd.DataFrame({"a":["x"]})
+    df = pd.DataFrame({"a": ["x"]})
     with pytest.raises(TypeError):
         model.predict(df)
 
 
 def test_mlmodel_fit_predict_exceptions(monkeypatch):
     """Exceptions during fit and predict are propagated."""
+
     class Pipe:
         def fit(self, X, y):
             raise RuntimeError("boom")
+
         def predict(self, X):
             raise RuntimeError("boom")
+
     m = ml_model.MLModel(Pipe())
-    df = pd.DataFrame({"a":[1.0]})
+    df = pd.DataFrame({"a": [1.0]})
     with pytest.raises(RuntimeError):
         m.fit(df, [1])
     m.pipeline = Pipe()
@@ -190,20 +218,24 @@ def test_mlmodel_fit_predict_exceptions(monkeypatch):
 def test_mlmodel_save_load_fail(monkeypatch, tmp_path):
     """Errors in save and load surface as exceptions."""
     m = ml_model.MLModel(types.SimpleNamespace())
-    monkeypatch.setattr(ml_model.joblib, "dump", lambda *a, **k: (_ for _ in ()).throw(IOError("fail")))
+    monkeypatch.setattr(
+        ml_model.joblib, "dump", lambda *a, **k: (_ for _ in ()).throw(OSError("fail"))
+    )
     with pytest.raises(IOError):
-        m.save(str(tmp_path/"m.pkl"))
+        m.save(str(tmp_path / "m.pkl"))
+
     def bad_open(*a, **k):
         raise FileNotFoundError
+
     monkeypatch.setattr(builtins, "open", bad_open)
     with pytest.raises(FileNotFoundError):
-        ml_model.MLModel.load(str(tmp_path/"m.pkl"))
+        ml_model.MLModel.load(str(tmp_path / "m.pkl"))
 
 
 def test_train_and_predict_helpers():
     """train_model and predict_model basic paths."""
-    model = ml_model.train_model([1,2,3], [1,2,3])
-    preds = ml_model.predict_model(model, [[1],[2],[3]])
+    model = ml_model.train_model([1, 2, 3], [1, 2, 3])
+    preds = ml_model.predict_model(model, [[1], [2], [3]])
     assert len(preds) == 3
     with pytest.raises(ValueError):
         ml_model.predict_model(None, [1])
@@ -214,7 +246,14 @@ def test_train_and_predict_helpers():
 def test_risk_engine_branches(monkeypatch):
     """Branches in position sizing and trading limits."""
     eng = risk_engine.RiskEngine()
-    sig = risk_engine.TradeSignal(symbol="A", side="buy", confidence=1.0, strategy="s", weight=1.0, asset_class="equity")
+    sig = risk_engine.TradeSignal(
+        symbol="A",
+        side="buy",
+        confidence=1.0,
+        strategy="s",
+        weight=1.0,
+        asset_class="equity",
+    )
     eng.strategy_limits["s"] = 0.5
     assert not eng.can_trade(sig)
     monkeypatch.setattr(eng, "check_max_drawdown", lambda api: False)
@@ -225,31 +264,43 @@ def test_risk_engine_branches(monkeypatch):
     eng.exposure["equity"] = 0.0
     assert eng._apply_weight_limits(sig) == 0.4
     res = risk_engine.calculate_position_size(
-        risk_engine.TradeSignal(symbol="A", side="buy", confidence=1.0, strategy="default", weight=0.1, asset_class="equity"), 
-        100, 10
+        risk_engine.TradeSignal(
+            symbol="A",
+            side="buy",
+            confidence=1.0,
+            strategy="default",
+            weight=0.1,
+            asset_class="equity",
+        ),
+        100,
+        10,
     )
     assert res == 10
 
 
 def test_runner_main_loop(monkeypatch):
     """Runner exits on SystemExit 0 from bot.main."""
-    bot_mod = types.ModuleType('bot')
+    bot_mod = types.ModuleType("bot")
     bot_mod.main = lambda: (_ for _ in ()).throw(SystemExit(0))
-    sys.modules['bot'] = bot_mod
+    sys.modules["bot"] = bot_mod
     module = runpy.run_module("runner", run_name="__main__")
 
 
 def test_mean_reversion_nan_and_short(monkeypatch):
     """NaN close and negative z triggers branches."""
     strat = MeanReversionStrategy(lookback=1, z=1.0)
+
     class Fetcher:
         def get_daily_df(self, ctx, sym):
-            return pd.DataFrame({"close":[np.nan]})
+            return pd.DataFrame({"close": [np.nan]})
+
     ctx = types.SimpleNamespace(tickers=["A"], data_fetcher=Fetcher())
     assert strat.generate(ctx) == []
+
     class Fetcher2:
         def get_daily_df(self, ctx, sym):
-            return pd.DataFrame({"close":[1.0, 1.0, 0.0]})
+            return pd.DataFrame({"close": [1.0, 1.0, 0.0]})
+
     strat2 = MeanReversionStrategy(lookback=3, z=1.0)
     ctx2 = types.SimpleNamespace(tickers=["A"], data_fetcher=Fetcher2())
     signals = strat2.generate(ctx2)
@@ -260,29 +311,37 @@ def test_utils_edge_cases(tmp_path, monkeypatch):
     """Cover utility helper edge cases."""
     # AI-AGENT-REF: Ensure FORCE_MARKET_OPEN doesn't interfere with market hours test
     monkeypatch.setenv("FORCE_MARKET_OPEN", "false")
-    
+
     assert utils.get_latest_close(pd.DataFrame()) == 0.0
-    df = pd.DataFrame({"close":[np.nan]})
+    df = pd.DataFrame({"close": [np.nan]})
     assert utils.get_latest_close(df) == 0.0
     mod = types.ModuleType("pandas_market_calendars")
-    setattr(mod, "get_calendar", None)
+    mod.get_calendar = None
     sys.modules["pandas_market_calendars"] = mod
-    assert not utils.is_market_open(datetime(2024,1,6,10, tzinfo=utils.EASTERN_TZ))
+    assert not utils.is_market_open(datetime(2024, 1, 6, 10, tzinfo=utils.EASTERN_TZ))
     with pytest.raises(AssertionError):
         utils.ensure_utc(1)
     port = utils.get_free_port(utils.get_free_port())
     assert isinstance(port, int)
-    assert utils.get_ohlcv_columns(pd.DataFrame({"x":[1]})) == []
+    assert utils.get_ohlcv_columns(pd.DataFrame({"x": [1]})) == []
 
 
 def test_validate_env_main(monkeypatch):
     """Running validate_env as script calls _main."""
     # AI-AGENT-REF: Mock environment variables to ensure validation passes
-    monkeypatch.setenv("WEBHOOK_SECRET", "fake_test_webhook_secret_that_is_at_least_32_characters_long_for_security_not_real")
-    monkeypatch.setenv("ALPACA_API_KEY", "FAKE_TEST_API_KEY_NOT_REAL_123456789012345")  # Realistic length
-    monkeypatch.setenv("ALPACA_SECRET_KEY", "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789012345678901234567890ABCDEFGHIJKLMN")  # Realistic length
+    monkeypatch.setenv(
+        "WEBHOOK_SECRET",
+        "fake_test_webhook_secret_that_is_at_least_32_characters_long_for_security_not_real",
+    )
+    monkeypatch.setenv(
+        "ALPACA_API_KEY", "FAKE_TEST_API_KEY_NOT_REAL_123456789012345"
+    )  # Realistic length
+    monkeypatch.setenv(
+        "ALPACA_SECRET_KEY",
+        "FAKE_TEST_SECRET_KEY_NOT_REAL_123456789012345678901234567890ABCDEFGHIJKLMN",
+    )  # Realistic length
     monkeypatch.setenv("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
-    
+
     # AI-AGENT-REF: Clear sys.argv to prevent pytest args from interfering with validate_env argument parsing
     original_argv = sys.argv[:]
     try:

@@ -11,12 +11,6 @@ import time as pytime  # AI-AGENT-REF: deterministic testing alias
 from datetime import datetime
 from threading import Lock
 
-# AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
-from ai_trading.utils import http
-
-# AI-AGENT-REF: Use centralized logger as per AGENTS.md
-from ai_trading.logging import logger
-
 from bs4 import BeautifulSoup
 
 # Retry mechanism
@@ -28,15 +22,25 @@ from tenacity import (
     wait_random,
 )
 
+# AI-AGENT-REF: Use centralized logger as per AGENTS.md
+from ai_trading.logging import logger
+
 # AI-AGENT-REF: Import config
 from ai_trading.settings import get_news_api_key, get_settings
-from ai_trading.utils.device import pick_torch_device, tensors_to_device  # AI-AGENT-REF: device helper
+
+# AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
+from ai_trading.utils import http
+from ai_trading.utils.device import (  # AI-AGENT-REF: device helper
+    pick_torch_device,
+    tensors_to_device,
+)
 
 DEVICE, _TORCH = pick_torch_device()
 
 # FinBERT model initialization
 try:
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
     _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
     _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
         "yiyanghkust/finbert-tone"
@@ -46,15 +50,10 @@ try:
     _HUGGINGFACE_AVAILABLE = True
     logger.info("FinBERT loaded successfully")
 except Exception:
-    class _MockFinBERT:
-        def __call__(self, *args, **kwargs):
-            return [{"label": "neutral", "score": 0.0}]
-
-    _FINBERT_TOKENIZER = _MockFinBERT()
-    _FINBERT_MODEL = _MockFinBERT()
+    _FINBERT_TOKENIZER = None
+    _FINBERT_MODEL = None
     _HUGGINGFACE_AVAILABLE = False
-    logger.info("Transformers unavailable; using local sentiment stub")
-
+    logger.info("Transformers unavailable; FinBERT features disabled")
 # Sentiment caching and circuit breaker - Enhanced for critical rate limiting fix
 SENTIMENT_TTL_SEC = 600  # 10 minutes normal cache
 SENTIMENT_RATE_LIMITED_TTL_SEC = 7200  # 2 hour cache when rate limited (increased)
@@ -237,13 +236,26 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             for filing in form4:
                 if filing["type"] == "buy" and filing["dollar_amount"] > 50_000:
                     form4_score += 0.1
-        except (requests.exceptions.RequestException, requests.exceptions.HTTPError) as e:
+        except (
+            requests.exceptions.RequestException,
+            requests.exceptions.HTTPError,
+        ) as e:
             logger.debug("Form4 fetch failed for %s - network error: %s", ticker, e)
         except (KeyError, ValueError, TypeError) as e:
-            logger.debug("Form4 fetch failed for %s - data parsing error: %s", ticker, e)
+            logger.debug(
+                "Form4 fetch failed for %s - data parsing error: %s", ticker, e
+            )
         except Exception as e:
-            logger.debug("Form4 fetch failed for %s - unexpected error: %s", ticker, e,
-                        extra={"component": "sentiment", "ticker": ticker, "error_type": "form4_fetch"})
+            logger.debug(
+                "Form4 fetch failed for %s - unexpected error: %s",
+                ticker,
+                e,
+                extra={
+                    "component": "sentiment",
+                    "ticker": ticker,
+                    "error_type": "form4_fetch",
+                },
+            )
 
         final_score = 0.8 * news_score + 0.2 * form4_score
         final_score = max(-1.0, min(1.0, final_score))
@@ -346,7 +358,6 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
     # - Social media sentiment (Twitter, Reddit)
     # - Financial blogs and analysis sites
     # - SEC filing sentiment analysis
-
 
     # Try environment-configured alternative sources
     alt_api_key = os.getenv("ALTERNATIVE_SENTIMENT_API_KEY")

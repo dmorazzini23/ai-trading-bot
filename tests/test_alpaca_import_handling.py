@@ -5,10 +5,11 @@ This test validates that the service can start even when alpaca imports fail
 with the specific Python 3.12 compatibility error.
 """
 
-import unittest
-from unittest.mock import patch, MagicMock
 import logging
-from ai_trading.broker.alpaca import MockTradingClient, MockOrderSide
+import unittest
+from unittest.mock import MagicMock, patch
+
+from tests.mocks.alpaca_mocks import MockOrderSide, MockTradingClient
 
 
 class TestAlpacaImportHandling(unittest.TestCase):
@@ -19,72 +20,77 @@ class TestAlpacaImportHandling(unittest.TestCase):
         # Capture log output
         self.log_output = []
         self.test_handler = logging.StreamHandler()
-        self.test_handler.emit = lambda record: self.log_output.append(record.getMessage())
-        
+        self.test_handler.emit = lambda record: self.log_output.append(
+            record.getMessage()
+        )
+
     def test_alpaca_import_failure_graceful_handling(self):
         """Test that alpaca import failures are handled gracefully."""
         # Simulate the specific error from the problem statement
         original_import = __import__
-        
+
         def mock_import(name, *args, **kwargs):
-            if name.startswith('alpaca.trading') or name.startswith('alpaca.data'):
+            if name.startswith("alpaca.trading") or name.startswith("alpaca.data"):
                 raise TypeError("'function' object is not iterable")
             return original_import(name, *args, **kwargs)
-        
-        with patch('builtins.__import__', side_effect=mock_import):
+
+        with patch("builtins.__import__", side_effect=mock_import):
             # This should simulate our conditional import pattern
             ALPACA_AVAILABLE = True
             TradingClient = None
-            
+
             try:
                 from alpaca.trading.client import TradingClient
+
                 self.fail("Expected alpaca import to fail")
             except TypeError as e:
                 ALPACA_AVAILABLE = False
                 self.assertIn("'function' object is not iterable", str(e))
-                
+
                 # Mock classes should be created
                 TradingClient = MockTradingClient
-            
+
             # Verify graceful degradation
             self.assertFalse(ALPACA_AVAILABLE)
             self.assertIsNotNone(TradingClient)
-            
+
             # Test mock client instantiation
             mock_client = TradingClient("fake_key", "fake_secret")
             self.assertIsInstance(mock_client, MockTradingClient)
 
     def test_check_alpaca_available_function(self):
         """Test the check_alpaca_available utility function behavior."""
+
         # This would require importing bot_engine, but we can test the pattern
         def check_alpaca_available_mock(alpaca_available, operation_name="operation"):
             """Mock implementation of check_alpaca_available."""
             if not alpaca_available:
                 return False
             return True
-        
+
         # Test when alpaca is not available
         result = check_alpaca_available_mock(False, "order submission")
         self.assertFalse(result)
-        
+
         # Test when alpaca is available
-        result = check_alpaca_available_mock(True, "order submission") 
+        result = check_alpaca_available_mock(True, "order submission")
         self.assertTrue(result)
 
     def test_safe_submit_order_with_unavailable_alpaca(self):
         """Test safe_submit_order handles unavailable alpaca gracefully."""
+
         def safe_submit_order_mock(alpaca_available, api, req):
             """Mock implementation of safe_submit_order with our checks."""
             if not alpaca_available:
                 return None
             # Would normally proceed with order submission
             return {"status": "mock_order"}
-        
+
         # Test with alpaca unavailable
         result = safe_submit_order_mock(False, None, None)
         self.assertIsNone(result)
-        
-        # Test with alpaca available  
+
+        # Test with alpaca available
         result = safe_submit_order_mock(True, MagicMock(), MagicMock())
         self.assertIsNotNone(result)
         self.assertEqual(result["status"], "mock_order")
@@ -94,7 +100,7 @@ class TestAlpacaImportHandling(unittest.TestCase):
         # Test mock trading client
         client = MockTradingClient("key", "secret", paper=True)
         self.assertIsInstance(client, MockTradingClient)
-        
+
         # Test mock enums
         order_side = MockOrderSide()
         self.assertEqual(order_side.BUY, "buy")
@@ -105,7 +111,7 @@ class TestAlpacaImportHandling(unittest.TestCase):
         # Simulate the service startup logic with our fix
         service_started = False
         alpaca_available = False
-        
+
         try:
             # Simulate alpaca import failure
             raise TypeError("'function' object is not iterable")
@@ -113,7 +119,7 @@ class TestAlpacaImportHandling(unittest.TestCase):
             # Service should continue with degraded mode
             alpaca_available = False
             service_started = True  # Service can still start
-        
+
         self.assertTrue(service_started)
         self.assertFalse(alpaca_available)
 
@@ -124,7 +130,7 @@ class TestAlpacaImportHandling(unittest.TestCase):
             raise TypeError("'function' object is not iterable")
         except TypeError as e:
             self.assertIn("'function' object is not iterable", str(e))
-        
+
         # Test general import errors
         try:
             raise ImportError("No module named 'alpaca'")
@@ -132,8 +138,8 @@ class TestAlpacaImportHandling(unittest.TestCase):
             self.assertIn("No module named", str(e))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Set up basic logging for test output
     logging.basicConfig(level=logging.INFO)
-    
+
     unittest.main(verbosity=2)

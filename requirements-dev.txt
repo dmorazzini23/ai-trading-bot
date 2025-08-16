@@ -5,7 +5,6 @@ pytest>=8.3
 pytest-xdist>=3.6
 pytest-cov>=5.0,<6.0
 flake8
-black
 isort
 pydantic>=2.6
 pydantic-settings>=2.2
@@ -50,3 +49,7 @@ pytest-asyncio>=0.23,<0.24
 anyio>=4,<5
 aiohttp>=3.9,<3.10
 websockets>=12,<13
+pre-commit>=3.7,<4
+ruff>=0.5,<1
+black>=24,<25
+mypy>=1.10,<2

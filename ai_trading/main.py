@@ -13,8 +13,13 @@ load_dotenv()
 
 # AI-AGENT-REF: Import only essential modules at top level for import-light entrypoint
 from ai_trading.config import get_settings as get_config
-from ai_trading.settings import get_settings, get_seed_int  # AI-AGENT-REF: runtime env settings
-from ai_trading.utils import get_free_port, get_pid_on_port, sleep as psleep
+from ai_trading.settings import (
+    get_seed_int,
+    get_settings,
+)  # AI-AGENT-REF: runtime env settings
+from ai_trading.utils import get_free_port, get_pid_on_port
+from ai_trading.utils import sleep as psleep
+
 
 # AI-AGENT-REF: expose run_cycle for monkeypatching
 def _default_run_cycle():
@@ -28,27 +33,33 @@ def _get_run_cycle():
     global run_cycle
     if run_cycle is _default_run_cycle:
         from ai_trading.runner import run_cycle as _runner_run_cycle
+
         run_cycle = _runner_run_cycle
     return run_cycle
+
 
 # AI-AGENT-REF: Import memory optimization only
 def get_memory_optimizer():
     from ai_trading.config import get_settings
+
     S = get_settings()
     if not S.enable_memory_optimization:
         return None
 
     from ai_trading.utils import memory_optimizer  # AI-AGENT-REF: stable import path
+
     return memory_optimizer
 
 
 def optimize_memory():
     from ai_trading.config import get_settings
+
     S = get_settings()
     if not S.enable_memory_optimization:
         return {}
 
     from ai_trading.utils import memory_optimizer  # AI-AGENT-REF: stable import path
+
     return memory_optimizer.report_memory_use()
 
 
@@ -60,6 +71,8 @@ def get_performance_monitor():
 def start_performance_monitoring():
     # AI-AGENT-REF: shim removed; no-op
     return None
+
+
 # AI-AGENT-REF: Create global config AFTER .env loading and Settings import
 from typing import Any
 
@@ -69,18 +82,6 @@ config: Any | None = None
 logger = logging.getLogger(__name__)
 
 
-class MockConfig:
-    """Test stub injected by tests via monkeypatch; real code never uses it."""
-    pass  # AI-AGENT-REF: dynamic attribute stub removed
-
-
-import os
-if os.getenv("PYTEST_RUNNING"):
-    import builtins as _b
-
-    _b.MockConfig = MockConfig
-
-
 def validate_environment() -> None:
     """Ensure required environment variables are present and dependencies are available."""
     cfg = get_config()
@@ -88,11 +89,11 @@ def validate_environment() -> None:
     if not cfg.webhook_secret:
         raise RuntimeError("WEBHOOK_SECRET is required")
     if not cfg.alpaca_api_key or not cfg.alpaca_secret_key_plain:
-        raise RuntimeError("ALPACA_API_KEY and ALPACA_SECRET_KEY are required")  # AI-AGENT-REF: check plain secret
+        raise RuntimeError(
+            "ALPACA_API_KEY and ALPACA_SECRET_KEY are required"
+        )  # AI-AGENT-REF: check plain secret
 
     # Check optional but important dependencies
-    import alpaca_trade_api
-    import alpaca
     # Validate data directories exist
     import os
 
@@ -175,6 +176,7 @@ def run_flask_app(port: int = 5000, ready_signal: threading.Event = None) -> Non
 
     # Defer app import to avoid import-time side effects
     import ai_trading.app as app
+
     application = app.create_app()
 
     # AI-AGENT-REF: Signal ready immediately after Flask app creation for faster startup
@@ -249,13 +251,14 @@ def main() -> None:
         logger.error("Unexpected error during API startup synchronization: %s", e)
         raise RuntimeError(f"API startup synchronization failed: {e}")
 
-    import os, time  # AI-AGENT-REF: scheduler config
+    import os  # AI-AGENT-REF: scheduler config
+
     S = get_settings()
     from ai_trading.utils.device import pick_torch_device  # AI-AGENT-REF: ML device log
+
     pick_torch_device()
     health_tick_seconds = int(
-        os.getenv("HEALTH_TICK_SECONDS")
-        or getattr(S, "health_tick_seconds", 300)
+        os.getenv("HEALTH_TICK_SECONDS") or getattr(S, "health_tick_seconds", 300)
     )
     last_health = time.monotonic()
 
@@ -318,6 +321,5 @@ if __name__ == "__main__":
     main()
 
 
-from ai_trading.config import get_settings as get_config
 cfg = get_config()
 test_mode = getattr(cfg, "scheduler_iterations", 0) != 0
