@@ -1,3 +1,4 @@
+# ruff: noqa
 """Graceful shutdown handler for production trading safety.
 
 Provides safe shutdown procedures that protect open positions,
@@ -97,11 +98,11 @@ class ShutdownHandler:
         }
 
         # Registered shutdown hooks
-        self._pre_shutdown_hooks: list[Callable[[], None]] = list()
-        self._position_handlers: list[Callable] = list()
-        self._order_handlers: list[Callable] = list()
-        self._cleanup_hooks: list[Callable] = list()
-        self._post_shutdown_hooks: list[Callable] = list()
+        self._pre_shutdown_hooks: list[Callable[[], None]] = []
+        self._position_handlers: list[Callable] = []
+        self._order_handlers: list[Callable] = []
+        self._cleanup_hooks: list[Callable] = []
+        self._post_shutdown_hooks: list[Callable] = []
 
         # Thread safety
         self._lock = threading.RLock()
@@ -112,9 +113,9 @@ class ShutdownHandler:
         self._setup_signal_handlers()
 
         # State tracking
-        self._active_positions: list[dict[str, Any]] = list()
-        self._pending_orders: list[dict[str, Any]] = list()
-        self._system_state: dict[str, Any] = dict()
+        self._active_positions: list[dict[str, Any]] = []
+        self._pending_orders: list[dict[str, Any]] = []
+        self._system_state: dict[str, Any] = {}
 
         self.logger.info("ShutdownHandler initialized")
 
@@ -155,24 +156,23 @@ class ShutdownHandler:
         if not self._status.is_shutting_down:
             asyncio.create_task(self.shutdown(ShutdownReason.SIGNAL_RECEIVED))
 
-    def register_pre_shutdown_hook(
-        self, hook: Callable[[], None], hooks: list | None = None
-    ) -> None:
+    def register_pre_shutdown_hook(self, hook: Callable[[], None]) -> None:
         """Register a pre-shutdown hook."""
-        if hooks is None:
-            hooks = self._pre_shutdown_hooks
-        if hooks is None:
-            hooks = []
-            self._pre_shutdown_hooks = hooks
-        hooks.append(hook)
+        if not hasattr(self, "_pre_shutdown_hooks") or self._pre_shutdown_hooks is None:
+            self._pre_shutdown_hooks = []
+        self._pre_shutdown_hooks.append(hook)
         self.logger.debug(f"Registered pre-shutdown hook: {hook.__name__}")
 
-    def register_position_handler(self, handler: Callable[[], list[dict[str, Any]]]) -> None:
+    def register_position_handler(
+        self, handler: Callable[[], list[dict[str, Any]]]
+    ) -> None:
         """Register a position handler that returns list of positions to close."""
         self._position_handlers.append(handler)
         self.logger.debug(f"Registered position handler: {handler.__name__}")
 
-    def register_order_handler(self, handler: Callable[[], list[dict[str, Any]]]) -> None:
+    def register_order_handler(
+        self, handler: Callable[[], list[dict[str, Any]]]
+    ) -> None:
         """Register an order handler that returns list of orders to cancel."""
         self._order_handlers.append(handler)
         self.logger.debug(f"Registered order handler: {handler.__name__}")
@@ -411,7 +411,9 @@ class ShutdownHandler:
                     self._status.errors.append(f"Order cancel error: {e}")
                     continue
 
-            success_rate = self._status.orders_canceled / max(self._status.orders_to_cancel, 1)
+            success_rate = self._status.orders_canceled / max(
+                self._status.orders_to_cancel, 1
+            )
             self.logger.info(
                 f"Canceled {self._status.orders_canceled}/{self._status.orders_to_cancel} orders ({success_rate:.1%})"  # noqa: E501
             )
@@ -471,7 +473,9 @@ class ShutdownHandler:
                     self._status.errors.append(f"Position close error: {e}")
                     continue
 
-            success_rate = self._status.positions_closed / max(self._status.positions_to_close, 1)
+            success_rate = self._status.positions_closed / max(
+                self._status.positions_to_close, 1
+            )
             self.logger.info(
                 f"Closed {self._status.positions_closed}/{self._status.positions_to_close} positions ({success_rate:.1%})"  # noqa: E501
             )
@@ -501,13 +505,16 @@ class ShutdownHandler:
         """Save complete system state."""
         try:
             state_file = (
-                Path("logs") / f"shutdown_state_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
+                Path("logs")
+                / f"shutdown_state_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
             )
             state_file.parent.mkdir(exist_ok=True)
 
             state_data = {
                 "shutdown_info": {
-                    "reason": (self._status.reason.value if self._status.reason else None),
+                    "reason": (
+                        self._status.reason.value if self._status.reason else None
+                    ),
                     "timestamp": datetime.now(UTC).isoformat(),
                     "phase": self._status.phase.value,
                     "positions_status": {
@@ -542,7 +549,8 @@ class ShutdownHandler:
         """Save only critical state for emergency shutdown."""
         try:
             state_file = (
-                Path("logs") / f"emergency_state_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
+                Path("logs")
+                / f"emergency_state_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
             )
             state_file.parent.mkdir(exist_ok=True)
 

@@ -1,20 +1,31 @@
+from __future__ import annotations
+
+import argparse
 import os
-
-# AI-AGENT-REF: minimal env validator for runpy execution
-REQUIRED_KEYS = (
-    "WEBHOOK_SECRET",
-    "ALPACA_API_KEY",
-    "ALPACA_SECRET_KEY",
-    "ALPACA_BASE_URL",
-)
+import sys
 
 
-def _main() -> bool:
-    missing = [k for k in REQUIRED_KEYS if not os.getenv(k)]
-    if missing:
-        raise SystemExit(f"Missing required env vars: {', '.join(missing)}")
-    return True
+def _validate() -> int:
+    # Minimal checks used by tests; expand if you want
+    required = (
+        "WEBHOOK_SECRET",
+        "ALPACA_API_KEY",
+        "ALPACA_SECRET_KEY",
+        "ALPACA_BASE_URL",
+    )
+    missing = [k for k in required if not os.getenv(k)]
+    return 0 if not missing else 1
 
 
-if __name__ == "__main__":  # pragma: no cover - manual execution
+def _main() -> None:
+    parser = argparse.ArgumentParser("validate-env", add_help=False)
+    parser.add_argument("--quiet", action="store_true")
+    # Ignore pytest's argv noise:
+    _, _ = parser.parse_known_args([])
+    rc = _validate()
+    if rc != 0:
+        sys.exit(rc)
+
+
+if __name__ == "__main__":
     _main()

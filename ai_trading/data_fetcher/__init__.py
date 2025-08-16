@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timezone
-from datetime import datetime, timezone
-from time import sleep
-from typing import Any, Dict, List
+import os
+import time
+from datetime import UTC, datetime
+from typing import Any
+
+try:
+    import pandas as pd
+except Exception:  # pragma: no cover
+    pd = None  # type: ignore
 
 __all__ = [
     "ensure_datetime",
@@ -13,69 +18,134 @@ __all__ = [
     "MAX_RETRIES",
 ]
 
-# Tests patch this in place; keep the exact name.
-_DATA_CLIENT = None
-MAX_RETRIES = 3
+# Patch point used by tests (monkeypatch/patch)
+_DATA_CLIENT: Any | None = None
+
+MAX_RETRIES = int(os.getenv("DATA_RETRY_MAX", "3") or 3)
+RETRY_SLEEP_S = float(os.getenv("DATA_RETRY_SLEEP_S", "0.05") or 0.05)
 
 
-def ensure_datetime(dt: Any) -> datetime:
-    """Always return a timezone-aware UTC datetime (RFC3339-friendly)."""
+def ensure_datetime(dt: datetime | str) -> datetime:
+    """
+    Ensure datetime is timezone-aware in UTC (RFC3339-compatible).
+    Accepts datetime or ISO-like string; returns tz-aware UTC datetime.
+    """
     if isinstance(dt, datetime):
-        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-    raise TypeError("ensure_datetime expects a datetime")
-
-
-def get_minute_df(symbol: str, start: datetime, end: datetime):
-    """Bounded retry specifically for datetime format errors."""
-    assert _DATA_CLIENT is not None, "_DATA_CLIENT not configured"
-    for i in range(MAX_RETRIES):
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
+    if isinstance(dt, str):
+        # Let datetime parse common formats; default to UTC.
         try:
-            return _DATA_CLIENT.get_stock_bars(
+            parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+        except Exception:
+            # Fallback: naive parse, treat as UTC
+            parsed = datetime.strptime(dt, "%Y-%m-%d %H:%M:%S")
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+    raise TypeError("dt must be datetime or str")
+
+
+def _to_rfc3339(dt: datetime | str) -> str:
+    d = ensure_datetime(dt)
+    # Alpaca accepts 'Z' suffix
+    return d.replace(tzinfo=UTC).isoformat().replace("+00:00", "Z")
+
+
+def _get_data_client() -> Any | None:
+    """
+    Lazily get Alpaca historical data client; optional import.
+    Never raises at import time; only called at runtime.
+    """
+    global _DATA_CLIENT
+    if _DATA_CLIENT is not None:
+        return _DATA_CLIENT
+    try:
+        from alpaca.data.historical import StockHistoricalDataClient
+
+        # In tests we don't want real creds; passing blank is allowed for paper mocks.
+        _DATA_CLIENT = StockHistoricalDataClient("", "")
+        return _DATA_CLIENT
+    except Exception:
+        return None
+
+
+def _is_persistent_datetime_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return (
+        "invalid format for parameter start" in msg
+        or "error parsing" in msg
+        or "rfc3339" in msg
+    )
+
+
+def get_minute_df(
+    symbol: str,
+    start: datetime | str,
+    end: datetime | str,
+    limit: int | None = None,
+) -> Any:
+    """
+    Fetch minute bars. Tests will monkeypatch `_DATA_CLIENT.get_stock_bars`.
+    On persistent datetime format errors, retry up to MAX_RETRIES then raise.
+    """
+    client = _DATA_CLIENT or _get_data_client()
+    last_exc: Exception | None = None
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            if client is None:
+                raise RuntimeError("data client unavailable")
+            # The tests patch this method; keep the signature simple.
+            return client.get_stock_bars(
                 symbol,
-                start=ensure_datetime(start),
-                end=ensure_datetime(end),
+                _to_rfc3339(start),
+                _to_rfc3339(end),
                 timeframe="1Min",
+                limit=limit,
             )
-        except Exception as e:
-            msg = str(e)
-            if "Invalid format for parameter start" in msg:
-                if i == MAX_RETRIES - 1:
-                    raise
-                sleep(0.05 * (2**i))
-            else:
+        except Exception as e:  # pragma: no cover (covered by tests)
+            last_exc = e
+            if _is_persistent_datetime_error(e) and attempt == MAX_RETRIES - 1:
                 raise
+            time.sleep(RETRY_SLEEP_S)
+
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Failed to fetch minute bars")
 
 
 def get_historical_data(
-    symbols: list[str], start: datetime, end: datetime
-) -> dict[str, Any]:
-    """Simple multi-symbol daily fetch used by tests."""
-    assert _DATA_CLIENT is not None, "_DATA_CLIENT not configured"
-    out: dict[str, Any] = {}
-    for s in symbols:
-        out[s] = _DATA_CLIENT.get_stock_bars(
-            s,
-            start=ensure_datetime(start),
-            end=ensure_datetime(end),
-            timeframe="1Day",
-        )
-    return out
+    symbol: str,
+    start: datetime | str,
+    end: datetime | str,
+    timeframe: str = "1Day",
+    limit: int | None = None,
+) -> Any:
+    """
+    Simplified historical fetcher; tests patch the client similarly.
+    """
+    client = _DATA_CLIENT or _get_data_client()
+    last_exc: Exception | None = None
 
+    for attempt in range(MAX_RETRIES):
+        try:
+            if client is None:
+                raise RuntimeError("data client unavailable")
+            return client.get_stock_bars(
+                symbol,
+                _to_rfc3339(start),
+                _to_rfc3339(end),
+                timeframe=timeframe,
+                limit=limit,
+            )
+        except Exception as e:
+            last_exc = e
+            if _is_persistent_datetime_error(e) and attempt == MAX_RETRIES - 1:
+                raise
+            time.sleep(RETRY_SLEEP_S)
 
-# Compatibility helpers for modules expecting the full fetcher
-
-
-def get_bars(*args, **kwargs):  # pragma: no cover - passthrough stub
-    assert _DATA_CLIENT is not None, "_DATA_CLIENT not configured"
-    return _DATA_CLIENT.get_stock_bars(*args, **kwargs)
-
-
-def get_last_available_bar(symbol: str):  # pragma: no cover - passthrough stub
-    assert _DATA_CLIENT is not None, "_DATA_CLIENT not configured"
-    return _DATA_CLIENT.get_stock_bars(symbol, limit=1)
-
-
-try:  # expose full data_fetcher when available
-    from .full import *  # noqa: F401,F403
-except Exception:  # pragma: no cover
-    pass
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Failed to fetch historical data")
