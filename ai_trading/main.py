@@ -249,7 +249,15 @@ def main() -> None:
         logger.error("Unexpected error during API startup synchronization: %s", e)
         raise RuntimeError(f"API startup synchronization failed: {e}")
 
+    import os, time  # AI-AGENT-REF: scheduler config
     S = get_settings()
+    from ai_trading.utils.device import pick_torch_device  # AI-AGENT-REF: ML device log
+    pick_torch_device()
+    health_tick_seconds = int(
+        os.getenv("HEALTH_TICK_SECONDS")
+        or getattr(S, "health_tick_seconds", 300)
+    )
+    last_health = time.monotonic()
 
     # CLI takes precedence; then settings
     iterations = args.iterations if args.iterations is not None else S.iterations
@@ -277,21 +285,33 @@ def main() -> None:
     # AI-AGENT-REF: Track memory optimization cycles
     memory_check_interval = 10  # Check every 10 cycles
 
-    while iterations <= 0 or count < iterations:
-        try:
-            # AI-AGENT-REF: Periodic memory optimization
-            if count % memory_check_interval == 0:
-                gc_result = optimize_memory()
-                if gc_result.get("objects_collected", 0) > 100:
-                    logger.info(
-                        f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects"
-                    )
+    try:
+        while iterations <= 0 or count < iterations:
+            try:
+                # AI-AGENT-REF: Periodic memory optimization
+                if count % memory_check_interval == 0:
+                    gc_result = optimize_memory()
+                    if gc_result.get("objects_collected", 0) > 100:
+                        logger.info(
+                            f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects"
+                        )
 
-            rc()
-        except Exception:  # pragma: no cover - log unexpected errors
-            logger.exception("run_cycle failed")
-        count += 1
-        psleep(int(max(1, interval)))
+                rc()
+            except Exception:  # pragma: no cover - log unexpected errors
+                logger.exception("run_cycle failed")
+            count += 1
+
+            now_mono = time.monotonic()
+            if now_mono - last_health >= max(30, health_tick_seconds):
+                logger.info(
+                    "HEALTH_TICK", extra={"iteration": count, "interval": interval}
+                )
+                last_health = now_mono
+
+            psleep(int(max(1, interval)))
+    except KeyboardInterrupt:
+        logger.info("KeyboardInterrupt received — shutting down gracefully")
+        return
 
 
 if __name__ == "__main__":

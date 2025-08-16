@@ -7,6 +7,7 @@ extracted from bot_engine.py to enable standalone imports and testing.
 
 import os
 import time
+import time as pytime  # AI-AGENT-REF: deterministic testing alias
 from datetime import datetime
 from threading import Lock
 
@@ -29,15 +30,18 @@ from tenacity import (
 
 # AI-AGENT-REF: Import config
 from ai_trading.settings import get_news_api_key, get_settings
+from ai_trading.utils.device import pick_torch_device, tensors_to_device  # AI-AGENT-REF: device helper
+
+DEVICE, _TORCH = pick_torch_device()
 
 # FinBERT model initialization
-import torch
 try:
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
     _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
     _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
         "yiyanghkust/finbert-tone"
     )
+    _FINBERT_MODEL.to(DEVICE)  # AI-AGENT-REF: move model to selected device
     _FINBERT_MODEL.eval()
     _HUGGINGFACE_AVAILABLE = True
     logger.info("FinBERT loaded successfully")
@@ -466,7 +470,7 @@ def predict_text_sentiment(text: str) -> float:
     Returns:
         Sentiment score between -1.0 and 1.0
     """
-    if _HUGGINGFACE_AVAILABLE and _FINBERT_MODEL and _FINBERT_TOKENIZER:
+    if _HUGGINGFACE_AVAILABLE and _FINBERT_MODEL and _FINBERT_TOKENIZER and _TORCH:
         try:
             inputs = _FINBERT_TOKENIZER(
                 text,
@@ -474,10 +478,11 @@ def predict_text_sentiment(text: str) -> float:
                 truncation=True,
                 max_length=128,
             )
-            with torch.no_grad():
+            inputs = tensors_to_device(inputs, DEVICE)
+            with _TORCH.no_grad():
                 outputs = _FINBERT_MODEL(**inputs)
                 logits = outputs.logits[0]  # shape = (3,)
-                probs = torch.softmax(logits, dim=0)  # [p_neg, p_neu, p_pos]
+                probs = _TORCH.softmax(logits, dim=0)  # [p_neg, p_neu, p_pos]
 
             neg, neu, pos = probs.tolist()
             return float(pos - neg)

@@ -8,6 +8,12 @@ issue and ensure consistent ISO-8601 format compliance throughout the applicatio
 from datetime import UTC, datetime
 
 
+def utc_now_iso_from(now: datetime) -> str:
+    """Format provided datetime as ISO-8601 UTC string."""  # AI-AGENT-REF: deterministic timestamp
+    dt = now.astimezone(UTC)
+    return dt.isoformat().replace("+00:00", "Z")
+
+
 def utc_now_iso() -> str:
     """
     Generate a properly formatted UTC timestamp in ISO-8601 format.
