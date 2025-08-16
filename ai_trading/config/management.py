@@ -1496,6 +1496,31 @@ class TradingConfig(BaseModel):
             base.kelly_fraction = float(env_val)
         if env_val := os.getenv("CONF_THRESHOLD"):
             base.conf_threshold = float(env_val)
+        # AI-AGENT-REF: sync core risk knobs with environment/settings
+        # Ensure model reflects environment/settings for core risk knobs
+        from ai_trading.settings import (
+            get_capital_cap,
+            get_dollar_risk_limit,
+            get_max_drawdown_threshold,
+        )
+
+        # CAPITAL_CAP
+        if env_val := os.getenv("CAPITAL_CAP"):
+            base.capital_cap = float(env_val)
+        else:
+            base.capital_cap = float(get_capital_cap())
+
+        # DOLLAR_RISK_LIMIT
+        if env_val := os.getenv("DOLLAR_RISK_LIMIT"):
+            base.dollar_risk_limit = float(env_val)
+        else:
+            base.dollar_risk_limit = float(get_dollar_risk_limit())
+
+        # MAX_DRAWDOWN_THRESHOLD
+        if env_val := os.getenv("MAX_DRAWDOWN_THRESHOLD"):
+            base.max_drawdown_threshold = float(env_val)
+        else:
+            base.max_drawdown_threshold = float(get_max_drawdown_threshold())
         if overrides:
             base = base.model_copy(update=overrides)
         return base
