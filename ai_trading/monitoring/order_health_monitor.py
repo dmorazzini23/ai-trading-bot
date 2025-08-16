@@ -28,20 +28,20 @@ CONFIG = TradingConfig()
 
 
 # AI-AGENT-REF: local order tracking helpers replacing trade_execution shim
-@dataclass
+@dataclass(slots=True)
 class OrderInfo:
     order_id: str
     symbol: str
-    side: str
-    qty: int  # AI-AGENT-REF: tests pass 'qty'
-    submitted_time: float
+    side: str  # "buy" | "sell"
+    qty: int
+    submitted_time: float  # epoch seconds in tests
     last_status: str
     cancel_attempted: bool = False
-    quantity: int | None = None  # AI-AGENT-REF: legacy alias
 
-    def __post_init__(self) -> None:
-        if self.quantity is None:
-            self.quantity = self.qty
+    @property
+    def quantity(self) -> int:
+        # backward compatibility alias
+        return self.qty
 
 
 _active_orders: dict[str, OrderInfo] = {}

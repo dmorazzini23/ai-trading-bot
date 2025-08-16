@@ -1,4 +1,5 @@
-from ai_trading.tools.validate_env import _main  # AI-AGENT-REF: expose CLI entrypoint
+# mypy: ignore-errors
+from ai_trading.tools.validate_env import _main
 
 if __name__ == "__main__":
-    _main()
+    raise SystemExit(_main())

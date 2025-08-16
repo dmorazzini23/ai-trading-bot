@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 
 
 def _validate() -> int:
@@ -17,15 +16,13 @@ def _validate() -> int:
     return 0 if not missing else 1
 
 
-def _main() -> None:
+def _main() -> int:
     parser = argparse.ArgumentParser("validate-env", add_help=False)
     parser.add_argument("--quiet", action="store_true")
     # Ignore pytest's argv noise:
     _, _ = parser.parse_known_args([])
-    rc = _validate()
-    if rc != 0:
-        sys.exit(rc)
+    return _validate()
 
 
 if __name__ == "__main__":
-    _main()
+    raise SystemExit(_main())
