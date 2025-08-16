@@ -57,8 +57,6 @@ def test_requests_can_still_be_patched_via_session():
     s.mount("https://", SpyAdapter())
 
     # Do not pass timeout -> plugin should inject default
-    r = s.get("http://localhost/_probe_ok")
+    r = s.get("http://localhost/_probe_ok")  # AI-AGENT-REF: trigger plugin default timeout
     assert r.status_code == 200
-    assert (
-        seen.get("timeout") is not None
-    ), "Expected plugin to inject a default timeout into Session.request"
+    assert seen.get("timeout") is not None, "Default timeout should be injected by the plugin"
