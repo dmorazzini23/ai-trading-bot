@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 from datetime import timedelta
-from typing import Any, Optional
+from functools import lru_cache
+from typing import Any
 
-from pydantic import Field, SecretStr, field_validator, computed_field
+from pydantic import Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 try:  # AI-AGENT-REF: tolerate pydantic internals missing
@@ -15,7 +15,7 @@ except Exception:  # pragma: no cover
     FieldInfo = object
 
 
-def _secret_to_str(val: Any) -> Optional[str]:
+def _secret_to_str(val: Any) -> str | None:
     """Return a plain string for SecretStr or str; None if unset."""  # AI-AGENT-REF: safe secret unwrap
     if val is None or isinstance(val, FieldInfo):
         return None
@@ -79,17 +79,25 @@ class Settings(BaseSettings):
     # Max daily loss fraction before halt
     daily_loss_limit: float = Field(default=0.03, env="AI_TRADER_DAILY_LOSS_LIMIT")
     # Max running drawdown before action
-    max_drawdown_threshold: float = Field(default=0.08, env="AI_TRADER_MAX_DRAWDOWN_THRESHOLD")
+    max_drawdown_threshold: float = Field(
+        default=0.08, env="AI_TRADER_MAX_DRAWDOWN_THRESHOLD"
+    )
     # Rebalance drift threshold
-    portfolio_drift_threshold: float = Field(default=0.15, env="AI_TRADER_PORTFOLIO_DRIFT_THRESHOLD")
+    portfolio_drift_threshold: float = Field(
+        default=0.15, env="AI_TRADER_PORTFOLIO_DRIFT_THRESHOLD"
+    )
     # Max fraction of equity at risk per trade
     dollar_risk_limit: float = Field(default=0.05, env="AI_TRADER_DOLLAR_RISK_LIMIT")
     # Max fraction of equity per new position
     capital_cap: float = Field(default=0.04, env="AI_TRADER_CAPITAL_CAP")
     # Max fraction of equity in one sector
-    sector_exposure_cap: float = Field(default=0.33, env="AI_TRADER_SECTOR_EXPOSURE_CAP")
+    sector_exposure_cap: float = Field(
+        default=0.33, env="AI_TRADER_SECTOR_EXPOSURE_CAP"
+    )
     # Upper bound on concurrent open positions
-    max_portfolio_positions: int = Field(default=10, env="AI_TRADER_MAX_PORTFOLIO_POSITIONS")
+    max_portfolio_positions: int = Field(
+        default=10, env="AI_TRADER_MAX_PORTFOLIO_POSITIONS"
+    )
     disaster_dd_limit: float = Field(default=0.25, env="AI_TRADER_DISASTER_DD_LIMIT")
     # Toggle dataframe/bars cache in data_fetcher
     data_cache_enable: bool = Field(default=True, env="AI_TRADER_DATA_CACHE_ENABLE")
@@ -100,35 +108,51 @@ class Settings(BaseSettings):
     # Plotting (matplotlib) allowed in environments that support it
     enable_plotting: bool = Field(default=False, env="AI_TRADER_ENABLE_PLOTTING")
     # Minimum absolute USD size for a position
-    position_size_min_usd: float = Field(default=0.0, env="AI_TRADER_POSITION_SIZE_MIN_USD")
+    position_size_min_usd: float = Field(
+        default=0.0, env="AI_TRADER_POSITION_SIZE_MIN_USD"
+    )
     # Global volume threshold used by bot_engine init
     volume_threshold: float = Field(default=0.0, env="AI_TRADER_VOLUME_THRESHOLD")
     """Single source of truth for runtime configuration."""  # AI-AGENT-REF: runtime config model
 
     # loop control
-    interval: int = Field(60, alias="AI_TRADING_INTERVAL")  # AI-AGENT-REF: interval alias
-    iterations: int = Field(0, alias="AI_TRADING_ITERATIONS")  # AI-AGENT-REF: iterations alias
+    interval: int = Field(
+        60, alias="AI_TRADING_INTERVAL"
+    )  # AI-AGENT-REF: interval alias
+    iterations: int = Field(
+        0, alias="AI_TRADING_ITERATIONS"
+    )  # AI-AGENT-REF: iterations alias
     scheduler_iterations: int = Field(0, validation_alias="SCHEDULER_ITERATIONS")
     scheduler_sleep_seconds: int = Field(60, validation_alias="SCHEDULER_SLEEP_SECONDS")
     seed: int = Field(42, alias="AI_TRADING_SEED")  # AI-AGENT-REF: seed alias
 
     # paths
-    model_path: str = Field("trained_model.pkl", alias="AI_TRADING_MODEL_PATH")  # AI-AGENT-REF: model path
-    halt_flag_path: str = Field("halt.flag", alias="HALT_FLAG_PATH")  # AI-AGENT-REF: halt flag path
-    rl_model_path: str = Field("rl_agent.zip", alias="AI_TRADING_RL_MODEL_PATH")  # AI-AGENT-REF: RL model path
+    model_path: str = Field(
+        "trained_model.pkl", alias="AI_TRADING_MODEL_PATH"
+    )  # AI-AGENT-REF: model path
+    halt_flag_path: str = Field(
+        "halt.flag", alias="HALT_FLAG_PATH"
+    )  # AI-AGENT-REF: halt flag path
+    rl_model_path: str = Field(
+        "rl_agent.zip", alias="AI_TRADING_RL_MODEL_PATH"
+    )  # AI-AGENT-REF: RL model path
 
     # RL switch
     use_rl_agent: bool = Field(False, alias="USE_RL_AGENT")  # AI-AGENT-REF: RL toggle
 
     # cooling
-    trade_cooldown_min: int = Field(15, alias="TRADE_COOLDOWN_MIN")  # AI-AGENT-REF: cooldown minutes
+    trade_cooldown_min: int = Field(
+        15, alias="TRADE_COOLDOWN_MIN"
+    )  # AI-AGENT-REF: cooldown minutes
     health_tick_seconds: int = Field(
         default=300, env="AI_TRADER_HEALTH_TICK_SECONDS"
     )  # AI-AGENT-REF: scheduler heartbeat
-    cpu_only: bool = Field(default=False, validation_alias="CPU_ONLY")  # AI-AGENT-REF: ML device override
+    cpu_only: bool = Field(
+        default=False, validation_alias="CPU_ONLY"
+    )  # AI-AGENT-REF: ML device override
 
     # External APIs
-    news_api_key: Optional[str] = None  # AI-AGENT-REF: optional News API key
+    news_api_key: str | None = None  # AI-AGENT-REF: optional News API key
     rebalance_interval_min: int = Field(
         60,
         ge=1,
@@ -161,7 +185,7 @@ def get_settings() -> Settings:
     return Settings()  # pydantic-settings auto-loads .env when present
 
 
-def get_news_api_key() -> Optional[str]:
+def get_news_api_key() -> str | None:
     """Lazy accessor for optional News API key."""  # AI-AGENT-REF: runtime News API key
     return get_settings().news_api_key
 
@@ -170,14 +194,15 @@ def get_rebalance_interval_min() -> int:
     """Lazy accessor for rebalance interval."""  # AI-AGENT-REF: runtime rebalance interval
     return int(get_settings().rebalance_interval_min)
 
+
 # ---- Lazy getters (access only at runtime; never at module import) ----
 def get_disaster_dd_limit() -> float:
     return _to_float(getattr(get_settings(), "disaster_dd_limit", 0.25), 0.25)
 
+
 # ---- Lazy getters (access only at runtime; never at module import) ----
 def get_max_portfolio_positions() -> int:
     return _to_int(getattr(get_settings(), "max_portfolio_positions", 10), 10)
-
 
 
 def get_sector_exposure_cap() -> float:
@@ -209,19 +234,28 @@ def get_buy_threshold() -> float:
 
 
 def get_conf_threshold() -> float:
-    return _to_float(getattr(get_settings(), "conf_threshold", 0.8), 0.8)
+    from ai_trading.config.management import TradingConfig
+
+    mode = getattr(get_settings(), "bot_mode", "balanced")
+    cfg = TradingConfig.from_env(mode=mode)
+    return _to_float(
+        getattr(cfg, "conf_threshold", 0.75), 0.75
+    )  # AI-AGENT-REF: mode-aware
 
 
 def get_trade_cooldown_min() -> int:
     return _to_int(getattr(get_settings(), "trade_cooldown_min", 15), 15)
 
+
 # ---- Lazy getters ----
 def get_max_trades_per_hour() -> int:
     return _to_int(getattr(get_settings(), "max_trades_per_hour", 30), 30)
 
+
 # ---- Lazy getters ----
 def get_max_trades_per_day() -> int:
     return _to_int(getattr(get_settings(), "max_trades_per_day", 200), 200)
+
 
 # ---- Lazy getters ----
 def get_finnhub_rpm() -> int:
@@ -252,7 +286,7 @@ def get_volume_threshold() -> float:
     return _to_float(getattr(get_settings(), "volume_threshold", 0.0), 0.0)
 
 
-def get_alpaca_secret_key_plain() -> Optional[str]:
+def get_alpaca_secret_key_plain() -> str | None:
     """Return Alpaca secret key as plain string if present."""  # AI-AGENT-REF: helper for secrets
     s = get_settings()
     return _secret_to_str(getattr(s, "alpaca_secret_key", None))
@@ -262,4 +296,3 @@ def get_seed_int(default: int = 42) -> int:
     """Fetch deterministic seed as int."""  # AI-AGENT-REF: robust seed accessor
     s = get_settings()
     return _to_int(getattr(s, "seed", default), default)
-
