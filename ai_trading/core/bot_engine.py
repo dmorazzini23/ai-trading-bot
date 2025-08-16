@@ -147,28 +147,26 @@ except Exception as e:  # noqa: BLE001 - best-effort import; we log below.
 logger = logging.getLogger("ai_trading.core.bot_engine")
 
 # AI-AGENT-REF: defer Alpaca client initialization
-trading_client = None
-data_client = None
-ALPACA_AVAILABLE = False
+import importlib.util
+import sys
 
 
-def _module_ok(name: str) -> bool:
-    """Check module availability without importing it."""  # AI-AGENT-REF: robust module check
+def _module_available(name: str) -> bool:
+    """Check if a module exists without importing it."""  # AI-AGENT-REF: safe module probe
+    if name in sys.modules and sys.modules[name] is None:
+        return False
     try:
-        import sys
-        if name in sys.modules and sys.modules[name] is None:
-            return False
-        import importlib.util
-        return importlib.util.find_spec(name) is not None
+        spec = importlib.util.find_spec(name)
     except Exception:
         return False
+    return spec is not None
 
 
 ALPACA_AVAILABLE = (
-    _module_ok("alpaca")
-    or _module_ok("alpaca_trade_api")
-    or (_module_ok("alpaca.trading") and _module_ok("alpaca.data"))
+    _module_available("alpaca") and _module_available("alpaca_trade_api")
 )
+trading_client = None
+data_client = None
 
 
 def _sha256_file(path: str) -> str:
@@ -1005,7 +1003,10 @@ YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availabilit
 # Production Alpaca SDK imports are performed lazily at runtime to avoid import
 # side effects when the SDK is unavailable. Call ``init_alpaca_clients()`` before
 # performing live trading operations.
-StockHistoricalDataClient = Quote = StockBarsRequest = StockLatestQuoteRequest = TimeFrame = TradingClient = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = APIError = None  # type: ignore
+class _AlpacaStub:  # AI-AGENT-REF: placeholder when Alpaca unavailable
+    pass
+
+StockHistoricalDataClient = Quote = StockBarsRequest = StockLatestQuoteRequest = TimeFrame = TradingClient = OrderSide = OrderStatus = TimeInForce = Order = MarketOrderRequest = APIError = _AlpacaStub  # type: ignore
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
 from bs4 import BeautifulSoup

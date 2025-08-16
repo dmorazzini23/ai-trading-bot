@@ -199,12 +199,18 @@ def start_api(ready_signal: threading.Event = None) -> None:
     run_flask_app(port, ready_signal)
 
 
-def main() -> None:
-    """Start the API thread and repeatedly run trading cycles."""
+def parse_cli(argv: list[str] | None = None):
+    """Parse CLI arguments, tolerating unknown flags."""  # AI-AGENT-REF: tolerant parser
     parser = argparse.ArgumentParser(description="AI Trading Bot")
     parser.add_argument("--iterations")
     parser.add_argument("--interval")
-    args = parser.parse_args()
+    args, _unknown = parser.parse_known_args(argv)
+    return args
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Start the API thread and repeatedly run trading cycles."""
+    args = parse_cli(argv)
 
     load_dotenv()
     global config

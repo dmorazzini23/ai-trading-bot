@@ -1,4 +1,4 @@
-"""HTTP utilities with default timeout, retry, and pooled concurrency."""
+"""HTTP utilities with default timeout, retry, and pooled concurrency."""  # AI-AGENT-REF: ensure timeouts
 
 import os
 import time
@@ -9,6 +9,45 @@ from urllib.parse import urlparse
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+
+_DEFAULT_TIMEOUT = float(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
+
+
+def _ensure_timeout(kwargs: dict) -> dict:
+    """Populate ``timeout`` in kwargs when missing."""  # AI-AGENT-REF: timeout guard
+    if "timeout" not in kwargs or kwargs["timeout"] is None:
+        kwargs["timeout"] = _DEFAULT_TIMEOUT
+    return kwargs
+
+
+def request(method: str, url: str, **kwargs) -> requests.Response:
+    """Perform an HTTP request with a guaranteed timeout."""  # AI-AGENT-REF: timeout enforced
+    kwargs = _ensure_timeout(kwargs)
+    return requests.request(method, url, **kwargs)
+
+
+def get(url: str, **kwargs) -> requests.Response:
+    return request("GET", url, **kwargs)
+
+
+def post(url: str, **kwargs) -> requests.Response:
+    return request("POST", url, **kwargs)
+
+
+def put(url: str, **kwargs) -> requests.Response:
+    return request("PUT", url, **kwargs)
+
+
+def delete(url: str, **kwargs) -> requests.Response:
+    return request("DELETE", url, **kwargs)
+
+
+def head(url: str, **kwargs) -> requests.Response:
+    return request("HEAD", url, **kwargs)
+
+
+def options(url: str, **kwargs) -> requests.Response:
+    return request("OPTIONS", url, **kwargs)
 
 # Lazy singletons
 __HTTP_EXECUTOR: ThreadPoolExecutor | None = None
@@ -125,46 +164,35 @@ class HTTPSession:
         self.session.mount("https://", adapter)
 
     def get(self, url: str, **kwargs) -> requests.Response:
-        """GET request with default timeout."""
-        kwargs.setdefault("timeout", self.timeout)
+        """GET request with default timeout."""  # AI-AGENT-REF: enforce timeout
+        kwargs = _ensure_timeout(kwargs)
         return self.session.get(url, **kwargs)
 
     def post(self, url: str, **kwargs) -> requests.Response:
-        """POST request with default timeout."""
-        kwargs.setdefault("timeout", self.timeout)
+        """POST request with default timeout."""  # AI-AGENT-REF: enforce timeout
+        kwargs = _ensure_timeout(kwargs)
         return self.session.post(url, **kwargs)
 
     def put(self, url: str, **kwargs) -> requests.Response:
-        """PUT request with default timeout."""
-        kwargs.setdefault("timeout", self.timeout)
+        """PUT request with default timeout."""  # AI-AGENT-REF: enforce timeout
+        kwargs = _ensure_timeout(kwargs)
         return self.session.put(url, **kwargs)
 
     def delete(self, url: str, **kwargs) -> requests.Response:
-        """DELETE request with default timeout."""
-        kwargs.setdefault("timeout", self.timeout)
+        """DELETE request with default timeout."""  # AI-AGENT-REF: enforce timeout
+        kwargs = _ensure_timeout(kwargs)
         return self.session.delete(url, **kwargs)
 
     def head(self, url: str, **kwargs) -> requests.Response:
-        """HEAD request with default timeout."""
-        kwargs.setdefault("timeout", self.timeout)
+        """HEAD request with default timeout."""  # AI-AGENT-REF: enforce timeout
+        kwargs = _ensure_timeout(kwargs)
         return self.session.head(url, **kwargs)
 
     def options(self, url: str, **kwargs) -> requests.Response:
-        """OPTIONS request with default timeout."""
-        kwargs.setdefault("timeout", self.timeout)
+        """OPTIONS request with default timeout."""  # AI-AGENT-REF: enforce timeout
+        kwargs = _ensure_timeout(kwargs)
         return self.session.options(url, **kwargs)
 
-
-# Default session instance
-_default_session = HTTPSession()
-
-# Convenience functions that use the default session
-get = _default_session.get
-post = _default_session.post
-put = _default_session.put
-delete = _default_session.delete
-head = _default_session.head
-options = _default_session.options
 
 # Bounded concurrency helpers
 

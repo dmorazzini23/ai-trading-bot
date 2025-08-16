@@ -1511,11 +1511,15 @@ class TradingConfig(BaseModel):
     ) -> "TradingConfig":
         """Load configuration from environment with mode defaults."""  # AI-AGENT-REF
         mode = (mode or os.getenv("TRADING_MODE", "balanced")).lower()
+        MODE_CONF = {"conservative": 0.85, "balanced": 0.75, "aggressive": 0.65}
+        conf_env = os.getenv("CONF_THRESHOLD")
+        conf_threshold = (
+            float(conf_env) if conf_env is not None else MODE_CONF.get(mode, 0.75)
+        )
         base = cls()
         mode_defaults = {
             "conservative": {
                 "kelly_fraction": 0.25,
-                "conf_threshold": 0.85,
                 "daily_loss_limit": 0.03,
                 "capital_cap": 0.20,
                 "confirmation_count": 3,
@@ -1524,7 +1528,6 @@ class TradingConfig(BaseModel):
             },
             "balanced": {
                 "kelly_fraction": 0.60,
-                "conf_threshold": 0.75,
                 "daily_loss_limit": 0.05,
                 "capital_cap": 0.25,
                 "confirmation_count": 2,
@@ -1533,7 +1536,6 @@ class TradingConfig(BaseModel):
             },
             "aggressive": {
                 "kelly_fraction": 0.75,
-                "conf_threshold": 0.65,
                 "daily_loss_limit": 0.08,
                 "capital_cap": 0.30,
                 "confirmation_count": 1,
@@ -1542,10 +1544,9 @@ class TradingConfig(BaseModel):
             },
         }
         base = base.model_copy(update=mode_defaults.get(mode, {}))
+        base.conf_threshold = conf_threshold  # AI-AGENT-REF: mode-specific confidence
         if env_val := os.getenv("KELLY_FRACTION"):
             base.kelly_fraction = float(env_val)
-        if env_val := os.getenv("CONF_THRESHOLD"):
-            base.conf_threshold = float(env_val)
         # AI-AGENT-REF: sync additional risk/cadence knobs with env/settings
         from ai_trading.settings import (
             get_portfolio_drift_threshold,

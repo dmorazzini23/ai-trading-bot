@@ -119,30 +119,31 @@ class AlpacaExecutionEngine:
             True if initialization successful, False otherwise
         """
         try:
-            # Get configuration
-            self.config = get_alpaca_config()
-
-            # Import Alpaca SDK based on environment
             import os
 
             if os.environ.get("PYTEST_RUNNING"):
-                from ai_trading.execution.mocks import (
-                    MockTradingClient,
-                )  # AI-AGENT-REF: internal test mock
-                raw_client = MockTradingClient()
-                logger.info("Mock Alpaca client initialized for testing")
-            else:
-                from alpaca.trading.client import TradingClient  # type: ignore
+                try:
+                    from ai_trading.execution.mocks import MockTradingClient  # AI-AGENT-REF: test mock
+                except Exception:
+                    MockTradingClient = None
+                if MockTradingClient:
+                    self.trading_client = MockTradingClient()
+                    self.is_initialized = True
+                    return True
 
-                raw_client = TradingClient(
-                    api_key=self.config.key_id,
-                    secret_key=self.config.secret_key,
-                    paper=self.config.use_paper,
-                    base_url=self.config.base_url,
-                )
-                logger.info(
-                    f"Real Alpaca client initialized (paper={self.config.use_paper})"
-                )
+            # Get configuration only when not using mocks
+            self.config = get_alpaca_config()
+            from alpaca.trading.client import TradingClient  # type: ignore
+
+            raw_client = TradingClient(
+                api_key=self.config.key_id,
+                secret_key=self.config.secret_key,
+                paper=self.config.use_paper,
+                base_url=self.config.base_url,
+            )
+            logger.info(
+                f"Real Alpaca client initialized (paper={self.config.use_paper})"
+            )
             self.trading_client = AlpacaBroker(raw_client)
 
             # Validate connection
