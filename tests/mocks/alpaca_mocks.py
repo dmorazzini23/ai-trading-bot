@@ -28,8 +28,15 @@ class MockTradingClient:
         return {"status": "accepted", "id": f"mock-{len(self.orders)}"}
 
 
+import types
+
+
 class MockClient:
-    """Replaces ai_trading/alpaca_contract.py:MockClient for tests."""
+    """Replaces ai_trading/alpaca_contract.py:MockClient for tests."""  # AI-AGENT-REF: normalize id
+
+    def __init__(self):
+        self.last_payload = None
 
     def submit_order(self, **order):
-        return {"status": "accepted", "id": "mock-client-1"}
+        self.last_payload = types.SimpleNamespace(**order)
+        return {"status": "accepted", "id": "1"}

@@ -5,7 +5,7 @@ import logging
 import time  # AI-AGENT-REF: tests patch alpaca_api.time.sleep
 from ai_trading.utils import sleep as psleep, clamp_timeout
 from ai_trading.utils import http
-import types
+from types import SimpleNamespace
 import uuid
 from typing import Any, Optional
 
@@ -165,10 +165,13 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
         if code == 429:
             retries += 1
             if retries > 2:
-                return resp
+                break
             psleep(min(0.5 * retries, 1.0))
             continue
-        return resp
+        break
+    if isinstance(resp, dict):
+        resp = SimpleNamespace(**resp)  # AI-AGENT-REF: normalize dict response
+    return resp
 
 
 def handle_trade_update(event: Any) -> None:
