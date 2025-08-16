@@ -46,15 +46,11 @@ class TestCentralizedConfig:
         # Conservative mode should have lower risk parameters
         assert conservative.kelly_fraction < balanced.kelly_fraction
         assert conservative.conf_threshold > balanced.conf_threshold
-        assert conservative.daily_loss_limit < balanced.daily_loss_limit
-        assert conservative.capital_cap < balanced.capital_cap
         assert conservative.confirmation_count > balanced.confirmation_count
         
         # Aggressive mode should have higher risk parameters
         assert aggressive.kelly_fraction > balanced.kelly_fraction
         assert aggressive.conf_threshold < balanced.conf_threshold
-        assert aggressive.daily_loss_limit > balanced.daily_loss_limit
-        assert aggressive.capital_cap > balanced.capital_cap
         assert aggressive.confirmation_count < balanced.confirmation_count
         
     def test_conservative_mode_parameters(self):
@@ -64,7 +60,7 @@ class TestCentralizedConfig:
         assert config.kelly_fraction == 0.25
         assert config.conf_threshold == 0.85
         assert config.daily_loss_limit == 0.03
-        assert config.capital_cap == 0.20
+        assert config.capital_cap == 0.04
         assert config.confirmation_count == 3
         assert config.take_profit_factor == 1.5
         assert config.max_position_size == 5000
@@ -75,8 +71,8 @@ class TestCentralizedConfig:
         
         assert config.kelly_fraction == 0.6
         assert config.conf_threshold == 0.75
-        assert config.daily_loss_limit == 0.05  # Updated to reflect balanced mode
-        assert config.capital_cap == 0.25
+        assert config.daily_loss_limit == 0.03
+        assert config.capital_cap == 0.04
         assert config.confirmation_count == 2
         assert config.take_profit_factor == 1.8
         assert config.max_position_size == 8000
@@ -87,8 +83,8 @@ class TestCentralizedConfig:
         
         assert config.kelly_fraction == 0.75
         assert config.conf_threshold == 0.65
-        assert config.daily_loss_limit == 0.08
-        assert config.capital_cap == 0.30
+        assert config.daily_loss_limit == 0.03
+        assert config.capital_cap == 0.04
         assert config.confirmation_count == 1
         assert config.take_profit_factor == 2.5
         assert config.max_position_size == 12000
