@@ -14,13 +14,16 @@ pandas>=2.3
 pandas_ta==0.3.14b0
 pandas-market-calendars==4.4.1
 cachetools>=5.3,<6.0
-yfinance>=0.2.40,<0.3  # AI-AGENT-REF: pin yfinance for CI
+# yfinance requires websockets>=13 which conflicts with alpaca-trade-api<11
+# move to optional extra or install only locally when needed
+# yfinance>=0.2.40,<0.3
 requests>=2.31,<3
 urllib3>=1.26,<2  # AI-AGENT-REF: align with Alpaca SDK
 certifi>=2023.7.22
 charset-normalizer>=3.2,<4
 idna>=3.4,<4
 joblib>=1.3,<2
+tenacity
 
 # Web stack used in app/tests
 Flask>=3,<4
@@ -39,7 +42,8 @@ finnhub-python
 prometheus-client
 
 # Broker SDK
-alpaca-trade-api>=3.0,<4  # AI-AGENT-REF: pin Alpaca SDK for tests
+alpaca-trade-api==3.2.0
+websockets<11
 
 # Keep CI/dev on a NumPy that still exports `NaN` (NumPy 2.0 removed it).
 # 1.26.4 supports Python 3.12 and is broadly compatible with pandas & pandas-ta.
@@ -48,7 +52,6 @@ numpy==1.26.4
 pytest-asyncio>=0.23,<0.24
 anyio>=4,<5
 aiohttp>=3.9,<3.10
-websockets>=12,<13
 pre-commit>=3.7,<4
 detect-secrets==1.5.0
 ruff>=0.5,<1

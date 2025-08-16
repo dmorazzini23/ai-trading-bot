@@ -19,8 +19,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from ai_trading.logging import logger
 from alpaca_trade_api.rest import APIError
+
+from ai_trading.logging import logger
 
 
 class ShutdownReason(Enum):
@@ -69,6 +70,8 @@ class ShutdownStatus:
 class ShutdownHandler:
     """Comprehensive shutdown handler for trading system."""
 
+    _pre_shutdown_hooks: list[Callable[[], None]] | None = None  # AI-AGENT-REF: avoid mutable class defaults
+
     def __init__(self):
         self.logger = logger
         self._status = ShutdownStatus(
@@ -92,11 +95,11 @@ class ShutdownHandler:
         }
 
         # Registered shutdown hooks
-        self._pre_shutdown_hooks: list[Callable] = []
-        self._position_handlers: list[Callable] = []
-        self._order_handlers: list[Callable] = []
-        self._cleanup_hooks: list[Callable] = []
-        self._post_shutdown_hooks: list[Callable] = []
+        self._pre_shutdown_hooks: list[Callable[[], None]] = list()
+        self._position_handlers: list[Callable] = list()
+        self._order_handlers: list[Callable] = list()
+        self._cleanup_hooks: list[Callable] = list()
+        self._post_shutdown_hooks: list[Callable] = list()
 
         # Thread safety
         self._lock = threading.RLock()
@@ -107,9 +110,9 @@ class ShutdownHandler:
         self._setup_signal_handlers()
 
         # State tracking
-        self._active_positions: list[dict[str, Any]] = []
-        self._pending_orders: list[dict[str, Any]] = []
-        self._system_state: dict[str, Any] = {}
+        self._active_positions: list[dict[str, Any]] = list()
+        self._pending_orders: list[dict[str, Any]] = list()
+        self._system_state: dict[str, Any] = dict()
 
         self.logger.info("ShutdownHandler initialized")
 
@@ -130,7 +133,12 @@ class ShutdownHandler:
                 f"Signal handlers registered for: {[s.name for s in signals_to_handle]}"
             )
 
-        except (APIError, TimeoutError, ConnectionError, OSError) as e:  # AI-AGENT-REF: include OSError in shutdown handling
+        except (
+            APIError,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: include OSError in shutdown handling
             self.logger.error(
                 "SIGNAL_HANDLER_SETUP_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
@@ -147,6 +155,7 @@ class ShutdownHandler:
 
     def register_pre_shutdown_hook(self, hook: Callable[[], None]) -> None:
         """Register a pre-shutdown hook."""
+        assert self._pre_shutdown_hooks is not None
         self._pre_shutdown_hooks.append(hook)
         self.logger.debug(f"Registered pre-shutdown hook: {hook.__name__}")
 
@@ -402,7 +411,7 @@ class ShutdownHandler:
                 self._status.orders_to_cancel, 1
             )
             self.logger.info(
-                f"Canceled {self._status.orders_canceled}/{self._status.orders_to_cancel} orders ({success_rate:.1%})"
+                f"Canceled {self._status.orders_canceled}/{self._status.orders_to_cancel} orders ({success_rate:.1%})"  # noqa: E501
             )
 
             return success_rate >= 0.9  # 90% success rate required
@@ -464,7 +473,7 @@ class ShutdownHandler:
                 self._status.positions_to_close, 1
             )
             self.logger.info(
-                f"Closed {self._status.positions_closed}/{self._status.positions_to_close} positions ({success_rate:.1%})"
+                f"Closed {self._status.positions_closed}/{self._status.positions_to_close} positions ({success_rate:.1%})"  # noqa: E501
             )
 
             return success_rate >= 0.9  # 90% success rate required

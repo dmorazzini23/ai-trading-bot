@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
+from time import sleep
 from types import SimpleNamespace
 from typing import Any
 
+from requests import HTTPError
+
 from ai_trading.utils import clamp_timeout, http
-from ai_trading.utils import sleep as psleep
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,8 @@ partial_fill_tracker: dict[str, Any] = {}
 partial_fills: list[str] = []
 
 _DATA_BASE = "https://data.alpaca.markets"  # market data v2
+
+HTTP_RETRYABLE_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}  # AI-AGENT-REF: retry list
 
 
 def _resolve_url(path_or_url: str) -> str:
@@ -37,9 +40,7 @@ def _resolve_url(path_or_url: str) -> str:
     return trading_base + path_or_url
 
 
-def alpaca_get(
-    path_or_url: str, *, params: dict | None = None, timeout: int | None = None
-) -> Any:
+def alpaca_get(path_or_url: str, *, params: dict | None = None, timeout: int | None = None) -> Any:
     """Tiny helper for authenticated GET to Alpaca endpoints."""
     from ai_trading.config.settings import get_settings
 
@@ -91,9 +92,7 @@ async def _stream_with_sdk(
     tradeapi = _require_alpaca()
     Stream = tradeapi.stream.Stream
 
-    base_url = (
-        "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
-    )
+    base_url = "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
     stream = Stream(api_key, api_secret, base_url=base_url)
 
     async def on_trade_update(data):
@@ -155,67 +154,40 @@ def start_trade_updates_stream(
             loop.close()
 
 
-def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
+def submit_order(api: Any, req: Any) -> Any:
+    """Pass through provider order id and normalize to object with .id."""  # AI-AGENT-REF: test helper
     if SHADOW_MODE:
-        return {"status": "shadow"}
+        return SimpleNamespace(id=None, status="shadow")
     if DRY_RUN:
-        return {"status": "dry_run"}
-    if getattr(order_data, "client_order_id", None) is None:
-        order_data.client_order_id = str(uuid.uuid4())
-    safe_keys = [
-        "symbol",
-        "qty",
-        "side",
-        "type",
-        "time_in_force",
-        "limit_price",
-        "stop_price",
-        "client_order_id",
-    ]
-    kwargs = {}
-    for key in safe_keys:
-        val = getattr(order_data, key, None)
-        if val is None:
-            continue
-        if key in {"side", "time_in_force"}:
-            val = getattr(val, "value", str(val)).lower()
-        kwargs[key] = val
-    kwargs = {k: v for k, v in kwargs.items() if v is not None}
-
-    retries = 0
-    use_kwargs = True
-    while True:
-        try:
-            resp = (
-                api.submit_order(**kwargs)
-                if use_kwargs
-                else api.submit_order(order_data)
-            )
-        except TypeError:
-            if use_kwargs:
-                use_kwargs = False
-                continue
-            raise
-        except Exception as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            retries += 1
-            if retries > 2 or (status not in (500, None) and str(e) != "err"):
-                raise
-            psleep(min(0.5 * retries, 1.0))
-            continue
-        code = getattr(resp, "status_code", 200)
-        if code == 429:
-            retries += 1
-            if retries > 2:
-                break
-            psleep(min(0.5 * retries, 1.0))
-            continue
-        break
+        return SimpleNamespace(id=None, status="dry_run")
+    resp = api.submit_order(**req.__dict__)
     if isinstance(resp, dict):
-        resp = SimpleNamespace(**resp)  # AI-AGENT-REF: normalize dict response
-    oid = getattr(resp, "id", None)
-    status = getattr(resp, "status", "accepted")
-    return SimpleNamespace(id=oid, status=status)  # AI-AGENT-REF: preserve provider id
+        return SimpleNamespace(**resp)
+    return resp
+
+
+def submit_order_with_retry(api: Any, req: Any, retries: int = 3, backoff_s: float = 0.1) -> Any:
+    """Retry submit_order on transient HTTP errors."""  # AI-AGENT-REF: bounded retry
+    for attempt in range(retries + 1):
+        try:
+            return submit_order(api, req)
+        except HTTPError as e:
+            status = getattr(e.response, "status_code", None)
+            if status not in HTTP_RETRYABLE_STATUS_CODES or attempt == retries:
+                raise
+            sleep(backoff_s * (2**attempt))
+
+
+def submit_order_generic_retry(fn, *, retries: int = 3):
+    """Generic retry wrapper used by tests."""  # AI-AGENT-REF: helper for callables
+    for i in range(retries + 1):
+        try:
+            return fn()
+        except HTTPError as e:
+            sc = getattr(e.response, "status_code", None)
+            if sc not in HTTP_RETRYABLE_STATUS_CODES or i == retries:
+                raise
+            sleep(0.05 * (2**i))
 
 
 def handle_trade_update(event: Any) -> None:
