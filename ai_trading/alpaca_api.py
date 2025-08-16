@@ -1,13 +1,14 @@
 # ai_trading/alpaca_api.py
 from __future__ import annotations
+
 import asyncio
 import logging
-import time  # AI-AGENT-REF: tests patch alpaca_api.time.sleep
-from ai_trading.utils import sleep as psleep, clamp_timeout
-from ai_trading.utils import http
-from types import SimpleNamespace
 import uuid
-from typing import Any, Optional
+from types import SimpleNamespace
+from typing import Any
+
+from ai_trading.utils import clamp_timeout, http
+from ai_trading.utils import sleep as psleep
 
 logger = logging.getLogger(__name__)
 
@@ -19,10 +20,12 @@ partial_fills: list[str] = []
 
 _DATA_BASE = "https://data.alpaca.markets"  # market data v2
 
+
 def _resolve_url(path_or_url: str) -> str:
     if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
         return path_or_url
     from ai_trading.config.settings import get_settings
+
     S = get_settings()
     trading_base = (
         getattr(S, "alpaca_base_url", "https://paper-api.alpaca.markets")
@@ -33,7 +36,10 @@ def _resolve_url(path_or_url: str) -> str:
         return _DATA_BASE + path_or_url
     return trading_base + path_or_url
 
-def alpaca_get(path_or_url: str, *, params: Optional[dict] = None, timeout: int | None = None) -> Any:
+
+def alpaca_get(
+    path_or_url: str, *, params: dict | None = None, timeout: int | None = None
+) -> Any:
     """Tiny helper for authenticated GET to Alpaca endpoints."""
     from ai_trading.config.settings import get_settings
 
@@ -46,12 +52,15 @@ def alpaca_get(path_or_url: str, *, params: Optional[dict] = None, timeout: int 
     ctype = resp.headers.get("content-type", "")
     return resp.json() if "json" in ctype else resp.text
 
+
 # --- Trade updates stream (optional if SDK present) ---
+
 
 def _require_alpaca():
     """Import and return alpaca_trade_api or raise a helpful error."""  # AI-AGENT-REF: lazy import guard
     try:
         import alpaca_trade_api as tradeapi  # type: ignore
+
         return tradeapi
     except Exception as e:  # pragma: no cover - safety
         raise RuntimeError(
@@ -66,14 +75,23 @@ def _sdk_available() -> bool:
     except Exception:
         return False
 
+
 async def _stream_with_sdk(
-    api_key: str, api_secret: str, trading_client: Any, state: Any, *, paper: bool, running: Optional[asyncio.Event]
+    api_key: str,
+    api_secret: str,
+    trading_client: Any,
+    state: Any,
+    *,
+    paper: bool,
+    running: asyncio.Event | None,
 ) -> None:
     """Example async stream using alpaca-trade-api's websockets."""
     tradeapi = _require_alpaca()
     Stream = tradeapi.stream.Stream
 
-    base_url = "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
+    base_url = (
+        "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
+    )
     stream = Stream(api_key, api_secret, base_url=base_url)
 
     async def on_trade_update(data):
@@ -94,8 +112,15 @@ async def _stream_with_sdk(
     finally:
         await stream.stop()
 
+
 def start_trade_updates_stream(
-    api_key: str, api_secret: str, trading_client: Any, state: Any, *, paper: bool = True, running: Optional[asyncio.Event] = None
+    api_key: str,
+    api_secret: str,
+    trading_client: Any,
+    state: Any,
+    *,
+    paper: bool = True,
+    running: asyncio.Event | None = None,
 ) -> None:
     """
     Entrypoint expected by bot_engine: kicks off an async trade-updates stream.
@@ -105,13 +130,24 @@ def start_trade_updates_stream(
         logger.warning("Alpaca SDK not installed; trade updates stream disabled")
         return
     try:
-        asyncio.run(_stream_with_sdk(api_key, api_secret, trading_client, state, paper=paper, running=running))
+        asyncio.run(
+            _stream_with_sdk(
+                api_key, api_secret, trading_client, state, paper=paper, running=running
+            )
+        )
     except RuntimeError:
         # If already in an event loop (rare here), fall back to a simple loop
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(
-                _stream_with_sdk(api_key, api_secret, trading_client, state, paper=paper, running=running)
+                _stream_with_sdk(
+                    api_key,
+                    api_secret,
+                    trading_client,
+                    state,
+                    paper=paper,
+                    running=running,
+                )
             )
         finally:
             loop.close()
@@ -123,7 +159,7 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
     if DRY_RUN:
         return {"status": "dry_run"}
     if getattr(order_data, "client_order_id", None) is None:
-        setattr(order_data, "client_order_id", str(uuid.uuid4()))
+        order_data.client_order_id = str(uuid.uuid4())
     safe_keys = [
         "symbol",
         "qty",
@@ -148,7 +184,11 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
     use_kwargs = True
     while True:
         try:
-            resp = api.submit_order(**kwargs) if use_kwargs else api.submit_order(order_data)
+            resp = (
+                api.submit_order(**kwargs)
+                if use_kwargs
+                else api.submit_order(order_data)
+            )
         except TypeError:
             if use_kwargs:
                 use_kwargs = False
@@ -171,7 +211,9 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
         break
     if isinstance(resp, dict):
         resp = SimpleNamespace(**resp)  # AI-AGENT-REF: normalize dict response
-    return resp
+    oid = getattr(resp, "id", None)
+    status = getattr(resp, "status", "accepted")
+    return SimpleNamespace(id=str(oid) if oid is not None else None, status=status)
 
 
 def handle_trade_update(event: Any) -> None:

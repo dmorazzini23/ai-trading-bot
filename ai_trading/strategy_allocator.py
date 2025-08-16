@@ -1,30 +1,33 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
-from typing import Dict, List
-from ai_trading.strategies.base import StrategySignal as TradeSignal
+
+from dataclasses import dataclass
 
 
 @dataclass
-class _AllocConfig:
-    min_confidence: float = 0.0
-    delta_threshold: float = 0.0
-    signal_confirmation_bars: int = 1
+class MockSignal:
+    symbol: str
+    action: str  # 'buy' or 'sell'
+    confidence: float
 
 
-@dataclass
 class StrategyAllocator:
-    config: _AllocConfig = field(default_factory=_AllocConfig)
-    _confirm_counter: Dict[str, int] = field(default_factory=dict)
+    """Minimal allocator with confidence normalization hook for tests."""  # AI-AGENT-REF: test strategy allocator
 
-    def select_signals(self, signals_by_strategy: Dict[str, List[TradeSignal]]) -> List[TradeSignal]:
-        out: List[TradeSignal] = []
-        for strat, signals in (signals_by_strategy or {}).items():
-            for s in signals or []:
-                if getattr(s, "confidence", 1.0) < self.config.min_confidence:
-                    continue
-                need = max(1, int(self.config.signal_confirmation_bars))
-                key = f"{strat}:{s.symbol}:{s.side}"
-                self._confirm_counter[key] = self._confirm_counter.get(key, 0) + 1
-                if self._confirm_counter[key] >= need:
-                    out.append(s)
+    @staticmethod
+    def _normalize_confidence(c: float) -> float:
+        """Clip confidence to [0,1]."""  # AI-AGENT-REF: normalization helper
+        return max(0.0, min(1.0, c))
+
+    def allocate(self, signals_by_strategy: dict[str, list[MockSignal]]):
+        out: list[MockSignal] = []
+        for sigs in (signals_by_strategy or {}).values():
+            for s in sigs or []:
+                out.append(
+                    MockSignal(
+                        s.symbol, s.action, self._normalize_confidence(s.confidence)
+                    )
+                )
         return out
+
+
+__all__ = ["MockSignal", "StrategyAllocator"]
