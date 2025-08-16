@@ -12,12 +12,16 @@ from collections import deque
 from collections.abc import Sequence
 from datetime import datetime, date, timezone, timedelta
 from typing import Any, Union
+import json
+from urllib.parse import urlencode
 
 from pathlib import Path
 
 from ai_trading.utils import sleep as psleep, clamp_timeout, http
 from ai_trading.utils.prof import StageTimer
 import requests
+import urllib3
+from requests.exceptions import RequestException
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -170,9 +174,6 @@ def _get_alpaca_client():
     APIError = _APIError
     return _DATA_CLIENT
 
-# Session management for HTTP requests
-_session = None
-
 # Default market data feed for Alpaca requests
 _DEFAULT_FEED = "iex"
 
@@ -207,69 +208,44 @@ def _log_http_response(resp: requests.Response) -> None:
 _rate_limit_lock = threading.Lock()
 
 
-def get_session():
-    """Get or create HTTP session with proper cleanup."""
-    global _session
-    if _session is None:
-        try:
-            _session = requests.Session()
-            _session.headers.update({"User-Agent": "AI-Trading-Bot/1.0"})
-            # AI-AGENT-REF: Set reasonable timeouts to prevent hanging
-            _session.timeout = (10, 30)  # (connect_timeout, read_timeout)
-        except Exception as e:
-            # AI-AGENT-REF: Ensure proper session cleanup on initialization failure
-            logger.error("Failed to create HTTP session: %s", e)
-            if _session is not None:
-                try:
-                    _session.close()
-                except (AttributeError, RuntimeError) as e:
-                    # Ignore session cleanup errors during error handling
-                    logger.exception(
-                        "data_fetcher: session cleanup failed during error handling",
-                        exc_info=e,
-                    )
-                _session = None
-            raise
-    return _session
-
-
-def cleanup_session():
-    """Clean up HTTP session resources."""
-    global _session
-    if _session is not None:
-        try:
-            _session.close()
-            logger.debug("HTTP session closed successfully")
-        except Exception as e:
-            logger.warning("Error closing HTTP session: %s", e)
-        finally:
-            _session = None
-
-
-# AI-AGENT-REF: Ensure session cleanup on module exit
-import atexit
-
-atexit.register(cleanup_session)
-try:
-    import requests
-    import urllib3
-    from requests.exceptions import RequestException
-except Exception as e:  # pragma: no cover - allow missing in test env
-    logger.warning("Optional dependencies missing: %s", e)
-    import types
-
-    requests = types.SimpleNamespace(
-        Session=lambda: types.SimpleNamespace(get=lambda *a, **k: None),
-        get=lambda *a, **k: None,
-        exceptions=types.SimpleNamespace(
-            RequestException=Exception,
-            HTTPError=Exception,
-        ),
+def _build_daily_url(symbol: str, start: datetime, end: datetime) -> str:
+    """Construct Alpaca bars URL for a symbol."""  # AI-AGENT-REF: pooled fetch helper
+    params = {
+        "start": ensure_utc(start).isoformat().replace("+00:00", "Z"),
+        "end": ensure_utc(end).isoformat().replace("+00:00", "Z"),
+        "timeframe": "1Day",
+        "feed": _DEFAULT_FEED,
+    }
+    return (
+        f"https://data.alpaca.markets/v2/stocks/{symbol}/bars?" + urlencode(params)
     )
-    urllib3 = types.SimpleNamespace(
-        exceptions=types.SimpleNamespace(HTTPError=Exception)
-    )
-    RequestException = Exception
+
+
+def _parse_bars(symbol: str, code: int, body: bytes) -> pd.DataFrame | None:
+    """Parse bar response into a DataFrame."""  # AI-AGENT-REF: parse pooled responses
+    if code != 200:
+        logger.error("fetch_daily_data_async status %s for %s", code, symbol)
+        return None
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except Exception as exc:
+        logger.warning("fetch_daily_data_async decode error for %s: %s", symbol, exc)
+        return None
+    bars = data.get("bars") or []
+    if not bars:
+        logger.warning("No bars returned for %s", symbol)
+        return pd.DataFrame(
+            columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
+    df = pd.DataFrame(bars)
+    rename_map = {"t": "timestamp", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"}
+    df = df.rename(columns=rename_map)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
+    df = df[["timestamp", "open", "high", "low", "close", "volume"]]
+    df = df.reset_index(drop=True)
+    return df
+
+
 from ai_trading.utils.base import is_market_open, safe_to_datetime
 
 MINUTES_REQUIRED = 31
@@ -867,29 +843,20 @@ def get_daily_df(
 def fetch_daily_data_async(
     symbols: Sequence[str], start, end
 ) -> dict[str, pd.DataFrame]:
-    """Fetch daily data for multiple ``symbols`` concurrently."""
+    """Fetch daily data for multiple ``symbols`` using pooled HTTP requests."""
+    start_dt = ensure_datetime(start)
+    end_dt = ensure_datetime(end)
+    urls = [_build_daily_url(sym, start_dt, end_dt) for sym in symbols]
+    with StageTimer(logger, "UNIVERSE_FETCH", universe_size=len(symbols)):
+        responses = http.map_get(urls)
     results: dict[str, pd.DataFrame] = {}
-
-    def worker(sym: str) -> None:
+    for sym, (_, code, body) in zip(symbols, responses):
         try:
-            df = get_daily_df(sym, start, end)
+            df = _parse_bars(sym, code, body)
             if df is not None:
                 results[sym] = df
         except Exception as exc:  # pragma: no cover - best effort
             logger.error("fetch_daily_data_async failed for %s: %s", sym, exc)
-
-    with StageTimer(logger, "UNIVERSE_FETCH", universe_size=len(symbols)):
-        threads = [threading.Thread(target=worker, args=(s,)) for s in symbols]
-        for t in threads:
-            t.start()
-        deadline = 5.0 if not _TESTING else 0.5
-        for t in threads:
-            waited = 0.0
-            while t.is_alive() and waited < deadline:
-                psleep(0.05)
-                waited += 0.05
-            if t.is_alive():
-                logger.warning("fetch_daily_data_async thread still alive for %s", t)
     return results
 
 
