@@ -6,7 +6,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ai_trading.logging import get_logger
-from ai_trading.telemetry import metrics_logger
 
 try:
     from ai_trading.capital_scaling import (
@@ -129,6 +128,8 @@ def pyramiding_logic(
 ) -> float:
     """Return new position size applying pyramiding rules."""
     if profit_in_atr > 1.0 and current_position < 2 * base_size:
+        from ai_trading.telemetry import metrics_logger  # AI-AGENT-REF: local import
+
         new_pos = current_position + 0.25 * base_size
         metrics_logger.log_pyramid_add("generic", new_pos)
         return new_pos

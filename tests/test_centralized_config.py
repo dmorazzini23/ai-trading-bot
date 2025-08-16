@@ -247,5 +247,80 @@ class TestCentralizedConfig:
             assert config.max_position_size > 0
 
 
+def test_trading_config_has_max_drawdown_threshold():
+    """TradingConfig exposes drawdown threshold."""  # AI-AGENT-REF
+    from ai_trading.config.management import TradingConfig
+
+    cfg = TradingConfig.from_env("balanced")
+    assert hasattr(cfg, "max_drawdown_threshold"), "TradingConfig missing max_drawdown_threshold"
+    assert isinstance(cfg.max_drawdown_threshold, (int, float))
+    assert 0 <= cfg.max_drawdown_threshold <= 1, "max_drawdown_threshold should be a fraction (0..1)"
+
+
+def test_trading_config_to_dict_includes_capital_and_drawdown():
+    """to_dict includes capital cap and drawdown."""  # AI-AGENT-REF
+    from ai_trading.config.management import TradingConfig
+
+    cfg = TradingConfig.from_env("balanced")
+    data = cfg.to_dict()
+    assert "capital_cap" in data, "to_dict() missing capital_cap"
+    assert "max_drawdown_threshold" in data, "to_dict() missing max_drawdown_threshold"
+    assert isinstance(data["capital_cap"], (int, float))
+    assert isinstance(data["max_drawdown_threshold"], (int, float))
+
+
+def test_trading_config_legacy_params_keys():
+    """Ensure legacy params expose required keys."""  # AI-AGENT-REF: regression guard
+    from ai_trading.config.management import TradingConfig
+
+    cfg = TradingConfig.from_env("balanced")
+    params = cfg.get_legacy_params()
+    required = {
+        "KELLY_FRACTION",
+        "CONF_THRESHOLD",
+        "CONFIRMATION_COUNT",
+        "LOOKBACK_DAYS",
+        "MIN_SIGNAL_STRENGTH",
+        "STOP_LOSS",
+        "TAKE_PROFIT",
+        "TAKE_PROFIT_FACTOR",
+        "TRAILING_FACTOR",
+        "ENTRY_START_OFFSET_MIN",
+        "ENTRY_END_OFFSET_MIN",
+        "DAILY_LOSS_LIMIT",
+        "MAX_DRAWDOWN_THRESHOLD",
+        "PORTFOLIO_DRIFT_THRESHOLD",
+        "DOLLAR_RISK_LIMIT",
+        "CAPITAL_CAP",
+        "SECTOR_EXPOSURE_CAP",
+        "MAX_PORTFOLIO_POSITIONS",
+        "DISASTER_DD_LIMIT",
+        "REBALANCE_INTERVAL_MIN",
+        "TRADE_COOLDOWN_MIN",
+        "MAX_TRADES_PER_HOUR",
+        "MAX_TRADES_PER_DAY",
+        "BUY_THRESHOLD",
+        "POSITION_SIZE_MIN_USD",
+        "VOLUME_THRESHOLD",
+        "SEED",
+    }
+    assert required.issubset(params.keys())
+
+
+def test_botmode_init_uses_fallback_when_method_missing(monkeypatch):
+    """BotMode should not error if config lacks legacy method."""  # AI-AGENT-REF
+    from ai_trading.core import bot_engine
+    from ai_trading.config import management as config
+
+    class BareCfg(config.TradingConfig):
+        pass
+
+    cfg = BareCfg.from_env("balanced")
+    monkeypatch.delattr(config.TradingConfig, "get_legacy_params", raising=False)
+    monkeypatch.setattr(config.TradingConfig, "from_env", staticmethod(lambda mode: cfg))
+
+    bot_engine.BotMode("balanced")  # Should not raise
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

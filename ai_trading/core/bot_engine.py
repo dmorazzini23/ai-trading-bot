@@ -2094,7 +2094,14 @@ class BotMode:
         self.mode = mode.lower()
         # Use centralized configuration instead of hardcoded parameters
         self.config = config.TradingConfig.from_env(mode=self.mode)
-        self.params = self.config.get_legacy_params()
+        # Build legacy parameter map with attribute guard
+        get_lp = getattr(self.config, "get_legacy_params", None)
+        if callable(get_lp):
+            self.params = get_lp()  # AI-AGENT-REF: direct method path
+        else:  # AI-AGENT-REF: fallback for stale Pydantic instances
+            from ai_trading.config.management import build_legacy_params_from_config
+
+            self.params = build_legacy_params_from_config(self.config)
 
     def set_parameters(self) -> dict[str, float]:
         """Return trading parameters for the current mode.
@@ -2290,7 +2297,10 @@ def _env_float(default: float, *keys: str) -> float:
 
 CAPITAL_CAP = _env_float(0.04, "AI_TRADING_CAPITAL_CAP", "get_capital_cap()")
 DOLLAR_RISK_LIMIT = _env_float(0.05, "AI_TRADING_DOLLAR_RISK_LIMIT", "get_dollar_risk_limit()")
-BUY_THRESHOLD = params.get("get_buy_threshold()", state.mode_obj.config.buy_threshold)
+BUY_THRESHOLD = params.get(
+    "get_buy_threshold()",
+    getattr(state.mode_obj.config, "buy_threshold", get_buy_threshold()),
+)
 
 
 # Coerce MAX_*SIZE to bounded integers to avoid noisy "invalid" logs
