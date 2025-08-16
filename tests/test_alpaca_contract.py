@@ -1,6 +1,8 @@
 import types
+
 import ai_trading.alpaca_api as alpaca_api  # AI-AGENT-REF: canonical import
-from ai_trading.alpaca_contract import MockClient
+from tests.mocks.alpaca_mocks import MockClient
+
 
 def test_submit_order_contract():
     api = MockClient()

@@ -1,1 +1,1 @@
-# Test-only mock classes live here.
+# Test-only mocks package

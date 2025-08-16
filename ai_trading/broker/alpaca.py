@@ -1,43 +1,18 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from typing import Any
 
 try:  # AI-AGENT-REF: safe optional import for tests
     from alpaca.trading.client import TradingClient as _RealTradingClient  # type: ignore
+
     ALPACA_SDK_AVAILABLE = True
 except Exception:  # pragma: no cover - optional dependency
     _RealTradingClient = None
     ALPACA_SDK_AVAILABLE = False
 
 
-class MockTradingClient:
-    def __init__(self, *a, **k):
-        pass
-
-    def submit_order(self, *a, **k):
-        return {"status": "mock"}
-
-
-TradingClient = _RealTradingClient or MockTradingClient
-
-
-class MockOrderSide:
-    BUY = "buy"
-    SELL = "sell"
-
-
-class MockTimeInForce:
-    DAY = "day"
-
-
-class MockOrderStatus:
-    NEW = "new"
-
-
-class MockQueryOrderStatus:
-    OPEN = "open"
-    CLOSED = "closed"
-    ALL = "all"
+TradingClient = _RealTradingClient
 
 
 class AlpacaBroker:
@@ -66,6 +41,7 @@ class AlpacaBroker:
         try:
             # New SDK: `alpaca.trading.client.TradingClient`
             from alpaca.trading.client import TradingClient  # type: ignore
+
             self._is_new = isinstance(raw_api, TradingClient)
         except Exception:
             self._is_new = False
@@ -82,8 +58,20 @@ class AlpacaBroker:
         if not self._is_new:
             return
         if self._GetOrdersRequest is None:
-            from alpaca.trading.requests import GetOrdersRequest, MarketOrderRequest, LimitOrderRequest, StopOrderRequest, StopLimitOrderRequest  # type: ignore
-            from alpaca.trading.enums import QueryOrderStatus, OrderSide, OrderType, TimeInForce  # type: ignore
+            from alpaca.trading.enums import (  # type: ignore
+                OrderSide,
+                OrderType,
+                QueryOrderStatus,
+                TimeInForce,
+            )
+            from alpaca.trading.requests import (  # type: ignore
+                GetOrdersRequest,
+                LimitOrderRequest,
+                MarketOrderRequest,
+                StopLimitOrderRequest,
+                StopOrderRequest,
+            )
+
             self._GetOrdersRequest = GetOrdersRequest
             self._MarketOrderRequest = MarketOrderRequest
             self._LimitOrderRequest = LimitOrderRequest
@@ -109,7 +97,9 @@ class AlpacaBroker:
         except AttributeError:
             raise RuntimeError("Alpaca API has neither get_orders nor list_orders")
 
-    def list_orders(self, status: Optional[str] = None, limit: Optional[int] = None) -> Iterable[Any]:
+    def list_orders(
+        self, status: str | None = None, limit: int | None = None
+    ) -> Iterable[Any]:
         """
         Generic order listing with optional status and limit.
         status: 'open'|'closed'|'all' (old SDK words) or maps to new enums.
@@ -157,7 +147,9 @@ class AlpacaBroker:
             return self._api.list_positions()
         except AttributeError:
             # Some old SDKs used `list_positions`; keep explicit error
-            raise RuntimeError("Alpaca API has neither get_all_positions nor list_positions")
+            raise RuntimeError(
+                "Alpaca API has neither get_all_positions nor list_positions"
+            )
 
     def get_account(self) -> Any:
         if self._is_new:
@@ -165,7 +157,7 @@ class AlpacaBroker:
         return self._api.get_account()
 
 
-def initialize(*args, **kwargs) -> "AlpacaBroker | None":
+def initialize(*args, **kwargs) -> AlpacaBroker | None:
     """Create an :class:`AlpacaBroker` if the SDK is available."""
     if not ALPACA_SDK_AVAILABLE:
         return None
@@ -177,34 +169,70 @@ def initialize(*args, **kwargs) -> "AlpacaBroker | None":
         self,
         symbol: str,
         qty: float,
-        side: str,               # 'buy' | 'sell'
-        type: str = "market",    # 'market'|'limit'|'stop'|'stop_limit'
+        side: str,  # 'buy' | 'sell'
+        type: str = "market",  # 'market'|'limit'|'stop'|'stop_limit'
         time_in_force: str = "day",
-        limit_price: Optional[float] = None,
-        stop_price: Optional[float] = None,
-        client_order_id: Optional[str] = None,
+        limit_price: float | None = None,
+        stop_price: float | None = None,
+        client_order_id: str | None = None,
         **extras: Any,
     ) -> Any:
         if self._is_new:
             self._new_imports()
-            side_enum = self._OrderSide.BUY if side.lower() == "buy" else self._OrderSide.SELL
-            tif_enum = getattr(self._TimeInForce, time_in_force.upper(), self._TimeInForce.DAY)
+            side_enum = (
+                self._OrderSide.BUY if side.lower() == "buy" else self._OrderSide.SELL
+            )
+            tif_enum = getattr(
+                self._TimeInForce, time_in_force.upper(), self._TimeInForce.DAY
+            )
 
             t = type.lower()
             if t == "market":
-                req = self._MarketOrderRequest(symbol=symbol, qty=qty, side=side_enum, time_in_force=tif_enum, client_order_id=client_order_id, **extras)
+                req = self._MarketOrderRequest(
+                    symbol=symbol,
+                    qty=qty,
+                    side=side_enum,
+                    time_in_force=tif_enum,
+                    client_order_id=client_order_id,
+                    **extras,
+                )
             elif t == "limit":
                 if limit_price is None:
                     raise ValueError("limit_price is required for limit orders")
-                req = self._LimitOrderRequest(symbol=symbol, qty=qty, side=side_enum, time_in_force=tif_enum, limit_price=limit_price, client_order_id=client_order_id, **extras)
+                req = self._LimitOrderRequest(
+                    symbol=symbol,
+                    qty=qty,
+                    side=side_enum,
+                    time_in_force=tif_enum,
+                    limit_price=limit_price,
+                    client_order_id=client_order_id,
+                    **extras,
+                )
             elif t == "stop":
                 if stop_price is None:
                     raise ValueError("stop_price is required for stop orders")
-                req = self._StopOrderRequest(symbol=symbol, qty=qty, side=side_enum, time_in_force=tif_enum, stop_price=stop_price, client_order_id=client_order_id, **extras)
+                req = self._StopOrderRequest(
+                    symbol=symbol,
+                    qty=qty,
+                    side=side_enum,
+                    time_in_force=tif_enum,
+                    stop_price=stop_price,
+                    client_order_id=client_order_id,
+                    **extras,
+                )
             elif t == "stop_limit":
                 if stop_price is None or limit_price is None:
                     raise ValueError("stop_limit requires stop_price and limit_price")
-                req = self._StopLimitOrderRequest(symbol=symbol, qty=qty, side=side_enum, time_in_force=tif_enum, stop_price=stop_price, limit_price=limit_price, client_order_id=client_order_id, **extras)
+                req = self._StopLimitOrderRequest(
+                    symbol=symbol,
+                    qty=qty,
+                    side=side_enum,
+                    time_in_force=tif_enum,
+                    stop_price=stop_price,
+                    limit_price=limit_price,
+                    client_order_id=client_order_id,
+                    **extras,
+                )
             else:
                 raise ValueError(f"unsupported order type: {type!r}")
 
@@ -227,10 +255,5 @@ def initialize(*args, **kwargs) -> "AlpacaBroker | None":
 
 __all__ = [
     "TradingClient",
-    "MockTradingClient",
     "AlpacaBroker",
-    "MockOrderSide",
-    "MockTimeInForce",
-    "MockOrderStatus",
-    "MockQueryOrderStatus",
 ]
