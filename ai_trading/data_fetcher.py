@@ -19,7 +19,6 @@ from pathlib import Path
 
 from ai_trading.utils import sleep as psleep, clamp_timeout, http
 from ai_trading.utils.prof import StageTimer
-import requests
 import urllib3
 from requests.exceptions import RequestException
 from tenacity import (
@@ -201,7 +200,7 @@ def _log_http_request(
     )
 
 
-def _log_http_response(resp: requests.Response) -> None:
+def _log_http_response(resp: Any) -> None:
     logger.debug("HTTP_RESPONSE status=%s body=%s", resp.status_code, resp.text[:300])
 
 
@@ -373,7 +372,7 @@ def _fetch_bars(
                     url, params=params, headers=headers
                 )
             break
-        except requests.exceptions.RequestException as exc:
+        except RequestException as exc:
             logger.warning(
                 "HTTP request failed %s/%s for %s: %s", attempt + 1, 3, symbol, exc
             )
