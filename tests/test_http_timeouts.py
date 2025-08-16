@@ -1,11 +1,12 @@
 """Validate timeout behavior via the centralized HTTP abstraction."""
 
-import inspect
 import re
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import ai_trading.utils.http as http
-from pathlib import Path
+
+pytest_plugins = ("tests.watchdog_ext",)
 
 
 def test_httpsession_sets_default_timeout(monkeypatch):
@@ -24,22 +25,40 @@ def test_httpsession_sets_default_timeout(monkeypatch):
 
 def test_bot_engine_uses_http_abstraction():
     source = Path("ai_trading/core/bot_engine.py").read_text()
-    assert (
-        "from ai_trading.utils import http" in source
-        or re.search(r"HTTPSession\(", source)
+    assert "from ai_trading.utils import http" in source or re.search(
+        r"HTTPSession\(", source
     ), "bot_engine should use ai_trading.utils.http (centralized timeouts/retries)."
 
 
-def test_requests_can_still_be_patched_via_session(monkeypatch):
+def test_requests_can_still_be_patched_via_session():
+    """
+    Validate that our test plugin injects a default timeout into raw requests.Session calls
+    even when the caller does not pass `timeout`.
+    We avoid patching internals and instead mount a spy adapter to observe kwargs.
+    """
     import requests
+    from requests.adapters import HTTPAdapter
+    from requests.models import Response
 
     seen = {}
 
-    def spy(self, method, url, **kw):
-        seen["timeout_present"] = "timeout" in kw and kw["timeout"] is not None
-        return MagicMock(status_code=200, text="ok")
+    class SpyAdapter(HTTPAdapter):
+        def send(self, request, **kwargs):
+            # capture timeout kw passed down by Session.request (via our plugin)
+            seen["timeout"] = kwargs.get("timeout")
+            resp = Response()
+            resp.status_code = 200
+            resp._content = b"ok"
+            resp.url = request.url
+            return resp
 
-    monkeypatch.setattr(requests.sessions.Session, "request", spy)
-    requests.Session().get("http://localhost/ok", timeout=1)
-    assert seen["timeout_present"] is True
+    s = requests.Session()
+    s.mount("http://", SpyAdapter())
+    s.mount("https://", SpyAdapter())
 
+    # Do not pass timeout -> plugin should inject default
+    r = s.get("http://localhost/_probe_ok")
+    assert r.status_code == 200
+    assert (
+        seen.get("timeout") is not None
+    ), "Expected plugin to inject a default timeout into Session.request"
