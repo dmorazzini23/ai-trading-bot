@@ -16,7 +16,8 @@ except Exception:  # pragma: no cover
 
 
 def _secret_to_str(val: Any) -> str | None:
-    """Return a plain string for SecretStr or str; None if unset."""  # AI-AGENT-REF: safe secret unwrap
+    """Return a plain string for SecretStr or str; None if unset."""
+    # AI-AGENT-REF: safe secret unwrap
     if val is None or isinstance(val, FieldInfo):
         return None
     if isinstance(val, SecretStr):
@@ -124,7 +125,9 @@ class Settings(BaseSettings):
     )  # AI-AGENT-REF: iterations alias
     scheduler_iterations: int = Field(0, validation_alias="SCHEDULER_ITERATIONS")
     scheduler_sleep_seconds: int = Field(60, validation_alias="SCHEDULER_SLEEP_SECONDS")
-    seed: int = Field(42, alias="AI_TRADING_SEED")  # AI-AGENT-REF: seed alias
+    ai_trading_seed: int = Field(
+        42, alias="AI_TRADING_SEED"
+    )  # AI-AGENT-REF: seed alias
 
     # paths
     model_path: str = Field(
@@ -157,6 +160,7 @@ class Settings(BaseSettings):
         60,
         ge=1,
         description="Minutes between portfolio rebalances",
+        alias="REBALANCE_INTERVAL_MIN",
     )  # AI-AGENT-REF: rebalance interval
 
     @field_validator("model_path", "halt_flag_path", "rl_model_path", mode="before")
@@ -295,4 +299,4 @@ def get_alpaca_secret_key_plain() -> str | None:
 def get_seed_int(default: int = 42) -> int:
     """Fetch deterministic seed as int."""  # AI-AGENT-REF: robust seed accessor
     s = get_settings()
-    return _to_int(getattr(s, "seed", default), default)
+    return _to_int(getattr(s, "ai_trading_seed", default), default)

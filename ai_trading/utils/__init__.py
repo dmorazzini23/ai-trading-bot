@@ -7,7 +7,7 @@ Unified utilities export layer.
 Only re-export light symbols needed by production modules to avoid import-time heaviness.
 """
 import os
-from typing import Any
+from typing import Any, Final
 
 import pandas as pd
 
@@ -44,22 +44,17 @@ from .process_manager import acquire_lock, file_lock, release_lock
 from .time import now_utc
 from .timing import sleep  # AI-AGENT-REF: test-aware timing helpers
 
-HTTP_TIMEOUT_S: float = float(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
+# Shared timeout knobs
+HTTP_TIMEOUT_S: Final[int] = int(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
+SUBPROCESS_TIMEOUT_S: Final[int] = int(os.getenv("SUBPROCESS_TIMEOUT_S", "10") or 10)
 
 
-def clamp_timeout(
-    kwargs: dict[str, Any], default: float | None = None
-) -> dict[str, Any]:
-    """Ensure a numeric timeout is present in kwargs."""
-    if default is None:
-        default = HTTP_TIMEOUT_S
-    t = kwargs.get("timeout", default)
+def clamp_timeout(timeout: float | None, default: float = HTTP_TIMEOUT_S) -> float:
+    """Return a concrete timeout value."""
     try:
-        t = float(t)
+        return float(timeout) if timeout is not None else float(default)
     except Exception:
-        t = default
-    kwargs["timeout"] = t
-    return kwargs
+        return float(default)
 
 
 import ai_trading.utils.process_manager as process_manager  # noqa: E402
@@ -99,4 +94,5 @@ __all__ = [
     "ensure_utc_index",
     "process_manager",
     "HTTP_TIMEOUT_S",
+    "SUBPROCESS_TIMEOUT_S",
 ]

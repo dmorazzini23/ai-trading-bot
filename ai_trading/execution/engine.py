@@ -41,7 +41,7 @@ else:  # pragma: no cover - fallback for dev/test
         pass
 
 
-_ORDER_STALE_AGE_S = int(os.getenv("ORDER_STALE_AGE_S", "480") or 480)
+ORDER_STALE_TIMEOUT_S = int(os.getenv("ORDER_STALE_TIMEOUT_S", "300") or 300)
 
 
 @dataclass
@@ -63,7 +63,7 @@ def _cleanup_stale_orders(now_s: float | None = None) -> list[str]:
     removed: list[str] = []
     with _order_tracking_lock:
         for oid, info in list(_active_orders.items()):
-            if now - info.submitted_time >= _ORDER_STALE_AGE_S:
+            if now - info.submitted_time >= ORDER_STALE_TIMEOUT_S:
                 removed.append(oid)
                 _active_orders.pop(oid, None)
     return removed

@@ -171,8 +171,10 @@ def get_trading_calendar(name: str = "XNYS"):
 
     class _NaiveCal:
         def schedule(self, start_date, end_date):
-            idx = pd.date_range(start=start_date, end=end_date, freq="B")
-            return pd.DataFrame({"market_open": idx, "market_close": idx})
+            idx = pd.date_range(start=start_date, end=end_date, freq="B", tz="UTC")
+            opens = idx + pd.Timedelta(hours=9, minutes=30)
+            closes = idx + pd.Timedelta(hours=16)
+            return pd.DataFrame({"market_open": opens, "market_close": closes})
 
     return _NaiveCal()
 

@@ -32,6 +32,8 @@ from ai_trading.utils import (
     http,
 )  # AI-AGENT-REF: use centralized HTTP helper
 
+SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY", "")
+
 # AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
 from ai_trading.utils.device import (  # AI-AGENT-REF: device helper
     pick_torch_device,
@@ -110,6 +112,8 @@ __all__ = [
     "analyze_text",
     "sentiment_lock",
     "_SENTIMENT_CACHE",
+    "SENTIMENT_FAILURE_THRESHOLD",
+    "SENTIMENT_API_KEY",
 ]
 
 
@@ -177,7 +181,11 @@ def fetch_sentiment(ctx, ticker: str) -> float:
         Sentiment score between -1.0 and 1.0
     """
     settings = get_settings()
-    api_key = getattr(settings, "sentiment_api_key", None) or get_news_api_key()
+    api_key = (
+        SENTIMENT_API_KEY
+        or getattr(settings, "sentiment_api_key", None)
+        or get_news_api_key()
+    )
     if not api_key:
         logger.debug(
             "No sentiment API key configured (checked settings.sentiment_api_key and news API key)"
