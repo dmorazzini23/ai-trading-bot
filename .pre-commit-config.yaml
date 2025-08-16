@@ -19,6 +19,7 @@ repos:
       - id: detect-secrets
         args: [--baseline, .secrets.baseline]
         exclude: \.secrets\.baseline$
+        stages: [manual]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0

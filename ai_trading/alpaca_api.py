@@ -1,38 +1,42 @@
+"""Minimal Alpaca helpers used in tests."""
+
 from __future__ import annotations
 
+import threading
 import time
 import uuid
 from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import Any
 
-try:
-    from requests.exceptions import HTTPError as _HTTPError
-    from requests.exceptions import RequestException as _RequestException
+try:  # pragma: no cover - requests optional
+    from requests.exceptions import HTTPError
 except Exception:  # pragma: no cover
-    _HTTPError = None
-    _RequestException = None
+
+    class HTTPError(Exception):
+        pass
 
 
-class HTTPError(Exception):  # re-export
-    pass
+from ai_trading.utils import clamp_timeout
+
+DRY_RUN = False
+SHADOW_MODE = False
+_pending_orders_lock = threading.Lock()
+_pending_orders: dict[str, Any] = {}
+partial_fill_tracker: dict[str, int] = {}
+partial_fills: set[str] = set()
 
 
-class RequestException(Exception):  # re-export
-    pass
+def is_rate_limit(exc: Exception) -> bool:
+    return getattr(exc, "status_code", None) == 429 or "429" in str(exc)
 
 
-if _HTTPError is not None:  # pragma: no cover
-    HTTPError = _HTTPError  # type: ignore[assignment]
-if _RequestException is not None:  # pragma: no cover
-    RequestException = _RequestException  # type: ignore[assignment]
+def is_retryable(status_code: int, exc: Exception | None = None) -> bool:
+    return status_code in {429, 500, 502, 503, 504} or bool(exc and is_rate_limit(exc))
 
 
-RETRYABLE_STATUS = {429, 500, 502, 503, 504}
-
-
-def unique_client_order_id(prefix: str = "bot") -> str:
-    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+def generate_client_order_id(symbol: str) -> str:
+    return f"{symbol}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
 
 
 def _as_mapping(obj: Any) -> Mapping[str, Any]:
@@ -41,70 +45,82 @@ def _as_mapping(obj: Any) -> Mapping[str, Any]:
     return {k: getattr(obj, k) for k in dir(obj) if not k.startswith("_")}
 
 
-def _extract_req(req: Any) -> dict[str, Any]:
+def _build_order(req: Any) -> SimpleNamespace:
     m = _as_mapping(req)
-    # normalize common keys expected by tests
-    return {
-        "symbol": m.get("symbol"),
-        "qty": m.get("qty") or m.get("quantity"),
-        "side": m.get("side"),
-        "time_in_force": m.get("time_in_force") or m.get("tif") or "day",
-        "type": m.get("type") or "market",
-        "limit_price": m.get("limit_price"),
-        "stop_price": m.get("stop_price"),
-        "client_order_id": m.get("client_order_id"),
-        "extended_hours": m.get("extended_hours", False),
-    }
+    coid = m.get("client_order_id") or generate_client_order_id(m.get("symbol", "ord"))
+    return SimpleNamespace(
+        symbol=m.get("symbol"),
+        qty=m.get("qty") or m.get("quantity"),
+        side=m.get("side"),
+        time_in_force=m.get("time_in_force") or m.get("tif") or "day",
+        type=m.get("type") or "market",
+        limit_price=m.get("limit_price"),
+        stop_price=m.get("stop_price"),
+        client_order_id=coid,
+        extended_hours=m.get("extended_hours", False),
+    )
 
 
-def submit_order(api: Any, req: Any, max_retries: int = 3, retry_wait_s: float = 0.25):
-    """Submit an order; accepts dict or SimpleNamespace; returns object with `.id`."""
-    payload = _extract_req(req)
+def submit_order(
+    api: Any,
+    req: Any,
+    *,
+    dry_run: bool = False,
+    shadow: bool = False,
+    timeout: float | None = None,
+    max_retries: int = 3,
+) -> Any:
+    """Submit an order and return an object with ``.id``."""
+    if dry_run or DRY_RUN:
+        return {"status": "dry_run", "id": "dry-run"}
+    if shadow or SHADOW_MODE:
+        return {"status": "shadow", "id": "shadow"}
 
-    def _do():
-        resp = api.submit_order(**{k: v for k, v in payload.items() if v is not None})
-        # Normalize result to have `.id`
-        if isinstance(resp, Mapping):
-            oid = resp.get("id") or resp.get("order_id")
-        else:
-            oid = getattr(resp, "id", None) or getattr(resp, "order_id", None)
-        return SimpleNamespace(id=oid or "mock-client-1", raw=resp)
-
-    last_exc = None
+    order = _build_order(req)
+    timeout_v = clamp_timeout(timeout)
+    last_exc: Exception | None = None
     for attempt in range(1, max_retries + 1):
         try:
-            return _do()
+            try:
+                resp = api.submit_order(order, timeout=timeout_v)
+            except TypeError:
+                resp = api.submit_order(order)
+            oid = getattr(resp, "id", None) or getattr(resp, "order_id", None)
+            return SimpleNamespace(id=oid or order.client_order_id, raw=resp)
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
-            if attempt == max_retries:
+            status = getattr(exc, "status_code", 0)
+            if not is_retryable(status, exc) or attempt == max_retries:
                 raise
-            time.sleep(retry_wait_s)
+            time.sleep(0.1)
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("submit_order failed")
 
 
-# ---- Compatibility wrappers expected by tests ----
+def handle_trade_update(event: Any) -> None:
+    oid = getattr(getattr(event, "order", None), "id", None)
+    if not oid:
+        return
+    qty = int(getattr(getattr(event, "order", None), "filled_qty", 0))
+    if event.event == "partial_fill":
+        prev = partial_fill_tracker.get(oid)
+        if prev != qty:
+            partial_fill_tracker[oid] = qty
+            partial_fills.add(oid)
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "ORDER_PARTIAL_FILL", extra={"order_id": oid}
+            )
+    elif event.event == "fill":
+        if oid in partial_fills:
+            import logging
+
+            logging.getLogger(__name__).debug("ORDER_FILLED", extra={"order_id": oid})
+        partial_fill_tracker.pop(oid, None)
+        partial_fills.discard(oid)
 
 
-def submit_order_rate_limit(api: Any, req: Any):
-    """Thin wrapper used by tests to exercise 429 handling via submit_order."""
-    return submit_order(api, req)
-
-
-def submit_order_generic_retry(api: Any, req: Any):
-    """Thin wrapper used by tests to exercise generic retry via submit_order."""
-    return submit_order(api, req)
-
-
-def submit_order_http_error(api: Any, req: Any):
-    """Thin wrapper that surfaces HTTP errors from the underlying call."""
-    return submit_order(api, req, max_retries=1)
-
-
-# Legacy placeholders expected by bot_engine imports
-def alpaca_get(*args, **kwargs):  # pragma: no cover - placeholder
-    raise NotImplementedError("alpaca_get is not implemented in test shim")
-
-
-def start_trade_updates_stream(*args, **kwargs):  # pragma: no cover - placeholder
-    raise NotImplementedError(
-        "start_trade_updates_stream is not implemented in test shim"
-    )
+# Compatibility exports expected by tests
+HTTPError = HTTPError  # re-export for import contracts

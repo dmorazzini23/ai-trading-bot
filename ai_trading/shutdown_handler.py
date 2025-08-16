@@ -20,6 +20,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+Hook = Callable[[], None]
+PositionsHandler = Callable[[], list[dict[str, Any]]]
+
 from alpaca_trade_api.rest import APIError
 
 from ai_trading.logging import logger
@@ -98,7 +101,7 @@ class ShutdownHandler:
         }
 
         # Registered shutdown hooks
-        self._pre_shutdown_hooks: list[Callable[[], None]] = []
+        self._pre_shutdown_hooks: list[Callable[[], None]] = list()
         self._position_handlers: list[Callable] = []
         self._order_handlers: list[Callable] = []
         self._cleanup_hooks: list[Callable] = []
@@ -156,16 +159,12 @@ class ShutdownHandler:
         if not self._status.is_shutting_down:
             asyncio.create_task(self.shutdown(ShutdownReason.SIGNAL_RECEIVED))
 
-    def register_pre_shutdown_hook(self, hook: Callable[[], None]) -> None:
+    def register_pre_shutdown_hook(self, hook: Hook) -> None:
         """Register a pre-shutdown hook."""
-        if not hasattr(self, "_pre_shutdown_hooks") or self._pre_shutdown_hooks is None:
-            self._pre_shutdown_hooks = []
         self._pre_shutdown_hooks.append(hook)
         self.logger.debug(f"Registered pre-shutdown hook: {hook.__name__}")
 
-    def register_position_handler(
-        self, handler: Callable[[], list[dict[str, Any]]]
-    ) -> None:
+    def register_position_handler(self, handler: PositionsHandler) -> None:
         """Register a position handler that returns list of positions to close."""
         self._position_handlers.append(handler)
         self.logger.debug(f"Registered position handler: {handler.__name__}")
@@ -177,12 +176,12 @@ class ShutdownHandler:
         self._order_handlers.append(handler)
         self.logger.debug(f"Registered order handler: {handler.__name__}")
 
-    def register_cleanup_hook(self, hook: Callable[[], None]) -> None:
+    def register_cleanup_hook(self, hook: Hook) -> None:
         """Register a cleanup hook."""
         self._cleanup_hooks.append(hook)
         self.logger.debug(f"Registered cleanup hook: {hook.__name__}")
 
-    def register_post_shutdown_hook(self, hook: Callable[[], None]) -> None:
+    def register_post_shutdown_hook(self, hook: Hook) -> None:
         """Register a post-shutdown hook."""
         self._post_shutdown_hooks.append(hook)
         self.logger.debug(f"Registered post-shutdown hook: {hook.__name__}")
