@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 _log = logging.getLogger(__name__)
 
@@ -31,16 +31,17 @@ _alpaca_rest = _optional_import("alpaca_trade_api.rest")
 if _alpaca_rest is not None:
     APIError = _alpaca_rest.APIError  # type: ignore[attr-defined]
 else:  # pragma: no cover - fallback for dev/test
+
     class APIError(Exception):
         pass
+
 
 from ai_trading.market.symbol_specs import TICK_BY_SYMBOL, get_lot_size, get_tick_size
 from ai_trading.math.money import Money, round_to_lot, round_to_tick
 
-from .idempotency import OrderIdempotencyCache
-
 from ..core.constants import EXECUTION_PARAMETERS
 from ..core.enums import OrderSide, OrderStatus, OrderType
+from .idempotency import OrderIdempotencyCache
 
 
 # AI-AGENT-REF: quantity input guard
@@ -54,7 +55,7 @@ def _ensure_positive_qty(qty: float) -> float:
 
 
 # AI-AGENT-REF: price input guard
-def _ensure_valid_price(price: Optional[float]) -> Optional[float]:
+def _ensure_valid_price(price: float | None) -> float | None:
     if price is None:
         return None
     p = float(price)
@@ -554,6 +555,7 @@ class OrderManager:
 
                 # AI-AGENT-REF: Run reconciliation after order processing
                 from .reconcile import reconcile_positions_and_orders
+
                 reconcile_positions_and_orders()
 
                 time.sleep(1)  # Check every second
@@ -609,6 +611,9 @@ class ExecutionEngine:
     and provides unified execution interface.
     """
 
+    _minute_stats: dict[str, float] = {}  # AI-AGENT-REF: patchable minute stats
+    _latest_quote: dict[str, float] = {}  # AI-AGENT-REF: patchable quote cache
+
     def __init__(self, market_data_feed=None, broker_interface=None):
         """Initialize execution engine."""
         # AI-AGENT-REF: Main institutional execution engine
@@ -628,6 +633,29 @@ class ExecutionEngine:
 
         _log.info("ExecutionEngine initialized")
 
+    def _assess_liquidity(self, symbol: str, quantity: int) -> tuple[int, bool]:
+        """Assess liquidity and optionally adjust quantity."""
+        bid, ask = (0.0, 0.0)
+        try:
+            bid, ask = self._latest_quote()
+        except Exception:
+            return quantity, False
+        spread_pct = (ask - bid) / bid if bid else 0.0
+        if spread_pct >= 0.01:
+            return int(quantity * 0.75), False
+        return quantity, False
+
+    def _reconcile_partial_fills(
+        self,
+        *,
+        symbol: str,
+        submitted_qty: int,
+        remaining_qty: int,
+        side: str,
+        last_order,
+    ) -> None:
+        """Stub for partial fill reconciliation."""
+        return None
 
     def execute_order(
         self,
@@ -682,7 +710,7 @@ class ExecutionEngine:
             kwargs["limit_price"] = _ensure_valid_price(kwargs.get("limit_price"))
             kwargs["stop_price"] = _ensure_valid_price(kwargs.get("stop_price"))
 
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "symbol": symbol,
                 "side": getattr(side, "value", side),
                 "qty": quantity,
@@ -693,15 +721,18 @@ class ExecutionEngine:
             }
             _log.debug(
                 "ORDER_SUBMIT_PAYLOAD",
-                extra={k: payload.get(k) for k in (
-                    "symbol",
-                    "side",
-                    "qty",
-                    "type",
-                    "time_in_force",
-                    "limit_price",
-                    "stop_price",
-                )},
+                extra={
+                    k: payload.get(k)
+                    for k in (
+                        "symbol",
+                        "side",
+                        "qty",
+                        "type",
+                        "time_in_force",
+                        "limit_price",
+                        "stop_price",
+                    )
+                },
             )
 
             # Create order
@@ -728,9 +759,7 @@ class ExecutionEngine:
             self.execution_stats["rejected_orders"] += 1
             raise
 
-    def execute_sliced(
-        self, symbol: str, quantity: int, side: OrderSide, **kwargs
-    ):
+    def execute_sliced(self, symbol: str, quantity: int, side: OrderSide, **kwargs):
         """Execute order slices by delegating to execute_order."""
         # AI-AGENT-REF: delegate sliced execution to unified path
         return self.execute_order(symbol, side, quantity, **kwargs)

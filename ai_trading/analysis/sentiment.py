@@ -11,6 +11,8 @@ import time as pytime  # AI-AGENT-REF: deterministic testing alias
 from datetime import datetime
 from threading import Lock
 
+import requests  # AI-AGENT-REF: expose requests for patching in tests
+
 # Retry mechanism
 from tenacity import (
     retry,
@@ -62,7 +64,7 @@ def _load_transformers(log=logger):
         return _TRANSFORMERS
     try:
         import torch  # noqa: F401
-        from transformers import AutoTokenizer, AutoModelForSequenceClassification  # type: ignore
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer  # type: ignore
 
         tokenizer = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
         model = AutoModelForSequenceClassification.from_pretrained(
@@ -80,6 +82,8 @@ def _load_transformers(log=logger):
             _SENT_DEPS_LOGGED.add("transformers")
         _TRANSFORMERS = None
     return _TRANSFORMERS
+
+
 # Sentiment caching and circuit breaker - Enhanced for critical rate limiting fix
 SENTIMENT_TTL_SEC = 600  # 10 minutes normal cache
 SENTIMENT_RATE_LIMITED_TTL_SEC = 7200  # 2 hour cache when rate limited (increased)
@@ -172,7 +176,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
         Sentiment score between -1.0 and 1.0
     """
     settings = get_settings()
-    api_key = settings.sentiment_api_key or get_news_api_key()
+    api_key = getattr(settings, "sentiment_api_key", None) or get_news_api_key()
     if not api_key:
         logger.debug(
             "No sentiment API key configured (checked settings.sentiment_api_key and news API key)"
@@ -390,20 +394,32 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
     alt_api_key = os.getenv("ALTERNATIVE_SENTIMENT_API_KEY")
     alt_api_url = os.getenv("ALTERNATIVE_SENTIMENT_API_URL")
 
-    if alt_api_key and alt_api_url:
-        try:
-            # Example implementation for alternative API
-            response = http.get(f"{alt_api_url}?symbol={ticker}&apikey={alt_api_key}")
-            if response.status_code == 200:
-                data = response.json()
+    primary_url = os.getenv("SENTIMENT_API_URL", "https://newsapi.org/v2/everything")
+    primary_key = os.getenv("SENTIMENT_API_KEY")
+
+    try:
+        primary_resp = requests.get(
+            f"{primary_url}?symbol={ticker}&apikey={primary_key}", timeout=10
+        )
+        if primary_resp.status_code == 200:
+            data = primary_resp.json()
+            sentiment_score = data.get("sentiment_score", 0.0)
+            if -1.0 <= sentiment_score <= 1.0:
+                return sentiment_score
+        elif primary_resp.status_code == 429 and alt_api_key and alt_api_url:
+            alt_resp = requests.get(
+                f"{alt_api_url}?symbol={ticker}&apikey={alt_api_key}", timeout=10
+            )
+            if alt_resp.status_code == 200:
+                data = alt_resp.json()
                 sentiment_score = data.get("sentiment_score", 0.0)
                 if -1.0 <= sentiment_score <= 1.0:
                     logger.info(
                         f"ALTERNATIVE_SENTIMENT_SUCCESS | ticker={ticker} score={sentiment_score}"
                     )
                     return sentiment_score
-        except Exception as e:
-            logger.debug(f"Alternative sentiment source failed for {ticker}: {e}")
+    except Exception as e:
+        logger.debug(f"Alternative sentiment source failed for {ticker}: {e}")
 
     return None
 
@@ -496,6 +512,7 @@ def _get_cached_or_neutral_sentiment(ticker: str) -> float:
     # Return neutral sentiment as safe fallback
     return 0.0
 
+
 def analyze_text(text: str, logger=logger) -> dict:
     """Return sentiment probabilities for ``text``.
 
@@ -512,7 +529,7 @@ def analyze_text(text: str, logger=logger) -> dict:
             outputs = model(**inputs)
             logits = outputs.logits[0]
             probs = torch.softmax(logits, dim=0)
-        neg, neu, pos = [float(x) for x in probs.tolist()]
+        neg, neu, pos = (float(x) for x in probs.tolist())
         return {"available": True, "pos": pos, "neg": neg, "neu": neu}
     except Exception as exc:  # pragma: no cover - best effort
         logger.warning("analyze_text inference failed: %s", exc)
@@ -525,9 +542,6 @@ def predict_text_sentiment(text: str) -> float:
     if not res.get("available"):
         return 0.0
     return float(res["pos"] - res["neg"])
-
-
-
 
 
 def fetch_form4_filings(ticker: str) -> list[dict]:

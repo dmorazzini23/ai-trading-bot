@@ -5,7 +5,7 @@ from ai_trading.utils.base import get_latest_close
 
 logger = logging.getLogger(__name__)
 
-# AI-AGENT-REF: moved from bot_engine to break import cycle
+# AI-AGENT-REF: moved from top-level module to package to avoid mypy duplicate
 
 _portfolio_lock = threading.RLock()
 
@@ -104,14 +104,25 @@ def log_portfolio_summary(ctx) -> None:
         )
         logger.info("CYCLE SUMMARY adaptive_cap=%.1f", adaptive_cap)
     except TimeoutError:
-        logger.error("Portfolio summary timed out", 
-                    extra={"component": "portfolio_summary", "error_type": "timeout"})
+        logger.error(
+            "Portfolio summary timed out",
+            extra={"component": "portfolio_summary", "error_type": "timeout"},
+        )
     except (AttributeError, KeyError) as exc:
-        logger.warning("Portfolio summary failed - missing attribute/key: %s", exc,
-                      extra={"component": "portfolio_summary", "error_type": "attribute"})
+        logger.warning(
+            "Portfolio summary failed - missing attribute/key: %s",
+            exc,
+            extra={"component": "portfolio_summary", "error_type": "attribute"},
+        )
     except (ValueError, TypeError) as exc:
-        logger.warning("Portfolio summary failed - data conversion error: %s", exc,
-                      extra={"component": "portfolio_summary", "error_type": "data"})
+        logger.warning(
+            "Portfolio summary failed - data conversion error: %s",
+            exc,
+            extra={"component": "portfolio_summary", "error_type": "data"},
+        )
     except Exception as exc:  # Final safety net for unexpected errors
-        logger.warning("Portfolio summary failed - unexpected error: %s", exc,
-                      extra={"component": "portfolio_summary", "error_type": "unexpected"})
+        logger.warning(
+            "Portfolio summary failed - unexpected error: %s",
+            exc,
+            extra={"component": "portfolio_summary", "error_type": "unexpected"},
+        )

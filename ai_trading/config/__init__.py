@@ -1,11 +1,12 @@
-from .settings import Settings, get_settings, broker_keys  # noqa: F401
-from .alpaca import get_alpaca_config, AlpacaConfig  # noqa: F401
-from .management import TradingConfig  # AI-AGENT-REF: expose TradingConfig
-import os
-from typing import Any
 import logging
+import os
 import threading
+from typing import Any
+
+from .alpaca import AlpacaConfig, get_alpaca_config  # noqa: F401
 from .locks import LockWithTimeout
+from .management import TradingConfig  # AI-AGENT-REF: expose TradingConfig
+from .settings import Settings, broker_keys, get_settings  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +14,15 @@ _LOCK_TIMEOUT = 30
 _ENV_LOCK = LockWithTimeout(_LOCK_TIMEOUT)
 _lock_state = threading.local()
 _CONFIG_LOGGED = False
+
+# AI-AGENT-REF: liquidity management defaults
+LIQUIDITY_SPREAD_THRESHOLD = 0.01
+LIQUIDITY_VOL_THRESHOLD = 1000
+LIQUIDITY_REDUCTION_AGGRESSIVE = 0.75
+LIQUIDITY_REDUCTION_MODERATE = 0.90
+ORDER_TIMEOUT_SECONDS = 300
+ORDER_STALE_CLEANUP_INTERVAL = 60
+ORDER_FILL_RATE_TARGET = 0.80
 
 
 def _is_lock_held_by_current_thread() -> bool:
@@ -27,12 +37,15 @@ def reload_env() -> None:
     """Reload .env if python-dotenv is present; ignore failures."""
     try:
         from dotenv import load_dotenv
+
         load_dotenv(override=False)
     except Exception:
         pass
 
 
-def get_env(name: str, default: Any = None, *, reload: bool = False, required: bool = False) -> Any:
+def get_env(
+    name: str, default: Any = None, *, reload: bool = False, required: bool = False
+) -> Any:
     """Return env var; if reload=True, call reload_env() first."""
     if reload:
         reload_env()
@@ -86,8 +99,12 @@ def validate_environment() -> None:
 
 def validate_alpaca_credentials() -> None:
     api = str(globals().get("ALPACA_API_KEY", os.getenv("ALPACA_API_KEY", ""))).strip()
-    sec = str(globals().get("ALPACA_SECRET_KEY", os.getenv("ALPACA_SECRET_KEY", ""))).strip()
-    url = str(globals().get("ALPACA_BASE_URL", os.getenv("ALPACA_BASE_URL", ""))).strip()
+    sec = str(
+        globals().get("ALPACA_SECRET_KEY", os.getenv("ALPACA_SECRET_KEY", ""))
+    ).strip()
+    url = str(
+        globals().get("ALPACA_BASE_URL", os.getenv("ALPACA_BASE_URL", ""))
+    ).strip()
     if not (api and sec and url):
         raise RuntimeError("Alpaca credentials are missing or empty")
 
@@ -96,7 +113,9 @@ def validate_env_vars() -> None:
     return validate_environment()
 
 
-def log_config(masked_keys: list[str] | None = None, secrets_to_redact: list[str] | None = None) -> dict:
+def log_config(
+    masked_keys: list[str] | None = None, secrets_to_redact: list[str] | None = None
+) -> dict:
     """
     Return a sanitized snapshot of current config for diagnostics.
     MUST NOT log or print in tests.
@@ -121,6 +140,7 @@ def log_config(masked_keys: list[str] | None = None, secrets_to_redact: list[str
                 conf[key] = "***"
     return conf
 
+
 __all__ = [
     "Settings",
     "get_settings",
@@ -136,4 +156,3 @@ __all__ = [
     "validate_env_vars",
     "log_config",
 ]
-

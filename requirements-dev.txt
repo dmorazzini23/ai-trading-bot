@@ -12,7 +12,7 @@ pydantic-settings>=2.2
 # Market / data tooling used only in tests/CI
 pandas>=2.3
 pandas_ta==0.3.14b0
-pandas-market-calendars>=4.4,<5.0
+pandas-market-calendars==4.4.1
 cachetools>=5.3,<6.0
 yfinance>=0.2.40,<0.3  # AI-AGENT-REF: pin yfinance for CI
 requests>=2.31,<3
@@ -50,6 +50,7 @@ anyio>=4,<5
 aiohttp>=3.9,<3.10
 websockets>=12,<13
 pre-commit>=3.7,<4
+detect-secrets==1.5.0
 ruff>=0.5,<1
 black>=24,<25
 mypy>=1.10,<2

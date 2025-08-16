@@ -22,7 +22,7 @@ _DATA_BASE = "https://data.alpaca.markets"  # market data v2
 
 
 def _resolve_url(path_or_url: str) -> str:
-    if path_or_url.startswith("http://") or path_or_url.startswith("https://"):
+    if path_or_url.startswith(("http://", "https://")):
         return path_or_url
     from ai_trading.config.settings import get_settings
 
@@ -57,14 +57,16 @@ def alpaca_get(
 
 
 def _require_alpaca():
-    """Import and return alpaca_trade_api or raise a helpful error."""  # AI-AGENT-REF: lazy import guard
+    """Import and return alpaca_trade_api or raise a helpful error."""
+    # AI-AGENT-REF: lazy import guard
     try:
         import alpaca_trade_api as tradeapi  # type: ignore
 
         return tradeapi
     except Exception as e:  # pragma: no cover - safety
         raise RuntimeError(
-            "alpaca_trade_api is required but not installed. Install with: pip install 'alpaca-trade-api>=3.0,<4'"
+            "alpaca_trade_api is required but not installed. "
+            "Install with: pip install 'alpaca-trade-api>=3.0,<4'"
         ) from e
 
 
@@ -213,7 +215,7 @@ def submit_order(api: Any, order_data: Any, log: Any | None = None) -> Any:
         resp = SimpleNamespace(**resp)  # AI-AGENT-REF: normalize dict response
     oid = getattr(resp, "id", None)
     status = getattr(resp, "status", "accepted")
-    return SimpleNamespace(id=str(oid) if oid is not None else None, status=status)
+    return SimpleNamespace(id=oid, status=status)  # AI-AGENT-REF: preserve provider id
 
 
 def handle_trade_update(event: Any) -> None:

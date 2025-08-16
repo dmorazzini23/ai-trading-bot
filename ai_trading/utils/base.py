@@ -19,8 +19,16 @@ from zoneinfo import ZoneInfo
 
 # AI-AGENT-REF: Pandas is a hard dependency
 import pandas as pd
-import pandas_market_calendars as mcal
+
+try:
+    import pandas_market_calendars as mcal  # AI-AGENT-REF: optional dependency
+except Exception:  # AI-AGENT-REF: library optional in tests
+    mcal = None
 import numpy as np
+from ai_trading.monitoring.system_health import (
+    snapshot_basic,
+)  # AI-AGENT-REF: lazy psutil
+from ai_trading.settings import get_verbose_logging
 
 # Alpaca SDK imports - now required dependencies
 try:  # AI-AGENT-REF: optional dependency guard
@@ -64,14 +72,7 @@ def requires_pandas(func):
     return wrapper
 
 
-
 logger = logging.getLogger(__name__)
-from ai_trading.settings import get_verbose_logging
-
-from ai_trading.monitoring.system_health import snapshot_basic  # AI-AGENT-REF: lazy psutil
-
-from tzlocal import get_localzone
-
 
 # AI-AGENT-REF: throttle noisy logs
 _LAST_MARKET_HOURS_LOG = 0.0
@@ -89,7 +90,10 @@ class PhaseLoggerAdapter(logging.LoggerAdapter):
     """Logger adapter that injects bot_phase context."""
 
     def process(self, msg, kwargs):
-        extra = kwargs.setdefault("extra", {})
+        extra = kwargs.get("extra")  # AI-AGENT-REF: avoid mutable default
+        if extra is None:
+            extra = {}
+            kwargs["extra"] = extra
         extra.setdefault("bot_phase", self.extra.get("bot_phase", "GENERAL"))
         extra.setdefault("timestamp", dt.datetime.now(dt.UTC))
         return msg, kwargs
@@ -158,6 +162,21 @@ def should_log_stale(symbol: str, last_ts: Timestamp, *, ttl: int = 300) -> bool
         return True
 
 
+def get_trading_calendar(name: str = "XNYS"):
+    """Return a trading calendar, with fallback when mcal is missing."""
+    # AI-AGENT-REF: optional calendar shim
+    if mcal is not None:
+        return mcal.get_calendar(name)
+    import pandas as pd  # AI-AGENT-REF: fallback calendar
+
+    class _NaiveCal:
+        def schedule(self, start_date, end_date):
+            idx = pd.date_range(start=start_date, end=end_date, freq="B")
+            return pd.DataFrame({"market_open": idx, "market_close": idx})
+
+    return _NaiveCal()
+
+
 def backoff_delay(
     attempt: int, base: float = 1.0, cap: float = 30.0, jitter: float = 0.1
 ) -> float:
@@ -165,7 +184,7 @@ def backoff_delay(
     exp = base * (2 ** max(0, attempt - 1))
     delay = min(exp, cap)
     if jitter > 0:
-        jitter_amt = random.uniform(-jitter * delay, jitter * delay)
+        jitter_amt = random.uniform(-jitter * delay, jitter * delay)  # noqa: S311
         delay = max(0.0, delay + jitter_amt)
     return delay
 
@@ -350,7 +369,8 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
                 )
             else:
                 logger.warning(
-                    "No market schedule for %s in is_market_open (likely holiday); returning False.",
+                    "No market schedule for %s in is_market_open (likely holiday); "
+                    "returning False.",
                     check_time.date(),
                 )
             _log_market_hours("Detected Market Hours today: CLOSED")
@@ -361,7 +381,9 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
             july4 = date(check_time.year, 7, 4)
             market_close = dt_time(13, 0) if july4.weekday() >= 5 else MARKET_CLOSE_TIME
         _log_market_hours(
-            "Detected Market Hours today: OPEN from {} to {}".format(market_open.strftime("%H:%M"), market_close.strftime("%H:%M"))
+            "Detected Market Hours today: OPEN from {} to {}".format(
+                market_open.strftime("%H:%M"), market_close.strftime("%H:%M")
+            )
         )
         current = check_time.time()
         return market_open <= current <= market_close
@@ -405,7 +427,7 @@ def is_market_holiday(date_to_check: date | dt.datetime | None = None) -> bool:
     elif isinstance(date_to_check, dt.datetime):
         date_to_check = date_to_check.date()
 
-    # Use pandas_market_calendars for accurate market calendar  
+    # Use pandas_market_calendars for accurate market calendar
     nyse = mcal.get_calendar("NYSE")
 
     # Check if the date is a trading day
@@ -418,7 +440,7 @@ BASE_PATH = os.path.dirname(os.path.abspath(__file__))
 
 def ensure_utc(value: dt.datetime | date) -> dt.datetime:
     """Return a timezone-aware UTC datetime for ``dt``."""
-    assert isinstance(value, (dt.datetime, date)), "dt must be date or datetime"
+    assert isinstance(value, dt.datetime | date), "dt must be date or datetime"
     if isinstance(value, dt.datetime):
         if value.tzinfo is None:
             return value.replace(tzinfo=dt.UTC)
@@ -535,7 +557,9 @@ def get_volume_spike_factor(symbol: str) -> float:
 def get_ml_confidence(symbol: str) -> float:
     """Return model confidence for ``symbol``."""
     try:
-        from ai_trading.ml_model import load_model  # AI-AGENT-REF: use packaged ml_model
+        from ai_trading.ml_model import (
+            load_model,
+        )  # AI-AGENT-REF: use packaged ml_model
     except Exception as e:  # pragma: no cover - optional dependency
         logger.error("load_model failed", exc_info=e)
         return 0.5

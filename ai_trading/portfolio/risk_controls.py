@@ -9,19 +9,21 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any  # AI-AGENT-REF: cluster map types
 
 import numpy as np
 import pandas as pd
 
+
 # Clustering features controlled by ENABLE_PORTFOLIO_FEATURES setting
 def _import_clustering():
     from ai_trading.config import get_settings
+
     S = get_settings()
     if not S.ENABLE_PORTFOLIO_FEATURES:
         return None, None, None, False
-    
-    from scipy.cluster.hierarchy import fcluster, linkage
-    from scipy.spatial.distance import squareform
+
+
 # Lazy load clustering components when needed
 
 
@@ -324,8 +326,15 @@ class AdaptiveRiskController:
         Returns:
             List of cluster risk metrics
         """
+
         # Group positions by cluster
-        cluster_risks = defaultdict(lambda: {"symbols": [], "total_risk": 0.0})
+        def _new_cluster() -> dict[str, Any]:
+            return {
+                "symbols": [],
+                "total_risk": 0.0,
+            }  # AI-AGENT-REF: avoid mutable default
+
+        cluster_risks = defaultdict(_new_cluster)
 
         for symbol, position in positions.items():
             cluster_id = cluster_assignments.get(symbol, 0)

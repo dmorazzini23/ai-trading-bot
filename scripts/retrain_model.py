@@ -5,7 +5,6 @@ import os
 import random
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
-
 # AI-AGENT-REF: graceful joblib fallback for testing
 import joblib
 
@@ -17,6 +16,7 @@ import pandas as pd
 
 from ai_trading.config import management as config
 from ai_trading.config.management import TradingConfig
+
 CONFIG = TradingConfig()
 
 from ai_trading.utils.base import safe_to_datetime
@@ -127,7 +127,9 @@ def load_reward_by_band(n: int = 200) -> dict:
         return {}
     return df.groupby("band")["reward"].mean().to_dict()
 
+
 # (Copy your real implementation from bot.py.)
+
 
 def fetch_sentiment(symbol: str) -> float:
     """Lightweight sentiment score using NewsAPI headlines."""
@@ -154,8 +156,24 @@ def fetch_sentiment(symbol: str) -> float:
         if not articles:
             return 0.0
 
-        positive_words = ["up", "rise", "gain", "bull", "positive", "growth", "increase"]
-        negative_words = ["down", "fall", "drop", "bear", "negative", "decline", "decrease"]
+        positive_words = [
+            "up",
+            "rise",
+            "gain",
+            "bull",
+            "positive",
+            "growth",
+            "increase",
+        ]
+        negative_words = [
+            "down",
+            "fall",
+            "drop",
+            "bear",
+            "negative",
+            "decline",
+            "decrease",
+        ]
 
         sentiment_score = 0.0
         for article in articles:
@@ -168,6 +186,8 @@ def fetch_sentiment(symbol: str) -> float:
     except Exception as e:
         logger.warning("Failed to fetch sentiment for %s: %s", symbol, e)
         return 0.0
+
+
 def detect_regime(df: pd.DataFrame) -> str:
     """Simple SMA-based regime detection used by bot and predict scripts."""
     if df is None or df.empty or "close" not in df:
@@ -307,7 +327,9 @@ def prepare_indicators(df: pd.DataFrame, freq: str = "daily") -> pd.DataFrame:
     df["cci"] = np.nan
     try:
         if hasattr(ta, "cci"):
-            df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20).astype(float)
+            df["cci"] = ta.cci(df["high"], df["low"], df["close"], length=20).astype(
+                float
+            )
     except Exception as e:
         logger.exception("CCI calculation failed: %s", e)
 
@@ -639,7 +661,10 @@ def save_model_version(clf, regime: str) -> str:
         logger.exception("Failed to save model %s: %s", regime, e)
         raise
     log_hyperparam_result(regime, -1, {"model_path": filename}, 0.0)
-    from ai_trading.logging import _get_metrics_logger  # AI-AGENT-REF: lazy metrics import
+    from ai_trading.logging import (
+        _get_metrics_logger,
+    )  # AI-AGENT-REF: lazy metrics import
+
     _get_metrics_logger().log_metrics(
         {
             "timestamp": datetime.now(UTC).isoformat(),
@@ -695,7 +720,9 @@ def evolutionary_search(
             logger.warning("No successful CV scores in generation %s", gen)
             continue
         ranked = sorted(
-            zip(scores, population_params, strict=False), key=lambda t: t[0], reverse=True
+            zip(scores, population_params, strict=False),
+            key=lambda t: t[0],
+            reverse=True,
         )
         for rank, (scr, pr) in enumerate(ranked):
             log_hyperparam_result("", gen, pr, scr)
@@ -886,8 +913,7 @@ def retrain_meta_learner(
             )
             imp_df = pd.DataFrame(
                 {
-                    "timestamp": [datetime.now(UTC).isoformat()]
-                    * len(importances),
+                    "timestamp": [datetime.now(UTC).isoformat()] * len(importances),
                     "feature": importances.index,
                     "importance": importances.values,
                 }
@@ -902,7 +928,10 @@ def retrain_meta_learner(
         try:
             path = save_model_version(pipe, regime)
             logger.info("Saved %s model to %s", regime, path)
-            from ai_trading.logging import _get_metrics_logger  # AI-AGENT-REF: lazy metrics import
+            from ai_trading.logging import (
+                _get_metrics_logger,
+            )  # AI-AGENT-REF: lazy metrics import
+
             _get_metrics_logger().log_metrics(
                 {
                     "timestamp": datetime.now(UTC).isoformat(),

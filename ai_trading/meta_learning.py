@@ -1,9 +1,11 @@
-from ai_trading.config import get_settings
 from importlib.util import find_spec
+
+from ai_trading.config import get_settings
 
 # AI-AGENT-REF: detect sklearn availability at import time
 try:  # pragma: no cover - optional dependency
     import sklearn  # type: ignore  # noqa: F401
+
     SKLEARN_AVAILABLE = True
 except Exception:  # pragma: no cover - missing sklearn
     SKLEARN_AVAILABLE = False
@@ -21,15 +23,21 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
+
 # CSV:17 - Move metrics_logger import to functions that use it
 
-# ai_trading/meta_learning.py:20 - Convert import guard to hard import (torch is in dependencies)
-import torch
-import torch.nn as _nn
+# AI-AGENT-REF: guard torch import for optional dependency
+try:  # pragma: no cover - torch is optional
+    import torch  # type: ignore
+    from torch import nn  # type: ignore
+    from torch.utils.data import DataLoader, TensorDataset  # type: ignore
 
-# ensure torch.nn and Parameter live on the torch module
-torch.nn = _nn
-torch.nn.Parameter = _nn.Parameter
+    TORCH_AVAILABLE = True
+except Exception:  # torch not installed or not importable on this host
+    torch = None  # type: ignore
+    nn = None  # type: ignore
+    DataLoader = TensorDataset = None  # type: ignore
+    TORCH_AVAILABLE = False
 
 # For type checking only
 if TYPE_CHECKING:
@@ -39,6 +47,74 @@ if TYPE_CHECKING:
 open = open  # allow monkeypatching built-in open
 
 logger = logging.getLogger(__name__)
+
+
+def get_device() -> str:
+    """
+    Honor CPU_ONLY and handle environments without torch.
+    """
+    if os.getenv("CPU_ONLY") == "1" or not TORCH_AVAILABLE:
+        return "cpu"
+    try:
+        return "cuda" if torch and torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+class SimpleMetaLearner:
+    """
+    Lightweight wrapper so the module can import without torch.
+    When TORCH_AVAILABLE is False, construction raises on actual use,
+    but mere import of the module succeeds.
+    """
+
+    def __init__(self, input_dim: int, hidden: int = 32):
+        if not TORCH_AVAILABLE:
+            raise RuntimeError("Meta-learner requires PyTorch; TORCH_AVAILABLE=False")
+
+        class _Net(nn.Module):  # type: ignore
+            def __init__(self, d: int, h: int):
+                super().__init__()
+                self.net = nn.Sequential(
+                    nn.Linear(d, h),
+                    nn.ReLU(),
+                    nn.Linear(h, 1),
+                    nn.Sigmoid(),
+                )
+
+            def forward(self, x):  # pragma: no cover
+                return self.net(x)
+
+        self.impl = _Net(input_dim, hidden)
+
+    def forward(self, x):  # pragma: no cover
+        return self.impl.forward(x)
+
+
+def train_meta_learner(X, y, *, epochs: int = 20, lr: float = 1e-3):
+    """
+    Train only if TORCH_AVAILABLE; otherwise raise a clear error on call.
+    Importing the module remains safe.
+    """
+    if not TORCH_AVAILABLE:
+        raise RuntimeError("train_meta_learner requires PyTorch; not installed")
+
+    device = get_device()
+    model = SimpleMetaLearner(X.shape[1]).impl.to(device)
+    dataset = TensorDataset(torch.from_numpy(X).float(), torch.from_numpy(y).float())
+    loader = DataLoader(dataset, batch_size=32, shuffle=True)
+    optim = torch.optim.Adam(model.parameters(), lr=lr)
+    loss_fn = nn.BCELoss()
+    model.train()
+    for _ in range(epochs):
+        for batch_X, batch_y in loader:
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+            preds = model(batch_X).view(-1)
+            loss = loss_fn(preds, batch_y)
+            optim.zero_grad()
+            loss.backward()
+            optim.step()
+    return model
 
 
 class MetaLearning:
@@ -375,7 +451,7 @@ def adjust_confidence(
 def volatility_regime_filter(atr: float, sma100: float) -> str:
     """Return volatility regime string based on ATR and SMA."""
     from ai_trading.telemetry import metrics_logger  # CSV:17 - Local import
-    
+
     if sma100 == 0:
         return "unknown"
     ratio = atr / sma100
@@ -720,7 +796,11 @@ def retrain_meta_learner(
                 return False
 
     # AI-AGENT-REF: Only require essential columns, allow missing exit_price for open positions
-    df = df.dropna(subset=["entry_price", "signal_tags", "side"])
+    try:
+        df = df.dropna(subset=["entry_price", "signal_tags", "side"])
+    except KeyError:
+        logger.warning("META_LEARNING_MISSING_COLUMNS")
+        return False
 
     # AI-AGENT-REF: Enhanced meta learning data validation with better error handling
     try:
@@ -1681,15 +1761,16 @@ def trigger_rebalance_on_regime(df: "pd.DataFrame") -> None:
     settings = get_settings()
     if not settings.enable_reinforcement_learning:
         return
-    
+
     # Check if portfolio_rl module is available using find_spec
     if find_spec("portfolio_rl") is None:
         raise RuntimeError(
             "Reinforcement learning enabled but portfolio_rl module unavailable. "
             "Set ENABLE_REINFORCEMENT_LEARNING=False to disable"
         )
-    
+
     from portfolio_rl import PortfolioReinforcementLearner
+
     rl = PortfolioReinforcementLearner()
     if "Regime" in df.columns and len(df) > 2:
         if df["Regime"].iloc[-1] != df["Regime"].iloc[-2]:
