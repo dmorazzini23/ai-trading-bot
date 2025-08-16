@@ -11,8 +11,6 @@ import time as pytime  # AI-AGENT-REF: deterministic testing alias
 from datetime import datetime
 from threading import Lock
 
-from bs4 import BeautifulSoup
-
 # Retry mechanism
 from tenacity import (
     retry,
@@ -37,23 +35,51 @@ from ai_trading.utils.device import (  # AI-AGENT-REF: device helper
 
 DEVICE, _TORCH = pick_torch_device()
 
-# FinBERT model initialization
-try:
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+_BS4 = None
+_TRANSFORMERS = None
+_SENT_DEPS_LOGGED: set[str] = set()
 
-    _FINBERT_TOKENIZER = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
-    _FINBERT_MODEL = AutoModelForSequenceClassification.from_pretrained(
-        "yiyanghkust/finbert-tone"
-    )
-    _FINBERT_MODEL.to(DEVICE)  # AI-AGENT-REF: move model to selected device
-    _FINBERT_MODEL.eval()
-    _HUGGINGFACE_AVAILABLE = True
-    logger.info("FinBERT loaded successfully")
-except Exception:
-    _FINBERT_TOKENIZER = None
-    _FINBERT_MODEL = None
-    _HUGGINGFACE_AVAILABLE = False
-    logger.info("Transformers unavailable; FinBERT features disabled")
+
+def _load_bs4(log=logger):
+    global _BS4
+    if _BS4 is not None:
+        return _BS4
+    try:
+        from bs4 import BeautifulSoup  # type: ignore
+
+        _BS4 = BeautifulSoup
+    except Exception:
+        if "bs4" not in _SENT_DEPS_LOGGED:
+            log.warning("SENTIMENT_OPTIONAL_DEP_MISSING", extra={"package": "bs4"})
+            _SENT_DEPS_LOGGED.add("bs4")
+        _BS4 = None
+    return _BS4
+
+
+def _load_transformers(log=logger):
+    global _TRANSFORMERS
+    if _TRANSFORMERS is not None:
+        return _TRANSFORMERS
+    try:
+        import torch  # noqa: F401
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification  # type: ignore
+
+        tokenizer = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
+        model = AutoModelForSequenceClassification.from_pretrained(
+            "yiyanghkust/finbert-tone"
+        )
+        model.to(DEVICE)
+        model.eval()
+        _TRANSFORMERS = (torch, tokenizer, model)
+    except Exception:
+        if "transformers" not in _SENT_DEPS_LOGGED:
+            log.warning(
+                "SENTIMENT_OPTIONAL_DEP_MISSING",
+                extra={"package": "transformers"},
+            )
+            _SENT_DEPS_LOGGED.add("transformers")
+        _TRANSFORMERS = None
+    return _TRANSFORMERS
 # Sentiment caching and circuit breaker - Enhanced for critical rate limiting fix
 SENTIMENT_TTL_SEC = 600  # 10 minutes normal cache
 SENTIMENT_RATE_LIMITED_TTL_SEC = 7200  # 2 hour cache when rate limited (increased)
@@ -76,6 +102,7 @@ sentiment_lock = Lock()
 __all__ = [
     "fetch_sentiment",
     "predict_text_sentiment",
+    "analyze_text",
     "sentiment_lock",
     "_SENTIMENT_CACHE",
 ]
@@ -469,39 +496,38 @@ def _get_cached_or_neutral_sentiment(ticker: str) -> float:
     # Return neutral sentiment as safe fallback
     return 0.0
 
+def analyze_text(text: str, logger=logger) -> dict:
+    """Return sentiment probabilities for ``text``.
+
+    Falls back to neutral if transformers are unavailable.
+    """  # AI-AGENT-REF: lazy optional transformers
+    deps = _load_transformers(logger)
+    if deps is None:
+        return {"available": False, "pos": 0.0, "neg": 0.0, "neu": 1.0}
+    torch, tokenizer, model = deps
+    try:
+        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=128)
+        inputs = tensors_to_device(inputs, DEVICE)
+        with torch.no_grad():
+            outputs = model(**inputs)
+            logits = outputs.logits[0]
+            probs = torch.softmax(logits, dim=0)
+        neg, neu, pos = [float(x) for x in probs.tolist()]
+        return {"available": True, "pos": pos, "neg": neg, "neu": neu}
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.warning("analyze_text inference failed: %s", exc)
+        return {"available": False, "pos": 0.0, "neg": 0.0, "neu": 1.0}
+
 
 def predict_text_sentiment(text: str) -> float:
-    """
-    Uses FinBERT (if available) to assign a sentiment score ∈ [–1, +1].
-    If FinBERT is unavailable, return 0.0.
+    """Legacy float sentiment interface."""  # AI-AGENT-REF: maintain float API
+    res = analyze_text(text)
+    if not res.get("available"):
+        return 0.0
+    return float(res["pos"] - res["neg"])
 
-    Args:
-        text: Text to analyze for sentiment
 
-    Returns:
-        Sentiment score between -1.0 and 1.0
-    """
-    if _HUGGINGFACE_AVAILABLE and _FINBERT_MODEL and _FINBERT_TOKENIZER and _TORCH:
-        try:
-            inputs = _FINBERT_TOKENIZER(
-                text,
-                return_tensors="pt",
-                truncation=True,
-                max_length=128,
-            )
-            inputs = tensors_to_device(inputs, DEVICE)
-            with _TORCH.no_grad():
-                outputs = _FINBERT_MODEL(**inputs)
-                logits = outputs.logits[0]  # shape = (3,)
-                probs = _TORCH.softmax(logits, dim=0)  # [p_neg, p_neu, p_pos]
 
-            neg, neu, pos = probs.tolist()
-            return float(pos - neg)
-        except Exception as e:
-            logger.warning(
-                f"[predict_text_sentiment] FinBERT inference failed ({e}); returning neutral"
-            )
-    return 0.0
 
 
 def fetch_form4_filings(ticker: str) -> list[dict]:
@@ -515,7 +541,8 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
     Returns:
         List of insider trading filings
     """
-    if not BS4_AVAILABLE:
+    soup_cls = _load_bs4(logger)
+    if soup_cls is None:
         logger.debug("BeautifulSoup not available, Form 4 parsing disabled")
         return []
 
@@ -523,7 +550,7 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
     try:
         r = http.get(url, headers={"User-Agent": "AI Trading Bot"})
         r.raise_for_status()
-        soup = BeautifulSoup(r.content, "lxml")
+        soup = soup_cls(r.content, "lxml")
         filings = []
         # Parse table rows (approximate)
         table = soup.find("table", {"class": "tableFile2"})
