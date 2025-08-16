@@ -19,3 +19,12 @@ __version__ = "2.0.0"
 
 # Import-light init - only expose version and basic metadata
 __all__ = ["__version__"]
+import sys as _sys
+
+# AI-AGENT-REF: expose validate_env module at top-level for tests
+try:
+    from .tools import validate_env as _validate_env_mod
+
+    _sys.modules.setdefault("validate_env", _validate_env_mod)
+except Exception:
+    pass
