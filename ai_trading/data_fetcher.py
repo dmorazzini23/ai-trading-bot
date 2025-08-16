@@ -13,10 +13,10 @@ from collections.abc import Sequence
 from datetime import datetime, date, timezone, timedelta
 from typing import Any, Union
 
-import requests
 from pathlib import Path
 
-from ai_trading.utils import sleep as psleep, clamp_timeout
+from ai_trading.utils import sleep as psleep, clamp_timeout, http
+import requests
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -380,10 +380,9 @@ def _fetch_bars(
     headers = CFG.alpaca_headers  # AI-AGENT-REF: canonical Alpaca headers
     _log_http_request("GET", url, params, headers)
     delay = 1.0
-    timeout = clamp_timeout(None, 10, 0.5)
     for attempt in range(3):
         try:
-            resp = requests.get(url, params=params, headers=headers, timeout=timeout)
+            resp = http.get(url, params=params, headers=headers)
             if (
                 resp.status_code == 400
                 and "invalid feed" in resp.text.lower()
@@ -393,8 +392,8 @@ def _fetch_bars(
                     "Alpaca invalid feed %s for %s; retrying with SIP", feed, symbol
                 )
                 params["feed"] = "sip"
-                resp = requests.get(
-                    url, params=params, headers=headers, timeout=timeout
+                resp = http.get(
+                    url, params=params, headers=headers
                 )
             break
         except requests.exceptions.RequestException as exc:

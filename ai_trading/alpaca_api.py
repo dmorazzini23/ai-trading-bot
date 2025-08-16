@@ -4,11 +4,10 @@ import asyncio
 import logging
 import time  # AI-AGENT-REF: tests patch alpaca_api.time.sleep
 from ai_trading.utils import sleep as psleep, clamp_timeout
+from ai_trading.utils import http
 import types
 import uuid
 from typing import Any, Optional
-
-import requests
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +41,7 @@ def alpaca_get(path_or_url: str, *, params: Optional[dict] = None, timeout: int 
     headers = getattr(S, "alpaca_headers", {})
     url = _resolve_url(path_or_url)
     timeout = clamp_timeout(timeout, 10, 0.5)
-    resp = requests.get(url, headers=headers, params=params or {}, timeout=timeout)
+    resp = http.get(url, headers=headers, params=params or {}, timeout=timeout)
     resp.raise_for_status()
     ctype = resp.headers.get("content-type", "")
     return resp.json() if "json" in ctype else resp.text

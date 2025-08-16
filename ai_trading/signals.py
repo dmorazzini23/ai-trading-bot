@@ -35,6 +35,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ai_trading.utils import http
 import requests
 
 # Optional ML dependency: hmmlearn
@@ -127,7 +128,7 @@ def _fetch_api(url: str, retries: int = 3, delay: float = 1.0) -> dict:
     """Fetch JSON from an API with simple retry logic and backoff."""
     for attempt in range(1, retries + 1):
         try:
-            resp = requests.get(url, timeout=clamp_timeout(5, 5, 0.5))
+            resp = http.get(url, timeout=clamp_timeout(5, 5, 0.5))
             resp.raise_for_status()
             return resp.json()
         except (

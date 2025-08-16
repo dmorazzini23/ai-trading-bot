@@ -34,8 +34,7 @@ import atexit
 import io
 import inspect
 import logging
-import requests
-from ai_trading.utils import clamp_timeout  # AI-AGENT-REF: enforce request timeouts
+from ai_trading.utils import http, clamp_timeout  # AI-AGENT-REF: enforce request timeouts
 from ai_trading.logging import (
     get_logger,  # AI-AGENT-REF: use sanitizing adapter
     _get_metrics_logger,
@@ -980,7 +979,6 @@ import portalocker
 # (e.g. FinBERT sentiment loading) to fail at import time.
 try:
     import requests  # type: ignore[assignment]
-    from requests import Session  # type: ignore[assignment]
     from requests.exceptions import HTTPError  # type: ignore[assignment]
 except (
     Exception
@@ -988,14 +986,11 @@ except (
     import types
 
     requests = types.SimpleNamespace(
-        Session=lambda *a, **k: types.SimpleNamespace(get=lambda *a, **k: None),
-        get=lambda *a, **k: None,
         exceptions=types.SimpleNamespace(
             RequestException=Exception,
             HTTPError=Exception,
         ),
     )
-    Session = requests.Session  # type: ignore[assignment]
     HTTPError = Exception  # type: ignore[assignment]
 
 # AI-AGENT-REF: schedule is a hard dependency in pyproject.toml
@@ -4768,11 +4763,10 @@ def in_trading_hours(ts: pd.Timestamp) -> bool:
 )
 def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
     with ctx.sem:
-        r = requests.get(
+        r = http.get(
             f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
             f"&CIK={ticker}&type=8-K&count=5",
             headers={"User-Agent": "AI Trading Bot"},
-            timeout=clamp_timeout(10, 10, 0.5),
         )
         r.raise_for_status()
 
@@ -4894,7 +4888,7 @@ def fetch_sentiment(ctx: BotContext, ticker: str) -> float:
             f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
             f"&apiKey={api_key}"
         )
-        resp = requests.get(url, timeout=clamp_timeout(10, 10, 0.5))
+        resp = http.get(url)
 
         if resp.status_code == 429:
             # AI-AGENT-REF: Enhanced rate limiting handling
@@ -5020,10 +5014,9 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
     Returns a list of dicts: {"date": datetime, "type": "buy"/"sell", "dollar_amount": float}.
     """
     url = f"https://www.sec.gov/cgi-bin/own-disp?action=getowner&CIK={ticker}&type=4"
-    r = requests.get(
+    r = http.get(
         url,
         headers={"User-Agent": "AI Trading Bot"},
-        timeout=clamp_timeout(10, 10, 0.5),
     )
     r.raise_for_status()
     soup = BeautifulSoup(r.content, "lxml")
@@ -9525,9 +9518,7 @@ def start_metrics_server(default_port: int = 9200) -> None:
     except OSError as exc:
         if "Address already in use" in str(exc):
             try:
-                import requests
-
-                resp = requests.get(
+                resp = http.get(
                     f"http://localhost:{default_port}",
                     timeout=clamp_timeout(2, 10, 0.5),
                 )

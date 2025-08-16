@@ -17,7 +17,7 @@ from email.mime.text import MIMEText
 from enum import Enum
 from typing import Any
 
-import requests
+from ai_trading.utils import http
 from ai_trading.utils.timing import clamp_timeout  # AI-AGENT-REF: avoid circular import
 
 # Use the centralized logger as per AGENTS.md
@@ -268,10 +268,9 @@ class SlackAlerter:
                     )
 
             # Send to Slack
-            response = requests.post(
+            response = http.post(
                 self.webhook_url,
                 json=payload,
-                timeout=clamp_timeout(10, 10, 0.5),
             )
             response.raise_for_status()
 
