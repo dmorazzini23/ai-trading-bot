@@ -35,6 +35,7 @@ import io
 import inspect
 import logging
 from ai_trading.utils import http, clamp_timeout  # AI-AGENT-REF: enforce request timeouts
+from ai_trading.utils.prof import StageTimer
 from ai_trading.logging import (
     get_logger,  # AI-AGENT-REF: use sanitizing adapter
     _get_metrics_logger,
@@ -10433,9 +10434,10 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             retries = 3
             processed, row_counts = [], {}
             for attempt in range(retries):
-                processed, row_counts = _process_symbols(
-                    symbols, current_cash, alpha_model, regime_ok
-                )
+                with StageTimer(_log, "INDICATORS_COMPUTE", symbols=len(symbols)):
+                    processed, row_counts = _process_symbols(
+                        symbols, current_cash, alpha_model, regime_ok
+                    )
                 if processed:
                     if attempt:
                         _log.info(
