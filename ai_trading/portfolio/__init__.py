@@ -6,7 +6,7 @@ Exports:
     optimize_equal_weight
 """
 
-from .weights import compute_portfolio_weights  # re-export for stable import path
+from .core import compute_portfolio_weights, is_high_volatility, log_portfolio_summary
 from .optimizer import (
     PortfolioDecision,
     PortfolioOptimizer,
@@ -16,6 +16,8 @@ from .optimizer import (
 
 __all__ = [
     "compute_portfolio_weights",
+    "is_high_volatility",
+    "log_portfolio_summary",
     "PortfolioDecision",
     "PortfolioOptimizer",
     "create_portfolio_optimizer",
