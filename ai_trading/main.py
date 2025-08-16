@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import threading
 import time  # AI-AGENT-REF: tests patch main.time.sleep
 from threading import Thread
@@ -19,6 +20,8 @@ from ai_trading.settings import (
 )  # AI-AGENT-REF: runtime env settings
 from ai_trading.utils import get_free_port, get_pid_on_port
 from ai_trading.utils import sleep as psleep
+from ai_trading.utils.prof import StageTimer, SoftBudget
+from ai_trading.utils import http as http_utils
 
 
 # AI-AGENT-REF: expose run_cycle for monkeypatching
@@ -290,6 +293,10 @@ def main() -> None:
 
     try:
         while iterations <= 0 or count < iterations:
+            budget = SoftBudget(
+                interval_sec=float(interval),
+                fraction=float(os.getenv("CYCLE_BUDGET_FRACTION", 0.8)),
+            )
             try:
                 # AI-AGENT-REF: Periodic memory optimization
                 if count % memory_check_interval == 0:
@@ -299,10 +306,29 @@ def main() -> None:
                             f"Cycle {count}: Garbage collected {gc_result['objects_collected']} objects"
                         )
 
-                rc()
+                with StageTimer(logger, "CYCLE_FETCH"):
+                    pass
+                if budget.over():
+                    logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_FETCH"})
+
+                with StageTimer(logger, "CYCLE_COMPUTE"):
+                    rc()
+                if budget.over():
+                    logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_COMPUTE"})
+
+                with StageTimer(logger, "CYCLE_EXECUTE"):
+                    pass
+                if budget.over():
+                    logger.warning("BUDGET_OVER", extra={"stage": "CYCLE_EXECUTE"})
             except Exception:  # pragma: no cover - log unexpected errors
                 logger.exception("run_cycle failed")
             count += 1
+
+            logger.info("HTTP_POOL_STATS", extra=http_utils.pool_stats())
+            logger.info(
+                "CYCLE_TIMING",
+                extra={"elapsed_ms": budget.elapsed_ms(), "within_budget": not budget.over()},
+            )
 
             now_mono = time.monotonic()
             if now_mono - last_health >= max(30, health_tick_seconds):

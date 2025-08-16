@@ -16,6 +16,7 @@ from typing import Any, Union
 from pathlib import Path
 
 from ai_trading.utils import sleep as psleep, clamp_timeout, http
+from ai_trading.utils.prof import StageTimer
 import requests
 from tenacity import (
     retry,
@@ -877,17 +878,18 @@ def fetch_daily_data_async(
         except Exception as exc:  # pragma: no cover - best effort
             logger.error("fetch_daily_data_async failed for %s: %s", sym, exc)
 
-    threads = [threading.Thread(target=worker, args=(s,)) for s in symbols]
-    for t in threads:
-        t.start()
-    deadline = 5.0 if not _TESTING else 0.5
-    for t in threads:
-        waited = 0.0
-        while t.is_alive() and waited < deadline:
-            psleep(0.05)
-            waited += 0.05
-        if t.is_alive():
-            logger.warning("fetch_daily_data_async thread still alive for %s", t)
+    with StageTimer(logger, "UNIVERSE_FETCH", universe_size=len(symbols)):
+        threads = [threading.Thread(target=worker, args=(s,)) for s in symbols]
+        for t in threads:
+            t.start()
+        deadline = 5.0 if not _TESTING else 0.5
+        for t in threads:
+            waited = 0.0
+            while t.is_alive() and waited < deadline:
+                psleep(0.05)
+                waited += 0.05
+            if t.is_alive():
+                logger.warning("fetch_daily_data_async thread still alive for %s", t)
     return results
 
 
