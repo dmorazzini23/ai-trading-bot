@@ -11,8 +11,6 @@ import time as pytime  # AI-AGENT-REF: deterministic testing alias
 from datetime import datetime
 from threading import Lock
 
-import requests  # AI-AGENT-REF: expose requests for patching in tests
-
 # Retry mechanism
 from tenacity import (
     retry,
@@ -27,9 +25,9 @@ from ai_trading.logging import logger
 
 # AI-AGENT-REF: Import config
 from ai_trading.settings import get_news_api_key, get_settings
+from ai_trading.utils import http  # AI-AGENT-REF: use centralized HTTP helper
 
 # AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
-from ai_trading.utils import http
 from ai_trading.utils.device import (  # AI-AGENT-REF: device helper
     pick_torch_device,
     tensors_to_device,
@@ -398,8 +396,9 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
     primary_key = os.getenv("SENTIMENT_API_KEY")
 
     try:
-        primary_resp = requests.get(
-            f"{primary_url}?symbol={ticker}&apikey={primary_key}", timeout=10
+        primary_resp = http.get(
+            f"{primary_url}?symbol={ticker}&apikey={primary_key}",
+            timeout=10,
         )
         if primary_resp.status_code == 200:
             data = primary_resp.json()
@@ -407,8 +406,9 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
             if -1.0 <= sentiment_score <= 1.0:
                 return sentiment_score
         elif primary_resp.status_code == 429 and alt_api_key and alt_api_url:
-            alt_resp = requests.get(
-                f"{alt_api_url}?symbol={ticker}&apikey={alt_api_key}", timeout=10
+            alt_resp = http.get(
+                f"{alt_api_url}?symbol={ticker}&apikey={alt_api_key}",
+                timeout=10,
             )
             if alt_resp.status_code == 200:
                 data = alt_resp.json()
@@ -488,7 +488,7 @@ def _try_sector_sentiment_proxy(ticker: str) -> float | None:
                         time.time() - cache_ts < SENTIMENT_TTL_SEC * 2
                     ):  # More lenient for sector proxy
                         logger.info(
-                            f"SENTIMENT_SECTOR_PROXY | ticker={ticker} sector_etf={sector_etf} score={sentiment_val}"
+                            f"SENTIMENT_SECTOR_PROXY | ticker={ticker} sector_etf={sector_etf} score={sentiment_val}"  # noqa: E501
                         )
                         # Apply decay factor for sector sentiment
                         sector_sentiment = (

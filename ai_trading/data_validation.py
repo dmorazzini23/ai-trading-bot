@@ -1,55 +1,37 @@
-"""Lightweight data validation utilities for tests."""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-
-# AI-AGENT-REF: fresh data check
-
-
-def check_data_freshness(last_updated: datetime, *, max_age_minutes: int = 15) -> bool:
-    if last_updated.tzinfo is None:
-        last_updated = last_updated.replace(tzinfo=UTC)
-    return (datetime.now(UTC) - last_updated) <= timedelta(minutes=max_age_minutes)
+from typing import Any
 
 
-# AI-AGENT-REF: stale symbol helper
-
-
-def get_stale_symbols(
-    symbol_updates: dict[str, datetime], *, max_age_minutes: int = 15
+def check_data_freshness(
+    data: dict[str, Any], *, now: datetime | None = None, max_age_minutes: int = 30, **_: Any
 ) -> list[str]:
-    return [
-        s
-        for s, ts in symbol_updates.items()
-        if not check_data_freshness(ts, max_age_minutes=max_age_minutes)
-    ]
+    """Return list of symbols whose 'asof' is older than max_age_minutes."""  # AI-AGENT-REF: permissive sig
+    now = now or datetime.now(UTC)
+    stale: list[str] = []
+    for sym, rec in (data or {}).items():
+        asof = rec.get("asof") if isinstance(rec, dict) else None
+        if not isinstance(asof, datetime):
+            stale.append(sym)
+            continue
+        if (now - asof) > timedelta(minutes=max_age_minutes):
+            stale.append(sym)
+    return stale
 
 
-# AI-AGENT-REF: basic structural validation
+def get_stale_symbols(data: dict[str, Any], **kwargs: Any) -> list[str]:
+    return check_data_freshness(data, **kwargs)
 
 
-def validate_trading_data(df) -> bool:
-    required = {"symbol", "timestamp"}
-    return hasattr(df, "columns") and required.issubset(set(df.columns))
+def validate_trading_data(data: dict[str, Any], **_: Any) -> bool:
+    return len(get_stale_symbols(data)) == 0
 
 
-# AI-AGENT-REF: critical data check
-
-
-def emergency_data_check(df) -> bool:
-    if not validate_trading_data(df) or df.empty:
-        return False
-    last_ts = df["timestamp"].iloc[-1]
-    if last_ts.tzinfo is None:
-        last_ts = last_ts.replace(tzinfo=UTC)
-    fresh = check_data_freshness(last_ts, max_age_minutes=30)
-    price_cols = [
-        c
-        for c in df.columns
-        if "price" in c.lower() or c.lower() in {"close", "open", "high", "low"}
-    ]
-    return fresh and not df[price_cols].isnull().any().any()
+def emergency_data_check(data: dict[str, Any], *, strict: bool = True, **kwargs: Any) -> bool:
+    """Stricter gate used by tests; default to strict=True."""  # AI-AGENT-REF: emergency gate
+    stale = get_stale_symbols(data, **kwargs)
+    return len(stale) == 0 if strict else len(stale) < len(data)
 
 
 __all__ = [
