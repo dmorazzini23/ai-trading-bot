@@ -1,7 +1,8 @@
-import faulthandler
 import os
-import socket
 import time
+import socket
+import faulthandler
+import contextlib
 
 import pytest
 
@@ -13,7 +14,8 @@ def _watchdog():
     try:
         yield
     finally:
-        faulthandler.cancel_dump_traceback_later()
+        with contextlib.suppress(Exception):
+            faulthandler.cancel_dump_traceback_later()  # AI-AGENT-REF: ensure watchdog cleanup
 
 
 @pytest.fixture(autouse=True)
@@ -28,30 +30,35 @@ def _short_sleep(monkeypatch):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _requests_default_timeout(monkeypatch):
+def _requests_default_timeout():
     try:
         import requests
     except Exception:
+        # requests not present – nothing to do
+        yield
         return
-    default_timeout = float(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
 
-    # Robust: patch the commonly exposed class attribute
-    # (some environments don't have `requests.sessions` attr)
+    default_timeout = float(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
     orig_request = requests.Session.request
 
-    def _request_with_default_timeout(self, method, url, **kwargs):
+    def request_with_default_timeout(self, method, url, **kwargs):
         if "timeout" not in kwargs or kwargs["timeout"] is None:
             kwargs["timeout"] = default_timeout
         return orig_request(self, method, url, **kwargs)
 
-    monkeypatch.setattr(requests.Session, "request", _request_with_default_timeout)
-    yield
+    requests.Session.request = request_with_default_timeout  # AI-AGENT-REF: manual patch to avoid session monkeypatch
+    try:
+        yield
+    finally:
+        requests.Session.request = orig_request  # AI-AGENT-REF: restore original
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _block_external_network(monkeypatch):
+def _block_external_network():
     if os.getenv("ALLOW_EXTERNAL_NETWORK", "0") == "1":
+        yield
         return
+
     orig_connect = socket.socket.connect
 
     def guarded_connect(self, address):
@@ -59,16 +66,19 @@ def _block_external_network(monkeypatch):
         try:
             ip = socket.gethostbyname(host)
         except Exception:
-            ip = host
-        if ip.startswith("127.") or ip in ("::1", "localhost"):
+            ip = str(host)
+        if ip.startswith("127.") or host in ("::1", "localhost"):
             return orig_connect(self, address)
         raise RuntimeError(
             f"External network blocked in tests (host={host}). "
-            "Set ALLOW_EXTERNAL_NETWORK=1 to override."
+            f"Set ALLOW_EXTERNAL_NETWORK=1 to override."
         )
 
-    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
-    yield
+    socket.socket.connect = guarded_connect  # AI-AGENT-REF: manual patch to enforce network sandbox
+    try:
+        yield
+    finally:
+        socket.socket.connect = orig_connect  # AI-AGENT-REF: restore original
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -77,5 +87,5 @@ def _test_env():
     os.environ.setdefault("CPU_ONLY", "1")
     os.environ.setdefault("AI_TRADER_HEALTH_TICK_SECONDS", "2")
     os.environ.setdefault("HTTP_TIMEOUT_S", "10")
-    os.environ.setdefault("FLASK_PORT", "0")
+    os.environ.setdefault("FLASK_PORT", "0")  # avoid port collisions
     yield
