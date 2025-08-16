@@ -27,7 +27,6 @@ def _optional_import(name: str):
 ta = _optional_import("pandas_ta")
 
 from ai_trading.config.management import TradingConfig, SEED
-from ai_trading.telemetry import metrics_logger
 from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: narrow Alpaca exceptions
 from ai_trading.config.settings import get_settings
 try:
@@ -1236,6 +1235,8 @@ def calculate_atr_stop(
         if direction == "long"
         else entry_price + multiplier * atr
     )
+    from ai_trading.telemetry import metrics_logger  # AI-AGENT-REF: local import
+
     _safe_call(metrics_logger.log_atr_stop, symbol="generic", stop=stop)
     return stop
 
@@ -1249,6 +1250,8 @@ def calculate_bollinger_stop(
         stop = min(price, mid)
     else:
         stop = max(price, mid)
+    from ai_trading.telemetry import metrics_logger  # AI-AGENT-REF: local import
+
     _safe_call(metrics_logger.log_atr_stop, symbol="bb", stop=stop)
     return stop
 

@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict  # AI-AGENT-REF: allow extras
 
 from dotenv import load_dotenv
 
@@ -1209,32 +1209,72 @@ class _LegacyTradingConfig:
         cfg.ENTRY_END_OFFSET_MIN = cfg.entry_end_offset_min
         return cfg
 
-    def get_legacy_params(self):
-        """Return legacy parameters for backward compatibility."""
-        return {
-            "KELLY_FRACTION": self.kelly_fraction,
-            "CONF_THRESHOLD": self.conf_threshold,
-            "DAILY_LOSS_LIMIT": self.daily_loss_limit,
-            "CAPITAL_CAP": self.capital_cap,
-            "DOLLAR_RISK_LIMIT": self.dollar_risk_limit,
-            "MAX_POSITION_SIZE": self.max_position_size,
-            "STOP_LOSS": self.stop_loss,
-            "TAKE_PROFIT": self.take_profit,
-            "TAKE_PROFIT_FACTOR": self.take_profit_factor,
-            "TRAILING_FACTOR": getattr(self, "trailing_factor", 1.0),
-            "BUY_THRESHOLD": getattr(self, "buy_threshold", 0.0),
-            "LOOKBACK_DAYS": self.lookback_days,
-            "MIN_SIGNAL_STRENGTH": self.min_signal_strength,
-            "SCALING_FACTOR": self.scaling_factor,
-            "LIMIT_ORDER_SLIPPAGE": self.limit_order_slippage,
-            "POV_SLICE_PCT": self.pov_slice_pct,
-            "ENTRY_START_OFFSET_MIN": self.entry_start_offset_min,
-            "ENTRY_END_OFFSET_MIN": self.entry_end_offset_min,
-            "TRADING_MODE": getattr(self, "trading_mode", "balanced"),
-            "ALPACA_BASE_URL": getattr(self, "alpaca_base_url", ""),
-            "CONFIRMATION_COUNT": getattr(self, "confirmation_count", 3),
-            "MAX_PORTFOLIO_RISK": getattr(self, "max_portfolio_risk", 0.10),
+    def get_legacy_params(self) -> dict[str, float | int]:
+        """Return a legacy-style parameter map."""  # AI-AGENT-REF: robust legacy export
+        from ai_trading.settings import (
+            get_buy_threshold,
+            get_conf_threshold,
+            get_daily_loss_limit,
+            get_max_drawdown_threshold,
+            get_portfolio_drift_threshold,
+            get_dollar_risk_limit,
+            get_capital_cap,
+            get_sector_exposure_cap,
+            get_max_portfolio_positions,
+            get_disaster_dd_limit,
+            get_rebalance_interval_min,
+            get_trade_cooldown_min,
+            get_max_trades_per_hour,
+            get_max_trades_per_day,
+            get_position_size_min_usd,
+            get_volume_threshold,
+            get_seed_int,
+        )
+
+        def _get(name: str, default):
+            return getattr(self, name, default)
+
+        params = {
+            "KELLY_FRACTION": _get("kelly_fraction", 0.60),
+            "CONF_THRESHOLD": _get("conf_threshold", get_conf_threshold()),
+            "CONFIRMATION_COUNT": _get("confirmation_count", 3),
+            "LOOKBACK_DAYS": _get("lookback_days", 60),
+            "MIN_SIGNAL_STRENGTH": _get("min_signal_strength", 0.0),
+            "STOP_LOSS": _get("stop_loss", 0.02),
+            "TAKE_PROFIT": _get("take_profit", 0.04),
+            "TAKE_PROFIT_FACTOR": _get("take_profit_factor", 2.0),
+            "TRAILING_FACTOR": _get("trailing_factor", 1.0),
+            "ENTRY_START_OFFSET_MIN": _get("entry_start_offset_min", 0),
+            "ENTRY_END_OFFSET_MIN": _get("entry_end_offset_min", 390),
+            "DAILY_LOSS_LIMIT": _get("daily_loss_limit", get_daily_loss_limit()),
+            "MAX_DRAWDOWN_THRESHOLD": _get("max_drawdown_threshold", get_max_drawdown_threshold()),
+            "PORTFOLIO_DRIFT_THRESHOLD": _get("portfolio_drift_threshold", get_portfolio_drift_threshold()),
+            "DOLLAR_RISK_LIMIT": _get("dollar_risk_limit", get_dollar_risk_limit()),
+            "CAPITAL_CAP": _get("capital_cap", get_capital_cap()),
+            "SECTOR_EXPOSURE_CAP": _get("sector_exposure_cap", get_sector_exposure_cap()),
+            "MAX_PORTFOLIO_POSITIONS": _get("max_portfolio_positions", get_max_portfolio_positions()),
+            "DISASTER_DD_LIMIT": _get("disaster_dd_limit", get_disaster_dd_limit()),
+            "REBALANCE_INTERVAL_MIN": _get("rebalance_interval_min", get_rebalance_interval_min()),
+            "TRADE_COOLDOWN_MIN": _get("trade_cooldown_min", get_trade_cooldown_min()),
+            "MAX_TRADES_PER_HOUR": _get("max_trades_per_hour", get_max_trades_per_hour()),
+            "MAX_TRADES_PER_DAY": _get("max_trades_per_day", get_max_trades_per_day()),
+            "BUY_THRESHOLD": _get("buy_threshold", get_buy_threshold()),
+            "POSITION_SIZE_MIN_USD": _get("position_size_min_usd", get_position_size_min_usd()),
+            "VOLUME_THRESHOLD": _get("volume_threshold", get_volume_threshold()),
+            "SEED": _get("seed", get_seed_int()),
         }
+
+        for optional_key in ("LIMIT_ORDER_SLIPPAGE", "SCALING_FACTOR", "POV_SLICE_PCT"):
+            attr = optional_key.lower()
+            if hasattr(self, attr):
+                params[optional_key] = getattr(self, attr)
+
+        return params
+
+
+def build_legacy_params_from_config(cfg: "TradingConfig") -> dict[str, float | int]:
+    """Pure function fallback to build legacy params."""  # AI-AGENT-REF: method lookup guard
+    return cfg.get_legacy_params() if hasattr(cfg, "get_legacy_params") else {}
 
 
 def validate_env_vars():
@@ -1372,59 +1412,161 @@ def reload_env(env_file: str | os.PathLike[str] | None = None) -> None:
 
 
 class TradingConfig(BaseModel):
-    """Trading parameters with mode-based defaults."""  # AI-AGENT-REF: simplified config
+    """Trading parameters with mode-based defaults."""  # AI-AGENT-REF: unify config schema
 
+    model_config = ConfigDict(extra="allow")
+
+    # Core risk/trade fields
     daily_loss_limit: float = 0.03
     conf_threshold: float = 0.75
     kelly_fraction: float = 0.60
     slow_period: int = 21
     confirmation_count: int = 3
+    capital_cap: float = 0.25  # AI-AGENT-REF: required risk cap
+    dollar_risk_limit: float = 0.05  # AI-AGENT-REF: dollar exposure limit
+    max_portfolio_risk: float = 0.10  # AI-AGENT-REF: portfolio risk cap
+    max_position_size: float = 8000.0  # AI-AGENT-REF: default max position
+    take_profit_factor: float = 2.0  # AI-AGENT-REF: reward multiple
+    buy_threshold: float = 0.60  # AI-AGENT-REF: min buy confidence
+    lookback_days: int = 60  # AI-AGENT-REF: history window
+    min_confidence: float = 0.60  # AI-AGENT-REF: floor for ML signals
+    signal_confirmation_bars: int = 2  # AI-AGENT-REF: bars to confirm signal
+    delta_threshold: float = 0.02  # AI-AGENT-REF: price delta trigger
+    max_drawdown_threshold: float = 0.08  # AI-AGENT-REF: drawdown guard
+    take_profit: float = 0.04
+    stop_loss: float = 0.02
+    trailing_factor: float = 1.0
+    limit_order_slippage: float = 0.001
+    pov_slice_pct: float = 0.05
+    max_slippage_bps: float = 25.0
+    participation_rate: float = 0.10
+    order_timeout_seconds: int = 30
+    signal_period: int = 20
+    fast_period: int = 12
+    position_size_min_usd: float = 0.0
+    portfolio_drift_threshold: float = 0.05
+    sector_exposure_cap: float = 0.2
+    max_portfolio_positions: int = 20
+    disaster_dd_limit: float = 0.2
+    rebalance_interval_min: int = 60
+    trade_cooldown_min: int = 15
+    max_trades_per_hour: int = 10
+    max_trades_per_day: int = 100
+    volume_threshold: int = 50000
+    seed: int = 42
+    entry_start_offset_min: int = 0
+    entry_end_offset_min: int = 390
 
     @classmethod
-    def from_env(cls, mode: str) -> "TradingConfig":
-        mode = (mode or "").lower()
+    def from_env(cls, mode: str | None = None, **overrides) -> "TradingConfig":
+        """Load configuration from environment with mode defaults."""  # AI-AGENT-REF
+        mode = (mode or os.getenv("TRADING_MODE", "balanced")).lower()
         base = cls()
-        if mode == "conservative":
-            return base.copy(update={
+        mode_defaults = {
+            "conservative": {
                 "kelly_fraction": 0.25,
                 "conf_threshold": 0.85,
-                "confirmation_count": 3,
                 "daily_loss_limit": 0.03,
-            })
-        if mode == "balanced":
-            return base.copy(update={
+                "capital_cap": 0.20,
+                "confirmation_count": 3,
+                "take_profit_factor": 1.5,
+                "max_position_size": 5000.0,
+            },
+            "balanced": {
                 "kelly_fraction": 0.60,
                 "conf_threshold": 0.75,
-                "confirmation_count": 3,
-                "daily_loss_limit": 0.03,
-            })
-        if mode == "aggressive":
-            return base.copy(update={
+                "daily_loss_limit": 0.05,
+                "capital_cap": 0.25,
+                "confirmation_count": 2,
+                "take_profit_factor": 1.8,
+                "max_position_size": 8000.0,
+            },
+            "aggressive": {
                 "kelly_fraction": 0.75,
                 "conf_threshold": 0.65,
-                "confirmation_count": 2,
-            })
+                "daily_loss_limit": 0.08,
+                "capital_cap": 0.30,
+                "confirmation_count": 1,
+                "take_profit_factor": 2.5,
+                "max_position_size": 12000.0,
+            },
+        }
+        base = base.model_copy(update=mode_defaults.get(mode, {}))
+        if env_val := os.getenv("KELLY_FRACTION"):
+            base.kelly_fraction = float(env_val)
+        if env_val := os.getenv("CONF_THRESHOLD"):
+            base.conf_threshold = float(env_val)
+        if overrides:
+            base = base.model_copy(update=overrides)
         return base
 
     @classmethod
-    def from_optimization(cls, method) -> "TradingConfig":
-        # If passed a dict, treat as overrides
-        if isinstance(method, dict):
-            base = cls()
-            try:
-                return base.model_copy(update={k: v for k, v in method.items() if k in base.model_fields})
-            except Exception:
-                return base.copy(update={k: v for k, v in method.items() if hasattr(base, k)})
-
-        method = (method or "").lower()
-        if method == "kelly":
-            return cls.from_env("aggressive").copy(update={"kelly_fraction": 0.75, "conf_threshold": 0.7})
-        if method == "risk_parity":
-            return cls.from_env("balanced").copy(update={"kelly_fraction": 0.35, "conf_threshold": 0.75})
-        if method == "mean_variance":
-            return cls.from_env("balanced")
-        return cls()
+    def from_optimization(cls, params: dict[str, Any]) -> "TradingConfig":
+        """Build from optimization parameters."""  # AI-AGENT-REF
+        base = cls.from_env(params.get("mode", "balanced"))
+        return base.model_copy(update={k: v for k, v in params.items() if k in base.model_fields})
 
     def to_dict(self) -> dict:
-        d = self.dict() if hasattr(self, "dict") else self.model_dump()
-        return d
+        return self.model_dump()  # AI-AGENT-REF: include extras
+
+    def get_legacy_params(self) -> dict[str, float | int]:
+        """Return a legacy-style parameter map."""  # AI-AGENT-REF: robust legacy export
+        from ai_trading.settings import (
+            get_buy_threshold,
+            get_conf_threshold,
+            get_daily_loss_limit,
+            get_max_drawdown_threshold,
+            get_portfolio_drift_threshold,
+            get_dollar_risk_limit,
+            get_capital_cap,
+            get_sector_exposure_cap,
+            get_max_portfolio_positions,
+            get_disaster_dd_limit,
+            get_rebalance_interval_min,
+            get_trade_cooldown_min,
+            get_max_trades_per_hour,
+            get_max_trades_per_day,
+            get_position_size_min_usd,
+            get_volume_threshold,
+            get_seed_int,
+        )
+
+        def _get(name: str, default):
+            return getattr(self, name, default)
+
+        params = {
+            "KELLY_FRACTION": _get("kelly_fraction", 0.60),
+            "CONF_THRESHOLD": _get("conf_threshold", get_conf_threshold()),
+            "CONFIRMATION_COUNT": _get("confirmation_count", 3),
+            "LOOKBACK_DAYS": _get("lookback_days", 60),
+            "MIN_SIGNAL_STRENGTH": _get("min_signal_strength", 0.0),
+            "STOP_LOSS": _get("stop_loss", 0.02),
+            "TAKE_PROFIT": _get("take_profit", 0.04),
+            "TAKE_PROFIT_FACTOR": _get("take_profit_factor", 2.0),
+            "TRAILING_FACTOR": _get("trailing_factor", 1.0),
+            "ENTRY_START_OFFSET_MIN": _get("entry_start_offset_min", 0),
+            "ENTRY_END_OFFSET_MIN": _get("entry_end_offset_min", 390),
+            "DAILY_LOSS_LIMIT": _get("daily_loss_limit", get_daily_loss_limit()),
+            "MAX_DRAWDOWN_THRESHOLD": _get("max_drawdown_threshold", get_max_drawdown_threshold()),
+            "PORTFOLIO_DRIFT_THRESHOLD": _get("portfolio_drift_threshold", get_portfolio_drift_threshold()),
+            "DOLLAR_RISK_LIMIT": _get("dollar_risk_limit", get_dollar_risk_limit()),
+            "CAPITAL_CAP": _get("capital_cap", get_capital_cap()),
+            "SECTOR_EXPOSURE_CAP": _get("sector_exposure_cap", get_sector_exposure_cap()),
+            "MAX_PORTFOLIO_POSITIONS": _get("max_portfolio_positions", get_max_portfolio_positions()),
+            "DISASTER_DD_LIMIT": _get("disaster_dd_limit", get_disaster_dd_limit()),
+            "REBALANCE_INTERVAL_MIN": _get("rebalance_interval_min", get_rebalance_interval_min()),
+            "TRADE_COOLDOWN_MIN": _get("trade_cooldown_min", get_trade_cooldown_min()),
+            "MAX_TRADES_PER_HOUR": _get("max_trades_per_hour", get_max_trades_per_hour()),
+            "MAX_TRADES_PER_DAY": _get("max_trades_per_day", get_max_trades_per_day()),
+            "BUY_THRESHOLD": _get("buy_threshold", get_buy_threshold()),
+            "POSITION_SIZE_MIN_USD": _get("position_size_min_usd", get_position_size_min_usd()),
+            "VOLUME_THRESHOLD": _get("volume_threshold", get_volume_threshold()),
+            "SEED": _get("seed", get_seed_int()),
+        }
+
+        for optional_key in ("LIMIT_ORDER_SLIPPAGE", "SCALING_FACTOR", "POV_SLICE_PCT"):
+            attr = optional_key.lower()
+            if hasattr(self, attr):
+                params[optional_key] = getattr(self, attr)
+
+        return params
