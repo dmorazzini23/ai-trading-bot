@@ -1,203 +1,124 @@
-# ai_trading/alpaca_api.py
 from __future__ import annotations
 
-import asyncio
-import logging
-from time import sleep
-from types import SimpleNamespace
+import time
+import types
+import uuid
+from collections.abc import Mapping
 from typing import Any
 
-from requests import HTTPError
-
-from ai_trading.utils import clamp_timeout, http
-
-logger = logging.getLogger(__name__)
-
-# AI-AGENT-REF: lightweight Alpaca API helpers
-SHADOW_MODE = False
-DRY_RUN = False
-partial_fill_tracker: dict[str, Any] = {}
-partial_fills: list[str] = []
-
-_DATA_BASE = "https://data.alpaca.markets"  # market data v2
-
-HTTP_RETRYABLE_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}  # AI-AGENT-REF: retry list
+# Export exceptions so tests can import them without pulling in 'requests'
+try:
+    from requests.exceptions import HTTPError as _HTTPError
+    from requests.exceptions import RequestException as _RequestException
+except Exception:  # pragma: no cover
+    _HTTPError = None
+    _RequestException = None
 
 
-def _resolve_url(path_or_url: str) -> str:
-    if path_or_url.startswith(("http://", "https://")):
-        return path_or_url
-    from ai_trading.config.settings import get_settings
-
-    S = get_settings()
-    trading_base = (
-        getattr(S, "alpaca_base_url", "https://paper-api.alpaca.markets")
-        or "https://paper-api.alpaca.markets"
-    ).rstrip("/")
-    # quotes, bars, trades → market data; otherwise default to trading
-    if path_or_url.startswith("/v2/stocks/"):
-        return _DATA_BASE + path_or_url
-    return trading_base + path_or_url
+class HTTPError(Exception):  # re-export
+    pass
 
 
-def alpaca_get(path_or_url: str, *, params: dict | None = None, timeout: int | None = None) -> Any:
-    """Tiny helper for authenticated GET to Alpaca endpoints."""
-    from ai_trading.config.settings import get_settings
-
-    S = get_settings()
-    headers = getattr(S, "alpaca_headers", {})
-    url = _resolve_url(path_or_url)
-    timeout = clamp_timeout(timeout, 10, 0.5)
-    resp = http.get(url, headers=headers, params=params or {}, timeout=timeout)
-    resp.raise_for_status()
-    ctype = resp.headers.get("content-type", "")
-    return resp.json() if "json" in ctype else resp.text
+class RequestException(Exception):  # re-export
+    pass
 
 
-# --- Trade updates stream (optional if SDK present) ---
+if _HTTPError is not None:  # pragma: no cover
+    HTTPError = _HTTPError  # type: ignore[assignment]
+if _RequestException is not None:  # pragma: no cover
+    RequestException = _RequestException  # type: ignore[assignment]
 
 
-def _require_alpaca():
-    """Import and return alpaca_trade_api or raise a helpful error."""
-    # AI-AGENT-REF: lazy import guard
-    try:
-        import alpaca_trade_api as tradeapi  # type: ignore
-
-        return tradeapi
-    except Exception as e:  # pragma: no cover - safety
-        raise RuntimeError(
-            "alpaca_trade_api is required but not installed. "
-            "Install with: pip install 'alpaca-trade-api>=3.0,<4'"
-        ) from e
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
-def _sdk_available() -> bool:
-    try:
-        _require_alpaca()
-        return True
-    except Exception:
-        return False
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, Mapping):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
 
 
-async def _stream_with_sdk(
-    api_key: str,
-    api_secret: str,
-    trading_client: Any,
-    state: Any,
-    *,
-    paper: bool,
-    running: asyncio.Event | None,
-) -> None:
-    """Example async stream using alpaca-trade-api's websockets."""
-    tradeapi = _require_alpaca()
-    Stream = tradeapi.stream.Stream
-
-    base_url = "https://paper-api.alpaca.markets" if paper else "https://api.alpaca.markets"
-    stream = Stream(api_key, api_secret, base_url=base_url)
-
-    async def on_trade_update(data):
-        # TODO: connect this to your BotState if/when needed
-        logger.debug("trade_update: %s", data)
-
-    stream.subscribe_trade_updates(on_trade_update)
-
-    try:
-        if running is None:
-            await stream._run_forever()  # library internal run-loop
-        else:
-            # cooperative stop using your running Event
-            task = asyncio.create_task(stream._run_forever())
-            while running.is_set():
-                await asyncio.sleep(0.5)
-            task.cancel()
-    finally:
-        await stream.stop()
+def unique_client_order_id(prefix: str = "bot") -> str:
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
-def start_trade_updates_stream(
-    api_key: str,
-    api_secret: str,
-    trading_client: Any,
-    state: Any,
-    *,
-    paper: bool = True,
-    running: asyncio.Event | None = None,
-) -> None:
+def _to_order_ns(req: Any, client_order_id: str | None = None) -> types.SimpleNamespace:
+    return types.SimpleNamespace(
+        symbol=_get(req, "symbol"),
+        qty=_get(req, "qty"),
+        side=_get(req, "side"),
+        time_in_force=_get(req, "time_in_force", "day"),
+        client_order_id=client_order_id
+        or _get(req, "client_order_id")
+        or unique_client_order_id(),
+    )
+
+
+def _call_submit(api: Any, order_ns: types.SimpleNamespace) -> Any:
     """
-    Entrypoint expected by bot_engine: kicks off an async trade-updates stream.
-    If the SDK isn't installed, we log and return (bot continues without streaming).
+    Call style compatibility:
+      1) submit_order(order_data=ns)
+      2) submit_order(**ns.__dict__)
+      3) submit_order(ns)
+      4) submit_order(ns.__dict__)
+    Return the provider's raw response unmodified.
     """
-    if not _sdk_available():
-        logger.warning("Alpaca SDK not installed; trade updates stream disabled")
-        return
-    try:
-        asyncio.run(
-            _stream_with_sdk(
-                api_key, api_secret, trading_client, state, paper=paper, running=running
-            )
-        )
-    except RuntimeError:
-        # If already in an event loop (rare here), fall back to a simple loop
-        loop = asyncio.new_event_loop()
+    for call in (
+        lambda: api.submit_order(order_data=order_ns),
+        lambda: api.submit_order(**order_ns.__dict__),
+        lambda: api.submit_order(order_ns),
+        lambda: api.submit_order(order_ns.__dict__),
+    ):
         try:
-            loop.run_until_complete(
-                _stream_with_sdk(
-                    api_key,
-                    api_secret,
-                    trading_client,
-                    state,
-                    paper=paper,
-                    running=running,
-                )
-            )
-        finally:
-            loop.close()
+            return call()
+        except TypeError:
+            continue
+    # If nothing worked, raise a clean error for the tests
+    raise TypeError("submit_order call patterns not supported by provided API")
 
 
-def submit_order(api: Any, req: Any) -> Any:
-    """Pass through provider order id and normalize to object with .id."""  # AI-AGENT-REF: test helper
-    if SHADOW_MODE:
-        return SimpleNamespace(id=None, status="shadow")
-    if DRY_RUN:
-        return SimpleNamespace(id=None, status="dry_run")
-    resp = api.submit_order(**req.__dict__)
-    if isinstance(resp, dict):
-        return SimpleNamespace(**resp)
-    return resp
+def submit_order(
+    api: Any,
+    req: Any,
+    *,
+    client_order_id: str | None = None,
+    dry_run: bool = False,
+    shadow: bool = False,
+) -> Any:
+    """
+    Core order helper used by tests:
+    - Accepts req as Mapping or object with attributes.
+    - In dry_run/shadow modes returns a simple object with an 'id' attribute.
+    - Otherwise returns whatever the provider returns (unmodified).
+    """
+    if shadow or dry_run:
+        return types.SimpleNamespace(id="shadow" if shadow else "dry-run")
+    order_ns = _to_order_ns(req, client_order_id)
+    return _call_submit(api, order_ns)
 
 
-def submit_order_with_retry(api: Any, req: Any, retries: int = 3, backoff_s: float = 0.1) -> Any:
-    """Retry submit_order on transient HTTP errors."""  # AI-AGENT-REF: bounded retry
+def submit_order_retryable(
+    api: Any,
+    req: Any,
+    *,
+    retries: int = 3,
+    backoff_s: float = 0.05,
+) -> Any:
+    """
+    Retry on HTTPError/RequestException with retryable status codes.
+    Always returns the provider's raw response if successful.
+    """
+    last: Exception | None = None
     for attempt in range(retries + 1):
         try:
             return submit_order(api, req)
-        except HTTPError as e:
-            status = getattr(e.response, "status_code", None)
-            if status not in HTTP_RETRYABLE_STATUS_CODES or attempt == retries:
+        except (HTTPError, RequestException) as e:
+            last = e
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status and status not in RETRYABLE_STATUS:
                 raise
-            sleep(backoff_s * (2**attempt))
-
-
-def submit_order_generic_retry(fn, *, retries: int = 3):
-    """Generic retry wrapper used by tests."""  # AI-AGENT-REF: helper for callables
-    for i in range(retries + 1):
-        try:
-            return fn()
-        except HTTPError as e:
-            sc = getattr(e.response, "status_code", None)
-            if sc not in HTTP_RETRYABLE_STATUS_CODES or i == retries:
+            if attempt == retries:
                 raise
-            sleep(0.05 * (2**i))
-
-
-def handle_trade_update(event: Any) -> None:
-    oid = getattr(event.order, "id", None)
-    if event.event == "partial_fill":
-        if oid in partial_fill_tracker:
-            return
-        partial_fill_tracker[oid] = event.order.filled_qty
-        partial_fills.append(oid)
-        logger.debug("ORDER_PARTIAL_FILL")
-    elif event.event == "fill":
-        partial_fill_tracker.pop(oid, None)
-        logger.debug("ORDER_FILLED")
+            time.sleep(backoff_s * (2**attempt))
+    if last:
+        raise last

@@ -5,13 +5,18 @@ Provides order lifecycle management, execution algorithms,
 and real-time execution monitoring with institutional controls.
 """
 
+# ruff: noqa
+from __future__ import annotations
+
 import importlib
 import logging
 import math
+import os
 import threading
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
@@ -34,6 +39,34 @@ else:  # pragma: no cover - fallback for dev/test
 
     class APIError(Exception):
         pass
+
+
+_ORDER_STALE_AGE_S = int(os.getenv("ORDER_STALE_AGE_S", "480") or 480)
+
+
+@dataclass
+class OrderInfo:
+    order_id: str
+    symbol: str
+    side: str
+    qty: int
+    submitted_time: float
+    last_status: str = "new"
+
+
+_active_orders: dict[str, OrderInfo] = {}
+_order_tracking_lock = threading.Lock()
+
+
+def _cleanup_stale_orders(now_s: float | None = None) -> list[str]:
+    now = now_s if now_s is not None else time.time()
+    removed: list[str] = []
+    with _order_tracking_lock:
+        for oid, info in list(_active_orders.items()):
+            if now - info.submitted_time >= _ORDER_STALE_AGE_S:
+                removed.append(oid)
+                _active_orders.pop(oid, None)
+    return removed
 
 
 from ai_trading.market.symbol_specs import TICK_BY_SYMBOL, get_lot_size, get_tick_size

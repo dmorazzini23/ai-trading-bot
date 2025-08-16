@@ -1,13 +1,13 @@
+# ruff: noqa
 from __future__ import annotations
 
-"""Utility functions and helpers for the AI trading bot."""
+"""Utility functions and helpers for the AI trading bot.
 
-"""
 Unified utilities export layer.
 Only re-export light symbols needed by production modules to avoid import-time heaviness.
 """
 import os
-from zoneinfo import ZoneInfo
+from typing import Any
 
 import pandas as pd
 
@@ -42,9 +42,25 @@ from .determinism import (
 )
 from .process_manager import acquire_lock, file_lock, release_lock
 from .time import now_utc
-from .timing import clamp_timeout, sleep  # AI-AGENT-REF: test-aware timing helpers
+from .timing import sleep  # AI-AGENT-REF: test-aware timing helpers
 
-HTTP_TIMEOUT_S = float(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
+HTTP_TIMEOUT_S: float = float(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
+
+
+def clamp_timeout(
+    kwargs: dict[str, Any], default: float | None = None
+) -> dict[str, Any]:
+    """Ensure a numeric timeout is present in kwargs."""
+    if default is None:
+        default = HTTP_TIMEOUT_S
+    t = kwargs.get("timeout", default)
+    try:
+        t = float(t)
+    except Exception:
+        t = default
+    kwargs["timeout"] = t
+    return kwargs
+
 
 import ai_trading.utils.process_manager as process_manager  # noqa: E402
 
