@@ -29,5 +29,8 @@ def main() -> int:
     return _main()
 
 
+__all__ = ["_main", "main"]
+
+
 if __name__ == "__main__":  # pragma: no cover - manual execution
     raise SystemExit(_main())

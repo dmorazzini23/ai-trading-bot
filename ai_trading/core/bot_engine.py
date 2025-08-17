@@ -6,11 +6,12 @@ import importlib.util
 import os
 import sys
 import sys as _sys
+from importlib import import_module
 
 from ai_trading.data_fetcher import (
     ensure_datetime,
     get_bars,
-    get_historical_data,
+    get_historical_df,
     get_minute_df,
 )
 
@@ -18,13 +19,35 @@ SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY")
 NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
 SENTIMENT_API_URL: str = os.getenv("SENTIMENT_API_URL", "")
 TESTING = os.getenv("TESTING", "").lower() == "true"
-_alpaca_mods = (
-    _sys.modules.get("alpaca_trade_api"),
-    _sys.modules.get("alpaca.trading"),
-    _sys.modules.get("alpaca.data"),
-    _sys.modules.get("alpaca"),
-)
-ALPACA_AVAILABLE = all(m is not None for m in _alpaca_mods)
+
+_ALPACA_MODULE_KEYS = ("alpaca_trade_api", "alpaca", "alpaca.trading", "alpaca.data")
+
+
+def _detect_alpaca_available() -> bool:
+    """Return ``True`` if Alpaca modules appear importable."""
+
+    testing = os.getenv("TESTING", "").lower() in {"1", "true", "yes"}
+    if testing:
+        if any(sys.modules.get(k, "missing") is None for k in _ALPACA_MODULE_KEYS):
+            return False
+
+    if any(sys.modules.get(k) is None for k in _ALPACA_MODULE_KEYS):
+        return False
+
+    try:
+        import_module("alpaca_trade_api")
+        return True
+    except Exception:
+        pass
+    try:
+        import_module("alpaca.trading")
+        import_module("alpaca.data")
+        return True
+    except Exception:
+        return False
+
+
+ALPACA_AVAILABLE = _detect_alpaca_available()
 
 # defer any client creation until inside a function, not at import time
 trading_client = None
@@ -484,7 +507,7 @@ S = get_runtime_settings()
 SEED = get_seed_int()  # AI-AGENT-REF: deterministic seed from runtime settings
 from ai_trading.data_fetcher import (
     get_bars,
-    get_historical_data,
+    get_historical_df,
     get_minute_df,
 )
 
@@ -2026,10 +2049,11 @@ def get_git_hash() -> str:
     """Return current git commit short hash if available."""
     try:
         import subprocess
-        from ai_trading.utils import SUBPROCESS_TIMEOUT_S
+        from ai_trading.utils import SUBPROCESS_TIMEOUT_S, clamp_timeout
 
         cmd = ["git", "rev-parse", "--short", "HEAD"]
-        proc = subprocess.run(cmd, check=True, timeout=SUBPROCESS_TIMEOUT_S, capture_output=True)
+        timeout = clamp_timeout(SUBPROCESS_TIMEOUT_S, default=SUBPROCESS_TIMEOUT_S)
+        proc = subprocess.run(cmd, check=True, timeout=timeout, capture_output=True)
         return proc.stdout.decode().strip()
     except (
         FileNotFoundError,
