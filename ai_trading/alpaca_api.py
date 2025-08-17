@@ -55,6 +55,11 @@ def submit_order(api: Any, req: Any, *, timeout: float | None = None) -> Any:
     for attempt in range(max_tries):
         try:
             resp = api.submit_order(**payload, timeout=timeout_v)
+            status = getattr(resp, "status_code", None)
+            if status in RETRYABLE_HTTP_STATUSES and attempt < max_tries - 1:
+                time.sleep(backoff)
+                backoff *= 2
+                continue
             if isinstance(resp, dict):
                 return types.SimpleNamespace(**resp)
             return resp
