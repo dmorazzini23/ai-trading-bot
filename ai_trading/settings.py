@@ -200,7 +200,11 @@ def get_news_api_key() -> str | None:
 def get_rebalance_interval_min() -> int:
     """Lazy accessor for rebalance interval."""
     s = get_settings()
-    return int(s.rebalance_interval_min)
+    val = getattr(s, "rebalance_interval_min", 60)
+    try:
+        return int(val)
+    except Exception:  # AI-AGENT-REF: tolerate FieldInfo during early imports
+        return 60
 
 
 # ---- Lazy getters (access only at runtime; never at module import) ----

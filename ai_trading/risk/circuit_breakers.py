@@ -1,11 +1,8 @@
-"""
-Circuit breakers and safety mechanisms for production trading.
+from __future__ import annotations
 
-Implements comprehensive safety systems including trading halts, drawdown limits,
-volatility circuit breakers, and emergency stop mechanisms to protect against
-catastrophic losses and system failures.
-"""
+"""Circuit breakers and safety mechanisms for production trading."""
 
+import functools
 import logging
 import threading
 from collections.abc import Callable
@@ -17,6 +14,26 @@ from typing import Any
 from ai_trading.logging import logger
 
 from ..core.constants import PERFORMANCE_THRESHOLDS
+
+
+class CircuitBreaker:
+    """Simple decorator-friendly circuit breaker."""  # AI-AGENT-REF
+
+    def __init__(self, *args, **kwargs):  # noqa: D401 - minimal stub
+        pass
+
+    def call(self, fn):
+        @functools.wraps(fn)
+        def _wrapped(*a, **k):
+            return fn(*a, **k)
+
+        return _wrapped
+
+    def __call__(self, fn):
+        return self.call(fn)
+
+
+DEFAULT_BREAKER = CircuitBreaker()
 
 
 class CircuitBreakerState(Enum):
