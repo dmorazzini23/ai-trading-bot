@@ -22,6 +22,7 @@ __all__ = [
     "set_cached_minute_timestamp",
     "clear_minute_cache",
     "age_minute_cache",
+    "last_minute_bar_age_seconds",
     "retry",
     "FINNHUB_AVAILABLE",
 ]
@@ -84,6 +85,17 @@ def age_minute_cache(max_age_seconds: int) -> int:
                 _MINUTE_CACHE.pop(k, None)
                 removed += 1
     return removed
+
+
+def last_minute_bar_age_seconds(symbol: str) -> int:
+    """Return age in seconds of latest cached minute bar for ``symbol``; 0 if unknown."""
+    ts = get_cached_minute_timestamp(symbol)
+    if ts is None:
+        return 0
+    try:
+        return int(datetime.now(UTC).timestamp() - ts)
+    except Exception:
+        return 0
 
 
 # Backwards compat aliases

@@ -1,5 +1,7 @@
 .PHONY: init test lint verify test-all contract
 
+PYTEST_N ?= 0
+
 init:
 	python tools/check_python_version.py
 	python -m pip install --upgrade pip setuptools wheel
@@ -14,7 +16,7 @@ init:
 	python -m pip install "joblib>=1.3,<2"
 
 test: contract
-	PYTHONPATH=. pytest -q -n auto --maxfail=20 --disable-warnings
+	PYTHONPATH=. pytest -q -n $(PYTEST_N) --maxfail=20 --disable-warnings
 
 contract:
 	python tools/import_contract.py

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os  # noqa: F401  # AI-AGENT-REF: kept for potential env overrides
+from typing import Any, Callable
 
 # --- timeouts & clamps ---
 HTTP_TIMEOUT_DEFAULT = 10.0
@@ -18,6 +19,36 @@ def clamp_timeout(
         return default
     v = float(value)
     return max(min_, min(max_, v))
+
+
+# --- lazy process manager accessors ---
+def _lazy_process_manager():
+    """Import ai_trading.utils.process_manager lazily to satisfy the import contract."""
+    import importlib
+
+    mod = importlib.import_module("ai_trading.utils.process_manager")
+    return mod
+
+
+def __getattr__(name: str) -> Any:
+    if name == "process_manager":
+        mod = _lazy_process_manager()
+        globals()["process_manager"] = mod  # cache
+        return mod
+    raise AttributeError(name)
+
+
+# Lightweight wrappers to preserve current public surface
+def acquire_lock(*args, **kwargs):
+    return _lazy_process_manager().acquire_lock(*args, **kwargs)
+
+
+def release_lock(*args, **kwargs):
+    return _lazy_process_manager().release_lock(*args, **kwargs)
+
+
+def file_lock(*args, **kwargs):
+    return _lazy_process_manager().file_lock(*args, **kwargs)
 
 
 # Import only when actually needed to respect import contract
@@ -45,15 +76,25 @@ def safe_subprocess_run(
 
 
 __all__ = [
-    "HTTP_TIMEOUT_DEFAULT",
-    "SUBPROCESS_TIMEOUT_DEFAULT",
-    "clamp_timeout",
-    "get_process_manager",
-    "safe_subprocess_run",
-    "log_warning",
-    "model_lock",
-    "safe_to_datetime",
-    "validate_ohlcv",
+    *sorted(
+        set(
+            [
+                "HTTP_TIMEOUT_DEFAULT",
+                "SUBPROCESS_TIMEOUT_DEFAULT",
+                "clamp_timeout",
+                "get_process_manager",
+                "safe_subprocess_run",
+                "log_warning",
+                "model_lock",
+                "safe_to_datetime",
+                "validate_ohlcv",
+                "process_manager",
+                "acquire_lock",
+                "release_lock",
+                "file_lock",
+            ]
+        )
+    )
 ]
 
 

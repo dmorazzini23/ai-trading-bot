@@ -36,7 +36,8 @@ def log_trade(symbol, qty, side, fill_price, status="filled", extra_info="", tim
                 "reward": "",
             })
     except PermissionError:
-        from ai_trading.utils import process_manager
+        import importlib
+        process_manager = importlib.import_module("ai_trading.utils.process_manager")
 
         process_manager.fix_file_permissions(path)
         logger.warning("ProcessManager attempted to fix permissions", extra={"path": str(path)})
