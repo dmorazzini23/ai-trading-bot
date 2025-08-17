@@ -29,7 +29,7 @@ from ai_trading.logging import logger
 from ai_trading.settings import get_news_api_key, get_settings
 from ai_trading.utils import (
     HTTP_TIMEOUT_S,
-    http,
+    clamp_timeout,
 )  # AI-AGENT-REF: use centralized HTTP helper
 
 SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY", "")
@@ -235,7 +235,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
             f"&apiKey={api_key}"
         )
-        resp = http.get(url, timeout=HTTP_TIMEOUT_S)
+        resp = requests.get(url, timeout=clamp_timeout(HTTP_TIMEOUT_S))
 
         # AI-AGENT-REF: Enhanced rate limiting detection and handling
         if resp.status_code == 429:
@@ -407,20 +407,17 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
     primary_key = os.getenv("SENTIMENT_API_KEY")
 
     try:
-        primary_resp = http.get(
-            f"{primary_url}?symbol={ticker}&apikey={primary_key}",
-            timeout=HTTP_TIMEOUT_S,
-        )
+        primary_url_full = f"{primary_url}?symbol={ticker}&apikey={primary_key}"
+        timeout_v = clamp_timeout(HTTP_TIMEOUT_S)
+        primary_resp = requests.get(primary_url_full, timeout=timeout_v)
         if primary_resp.status_code == 200:
             data = primary_resp.json()
             sentiment_score = data.get("sentiment_score", 0.0)
             if -1.0 <= sentiment_score <= 1.0:
                 return sentiment_score
         elif primary_resp.status_code == 429 and alt_api_key and alt_api_url:
-            alt_resp = http.get(
-                f"{alt_api_url}?symbol={ticker}&apikey={alt_api_key}",
-                timeout=HTTP_TIMEOUT_S,
-            )
+            alt_url = f"{alt_api_url}?symbol={ticker}&apikey={alt_api_key}"
+            alt_resp = requests.get(alt_url, timeout=timeout_v)
             if alt_resp.status_code == 200:
                 data = alt_resp.json()
                 sentiment_score = data.get("sentiment_score", 0.0)
@@ -573,9 +570,8 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
 
     url = f"https://www.sec.gov/cgi-bin/own-disp?action=getowner&CIK={ticker}&type=4"
     try:
-        r = http.get(
-            url, headers={"User-Agent": "AI Trading Bot"}, timeout=HTTP_TIMEOUT_S
-        )
+        headers = {"User-Agent": "AI Trading Bot"}
+        r = requests.get(url, headers=headers, timeout=clamp_timeout(HTTP_TIMEOUT_S))
         r.raise_for_status()
         soup = soup_cls(r.content, "lxml")
         filings = []

@@ -103,25 +103,16 @@ rl = [  # AI-AGENT-REF: optional RL dependencies
   "torch>=2.1; platform_system != 'Windows'",
 ]
 
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
 [tool.ruff]
-line-length = 100
-target-version = "py312"
+line-length = 88
+target-version = "py311"
 
 [tool.ruff.lint]
-extend-select = ["I", "B", "UP"]
-select = [
-    "E",     # pycodestyle errors
-    "F",     # pyflakes
-    "W",     # pycodestyle warnings
-    "B",     # flake8-bugbear
-    "T201",  # print found
-    "E722",  # bare except
-    "S",     # bandit security
-    "UP",    # pyupgrade
-    "C4",    # flake8-comprehensions
-    "PIE",   # flake8-pie
-    "SIM",   # flake8-simplify
-]
+extend-select = ["F", "E", "W", "I", "UP", "B"]
 ignore = [
     "S101",  # assert found - common in tests
     "S603",  # subprocess without shell=False check (handled by guard)

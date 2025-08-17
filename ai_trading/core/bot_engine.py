@@ -5,6 +5,13 @@ import importlib
 import os
 import sys
 
+from ai_trading.data_fetcher import (
+    ensure_datetime,
+    get_bars,
+    get_historical_data,
+    get_minute_df,
+)
+
 SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY", "")
 SENTIMENT_API_URL = os.getenv("SENTIMENT_API_URL", "")
 
@@ -2042,11 +2049,11 @@ def get_git_hash() -> str:
     """Return current git commit short hash if available."""
     try:
         import subprocess
-        from ai_trading.utils import SUBPROCESS_TIMEOUT_S
+        from ai_trading.utils import DEFAULT_SUBPROCESS_TIMEOUT_S
 
         cmd = ["git", "rev-parse", "--short", "HEAD"]
         # fmt: off
-        proc = subprocess.run(cmd, check=True, timeout=SUBPROCESS_TIMEOUT_S, capture_output=True)
+        proc = subprocess.run(cmd, check=True, timeout=DEFAULT_SUBPROCESS_TIMEOUT_S, capture_output=True)
         # fmt: on
         return proc.stdout.decode().strip()
     except (

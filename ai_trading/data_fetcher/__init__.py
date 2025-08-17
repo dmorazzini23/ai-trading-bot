@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import time
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,150 +12,159 @@ try:  # pragma: no cover - pandas optional in some tests
 except Exception:  # pragma: no cover
     pd = None  # type: ignore
 
-from ai_trading.utils import clamp_timeout
-
 __all__ = [
     "ensure_datetime",
-    "to_rfc3339",
-    "_DATA_CLIENT",
+    "ensure_utc",
+    "rfc3339",
     "get_bars",
     "get_minute_df",
     "get_historical_data",
+    "_DATA_CLIENT",
+    "get_bars_batch",
+    "get_minute_bars",
+    "get_minute_bars_batch",
+    "warmup_cache",
+    "get_cached_minute_timestamp",
+    "last_minute_bar_age_seconds",
+    "_MINUTE_CACHE",
 ]
 
-# Patch point used by tests
 _DATA_CLIENT: Any | None = None
-MAX_RETRIES = int(os.getenv("DATA_RETRY_MAX", "3") or 3)
-RETRY_SLEEP_S = float(os.getenv("DATA_RETRY_SLEEP_S", "0.05") or 0.05)
+_MINUTE_CACHE: dict[str, tuple[Any, datetime]] = {}
 
 
-def ensure_datetime(dt: datetime | str) -> datetime:
-    """Return timezone-aware UTC datetime for inputs."""
+def ensure_utc(dt: datetime) -> datetime:
+    """Return a timezone-aware UTC datetime."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+def ensure_datetime(dt: Any) -> datetime:
+    """Normalize various datetime inputs to aware UTC ``datetime``."""
     if isinstance(dt, datetime):
-        if dt.tzinfo is None:
-            return dt.replace(tzinfo=UTC)
-        return dt.astimezone(UTC)
-    parsed = datetime.fromisoformat(str(dt).replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+        return ensure_utc(dt)
+    try:  # pandas Timestamp support
+        if pd is not None and isinstance(dt, pd.Timestamp):
+            return ensure_utc(dt.to_pydatetime())
+    except Exception:  # pragma: no cover - defensive
+        pass
+    if isinstance(dt, str):
+        try:
+            parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+            return ensure_utc(parsed)
+        except Exception:  # pragma: no cover - simple parser
+            pass
+    raise TypeError(f"Unsupported datetime value: {type(dt)!r}")
 
 
-def to_rfc3339(dt: datetime | str) -> str:
-    """Return RFC3339 timestamp string in UTC."""
+def rfc3339(dt: datetime | str) -> str:
+    """Return an RFC3339 UTC timestamp string."""
     return ensure_datetime(dt).isoformat().replace("+00:00", "Z")
 
 
-def _require_client():
+def _require_client():  # pragma: no cover - simple guard
     if _DATA_CLIENT is None:
-        raise RuntimeError("DATA_CLIENT not configured")
+        raise RuntimeError(
+            "Data client not configured; patch ai_trading.data_fetcher._DATA_CLIENT"
+        )
     return _DATA_CLIENT
 
 
-def _is_persistent_datetime_error(exc: Exception) -> bool:
-    msg = str(exc).lower()
-    return "invalid format for parameter start" in msg and "error parsing" in msg
+def _call_bars(
+    symbol: str, start: datetime, end: datetime, timeframe: str, limit: int | None
+):
+    client = _require_client()
+    fn = getattr(client, "get_stock_bars", None) or getattr(client, "get_bars", None)
+    if fn is None:
+        raise RuntimeError("Data client missing get_stock_bars/get_bars")
+    return fn(
+        symbol=symbol,
+        start=rfc3339(start),
+        end=rfc3339(end),
+        timeframe=timeframe,
+        limit=limit,
+    )
 
 
 def get_bars(
     symbol: str,
     start: datetime | str,
     end: datetime | str,
-    *,
     timeframe: str = "1Min",
     limit: int | None = None,
-    adjust: str = "raw",
-    include_extended: bool = False,
-    timeout: float | None = None,
-    **kwargs: Any,
-) -> Any:
-    """Fetch OHLCV bars for ``symbol`` between ``start`` and ``end``."""
-    client = _require_client()
-    start_s = to_rfc3339(start)
-    end_s = to_rfc3339(end)
-    tf_map = {
-        "1Min": "1Min",
-        "5Min": "5Min",
-        "15Min": "15Min",
-        "1Hour": "1Hour",
-        "1Day": "1Day",
-    }
-    tf = tf_map.get(timeframe, timeframe)
-    timeout_v = clamp_timeout(timeout)
+    *,
+    max_retries: int = 3,
+    retry_sleep_s: float = 0.25,
+):
+    """Fetch OHLCV bars with bounded retries."""
+    start_dt, end_dt = ensure_datetime(start), ensure_datetime(end)
     last_exc: Exception | None = None
-    for attempt in range(MAX_RETRIES):
+    for attempt in range(max_retries + 1):
         try:
-            fn = getattr(client, "get_stock_bars", None) or client.get_bars
-            params = {
-                "timeframe": tf,
-                "limit": limit,
-                "adjust": adjust,
-                "include_extended": include_extended,
-            }
-            params.update(kwargs)
-            try:
-                resp = fn(
-                    symbol,
-                    start_s,
-                    end_s,
-                    timeout=timeout_v,
-                    **{k: v for k, v in params.items() if v is not None},
-                )
-            except TypeError:
-                resp = fn(
-                    symbol,
-                    start_s,
-                    end_s,
-                    **{k: v for k, v in params.items() if v is not None},
-                )
-            if pd is not None and isinstance(resp, pd.DataFrame):
-                if resp.index.tz is None:
-                    resp.index = resp.index.tz_localize("UTC")
-                else:
-                    resp.index = resp.index.tz_convert("UTC")
-            return resp
-        except Exception as e:  # pragma: no cover - network errors mocked in tests
+            return _call_bars(symbol, start_dt, end_dt, timeframe, limit)
+        except Exception as e:  # pragma: no cover - network mocked in tests
             last_exc = e
-            if _is_persistent_datetime_error(e) and attempt == MAX_RETRIES - 1:
+            msg = str(e)
+            if "Invalid format for parameter start" in msg and attempt >= max_retries:
                 raise
-            time.sleep(RETRY_SLEEP_S)
-    if last_exc:
-        raise last_exc
-    raise RuntimeError("Failed to fetch bars")
+            if attempt < max_retries:
+                time.sleep(retry_sleep_s)
+                continue
+            raise
+    raise last_exc or RuntimeError("get_bars failed unexpectedly")
 
 
-def get_minute_df(
-    symbol: str,
-    start: datetime | str,
-    end: datetime | str,
-    limit: int | None = None,
-    **kwargs: Any,
-) -> Any:
-    """Fetch 1-minute bars."""
-    return get_bars(
-        symbol,
-        start,
-        end,
-        timeframe="1Min",
-        limit=limit,
-        **kwargs,
-    )
+def get_minute_df(symbol: str, start: datetime | str, end: datetime | str, **kw):
+    """Fetch minute-level bars."""
+    return get_bars(symbol, start, end, timeframe="1Min", **kw)
 
 
 def get_historical_data(
-    symbol: str,
+    symbols: Iterable[str],
     start: datetime | str,
     end: datetime | str,
     timeframe: str = "1Day",
-    limit: int | None = None,
-    **kwargs: Any,
-) -> Any:
-    """Fetch historical bars using the patchable client."""
-    return get_bars(
-        symbol,
-        start,
-        end,
-        timeframe=timeframe,
-        limit=limit,
-        **kwargs,
-    )
+    **kw,
+):
+    """Fetch bars for multiple symbols and return mapping of symbol->DataFrame."""
+    out: dict[str, Any] = {}
+    for sym in symbols:
+        out[sym] = get_bars(sym, start, end, timeframe=timeframe, **kw)
+    return out
+
+
+def get_bars_batch(*args, **kwargs):  # pragma: no cover - legacy stub
+    raise NotImplementedError("get_bars_batch is no longer implemented")
+
+
+def get_minute_bars(*args, **kwargs):  # pragma: no cover - legacy stub
+    raise NotImplementedError("get_minute_bars is no longer implemented")
+
+
+def get_minute_bars_batch(*args, **kwargs):  # pragma: no cover - legacy stub
+    raise NotImplementedError("get_minute_bars_batch is no longer implemented")
+
+
+def warmup_cache(*args, **kwargs):  # pragma: no cover - legacy stub
+    return None
+
+
+def get_cached_minute_timestamp(symbol: str):
+    item = _MINUTE_CACHE.get(symbol)
+    if not item:
+        return None
+    ts = item[1]
+    if isinstance(ts, pd.Timestamp):
+        return ts
+    return pd.Timestamp(ts, tz="UTC") if pd is not None else ts
+
+
+def last_minute_bar_age_seconds(symbol: str, now: datetime | None = None):
+    ts = get_cached_minute_timestamp(symbol)
+    if ts is None:
+        return None
+    now_dt = now or datetime.now(UTC)
+    if isinstance(ts, pd.Timestamp):
+        ts_dt = ts.to_pydatetime()
+    else:
+        ts_dt = ts
+    return (now_dt - ts_dt).total_seconds()

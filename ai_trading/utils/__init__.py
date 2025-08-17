@@ -46,15 +46,22 @@ from .timing import sleep  # AI-AGENT-REF: test-aware timing helpers
 
 # Shared timeout knobs
 HTTP_TIMEOUT_S: Final[int] = int(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
-SUBPROCESS_TIMEOUT_S: Final[int] = int(os.getenv("SUBPROCESS_TIMEOUT_S", "10") or 10)
+DEFAULT_SUBPROCESS_TIMEOUT_S: Final[int] = int(
+    os.getenv("SUBPROCESS_TIMEOUT_S", "10") or 10
+)
 
 
-def clamp_timeout(timeout: float | None, default: float = HTTP_TIMEOUT_S) -> float:
-    """Return a concrete timeout value."""
+def clamp_timeout(
+    value: float | int | None, *, low: float = 1, high: float = 60
+) -> float:
+    """Clamp timeout between ``low`` and ``high`` seconds."""
+    if value is None:
+        return float(HTTP_TIMEOUT_S)
     try:
-        return float(timeout) if timeout is not None else float(default)
-    except Exception:
-        return float(default)
+        v = float(value)
+    except Exception:  # pragma: no cover - defensive
+        v = float(HTTP_TIMEOUT_S)
+    return max(low, min(high, v))
 
 
 import ai_trading.utils.process_manager as process_manager  # noqa: E402
@@ -94,5 +101,5 @@ __all__ = [
     "ensure_utc_index",
     "process_manager",
     "HTTP_TIMEOUT_S",
-    "SUBPROCESS_TIMEOUT_S",
+    "DEFAULT_SUBPROCESS_TIMEOUT_S",
 ]
