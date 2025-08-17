@@ -82,6 +82,4 @@ def validate_trading_data(
     """Basic sanity checks for OHLCV dataframes."""
     if df is None or df.shape[0] < min_rows:
         return False
-    if not allow_na and df.isna().any().any():
-        return False
-    return True
+    return not (not allow_na and df.isna().any().any())

@@ -1,20 +1,27 @@
-"""Thin Alpaca helpers with retry and DRY_RUN/SHADOW compatibility."""
+"""Thin Alpaca helpers with retry logic."""
 
 from __future__ import annotations
 
 import time
+import types
+import uuid
 from typing import Any
 
-from requests.exceptions import HTTPError as HTTPError  # re-export
+import requests
+
+HTTP_429_TOO_MANY_REQUESTS = 429
+SUBMIT_RETRY_HTTP_CODES: set[int] = {408, 409, 429, 500, 502, 503, 504}
 
 DRY_RUN = False
 SHADOW_MODE = False
 
-RETRY_STATUS = {429, 500, 502, 503, 504}
+
+def build_client_order_id(prefix: str = "bot") -> str:
+    """Generate a client order id."""
+    return f"{prefix}-{uuid.uuid4().hex[:12]}"
 
 
-def extract_order_id(resp: Any) -> str | None:
-    """Best-effort extraction of an order identifier."""
+def _extract_id(resp: Any) -> str | None:
     if resp is None:
         return None
     if isinstance(resp, dict):
@@ -26,52 +33,69 @@ def extract_order_id(resp: Any) -> str | None:
     )
 
 
-def submit_order(api: Any, req: Any, retries: int = 2, sleep_s: float = 0.2):
-    """Submit an order via ``api`` and return the raw response."""
-    if DRY_RUN:
-        return {"id": "dry-run"}
+def submit_order(
+    api: Any,
+    req: Any,
+    *,
+    client_order_id: str | None = None,
+    max_retries: int = 3,
+    backoff_s: float = 0.2,
+) -> Any:
+    """Submit an order via ``api`` with optional retries."""  # AI-AGENT-REF: retry+id normalizer
     if SHADOW_MODE:
-        return {"id": "shadow"}
+        return {"status": "shadow"}
+    if DRY_RUN:
+        return {"status": "dry_run"}
 
+    coid = (
+        client_order_id
+        or getattr(req, "client_order_id", None)
+        or (req.get("client_order_id") if isinstance(req, dict) else None)
+    )
+    if coid is None:
+        coid = build_client_order_id()
     payload = {
         "symbol": getattr(req, "symbol", None) or req["symbol"],
-        "qty": getattr(req, "qty", None)
-        or getattr(req, "quantity", None)
-        or req.get("qty"),
+        "qty": getattr(req, "qty", None) or req.get("qty") or getattr(req, "quantity", None),
         "side": getattr(req, "side", None) or req["side"],
-        "time_in_force": getattr(req, "time_in_force", None)
-        or req.get("time_in_force")
-        or "day",
+        "time_in_force": getattr(req, "time_in_force", None) or req.get("time_in_force") or "day",
     }
-    coid = getattr(req, "client_order_id", None) or req.get("client_order_id")
     if coid:
         payload["client_order_id"] = coid
 
+    submit = getattr(api, "submit_order", None) or getattr(api, "place_order", None)
+    if submit is None:
+        raise RuntimeError("API missing submit_order/place_order")
+
     last_exc: Exception | None = None
-    for attempt in range(retries + 1):
+    for attempt in range(max_retries + 1):
         try:
-            submit = getattr(api, "submit_order", None) or getattr(
-                api, "place_order", None
-            )
-            if submit is None:
-                raise RuntimeError("API has no submit_order/place_order")
-            resp = submit(**payload)
-            oid = extract_order_id(resp)
+            try:
+                resp = submit(**payload)
+            except TypeError as e:
+                if client_order_id and "client_order_id" in str(e):
+                    payload.pop("client_order_id", None)
+                    resp = submit(**payload)
+                else:
+                    raise
+            oid = _extract_id(resp)
             if isinstance(resp, dict):
-                resp.setdefault("id", oid)
-            elif oid is not None:
-                return resp
+                if oid is not None and "id" not in resp:
+                    resp["id"] = oid
+                return types.SimpleNamespace(**resp)
+            if oid is not None and not hasattr(resp, "id"):
+                return types.SimpleNamespace(id=oid)
             return resp
-        except HTTPError as e:  # pragma: no cover - network mocked
+        except requests.exceptions.HTTPError as e:
             status = getattr(getattr(e, "response", None), "status_code", None)
-            if status in RETRY_STATUS and attempt < retries:
-                time.sleep(sleep_s)
+            if status in SUBMIT_RETRY_HTTP_CODES and attempt < max_retries:
+                time.sleep(backoff_s)
                 last_exc = e
                 continue
             raise
         except Exception as e:  # noqa: BLE001
-            if attempt < retries:
-                time.sleep(sleep_s)
+            if attempt < max_retries:
+                time.sleep(backoff_s)
                 last_exc = e
                 continue
             raise
@@ -79,20 +103,11 @@ def submit_order(api: Any, req: Any, retries: int = 2, sleep_s: float = 0.2):
 
 
 __all__ = [
-    "HTTPError",
+    "HTTP_429_TOO_MANY_REQUESTS",
+    "SUBMIT_RETRY_HTTP_CODES",
+    "build_client_order_id",
+    "submit_order",
     "DRY_RUN",
     "SHADOW_MODE",
-    "RETRY_STATUS",
-    "extract_order_id",
-    "submit_order",
-    "alpaca_get",
-    "start_trade_updates_stream",
+    "requests",
 ]
-
-
-def alpaca_get(*args, **kwargs):  # pragma: no cover - legacy stub
-    return None
-
-
-def start_trade_updates_stream(*args, **kwargs):  # pragma: no cover - legacy stub
-    return None

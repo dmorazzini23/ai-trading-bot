@@ -63,7 +63,8 @@ def _cleanup_stale_orders(now_s: float | None = None) -> list[str]:
     removed: list[str] = []
     with _order_tracking_lock:
         for oid, info in list(_active_orders.items()):
-            if now - info.submitted_time >= ORDER_STALE_TIMEOUT_S:
+            age = now - info.submitted_time
+            if age >= ORDER_STALE_TIMEOUT_S and info.last_status in {"new", "pending"}:
                 removed.append(oid)
                 _active_orders.pop(oid, None)
     return removed
@@ -149,9 +150,7 @@ class Order:
         # Institutional parameters
         self.client_order_id = kwargs.get("client_order_id", f"ord_{int(time.time())}")
         self.strategy_id = kwargs.get("strategy_id")
-        self.execution_algorithm = kwargs.get(
-            "execution_algorithm", ExecutionAlgorithm.MARKET
-        )
+        self.execution_algorithm = kwargs.get("execution_algorithm", ExecutionAlgorithm.MARKET)
         self.time_in_force = kwargs.get("time_in_force", "DAY")
         self.min_quantity = kwargs.get("min_quantity", 0)
         self.stop_price = kwargs.get("stop_price")
@@ -169,9 +168,7 @@ class Order:
         self.source_system = kwargs.get("source_system", "ai_trading")
         self.parent_order_id = kwargs.get("parent_order_id")
 
-        _log.debug(
-            f"Order created: {self.id} {self.side} {self.quantity} {self.symbol}"
-        )
+        _log.debug(f"Order created: {self.id} {self.side} {self.quantity} {self.symbol}")
 
     @property
     def remaining_quantity(self) -> int:
@@ -222,9 +219,7 @@ class Order:
         # Update average fill price with precise math
         total_value = sum(Money(f["quantity"]) * f["price"] for f in self.fills)
         self.average_fill_price = (
-            total_value / Money(self.filled_quantity)
-            if self.filled_quantity > 0
-            else Money(0)
+            total_value / Money(self.filled_quantity) if self.filled_quantity > 0 else Money(0)
         )
 
         # Update status
@@ -266,16 +261,10 @@ class Order:
             "side": self.side.value if isinstance(self.side, OrderSide) else self.side,
             "quantity": self.quantity,
             "order_type": (
-                self.order_type.value
-                if isinstance(self.order_type, OrderType)
-                else self.order_type
+                self.order_type.value if isinstance(self.order_type, OrderType) else self.order_type
             ),
             "price": self.price,
-            "status": (
-                self.status.value
-                if isinstance(self.status, OrderStatus)
-                else self.status
-            ),
+            "status": (self.status.value if isinstance(self.status, OrderStatus) else self.status),
             "filled_quantity": self.filled_quantity,
             "average_fill_price": self.average_fill_price,
             "created_at": self.created_at.isoformat(),
@@ -305,9 +294,7 @@ class OrderManager:
         self.execution_callbacks: list[Callable] = []
 
         # Execution parameters
-        self.max_concurrent_orders = EXECUTION_PARAMETERS.get(
-            "MAX_CONCURRENT_ORDERS", 100
-        )
+        self.max_concurrent_orders = EXECUTION_PARAMETERS.get("MAX_CONCURRENT_ORDERS", 100)
         self.order_timeout = EXECUTION_PARAMETERS.get("ORDER_TIMEOUT_SECONDS", 300)
         self.retry_attempts = EXECUTION_PARAMETERS.get("RETRY_ATTEMPTS", 3)
 
@@ -357,9 +344,7 @@ class OrderManager:
             cache = self._ensure_idempotency_cache()
 
             # Generate idempotency key
-            key = cache.generate_key(
-                order.symbol, order.side, order.quantity, datetime.now(UTC)
-            )
+            key = cache.generate_key(order.symbol, order.side, order.quantity, datetime.now(UTC))
 
             # Check if this is a duplicate order
             if cache.is_duplicate(key):
@@ -390,9 +375,7 @@ class OrderManager:
             if not self._monitor_running:
                 self.start_monitoring()
 
-            _log.info(
-                f"Order submitted: {order.id} {order.side} {order.quantity} {order.symbol}"
-            )
+            _log.info(f"Order submitted: {order.id} {order.side} {order.quantity} {order.symbol}")
 
             # Notify callbacks
             self._notify_callbacks(order, "submitted")
@@ -424,9 +407,7 @@ class OrderManager:
         try:
             order = self.active_orders.get(order_id)
             if not order:
-                _log.warning(
-                    f"Cannot cancel order {order_id}: not found in active orders"
-                )
+                _log.warning(f"Cannot cancel order {order_id}: not found in active orders")
                 return False
 
             success = order.cancel(reason)
@@ -481,9 +462,7 @@ class OrderManager:
             return
 
         self._monitor_running = True
-        self._monitor_thread = threading.Thread(
-            target=self._monitor_orders, daemon=True
-        )
+        self._monitor_thread = threading.Thread(target=self._monitor_orders, daemon=True)
         self._monitor_thread.start()
         _log.info("Order monitoring started")
 
@@ -581,9 +560,7 @@ class OrderManager:
                         order.status = OrderStatus.EXPIRED
                         order.updated_at = current_time
                         self.active_orders.pop(order_id, None)
-                        _log.warning(
-                            f"Order {order_id} expired after {self.order_timeout} seconds"
-                        )
+                        _log.warning(f"Order {order_id} expired after {self.order_timeout} seconds")
                         self._notify_callbacks(order, "expired")
 
                 # AI-AGENT-REF: Run reconciliation after order processing
@@ -848,8 +825,6 @@ class ExecutionEngine:
         stats = self.execution_stats.copy()
         stats["active_orders"] = len(self.order_manager.active_orders)
         stats["success_rate"] = (
-            stats["filled_orders"] / stats["total_orders"]
-            if stats["total_orders"] > 0
-            else 0
+            stats["filled_orders"] / stats["total_orders"] if stats["total_orders"] > 0 else 0
         )
         return stats

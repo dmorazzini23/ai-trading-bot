@@ -74,10 +74,6 @@ class ShutdownStatus:
 class ShutdownHandler:
     """Comprehensive shutdown handler for trading system."""
 
-    _pre_shutdown_hooks: list[Callable[[], None]] | None = (
-        None  # AI-AGENT-REF: avoid mutable class defaults
-    )
-
     def __init__(self):
         self.logger = logger
         self._status = ShutdownStatus(
@@ -173,9 +169,7 @@ class ShutdownHandler:
         self._position_handlers.append(handler)
         self.logger.debug(f"Registered position handler: {handler.__name__}")
 
-    def register_order_handler(
-        self, handler: Callable[[], list[dict[str, Any]]]
-    ) -> None:
+    def register_order_handler(self, handler: Callable) -> None:
         """Register an order handler that returns list of orders to cancel."""
         self._order_handlers.append(handler)
         self.logger.debug(f"Registered order handler: {handler.__name__}")
@@ -414,9 +408,7 @@ class ShutdownHandler:
                     self._status.errors.append(f"Order cancel error: {e}")
                     continue
 
-            success_rate = self._status.orders_canceled / max(
-                self._status.orders_to_cancel, 1
-            )
+            success_rate = self._status.orders_canceled / max(self._status.orders_to_cancel, 1)
             self.logger.info(
                 f"Canceled {self._status.orders_canceled}/{self._status.orders_to_cancel} orders ({success_rate:.1%})"  # noqa: E501
             )
@@ -476,9 +468,7 @@ class ShutdownHandler:
                     self._status.errors.append(f"Position close error: {e}")
                     continue
 
-            success_rate = self._status.positions_closed / max(
-                self._status.positions_to_close, 1
-            )
+            success_rate = self._status.positions_closed / max(self._status.positions_to_close, 1)
             self.logger.info(
                 f"Closed {self._status.positions_closed}/{self._status.positions_to_close} positions ({success_rate:.1%})"  # noqa: E501
             )
@@ -508,16 +498,13 @@ class ShutdownHandler:
         """Save complete system state."""
         try:
             state_file = (
-                Path("logs")
-                / f"shutdown_state_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
+                Path("logs") / f"shutdown_state_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
             )
             state_file.parent.mkdir(exist_ok=True)
 
             state_data = {
                 "shutdown_info": {
-                    "reason": (
-                        self._status.reason.value if self._status.reason else None
-                    ),
+                    "reason": (self._status.reason.value if self._status.reason else None),
                     "timestamp": datetime.now(UTC).isoformat(),
                     "phase": self._status.phase.value,
                     "positions_status": {
@@ -552,8 +539,7 @@ class ShutdownHandler:
         """Save only critical state for emergency shutdown."""
         try:
             state_file = (
-                Path("logs")
-                / f"emergency_state_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
+                Path("logs") / f"emergency_state_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
             )
             state_file.parent.mkdir(exist_ok=True)
 

@@ -7,7 +7,7 @@ Unified utilities export layer.
 Only re-export light symbols needed by production modules to avoid import-time heaviness.
 """
 import os
-from typing import Any, Final
+from typing import Any
 
 import pandas as pd
 
@@ -44,24 +44,26 @@ from .process_manager import acquire_lock, file_lock, release_lock
 from .time import now_utc
 from .timing import sleep  # AI-AGENT-REF: test-aware timing helpers
 
+
 # Shared timeout knobs
-HTTP_TIMEOUT_S: Final[int] = int(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
-DEFAULT_SUBPROCESS_TIMEOUT_S: Final[int] = int(
-    os.getenv("SUBPROCESS_TIMEOUT_S", "10") or 10
-)
+DEFAULT_HTTP_TIMEOUT_S: float = float(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
+SUBPROCESS_TIMEOUT_S: float = float(os.getenv("SUBPROCESS_TIMEOUT_S", "10") or 10)
+
+# Backwards compatibility aliases
+HTTP_TIMEOUT_S = DEFAULT_HTTP_TIMEOUT_S  # AI-AGENT-REF: legacy name
+DEFAULT_SUBPROCESS_TIMEOUT_S = SUBPROCESS_TIMEOUT_S
 
 
 def clamp_timeout(
-    value: float | int | None, *, low: float = 1, high: float = 60
+    value: float | None,
+    *,
+    default: float = DEFAULT_HTTP_TIMEOUT_S,
+    lo: float = 1.0,
+    hi: float = 60.0,
 ) -> float:
-    """Clamp timeout between ``low`` and ``high`` seconds."""
-    if value is None:
-        return float(HTTP_TIMEOUT_S)
-    try:
-        v = float(value)
-    except Exception:  # pragma: no cover - defensive
-        v = float(HTTP_TIMEOUT_S)
-    return max(low, min(high, v))
+    """Clamp timeout between ``lo`` and ``hi`` seconds."""
+    v = default if value is None else float(value)
+    return max(lo, min(hi, v))
 
 
 import ai_trading.utils.process_manager as process_manager  # noqa: E402
@@ -100,6 +102,6 @@ __all__ = [
     "get_ohlcv_columns",
     "ensure_utc_index",
     "process_manager",
-    "HTTP_TIMEOUT_S",
-    "DEFAULT_SUBPROCESS_TIMEOUT_S",
+    "DEFAULT_HTTP_TIMEOUT_S",
+    "SUBPROCESS_TIMEOUT_S",
 ]

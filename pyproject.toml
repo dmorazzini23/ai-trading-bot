@@ -104,15 +104,14 @@ rl = [  # AI-AGENT-REF: optional RL dependencies
 ]
 
 [tool.black]
-line-length = 88
+line-length = 100
 target-version = ["py311"]
 
 [tool.ruff]
-line-length = 88
-target-version = "py311"
+line-length = 100
 
 [tool.ruff.lint]
-extend-select = ["F", "E", "W", "I", "UP", "B"]
+select = ["E", "F", "I", "B", "UP", "SIM"]
 ignore = [
     "S101",  # assert found - common in tests
     "S603",  # subprocess without shell=False check (handled by guard)
