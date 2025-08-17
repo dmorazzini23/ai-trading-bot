@@ -3,7 +3,9 @@ from __future__ import annotations
 import importlib.util as _ils
 import os
 import time
+import types
 import uuid
+from contextlib import suppress
 
 SHADOW_MODE = os.getenv("SHADOW_MODE", "").lower() in {"1", "true", "yes"}
 RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
@@ -45,23 +47,15 @@ def _get(obj, key, default=None):
 
 
 def submit_order(api, order_data=None, log=None, **kwargs):
-    """
-    Submit an order to Alpaca or simulate when shadow-mode is on or
-    the provided api object lacks 'submit_order'.
-    Always return a types.SimpleNamespace with a boolean .success attribute.
-    Accepts dict-like payloads, attribute objects, or plain kwargs.
-    """
-    import types, time, uuid
-
-    # normalize input -> data dict
-    data = {}
+    """Submit an order to Alpaca or simulate in shadow/fallback mode."""  # AI-AGENT-REF
+    data: dict[str, object] = {}
     if order_data is not None:
         if isinstance(order_data, dict):
             data.update(order_data)
         else:
-            for k in ("symbol", "qty", "side", "time_in_force"):
-                if hasattr(order_data, k):
-                    data[k] = getattr(order_data, k)
+            for key in ("symbol", "qty", "side", "time_in_force"):
+                if hasattr(order_data, key):
+                    data[key] = getattr(order_data, key)
     if kwargs:
         data.update(kwargs)
 
@@ -70,14 +64,19 @@ def submit_order(api, order_data=None, log=None, **kwargs):
     side = _get(data, "side")
     tif = _get(data, "time_in_force", "day")
     client_order_id = _make_client_order_id("shadow" if SHADOW_MODE else "ai")
+    payload = {
+        "symbol": symbol,
+        "qty": qty,
+        "side": side,
+        "time_in_force": tif,
+        "client_order_id": client_order_id,
+    }
+    submit = getattr(api, "submit_order", None)
 
-    # Fallback/shadow path OR api missing submit_order -> simulate but return object
-    if SHADOW_MODE or not hasattr(api, "submit_order"):
+    if SHADOW_MODE or not callable(submit):
         if log:
-            try:
+            with suppress(Exception):
                 log.info("submit_order shadow", symbol=symbol, qty=qty)
-            except Exception:
-                pass
         return types.SimpleNamespace(
             success=True,
             status="shadow",
@@ -86,41 +85,45 @@ def submit_order(api, order_data=None, log=None, **kwargs):
             side=side,
             time_in_force=tif,
             client_order_id=client_order_id,
+            broker_order_id=f"shadow-{client_order_id}",
         )
 
-    payload = {
-        "symbol": symbol,
-        "qty": qty,
-        "side": side,
-        "time_in_force": tif,
-        "client_order_id": client_order_id,
-    }
     if log:
-        try:
+        with suppress(Exception):
             log.info("submit_order live", payload=payload)
-        except Exception:
-            pass
 
     try:
-        resp = api.submit_order(**payload)
-    except Exception as e:
-        status = getattr(e, "status", None)
+        resp = submit(**payload)
+        if isinstance(resp, dict):
+            resp.setdefault("client_order_id", client_order_id)
+            broker_id = resp.get("broker_order_id") or resp.get("id")
+            resp.setdefault("broker_order_id", broker_id)
+            resp.setdefault("id", broker_id)
+            return types.SimpleNamespace(success=True, **resp)
+        broker_id = getattr(resp, "broker_order_id", None) or getattr(resp, "id", None)
+        resp.client_order_id = getattr(resp, "client_order_id", client_order_id)
+        resp.broker_order_id = broker_id or client_order_id
+        resp.success = True
+        return resp
+    except Exception as exc:  # noqa: BLE001
+        status = getattr(exc, "status", 0)
+        retryable = status in RETRY_HTTP_CODES
+        if log:
+            with suppress(Exception):
+                log.warning("submit_order fallback: %s", exc)
         return types.SimpleNamespace(
             success=False,
-            retryable=(status in RETRY_HTTP_CODES),
             status=status,
-            error=str(e),
+            retryable=retryable,
+            error=str(exc),
             client_order_id=client_order_id,
+            broker_order_id=client_order_id,
+            id=client_order_id,
+            symbol=symbol,
+            qty=qty,
+            side=side,
+            time_in_force=tif,
         )
-
-    order_id = getattr(resp, "id", None)
-    if isinstance(resp, dict):
-        order_id = resp.get("id")
-    return types.SimpleNamespace(
-        success=True,
-        order_id=order_id,
-        client_order_id=client_order_id,
-    )
 
 
 __all__ = [
