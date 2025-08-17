@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 try:  # pragma: no cover - best effort
-    from .regimes import MarketRegime
+    from .regime import MarketRegime
 except Exception:  # pragma: no cover - fallback
     from enum import Enum
 
     class MarketRegime(Enum):
         BULL = "bull"
         BEAR = "bear"
-        SIDEWAYS = "sideways"
+        NEUTRAL = "neutral"
 
 
 __all__ = ["MarketRegime"]

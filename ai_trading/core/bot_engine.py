@@ -20,34 +20,38 @@ NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
 SENTIMENT_API_URL: str = os.getenv("SENTIMENT_API_URL", "")
 TESTING = os.getenv("TESTING", "").lower() == "true"
 
-_ALPACA_MODULE_KEYS = ("alpaca_trade_api", "alpaca", "alpaca.trading", "alpaca.data")
+_ALPACA_MODULE_NAMES = (
+    "alpaca_trade_api",
+    "alpaca.trading",
+    "alpaca.data",
+    "alpaca",
+)
 
 
-def _detect_alpaca_available() -> bool:
-    """Return ``True`` if Alpaca modules appear importable."""
+def _alpaca_available_for_tests() -> bool:
+    """Detect Alpaca availability respecting test stubs."""
 
-    testing = os.getenv("TESTING", "").lower() in {"1", "true", "yes"}
-    if testing:
-        if any(sys.modules.get(k, "missing") is None for k in _ALPACA_MODULE_KEYS):
-            return False
+    if os.getenv("TESTING", "").lower() == "true":
+        for name in _ALPACA_MODULE_NAMES:
+            if sys.modules.get(name, "absent") is None:
+                return False
+        return any(
+            mod
+            for mod in (sys.modules.get(n) for n in _ALPACA_MODULE_NAMES)
+            if mod not in (None, "absent")
+        )
+    import importlib.util
 
-    if any(sys.modules.get(k) is None for k in _ALPACA_MODULE_KEYS):
-        return False
-
-    try:
-        import_module("alpaca_trade_api")
-        return True
-    except Exception:
-        pass
-    try:
-        import_module("alpaca.trading")
-        import_module("alpaca.data")
-        return True
-    except Exception:
-        return False
+    for n in _ALPACA_MODULE_NAMES:
+        try:
+            if importlib.util.find_spec(n) is not None:
+                return True
+        except Exception:
+            continue
+    return False
 
 
-ALPACA_AVAILABLE = _detect_alpaca_available()
+ALPACA_AVAILABLE = _alpaca_available_for_tests()
 
 # defer any client creation until inside a function, not at import time
 trading_client = None
@@ -90,6 +94,7 @@ __all__ = [
     "SENTIMENT_FAILURE_THRESHOLD",
     "_SENTIMENT_CACHE",
     "fetch_sentiment",
+    "ALPACA_AVAILABLE",
 ]
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
 # Using a mutable dict to avoid fragile `global` declarations inside functions.
@@ -125,7 +130,6 @@ from ai_trading.logging import (
     get_logger,  # AI-AGENT-REF: use sanitizing adapter
 )
 from ai_trading.utils import (
-    HTTP_TIMEOUT,
     SUBPROCESS_TIMEOUT_S,
     clamp_timeout,
     http,
@@ -273,7 +277,10 @@ def fetch_sentiment(symbol_or_ctx, symbol: str | None = None, *, ttl_s: int = 30
         return 0.0
     params = {"symbol": symbol, "apikey": SENTIMENT_API_KEY}
     try:
-        resp = requests.get(SENTIMENT_API_URL, params=params, timeout=HTTP_TIMEOUT)
+        resp = requests.get(SENTIMENT_API_URL, params=params, timeout=clamp_timeout(None))
+        if resp.status_code in {429, 500, 502, 503, 504}:
+            _SENTIMENT_FAILURES += 1
+            return 0.0
         resp.raise_for_status()
         data = resp.json()
         score = float(data.get("sentiment", 0.0))
@@ -2052,7 +2059,7 @@ def get_git_hash() -> str:
         from ai_trading.utils import SUBPROCESS_TIMEOUT_S, clamp_timeout
 
         cmd = ["git", "rev-parse", "--short", "HEAD"]
-        timeout = clamp_timeout(SUBPROCESS_TIMEOUT_S, default=SUBPROCESS_TIMEOUT_S)
+        timeout = clamp_timeout(SUBPROCESS_TIMEOUT_S, kind="subprocess")
         proc = subprocess.run(cmd, check=True, timeout=timeout, capture_output=True)
         return proc.stdout.decode().strip()
     except (

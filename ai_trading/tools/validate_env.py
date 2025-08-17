@@ -15,8 +15,10 @@ def _validate() -> tuple[bool, list[str]]:
     return (not missing, missing)
 
 
-def _main() -> int:
+def _main(argv: list[str] | None = None) -> int:
     """Validate required environment variables and print summary."""
+
+    _ = argv  # unused but keeps signature compatible
     ok, missing = _validate()
     if ok:
         print("env ok")  # noqa: T201
@@ -25,8 +27,8 @@ def _main() -> int:
     return 1
 
 
-def main() -> int:
-    return _main()
+def main(argv: list[str] | None = None) -> int:
+    return _main(argv)
 
 
 __all__ = ["_main", "main"]
