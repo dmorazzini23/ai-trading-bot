@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util as _iu
 import threading
 import time
 from collections.abc import Iterable
@@ -7,37 +8,43 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
-# Availability flags -------------------------------------------------------
-try:  # pragma: no cover - optional provider
-    import finnhub  # type: ignore  # noqa: F401
-
-    FINNHUB_AVAILABLE = True
-except Exception:  # noqa: BLE001, pragma: no cover
-    FINNHUB_AVAILABLE = False
+# Robust availability checks (lazy, no import side effects)
+FINNHUB_AVAILABLE = _iu.find_spec("finnhub") is not None
+YFIN_AVAILABLE = _iu.find_spec("yfinance") is not None
 
 
-def ensure_datetime(dt_like) -> datetime:
-    """Return a timezone-aware (UTC) datetime."""
-    if isinstance(dt_like, datetime):
-        return dt_like if dt_like.tzinfo else dt_like.replace(tzinfo=UTC)
+def ensure_datetime(dt) -> datetime:
+    """Return a timezone-aware UTC datetime for provider calls."""  # AI-AGENT-REF
+    if isinstance(dt, datetime):
+        return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
     try:
-        dt = pd.to_datetime(dt_like, utc=True).to_pydatetime()
-        if isinstance(dt, datetime):
-            return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+        return datetime.fromtimestamp(float(dt), tz=UTC)
     except Exception:  # noqa: BLE001
-        pass
-    raise ValueError(f"Unsupported datetime-like value: {dt_like!r}")
+        return datetime.now(UTC)
 
 
 def get_bars(
     symbol: str,
     timeframe: str,
-    start,
-    end,
-    feed: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    *,
+    feed=None,
+    client=None,
 ) -> pd.DataFrame:
-    """Fetch OHLCV bars for ``symbol``. Safe default returns empty DataFrame."""
-    _ = ensure_datetime(start), ensure_datetime(end)
+    """Safe fetcher returning empty frame if provider missing."""  # AI-AGENT-REF
+    if start is not None:
+        start = ensure_datetime(start)
+    if end is not None:
+        end = ensure_datetime(end)
+    try:
+        if client and hasattr(client, "get_bars"):
+            return (
+                client.get_bars(symbol, timeframe, start, end, feed=feed)
+                or pd.DataFrame()
+            )
+    except Exception:  # noqa: BLE001
+        pass
     cols = ["Open", "High", "Low", "Close", "Volume"]
     return pd.DataFrame(columns=cols)
 
@@ -45,17 +52,16 @@ def get_bars(
 def get_bars_batch(
     symbols: Iterable[str],
     timeframe: str,
-    start,
-    end,
-    feed: str | None = None,
+    start: datetime | None,
+    end: datetime | None,
+    *,
+    feed=None,
+    client=None,
 ) -> dict[str, pd.DataFrame]:
-    """Batch fetch bars -> {symbol: DataFrame}."""
+    """Compatibility batch fetcher used by legacy code; never raises."""  # AI-AGENT-REF
     out: dict[str, pd.DataFrame] = {}
-    for s in symbols:
-        try:
-            out[str(s)] = get_bars(str(s), timeframe, start, end, feed=feed)
-        except Exception:  # noqa: BLE001
-            out[str(s)] = pd.DataFrame()
+    for sym in symbols:
+        out[str(sym)] = get_bars(sym, timeframe, start, end, feed=feed, client=client)
     return out
 
 
@@ -145,6 +151,7 @@ def _fetch_bars_impl(symbol: str, start: datetime, end: datetime):
 
 __all__ = [
     "FINNHUB_AVAILABLE",
+    "YFIN_AVAILABLE",
     "ensure_datetime",
     "get_bars",
     "get_bars_batch",

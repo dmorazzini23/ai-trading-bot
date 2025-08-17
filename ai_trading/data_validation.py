@@ -24,9 +24,14 @@ def _ts_utc_now() -> datetime:
 def check_data_freshness(
     df: pd.DataFrame,
     symbol: str,
-    max_staleness_minutes: int = 15,
+    *,
+    max_staleness_minutes: int | None = None,
+    stale_after_min: int | None = None,
 ) -> bool:
-    """Return True if ``df`` has data within ``max_staleness_minutes``."""
+    """Return True if data is fresh; supports legacy alias."""  # AI-AGENT-REF
+    limit = stale_after_min if stale_after_min is not None else max_staleness_minutes
+    if limit is None:
+        limit = 15
     if df is None or df.empty:
         return False
     ts = df.index.max()
@@ -34,7 +39,8 @@ def check_data_freshness(
         ts = pd.to_datetime(ts, utc=True).to_pydatetime()
     except Exception:  # noqa: BLE001
         return False
-    return (_ts_utc_now() - ts) <= timedelta(minutes=int(max_staleness_minutes))
+    now = datetime.now(UTC)
+    return (now - ts) <= timedelta(minutes=float(limit))
 
 
 def validate_trading_data(

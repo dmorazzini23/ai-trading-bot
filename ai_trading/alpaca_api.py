@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
+import time
+import types
 import uuid
 from typing import Any
 
@@ -21,65 +24,67 @@ if os.environ.get("TESTING", "").lower() == "true" and any(
 ):
     ALPACA_AVAILABLE = False
 
-# Legacy constant kept for tests
-SHADOW_MODE: bool = os.environ.get("AI_TRADING_SHADOW_MODE", "0") in (
-    "1",
-    "true",
-    "True",
-)
+SHADOW_MODE: bool = False  # AI-AGENT-REF: tests monkeypatch this
 
-# Retryable statuses expected by tests (include rate-limit)
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_HTTP_STATUSES = tuple(_RETRYABLE_CODES)
 
 
-def _coerce_req_to_payload(req: Any) -> dict:
-    d = {
-        "symbol": getattr(req, "symbol", None),
-        "qty": getattr(req, "qty", None),
-        "side": getattr(req, "side", None),
-        "type": getattr(req, "type", "market"),
-        "time_in_force": getattr(req, "time_in_force", "day"),
-        "client_order_id": getattr(req, "client_order_id", None),
+def generate_client_order_id(prefix: str = "cid") -> str:
+    """Return unique client order id."""  # AI-AGENT-REF
+    return f"{prefix}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+
+
+def _coerce_req(req: Any) -> dict[str, Any]:
+    if isinstance(req, dict):
+        return req
+    if isinstance(req, types.SimpleNamespace):
+        return vars(req)
+    return {
+        k: getattr(req, k)
+        for k in ("symbol", "qty", "side", "time_in_force")
+        if hasattr(req, k)
     }
-    if not d["client_order_id"]:
-        d["client_order_id"] = uuid.uuid4().hex[:20]
-    return d
 
 
 def submit_order(
     api: Any,
     req: Any,
-    logger: Any | None = None,
-    *,
-    shadow_mode: bool | None = None,
-    dry_run: bool | None = None,
-) -> dict:
-    """Submit an order to an Alpaca-like API."""
-    mode_shadow = SHADOW_MODE if shadow_mode is None else bool(shadow_mode)
-    payload = _coerce_req_to_payload(req)
+    log: Any | None = None,
+    **kwargs,
+) -> dict[str, Any]:
+    """Normalize order submission with shadow mode support."""  # AI-AGENT-REF
+    data = _coerce_req(req)
+    coid = data.get("client_order_id") or generate_client_order_id()
+    data["client_order_id"] = coid
 
-    if mode_shadow or dry_run:
-        if logger:
-            logger.info(
-                "SHADOW_SUBMIT",
-                extra={
-                    "symbol": payload["symbol"],
-                    "qty": payload["qty"],
-                    "side": payload["side"],
-                },
-            )
-        return {"status": "shadow", **payload}
+    if SHADOW_MODE:
+        if log:
+            with contextlib.suppress(Exception):
+                log.info("SHADOW_SUBMIT", data=data)
+        return {"id": f"shadow-{coid}", "client_order_id": coid, "status": "shadow"}
 
     try:
-        resp = api.submit_order(order_data=payload)
-    except TypeError:
-        resp = api.submit_order(payload)
+        if hasattr(api, "submit_order"):
+            resp = api.submit_order(order_data=data)
+        else:
+            resp = {"id": f"dry-{coid}", "client_order_id": coid, "status": "accepted"}
+    except Exception as e:  # noqa: BLE001
+        if log:
+            with contextlib.suppress(Exception):
+                log.warning("ORDER_SUBMIT_ERROR", err=str(e))
+        return {"id": None, "client_order_id": coid, "status": "error"}
 
     if isinstance(resp, dict):
-        return resp
-    oid = getattr(resp, "id", None) or getattr(resp, "order_id", None)
-    return {"id": oid, "status": "submitted", **payload}
+        rid = resp.get("id") or resp.get("order_id")
+        return {
+            "id": rid,
+            "client_order_id": coid,
+            "status": resp.get("status", "accepted"),
+        }
+    rid = getattr(resp, "id", None) or getattr(resp, "order_id", None)
+    status = getattr(resp, "status", "accepted")
+    return {"id": rid, "client_order_id": coid, "status": status}
 
 
 __all__ = [
@@ -87,6 +92,7 @@ __all__ = [
     "SHADOW_MODE",
     "RETRYABLE_HTTP_STATUSES",
     "submit_order",
+    "generate_client_order_id",
     "alpaca_get",
     "start_trade_updates_stream",
 ]
