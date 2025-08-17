@@ -136,25 +136,25 @@ def test_data_fetcher_helpers_available():
     """Test that the new data_fetcher helper functions are available."""
     try:
         from ai_trading.data_fetcher import (
-            age_cached_minute_timestamp,
-            clear_cached_minute_timestamp,
+            clear_cached_minute_cache,
+            get_cached_age_seconds,
             get_cached_minute_timestamp,
             set_cached_minute_timestamp,
         )
 
         assert callable(get_cached_minute_timestamp)
         assert callable(set_cached_minute_timestamp)
-        assert callable(age_cached_minute_timestamp)
-        assert callable(clear_cached_minute_timestamp)
+        assert callable(get_cached_age_seconds)
+        assert callable(clear_cached_minute_cache)
     except ImportError:
         from ai_trading.data_fetcher import (
-            age_cached_minute_timestamp,
-            clear_cached_minute_timestamp,
+            clear_cached_minute_cache,
+            get_cached_age_seconds,
             get_cached_minute_timestamp,
             set_cached_minute_timestamp,
         )
 
         assert callable(get_cached_minute_timestamp)
         assert callable(set_cached_minute_timestamp)
-        assert callable(age_cached_minute_timestamp)
-        assert callable(clear_cached_minute_timestamp)
+        assert callable(get_cached_age_seconds)
+        assert callable(clear_cached_minute_cache)

@@ -7,12 +7,12 @@ import sys
 import time
 import types
 import uuid
-from importlib import import_module
+from importlib.util import find_spec
 from typing import Any
 
 import requests
 
-from ai_trading.utils import HTTP_TIMEOUT, clamp_timeout
+from ai_trading.utils import HTTP_TIMEOUT_S, clamp_timeout
 
 # Legacy compatibility for tests
 SHADOW_MODE: bool = False
@@ -23,24 +23,18 @@ _ALPACA_MODULE_KEYS = ("alpaca_trade_api", "alpaca", "alpaca.trading", "alpaca.d
 def _detect_alpaca_available() -> bool:
     """Detect whether Alpaca SDK modules are importable."""
 
-    testing = os.getenv("TESTING", "").lower() in {"1", "true", "yes"}
-    if testing:
-        if any(sys.modules.get(k, "missing") is None for k in _ALPACA_MODULE_KEYS):
-            return False
-
-    if any(sys.modules.get(k) is None for k in _ALPACA_MODULE_KEYS):
-        return False
-
     try:
-        import_module("alpaca_trade_api")
+        testing = os.getenv("TESTING", "").lower() in {"1", "true", "yes"}
+        if testing:
+            if any(
+                mod in sys.modules and sys.modules.get(mod) is None for mod in _ALPACA_MODULE_KEYS
+            ):
+                return False
+        for mod in ("alpaca_trade_api", "alpaca.trading", "alpaca.data"):
+            if find_spec(mod) is None:
+                return False
         return True
-    except Exception:
-        pass
-    try:
-        import_module("alpaca.trading")
-        import_module("alpaca.data")
-        return True
-    except Exception:
+    except Exception:  # pragma: no cover - best effort
         return False
 
 
@@ -108,7 +102,7 @@ def submit_order(
 
     backoff = 0.2
     retries = 3
-    timeout_v = clamp_timeout(None, default=HTTP_TIMEOUT)
+    timeout_v = clamp_timeout(None, default=HTTP_TIMEOUT_S)
     for attempt in range(retries):
         try:
             resp = client.submit_order(**order_payload, timeout=timeout_v)

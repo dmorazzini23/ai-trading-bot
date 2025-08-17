@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys as _sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from threading import RLock
 from typing import Any
 
@@ -14,50 +14,10 @@ except Exception:  # pragma: no cover
     pd = None  # type: ignore
 
 # ---------------------------------------------------------------------------
-# Minute-bar timestamp cache (thread-safe, import-safe)
-# ---------------------------------------------------------------------------
-
-_minute_cache_lock = RLock()
-_minute_cache: dict[str, int] = {}
-
-
-def set_cached_minute_timestamp(symbol: str, ts: int) -> None:
-    """Store latest processed minute timestamp for ``symbol``."""
-
-    with _minute_cache_lock:
-        _minute_cache[symbol] = int(ts)
-
-
-def get_cached_minute_timestamp(symbol: str) -> int | None:
-    """Return cached minute timestamp for ``symbol`` if present."""
-
-    with _minute_cache_lock:
-        return _minute_cache.get(symbol)
-
-
-def age_cached_minute_timestamp(symbol: str, delta: int) -> int | None:
-    """Age the cached timestamp for ``symbol`` by ``delta`` seconds."""
-
-    with _minute_cache_lock:
-        if symbol in _minute_cache:
-            _minute_cache[symbol] = int(_minute_cache[symbol]) + int(delta)
-            return _minute_cache[symbol]
-        return None
-
-
-def clear_cached_minute_timestamp(symbol: str) -> None:
-    """Remove cached timestamp for ``symbol`` if present."""
-
-    with _minute_cache_lock:
-        _minute_cache.pop(symbol, None)
-
-
-# ---------------------------------------------------------------------------
-# Client management and datetime helpers
+# Global data client (patchable for tests)
 # ---------------------------------------------------------------------------
 
 _DATA_CLIENT: Any | None = None
-_CACHE: dict[tuple[str, datetime, datetime], Any] = {}
 
 
 def set_data_client(client: Any) -> None:
@@ -67,36 +27,93 @@ def set_data_client(client: Any) -> None:
     _DATA_CLIENT = client
 
 
-def ensure_datetime(dt: datetime | str | int | float) -> datetime:
-    """Return a timezone-aware UTC ``datetime`` for ``dt``."""
+# ---------------------------------------------------------------------------
+# Minute-bar timestamp cache (thread-safe, import-safe)
+# ---------------------------------------------------------------------------
 
-    if isinstance(dt, datetime):
-        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
-    if isinstance(dt, int | float):
-        return datetime.fromtimestamp(float(dt), tz=UTC)
-    if isinstance(dt, str):
+_MINUTE_CACHE: dict[str, datetime] = {}
+_MINUTE_CACHE_LOCK = RLock()
+
+
+def set_cached_minute_timestamp(symbol: str, ts: datetime) -> None:
+    """Store latest processed minute timestamp for ``symbol``."""
+
+    dt = ensure_datetime(ts)
+    with _MINUTE_CACHE_LOCK:
+        _MINUTE_CACHE[symbol] = dt
+
+
+def get_cached_minute_timestamp(symbol: str) -> datetime | None:
+    """Return cached minute timestamp for ``symbol`` if present."""
+
+    with _MINUTE_CACHE_LOCK:
+        return _MINUTE_CACHE.get(symbol)
+
+
+def clear_cached_minute_cache(symbol: str | None = None) -> None:
+    """Clear cache for ``symbol`` or all symbols if ``None``."""
+
+    with _MINUTE_CACHE_LOCK:
+        if symbol is None:
+            _MINUTE_CACHE.clear()
+        else:
+            _MINUTE_CACHE.pop(symbol, None)
+
+
+def get_cached_age_seconds(symbol: str, now: datetime | None = None) -> float | None:
+    """Return age of cached timestamp in seconds for ``symbol``."""
+
+    with _MINUTE_CACHE_LOCK:
+        ts = _MINUTE_CACHE.get(symbol)
+    if ts is None:
+        return None
+    current = ensure_datetime(now or datetime.now(UTC))
+    return (current - ts).total_seconds()
+
+
+# ---------------------------------------------------------------------------
+# Datetime helpers
+# ---------------------------------------------------------------------------
+
+
+def ensure_datetime(value: str | int | float | datetime | date) -> datetime:
+    """Return a timezone-aware UTC datetime for ``value``."""
+
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day, tzinfo=UTC)
+    if isinstance(value, int | float):
+        return datetime.fromtimestamp(float(value), tz=UTC)
+    if isinstance(value, str):
+        if not value:
+            raise ValueError("Empty datetime string")
         try:
-            parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-        except Exception:
-            parsed = datetime.fromtimestamp(float(dt), tz=UTC)
-        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-    raise TypeError(f"Unsupported datetime type: {type(dt)!r}")
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except Exception:  # pragma: no cover - best effort
+            try:
+                dt = datetime.fromtimestamp(float(value), tz=UTC)
+            except Exception as exc2:  # pragma: no cover - best effort
+                raise ValueError(f"Invalid datetime string: {value}") from exc2
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+    raise TypeError(f"Unsupported datetime type: {type(value)!r}")
 
 
-def rfc3339(dt: datetime | str | int | float) -> str:
-    """Return an RFC3339 string in UTC for ``dt``."""
+# ---------------------------------------------------------------------------
+# Data fetching
+# ---------------------------------------------------------------------------
 
-    return ensure_datetime(dt).isoformat().replace("+00:00", "Z")
+_CACHE: dict[tuple[str, datetime, datetime], Any] = {}
 
 
 def get_minute_df(
-    symbol: str,
-    start: datetime | str | int | float,
-    end: datetime | str | int | float,
     *,
-    client: Any | None = None,
+    symbol: str,
+    start: datetime | str | int | float | date,
+    end: datetime | str | int | float | date,
     retries: int = 3,
-    backoff_s: float = 0.5,
+    backoff_s: float = 0.25,
+    client: Any | None = None,
 ):
     """Fetch minute bars for ``symbol`` with bounded retries."""
 
@@ -122,21 +139,8 @@ def get_minute_df(
                 "Invalid format for parameter start" not in msg and "error parsing" not in msg
             ) or attempt >= retries - 1:
                 raise
-            time.sleep(backoff_s * (2**attempt))
-    raise last_exc  # pragma: no cover - unreachable
-
-
-def get_historical_df(
-    symbol: str,
-    start: datetime | str | int | float,
-    end: datetime | str | int | float,
-    *,
-    client: Any | None = None,
-    **kwargs: Any,
-):
-    """Backward compatible wrapper for :func:`get_minute_df`."""
-
-    return get_minute_df(symbol, start, end, client=client, **kwargs)
+            time.sleep(backoff_s * (attempt + 1))
+    raise last_exc  # pragma: no cover
 
 
 # Backward-compatible aliases -------------------------------------------------
@@ -148,8 +152,8 @@ def get_bars(*args: Any, **kwargs: Any):
     return get_minute_df(*args, **kwargs)
 
 
-get_historical_data = get_historical_df
-
+get_historical_df = get_minute_df
+get_historical_data = get_minute_df
 
 _sys.modules.setdefault("data_fetcher", _sys.modules[__name__])
 
@@ -158,9 +162,10 @@ __all__ = [
     "ensure_datetime",
     "get_minute_df",
     "get_bars",
-    "get_historical_df",
-    "set_cached_minute_timestamp",
     "get_cached_minute_timestamp",
-    "age_cached_minute_timestamp",
-    "clear_cached_minute_timestamp",
+    "set_cached_minute_timestamp",
+    "clear_cached_minute_cache",
+    "get_cached_age_seconds",
+    "_DATA_CLIENT",
+    "set_data_client",
 ]

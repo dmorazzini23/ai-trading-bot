@@ -27,7 +27,7 @@ from ai_trading.logging import logger
 
 # AI-AGENT-REF: Import config
 from ai_trading.settings import get_news_api_key, get_settings
-from ai_trading.utils import DEFAULT_HTTP_TIMEOUT, clamp_timeout  # AI-AGENT-REF: timeout helper
+from ai_trading.utils import HTTP_TIMEOUT_S, clamp_timeout  # AI-AGENT-REF: timeout helper
 
 SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY", "")
 
@@ -220,7 +220,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
             f"&apiKey={api_key}"
         )
-        resp = requests.get(url, timeout=clamp_timeout(DEFAULT_HTTP_TIMEOUT))
+        resp = requests.get(url, timeout=clamp_timeout(HTTP_TIMEOUT_S))
 
         # AI-AGENT-REF: Enhanced rate limiting detection and handling
         if resp.status_code == 429:
@@ -389,7 +389,7 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
 
     try:
         primary_url_full = f"{primary_url}?symbol={ticker}&apikey={primary_key}"
-        timeout_v = clamp_timeout(DEFAULT_HTTP_TIMEOUT)
+        timeout_v = clamp_timeout(HTTP_TIMEOUT_S)
         primary_resp = requests.get(primary_url_full, timeout=timeout_v)
         if primary_resp.status_code == 200:
             data = primary_resp.json()
@@ -550,7 +550,7 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
     url = f"https://www.sec.gov/cgi-bin/own-disp?action=getowner&CIK={ticker}&type=4"
     try:
         headers = {"User-Agent": "AI Trading Bot"}
-        r = requests.get(url, headers=headers, timeout=clamp_timeout(DEFAULT_HTTP_TIMEOUT))
+        r = requests.get(url, headers=headers, timeout=clamp_timeout(HTTP_TIMEOUT_S))
         r.raise_for_status()
         soup = soup_cls(r.content, "lxml")
         filings = []
