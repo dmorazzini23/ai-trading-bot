@@ -1,3 +1,4 @@
+# ruff: noqa: UP007
 """Lightweight utility exports with lazy submodule access.
 
 This module intentionally keeps imports minimal to avoid heavy import-time side
@@ -9,32 +10,37 @@ eagerly defined here.
 
 from __future__ import annotations
 
-import os
 from importlib import import_module
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:  # pragma: no cover - hints only
     from . import process_manager as _process_manager  # noqa: F401
 
-HTTP_TIMEOUT: float = float(os.getenv("HTTP_TIMEOUT", "10"))
-SUBPROCESS_TIMEOUT_S: float = float(os.getenv("SUBPROCESS_TIMEOUT_S", "5"))
+HTTP_TIMEOUT_S: float = 10.0
+HTTP_TIMEOUT = HTTP_TIMEOUT_S  # legacy alias
+SUBPROCESS_TIMEOUT_S: float = 10.0
 
 
 def clamp_timeout(
-    t: float | None,
+    val: Optional[float],
     *,
-    default: float = HTTP_TIMEOUT,
-    low: float = 0.1,
-    high: float = 60.0,
+    default: float = HTTP_TIMEOUT_S,
+    lo: float = 0.1,
+    hi: float = 30.0,
 ) -> float:
-    """Clamp ``t`` to a safe timeout value."""
+    """Clamp ``val`` to a safe timeout value."""
 
-    if t is None:
-        return default
-    return max(low, min(float(t), high))
+    v = default if val is None else float(val)
+    return max(lo, min(hi, v))
 
 
-__all__ = ["HTTP_TIMEOUT", "SUBPROCESS_TIMEOUT_S", "clamp_timeout", "get_process_manager"]
+__all__ = [
+    "HTTP_TIMEOUT_S",
+    "HTTP_TIMEOUT",
+    "SUBPROCESS_TIMEOUT_S",
+    "clamp_timeout",
+    "get_process_manager",
+]
 
 # Submodules imported lazily via ``__getattr__`` to preserve the old API while
 # keeping this module lightweight.  Only names listed here are exposed as

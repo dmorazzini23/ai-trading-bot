@@ -1,28 +1,16 @@
-"""
-Advanced position management package for intelligent position holding strategies.
+"""Minimal position package exports."""
 
-This package implements sophisticated position management with:
-- Dynamic trailing stops based on volatility and momentum
-- Multi-tiered profit taking with scale-out strategies
-- Market regime-aware position management
-- Technical signal integration for exit timing
-- Portfolio-level correlation and exposure management
+from __future__ import annotations
 
-AI-AGENT-REF: Advanced intelligent position management system
-"""
+try:  # pragma: no cover - best effort
+    from .regimes import MarketRegime
+except Exception:  # pragma: no cover - fallback
+    from enum import Enum
 
-from .correlation_analyzer import PortfolioCorrelationAnalyzer
-from .intelligent_manager import IntelligentPositionManager
-from .market_regime import MarketRegimeDetector
-from .profit_taking import ProfitTakingEngine
-from .technical_analyzer import TechnicalSignalAnalyzer
-from .trailing_stops import TrailingStopManager
+    class MarketRegime(Enum):
+        BULL = "bull"
+        BEAR = "bear"
+        SIDEWAYS = "sideways"
 
-__all__ = [
-    "IntelligentPositionManager",
-    "MarketRegimeDetector",
-    "TechnicalSignalAnalyzer",
-    "TrailingStopManager",
-    "ProfitTakingEngine",
-    "PortfolioCorrelationAnalyzer",
-]
+
+__all__ = ["MarketRegime"]
