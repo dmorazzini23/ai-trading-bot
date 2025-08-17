@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import os
 from importlib import import_module
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - hints only
+    from . import process_manager as _process_manager  # noqa: F401
 
 HTTP_TIMEOUT: float = float(os.getenv("HTTP_TIMEOUT", "10"))
 SUBPROCESS_TIMEOUT_S: float = float(os.getenv("SUBPROCESS_TIMEOUT_S", "5"))
@@ -31,7 +34,7 @@ def clamp_timeout(
     return max(low, min(float(t), high))
 
 
-__all__ = ["HTTP_TIMEOUT", "SUBPROCESS_TIMEOUT_S", "clamp_timeout"]
+__all__ = ["HTTP_TIMEOUT", "SUBPROCESS_TIMEOUT_S", "clamp_timeout", "get_process_manager"]
 
 # Submodules imported lazily via ``__getattr__`` to preserve the old API while
 # keeping this module lightweight.  Only names listed here are exposed as
@@ -58,6 +61,14 @@ def __getattr__(name: str) -> Any:  # pragma: no cover - thin passthrough
         except Exception:  # pragma: no cover - optional dependency
             continue
     raise AttributeError(name) from None
+
+
+def get_process_manager():  # pragma: no cover - thin wrapper
+    """Return the lazily imported :mod:`process_manager` module."""
+
+    from . import process_manager  # noqa: WPS433 (allowed lazy import)
+
+    return process_manager
 
 
 def __dir__() -> list[str]:  # pragma: no cover - simple namespace helper
