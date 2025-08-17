@@ -17,22 +17,24 @@ __all__ = [
 ]
 
 
+def _ts_utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 def check_data_freshness(
     df: pd.DataFrame,
-    *,
-    now: datetime | None = None,
-    max_age_minutes: int = 5,
+    symbol: str,
+    max_staleness_minutes: int = 15,
 ) -> bool:
-    """Return ``True`` if ``df`` has data within ``max_age_minutes``."""
+    """Return True if ``df`` has data within ``max_staleness_minutes``."""
     if df is None or df.empty:
         return False
-    ts = df["timestamp"].max() if "timestamp" in df.columns else df.index.max()
-    if isinstance(ts, pd.Timestamp):
-        ts = ts.to_pydatetime()
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=UTC)
-    now_dt = now or datetime.now(UTC)
-    return now_dt - ts <= timedelta(minutes=max_age_minutes)
+    ts = df.index.max()
+    try:
+        ts = pd.to_datetime(ts, utc=True).to_pydatetime()
+    except Exception:  # noqa: BLE001
+        return False
+    return (_ts_utc_now() - ts) <= timedelta(minutes=int(max_staleness_minutes))
 
 
 def validate_trading_data(
@@ -53,15 +55,16 @@ def validate_trading_data(
 def get_stale_symbols(
     frames: Mapping[str, pd.DataFrame],
     *,
-    max_age_minutes: int = 5,
+    max_staleness_minutes: int = 5,
 ) -> list[str]:
-    """Return symbols whose data is older than ``max_age_minutes``."""
-    now = datetime.now(UTC)
-    return [
-        sym
-        for sym, df in frames.items()
-        if not check_data_freshness(df, now=now, max_age_minutes=max_age_minutes)
-    ]
+    """Return symbols whose data is older than ``max_staleness_minutes``."""
+    out: list[str] = []
+    for sym, df in frames.items():
+        if not check_data_freshness(
+            df, sym, max_staleness_minutes=max_staleness_minutes
+        ):
+            out.append(sym)
+    return out
 
 
 def emergency_data_check(
@@ -78,6 +81,6 @@ def emergency_data_check(
             df = fetch(sym, start, end)
             if df is None or df.empty:
                 return False
-        except Exception:
+        except Exception:  # noqa: BLE001
             return False
     return True

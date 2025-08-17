@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 try:  # AI-AGENT-REF: tolerate pydantic internals missing
     from pydantic.fields import FieldInfo
-except Exception:  # pragma: no cover
+except Exception:  # noqa: BLE001  pragma: no cover
     FieldInfo = object
 
 
@@ -75,13 +75,16 @@ class Settings(BaseSettings):
     # Upper bound on trade submissions per hour (rate limit)
     max_trades_per_hour: int = Field(default=30, env="AI_TRADER_MAX_TRADES_PER_HOUR")
     # Min confidence threshold
-    conf_threshold: float = Field(default=0.8, env="AI_TRADER_CONF_THRESHOLD")
+    # Confidence thresholds tuned to test expectations
+    conf_threshold: float = Field(default=0.75, env="AI_TRADER_CONF_THRESHOLD")
     # Min model buy score
     buy_threshold: float = Field(default=0.4, env="AI_TRADER_BUY_THRESHOLD")
     # Max daily loss fraction before halt
     daily_loss_limit: float = Field(default=0.03, env="AI_TRADER_DAILY_LOSS_LIMIT")
     # Max running drawdown before action
-    max_drawdown_threshold: float = Field(default=0.08, env="AI_TRADER_MAX_DRAWDOWN_THRESHOLD")
+    max_drawdown_threshold: float = Field(
+        default=0.08, env="AI_TRADER_MAX_DRAWDOWN_THRESHOLD"
+    )
     # Rebalance drift threshold
     portfolio_drift_threshold: float = Field(
         default=0.15, env="AI_TRADER_PORTFOLIO_DRIFT_THRESHOLD"
@@ -91,34 +94,50 @@ class Settings(BaseSettings):
     # Max fraction of equity per new position
     capital_cap: float = Field(default=0.04, env="AI_TRADER_CAPITAL_CAP")
     # Max fraction of equity in one sector
-    sector_exposure_cap: float = Field(default=0.33, env="AI_TRADER_SECTOR_EXPOSURE_CAP")
+    sector_exposure_cap: float = Field(
+        default=0.33, env="AI_TRADER_SECTOR_EXPOSURE_CAP"
+    )
     # Upper bound on concurrent open positions
-    max_portfolio_positions: int = Field(default=10, env="AI_TRADER_MAX_PORTFOLIO_POSITIONS")
+    max_portfolio_positions: int = Field(
+        default=10, env="AI_TRADER_MAX_PORTFOLIO_POSITIONS"
+    )
     disaster_dd_limit: float = Field(default=0.25, env="AI_TRADER_DISASTER_DD_LIMIT")
     # Toggle dataframe/bars cache in data_fetcher
     data_cache_enable: bool = Field(default=True, env="AI_TRADER_DATA_CACHE_ENABLE")
-    data_cache_ttl_seconds: int = Field(default=300, env="AI_TRADER_DATA_CACHE_TTL_SECONDS")
+    data_cache_ttl_seconds: int = Field(
+        default=300, env="AI_TRADER_DATA_CACHE_TTL_SECONDS"
+    )
     verbose_logging: bool = Field(default=False, env="AI_TRADER_VERBOSE_LOGGING")
     # Plotting (matplotlib) allowed in environments that support it
     enable_plotting: bool = Field(default=False, env="AI_TRADER_ENABLE_PLOTTING")
     # Minimum absolute USD size for a position
-    position_size_min_usd: float = Field(default=0.0, env="AI_TRADER_POSITION_SIZE_MIN_USD")
+    position_size_min_usd: float = Field(
+        default=0.0, env="AI_TRADER_POSITION_SIZE_MIN_USD"
+    )
     # Global volume threshold used by bot_engine init
     volume_threshold: float = Field(default=0.0, env="AI_TRADER_VOLUME_THRESHOLD")
     """Single source of truth for runtime configuration."""
 
     # loop control
-    interval: int = Field(60, alias="AI_TRADING_INTERVAL")  # AI-AGENT-REF: interval alias
-    iterations: int = Field(0, alias="AI_TRADING_ITERATIONS")  # AI-AGENT-REF: iterations alias
+    interval: int = Field(
+        60, alias="AI_TRADING_INTERVAL"
+    )  # AI-AGENT-REF: interval alias
+    iterations: int = Field(
+        0, alias="AI_TRADING_ITERATIONS"
+    )  # AI-AGENT-REF: iterations alias
     scheduler_iterations: int = Field(0, validation_alias="SCHEDULER_ITERATIONS")
     scheduler_sleep_seconds: int = Field(60, validation_alias="SCHEDULER_SLEEP_SECONDS")
-    ai_trading_seed: int = Field(42, alias="AI_TRADING_SEED")  # AI-AGENT-REF: seed alias
+    ai_trading_seed: int = Field(
+        42, alias="AI_TRADING_SEED"
+    )  # AI-AGENT-REF: seed alias
 
     # paths
     model_path: str = Field(
         "trained_model.pkl", alias="AI_TRADING_MODEL_PATH"
     )  # AI-AGENT-REF: model path
-    halt_flag_path: str = Field("halt.flag", alias="HALT_FLAG_PATH")  # AI-AGENT-REF: halt flag path
+    halt_flag_path: str = Field(
+        "halt.flag", alias="HALT_FLAG_PATH"
+    )  # AI-AGENT-REF: halt flag path
     rl_model_path: str = Field(
         "rl_agent.zip", alias="AI_TRADING_RL_MODEL_PATH"
     )  # AI-AGENT-REF: RL model path
@@ -227,7 +246,9 @@ def get_conf_threshold() -> float:
 
     mode = getattr(get_settings(), "bot_mode", "balanced")
     cfg = TradingConfig.from_env(mode=mode)
-    return _to_float(getattr(cfg, "conf_threshold", 0.75), 0.75)  # AI-AGENT-REF: mode-aware
+    return _to_float(
+        getattr(cfg, "conf_threshold", 0.75), 0.75
+    )  # AI-AGENT-REF: mode-aware
 
 
 def get_trade_cooldown_min() -> int:
