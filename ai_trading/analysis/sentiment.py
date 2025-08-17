@@ -27,7 +27,7 @@ from ai_trading.logging import logger
 
 # AI-AGENT-REF: Import config
 from ai_trading.settings import get_news_api_key, get_settings
-from ai_trading.utils import HTTP_TIMEOUT_S, clamp_timeout  # AI-AGENT-REF: timeout helper
+from ai_trading.utils import clamp_timeout  # AI-AGENT-REF: timeout helper
 
 SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY", "")
 
@@ -220,7 +220,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
             f"&apiKey={api_key}"
         )
-        resp = requests.get(url, timeout=clamp_timeout(HTTP_TIMEOUT_S))
+        resp = requests.get(url, timeout=clamp_timeout(None))
 
         # AI-AGENT-REF: Enhanced rate limiting detection and handling
         if resp.status_code == 429:
@@ -389,14 +389,10 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
 
     try:
         primary_url_full = f"{primary_url}?symbol={ticker}&apikey={primary_key}"
-        timeout_v = clamp_timeout(HTTP_TIMEOUT_S)
+        timeout_v = clamp_timeout(None)
         primary_resp = requests.get(primary_url_full, timeout=timeout_v)
-        if primary_resp.status_code == 200:
-            data = primary_resp.json()
-            sentiment_score = data.get("sentiment_score", 0.0)
-            if -1.0 <= sentiment_score <= 1.0:
-                return sentiment_score
-        elif primary_resp.status_code == 429 and alt_api_key and alt_api_url:
+        if primary_resp.status_code in {429, 500, 502, 503, 504} and alt_api_key and alt_api_url:
+            time.sleep(0.5)
             alt_url = f"{alt_api_url}?symbol={ticker}&apikey={alt_api_key}"
             alt_resp = requests.get(alt_url, timeout=timeout_v)
             if alt_resp.status_code == 200:
@@ -407,6 +403,11 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
                         f"ALTERNATIVE_SENTIMENT_SUCCESS | ticker={ticker} score={sentiment_score}"
                     )
                     return sentiment_score
+        elif primary_resp.status_code == 200:
+            data = primary_resp.json()
+            sentiment_score = data.get("sentiment_score", 0.0)
+            if -1.0 <= sentiment_score <= 1.0:
+                return sentiment_score
     except Exception as e:
         logger.debug(f"Alternative sentiment source failed for {ticker}: {e}")
 
@@ -550,7 +551,14 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
     url = f"https://www.sec.gov/cgi-bin/own-disp?action=getowner&CIK={ticker}&type=4"
     try:
         headers = {"User-Agent": "AI Trading Bot"}
-        r = requests.get(url, headers=headers, timeout=clamp_timeout(HTTP_TIMEOUT_S))
+        backoff = 0.5
+        for attempt in range(3):
+            r = requests.get(url, headers=headers, timeout=clamp_timeout(None))
+            if r.status_code in {429, 500, 502, 503, 504} and attempt < 2:
+                time.sleep(backoff)
+                backoff *= 2
+                continue
+            break
         r.raise_for_status()
         soup = soup_cls(r.content, "lxml")
         filings = []

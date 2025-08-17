@@ -6,6 +6,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
+from functools import lru_cache
 from pydantic import Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -165,15 +166,11 @@ class Settings(BaseSettings):
     )  # AI-AGENT-REF: AI_TRADER_ env prefix
 
 
-_SETTINGS: Settings | None = None
-
-
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return module-level Settings singleton."""  # AI-AGENT-REF: cached settings
-    global _SETTINGS  # noqa: PLW0603
-    if _SETTINGS is None:
-        _SETTINGS = Settings()
-    return _SETTINGS
+
+    return Settings()
 
 
 def get_news_api_key() -> str | None:

@@ -11,32 +11,30 @@ eagerly defined here.
 from __future__ import annotations
 
 from importlib import import_module
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:  # pragma: no cover - hints only
     from . import process_manager as _process_manager  # noqa: F401
 
-HTTP_TIMEOUT_S: float = 10.0
-HTTP_TIMEOUT = HTTP_TIMEOUT_S  # legacy alias
-SUBPROCESS_TIMEOUT_S: float = 10.0
+HTTP_TIMEOUT_S = 10.0
+SUBPROCESS_TIMEOUT_S = 15.0
 
 
 def clamp_timeout(
-    val: Optional[float],
+    value: float | int | None,
     *,
-    default: float = HTTP_TIMEOUT_S,
-    lo: float = 0.1,
-    hi: float = 30.0,
+    kind: Literal["http", "subprocess"] = "http",
 ) -> float:
-    """Clamp ``val`` to a safe timeout value."""
+    """Return a bounded timeout for ``kind`` operations."""
 
-    v = default if val is None else float(val)
+    base = HTTP_TIMEOUT_S if kind == "http" else SUBPROCESS_TIMEOUT_S
+    v = base if value is None else float(value)
+    lo, hi = (1.0, 30.0) if kind == "http" else (1.0, 60.0)
     return max(lo, min(hi, v))
 
 
 __all__ = [
     "HTTP_TIMEOUT_S",
-    "HTTP_TIMEOUT",
     "SUBPROCESS_TIMEOUT_S",
     "clamp_timeout",
     "get_process_manager",
