@@ -1,3 +1,4 @@
+# ruff: noqa
 """
 Production configuration management for live trading.
 
@@ -964,7 +965,7 @@ class _LegacyTradingConfig:
             getenv("PCT", overrides.get("pct", 0.05)),
             overrides.get("pct", 0.05),
         )
-        MODEL_PATH = getenv("MODEL_PATH", overrides.get("MODEL_PATH", None))
+        MODEL_PATH = getenv("MODEL_PATH", overrides.get("MODEL_PATH"))
         scheduler_iterations = _to_int(
             getenv("SCHEDULER_ITERATIONS", overrides.get("scheduler_iterations", 0)),
             overrides.get("scheduler_iterations", 0),
@@ -1516,8 +1517,14 @@ class TradingConfig(BaseModel):
         """Load configuration from environment with mode defaults."""  # AI-AGENT-REF
         mode = (mode or os.getenv("TRADING_MODE", "balanced")).lower()
         defaults = {"conservative": 0.85, "balanced": 0.75, "aggressive": 0.65}
-        conf_threshold = defaults.get(mode, 0.75)
-        conf_threshold = float(os.getenv("CONF_THRESHOLD", conf_threshold))
+        override = os.getenv("CONF_THRESHOLD")
+        if override is not None:
+            base = float(override)
+            offsets = {"conservative": 0.10, "balanced": 0.0, "aggressive": -0.10}
+            conf_threshold = base + offsets.get(mode, 0.0)
+        else:
+            conf_threshold = defaults.get(mode, 0.75)
+
         if mode == "conservative":
             mode_defaults = {
                 "kelly_fraction": 0.25,

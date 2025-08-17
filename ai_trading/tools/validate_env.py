@@ -1,5 +1,3 @@
-"""Environment validation entrypoint used by tests."""
-
 from __future__ import annotations
 
 import os
@@ -17,16 +15,18 @@ def _validate() -> tuple[bool, list[str]]:
     return (not missing, missing)
 
 
-def _main(argv: list[str] | None = None) -> int:
+def _main() -> int:
+    """Validate required environment variables and print summary."""
     ok, missing = _validate()
     if ok:
+        print("env ok")  # noqa: T201
         return 0
     print("missing vars: " + ",".join(missing))  # noqa: T201
     return 1
 
 
-def main(argv: list[str] | None = None) -> int:
-    return _main(argv)
+def main() -> int:
+    return _main()
 
 
 if __name__ == "__main__":  # pragma: no cover - manual execution

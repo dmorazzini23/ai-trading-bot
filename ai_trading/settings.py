@@ -165,15 +165,15 @@ class Settings(BaseSettings):
     )  # AI-AGENT-REF: AI_TRADER_ env prefix
 
 
-_SETTINGS_SINGLETON = None
+_SETTINGS: Settings | None = None
 
 
-def get_settings() -> Settings:  # noqa: F821
+def get_settings() -> Settings:
     """Return module-level Settings singleton."""  # AI-AGENT-REF: cached settings
-    global _SETTINGS_SINGLETON
-    if _SETTINGS_SINGLETON is None:
-        _SETTINGS_SINGLETON = Settings()  # noqa: F821
-    return _SETTINGS_SINGLETON
+    global _SETTINGS  # noqa: PLW0603
+    if _SETTINGS is None:
+        _SETTINGS = Settings()
+    return _SETTINGS
 
 
 def get_news_api_key() -> str | None:

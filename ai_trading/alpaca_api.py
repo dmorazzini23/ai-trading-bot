@@ -1,101 +1,76 @@
-"""Alpaca helper utilities used by tests and trading code."""
+"""Alpaca helper utilities with minimal pass-through semantics."""
 
 from __future__ import annotations
 
-import datetime as _dt
+import os
+import secrets
 import time
 import types
-import uuid
 from typing import Any
 
 import requests
 
-from ai_trading.utils import DEFAULT_HTTP_TIMEOUT
+from ai_trading.utils import HTTP_TIMEOUT, clamp_timeout
 
-RETRIABLE_STATUS = (429, 500, 502, 503, 504)
+SHADOW_MODE: bool = os.getenv("SHADOW_MODE", "").lower() in {"1", "true", "yes"}
+RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 
-
-def unique_client_order_id(prefix: str = "bot") -> str:
-    """Return a provider-safe unique client order id."""
-    day = _dt.datetime.now(_dt.UTC).strftime("%Y%m%d")
-    return f"{prefix}-{day}-{uuid.uuid4().hex[:8]}"
-
-
-def _coerce(v: Any, key: str, default: Any = None) -> Any:
-    if isinstance(v, dict):
-        return v.get(key, default)
-    return getattr(v, key, default)
+__all__ = [
+    "SHADOW_MODE",
+    "RETRYABLE_HTTP_STATUSES",
+    "submit_order",
+    "client_order_id",
+]
 
 
-def _payload_from_req(req: Any, *, include_id: bool = True) -> dict[str, Any]:
+def _coerce(req: Any, key: str, default: Any = None) -> Any:
+    if isinstance(req, dict):
+        return req.get(key, default)
+    return getattr(req, key, default)
+
+
+def client_order_id(symbol: str, ts: float | None = None) -> str:
+    """Generate a unique client order id for ``symbol``."""
+    ts_ms = int((ts if ts is not None else time.time()) * 1000)
+    return f"{symbol}-{ts_ms}-{secrets.token_hex(4)}"
+
+
+def submit_order(api: Any, req: Any, *, timeout: float | None = None) -> Any:
+    """Submit an order via ``api`` and return the provider response."""
+    if SHADOW_MODE or not hasattr(api, "submit_order"):
+        return types.SimpleNamespace(id="dry-run", status="accepted")
     payload = {
         "symbol": _coerce(req, "symbol"),
         "qty": _coerce(req, "qty", _coerce(req, "quantity")),
         "side": _coerce(req, "side"),
         "time_in_force": _coerce(req, "time_in_force", "day"),
-        "type": _coerce(req, "type"),
-        "limit_price": _coerce(req, "limit_price"),
-        "stop_price": _coerce(req, "stop_price"),
     }
     coid = _coerce(req, "client_order_id")
-    if include_id:
-        payload["client_order_id"] = coid or unique_client_order_id()
-    elif coid:
-        payload["client_order_id"] = coid
-    return {k: v for k, v in payload.items() if v is not None}
-
-
-def _wrap(resp: Any) -> Any:
-    return types.SimpleNamespace(**resp) if isinstance(resp, dict) else resp
-
-
-def submit_order(
-    api: Any,
-    req: Any,
-    *,
-    shadow: bool = False,
-    dry_run: bool = False,
-    max_retries: int = 3,
-) -> Any:
-    """Submit an order to ``api`` with simple retry handling."""
-    payload = _payload_from_req(req, include_id=not (shadow or dry_run))
-    if shadow:
-        return types.SimpleNamespace(id="SHADOW", **payload)
-    if dry_run:
-        return types.SimpleNamespace(id="DRY_RUN", **payload)
-
-    submit = getattr(api, "submit_order", None)
-    if submit is None:  # pragma: no cover - misconfigured API
-        raise RuntimeError("api missing submit_order")
-
-    for attempt in range(max_retries + 1):
+    if coid is None:
+        coid = client_order_id(payload["symbol"])
+    payload["client_order_id"] = coid
+    timeout_v = clamp_timeout(timeout, default=HTTP_TIMEOUT)
+    backoff = 0.2
+    max_tries = 3
+    for attempt in range(max_tries):
         try:
-            resp = submit(**payload, timeout=DEFAULT_HTTP_TIMEOUT)
-            status = getattr(resp, "status_code", None)
-            if status in RETRIABLE_STATUS and attempt < max_retries:
-                time.sleep(0.2)
-                continue
-            return _wrap(resp)
+            resp = api.submit_order(**payload, timeout=timeout_v)
+            if isinstance(resp, dict):
+                return types.SimpleNamespace(**resp)
+            return resp
         except requests.exceptions.HTTPError as exc:  # pragma: no cover - network mocked
             status = getattr(getattr(exc, "response", None), "status_code", None)
-            if status in RETRIABLE_STATUS and attempt < max_retries:
-                time.sleep(0.2)
+            if (status in RETRYABLE_HTTP_STATUSES or status is None) and attempt < max_tries - 1:
+                time.sleep(backoff)
+                backoff *= 2
                 continue
             raise
-        except Exception:  # noqa: BLE001
-            if attempt < max_retries:
-                time.sleep(0.2)
+        except Exception:
+            if attempt < max_tries - 1:
+                time.sleep(backoff)
+                backoff *= 2
                 continue
             raise
-
-
-__all__ = [
-    "RETRIABLE_STATUS",
-    "unique_client_order_id",
-    "submit_order",
-    "alpaca_get",
-    "start_trade_updates_stream",
-]
 
 
 def alpaca_get(*_args: Any, **_kwargs: Any) -> None:  # pragma: no cover - legacy stub

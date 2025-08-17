@@ -1,8 +1,8 @@
-"""Lightweight data validation helpers used by critical tests."""
+"""Lightweight data validation helpers used by tests."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
@@ -11,66 +11,73 @@ from ai_trading.data_fetcher import get_bars
 
 __all__ = [
     "check_data_freshness",
-    "get_stale_symbols",
     "validate_trading_data",
+    "get_stale_symbols",
     "emergency_data_check",
 ]
 
 
 def check_data_freshness(
     df: pd.DataFrame,
-    max_age_minutes: int = 15,
+    *,
     now: datetime | None = None,
-) -> tuple[bool, float]:
-    """Return ``(is_fresh, age_min)`` based on latest timestamp."""
+    max_age_minutes: int = 5,
+) -> bool:
+    """Return ``True`` if ``df`` has data within ``max_age_minutes``."""
     if df is None or df.empty:
-        return False, float("inf")
-    now = now or datetime.now(UTC)
+        return False
     ts = df["timestamp"].max() if "timestamp" in df.columns else df.index.max()
     if isinstance(ts, pd.Timestamp):
         ts = ts.to_pydatetime()
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
-    age_min = (now - ts).total_seconds() / 60.0
-    return age_min <= max_age_minutes, age_min
-
-
-def get_stale_symbols(
-    data_by_symbol: dict[str, pd.DataFrame],
-    max_age_minutes: int = 15,
-) -> list[str]:
-    """Return list of symbols whose data is older than ``max_age_minutes``."""
-    now = datetime.now(UTC)
-    stale: list[str] = []
-    for sym, df in data_by_symbol.items():
-        fresh, _ = check_data_freshness(df, max_age_minutes, now)
-        if not fresh:
-            stale.append(sym)
-    return stale
+    now_dt = now or datetime.now(UTC)
+    return now_dt - ts <= timedelta(minutes=max_age_minutes)
 
 
 def validate_trading_data(
-    data_by_symbol: dict[str, pd.DataFrame],
-    min_rows: int = 10,
-) -> bool:
-    """Basic validation ensuring each dataframe has ``min_rows`` rows."""
-    return all(df is not None and len(df) >= min_rows for df in data_by_symbol.values())
+    df: pd.DataFrame,
+    *,
+    required_cols: Iterable[str] = ("open", "high", "low", "close", "volume"),
+) -> tuple[bool, list[str]]:
+    """Check that ``df`` has ``required_cols`` and is not empty."""
+    issues: list[str] = []
+    if df is None or df.empty:
+        issues.append("empty")
+        return False, issues
+    missing = [c for c in required_cols if c not in df.columns]
+    issues.extend(missing)
+    return (not issues, issues)
+
+
+def get_stale_symbols(
+    frames: Mapping[str, pd.DataFrame],
+    *,
+    max_age_minutes: int = 5,
+) -> list[str]:
+    """Return symbols whose data is older than ``max_age_minutes``."""
+    now = datetime.now(UTC)
+    return [
+        sym
+        for sym, df in frames.items()
+        if not check_data_freshness(df, now=now, max_age_minutes=max_age_minutes)
+    ]
 
 
 def emergency_data_check(
-    symbols: list[str],
-    min_bars: int = 10,
-    fetcher: Callable[[str, datetime, datetime], pd.DataFrame] | None = None,
-) -> dict[str, bool]:
-    """Fetch a tiny window for ``symbols`` and report availability."""
+    symbols: Sequence[str],
+    *,
+    fetcher: Callable[..., pd.DataFrame] | None = None,
+) -> bool:
+    """Fetch a tiny window for ``symbols`` and ensure data exists."""
     fetch = fetcher or get_bars
     end = datetime.now(UTC)
-    start = end - timedelta(hours=1)
-    result: dict[str, bool] = {}
+    start = end - timedelta(minutes=1)
     for sym in symbols:
         try:
             df = fetch(sym, start, end)
-            result[sym] = bool(df is not None and len(df) >= min_bars)
+            if df is None or df.empty:
+                return False
         except Exception:
-            result[sym] = False
-    return result
+            return False
+    return True
