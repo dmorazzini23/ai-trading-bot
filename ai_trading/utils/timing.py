@@ -9,16 +9,16 @@ SUBPROCESS_TIMEOUT_S = 5.0
 
 
 def _is_test_env() -> bool:
-    return any(
-        os.getenv(k, "").lower() in {"1", "true", "yes"}
-        for k in ("PYTEST_RUNNING", "TESTING")
+    return (
+        os.getenv("PYTEST_RUNNING", "").lower() in {"1", "true", "yes"}
+        or os.getenv("TESTING", "").lower().startswith("true")
     )
 
 
 # default clamp used in *all* retry/sleep loops under tests
 def sleep(seconds: float) -> None:
     if _is_test_env():
-        seconds = min(seconds, 0.05)  # cap sleeps in tests
+        seconds = min(seconds or 0.0, 0.05)
     _time.sleep(max(0.0, seconds))
 
 
@@ -30,15 +30,13 @@ def clamp_timeout(
     min_s: float = 0.05,
     max_s: float = 15.0,
 ) -> float:
-    """Return a timeout value respecting tests and bounds."""  # AI-AGENT-REF
-    if value is None:
-        value = default_test if _is_test_env() else default_non_test
-    out = float(value)
-    if out < min_s:
-        out = min_s
-    if out > max_s:
-        out = max_s
-    return out
+    test_env = _is_test_env()
+    out = (
+        default_test if value is None and test_env else (
+            default_non_test if value is None else float(value)
+        )
+    )
+    return max(min_s, min(max_s, out))
 
 
 __all__ = ["sleep", "clamp_timeout", "HTTP_TIMEOUT", "SUBPROCESS_TIMEOUT_S"]
