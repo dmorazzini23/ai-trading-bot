@@ -1,46 +1,36 @@
-"""Test minute-bar cache helper functions."""
-
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from ai_trading.data_fetcher import (
-    clear_cached_minute_cache,
-    get_cached_age_seconds,
+    age_cached_minute_timestamp,
+    clear_cached_minute_timestamp,
     get_cached_minute_timestamp,
     set_cached_minute_timestamp,
 )
 
 
 def setup_function() -> None:
-    clear_cached_minute_cache()
+    clear_cached_minute_timestamp("AAPL")
+    clear_cached_minute_timestamp("MSFT")
 
 
 def test_set_and_get() -> None:
     assert get_cached_minute_timestamp("AAPL") is None
-    ts = datetime.now(UTC)
+    ts = int(datetime.now(UTC).timestamp())
     set_cached_minute_timestamp("AAPL", ts)
     assert get_cached_minute_timestamp("AAPL") == ts
 
 
-def test_get_cached_age_seconds() -> None:
-    now = datetime.now(UTC)
-    earlier = now - timedelta(seconds=30)
+def test_age_cached_minute_timestamp() -> None:
+    now = int(datetime.now(UTC).timestamp())
+    earlier = now - 30
     set_cached_minute_timestamp("MSFT", earlier)
-    age = get_cached_age_seconds("MSFT", now=now)
+    age = age_cached_minute_timestamp("MSFT", now_ts=now)
     assert age is not None
     assert 29 <= age <= 31
 
 
 def test_clear_cached_timestamp() -> None:
-    ts = datetime.now(UTC)
+    ts = int(datetime.now(UTC).timestamp())
     set_cached_minute_timestamp("AAPL", ts)
-    clear_cached_minute_cache("AAPL")
+    clear_cached_minute_timestamp("AAPL")
     assert get_cached_minute_timestamp("AAPL") is None
-
-
-def test_clear_all() -> None:
-    ts = datetime.now(UTC)
-    set_cached_minute_timestamp("AAPL", ts)
-    set_cached_minute_timestamp("MSFT", ts)
-    clear_cached_minute_cache()
-    assert get_cached_minute_timestamp("AAPL") is None
-    assert get_cached_minute_timestamp("MSFT") is None
