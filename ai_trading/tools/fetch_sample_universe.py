@@ -5,7 +5,8 @@ import os
 from datetime import UTC, datetime, timedelta
 
 from ai_trading.logging import get_logger
-from ai_trading.utils import HTTP_TIMEOUT_DEFAULT, http
+from ai_trading.utils import http
+from ai_trading.utils.timing import HTTP_TIMEOUT
 from ai_trading.utils.prof import StageTimer
 
 logger = get_logger(__name__)
@@ -54,7 +55,7 @@ def parse_cli_and_run() -> int:
 
     timeout = args.timeout
     if timeout is None:
-        timeout = HTTP_TIMEOUT_DEFAULT
+        timeout = HTTP_TIMEOUT
     return run(symbols, timeout=timeout)
 
 

@@ -266,23 +266,25 @@ def main(argv: list[str] | None = None) -> None:
     from ai_trading.utils.device import pick_torch_device  # AI-AGENT-REF: ML device log
 
     pick_torch_device()
-    health_tick_seconds = int(
-        os.getenv("HEALTH_TICK_SECONDS") or getattr(S, "health_tick_seconds", 300)
-    )
+    raw_tick = os.getenv("HEALTH_TICK_SECONDS") or getattr(S, "health_tick_seconds", 300)
+    try:
+        health_tick_seconds = int(raw_tick)
+    except Exception:
+        health_tick_seconds = 300
     last_health = time.monotonic()
 
     # CLI takes precedence; then settings
-    iterations = args.iterations if args.iterations is not None else S.iterations
+    raw_iter = args.iterations if args.iterations is not None else getattr(S, "iterations", 0)
     try:
-        iterations = int(iterations)
-    except (TypeError, ValueError):
-        iterations = S.iterations
+        iterations = int(raw_iter)
+    except Exception:
+        iterations = 0
 
-    interval = args.interval if args.interval is not None else S.interval
+    raw_interval = args.interval if args.interval is not None else getattr(S, "interval", 60)
     try:
-        interval = int(interval)
-    except (TypeError, ValueError):
-        interval = S.interval
+        interval = int(raw_interval)
+    except Exception:
+        interval = 60
 
     seed = get_seed_int()
 

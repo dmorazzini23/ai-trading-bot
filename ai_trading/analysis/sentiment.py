@@ -27,7 +27,7 @@ from ai_trading.logging import logger
 
 # AI-AGENT-REF: Import config
 from ai_trading.settings import get_news_api_key, get_settings
-from ai_trading.utils import HTTP_TIMEOUT_DEFAULT  # AI-AGENT-REF: timeout helper
+from ai_trading.utils.timing import HTTP_TIMEOUT  # AI-AGENT-REF: timeout helper
 
 SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY", "")
 
@@ -232,7 +232,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
             f"&apiKey={api_key}"
         )
-        resp = requests.get(url, timeout=HTTP_TIMEOUT_DEFAULT)
+        resp = requests.get(url, timeout=HTTP_TIMEOUT)
 
         # AI-AGENT-REF: Enhanced rate limiting detection and handling
         if resp.status_code == 429:
@@ -405,7 +405,7 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
 
     try:
         primary_url_full = f"{primary_url}?symbol={ticker}&apikey={primary_key}"
-        timeout_v = HTTP_TIMEOUT_DEFAULT
+        timeout_v = HTTP_TIMEOUT
         primary_resp = requests.get(primary_url_full, timeout=timeout_v)
         if (
             primary_resp.status_code in {429, 500, 502, 503, 504}
@@ -575,7 +575,7 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
         headers = {"User-Agent": "AI Trading Bot"}
         backoff = 0.5
         for attempt in range(3):
-            r = requests.get(url, headers=headers, timeout=HTTP_TIMEOUT_DEFAULT)
+            r = requests.get(url, headers=headers, timeout=HTTP_TIMEOUT)
             if r.status_code in {429, 500, 502, 503, 504} and attempt < 2:
                 time.sleep(backoff)
                 backoff *= 2

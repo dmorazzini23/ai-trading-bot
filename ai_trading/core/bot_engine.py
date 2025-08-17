@@ -7,7 +7,7 @@ import os
 import sys
 from typing import Dict, Iterable
 
-from ai_trading.data_fetcher import FINNHUB_AVAILABLE, ensure_datetime, get_bars, get_bars_batch
+from ai_trading.data_fetcher import ensure_datetime, get_bars, get_bars_batch
 from ai_trading.utils import health_check as _health_check
 
 SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY")
@@ -21,6 +21,14 @@ try:
     SKLEARN_AVAILABLE = True
 except Exception:
     SKLEARN_AVAILABLE = False
+
+# AI-AGENT-REF: optional finnhub dependency
+try:  # pragma: no cover - optional dependency
+    from finnhub import FinnhubAPIException  # type: ignore
+    FINNHUB_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    FinnhubAPIException = Exception  # type: ignore
+    FINNHUB_AVAILABLE = False
 
 
 def _rf_class():
@@ -47,25 +55,23 @@ def _ridge():
     return Ridge
 
 
-def _is_alpaca_available() -> bool:
-    candidate_modules = (
-        "alpaca_trade_api",
-        "alpaca.trading",
-        "alpaca.data",
-        "alpaca",
-    )
-    for name in candidate_modules:
-        if name in sys.modules and sys.modules[name] is None:
-            return False
-        try:
-            if importlib.util.find_spec(name) is None:
-                return False
-        except Exception:
-            return False
-    return True
+def _module_ok(name: str) -> bool:
+    if name in sys.modules and sys.modules[name] is None:
+        return False
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ValueError, ImportError):
+        return False
 
 
-ALPACA_AVAILABLE: bool = _is_alpaca_available()
+ALPACA_AVAILABLE = any(
+    [
+        _module_ok("alpaca"),
+        _module_ok("alpaca_trade_api"),
+        _module_ok("alpaca.trading"),
+        _module_ok("alpaca.data"),
+    ]
+) and os.environ.get("TESTING", "").lower() not in {"1", "true:force_unavailable"}
 trading_client = None
 data_client = None
 
@@ -150,10 +156,10 @@ from ai_trading.logging import (
     _get_metrics_logger,
     get_logger,  # AI-AGENT-REF: use sanitizing adapter
 )
-from ai_trading.utils import (
-    HTTP_TIMEOUT_DEFAULT,
+from ai_trading.utils import http
+from ai_trading.utils.timing import (
+    HTTP_TIMEOUT,
     clamp_timeout,
-    http,
 )  # AI-AGENT-REF: enforce request timeouts
 from ai_trading.utils.prof import StageTimer
 
@@ -301,7 +307,7 @@ def fetch_sentiment(
     params = {"symbol": symbol, "apikey": SENTIMENT_API_KEY}
     try:
         # fmt: off
-        resp = requests.get(SENTIMENT_API_URL, params=params, timeout=HTTP_TIMEOUT_DEFAULT)
+        resp = requests.get(SENTIMENT_API_URL, params=params, timeout=HTTP_TIMEOUT)
         # fmt: on
         if resp.status_code in {429, 500, 502, 503, 504}:
             _SENTIMENT_FAILURES += 1
@@ -1452,15 +1458,6 @@ except Exception:  # pragma: no cover - fallback
                 return self.call(func)
 
 
-# AI-AGENT-REF: optional finnhub dependency
-try:  # pragma: no cover - optional dependency
-    from finnhub import FinnhubAPIException  # type: ignore
-
-    FINNHUB_AVAILABLE = True
-except Exception:  # pragma: no cover - optional dependency
-    FinnhubAPIException = Exception  # type: ignore
-    FINNHUB_AVAILABLE = False
-
 # AI-AGENT-REF: optional prometheus_client dependency via shim
 from ai_trading.metrics import (
     PROMETHEUS_AVAILABLE,
@@ -2234,7 +2231,9 @@ def _fetch_universe_bars(
     if ctx is not None and hasattr(ctx, "data_fetcher"):
         fetch_client = getattr(ctx, "data_fetcher", None)
     try:
-        batch = get_bars_batch(symbols, timeframe, start, end, feed=feed, client=fetch_client)
+        batch = get_bars_batch(
+            symbols, timeframe, start, end, feed=feed, client=fetch_client
+        )
         if isinstance(batch, dict):
             return batch
     except Exception:
@@ -11254,7 +11253,7 @@ def start_metrics_server(default_port: int = 9200) -> None:
             try:
                 resp = http.get(
                     f"http://localhost:{default_port}",
-                    timeout=clamp_timeout(2, default=HTTP_TIMEOUT_DEFAULT),
+                    timeout=clamp_timeout(2, default_non_test=HTTP_TIMEOUT),
                 )
                 if resp.ok:
                     _log.info("Metrics port %d already serving; reusing", default_port)
@@ -11273,7 +11272,12 @@ def start_metrics_server(default_port: int = 9200) -> None:
                 _log.debug(
                     "Metrics server check failed on port %d: %s", default_port, e
                 )
-            port = utils.get_free_port(default_port + 1, default_port + 50)
+            # Avoid NameError (no 'utils' alias imported here)
+            from ai_trading.utils import (
+                get_free_port,
+            )  # AI-AGENT-REF: local import avoids cycles
+
+            port = get_free_port(default_port + 1, default_port + 50)
             if port is None:
                 _log.warning("No free port available for metrics server")
                 return
