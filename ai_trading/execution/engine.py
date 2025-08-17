@@ -11,7 +11,6 @@ from __future__ import annotations
 import importlib
 import logging
 import math
-import os
 import threading
 import time
 import uuid
@@ -41,7 +40,7 @@ else:  # pragma: no cover - fallback for dev/test
         pass
 
 
-ORDER_STALE_TIMEOUT_S = int(os.getenv("ORDER_STALE_TIMEOUT_S", "300") or 300)
+ORDER_STALE_AFTER_S = 8 * 60
 
 
 @dataclass
@@ -55,18 +54,18 @@ class OrderInfo:
 
 
 _active_orders: dict[str, OrderInfo] = {}
-_order_tracking_lock = threading.Lock()
+_order_tracking_lock = threading.RLock()
 
 
-def _cleanup_stale_orders(now_s: float | None = None) -> list[str]:
-    now = now_s if now_s is not None else time.time()
-    removed: list[str] = []
+def _cleanup_stale_orders(now: float | None = None) -> int:
+    """Remove orders older than ``ORDER_STALE_AFTER_S`` and return count."""
+    now_s = now if now is not None else time.time()
+    removed = 0
     with _order_tracking_lock:
         for oid, info in list(_active_orders.items()):
-            age = now - info.submitted_time
-            if age >= ORDER_STALE_TIMEOUT_S and info.last_status in {"new", "pending"}:
-                removed.append(oid)
+            if now_s - info.submitted_time >= ORDER_STALE_AFTER_S:
                 _active_orders.pop(oid, None)
+                removed += 1
     return removed
 
 

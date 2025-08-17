@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import sys
 import time
-from collections.abc import Iterable
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from typing import Any
 
 try:  # pragma: no cover - pandas optional in some tests
@@ -13,137 +11,114 @@ try:  # pragma: no cover - pandas optional in some tests
 except Exception:  # pragma: no cover
     pd = None  # type: ignore
 
+BAR_TIMEFRAME_DEFAULT = "1Min"
+MAX_RETRIES_DEFAULT = 3
+RETRYABLE_MESSAGES = ("Invalid format for parameter start",)
+
 __all__ = [
     "ensure_datetime",
-    "ensure_rfc3339",
+    "get_minute_df",
     "get_bars",
     "get_historical_data",
-    "get_minute_df",
-    "set_data_client",
+    "BAR_TIMEFRAME_DEFAULT",
+    "MAX_RETRIES_DEFAULT",
+    "RETRYABLE_MESSAGES",
     "_DATA_CLIENT",
+    "_MINUTE_CACHE",
+    "get_cached_minute_timestamp",
+    "DataFetchError",
+    "DataFetchException",
 ]
 
 _DATA_CLIENT: Any | None = None
-
-# AI-AGENT-REF: legacy import alias
-sys.modules.setdefault("data_fetcher", sys.modules[__name__])
+_MINUTE_CACHE: dict[str, tuple[datetime, pd.DataFrame]] = {}
 
 
-def set_data_client(client: Any) -> None:
-    """Set the global data client used by helpers."""  # AI-AGENT-REF: patchable client
-    global _DATA_CLIENT
-    _DATA_CLIENT = client
+class DataFetchError(Exception):
+    """Raised when data fetching ultimately fails."""
 
 
-def ensure_datetime(dt: datetime | date | str) -> datetime:
-    """Return an aware ``datetime`` in UTC."""  # AI-AGENT-REF: normalize inputs
-    if isinstance(dt, datetime):
-        return dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)
-    if isinstance(dt, date):
-        return datetime(dt.year, dt.month, dt.day, tzinfo=UTC)
+DataFetchException = DataFetchError
+
+
+def ensure_datetime(dt: datetime | str | pd.Timestamp) -> datetime:
+    """Return a timezone-aware UTC ``datetime`` for ``dt``."""
     if isinstance(dt, str):
-        parsed = datetime.fromisoformat(dt.replace("Z", "+00:00"))
-        return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-    raise TypeError(f"Unsupported datetime value: {dt!r}")
-
-
-def ensure_rfc3339(dt: datetime | date | str) -> str:
-    """Return RFC3339 formatted timestamp in UTC."""
-    return ensure_datetime(dt).isoformat().replace("+00:00", "Z")
-
-
-def _client() -> Any:
-    if _DATA_CLIENT is None:
-        raise RuntimeError("DATA_CLIENT not configured")
-    return _DATA_CLIENT
-
-
-def get_bars(
-    symbols: Iterable[str] | str,
-    timeframe: str,
-    start: datetime | date | str,
-    end: datetime | date | str | None = None,
-    *,
-    limit: int | None = None,
-    retries: int = 3,
-    backoff_s: float = 0.2,
-) -> dict[str, pd.DataFrame]:
-    """Fetch bars for ``symbols`` and return mapping of symbol to DataFrame."""
-    sym_list = [symbols] if isinstance(symbols, str) else list(symbols)
-    start_s = ensure_rfc3339(start)
-    end_s = ensure_rfc3339(end) if end is not None else None
-    client = _client()
-    fn = getattr(client, "get_stock_bars", None) or getattr(client, "get_bars", None)
-    if fn is None:
-        raise RuntimeError("DATA_CLIENT missing get_stock_bars/get_bars")
-    out: dict[str, pd.DataFrame] = {}
-    for sym in sym_list:
-        last_exc: Exception | None = None
-        for attempt in range(retries + 1):
-            try:
-                out[sym] = fn(
-                    symbol=sym,
-                    timeframe=timeframe,
-                    start=start_s,
-                    end=end_s,
-                    limit=limit,
-                )
-                break
-            except Exception as e:  # pragma: no cover - network mocked in tests
-                last_exc = e
-                if attempt >= retries:
-                    raise
-                time.sleep(backoff_s)
-        else:
-            if last_exc:
-                raise last_exc
-    return out
-
-
-def get_historical_data(
-    symbol: str,
-    start: datetime | date | str,
-    end: datetime | date | str,
-    *,
-    timeframe: str = "1Min",
-    limit: int | None = 1000,
-    retries: int = 3,
-    backoff_s: float = 0.2,
-) -> pd.DataFrame:
-    """Fetch historical bars for a single ``symbol``."""
-    return get_bars(
-        [symbol],
-        timeframe,
-        start,
-        end,
-        limit=limit,
-        retries=retries,
-        backoff_s=backoff_s,
-    )[symbol]
+        dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+    elif "Timestamp" in type(dt).__name__:
+        dt = dt.to_pydatetime()
+    if not isinstance(dt, datetime):  # pragma: no cover - defensive
+        raise TypeError(f"unsupported datetime value: {dt!r}")
+    return dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 def get_minute_df(
     symbol: str,
-    start_dt: datetime | date | str,
-    end_dt: datetime | date | str,
+    start: datetime | str | pd.Timestamp,
+    end: datetime | str | pd.Timestamp,
     *,
-    retries: int = 3,
-    backoff_s: float = 0.2,
+    timeframe: str = BAR_TIMEFRAME_DEFAULT,
+    max_retries: int = MAX_RETRIES_DEFAULT,
+    sleep_s: float = 0.1,
 ) -> pd.DataFrame:
-    """Fetch minute-level bars for ``symbol``."""  # AI-AGENT-REF: bounded retry
-    start_s = ensure_rfc3339(start_dt)
-    end_s = ensure_rfc3339(end_dt)
-    client = _client()
-    fn = getattr(client, "get_stock_bars", None) or getattr(client, "get_bars", None)
-    if fn is None:
-        raise RuntimeError("DATA_CLIENT missing get_stock_bars/get_bars")
+    """Fetch minute bars for ``symbol`` with simple retry logic."""
+    if _DATA_CLIENT is None:  # pragma: no cover - misconfigured in tests
+        raise RuntimeError("_DATA_CLIENT not configured")
+    start_dt = ensure_datetime(start)
+    end_dt = ensure_datetime(end)
     last_exc: Exception | None = None
-    for attempt in range(retries + 1):
+    for attempt in range(max_retries):
         try:
-            return fn(symbol=symbol, timeframe="1Min", start=start_s, end=end_s, limit=None)
-        except Exception as e:  # pragma: no cover - network mocked
-            last_exc = e
-            if "Invalid format for parameter" in str(e) or attempt >= retries:
+            return _DATA_CLIENT.get_stock_bars(
+                symbol,
+                start=start_dt,
+                end=end_dt,
+                timeframe=timeframe,
+            )
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            msg = str(exc)
+            if not any(m in msg for m in RETRYABLE_MESSAGES) or attempt >= max_retries - 1:
                 raise
-            time.sleep(backoff_s)
+            time.sleep(sleep_s)
     raise last_exc or RuntimeError("get_minute_df failed")
+
+
+def get_bars(
+    symbol: str,
+    start: datetime | str | pd.Timestamp,
+    end: datetime | str | pd.Timestamp,
+    *,
+    timeframe: str = BAR_TIMEFRAME_DEFAULT,
+    max_retries: int = MAX_RETRIES_DEFAULT,
+    sleep_s: float = 0.1,
+) -> pd.DataFrame:
+    """Alias for :func:`get_minute_df` for backward compatibility."""
+    return get_minute_df(
+        symbol,
+        start,
+        end,
+        timeframe=timeframe,
+        max_retries=max_retries,
+        sleep_s=sleep_s,
+    )
+
+
+def get_historical_data(
+    symbols: list[str] | tuple[str, ...],
+    start: datetime | str | pd.Timestamp,
+    end: datetime | str | pd.Timestamp,
+    *,
+    timeframe: str = BAR_TIMEFRAME_DEFAULT,
+    **kwargs: Any,
+) -> dict[str, pd.DataFrame]:
+    """Fetch bars for each symbol and return mapping."""
+    out: dict[str, pd.DataFrame] = {}
+    for sym in symbols:
+        out[sym] = get_minute_df(sym, start, end, timeframe=timeframe, **kwargs)
+    return out
+
+
+def get_cached_minute_timestamp(symbol: str) -> datetime | None:
+    entry = _MINUTE_CACHE.get(symbol)
+    return entry[0] if entry else None

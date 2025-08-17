@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import os
 import sys
 
@@ -12,14 +13,21 @@ from ai_trading.data_fetcher import (
     get_minute_df,
 )
 
-SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY", "")
+SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY")
 SENTIMENT_API_URL = os.getenv("SENTIMENT_API_URL", "")
 TESTING = os.getenv("TESTING", "").lower() == "true"
-try:  # AI-AGENT-REF: lazy Alpaca availability check
-    import alpaca_trade_api as _a  # noqa: F401
+_ALPACA_MODS = ("alpaca", "alpaca_trade_api", "alpaca.trading")
 
-    ALPACA_AVAILABLE = False if TESTING else True
-except Exception:  # pragma: no cover - optional dependency
+
+def _mod_exists(name: str) -> bool:
+    try:
+        return importlib.util.find_spec(name) is not None
+    except Exception:  # pragma: no cover - importlib quirk
+        return False
+
+
+ALPACA_AVAILABLE = all(_mod_exists(m) for m in _ALPACA_MODS)
+if TESTING:
     ALPACA_AVAILABLE = False
 
 # defer any client creation until inside a function, not at import time
@@ -27,7 +35,7 @@ trading_client = None
 data_client = None
 
 # Sentiment knobs used by tests
-SENTIMENT_FAILURE_THRESHOLD = 25  # increased threshold expected by tests
+SENTIMENT_FAILURE_THRESHOLD = 25
 _SENTIMENT_CACHE: dict[str, tuple[float, float]] = {}
 
 from enum import Enum
@@ -75,6 +83,7 @@ import inspect
 import io
 import logging
 import math
+import requests
 import time
 import traceback
 import types
@@ -96,6 +105,7 @@ from ai_trading.logging import (
     get_logger,  # AI-AGENT-REF: use sanitizing adapter
 )
 from ai_trading.utils import (
+    DEFAULT_HTTP_TIMEOUT,
     clamp_timeout,
     http,
 )  # AI-AGENT-REF: enforce request timeouts
@@ -227,12 +237,24 @@ def maybe_init_brokers() -> None:
 
 
 # Simple cache exposed for tests
-_SENTIMENT_CACHE: dict[str, tuple[float, float]] = {}
 
 
 def fetch_sentiment(symbol: str) -> float:
-    """Placeholder sentiment fetcher, patched in tests."""  # AI-AGENT-REF: patchable sentiment
-    return 0.0
+    """Fetch sentiment score for ``symbol`` with basic caching."""
+    now = time.time()
+    cached = _SENTIMENT_CACHE.get(symbol)
+    if cached and now - cached[0] < 300:
+        return cached[1]
+    url = SENTIMENT_API_URL
+    params = {"symbol": symbol, "apikey": SENTIMENT_API_KEY}
+    try:
+        resp = requests.get(url, params=params, timeout=DEFAULT_HTTP_TIMEOUT)
+        data = resp.json()
+        score = float(data.get("sentiment", 0.0))
+    except Exception:
+        score = 0.0
+    _SENTIMENT_CACHE[symbol] = (now, score)
+    return score
 
 
 def _sha256_file(path: str) -> str:
@@ -2006,12 +2028,11 @@ def get_git_hash() -> str:
     """Return current git commit short hash if available."""
     try:
         import subprocess
-        from ai_trading.utils import SUBPROCESS_TIMEOUT_S
+        from ai_trading.utils import DEFAULT_SUBPROCESS_TIMEOUT
 
         cmd = ["git", "rev-parse", "--short", "HEAD"]
-        # fmt: off
-        proc = subprocess.run(cmd, check=True, timeout=SUBPROCESS_TIMEOUT_S, capture_output=True)
-        # fmt: on
+        timeout_s = DEFAULT_SUBPROCESS_TIMEOUT
+        proc = subprocess.run(cmd, check=True, timeout=timeout_s, capture_output=True)
         return proc.stdout.decode().strip()
     except (
         FileNotFoundError,
