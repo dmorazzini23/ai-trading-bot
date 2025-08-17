@@ -17,18 +17,17 @@ def _validate() -> tuple[bool, list[str]]:
     return (not missing, missing)
 
 
-def _main() -> int:
+def _main(argv: list[str] | None = None) -> int:
     ok, missing = _validate()
     if ok:
-        print("environment ok")  # noqa: T201
         return 0
     print("missing vars: " + ",".join(missing))  # noqa: T201
     return 1
 
 
-def main() -> int:
-    return _main()
+def main(argv: list[str] | None = None) -> int:
+    return _main(argv)
 
 
 if __name__ == "__main__":  # pragma: no cover - manual execution
-    _main()
+    raise SystemExit(_main())

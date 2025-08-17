@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from functools import lru_cache
 from typing import Any
 
 from pydantic import Field, SecretStr, computed_field, field_validator
@@ -182,17 +183,10 @@ class Settings(BaseSettings):
     )  # AI-AGENT-REF: AI_TRADER_ env prefix
 
 
-_SETTINGS_SINGLETON: Settings | None = None
-
-
+@lru_cache
 def get_settings() -> Settings:
-    """Cached settings accessor."""  # AI-AGENT-REF: cache settings
-    global _SETTINGS_SINGLETON
-    if _SETTINGS_SINGLETON is None:
-        _SETTINGS_SINGLETON = (
-            Settings()
-        )  # pydantic-settings auto-loads .env when present
-    return _SETTINGS_SINGLETON
+    """Cached settings accessor."""  # AI-AGENT-REF: lru_cache singleton
+    return Settings()
 
 
 def get_news_api_key() -> str | None:
@@ -202,7 +196,7 @@ def get_news_api_key() -> str | None:
 
 def get_rebalance_interval_min() -> int:
     """Lazy accessor for rebalance interval."""
-    return int(get_settings().rebalance_interval_min)
+    return get_settings().rebalance_interval_min
 
 
 # ---- Lazy getters (access only at runtime; never at module import) ----
