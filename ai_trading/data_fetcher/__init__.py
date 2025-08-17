@@ -1,130 +1,122 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+import threading
+import time
+from collections.abc import Iterable  # noqa: F401
 from datetime import UTC, datetime
-from threading import RLock
-from typing import Any
+from typing import Optional  # noqa: F401
 
 try:
-    import finnhub  # noqa: F401
+    import finnhub  # type: ignore
 
     FINNHUB_AVAILABLE = True
-except Exception:  # pragma: no cover - optional dependency
-    finnhub = None  # type: ignore
+except Exception:  # noqa: BLE001
+    finnhub = None  # type: ignore[assignment]
     FINNHUB_AVAILABLE = False
 
 __all__ = [
     "ensure_datetime",
-    "get_minute_bars",
+    "get_minute_df",
     "get_bars",  # legacy alias
     "get_cached_minute_timestamp",
     "set_cached_minute_timestamp",
     "clear_cached_minute_timestamp",
-    "age_cached_minute_timestamp",
-    "retry",
+    "age_cached_minute_timestamps",
     "FINNHUB_AVAILABLE",
 ]
 
-# --- UTC normalizer ---------------------------------------------------------
 
-
-def ensure_datetime(dt_like: Any) -> datetime:
+# --- UTC normalizer ---
+def ensure_datetime(value: datetime | str | int | float | None) -> datetime:
     """
-    Convert dt-like input (datetime|int|float|str) into timezone-aware UTC datetime.
-    - naive datetime -> UTC
-    - epoch seconds (int/float) -> UTC
-    - RFC3339/ISO8601 str -> UTC
+    Normalize many datetime inputs into an aware UTC datetime.
+    Accepts ISO strings, epoch seconds, naive/tz-aware datetimes, or None (returns utcnow()).
     """
-    if isinstance(dt_like, datetime):
-        return dt_like if dt_like.tzinfo else dt_like.replace(tzinfo=UTC)
-    if isinstance(dt_like, int | float):
-        return datetime.fromtimestamp(float(dt_like), tz=UTC)
-    if isinstance(dt_like, str):
-        # Loose parse without external deps
+    if value is None:
+        return datetime.now(UTC)
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if isinstance(value, int | float):  # noqa: UP038
+        return datetime.fromtimestamp(float(value), tz=UTC)
+    if isinstance(value, str):
         try:
-            # Support "YYYY-MM-DDTHH:MM:SS[.fff][Z]"
-            ds = dt_like.rstrip("Z")
-            # datetime.fromisoformat can't parse "Z"; we removed it above
-            dt = datetime.fromisoformat(ds)
-        except Exception:
-            raise ValueError(f"Unsupported datetime string: {dt_like!r}") from None
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-        else:
-            dt = dt.astimezone(UTC)
-        return dt
-    raise TypeError(f"Unsupported dt_like type: {type(dt_like)}")
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except Exception:  # noqa: BLE001
+            dt = datetime.fromtimestamp(float(value), tz=UTC)
+        return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+    raise TypeError(f"Unsupported datetime value: {type(value)!r}")
 
 
-# --- Simple retry utility ---------------------------------------------------
-
-
-def retry(
-    fn: Callable[[], Any],
-    retries: int = 3,
-    backoff_s: float = 0.25,
-    retry_on: Iterable[type] | None = None,
-) -> Any:
-    import time
-
-    attempts = 0
-    retry_on = tuple(retry_on or (Exception,))
-    while True:
-        try:
-            return fn()
-        except retry_on:
-            attempts += 1
-            if attempts > retries:
-                raise
-            time.sleep(backoff_s * attempts)
-
-
-# --- Thread-safe minute-level cache ----------------------------------------
-
-_MINUTE_CACHE_LOCK = RLock()
-_MINUTE_CACHE: dict[str, int] = {}
+# --- minute-bar cache (thread-safe, import-safe) ---
+_MINUTE_CACHE_LOCK = threading.RLock()
+# symbol -> (last_minute_epoch_seconds, inserted_epoch_seconds)
+_MINUTE_CACHE: dict[str, tuple[int, float]] = {}
 
 
 def get_cached_minute_timestamp(symbol: str) -> int | None:
     with _MINUTE_CACHE_LOCK:
-        return _MINUTE_CACHE.get(symbol)
+        tup = _MINUTE_CACHE.get(symbol.upper())
+        return tup[0] if tup else None
 
 
 def set_cached_minute_timestamp(symbol: str, ts: int) -> None:
-    if not isinstance(ts, int | float):
-        raise TypeError("ts must be epoch seconds (int/float)")
     with _MINUTE_CACHE_LOCK:
-        _MINUTE_CACHE[symbol] = int(ts)
+        _MINUTE_CACHE[symbol.upper()] = (int(ts), time.time())
 
 
-def clear_cached_minute_timestamp(symbol: str) -> None:
+def clear_cached_minute_timestamp(symbol: str | None = None) -> None:
     with _MINUTE_CACHE_LOCK:
-        _MINUTE_CACHE.pop(symbol, None)
+        if symbol is None:
+            _MINUTE_CACHE.clear()
+        else:
+            _MINUTE_CACHE.pop(symbol.upper(), None)
 
 
-def age_cached_minute_timestamp(symbol: str, now_ts: int | None = None) -> int | None:
+def age_cached_minute_timestamps(max_age_seconds: int) -> int:
+    cutoff = time.time() - int(max_age_seconds)
+    removed = 0
     with _MINUTE_CACHE_LOCK:
-        ts = _MINUTE_CACHE.get(symbol)
-    if ts is None:
-        return None
-    if now_ts is None:
-        from time import time as _now
-
-        now_ts = int(_now())
-    return int(now_ts) - int(ts)
+        for k in list(_MINUTE_CACHE.keys()):
+            _, inserted = _MINUTE_CACHE[k]
+            if inserted < cutoff:
+                _MINUTE_CACHE.pop(k, None)
+                removed += 1
+    return removed
 
 
-# --- Bars fetcher: minimal/patchable surface --------------------------------
+# --- simple retry helper used by get_minute_df ---
+def _retry(n: int, delay: float, fn, *args, **kwargs):
+    last_err = None
+    for _ in range(max(1, n)):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            time.sleep(delay)
+    raise last_err  # type: ignore[misc]
 
 
-def get_minute_bars(symbol: str, start: Any, end: Any, limit: int = 100) -> list[dict]:
+# --- bar fetcher (minimal, patchable) ---
+def get_minute_df(
+    symbol: str,
+    start: datetime | str | int | float | None = None,
+    end: datetime | str | int | float | None = None,
+    retries: int = 2,
+    delay: float = 0.25,
+):
     """
-    Minimal bar fetcher. In production, this should query your data source.
-    In tests, it's commonly monkeypatched. Returns list of dicts (time, open, high, low, close, volume).
+    Minimal, patchable fetcher used by tests; actual provider injected elsewhere.
+    Returns a pandas.DataFrame-like object in real runs; tests patch this.
     """
-    _ = ensure_datetime(start), ensure_datetime(end)  # normalize only; no I/O here
-    return []
+    s = ensure_datetime(start)
+    e = ensure_datetime(end)
+    return _retry(retries, delay, _fetch_bars_impl, symbol, s, e)
 
 
-# Legacy alias required by older code paths / bot_engine
-get_bars = get_minute_bars
+def _fetch_bars_impl(symbol: str, start: datetime, end: datetime):
+    # Placeholder implementation; in production replaced/monkeypatched by tests.
+    raise RuntimeError("No data provider configured")
+
+
+# legacy alias required by older imports in bot_engine and runner
+get_bars = get_minute_df

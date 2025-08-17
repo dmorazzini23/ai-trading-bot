@@ -35,14 +35,14 @@ def _resolve_requests_session():
     """Locate requests.Session in a robust way."""  # AI-AGENT-REF: fallback lookup
     try:
         import requests  # noqa: F401
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None, None
     Session = getattr(sys.modules["requests"], "Session", None)
     if Session is None:
         try:
             sess_mod = importlib.import_module("requests.sessions")
             Session = getattr(sess_mod, "Session", None)
-        except Exception:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive  # noqa: BLE001
             Session = None
     return Session, sys.modules.get("requests")
 
@@ -58,7 +58,7 @@ def _requests_default_timeout():
         yield
         return
 
-    default_timeout = float(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
+    default_timeout = float(os.getenv("AI_HTTP_TIMEOUT", "10") or 10)
 
     orig_request = Session.request
 
@@ -67,7 +67,9 @@ def _requests_default_timeout():
             kwargs["timeout"] = default_timeout
         return orig_request(self, method, url, **kwargs)
 
-    Session.request = request_with_default_timeout  # AI-AGENT-REF: manual patch to inject default timeout
+    Session.request = (
+        request_with_default_timeout  # AI-AGENT-REF: manual patch to inject default timeout
+    )
     try:
         yield
     finally:
@@ -86,7 +88,7 @@ def _block_external_network():
         host = address[0] if isinstance(address, tuple) else address
         try:
             ip = socket.gethostbyname(host)
-        except Exception:
+        except Exception:  # noqa: BLE001
             ip = str(host)
         if ip.startswith("127.") or host in ("::1", "localhost"):
             return orig_connect(self, address)
@@ -95,9 +97,7 @@ def _block_external_network():
             f"Set ALLOW_EXTERNAL_NETWORK=1 to override."
         )
 
-    socket.socket.connect = (
-        guarded_connect  # AI-AGENT-REF: manual patch to block external network
-    )
+    socket.socket.connect = guarded_connect  # AI-AGENT-REF: manual patch to block external network
     try:
         yield
     finally:
@@ -109,6 +109,6 @@ def _test_env():
     os.environ.setdefault("TESTING", "1")
     os.environ.setdefault("CPU_ONLY", "1")
     os.environ.setdefault("AI_TRADER_HEALTH_TICK_SECONDS", "2")
-    os.environ.setdefault("HTTP_TIMEOUT_S", "10")
+    os.environ.setdefault("AI_HTTP_TIMEOUT", "10")
     os.environ.setdefault("FLASK_PORT", "0")  # avoid port collisions
     yield

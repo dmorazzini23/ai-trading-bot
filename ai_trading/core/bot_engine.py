@@ -8,12 +8,44 @@ import sys
 import sys as _sys
 from importlib import import_module
 
-from ai_trading.data_fetcher import ensure_datetime, get_bars
+from ai_trading.data_fetcher import FINNHUB_AVAILABLE, ensure_datetime, get_bars
 
 SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY")
 NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
 SENTIMENT_API_URL: str = os.getenv("SENTIMENT_API_URL", "")
 TESTING = os.getenv("TESTING", "").lower() == "true"
+
+try:
+    import sklearn  # noqa: F401
+
+    SKLEARN_AVAILABLE = True
+except Exception:
+    SKLEARN_AVAILABLE = False
+
+
+def _rf_class():
+    if not SKLEARN_AVAILABLE:
+        raise RuntimeError("sklearn not available")
+    from sklearn.ensemble import RandomForestClassifier
+
+    return RandomForestClassifier
+
+
+def _bayesian_ridge():
+    if not SKLEARN_AVAILABLE:
+        raise RuntimeError("sklearn not available")
+    from sklearn.linear_model import BayesianRidge
+
+    return BayesianRidge
+
+
+def _ridge():
+    if not SKLEARN_AVAILABLE:
+        raise RuntimeError("sklearn not available")
+    from sklearn.linear_model import Ridge
+
+    return Ridge
+
 
 _ALPACA_MODULE_NAMES = (
     "alpaca_trade_api",
@@ -1270,9 +1302,6 @@ def _import_model_pipeline():  # AI-AGENT-REF: import helper for tests
 
 
 # ML dependencies - sklearn is a hard dependency
-from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import BayesianRidge, Ridge
 
 from ai_trading.utils import log_warning, model_lock, safe_to_datetime, validate_ohlcv
 
@@ -2053,11 +2082,17 @@ def get_git_hash() -> str:
     """Return current git commit short hash if available."""
     try:
         import subprocess
-        from ai_trading.utils import SUBPROCESS_TIMEOUT_S
+        from ai_trading.utils import SUBPROCESS_DEFAULT_TIMEOUT, clamp_timeout
 
         cmd = ["git", "rev-parse", "--short", "HEAD"]
         run = subprocess.run
-        out = run(cmd, timeout=SUBPROCESS_TIMEOUT_S, check=False, capture_output=True, text=True)
+        out = run(
+            cmd,
+            timeout=clamp_timeout(SUBPROCESS_DEFAULT_TIMEOUT),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
         return (out.stdout or "").strip() or "unknown"
     except Exception:
         return "unknown"
@@ -9134,7 +9169,7 @@ def run_meta_learning_weight_optimizer(
             return
 
         sample_w = df["reward"].abs() + 1e-3
-        model = Ridge(alpha=alpha, fit_intercept=True)
+        model = _ridge()(alpha=alpha, fit_intercept=True)
         if X.empty:
             _log.warning("META_MODEL_TRAIN_SKIPPED_EMPTY")
             return
@@ -9197,7 +9232,7 @@ def run_bayesian_meta_learning_optimizer(
             _log.warning("METALEARN_TOO_FEW_SAMPLES")
             return
 
-        model = BayesianRidge(fit_intercept=True, normalize=True)
+        model = _bayesian_ridge()(fit_intercept=True, normalize=True)
         if X.size == 0:
             _log.warning("BAYES_MODEL_TRAIN_SKIPPED_EMPTY")
             return
@@ -9851,7 +9886,7 @@ def _initialize_regime_model(ctx=None):
     # Train or load regime model - skip in test environment
     if os.getenv("TESTING") == "1" or os.getenv("PYTEST_RUNNING"):
         _log.info("Skipping regime model training in test environment")
-        return RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+        return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
     elif os.path.exists(REGIME_MODEL_PATH):
         try:
             with open(REGIME_MODEL_PATH, "rb") as f:
@@ -9867,11 +9902,11 @@ def _initialize_regime_model(ctx=None):
             OSError,
         ) as e:  # AI-AGENT-REF: narrow exception
             _log.warning(f"Failed to load regime model: {e}")
-            return RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+            return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
     else:
         if ctx is None:
             _log.warning("No context provided for regime model training; using fallback")
-            return RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+            return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 
         # --- Regime training uses basket-based proxy now ---
         wide = _build_regime_dataset(ctx)
@@ -9917,7 +9952,7 @@ def _initialize_regime_model(ctx=None):
             if not _REGIME_INSUFFICIENT_DATA_WARNED["done"]:
                 _log.warning("No valid training data for regime model; using fallback")
                 _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
-            return RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+            return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 
         # Import settings for regime configuration
         from ai_trading.config.settings import get_settings
@@ -9933,9 +9968,7 @@ def _initialize_regime_model(ctx=None):
         if len(training) >= settings.REGIME_MIN_ROWS:
             X = training[["atr", "rsi", "macd", "vol"]]
             y = training["label"]
-            regime_model = RandomForestClassifier(
-                n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH
-            )
+            regime_model = _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
             if X.empty:
                 _log.warning("REGIME_MODEL_TRAIN_SKIPPED_EMPTY")
             else:
@@ -9965,7 +9998,7 @@ def _initialize_regime_model(ctx=None):
                     settings.REGIME_MIN_ROWS,
                 )
                 _REGIME_INSUFFICIENT_DATA_WARNED["done"] = True
-            return RandomForestClassifier(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
+            return _rf_class()(n_estimators=RF_ESTIMATORS, max_depth=RF_MAX_DEPTH)
 
 
 # Initialize regime model lazily
@@ -10377,6 +10410,10 @@ def daily_summary() -> None:
 # ─── PCA-BASED PORTFOLIO ADJUSTMENT ─────────────────────────────────────────────
 def run_daily_pca_adjustment(ctx: BotContext) -> None:
     from ai_trading.utils import portfolio_lock
+
+    if not SKLEARN_AVAILABLE:
+        return
+    from sklearn.decomposition import PCA  # lazy import
 
     """
     Once per day, run PCA on last 90-day returns of current universe.

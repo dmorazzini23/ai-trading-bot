@@ -1,64 +1,30 @@
 import types
 
-import pytest
-
-try:
-    from ai_trading import alpaca_api  # AI-AGENT-REF: canonical import
-except Exception:
-    pytest.skip("alpaca_api not available", allow_module_level=True)
+from ai_trading import alpaca_api
 
 
 class HTTPError(Exception):
-    pass
+    def __init__(self, status: int):
+        self.status = status
 
 
-class RequestException(Exception):
-    pass
+def test_submit_order_http_error():
+    def submit_order(**_):
+        raise HTTPError(500)
+
+    api = types.SimpleNamespace(submit_order=submit_order)
+    res = alpaca_api.submit_order(api, symbol="AAPL", qty=1, side="buy")
+    assert not res.success
+    assert res.status == 500
+    assert res.retryable
 
 
-alpaca_api.requests = types.SimpleNamespace(
-    exceptions=types.SimpleNamespace(HTTPError=HTTPError, RequestException=RequestException),
-)
+def test_submit_order_generic_error():
+    def submit_order(**_):
+        raise Exception("boom")
 
-
-class DummyAPI:
-    def __init__(self, to_raise=None):
-        self.to_raise = to_raise or []
-        self.calls = 0
-
-    def submit_order(self, **order_data):
-        self.calls += 1
-        if self.to_raise:
-            exc = self.to_raise.pop(0)
-            if exc is not None:
-                raise exc
-        return types.SimpleNamespace(id=self.calls, **order_data)
-
-
-class DummyReq(types.SimpleNamespace):
-    pass
-
-
-def test_submit_order_http_error(monkeypatch):
-    api = DummyAPI([HTTPError("500"), None])
-    monkeypatch.setattr(alpaca_api, "SHADOW_MODE", False)
-    monkeypatch.setattr(alpaca_api.time, "sleep", lambda s: None)
-    alpaca_api.submit_order(api, DummyReq())
-    assert api.calls == 2
-
-
-def test_submit_order_generic_retry(monkeypatch):
-    api = DummyAPI([Exception("err"), None])
-    monkeypatch.setattr(alpaca_api, "SHADOW_MODE", False)
-    monkeypatch.setattr(alpaca_api.time, "sleep", lambda s: None)
-    result = alpaca_api.submit_order(api, DummyReq())
-    assert getattr(result, "id", 0) == 2
-    assert api.calls == 2
-
-
-def test_submit_order_fail(monkeypatch):
-    api = DummyAPI([Exception("e1")] * 5)
-    monkeypatch.setattr(alpaca_api, "SHADOW_MODE", False)
-    monkeypatch.setattr(alpaca_api.time, "sleep", lambda s: None)
-    with pytest.raises(Exception):  # noqa: B017
-        alpaca_api.submit_order(api, DummyReq())
+    api = types.SimpleNamespace(submit_order=submit_order)
+    res = alpaca_api.submit_order(api, symbol="AAPL", qty=1, side="buy")
+    assert not res.success
+    assert res.status == 0
+    assert not res.retryable

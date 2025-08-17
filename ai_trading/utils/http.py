@@ -1,8 +1,10 @@
-"""HTTP utilities with default timeout, retry, and pooled concurrency."""  # AI-AGENT-REF: ensure timeouts
+"""HTTP utilities with default timeout, retry, and pooled concurrency."""
+
+# AI-AGENT-REF: ensure timeouts
 
 import os
-import time
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
@@ -10,7 +12,9 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-_DEFAULT_TIMEOUT = float(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
+from . import HTTP_DEFAULT_TIMEOUT
+
+_DEFAULT_TIMEOUT = HTTP_DEFAULT_TIMEOUT
 
 
 def _ensure_timeout(kwargs: dict) -> dict:
@@ -49,6 +53,7 @@ def head(url: str, **kwargs) -> requests.Response:
 def options(url: str, **kwargs) -> requests.Response:
     return request("OPTIONS", url, **kwargs)
 
+
 # Lazy singletons
 __HTTP_EXECUTOR: ThreadPoolExecutor | None = None
 __HTTP_LOCK = threading.Lock()
@@ -62,7 +67,7 @@ def _cfg_int(name: str, default: int) -> int:
     v = os.getenv(name)
     try:
         return int(v) if v is not None else default
-    except Exception:
+    except Exception:  # noqa: BLE001
         return default
 
 
@@ -70,7 +75,7 @@ def _cfg_float(name: str, default: float) -> float:
     v = os.getenv(name)
     try:
         return float(v) if v is not None else default
-    except Exception:
+    except Exception:  # noqa: BLE001
         return default
 
 
@@ -251,7 +256,7 @@ def map_post(
             resp = sess.post(url, data=payload, timeout=tout, headers=headers)
             return (idx, url, resp.status_code, resp.content)
 
-    for i, (u, p) in enumerate(zip(urls, data)):
+    for i, (u, p) in enumerate(zip(urls, data, strict=False)):
         futs.append(execu.submit(_task, i, u, p))
 
     for f in as_completed(futs):
@@ -267,12 +272,11 @@ def pool_stats() -> dict:
     return {
         "workers": _cfg_int("HTTP_MAX_WORKERS", 8),
         "per_host": _cfg_int("HTTP_MAX_PER_HOST", 6),
-        "pool_maxsize": _cfg_int(
-            "HTTP_POOL_MAXSIZE", max(_cfg_int("HTTP_MAX_WORKERS", 8), 10)
-        ),
+        "pool_maxsize": _cfg_int("HTTP_POOL_MAXSIZE", max(_cfg_int("HTTP_MAX_WORKERS", 8), 10)),
         "hosts": list(__SESSIONS.keys()),
         "in_flight": in_flight,
         "host_semaphores": sems,
     }
+
 
 # AI-AGENT-REF: HTTP safety module with default timeouts and retry logic

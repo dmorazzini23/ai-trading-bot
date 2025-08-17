@@ -111,4 +111,4 @@ line-length = 100
 line-length = 100
 
 [tool.ruff.lint]
-extend-select = ["I", "UP", "B", "C90"]
+extend-select = ["E", "F", "I", "UP", "SIM", "B", "BLE"]

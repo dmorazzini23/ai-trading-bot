@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-try:  # pragma: no cover - best effort
-    from .regime import MarketRegime
-except Exception:  # pragma: no cover - fallback
+try:
+    from .regimes import MarketRegime  # real enum if available
+except Exception:  # noqa: BLE001
     from enum import Enum
 
     class MarketRegime(Enum):
         BULL = "bull"
         BEAR = "bear"
-        NEUTRAL = "neutral"
+        SIDEWAYS = "sideways"
 
 
 __all__ = ["MarketRegime"]
