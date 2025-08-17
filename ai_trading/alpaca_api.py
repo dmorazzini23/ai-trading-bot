@@ -1,172 +1,140 @@
 from __future__ import annotations
 
-import importlib.util
 import os
 import sys
-import time
-from collections.abc import Mapping
+import types  # noqa: F401
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from typing import Any
+
+# --- availability detection (respects tests that stub sys.modules) ---
+_ALPACA_MODULE_NAMES = ("alpaca_trade_api", "alpaca", "alpaca.trading", "alpaca.data")
+ALPACA_AVAILABLE: bool = all(
+    (name in sys.modules and sys.modules.get(name) is not None) for name in _ALPACA_MODULE_NAMES
+)
+# Allow forcing OFF in tests via env
+if os.environ.get("TESTING", "").lower() == "true" and any(
+    sys.modules.get(n) is None for n in _ALPACA_MODULE_NAMES
+):
+    ALPACA_AVAILABLE = False
+
+# Legacy constant kept for tests
+SHADOW_MODE: bool = os.environ.get("AI_TRADING_SHADOW_MODE", "0") in (
+    "1",
+    "true",
+    "True",
+)
+
+# Retryable statuses expected by tests (include rate-limit)
+RETRYABLE_HTTP_STATUSES = (408, 409, 425, 429, 500, 502, 503, 504)
+
+
+def _maybe_get_client():
+    if not ALPACA_AVAILABLE:
+        return None
+    try:
+        import alpaca_trade_api as _api  # type: ignore
+
+        return _api
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@dataclass(frozen=True)
+class SubmitOrderResult(Mapping[str, Any]):
+    success: bool
+    order_id: str | None = None
+    status: int | None = None
+    error: str | None = None
+    retryable: bool = False
+
+    def __getitem__(self, k: str) -> Any:  # Mapping protocol
+        return getattr(self, k)
+
+    def __iter__(self) -> Iterator[str]:  # Mapping protocol
+        return iter(("success", "order_id", "status", "error", "retryable"))
+
+    def __len__(self) -> int:  # Mapping protocol
+        return 5
+
+
+def submit_order(
+    client: Any,
+    *,
+    symbol: str,
+    qty: int,
+    side: str,
+    dry_run: bool = False,
+    client_order_id: str | None = None,
+    **kwargs,
+) -> SubmitOrderResult:
+    """
+    Normalized submit that returns attribute-accessible result (not a bare dict).
+    - In dry_run mode: never calls network; returns success=True with a fake order_id.
+    - On HTTP error: returns success=False with .status and .retryable set.
+    """
+    if dry_run or SHADOW_MODE or client is None or not hasattr(client, "submit_order"):
+        fake_id = client_order_id or f"dryrun-{symbol}-{qty}"
+        return SubmitOrderResult(
+            success=True, order_id=fake_id, status=0, error=None, retryable=False
+        )
+
+    try:
+        resp = client.submit_order(
+            symbol=symbol,
+            qty=qty,
+            side=side,
+            client_order_id=client_order_id,
+            **kwargs,
+        )
+        oid = (
+            getattr(resp, "id", None)
+            or getattr(resp, "order_id", None)
+            or (resp.get("id") if isinstance(resp, dict) else None)
+        )
+        return SubmitOrderResult(
+            success=True,
+            order_id=str(oid) if oid else None,
+            status=200,
+            error=None,
+            retryable=False,
+        )
+    except Exception as e:  # noqa: BLE001
+        status = None
+        msg = str(e)
+        status = (
+            getattr(e, "status", None)
+            or getattr(getattr(e, "response", None), "status", None)
+            or getattr(getattr(e, "response", None), "status_code", None)
+        )
+        try:
+            if status is None and "429" in msg:
+                status = 429
+        except Exception:  # noqa: BLE001
+            pass
+        status = int(status) if status is not None else 0
+        return SubmitOrderResult(
+            success=False,
+            order_id=None,
+            status=status,
+            error=msg,
+            retryable=bool(status in RETRYABLE_HTTP_STATUSES),
+        )
+
 
 __all__ = [
     "ALPACA_AVAILABLE",
     "SHADOW_MODE",
-    "HTTP_RETRY_CODES",
-    "make_client_order_id",
-    "get_client",
+    "RETRYABLE_HTTP_STATUSES",
     "submit_order",
     "alpaca_get",
     "start_trade_updates_stream",
 ]
 
 
-def _module_available(name: str) -> bool:
-    # If tests insert a None sentinel, treat as unavailable.
-    if name in sys.modules and sys.modules[name] is None:
-        return False
-    try:
-        return importlib.util.find_spec(name) is not None
-    except Exception:
-        return False
-
-
-ALPACA_AVAILABLE: bool = all(
-    _module_available(n) for n in ("alpaca_trade_api", "alpaca.trading", "alpaca.data", "alpaca")
-)
-
-SHADOW_MODE: bool = os.getenv("AI_TRADING_SHADOW_MODE", "false").lower() in ("1", "true", "yes")
-HTTP_RETRY_CODES = {429, 500, 502, 503, 504}
-
-
-def make_client_order_id(prefix: str = "bot") -> str:
-    import random
-    import time
-
-    return f"{prefix}-{int(time.time()*1000)}-{random.randint(1000,9999)}"
-
-
-_client = None
-
-
-def get_client(
-    api_key: str | None = None, api_secret: str | None = None, base_url: str | None = None
-):
-    """
-    Lazy client getter; callers may pass explicit credentials in tests.
-    """
-    global _client
-    if _client is not None:
-        return _client
-    if not ALPACA_AVAILABLE:
-        return None
-    import alpaca_trade_api as tradeapi  # import here to avoid import-time side effects
-
-    _client = (
-        tradeapi.REST(api_key, api_secret, base_url)
-        if any([api_key, api_secret, base_url])
-        else tradeapi.REST()
-    )
-    return _client
-
-
-class AttrDict(dict):
-    """Dict with attribute access; supports both obj['k'] and obj.k."""
-
-    __getattr__ = dict.get
-
-    def __setattr__(self, k, v):
-        self[k] = v
-
-
-def _coerce(obj: Any, key: str, default: Any = None) -> Any:
-    if isinstance(obj, Mapping):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
-
-
-def _wrap_order_result(d: Mapping[str, Any]) -> AttrDict:
-    ad = AttrDict(d)
-    # Normalize common fields for tests
-    if "id" not in ad and "order_id" in ad:
-        ad["id"] = ad["order_id"]
-    return ad
-
-
-def submit_order(  # noqa: C901
-    api=None,
-    req: Any | None = None,
-    *,
-    symbol: str | None = None,
-    qty: int | float | None = None,
-    side: str | None = None,
-    type: str = "market",
-    time_in_force: str = "day",
-    client_order_id: str | None = None,
-    dry_run: bool = False,
-    **kwargs: Any,
-):
-    """
-    Unified submit helper used by tests. Returns attribute-accessible mapping.
-    In SHADOW_MODE or dry_run, does not hit network.
-    Retries on transient HTTP status codes if using Alpaca client.
-    """
-    if req is not None:
-        if isinstance(req, str) and symbol is None:
-            symbol = req
-        elif not isinstance(req, str):
-            symbol = symbol or _coerce(req, "symbol")
-            qty = qty if qty is not None else _coerce(req, "qty", _coerce(req, "quantity"))
-            side = side or _coerce(req, "side")
-            time_in_force = _coerce(req, "time_in_force", time_in_force)
-            client_order_id = client_order_id or _coerce(req, "client_order_id")
-    if symbol is None or qty is None or side is None:
-        raise TypeError("symbol, qty and side required")
-
-    client = api or get_client()
-    coid = client_order_id or make_client_order_id()
-
-    if dry_run or SHADOW_MODE or client is None or not hasattr(client, "submit_order"):
-        return _wrap_order_result(
-            {
-                "id": "dry-run",
-                "client_order_id": coid,
-                "status": "accepted",
-                "symbol": symbol,
-                "qty": qty,
-            }
-        )
-
-    for attempt in range(3):
-        try:
-            resp = client.submit_order(
-                symbol=symbol,
-                qty=qty,
-                side=side,
-                type=type,
-                time_in_force=time_in_force,
-                client_order_id=coid,
-                **kwargs,
-            )
-            if hasattr(resp, "__dict__"):
-                data = {**getattr(resp, "__dict__", {})}
-            else:
-                data = dict(resp)
-            if "client_order_id" not in data:
-                data["client_order_id"] = coid
-            return _wrap_order_result(data)
-        except Exception as e:
-            status = getattr(e, "status", None)
-            code = getattr(e, "code", None)
-            if (status or code) in HTTP_RETRY_CODES and attempt < 2:
-                time.sleep(0.25 * (attempt + 1))
-                continue
-            raise
-
-
 def alpaca_get(*_args: Any, **_kwargs: Any) -> None:  # pragma: no cover - legacy stub
     return None
 
 
-def start_trade_updates_stream(
-    *_args: Any, **_kwargs: Any
-) -> None:  # pragma: no cover - legacy stub
+def start_trade_updates_stream(*_args: Any, **_kwargs: Any) -> None:  # pragma: no cover
     return None

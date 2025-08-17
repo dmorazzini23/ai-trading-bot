@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import argparse
 import os
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 
 from ai_trading.logging import get_logger
-from ai_trading.utils import http
+from ai_trading.utils import HTTP_DEFAULT_TIMEOUT, http
 from ai_trading.utils.prof import StageTimer
 
 logger = get_logger(__name__)
@@ -14,6 +14,7 @@ __all__ = ["run", "parse_cli_and_run"]
 
 
 # AI-AGENT-REF: manual probe for pooled HTTP fetch
+
 
 def run(symbols: list[str], timeout: float | None = None) -> int:
     """Fetch daily data for ``symbols`` using the pooled HTTP client."""
@@ -28,7 +29,7 @@ def run(symbols: list[str], timeout: float | None = None) -> int:
     with StageTimer(logger, "UNIVERSE_FETCH", universe_size=len(symbols)):
         results = http.map_get(urls, timeout=timeout)
     logger.info("HTTP_POOL_STATS", extra=http.pool_stats())
-    for (url, code, _), sym in zip(results, symbols):
+    for (_url, code, _), sym in zip(results, symbols, strict=False):
         if code != 200:
             logger.error("fetch failed for %s status=%s", sym, code)
             failures += 1
@@ -49,10 +50,7 @@ def parse_cli_and_run() -> int:
 
     timeout = args.timeout
     if timeout is None:
-        try:
-            timeout = float(os.getenv("HTTP_TIMEOUT_S", "10"))
-        except Exception:
-            timeout = 10.0
+        timeout = HTTP_DEFAULT_TIMEOUT
     return run(symbols, timeout=timeout)
 
 
