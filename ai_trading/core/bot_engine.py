@@ -15,6 +15,7 @@ from ai_trading.data_fetcher import (
 )
 
 SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY")
+NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
 SENTIMENT_API_URL: str = os.getenv("SENTIMENT_API_URL", "")
 TESTING = os.getenv("TESTING", "").lower() == "true"
 _alpaca_mods = (
@@ -236,9 +237,11 @@ def maybe_init_brokers() -> None:
 # Simple cache exposed for tests
 
 
-def fetch_sentiment(symbol: str, *, ttl_s: int = 300) -> float:
+def fetch_sentiment(symbol_or_ctx, symbol: str | None = None, *, ttl_s: int = 300) -> float:
     global _SENTIMENT_FAILURES
     """Fetch sentiment score with basic caching and failure tracking."""
+    if symbol is None:
+        symbol = symbol_or_ctx  # backward compat: first arg was context
     now = time.time()
     cached = _SENTIMENT_CACHE.get(symbol)
     if cached and now - cached[0] < ttl_s:
@@ -256,8 +259,10 @@ def fetch_sentiment(symbol: str, *, ttl_s: int = 300) -> float:
     except Exception:
         _SENTIMENT_FAILURES += 1
         if _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD:
+            _SENTIMENT_CACHE[symbol] = (now, 0.0)
             return 0.0
-        raise
+        _SENTIMENT_CACHE[symbol] = (now, 0.0)
+        return 0.0
 
 
 def _sha256_file(path: str) -> str:
@@ -1534,6 +1539,7 @@ else:
     # AI-AGENT-REF: mock data_fetcher functions for test environments
     def get_minute_df(*args, **kwargs):
         return pd.DataFrame()  # Mock empty DataFrame
+
 
 finnhub_client = None
 
