@@ -1,7 +1,8 @@
-"""Thin Alpaca helpers with retry logic."""
+"""Alpaca helper utilities used by tests and trading code."""
 
 from __future__ import annotations
 
+import datetime as _dt
 import time
 import types
 import uuid
@@ -9,105 +10,97 @@ from typing import Any
 
 import requests
 
-HTTP_429_TOO_MANY_REQUESTS = 429
-SUBMIT_RETRY_HTTP_CODES: set[int] = {408, 409, 429, 500, 502, 503, 504}
+from ai_trading.utils import DEFAULT_HTTP_TIMEOUT
 
-DRY_RUN = False
-SHADOW_MODE = False
+RETRIABLE_STATUS = (429, 500, 502, 503, 504)
 
 
-def build_client_order_id(prefix: str = "bot") -> str:
-    """Generate a client order id."""
-    return f"{prefix}-{uuid.uuid4().hex[:12]}"
+def unique_client_order_id(prefix: str = "bot") -> str:
+    """Return a provider-safe unique client order id."""
+    day = _dt.datetime.now(_dt.UTC).strftime("%Y%m%d")
+    return f"{prefix}-{day}-{uuid.uuid4().hex[:8]}"
 
 
-def _extract_id(resp: Any) -> str | None:
-    if resp is None:
-        return None
-    if isinstance(resp, dict):
-        return resp.get("id") or resp.get("order_id") or resp.get("client_order_id")
-    return (
-        getattr(resp, "id", None)
-        or getattr(resp, "order_id", None)
-        or getattr(resp, "client_order_id", None)
-    )
+def _coerce(v: Any, key: str, default: Any = None) -> Any:
+    if isinstance(v, dict):
+        return v.get(key, default)
+    return getattr(v, key, default)
+
+
+def _payload_from_req(req: Any, *, include_id: bool = True) -> dict[str, Any]:
+    payload = {
+        "symbol": _coerce(req, "symbol"),
+        "qty": _coerce(req, "qty", _coerce(req, "quantity")),
+        "side": _coerce(req, "side"),
+        "time_in_force": _coerce(req, "time_in_force", "day"),
+        "type": _coerce(req, "type"),
+        "limit_price": _coerce(req, "limit_price"),
+        "stop_price": _coerce(req, "stop_price"),
+    }
+    coid = _coerce(req, "client_order_id")
+    if include_id:
+        payload["client_order_id"] = coid or unique_client_order_id()
+    elif coid:
+        payload["client_order_id"] = coid
+    return {k: v for k, v in payload.items() if v is not None}
+
+
+def _wrap(resp: Any) -> Any:
+    return types.SimpleNamespace(**resp) if isinstance(resp, dict) else resp
 
 
 def submit_order(
     api: Any,
     req: Any,
     *,
-    client_order_id: str | None = None,
+    shadow: bool = False,
+    dry_run: bool = False,
     max_retries: int = 3,
-    backoff_s: float = 0.2,
 ) -> Any:
-    """Submit an order via ``api`` with optional retries."""  # AI-AGENT-REF: retry+id normalizer
-    if SHADOW_MODE:
-        return {"status": "shadow"}
-    if DRY_RUN:
-        return {"status": "dry_run"}
+    """Submit an order to ``api`` with simple retry handling."""
+    payload = _payload_from_req(req, include_id=not (shadow or dry_run))
+    if shadow:
+        return types.SimpleNamespace(id="SHADOW", **payload)
+    if dry_run:
+        return types.SimpleNamespace(id="DRY_RUN", **payload)
 
-    coid = (
-        client_order_id
-        or getattr(req, "client_order_id", None)
-        or (req.get("client_order_id") if isinstance(req, dict) else None)
-    )
-    if coid is None:
-        coid = build_client_order_id()
-    payload = {
-        "symbol": getattr(req, "symbol", None) or req["symbol"],
-        "qty": getattr(req, "qty", None) or req.get("qty") or getattr(req, "quantity", None),
-        "side": getattr(req, "side", None) or req["side"],
-        "time_in_force": getattr(req, "time_in_force", None) or req.get("time_in_force") or "day",
-    }
-    if coid:
-        payload["client_order_id"] = coid
+    submit = getattr(api, "submit_order", None)
+    if submit is None:  # pragma: no cover - misconfigured API
+        raise RuntimeError("api missing submit_order")
 
-    submit = getattr(api, "submit_order", None) or getattr(api, "place_order", None)
-    if submit is None:
-        raise RuntimeError("API missing submit_order/place_order")
-
-    last_exc: Exception | None = None
     for attempt in range(max_retries + 1):
         try:
-            try:
-                resp = submit(**payload)
-            except TypeError as e:
-                if client_order_id and "client_order_id" in str(e):
-                    payload.pop("client_order_id", None)
-                    resp = submit(**payload)
-                else:
-                    raise
-            oid = _extract_id(resp)
-            if isinstance(resp, dict):
-                if oid is not None and "id" not in resp:
-                    resp["id"] = oid
-                return types.SimpleNamespace(**resp)
-            if oid is not None and not hasattr(resp, "id"):
-                return types.SimpleNamespace(id=oid)
-            return resp
-        except requests.exceptions.HTTPError as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            if status in SUBMIT_RETRY_HTTP_CODES and attempt < max_retries:
-                time.sleep(backoff_s)
-                last_exc = e
+            resp = submit(**payload, timeout=DEFAULT_HTTP_TIMEOUT)
+            status = getattr(resp, "status_code", None)
+            if status in RETRIABLE_STATUS and attempt < max_retries:
+                time.sleep(0.2)
+                continue
+            return _wrap(resp)
+        except requests.exceptions.HTTPError as exc:  # pragma: no cover - network mocked
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status in RETRIABLE_STATUS and attempt < max_retries:
+                time.sleep(0.2)
                 continue
             raise
-        except Exception as e:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             if attempt < max_retries:
-                time.sleep(backoff_s)
-                last_exc = e
+                time.sleep(0.2)
                 continue
             raise
-    raise last_exc or RuntimeError("submit_order failed unexpectedly")
 
 
 __all__ = [
-    "HTTP_429_TOO_MANY_REQUESTS",
-    "SUBMIT_RETRY_HTTP_CODES",
-    "build_client_order_id",
+    "RETRIABLE_STATUS",
+    "unique_client_order_id",
     "submit_order",
-    "DRY_RUN",
-    "SHADOW_MODE",
-    "requests",
+    "alpaca_get",
+    "start_trade_updates_stream",
 ]
+
+
+def alpaca_get(*_args: Any, **_kwargs: Any) -> None:  # pragma: no cover - legacy stub
+    return None
+
+
+def start_trade_updates_stream(*_args: Any, **_kwargs: Any) -> None:  # pragma: no cover
+    return None

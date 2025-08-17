@@ -1,85 +1,76 @@
-"""Utility functions for validating market data."""
+"""Lightweight data validation helpers used by critical tests."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
+from ai_trading.data_fetcher import get_bars
+
 __all__ = [
     "check_data_freshness",
-    "validate_trading_data",
     "get_stale_symbols",
+    "validate_trading_data",
     "emergency_data_check",
 ]
 
 
-def _utcnow() -> datetime:
-    return datetime.now(UTC)
-
-
 def check_data_freshness(
     df: pd.DataFrame,
-    freshness_minutes: int = 5,
+    max_age_minutes: int = 15,
     now: datetime | None = None,
-) -> bool:
-    """Return ``True`` if ``df`` has data within ``freshness_minutes``."""
-    now = now or _utcnow()
+) -> tuple[bool, float]:
+    """Return ``(is_fresh, age_min)`` based on latest timestamp."""
     if df is None or df.empty:
-        return False
-    ts = df.index.max()
+        return False, float("inf")
+    now = now or datetime.now(UTC)
+    ts = df["timestamp"].max() if "timestamp" in df.columns else df.index.max()
     if isinstance(ts, pd.Timestamp):
         ts = ts.to_pydatetime()
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
-    age = now - ts
-    return age <= timedelta(minutes=freshness_minutes)
+    age_min = (now - ts).total_seconds() / 60.0
+    return age_min <= max_age_minutes, age_min
 
 
 def get_stale_symbols(
-    last_ts: Mapping[str, datetime] | pd.DataFrame,
-    now: datetime | None = None,
-    threshold_minutes: int = 5,
+    data_by_symbol: dict[str, pd.DataFrame],
+    max_age_minutes: int = 15,
 ) -> list[str]:
-    """Return symbols whose timestamps exceed ``threshold_minutes`` age."""
-    now = now or _utcnow()
+    """Return list of symbols whose data is older than ``max_age_minutes``."""
+    now = datetime.now(UTC)
     stale: list[str] = []
-    if isinstance(last_ts, Mapping):
-        for sym, ts in last_ts.items():
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=UTC)
-            if now - ts > timedelta(minutes=threshold_minutes):
-                stale.append(sym)
-        return stale
-    ts_col = "timestamp" if "timestamp" in last_ts.columns else last_ts.index.name
-    for sym, grp in last_ts.groupby("symbol"):
-        ts = grp[ts_col].max() if ts_col in grp else grp.index.max()
-        if isinstance(ts, pd.Timestamp):
-            ts = ts.to_pydatetime()
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=UTC)
-        if now - ts > timedelta(minutes=threshold_minutes):
+    for sym, df in data_by_symbol.items():
+        fresh, _ = check_data_freshness(df, max_age_minutes, now)
+        if not fresh:
             stale.append(sym)
     return stale
 
 
-def emergency_data_check(df: pd.DataFrame, strict: bool = False) -> bool:
-    """Return ``True`` if ``df`` passes emergency validation checks."""
-    if df is None or df.empty:
-        return False
-    if strict:
-        return df.dropna().shape[0] > 0
-    return True
-
-
 def validate_trading_data(
-    df: pd.DataFrame,
-    *,
-    min_rows: int = 1,
-    allow_na: bool = True,
+    data_by_symbol: dict[str, pd.DataFrame],
+    min_rows: int = 10,
 ) -> bool:
-    """Basic sanity checks for OHLCV dataframes."""
-    if df is None or df.shape[0] < min_rows:
-        return False
-    return not (not allow_na and df.isna().any().any())
+    """Basic validation ensuring each dataframe has ``min_rows`` rows."""
+    return all(df is not None and len(df) >= min_rows for df in data_by_symbol.values())
+
+
+def emergency_data_check(
+    symbols: list[str],
+    min_bars: int = 10,
+    fetcher: Callable[[str, datetime, datetime], pd.DataFrame] | None = None,
+) -> dict[str, bool]:
+    """Fetch a tiny window for ``symbols`` and report availability."""
+    fetch = fetcher or get_bars
+    end = datetime.now(UTC)
+    start = end - timedelta(hours=1)
+    result: dict[str, bool] = {}
+    for sym in symbols:
+        try:
+            df = fetch(sym, start, end)
+            result[sym] = bool(df is not None and len(df) >= min_bars)
+        except Exception:
+            result[sym] = False
+    return result
