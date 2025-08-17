@@ -8,7 +8,12 @@ import sys
 import sys as _sys
 from importlib import import_module
 
-from ai_trading.data_fetcher import FINNHUB_AVAILABLE, ensure_datetime, get_bars
+from ai_trading.data_fetcher import (
+    FINNHUB_AVAILABLE,
+    ensure_datetime,
+    get_bars,
+    get_bars_batch,
+)
 
 SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY")
 NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
@@ -47,40 +52,18 @@ def _ridge():
     return Ridge
 
 
-_ALPACA_MODULE_NAMES = (
-    "alpaca_trade_api",
-    "alpaca.trading",
-    "alpaca.data",
-    "alpaca",
-)
+def _detect_alpaca_available() -> bool:
+    for name in ("alpaca_trade_api", "alpaca.trading", "alpaca.data", "alpaca"):
+        if name in sys.modules and sys.modules[name] is None:
+            return False
+    try:
+        spec = importlib.util.find_spec("alpaca_trade_api")
+        return bool(spec)
+    except Exception:
+        return False
 
 
-def _alpaca_available_for_tests() -> bool:
-    """Detect Alpaca availability respecting test stubs."""
-
-    if os.getenv("TESTING", "").lower() == "true":
-        for name in _ALPACA_MODULE_NAMES:
-            if sys.modules.get(name, "absent") is None:
-                return False
-        return any(
-            mod
-            for mod in (sys.modules.get(n) for n in _ALPACA_MODULE_NAMES)
-            if mod not in (None, "absent")
-        )
-    import importlib.util
-
-    for n in _ALPACA_MODULE_NAMES:
-        try:
-            if importlib.util.find_spec(n) is not None:
-                return True
-        except Exception:
-            continue
-    return False
-
-
-ALPACA_AVAILABLE = _alpaca_available_for_tests()
-
-# defer any client creation until inside a function, not at import time
+ALPACA_AVAILABLE: bool = _detect_alpaca_available()
 trading_client = None
 data_client = None
 
@@ -123,6 +106,7 @@ __all__ = [
     "fetch_sentiment",
     "ALPACA_AVAILABLE",
     "FINNHUB_AVAILABLE",
+    "DataFetchError",
 ]
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
 # Using a mutable dict to avoid fragile `global` declarations inside functions.
@@ -551,11 +535,6 @@ CFG = get_config_settings()
 # AI-AGENT-REF: cached runtime settings for env aliases
 S = get_runtime_settings()
 SEED = get_seed_int()  # AI-AGENT-REF: deterministic seed from runtime settings
-from ai_trading.data_fetcher import get_bars
-
-
-def get_bars_batch(*args, **kwargs):  # pragma: no cover - legacy
-    raise NotImplementedError("get_bars_batch removed")
 
 
 def get_minute_bars(*args, **kwargs):  # pragma: no cover - legacy
@@ -2227,6 +2206,8 @@ def _maybe_warm_cache(ctx: BotContext) -> None:
         _log.warning("Cache warm-up failed: %s", exc)
 
 
+# NOTE: Tests provide a ctx.data_fetcher with get_minute_bars; our batch fetch
+# first tries the generic data_fetcher API, then falls back to ctx-based fetch.
 def _fetch_universe_bars(
     ctx: BotContext,
     symbols: list[str],
@@ -2235,67 +2216,20 @@ def _fetch_universe_bars(
     end: datetime | str,
     feed: str | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """
-    Fetch universe bars for symbols with parallel fallback.
-    """
-    if not symbols:
-        return {}
-
-    try:
-        batch = get_bars_batch(symbols, timeframe, start, end, feed=feed)
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ) as exc:  # AI-AGENT-REF: narrow exception
-        _log.warning("Universe batch failed: %s", exc)
-        batch = {}
-
-    remaining = [
-        s
-        for s in symbols
-        if s not in batch
-        or batch.get(s) is None
-        or getattr(batch.get(s), "empty", False)
-    ]
-    if remaining:
-        settings = get_settings()
-        max_workers = max(1, int(getattr(settings, "batch_fallback_workers", 4)))
-
-        def _pull(sym: str):
-            try:
-                return sym, get_bars(sym, timeframe, start, end)
-            except (
-                FileNotFoundError,
-                PermissionError,
-                IsADirectoryError,
-                JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-                OSError,
-            ) as one_exc:  # AI-AGENT-REF: narrow exception
-                _log.warning("Per-symbol fetch failed for %s: %s", sym, one_exc)
-                return sym, None
-
-        with ThreadPoolExecutor(
-            max_workers=max_workers, thread_name_prefix="fallback-daily"
-        ) as ex:
-            for fut in as_completed([ex.submit(_pull, s) for s in remaining]):
-                sym, df = fut.result()
-                if df is not None and not getattr(df, "empty", False):
-                    batch[sym] = df
-
-    return {
-        k: v
-        for k, v in batch.items()
-        if v is not None and not getattr(v, "empty", False)
-    }
+    """Fetch universe bars for symbols with ctx-aware fallback."""
+    out = get_bars_batch(symbols, timeframe, start, end, feed=feed)
+    dfetch = getattr(ctx, "data_fetcher", None)
+    if dfetch:
+        for sym in symbols:
+            df = out.get(sym)
+            if df is None or getattr(df, "empty", True):
+                getter = getattr(dfetch, "get_minute_bars", None)
+                if callable(getter):
+                    try:
+                        out[sym] = getter(sym) or df
+                    except Exception:
+                        out[sym] = df
+    return out
 
 
 def _fetch_universe_bars_chunked(
@@ -3063,6 +2997,10 @@ def _log_health_diagnostics(runtime, reason: str) -> None:
 
 
 # ─── TYPED EXCEPTION ─────────────────────────────────────────────────────────
+class DataFetchError(Exception):
+    """Raised when expected market data is missing or unusable."""
+
+
 class DataFetchErrorLegacy(Exception):
     pass
 
