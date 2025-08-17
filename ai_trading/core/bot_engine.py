@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import os
 import sys
+import sys as _sys
 
 from ai_trading.data_fetcher import (
     ensure_datetime,
@@ -13,29 +14,24 @@ from ai_trading.data_fetcher import (
     get_minute_df,
 )
 
-SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY")
-SENTIMENT_API_URL = os.getenv("SENTIMENT_API_URL", "")
+SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY")
+SENTIMENT_API_URL: str = os.getenv("SENTIMENT_API_URL", "")
 TESTING = os.getenv("TESTING", "").lower() == "true"
-_ALPACA_MODS = ("alpaca", "alpaca_trade_api", "alpaca.trading")
-
-
-def _mod_exists(name: str) -> bool:
-    try:
-        return importlib.util.find_spec(name) is not None
-    except Exception:  # pragma: no cover - importlib quirk
-        return False
-
-
-ALPACA_AVAILABLE = all(_mod_exists(m) for m in _ALPACA_MODS)
-if TESTING:
-    ALPACA_AVAILABLE = False
+_alpaca_mods = (
+    _sys.modules.get("alpaca_trade_api"),
+    _sys.modules.get("alpaca.trading"),
+    _sys.modules.get("alpaca.data"),
+    _sys.modules.get("alpaca"),
+)
+ALPACA_AVAILABLE = all(m is not None for m in _alpaca_mods)
 
 # defer any client creation until inside a function, not at import time
 trading_client = None
 data_client = None
 
 # Sentiment knobs used by tests
-SENTIMENT_FAILURE_THRESHOLD = 25
+SENTIMENT_FAILURE_THRESHOLD: int = 25
+_SENTIMENT_FAILURES: int = 0
 _SENTIMENT_CACHE: dict[str, tuple[float, float]] = {}
 
 from enum import Enum
@@ -105,7 +101,8 @@ from ai_trading.logging import (
     get_logger,  # AI-AGENT-REF: use sanitizing adapter
 )
 from ai_trading.utils import (
-    DEFAULT_HTTP_TIMEOUT,
+    HTTP_TIMEOUT,
+    SUBPROCESS_TIMEOUT_S,
     clamp_timeout,
     http,
 )  # AI-AGENT-REF: enforce request timeouts
@@ -239,22 +236,28 @@ def maybe_init_brokers() -> None:
 # Simple cache exposed for tests
 
 
-def fetch_sentiment(symbol: str) -> float:
-    """Fetch sentiment score for ``symbol`` with basic caching."""
+def fetch_sentiment(symbol: str, *, ttl_s: int = 300) -> float:
+    global _SENTIMENT_FAILURES
+    """Fetch sentiment score with basic caching and failure tracking."""
     now = time.time()
     cached = _SENTIMENT_CACHE.get(symbol)
-    if cached and now - cached[0] < 300:
+    if cached and now - cached[0] < ttl_s:
         return cached[1]
-    url = SENTIMENT_API_URL
+    if _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD or not SENTIMENT_API_KEY:
+        return 0.0
     params = {"symbol": symbol, "apikey": SENTIMENT_API_KEY}
     try:
-        resp = requests.get(url, params=params, timeout=DEFAULT_HTTP_TIMEOUT)
+        resp = requests.get(SENTIMENT_API_URL, params=params, timeout=HTTP_TIMEOUT)
+        resp.raise_for_status()
         data = resp.json()
         score = float(data.get("sentiment", 0.0))
+        _SENTIMENT_CACHE[symbol] = (now, score)
+        return score
     except Exception:
-        score = 0.0
-    _SENTIMENT_CACHE[symbol] = (now, score)
-    return score
+        _SENTIMENT_FAILURES += 1
+        if _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD:
+            return 0.0
+        raise
 
 
 def _sha256_file(path: str) -> str:
@@ -1525,23 +1528,12 @@ class StrategyAllocator:
 # AI-AGENT-REF: lazy import heavy data_fetcher module to speed up import for tests
 if not os.getenv("PYTEST_RUNNING"):
     from ai_trading.data_fetcher import (  # type: ignore
-        _MINUTE_CACHE,
-        DataFetchError,
-        DataFetchException,
         get_minute_df,
     )
 else:
     # AI-AGENT-REF: mock data_fetcher functions for test environments
-    class DataFetchError(Exception):
-        pass
-
-    class DataFetchException(Exception):
-        pass
-
     def get_minute_df(*args, **kwargs):
         return pd.DataFrame()  # Mock empty DataFrame
-
-    _MINUTE_CACHE = {}  # Mock cache
 
 finnhub_client = None
 
@@ -2028,11 +2020,10 @@ def get_git_hash() -> str:
     """Return current git commit short hash if available."""
     try:
         import subprocess
-        from ai_trading.utils import DEFAULT_SUBPROCESS_TIMEOUT
+        from ai_trading.utils import SUBPROCESS_TIMEOUT_S
 
         cmd = ["git", "rev-parse", "--short", "HEAD"]
-        timeout_s = DEFAULT_SUBPROCESS_TIMEOUT
-        proc = subprocess.run(cmd, check=True, timeout=timeout_s, capture_output=True)
+        proc = subprocess.run(cmd, check=True, timeout=SUBPROCESS_TIMEOUT_S, capture_output=True)
         return proc.stdout.decode().strip()
     except (
         FileNotFoundError,

@@ -3,7 +3,7 @@ import types
 import pytest
 
 try:
-    import ai_trading.alpaca_api as alpaca_api  # AI-AGENT-REF: canonical import
+    from ai_trading import alpaca_api  # AI-AGENT-REF: canonical import
 except Exception:
     pytest.skip("alpaca_api not available", allow_module_level=True)
 
@@ -17,7 +17,7 @@ class RequestException(Exception):
 
 
 alpaca_api.requests = types.SimpleNamespace(
-    exceptions=types.SimpleNamespace(HTTPError=HTTPError, RequestException=RequestException)
+    exceptions=types.SimpleNamespace(HTTPError=HTTPError, RequestException=RequestException),
 )
 
 
@@ -26,13 +26,13 @@ class DummyAPI:
         self.to_raise = to_raise or []
         self.calls = 0
 
-    def submit_order(self, order_data=None):
+    def submit_order(self, **order_data):
         self.calls += 1
         if self.to_raise:
             exc = self.to_raise.pop(0)
             if exc is not None:
                 raise exc
-        return types.SimpleNamespace(id=self.calls)
+        return types.SimpleNamespace(id=self.calls, **order_data)
 
 
 class DummyReq(types.SimpleNamespace):
@@ -60,5 +60,5 @@ def test_submit_order_fail(monkeypatch):
     api = DummyAPI([Exception("e1")] * 5)
     monkeypatch.setattr(alpaca_api, "SHADOW_MODE", False)
     monkeypatch.setattr(alpaca_api.time, "sleep", lambda s: None)
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         alpaca_api.submit_order(api, DummyReq())

@@ -1,14 +1,15 @@
 import types
-import ai_trading.alpaca_api as alpaca_api  # AI-AGENT-REF: canonical import
+
+from ai_trading import alpaca_api  # AI-AGENT-REF: canonical import
 
 
 class DummyAPI:
     def __init__(self):
         self.ids = []
 
-    def submit_order(self, order_data=None):
-        self.ids.append(order_data.client_order_id)
-        return types.SimpleNamespace(id=len(self.ids), client_order_id=order_data.client_order_id)
+    def submit_order(self, **order_data):
+        self.ids.append(order_data["client_order_id"])
+        return types.SimpleNamespace(id=len(self.ids), **order_data)
 
 
 def make_req(symbol="AAPL"):

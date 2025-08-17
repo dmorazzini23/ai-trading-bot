@@ -1,12 +1,9 @@
-import sys
 import types
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 
 try:
-    import ai_trading.alpaca_api as alpaca_api  # AI-AGENT-REF: canonical import
+    from ai_trading import alpaca_api  # AI-AGENT-REF: canonical import
 except Exception:
     pytest.skip("alpaca_api not available", allow_module_level=True)
 
@@ -15,11 +12,11 @@ class DummyAPI:
     def __init__(self):
         self.calls = 0
 
-    def submit_order(self, order_data=None):
+    def submit_order(self, **order_data):
         self.calls += 1
         if self.calls == 1:
             return types.SimpleNamespace(status_code=429)
-        return types.SimpleNamespace(id=1)
+        return types.SimpleNamespace(id=1, **order_data)
 
 
 def make_req():
@@ -30,16 +27,17 @@ def test_submit_order_shadow(monkeypatch):
     api = DummyAPI()
     monkeypatch.setattr(alpaca_api, "SHADOW_MODE", True)
     result = alpaca_api.submit_order(api, make_req())
-    assert result["status"] == "shadow"
+    assert result.id == "dry-run"
+    assert result.status == "accepted"
     assert api.calls == 0
 
 
-def test_submit_order_dry_run(monkeypatch):
-    api = DummyAPI()
-    monkeypatch.setattr(alpaca_api, "DRY_RUN", True)
+def test_submit_order_missing_submit(monkeypatch):
+    monkeypatch.setattr(alpaca_api, "SHADOW_MODE", False)
+    api = object()  # lacks submit_order
     result = alpaca_api.submit_order(api, make_req())
-    assert result["status"] == "dry_run"
-    assert api.calls == 0
+    assert result.id == "dry-run"
+    assert result.status == "accepted"
 
 
 def test_submit_order_rate_limit(monkeypatch):

@@ -13,6 +13,7 @@ pydantic-settings>=2.2
 pandas>=2.3
 pandas_ta==0.3.14b0
 pandas-market-calendars==4.4.1
+exchange-calendars
 cachetools>=5.3,<6.0
 # yfinance requires websockets>=13 which conflicts with alpaca-trade-api<11
 # move to optional extra or install only locally when needed

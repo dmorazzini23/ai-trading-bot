@@ -43,13 +43,13 @@ else:  # pragma: no cover - fallback for dev/test
 ORDER_STALE_AFTER_S = 8 * 60
 
 
-@dataclass
+@dataclass(slots=True)
 class OrderInfo:
     order_id: str
     symbol: str
     side: str
-    qty: int
-    submitted_time: float
+    qty: int | float
+    submitted_time: float  # epoch seconds
     last_status: str = "new"
 
 

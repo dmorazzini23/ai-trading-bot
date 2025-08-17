@@ -46,28 +46,29 @@ from .timing import sleep  # AI-AGENT-REF: test-aware timing helpers
 
 
 # Shared timeout knobs
-DEFAULT_HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT_S", "10") or 10)
-DEFAULT_SUBPROCESS_TIMEOUT = int(os.getenv("SUBPROCESS_TIMEOUT_S", "10") or 10)
+HTTP_TIMEOUT: float = float(os.getenv("HTTP_TIMEOUT", "10"))
+SUBPROCESS_TIMEOUT_S: float = float(os.getenv("SUBPROCESS_TIMEOUT_S", "5"))
 
 
 def clamp_timeout(
-    value: int | float | None,
+    t: float | None,
     *,
-    default: int = DEFAULT_HTTP_TIMEOUT,
-    low: int = 1,
-    high: int = 60,
-) -> int:
-    """Clamp timeout to a safe integer range."""
-    if value is None:
+    default: float = HTTP_TIMEOUT,
+    low: float = 0.1,
+    high: float = 60.0,
+) -> float:
+    """Clamp timeout to a safe float range."""
+    if t is None:
         return default
-    return max(low, min(int(value), high))
+    return max(low, min(float(t), high))
 
 
 # Backwards compatibility aliases
-DEFAULT_HTTP_TIMEOUT_S = float(DEFAULT_HTTP_TIMEOUT)
-SUBPROCESS_TIMEOUT_S = float(DEFAULT_SUBPROCESS_TIMEOUT)
-HTTP_TIMEOUT_S = DEFAULT_HTTP_TIMEOUT
-DEFAULT_SUBPROCESS_TIMEOUT_S = DEFAULT_SUBPROCESS_TIMEOUT
+DEFAULT_HTTP_TIMEOUT = HTTP_TIMEOUT
+DEFAULT_SUBPROCESS_TIMEOUT = SUBPROCESS_TIMEOUT_S
+DEFAULT_HTTP_TIMEOUT_S = HTTP_TIMEOUT
+HTTP_TIMEOUT_S = HTTP_TIMEOUT
+DEFAULT_SUBPROCESS_TIMEOUT_S = SUBPROCESS_TIMEOUT_S
 
 
 import ai_trading.utils.process_manager as process_manager  # noqa: E402
@@ -110,4 +111,5 @@ __all__ = [
     "DEFAULT_SUBPROCESS_TIMEOUT",
     "DEFAULT_HTTP_TIMEOUT_S",
     "SUBPROCESS_TIMEOUT_S",
+    "HTTP_TIMEOUT",
 ]
