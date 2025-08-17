@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from functools import lru_cache
 from typing import Any
 
-from functools import lru_cache
 from pydantic import Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -180,7 +180,8 @@ def get_news_api_key() -> str | None:
 
 def get_rebalance_interval_min() -> int:
     """Lazy accessor for rebalance interval."""
-    return int(get_settings().rebalance_interval_min)
+    s = get_settings()
+    return int(s.rebalance_interval_min)
 
 
 # ---- Lazy getters (access only at runtime; never at module import) ----

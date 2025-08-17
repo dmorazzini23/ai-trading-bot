@@ -8,12 +8,7 @@ import sys
 import sys as _sys
 from importlib import import_module
 
-from ai_trading.data_fetcher import (
-    ensure_datetime,
-    get_bars,
-    get_historical_df,
-    get_minute_df,
-)
+from ai_trading.data_fetcher import ensure_datetime, get_bars
 
 SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY")
 NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
@@ -95,6 +90,7 @@ __all__ = [
     "_SENTIMENT_CACHE",
     "fetch_sentiment",
     "ALPACA_AVAILABLE",
+    "FINNHUB_AVAILABLE",
 ]
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
 # Using a mutable dict to avoid fragile `global` declarations inside functions.
@@ -130,7 +126,6 @@ from ai_trading.logging import (
     get_logger,  # AI-AGENT-REF: use sanitizing adapter
 )
 from ai_trading.utils import (
-    SUBPROCESS_TIMEOUT_S,
     clamp_timeout,
     http,
 )  # AI-AGENT-REF: enforce request timeouts
@@ -512,11 +507,7 @@ CFG = get_config_settings()
 # AI-AGENT-REF: cached runtime settings for env aliases
 S = get_runtime_settings()
 SEED = get_seed_int()  # AI-AGENT-REF: deterministic seed from runtime settings
-from ai_trading.data_fetcher import (
-    get_bars,
-    get_historical_df,
-    get_minute_df,
-)
+from ai_trading.data_fetcher import get_bars
 
 
 def get_bars_batch(*args, **kwargs):  # pragma: no cover - legacy
@@ -1396,8 +1387,14 @@ BASE_DIR = Path(__file__).resolve().parents[2]  # AI-AGENT-REF: repo root for pa
 # AI-AGENT-REF: pybreaker is a hard dependency in pyproject.toml
 import pybreaker
 
-# AI-AGENT-REF: finnhub is a hard dependency in pyproject.toml
-from finnhub import FinnhubAPIException
+# AI-AGENT-REF: optional finnhub dependency
+try:  # pragma: no cover - optional dependency
+    from finnhub import FinnhubAPIException  # type: ignore
+
+    FINNHUB_AVAILABLE = True
+except Exception:  # pragma: no cover - optional dependency
+    FinnhubAPIException = Exception  # type: ignore
+    FINNHUB_AVAILABLE = False
 
 # AI-AGENT-REF: prometheus-client is a hard dependency in pyproject.toml
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, start_http_server
@@ -2056,22 +2053,13 @@ def get_git_hash() -> str:
     """Return current git commit short hash if available."""
     try:
         import subprocess
-        from ai_trading.utils import SUBPROCESS_TIMEOUT_S, clamp_timeout
+        from ai_trading.utils import SUBPROCESS_TIMEOUT_S
 
         cmd = ["git", "rev-parse", "--short", "HEAD"]
-        timeout = clamp_timeout(SUBPROCESS_TIMEOUT_S, kind="subprocess")
-        proc = subprocess.run(cmd, check=True, timeout=timeout, capture_output=True)
-        return proc.stdout.decode().strip()
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-    ):  # AI-AGENT-REF: narrow exception
+        run = subprocess.run
+        out = run(cmd, timeout=SUBPROCESS_TIMEOUT_S, check=False, capture_output=True, text=True)
+        return (out.stdout or "").strip() or "unknown"
+    except Exception:
         return "unknown"
 
 
