@@ -36,7 +36,7 @@ def psleep(_=None) -> None:
 
 def clamp_timeout(df):
     """Benchmark-friendly shim returning input."""  # AI-AGENT-REF
-    _ = _clamp_timeout(1.0, min=0.1, max=10.0, default=1.0)
+    _ = _clamp_timeout(1.0, min_s=0.1, max_s=10.0, default_non_test=1.0)
     return df
 
 
@@ -142,7 +142,7 @@ def _fetch_api(url: str, retries: int = 3, delay: float = 1.0) -> dict:
     """Fetch JSON from an API with simple retry logic and backoff."""
     for attempt in range(1, retries + 1):
         try:
-            resp = http.get(url, timeout=_clamp_timeout(5, default=5, min_s=0.5))
+            resp = http.get(url, timeout=_clamp_timeout(5, min_s=0.5, default_non_test=5))
             resp.raise_for_status()
             return resp.json()
         except (

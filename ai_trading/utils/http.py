@@ -5,6 +5,7 @@
 import os
 import threading
 import time
+from ai_trading.utils.timing import HTTP_TIMEOUT
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
@@ -12,9 +13,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from . import HTTP_TIMEOUT_DEFAULT
 
-_DEFAULT_TIMEOUT = HTTP_TIMEOUT_DEFAULT
+_DEFAULT_TIMEOUT = HTTP_TIMEOUT
 
 
 def _ensure_timeout(kwargs: dict) -> dict:

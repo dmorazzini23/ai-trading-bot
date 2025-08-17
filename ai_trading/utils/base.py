@@ -25,6 +25,7 @@ try:
 except Exception:  # AI-AGENT-REF: library optional in tests
     mcal = None
 import numpy as np
+
 from ai_trading.monitoring.system_health import (
     snapshot_basic,
 )  # AI-AGENT-REF: lazy psutil
@@ -41,6 +42,8 @@ Timestamp = pd.Timestamp
 DataFrame = pd.DataFrame
 Series = pd.Series
 Index = pd.Index
+
+SUBPROCESS_TIMEOUT_S = 5.0
 
 
 def get_ohlcv_columns(df) -> list[str]:
@@ -406,6 +409,18 @@ def is_market_open(now: dt.datetime | None = None) -> bool:
         return MARKET_OPEN_TIME <= current <= MARKET_CLOSE_TIME
 
 
+def market_open_between(start: datetime, end: datetime) -> bool:
+    """Return True if market is open at any point in [start, end]."""  # AI-AGENT-REF
+    if end < start:
+        start, end = end, start
+    current = start
+    while current <= end:
+        if is_market_open(current):
+            return True
+        current += dt.timedelta(minutes=1)
+    return False
+
+
 def is_weekend(timestamp: dt.datetime | Timestamp | None = None) -> bool:
     """Check if the given timestamp (or current time) falls on a weekend."""
     if timestamp is None:
@@ -452,16 +467,23 @@ def ensure_utc(value: dt.datetime | date) -> dt.datetime:
     raise TypeError(f"Unsupported type for ensure_utc: {type(value)!r}")
 
 
-def get_free_port(start: int = 9200, end: int = 9300) -> int | None:
-    """Return an available TCP port in the range [start, end]."""
-    for port in range(start, end + 1):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            try:
-                sock.bind(("", port))
-                return port
-            except OSError:
-                continue
-    return None
+def get_free_port(start: int | None = None, end: int | None = None) -> int | None:
+    """
+    If ``start`` and ``end`` are provided, return a free port in that range;
+    otherwise ask the OS for an ephemeral port.
+    """  # AI-AGENT-REF
+    if start is not None and end is not None:
+        for port in range(start, end + 1):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                try:
+                    sock.bind(("", port))
+                    return port
+                except OSError:
+                    continue
+        return None
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("", 0))
+        return sock.getsockname()[1]
 
 
 def _pid_from_inode(inode: str) -> int | None:
