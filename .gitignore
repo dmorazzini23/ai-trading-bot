@@ -45,7 +45,7 @@ logs/
 .mypy_cache/
 **/__pycache__/
 
-# Test artifacts  
+# Test artifacts
 htmlcov/
 coverage.xml
 
@@ -58,6 +58,7 @@ cache_*.csv
 halt.flag
 peak_equity.txt
 metrics/
+!ai_trading/metrics/
 models/
 regime_model.pkl
 sklearn_fix_summary.md

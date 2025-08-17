@@ -20,8 +20,9 @@ __all__ = [
     "get_bars",  # legacy alias
     "get_cached_minute_timestamp",
     "set_cached_minute_timestamp",
-    "clear_cached_minute_timestamp",
-    "age_cached_minute_timestamps",
+    "clear_minute_cache",
+    "age_minute_cache",
+    "retry",
     "FINNHUB_AVAILABLE",
 ]
 
@@ -30,7 +31,8 @@ __all__ = [
 def ensure_datetime(value: datetime | str | int | float | None) -> datetime:
     """
     Normalize many datetime inputs into an aware UTC datetime.
-    Accepts ISO strings, epoch seconds, naive/tz-aware datetimes, or None (returns utcnow()).
+    Accepts ISO strings, epoch seconds, naive/tz-aware datetimes,
+    or None (returns utcnow()).
     """
     if value is None:
         return datetime.now(UTC)
@@ -64,7 +66,7 @@ def set_cached_minute_timestamp(symbol: str, ts: int) -> None:
         _MINUTE_CACHE[symbol.upper()] = (int(ts), time.time())
 
 
-def clear_cached_minute_timestamp(symbol: str | None = None) -> None:
+def clear_minute_cache(symbol: str | None = None) -> None:
     with _MINUTE_CACHE_LOCK:
         if symbol is None:
             _MINUTE_CACHE.clear()
@@ -72,7 +74,7 @@ def clear_cached_minute_timestamp(symbol: str | None = None) -> None:
             _MINUTE_CACHE.pop(symbol.upper(), None)
 
 
-def age_cached_minute_timestamps(max_age_seconds: int) -> int:
+def age_minute_cache(max_age_seconds: int) -> int:
     cutoff = time.time() - int(max_age_seconds)
     removed = 0
     with _MINUTE_CACHE_LOCK:
@@ -82,6 +84,19 @@ def age_cached_minute_timestamps(max_age_seconds: int) -> int:
                 _MINUTE_CACHE.pop(k, None)
                 removed += 1
     return removed
+
+
+# Backwards compat aliases
+def clear_cached_minute_timestamp(
+    symbol: str | None = None,
+) -> None:  # pragma: no cover - legacy
+    clear_minute_cache(symbol)
+
+
+def age_cached_minute_timestamps(
+    max_age_seconds: int,
+) -> int:  # pragma: no cover - legacy
+    return age_minute_cache(max_age_seconds)
 
 
 # --- simple retry helper used by get_minute_df ---
@@ -94,6 +109,9 @@ def _retry(n: int, delay: float, fn, *args, **kwargs):
             last_err = e
             time.sleep(delay)
     raise last_err  # type: ignore[misc]
+
+
+retry = _retry  # AI-AGENT-REF: export retry helper
 
 
 # --- bar fetcher (minimal, patchable) ---

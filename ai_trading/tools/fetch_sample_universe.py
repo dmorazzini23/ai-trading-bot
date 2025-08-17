@@ -5,7 +5,7 @@ import os
 from datetime import UTC, datetime, timedelta
 
 from ai_trading.logging import get_logger
-from ai_trading.utils import HTTP_DEFAULT_TIMEOUT, http
+from ai_trading.utils import HTTP_TIMEOUT_DEFAULT, http
 from ai_trading.utils.prof import StageTimer
 
 logger = get_logger(__name__)
@@ -20,7 +20,9 @@ def run(symbols: list[str], timeout: float | None = None) -> int:
     """Fetch daily data for ``symbols`` using the pooled HTTP client."""
     if not symbols:
         return 0
-    from ai_trading.data_fetcher import _build_daily_url  # local import to ease patching
+    from ai_trading.data_fetcher import (
+        _build_daily_url,  # local import to ease patching
+    )
 
     end = datetime.now(UTC)
     start = end - timedelta(days=7)
@@ -37,7 +39,9 @@ def run(symbols: list[str], timeout: float | None = None) -> int:
 
 
 def parse_cli_and_run() -> int:
-    parser = argparse.ArgumentParser(description="Fetch sample universe using pooled HTTP")
+    parser = argparse.ArgumentParser(
+        description="Fetch sample universe using pooled HTTP"
+    )
     parser.add_argument("--symbols", help="Comma separated symbols", default="")
     parser.add_argument("--timeout", type=float, default=None)
     args = parser.parse_args()
@@ -50,7 +54,7 @@ def parse_cli_and_run() -> int:
 
     timeout = args.timeout
     if timeout is None:
-        timeout = HTTP_DEFAULT_TIMEOUT
+        timeout = HTTP_TIMEOUT_DEFAULT
     return run(symbols, timeout=timeout)
 
 

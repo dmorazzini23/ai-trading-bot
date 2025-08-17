@@ -12,9 +12,9 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from . import HTTP_DEFAULT_TIMEOUT
+from . import HTTP_TIMEOUT_DEFAULT
 
-_DEFAULT_TIMEOUT = HTTP_DEFAULT_TIMEOUT
+_DEFAULT_TIMEOUT = HTTP_TIMEOUT_DEFAULT
 
 
 def _ensure_timeout(kwargs: dict) -> dict:
@@ -272,7 +272,9 @@ def pool_stats() -> dict:
     return {
         "workers": _cfg_int("HTTP_MAX_WORKERS", 8),
         "per_host": _cfg_int("HTTP_MAX_PER_HOST", 6),
-        "pool_maxsize": _cfg_int("HTTP_POOL_MAXSIZE", max(_cfg_int("HTTP_MAX_WORKERS", 8), 10)),
+        "pool_maxsize": _cfg_int(
+            "HTTP_POOL_MAXSIZE", max(_cfg_int("HTTP_MAX_WORKERS", 8), 10)
+        ),
         "hosts": list(__SESSIONS.keys()),
         "in_flight": in_flight,
         "host_semaphores": sems,

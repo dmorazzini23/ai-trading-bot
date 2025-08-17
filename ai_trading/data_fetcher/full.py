@@ -100,32 +100,21 @@ def ensure_datetime(dt):
     return ts
 
 
-# Prometheus metrics (optional)
-try:
-    from prometheus_client import Counter, Histogram
+# Prometheus metrics via shim (no-op if unavailable)
+from ai_trading.metrics import PROMETHEUS_AVAILABLE, Counter, Histogram
 
-    _MET_REQS = Counter(
-        "data_requests_total", "Data requests", ["source", "timeframe", "cache", "mode"]
-    )
-    _MET_LAT = Histogram(
-        "data_request_latency_seconds",
-        "Data request latency",
-        ["source", "timeframe", "cache", "mode"],
-    )
-except Exception:  # pragma: no cover
-
-    class _Noop:
-        def labels(self, *a, **k):
-            return self
-
-        def inc(self, *a, **k):
-            pass
-
-        def observe(self, *a, **k):
-            pass
-
-    _MET_REQS = _Noop()
-    _MET_LAT = _Noop()
+_MET_REQS = Counter(
+    "data_requests_total",
+    "Data requests",
+    ["source", "timeframe", "cache", "mode"],
+)
+_MET_LAT = Histogram(
+    "data_request_latency_seconds",
+    "Data request latency",
+    ["source", "timeframe", "cache", "mode"],
+)
+if not PROMETHEUS_AVAILABLE:
+    logger.debug("Prometheus metrics disabled; using no-op collectors")
 
 CFG = get_config_settings()
 BASE_DIR = Path(__file__).resolve().parents[1]  # AI-AGENT-REF: repo root for paths
