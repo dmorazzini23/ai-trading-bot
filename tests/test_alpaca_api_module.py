@@ -22,7 +22,7 @@ def test_submit_order_shadow(monkeypatch):
     monkeypatch.setattr(alpaca_api, "SHADOW_MODE", True)
     res = alpaca_api.submit_order(api, symbol="AAPL", qty=1, side="buy")
     assert res.success
-    assert res.order_id.startswith("dryrun")
+    assert res.status == "shadow"
     assert api.calls == 0
 
 
@@ -31,7 +31,7 @@ def test_submit_order_missing_submit(monkeypatch):
     api = object()
     res = alpaca_api.submit_order(api, symbol="AAPL", qty=1, side="buy")
     assert res.success
-    assert res.order_id.startswith("dryrun")
+    assert res.status == "shadow"
 
 
 def test_submit_order_rate_limit(monkeypatch):

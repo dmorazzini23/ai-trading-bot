@@ -96,8 +96,8 @@ def emergency_data_check(
                     df = fetch(sym, start, end)  # legacy shape
                 except TypeError:
                     df = fetch(sym, start=start, end=end)
-            if df is None or df.empty:
-                return False
+            if df is not None and not df.empty:
+                return True
         except Exception:  # noqa: BLE001
-            return False
-    return True
+            pass
+    return False
