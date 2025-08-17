@@ -104,11 +104,16 @@ rl = [  # AI-AGENT-REF: optional RL dependencies
 ]
 
 [tool.black]
-line-length = 100
+line-length = 88
 
 
 [tool.ruff]
-line-length = 100
+line-length = 88
+target-version = "py312"
 
 [tool.ruff.lint]
-extend-select = ["E", "F", "I", "UP", "SIM", "B", "BLE"]
+select = ["E", "F", "I", "UP", "SIM", "B", "BLE"]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true

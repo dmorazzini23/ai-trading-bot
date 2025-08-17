@@ -27,7 +27,7 @@ from ai_trading.logging import logger
 
 # AI-AGENT-REF: Import config
 from ai_trading.settings import get_news_api_key, get_settings
-from ai_trading.utils import HTTP_DEFAULT_TIMEOUT  # AI-AGENT-REF: timeout helper
+from ai_trading.utils import HTTP_TIMEOUT_DEFAULT  # AI-AGENT-REF: timeout helper
 
 SENTIMENT_API_KEY = os.getenv("SENTIMENT_API_KEY", "")
 
@@ -69,7 +69,9 @@ def _load_transformers(log=logger):
         from transformers import AutoModelForSequenceClassification, AutoTokenizer  # type: ignore
 
         tokenizer = AutoTokenizer.from_pretrained("yiyanghkust/finbert-tone")
-        model = AutoModelForSequenceClassification.from_pretrained("yiyanghkust/finbert-tone")
+        model = AutoModelForSequenceClassification.from_pretrained(
+            "yiyanghkust/finbert-tone"
+        )
         model.to(DEVICE)
         model.eval()
         _TRANSFORMERS = (torch, tokenizer, model)
@@ -145,12 +147,18 @@ def _record_sentiment_failure():
 
     if cb["failures"] >= SENTIMENT_FAILURE_THRESHOLD:
         cb["state"] = "open"
-        logger.warning(f"Sentiment circuit breaker opened after {cb['failures']} failures")
+        logger.warning(
+            f"Sentiment circuit breaker opened after {cb['failures']} failures"
+        )
 
 
 @retry(
-    stop=stop_after_attempt(SENTIMENT_MAX_RETRIES),  # Increased retries for rate limiting
-    wait=wait_exponential(multiplier=SENTIMENT_BASE_DELAY, min=SENTIMENT_BASE_DELAY, max=180)
+    stop=stop_after_attempt(
+        SENTIMENT_MAX_RETRIES
+    ),  # Increased retries for rate limiting
+    wait=wait_exponential(
+        multiplier=SENTIMENT_BASE_DELAY, min=SENTIMENT_BASE_DELAY, max=180
+    )
     + wait_random(0, 5),  # More aggressive backoff with jitter
     retry=retry_if_exception_type(
         (Exception,)
@@ -171,7 +179,9 @@ def fetch_sentiment(ctx, ticker: str) -> float:
     """
     settings = get_settings()
     api_key = (
-        SENTIMENT_API_KEY or getattr(settings, "sentiment_api_key", None) or get_news_api_key()
+        SENTIMENT_API_KEY
+        or getattr(settings, "sentiment_api_key", None)
+        or get_news_api_key()
     )
     if not api_key:
         logger.debug(
@@ -201,7 +211,9 @@ def fetch_sentiment(ctx, ticker: str) -> float:
     # Cache miss or stale → fetch fresh
     # AI-AGENT-REF: Circuit breaker pattern for graceful degradation
     if not _check_sentiment_circuit_breaker():
-        logger.info(f"Sentiment circuit breaker open, returning cached/neutral for {ticker}")
+        logger.info(
+            f"Sentiment circuit breaker open, returning cached/neutral for {ticker}"
+        )
         with sentiment_lock:
             # Try to use any existing cache, even if stale
             cached = _SENTIMENT_CACHE.get(ticker)
@@ -220,7 +232,7 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
             f"&apiKey={api_key}"
         )
-        resp = requests.get(url, timeout=HTTP_DEFAULT_TIMEOUT)
+        resp = requests.get(url, timeout=HTTP_TIMEOUT_DEFAULT)
 
         # AI-AGENT-REF: Enhanced rate limiting detection and handling
         if resp.status_code == 429:
@@ -267,7 +279,9 @@ def fetch_sentiment(ctx, ticker: str) -> float:
         ) as e:
             logger.debug("Form4 fetch failed for %s - network error: %s", ticker, e)
         except (KeyError, ValueError, TypeError) as e:
-            logger.debug("Form4 fetch failed for %s - data parsing error: %s", ticker, e)
+            logger.debug(
+                "Form4 fetch failed for %s - data parsing error: %s", ticker, e
+            )
         except Exception as e:
             logger.debug(
                 "Form4 fetch failed for %s - unexpected error: %s",
@@ -298,7 +312,9 @@ def fetch_sentiment(ctx, ticker: str) -> float:
             cached = _SENTIMENT_CACHE.get(ticker)
             if cached:
                 _, last_score = cached
-                logger.debug(f"Using cached sentiment fallback {last_score} for {ticker}")
+                logger.debug(
+                    f"Using cached sentiment fallback {last_score} for {ticker}"
+                )
                 return last_score
             # No cache available, return neutral
             _SENTIMENT_CACHE[ticker] = (now_ts, 0.0)
@@ -389,9 +405,13 @@ def _try_alternative_sentiment_sources(ticker: str) -> float | None:
 
     try:
         primary_url_full = f"{primary_url}?symbol={ticker}&apikey={primary_key}"
-        timeout_v = HTTP_DEFAULT_TIMEOUT
+        timeout_v = HTTP_TIMEOUT_DEFAULT
         primary_resp = requests.get(primary_url_full, timeout=timeout_v)
-        if primary_resp.status_code in {429, 500, 502, 503, 504} and alt_api_key and alt_api_url:
+        if (
+            primary_resp.status_code in {429, 500, 502, 503, 504}
+            and alt_api_key
+            and alt_api_url
+        ):
             time.sleep(0.5)
             alt_url = f"{alt_api_url}?symbol={ticker}&apikey={alt_api_key}"
             alt_resp = requests.get(alt_url, timeout=timeout_v)
@@ -481,7 +501,9 @@ def _try_sector_sentiment_proxy(ticker: str) -> float | None:
                             f"SENTIMENT_SECTOR_PROXY | ticker={ticker} sector_etf={sector_etf} score={sentiment_val}"  # noqa: E501
                         )
                         # Apply decay factor for sector sentiment
-                        sector_sentiment = sentiment_val * 0.6  # 40% discount for sector proxy
+                        sector_sentiment = (
+                            sentiment_val * 0.6
+                        )  # 40% discount for sector proxy
                         return sector_sentiment
 
     return None
@@ -553,7 +575,7 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
         headers = {"User-Agent": "AI Trading Bot"}
         backoff = 0.5
         for attempt in range(3):
-            r = requests.get(url, headers=headers, timeout=HTTP_DEFAULT_TIMEOUT)
+            r = requests.get(url, headers=headers, timeout=HTTP_TIMEOUT_DEFAULT)
             if r.status_code in {429, 500, 502, 503, 504} and attempt < 2:
                 time.sleep(backoff)
                 backoff *= 2

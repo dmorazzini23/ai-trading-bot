@@ -1,18 +1,23 @@
 from __future__ import annotations
 
-import os
+import os  # noqa: F401  # AI-AGENT-REF: kept for potential env overrides
 
 # --- timeouts & clamps ---
-HTTP_DEFAULT_TIMEOUT: float = float(os.environ.get("AI_HTTP_TIMEOUT", "10"))  # seconds
-SUBPROCESS_DEFAULT_TIMEOUT: float = float(os.environ.get("AI_SUBPROC_TIMEOUT", "3"))
+HTTP_TIMEOUT_DEFAULT = 10.0
+SUBPROCESS_TIMEOUT_DEFAULT = 5.0
 
 
-def clamp_timeout(value: float | int, min_s: float = 0.5, max_s: float = 60.0) -> float:
-    try:
-        v = float(value)
-    except Exception:  # noqa: BLE001
-        return HTTP_DEFAULT_TIMEOUT
-    return max(min_s, min(v, max_s))
+def clamp_timeout(
+    value: float | int | None,
+    *,
+    default: float,
+    min_: float = 0.5,
+    max_: float = 60.0,
+) -> float:
+    if value is None:
+        return default
+    v = float(value)
+    return max(min_, min(max_, v))
 
 
 # Import only when actually needed to respect import contract
@@ -22,11 +27,29 @@ def get_process_manager():
     return process_manager
 
 
+def safe_subprocess_run(
+    cmd: list[str] | str,
+    *,
+    timeout: float | int | None = None,
+    **kwargs,
+) -> str:
+    """Run subprocess and return decoded stdout with clamped timeout."""
+    import subprocess  # AI-AGENT-REF: lazy import to respect contract
+
+    to = clamp_timeout(timeout, default=SUBPROCESS_TIMEOUT_DEFAULT)
+    res = subprocess.run(cmd, timeout=to, capture_output=True, **kwargs)
+    out = res.stdout
+    if isinstance(out, bytes):
+        return out.decode(errors="ignore")
+    return out or ""
+
+
 __all__ = [
-    "HTTP_DEFAULT_TIMEOUT",
-    "SUBPROCESS_DEFAULT_TIMEOUT",
+    "HTTP_TIMEOUT_DEFAULT",
+    "SUBPROCESS_TIMEOUT_DEFAULT",
     "clamp_timeout",
     "get_process_manager",
+    "safe_subprocess_run",
     "log_warning",
     "model_lock",
     "safe_to_datetime",
