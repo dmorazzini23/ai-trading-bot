@@ -5,22 +5,68 @@ from __future__ import annotations
 import sys as _sys
 import time
 from datetime import UTC, datetime
-from typing import Any
+from threading import RLock  # AI-AGENT-REF: thread-safe minute cache helpers
+from typing import Any  # AI-AGENT-REF: explicit typing for cache
 
 try:  # pragma: no cover - pandas optional
     import pandas as pd
 except Exception:  # pragma: no cover
     pd = None  # type: ignore
 
-__all__ = [
-    "ensure_datetime",
-    "rfc3339",
-    "get_bars",
-    "get_minute_df",
-    "get_historical_data",
-    "set_data_client",
-    "_DATA_CLIENT",
-]
+# ======================================================================================
+# Public minute-level cache helpers (required by tests/test_minute_cache_helpers.py)
+# Thread-safe, no mutable default args, import-safe singletons.
+# ======================================================================================
+
+_MINUTE_CACHE_LOCK: RLock = RLock()  # AI-AGENT-REF: protect minute cache access
+_MINUTE_CACHE: dict[str, Any] = {}  # AI-AGENT-REF: symbol -> (df, ts) or ts
+
+
+def set_cached_minute_timestamp(symbol: str, ts: int) -> None:
+    """Store latest processed minute timestamp for ``symbol``."""
+    with _MINUTE_CACHE_LOCK:
+        _MINUTE_CACHE[symbol] = int(ts)  # AI-AGENT-REF: store epoch seconds
+
+
+def get_cached_minute_timestamp(symbol: str) -> pd.Timestamp | None:
+    """Return cached minute timestamp for ``symbol`` if present."""
+    with _MINUTE_CACHE_LOCK:
+        entry = _MINUTE_CACHE.get(symbol)
+    if entry is None:
+        return None
+    ts = entry[1] if isinstance(entry, tuple) else entry
+    try:
+        if pd is not None:
+            ts = pd.Timestamp(ts)
+            ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+            return ts
+        if isinstance(ts, datetime):
+            return ts if ts.tzinfo else ts.replace(tzinfo=UTC)
+    except Exception:  # pragma: no cover - defensive
+        return None
+    return None
+
+
+def clear_minute_cache(symbol: str | None = None) -> None:
+    """Clear cache for ``symbol`` or all symbols when ``symbol`` is ``None``."""
+    with _MINUTE_CACHE_LOCK:
+        if symbol is None:
+            _MINUTE_CACHE.clear()  # AI-AGENT-REF: drop entire cache
+        else:
+            _MINUTE_CACHE.pop(symbol, None)  # AI-AGENT-REF: best-effort removal
+
+
+def last_minute_bar_age_seconds(symbol: str) -> int | None:
+    """Return age in seconds of latest cached minute bar; ``None`` if unknown."""
+    ts = get_cached_minute_timestamp(symbol)
+    if ts is None:
+        return None
+    now = pd.Timestamp.now(tz="UTC") if pd is not None else datetime.now(UTC)
+    try:
+        return int((now - ts).total_seconds())
+    except Exception:  # pragma: no cover - defensive
+        return None
+
 
 _DATA_CLIENT: Any | None = None
 _CACHE: dict[tuple[str, datetime, datetime], pd.DataFrame] = {}
@@ -95,3 +141,18 @@ def get_historical_data(
 get_bars = get_minute_df
 
 _sys.modules.setdefault("data_fetcher", _sys.modules[__name__])
+
+
+__all__ = [
+    "ensure_datetime",
+    "rfc3339",
+    "get_bars",
+    "get_minute_df",
+    "get_historical_data",
+    "set_data_client",
+    "_DATA_CLIENT",
+    "get_cached_minute_timestamp",
+    "set_cached_minute_timestamp",
+    "clear_minute_cache",
+    "last_minute_bar_age_seconds",
+]
