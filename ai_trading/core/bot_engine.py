@@ -12,8 +12,8 @@ from ai_trading.data_fetcher import (
     FINNHUB_AVAILABLE,
     ensure_datetime,
     get_bars,
-    get_bars_batch,
 )
+from ai_trading.data_fetcher import get_bars_batch as _df_get_bars_batch
 
 SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY")
 NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
@@ -53,14 +53,13 @@ def _ridge():
 
 
 def _detect_alpaca_available() -> bool:
-    for name in ("alpaca_trade_api", "alpaca.trading", "alpaca.data", "alpaca"):
-        if name in sys.modules and sys.modules[name] is None:
-            return False
-    try:
-        spec = importlib.util.find_spec("alpaca_trade_api")
-        return bool(spec)
-    except Exception:
-        return False
+    """Robust Alpaca API availability check."""  # AI-AGENT-REF
+    if os.getenv("TESTING", "").lower() == "true":
+        for key in ("alpaca_trade_api", "alpaca.trading", "alpaca.data", "alpaca"):
+            if key in sys.modules and sys.modules[key] is None:
+                return False
+    spec = importlib.util.find_spec("alpaca_trade_api")
+    return spec is not None
 
 
 ALPACA_AVAILABLE: bool = _detect_alpaca_available()
@@ -92,6 +91,8 @@ from ai_trading.settings import (
     get_volume_threshold,
 )
 
+from ai_trading import utils as _utils  # AI-AGENT-REF: delegate health checks
+
 # Rate limit for Finnhub (calls/min); resolved at import time via settings
 FINNHUB_RPM = get_finnhub_rpm()
 __all__ = [
@@ -108,6 +109,13 @@ __all__ = [
     "FINNHUB_AVAILABLE",
     "DataFetchError",
 ]
+# AI-AGENT-REF: custom exception surfaced by fetch helpers
+
+
+class DataFetchError(Exception):
+    """Raised when required market data is unavailable."""
+
+
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
 # Using a mutable dict to avoid fragile `global` declarations inside functions.
 _REGIME_INSUFFICIENT_DATA_WARNED = {"done": False}
@@ -2206,30 +2214,21 @@ def _maybe_warm_cache(ctx: BotContext) -> None:
         _log.warning("Cache warm-up failed: %s", exc)
 
 
-# NOTE: Tests provide a ctx.data_fetcher with get_minute_bars; our batch fetch
-# first tries the generic data_fetcher API, then falls back to ctx-based fetch.
 def _fetch_universe_bars(
-    ctx: BotContext,
+    ctx: BotContext | None,
     symbols: list[str],
     timeframe: str,
     start: datetime | str,
     end: datetime | str,
     feed: str | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """Fetch universe bars for symbols with ctx-aware fallback."""
-    out = get_bars_batch(symbols, timeframe, start, end, feed=feed)
-    dfetch = getattr(ctx, "data_fetcher", None)
-    if dfetch:
-        for sym in symbols:
-            df = out.get(sym)
-            if df is None or getattr(df, "empty", True):
-                getter = getattr(dfetch, "get_minute_bars", None)
-                if callable(getter):
-                    try:
-                        out[sym] = getter(sym) or df
-                    except Exception:
-                        out[sym] = df
-    return out
+    """Fetch bars with safe compatibility fallback."""  # AI-AGENT-REF
+    fetch_client = None
+    if ctx is not None and hasattr(ctx, "data_fetcher"):
+        fetch_client = getattr(ctx, "data_fetcher", None)
+    return _df_get_bars_batch(
+        symbols, timeframe, start, end, feed=feed, client=fetch_client
+    )
 
 
 def _fetch_universe_bars_chunked(
@@ -13372,7 +13371,7 @@ def run_trading_cycle(ctx, df: pd.DataFrame) -> list[tuple[str, str]]:
 
 def health_check(df: pd.DataFrame, resolution: str) -> bool:
     """Delegate to :func:`utils.health_check` for convenience."""
-    return utils.health_check(df, resolution)
+    return _utils.health_check(df, resolution)
 
 
 def compute_atr_stop(df, atr_window=14, multiplier=2):

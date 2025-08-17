@@ -190,7 +190,9 @@ class ConfigValidator:
         # Validate existing configuration values
         for key, value in config.items():
             if key in self.validation_rules:
-                validation_errors = self._validate_value(key, value, self.validation_rules[key])
+                validation_errors = self._validate_value(
+                    key, value, self.validation_rules[key]
+                )
                 result["errors"].extend(validation_errors)
 
                 if validation_errors:
@@ -203,7 +205,9 @@ class ConfigValidator:
         security_issues = self._check_security(config)
         result["security_issues"] = security_issues
         if security_issues:
-            result["warnings"].extend([f"Security issue: {issue}" for issue in security_issues])
+            result["warnings"].extend(
+                [f"Security issue: {issue}" for issue in security_issues]
+            )
 
         return result
 
@@ -214,7 +218,9 @@ class ConfigValidator:
         # Type validation
         expected_type = rules.get("type")
         if expected_type and not isinstance(value, expected_type):
-            errors.append(f"Expected {expected_type.__name__}, got {type(value).__name__}")
+            errors.append(
+                f"Expected {expected_type.__name__}, got {type(value).__name__}"
+            )
             return errors  # Skip other validations if type is wrong
 
         # Allowed values validation
@@ -333,12 +339,16 @@ class ConfigManager:
             validation_result = self.validator.validate_config(config)
 
             if not validation_result["valid"]:
-                logger.error(f"Configuration validation failed: {validation_result['errors']}")
+                logger.error(
+                    f"Configuration validation failed: {validation_result['errors']}"
+                )
                 if validation_result["missing_required"]:
                     logger.error(
                         f"Missing required fields: {validation_result['missing_required']}"
                     )
-                raise ValueError(f"Invalid configuration: {validation_result['errors']}")
+                raise ValueError(
+                    f"Invalid configuration: {validation_result['errors']}"
+                )
 
             # Log warnings
             for warning in validation_result["warnings"]:
@@ -375,7 +385,9 @@ class ConfigManager:
             # Validate before saving
             validation_result = self.validator.validate_config(config)
             if not validation_result["valid"]:
-                logger.error(f"Cannot save invalid configuration: {validation_result['errors']}")
+                logger.error(
+                    f"Cannot save invalid configuration: {validation_result['errors']}"
+                )
                 return False
 
             # Create backup if requested
@@ -404,7 +416,9 @@ class ConfigManager:
             logger.error(f"Failed to save configuration: {e}")
             return False
 
-    def update_config(self, updates: dict[str, Any], reason: str = "Manual update") -> bool:
+    def update_config(
+        self, updates: dict[str, Any], reason: str = "Manual update"
+    ) -> bool:
         """
         Update configuration at runtime.
 
@@ -429,10 +443,16 @@ class ConfigManager:
                 return False
 
             # Check for critical changes
-            critical_changes = self._detect_critical_changes(self.current_config, new_config)
+            critical_changes = self._detect_critical_changes(
+                self.current_config, new_config
+            )
             if critical_changes:
-                logger.warning(f"Critical configuration changes detected: {critical_changes}")
-                self._log_config_change("critical_update", f"Critical changes: {critical_changes}")
+                logger.warning(
+                    f"Critical configuration changes detected: {critical_changes}"
+                )
+                self._log_config_change(
+                    "critical_update", f"Critical changes: {critical_changes}"
+                )
 
             # Apply updates
             old_config = self.current_config.copy()
@@ -447,7 +467,9 @@ class ConfigManager:
                 return False
 
             # Log update
-            self._log_config_change("update", f"Runtime update: {updates} - Reason: {reason}")
+            self._log_config_change(
+                "update", f"Runtime update: {updates} - Reason: {reason}"
+            )
 
             logger.info(f"Configuration updated successfully: {updates}")
             return True
@@ -464,7 +486,9 @@ class ConfigManager:
         """Get configuration summary for monitoring."""
         return {
             "hash": self.config_hash,
-            "last_updated": (self.config_history[-1]["timestamp"] if self.config_history else None),
+            "last_updated": (
+                self.config_history[-1]["timestamp"] if self.config_history else None
+            ),
             "trading_mode": self.current_config.get("TRADING_MODE", "unknown"),
             "num_changes": len(self.config_history),
             "validation_status": (
@@ -653,8 +677,12 @@ REQUIRED_ENV_VARS = [
 from ai_trading import paths
 
 TRADE_LOG_FILE = os.getenv("TRADE_LOG_FILE", str(paths.LOG_DIR / "trades.csv"))
-MODEL_PATH = os.getenv("MODEL_PATH", str(paths.DATA_DIR / "models" / "trained_model.pkl"))
-RL_MODEL_PATH = os.getenv("RL_MODEL_PATH", str(paths.DATA_DIR / "models" / "rl_model.pkl"))
+MODEL_PATH = os.getenv(
+    "MODEL_PATH", str(paths.DATA_DIR / "models" / "trained_model.pkl")
+)
+RL_MODEL_PATH = os.getenv(
+    "RL_MODEL_PATH", str(paths.DATA_DIR / "models" / "rl_model.pkl")
+)
 HALT_FLAG_PATH = os.getenv("HALT_FLAG_PATH", str(paths.DATA_DIR / "halt.flag"))
 
 USE_RL_AGENT = os.getenv("USE_RL_AGENT", "false").lower() in ("true", "1", "yes")
@@ -801,11 +829,17 @@ class _LegacyTradingConfig:
 
         # Basic validation for new fields
         if not (0.0 <= self.conf_threshold <= 1.0):
-            raise ValueError(f"conf_threshold must be in [0,1], got {self.conf_threshold}")
+            raise ValueError(
+                f"conf_threshold must be in [0,1], got {self.conf_threshold}"
+            )
         if not (0.0 <= self.buy_threshold <= 1.0):
-            raise ValueError(f"buy_threshold must be in [0,1], got {self.buy_threshold}")
+            raise ValueError(
+                f"buy_threshold must be in [0,1], got {self.buy_threshold}"
+            )
         if not isinstance(self.confirmation_count, int) or self.confirmation_count < 1:
-            raise ValueError(f"confirmation_count must be >= 1, got {self.confirmation_count}")
+            raise ValueError(
+                f"confirmation_count must be >= 1, got {self.confirmation_count}"
+            )
 
         # Apply kwargs fallbacks into attributes if present
         for k, v in kwargs.items():
@@ -821,7 +855,9 @@ class _LegacyTradingConfig:
 
         getenv = os.getenv
 
-        mode = (mode or overrides.get("mode") or getenv("TRADING_MODE", "balanced")).lower()
+        mode = (
+            mode or overrides.get("mode") or getenv("TRADING_MODE", "balanced")
+        ).lower()
         if mode not in {"conservative", "balanced", "aggressive"}:
             mode = "balanced"
         defaults = {
@@ -1000,7 +1036,9 @@ class _LegacyTradingConfig:
         )
         # AI-AGENT-REF: ML model configuration and halt file from env
         ml_model_path = getenv("AI_TRADER_MODEL_PATH", overrides.get("ml_model_path"))
-        ml_model_module = getenv("AI_TRADER_MODEL_MODULE", overrides.get("ml_model_module"))
+        ml_model_module = getenv(
+            "AI_TRADER_MODEL_MODULE", overrides.get("ml_model_module")
+        )
         halt_file = getenv("HALT_FILE", overrides.get("halt_file"))
 
         # include any other fields you already parse in from_env
@@ -1129,12 +1167,18 @@ class _LegacyTradingConfig:
         cfg.SYSTEM_HEALTH_EXPORT_ENABLED = _to_bool(
             getattr(s_rt, "system_health_export_enabled", False), False
         )
-        cfg.ORDER_MAX_RETRY_ATTEMPTS = _to_int(getattr(s_rt, "order_max_retry_attempts", 3), 3)
-        cfg.ORDER_TIMEOUT_SECONDS = _to_int(getattr(s_rt, "order_timeout_seconds", 30), 30)
+        cfg.ORDER_MAX_RETRY_ATTEMPTS = _to_int(
+            getattr(s_rt, "order_max_retry_attempts", 3), 3
+        )
+        cfg.ORDER_TIMEOUT_SECONDS = _to_int(
+            getattr(s_rt, "order_timeout_seconds", 30), 30
+        )
         cfg.ORDER_STALE_CLEANUP_INTERVAL = _to_int(
             getattr(s_rt, "order_stale_cleanup_interval", 600), 600
         )
-        cfg.ORDER_FILL_RATE_TARGET = _to_float(getattr(s_rt, "order_fill_rate_target", 0.95), 0.95)
+        cfg.ORDER_FILL_RATE_TARGET = _to_float(
+            getattr(s_rt, "order_fill_rate_target", 0.95), 0.95
+        )
         cfg.SENTIMENT_SUCCESS_RATE_TARGET = _to_float(
             getattr(s_rt, "sentiment_success_rate_target", 0.90), 0.90
         )
@@ -1173,16 +1217,21 @@ class _LegacyTradingConfig:
         cfg._LOCK_TIMEOUT = 30
 
         # --- Liquidity controls (defaults aligned with tests) ---
-        cfg.LIQUIDITY_SPREAD_THRESHOLD = float(os.getenv("LIQUIDITY_SPREAD_THRESHOLD", "0.01"))
+        cfg.LIQUIDITY_SPREAD_THRESHOLD = float(
+            os.getenv("LIQUIDITY_SPREAD_THRESHOLD", "0.01")
+        )
         cfg.LIQUIDITY_VOL_THRESHOLD = float(os.getenv("LIQUIDITY_VOL_THRESHOLD", "0.0"))
         cfg.LIQUIDITY_REDUCTION_AGGRESSIVE = float(
             os.getenv("LIQUIDITY_REDUCTION_AGGRESSIVE", "0.75")
         )
-        cfg.LIQUIDITY_REDUCTION_MODERATE = float(os.getenv("LIQUIDITY_REDUCTION_MODERATE", "0.90"))
+        cfg.LIQUIDITY_REDUCTION_MODERATE = float(
+            os.getenv("LIQUIDITY_REDUCTION_MODERATE", "0.90")
+        )
 
         # --- Meta-learning bootstrap (tests expect presence + values) ---
         cfg.META_LEARNING_BOOTSTRAP_ENABLED = bool(
-            os.getenv("META_LEARNING_BOOTSTRAP_ENABLED", "1") not in ("0", "false", "False")
+            os.getenv("META_LEARNING_BOOTSTRAP_ENABLED", "1")
+            not in ("0", "false", "False")
         )
         cfg.META_LEARNING_MIN_TRADES_REDUCED = int(
             os.getenv("META_LEARNING_MIN_TRADES_REDUCED", "10")
@@ -1220,7 +1269,9 @@ class _LegacyTradingConfig:
             missing.append("ALPACA_API_KEY")
         if not getattr(self, "ALPACA_SECRET_KEY", None):
             missing.append("ALPACA_SECRET_KEY")
-        if getattr(self, "enable_finbert", False) and not getattr(self, "NEWS_API_KEY", None):
+        if getattr(self, "enable_finbert", False) and not getattr(
+            self, "NEWS_API_KEY", None
+        ):
             missing.append("NEWS_API_KEY")
         if missing:
             raise RuntimeError(f"Missing required settings: {', '.join(missing)}")
@@ -1281,23 +1332,33 @@ class _LegacyTradingConfig:
             "ENTRY_START_OFFSET_MIN": _get("entry_start_offset_min", 0),
             "ENTRY_END_OFFSET_MIN": _get("entry_end_offset_min", 390),
             "DAILY_LOSS_LIMIT": _get("daily_loss_limit", get_daily_loss_limit()),
-            "MAX_DRAWDOWN_THRESHOLD": _get("max_drawdown_threshold", get_max_drawdown_threshold()),
+            "MAX_DRAWDOWN_THRESHOLD": _get(
+                "max_drawdown_threshold", get_max_drawdown_threshold()
+            ),
             "PORTFOLIO_DRIFT_THRESHOLD": _get(
                 "portfolio_drift_threshold", get_portfolio_drift_threshold()
             ),
             "DOLLAR_RISK_LIMIT": _get("dollar_risk_limit", get_dollar_risk_limit()),
             "CAPITAL_CAP": _get("capital_cap", get_capital_cap()),
-            "SECTOR_EXPOSURE_CAP": _get("sector_exposure_cap", get_sector_exposure_cap()),
+            "SECTOR_EXPOSURE_CAP": _get(
+                "sector_exposure_cap", get_sector_exposure_cap()
+            ),
             "MAX_PORTFOLIO_POSITIONS": _get(
                 "max_portfolio_positions", get_max_portfolio_positions()
             ),
             "DISASTER_DD_LIMIT": _get("disaster_dd_limit", get_disaster_dd_limit()),
-            "REBALANCE_INTERVAL_MIN": _get("rebalance_interval_min", get_rebalance_interval_min()),
+            "REBALANCE_INTERVAL_MIN": _get(
+                "rebalance_interval_min", get_rebalance_interval_min()
+            ),
             "TRADE_COOLDOWN_MIN": _get("trade_cooldown_min", get_trade_cooldown_min()),
-            "MAX_TRADES_PER_HOUR": _get("max_trades_per_hour", get_max_trades_per_hour()),
+            "MAX_TRADES_PER_HOUR": _get(
+                "max_trades_per_hour", get_max_trades_per_hour()
+            ),
             "MAX_TRADES_PER_DAY": _get("max_trades_per_day", get_max_trades_per_day()),
             "BUY_THRESHOLD": _get("buy_threshold", get_buy_threshold()),
-            "POSITION_SIZE_MIN_USD": _get("position_size_min_usd", get_position_size_min_usd()),
+            "POSITION_SIZE_MIN_USD": _get(
+                "position_size_min_usd", get_position_size_min_usd()
+            ),
             "VOLUME_THRESHOLD": _get("volume_threshold", get_volume_threshold()),
             "SEED": _get("seed", get_seed_int()),
         }
@@ -1319,7 +1380,9 @@ def validate_env_vars():
     """Validate required environment variables."""
     missing = [var for var in REQUIRED_ENV_VARS if not os.getenv(var)]
     if missing and not TESTING:
-        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+        raise RuntimeError(
+            f"Missing required environment variables: {', '.join(missing)}"
+        )
 
 
 def _resolve_alpaca_env() -> tuple[str | None, str | None, str]:
@@ -1459,16 +1522,22 @@ class TradingConfig(BaseModel):
     slow_period: int = 21
     confirmation_count: int = 3
     capital_cap: float = Field(0.25, ge=0, le=1)  # AI-AGENT-REF: bounded risk cap
-    dollar_risk_limit: float = Field(0.05, ge=0, le=1)  # AI-AGENT-REF: bounded dollar risk
+    dollar_risk_limit: float = Field(
+        0.05, ge=0, le=1
+    )  # AI-AGENT-REF: bounded dollar risk
     max_portfolio_risk: float = 0.10  # AI-AGENT-REF: portfolio risk cap
     max_position_size: float = 8000.0  # AI-AGENT-REF: default max position
     take_profit_factor: float = 2.0  # AI-AGENT-REF: reward multiple
     buy_threshold: float = Field(0.60, ge=0, le=1)  # AI-AGENT-REF: min buy confidence
     lookback_days: int = 60  # AI-AGENT-REF: history window
-    min_confidence: float = Field(0.60, ge=0, le=1)  # AI-AGENT-REF: floor for ML signals
+    min_confidence: float = Field(
+        0.60, ge=0, le=1
+    )  # AI-AGENT-REF: floor for ML signals
     signal_confirmation_bars: int = 2  # AI-AGENT-REF: bars to confirm signal
     delta_threshold: float = 0.02  # AI-AGENT-REF: price delta trigger
-    max_drawdown_threshold: float = Field(0.08, ge=0, le=1)  # AI-AGENT-REF: drawdown guard
+    max_drawdown_threshold: float = Field(
+        0.08, ge=0, le=1
+    )  # AI-AGENT-REF: drawdown guard
     take_profit: float = 0.04
     stop_loss: float = 0.02
     trailing_factor: float = 1.0
@@ -1519,11 +1588,11 @@ class TradingConfig(BaseModel):
         defaults = {"conservative": 0.85, "balanced": 0.75, "aggressive": 0.65}
         override = os.getenv("CONF_THRESHOLD")
         if override is not None:
-            base = float(override)
-            offsets = {"conservative": 0.10, "balanced": 0.0, "aggressive": -0.10}
-            conf_threshold = base + offsets.get(mode, 0.0)
+            conf_threshold = float(override)
         else:
-            conf_threshold = defaults.get(mode, 0.75)
+            conf_threshold = defaults.get(
+                mode, 0.75
+            )  # AI-AGENT-REF: mode-specific defaults
 
         if mode == "conservative":
             mode_defaults = {
@@ -1589,7 +1658,9 @@ class TradingConfig(BaseModel):
         base.portfolio_drift_threshold = _env_or_get(
             "PORTFOLIO_DRIFT_THRESHOLD", get_portfolio_drift_threshold
         )
-        base.sector_exposure_cap = _env_or_get("SECTOR_EXPOSURE_CAP", get_sector_exposure_cap)
+        base.sector_exposure_cap = _env_or_get(
+            "SECTOR_EXPOSURE_CAP", get_sector_exposure_cap
+        )
         base.max_portfolio_positions = _env_or_get(
             "MAX_PORTFOLIO_POSITIONS", get_max_portfolio_positions, int
         )
@@ -1597,11 +1668,19 @@ class TradingConfig(BaseModel):
         base.rebalance_interval_min = _env_or_get(
             "REBALANCE_INTERVAL_MIN", get_rebalance_interval_min, int
         )
-        base.trade_cooldown_min = _env_or_get("TRADE_COOLDOWN_MIN", get_trade_cooldown_min, int)
-        base.max_trades_per_hour = _env_or_get("MAX_TRADES_PER_HOUR", get_max_trades_per_hour, int)
-        base.max_trades_per_day = _env_or_get("MAX_TRADES_PER_DAY", get_max_trades_per_day, int)
+        base.trade_cooldown_min = _env_or_get(
+            "TRADE_COOLDOWN_MIN", get_trade_cooldown_min, int
+        )
+        base.max_trades_per_hour = _env_or_get(
+            "MAX_TRADES_PER_HOUR", get_max_trades_per_hour, int
+        )
+        base.max_trades_per_day = _env_or_get(
+            "MAX_TRADES_PER_DAY", get_max_trades_per_day, int
+        )
 
-        base.position_size_min_usd = _env_or_get("POSITION_SIZE_MIN_USD", get_position_size_min_usd)
+        base.position_size_min_usd = _env_or_get(
+            "POSITION_SIZE_MIN_USD", get_position_size_min_usd
+        )
         base.volume_threshold = _env_or_get("VOLUME_THRESHOLD", get_volume_threshold)
         base.buy_threshold = _env_or_get("BUY_THRESHOLD", get_buy_threshold)
         base.lookback_days = int(os.getenv("LOOKBACK_DAYS") or base.lookback_days)
@@ -1614,7 +1693,9 @@ class TradingConfig(BaseModel):
     def from_optimization(cls, params: dict[str, Any]) -> "TradingConfig":
         """Build from optimization parameters."""  # AI-AGENT-REF
         base = cls.from_env(params.get("mode", "balanced"))
-        return base.model_copy(update={k: v for k, v in params.items() if k in base.model_fields})
+        return base.model_copy(
+            update={k: v for k, v in params.items() if k in base.model_fields}
+        )
 
     def to_dict(self) -> dict:
         return self.model_dump()  # AI-AGENT-REF: include extras
@@ -1657,23 +1738,33 @@ class TradingConfig(BaseModel):
             "ENTRY_START_OFFSET_MIN": _get("entry_start_offset_min", 0),
             "ENTRY_END_OFFSET_MIN": _get("entry_end_offset_min", 390),
             "DAILY_LOSS_LIMIT": _get("daily_loss_limit", get_daily_loss_limit()),
-            "MAX_DRAWDOWN_THRESHOLD": _get("max_drawdown_threshold", get_max_drawdown_threshold()),
+            "MAX_DRAWDOWN_THRESHOLD": _get(
+                "max_drawdown_threshold", get_max_drawdown_threshold()
+            ),
             "PORTFOLIO_DRIFT_THRESHOLD": _get(
                 "portfolio_drift_threshold", get_portfolio_drift_threshold()
             ),
             "DOLLAR_RISK_LIMIT": _get("dollar_risk_limit", get_dollar_risk_limit()),
             "CAPITAL_CAP": _get("capital_cap", get_capital_cap()),
-            "SECTOR_EXPOSURE_CAP": _get("sector_exposure_cap", get_sector_exposure_cap()),
+            "SECTOR_EXPOSURE_CAP": _get(
+                "sector_exposure_cap", get_sector_exposure_cap()
+            ),
             "MAX_PORTFOLIO_POSITIONS": _get(
                 "max_portfolio_positions", get_max_portfolio_positions()
             ),
             "DISASTER_DD_LIMIT": _get("disaster_dd_limit", get_disaster_dd_limit()),
-            "REBALANCE_INTERVAL_MIN": _get("rebalance_interval_min", get_rebalance_interval_min()),
+            "REBALANCE_INTERVAL_MIN": _get(
+                "rebalance_interval_min", get_rebalance_interval_min()
+            ),
             "TRADE_COOLDOWN_MIN": _get("trade_cooldown_min", get_trade_cooldown_min()),
-            "MAX_TRADES_PER_HOUR": _get("max_trades_per_hour", get_max_trades_per_hour()),
+            "MAX_TRADES_PER_HOUR": _get(
+                "max_trades_per_hour", get_max_trades_per_hour()
+            ),
             "MAX_TRADES_PER_DAY": _get("max_trades_per_day", get_max_trades_per_day()),
             "BUY_THRESHOLD": _get("buy_threshold", get_buy_threshold()),
-            "POSITION_SIZE_MIN_USD": _get("position_size_min_usd", get_position_size_min_usd()),
+            "POSITION_SIZE_MIN_USD": _get(
+                "position_size_min_usd", get_position_size_min_usd()
+            ),
             "VOLUME_THRESHOLD": _get("volume_threshold", get_volume_threshold()),
             "SEED": _get("seed", get_seed_int()),
         }

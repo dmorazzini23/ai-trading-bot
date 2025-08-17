@@ -2,14 +2,9 @@ from __future__ import annotations
 
 import os  # noqa: F401  # AI-AGENT-REF: kept for potential env overrides
 import socket
-from contextlib import closing
+import time
 
-import pandas as pd
-
-try:  # pragma: no cover - optional runtime dependency
-    import psutil  # type: ignore
-except Exception:  # noqa: BLE001
-    psutil = None  # type: ignore[assignment]
+# AI-AGENT-REF: psutil imported lazily to respect import contract
 
 # --- timeouts & clamps ---
 HTTP_TIMEOUT_DEFAULT = 10.0
@@ -17,20 +12,20 @@ SUBPROCESS_TIMEOUT_DEFAULT = 5.0
 
 
 def clamp_timeout(
-    value: float | int | None,
-    default: float | int | None = None,
+    seconds: float,
     *,
-    min_: float = 0.5,
-    max_: float = 60.0,
+    default: float = 5.0,
+    min_s: float = 0.1,
+    max_s: float = 60.0,
 ) -> float:
-    """Return a sane timeout clamped between bounds."""
-    if value is None:
-        value = default
+    """Clamp ``seconds`` within bounds or fall back to ``default``."""  # AI-AGENT-REF
     try:
-        v = float(value) if value is not None else 10.0
+        sec = float(seconds)
+        if not (sec > 0):
+            raise ValueError
     except Exception:  # noqa: BLE001
-        v = float(default) if default is not None else 10.0
-    return max(min_, min(max_, v))
+        return float(default)
+    return max(min_s, min(max_s, sec))
 
 
 # Import only when actually needed to respect import contract
@@ -96,39 +91,48 @@ def validate_ohlcv(*args, **kwargs):
 
 
 def get_free_port() -> int:
-    """Return an ephemeral free TCP port on localhost."""
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
+    """Return an ephemeral free TCP port, then close the socket."""  # AI-AGENT-REF
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return int(s.getsockname()[1])
+        return s.getsockname()[1]
 
 
 def get_pid_on_port(port: int) -> int | None:
-    """Return PID bound to ``port`` if available."""
-    if psutil is None:
-        return None
-    for conn in psutil.net_connections(kind="inet"):
-        try:
-            if conn.laddr and conn.laddr.port == port and conn.pid:
-                return int(conn.pid)
-        except Exception:  # noqa: BLE001
-            continue
+    """Best-effort PID lookup for ``port``."""  # AI-AGENT-REF
+    try:
+        import psutil  # type: ignore
+
+        for p in psutil.process_iter(attrs=["pid", "connections"]):
+            for c in p.info.get("connections") or []:
+                if getattr(c, "laddr", None) and getattr(c.laddr, "port", None) == port:
+                    return p.info["pid"]
+    except Exception:  # noqa: BLE001
+        pass
     return None
 
 
-def health_check(df: pd.DataFrame, resolution: str) -> bool:
-    """Minimal dataframe health check used in tests."""
+def health_check(df, resolution: str) -> bool:
+    """Minimal DataFrame health check with env override."""  # AI-AGENT-REF
     try:
-        min_rows = int(os.getenv("HEALTH_MIN_ROWS", "100"))
+        rows = int(os.getenv("HEALTH_MIN_ROWS", "100"))
     except Exception:  # noqa: BLE001
-        min_rows = 100
-    return int(getattr(df, "shape", (0,))[0]) >= min_rows
+        rows = 100
+    try:
+        n = len(df) if df is not None else 0
+    except Exception:  # noqa: BLE001
+        n = 0
+    return n >= rows
+
+
+def sleep_s(seconds: float) -> None:
+    """Thin wrapper so tests can monkeypatch easily."""  # AI-AGENT-REF
+    time.sleep(clamp_timeout(seconds, default=0.01))
 
 
 def sleep(seconds: float) -> None:
-    from .time import sleep as _sleep
-
-    _sleep(seconds)
+    """Backward compatible sleep wrapper."""  # AI-AGENT-REF
+    sleep_s(seconds)
 
 
 __all__ = [
@@ -144,5 +148,6 @@ __all__ = [
     "get_free_port",
     "get_pid_on_port",
     "health_check",
+    "sleep_s",
     "sleep",
 ]
