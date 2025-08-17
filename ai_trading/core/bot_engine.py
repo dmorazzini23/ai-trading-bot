@@ -5,15 +5,10 @@ import importlib
 import importlib.util
 import os
 import sys
-import sys as _sys
-from importlib import import_module
+from typing import Dict, Iterable
 
-from ai_trading.data_fetcher import (
-    FINNHUB_AVAILABLE,
-    ensure_datetime,
-    get_bars,
-)
-from ai_trading.data_fetcher import get_bars_batch as _df_get_bars_batch
+from ai_trading.data_fetcher import FINNHUB_AVAILABLE, ensure_datetime, get_bars, get_bars_batch
+from ai_trading.utils import health_check as _health_check
 
 SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY")
 NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
@@ -52,17 +47,25 @@ def _ridge():
     return Ridge
 
 
-def _detect_alpaca_available() -> bool:
-    """Robust Alpaca API availability check."""  # AI-AGENT-REF
-    if os.getenv("TESTING", "").lower() == "true":
-        for key in ("alpaca_trade_api", "alpaca.trading", "alpaca.data", "alpaca"):
-            if key in sys.modules and sys.modules[key] is None:
+def _is_alpaca_available() -> bool:
+    candidate_modules = (
+        "alpaca_trade_api",
+        "alpaca.trading",
+        "alpaca.data",
+        "alpaca",
+    )
+    for name in candidate_modules:
+        if name in sys.modules and sys.modules[name] is None:
+            return False
+        try:
+            if importlib.util.find_spec(name) is None:
                 return False
-    spec = importlib.util.find_spec("alpaca_trade_api")
-    return spec is not None
+        except Exception:
+            return False
+    return True
 
 
-ALPACA_AVAILABLE: bool = _detect_alpaca_available()
+ALPACA_AVAILABLE: bool = _is_alpaca_available()
 trading_client = None
 data_client = None
 
@@ -91,8 +94,6 @@ from ai_trading.settings import (
     get_volume_threshold,
 )
 
-from ai_trading import utils as _utils  # AI-AGENT-REF: delegate health checks
-
 # Rate limit for Finnhub (calls/min); resolved at import time via settings
 FINNHUB_RPM = get_finnhub_rpm()
 __all__ = [
@@ -112,8 +113,8 @@ __all__ = [
 # AI-AGENT-REF: custom exception surfaced by fetch helpers
 
 
-class DataFetchError(Exception):
-    """Raised when required market data is unavailable."""
+class DataFetchError(RuntimeError):
+    """Raised when required market data is unavailable."""  # AI-AGENT-REF
 
 
 # AI-AGENT-REF: Track regime warnings to avoid spamming logs during market closed
@@ -1441,8 +1442,14 @@ except Exception:  # pragma: no cover - fallback
     class pybreaker:  # type: ignore
         class CircuitBreaker:
             def __init__(self, *args, **kwargs): ...
-            def call(self, func, *a, **kw):
-                return func(*a, **kw)
+            def call(self, func):
+                def _wrapped(*a, **kw):
+                    return func(*a, **kw)
+
+                return _wrapped
+
+            def __call__(self, func):
+                return self.call(func)
 
 
 # AI-AGENT-REF: optional finnhub dependency
@@ -2222,13 +2229,23 @@ def _fetch_universe_bars(
     end: datetime | str,
     feed: str | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """Fetch bars with safe compatibility fallback."""  # AI-AGENT-REF
+    """Fetch bars using batch API with safe fallback."""  # AI-AGENT-REF
     fetch_client = None
     if ctx is not None and hasattr(ctx, "data_fetcher"):
         fetch_client = getattr(ctx, "data_fetcher", None)
-    return _df_get_bars_batch(
-        symbols, timeframe, start, end, feed=feed, client=fetch_client
-    )
+    try:
+        batch = get_bars_batch(symbols, timeframe, start, end, feed=feed, client=fetch_client)
+        if isinstance(batch, dict):
+            return batch
+    except Exception:
+        pass
+    out: Dict[str, pd.DataFrame] = {}
+    for s in symbols:
+        try:
+            out[s] = get_bars(s, timeframe, start, end, feed=feed, client=fetch_client)
+        except Exception:
+            pass
+    return out
 
 
 def _fetch_universe_bars_chunked(
@@ -2479,7 +2496,15 @@ class BotMode:
         return self.params
 
     def get_config(self) -> dict[str, float]:
-        return self.params
+        cfg = config.TradingConfig.from_env(self.mode)
+        params = dict(self.params)
+        params.update(
+            {
+                "CONF_THRESHOLD": cfg.conf_threshold,
+                "KELLY_FRACTION": cfg.kelly_fraction,
+            }
+        )
+        return params
 
 
 @dataclass
@@ -4795,7 +4820,7 @@ class BotContext:
     @property
     def alpaca_client(self):
         """Backward compatibility property for accessing the trading API client."""
-        return self.api
+        return getattr(self, "api", None)
 
 
 data_fetcher = DataFetcher()
@@ -13370,8 +13395,8 @@ def run_trading_cycle(ctx, df: pd.DataFrame) -> list[tuple[str, str]]:
 
 
 def health_check(df: pd.DataFrame, resolution: str) -> bool:
-    """Delegate to :func:`utils.health_check` for convenience."""
-    return _utils.health_check(df, resolution)
+    """Delegate to :func:`utils.health_check` for convenience."""  # AI-AGENT-REF
+    return _health_check(df, resolution)
 
 
 def compute_atr_stop(df, atr_window=14, multiplier=2):

@@ -1,21 +1,18 @@
 from __future__ import annotations
 
-import contextlib
 import os
 import sys
 import time
 import types
 import uuid
-from typing import Any
 
-# --- availability detection (respects tests that stub sys.modules) ---------
 _ALPACA_MODULE_NAMES = (
     "alpaca_trade_api",
     "alpaca",
     "alpaca.trading",
     "alpaca.data",
 )
-ALPACA_AVAILABLE: bool = all(
+ALPACA_AVAILABLE = all(
     name in sys.modules and sys.modules.get(name) is not None
     for name in _ALPACA_MODULE_NAMES
 )
@@ -24,67 +21,62 @@ if os.environ.get("TESTING", "").lower() == "true" and any(
 ):
     ALPACA_AVAILABLE = False
 
-SHADOW_MODE: bool = False  # AI-AGENT-REF: tests monkeypatch this
+SHADOW_MODE = False
 
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_HTTP_STATUSES = tuple(_RETRYABLE_CODES)
 
 
-def generate_client_order_id(prefix: str = "cid") -> str:
-    """Return unique client order id."""  # AI-AGENT-REF
-    return f"{prefix}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+def _make_client_order_id(prefix: str = "ai") -> str:
+    return f"{prefix}-{int(time.time()*1000)}-{uuid.uuid4().hex[:8]}"
 
 
-def _coerce_req(req: Any) -> dict[str, Any]:
-    if isinstance(req, dict):
-        return req
-    if isinstance(req, types.SimpleNamespace):
-        return vars(req)
-    return {
-        k: getattr(req, k)
-        for k in ("symbol", "qty", "side", "time_in_force")
-        if hasattr(req, k)
-    }
-
-
-def submit_order(
-    api: Any,
-    req: Any,
-    log: Any | None = None,
-    **kwargs,
-) -> dict[str, Any]:
-    """Normalize order submission with shadow mode support."""  # AI-AGENT-REF
-    data = _coerce_req(req)
-    coid = data.get("client_order_id") or generate_client_order_id()
-    data["client_order_id"] = coid
-
+def submit_order(api, req, log: types.SimpleNamespace | None = None):
+    """Submit an order or return a shadow response."""  # AI-AGENT-REF
+    client_order_id = _make_client_order_id(
+        os.getenv("ALPACA_CLIENT_ORDER_ID_PREFIX", "ai")
+    )
     if SHADOW_MODE:
         if log:
-            with contextlib.suppress(Exception):
-                log.info("SHADOW_SUBMIT", data=data)
-        return {"id": f"shadow-{coid}", "client_order_id": coid, "status": "shadow"}
-
-    try:
-        if hasattr(api, "submit_order"):
-            resp = api.submit_order(order_data=data)
-        else:
-            resp = {"id": f"dry-{coid}", "client_order_id": coid, "status": "accepted"}
-    except Exception as e:  # noqa: BLE001
-        if log:
-            with contextlib.suppress(Exception):
-                log.warning("ORDER_SUBMIT_ERROR", err=str(e))
-        return {"id": None, "client_order_id": coid, "status": "error"}
-
-    if isinstance(resp, dict):
-        rid = resp.get("id") or resp.get("order_id")
+            log.info(
+                "submit_order shadow",
+                symbol=getattr(req, "symbol", None),
+                qty=getattr(req, "qty", None),
+            )
         return {
-            "id": rid,
-            "client_order_id": coid,
-            "status": resp.get("status", "accepted"),
+            "status": "shadow",
+            "symbol": getattr(req, "symbol", None),
+            "qty": getattr(req, "qty", None),
+            "side": getattr(req, "side", None),
+            "time_in_force": getattr(req, "time_in_force", None),
+            "client_order_id": client_order_id,
         }
-    rid = getattr(resp, "id", None) or getattr(resp, "order_id", None)
-    status = getattr(resp, "status", "accepted")
-    return {"id": rid, "client_order_id": coid, "status": status}
+
+    order_payload = {
+        "symbol": getattr(req, "symbol", None),
+        "qty": getattr(req, "qty", None),
+        "side": getattr(req, "side", None),
+        "time_in_force": getattr(req, "time_in_force", None),
+        "client_order_id": client_order_id,
+    }
+    if log:
+        log.info("submit_order live", payload=order_payload)
+    resp = api.submit_order(**order_payload)
+    if isinstance(resp, dict):
+        return types.SimpleNamespace(**resp)
+    return resp
+
+
+# Backwards compatibility helper
+generate_client_order_id = _make_client_order_id
+
+
+def alpaca_get(*_args, **_kwargs):  # pragma: no cover - legacy stub
+    return None
+
+
+def start_trade_updates_stream(*_args, **_kwargs):  # pragma: no cover
+    return None
 
 
 __all__ = [
@@ -97,10 +89,3 @@ __all__ = [
     "start_trade_updates_stream",
 ]
 
-
-def alpaca_get(*_args: Any, **_kwargs: Any) -> None:  # pragma: no cover - legacy stub
-    return None
-
-
-def start_trade_updates_stream(*_args: Any, **_kwargs: Any) -> None:  # pragma: no cover
-    return None

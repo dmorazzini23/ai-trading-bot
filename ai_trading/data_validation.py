@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
-from datetime import UTC, datetime, timedelta
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -11,66 +11,66 @@ from ai_trading.data_fetcher import get_bars
 
 __all__ = [
     "check_data_freshness",
-    "validate_trading_data",
     "get_stale_symbols",
+    "validate_trading_data",
     "emergency_data_check",
 ]
-
-
-def _ts_utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
 def check_data_freshness(
     df: pd.DataFrame,
     symbol: str,
     *,
-    max_staleness_minutes: int | None = None,
-    stale_after_min: int | None = None,
-) -> bool:
-    """Return True if data is fresh; supports legacy alias."""  # AI-AGENT-REF
-    limit = stale_after_min if stale_after_min is not None else max_staleness_minutes
-    if limit is None:
-        limit = 15
-    if df is None or df.empty:
-        return False
-    ts = df.index.max()
+    max_staleness_minutes: int = 15,
+) -> dict[str, float | str | bool]:
+    """Return freshness info for ``symbol``."""  # AI-AGENT-REF
     try:
-        ts = pd.to_datetime(ts, utc=True).to_pydatetime()
-    except Exception:  # noqa: BLE001
-        return False
-    now = datetime.now(UTC)
-    return (now - ts) <= timedelta(minutes=float(limit))
-
-
-def validate_trading_data(
-    df: pd.DataFrame,
-    *,
-    required_cols: Iterable[str] = ("open", "high", "low", "close", "volume"),
-) -> tuple[bool, list[str]]:
-    """Check that ``df`` has ``required_cols`` and is not empty."""
-    issues: list[str] = []
-    if df is None or df.empty:
-        issues.append("empty")
-        return False, issues
-    missing = [c for c in required_cols if c not in df.columns]
-    issues.extend(missing)
-    return (not issues, issues)
+        last_ts = df.index[-1]
+        if not isinstance(last_ts, datetime):
+            raise TypeError
+        if last_ts.tzinfo is None:
+            last_ts = last_ts.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - last_ts.astimezone(timezone.utc)
+        minutes = age.total_seconds() / 60.0
+        return {
+            "symbol": symbol,
+            "is_fresh": minutes <= max_staleness_minutes,
+            "minutes_stale": minutes,
+        }
+    except Exception:
+        return {"symbol": symbol, "is_fresh": False, "minutes_stale": float("inf")}
 
 
 def get_stale_symbols(
-    frames: Mapping[str, pd.DataFrame],
+    data_map: Mapping[str, Mapping[str, object]],
     *,
-    max_staleness_minutes: int = 5,
+    max_staleness_minutes: int = 15,
 ) -> list[str]:
-    """Return symbols whose data is older than ``max_staleness_minutes``."""
     out: list[str] = []
-    for sym, df in frames.items():
-        if not check_data_freshness(
-            df, sym, max_staleness_minutes=max_staleness_minutes
-        ):
+    for sym, info in (data_map or {}).items():
+        fresh = False
+        if isinstance(info, Mapping):
+            fresh = bool(info.get("trading_ready", info.get("is_fresh")))
+        else:
+            fresh = check_data_freshness(info, sym, max_staleness_minutes=max_staleness_minutes)[
+                "is_fresh"
+            ]
+        if not fresh:
             out.append(sym)
     return out
+
+
+def validate_trading_data(
+    data_map: Mapping[str, pd.DataFrame],
+    *,
+    max_staleness_minutes: int = 15,
+) -> dict[str, dict[str, object]]:
+    results: dict[str, dict[str, object]] = {}
+    for sym, df in (data_map or {}).items():
+        info = check_data_freshness(df, sym, max_staleness_minutes=max_staleness_minutes)
+        info["trading_ready"] = bool(info.get("is_fresh"))
+        results[sym] = info
+    return results
 
 
 def emergency_data_check(
@@ -78,15 +78,14 @@ def emergency_data_check(
     *,
     fetcher: Callable[..., pd.DataFrame] | None = None,
 ) -> bool:
-    """Fetch a tiny window for ``symbols`` and ensure data exists."""
     fetch = fetcher or get_bars
-    end = datetime.now(UTC)
+    end = datetime.now(timezone.utc)
     start = end - timedelta(minutes=1)
     for sym in symbols:
         try:
             df = fetch(sym, start, end)
             if df is None or df.empty:
                 return False
-        except Exception:  # noqa: BLE001
+        except Exception:
             return False
     return True

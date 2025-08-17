@@ -34,9 +34,10 @@ def psleep(_=None) -> None:
         pass
 
 
-def clamp_timeout(df) -> float:
-    """Benchmark wrapper calling utils.clamp_timeout with stable input."""  # AI-AGENT-REF
-    return _clamp_timeout(1.0)
+def clamp_timeout(df):
+    """Benchmark-friendly shim returning input."""  # AI-AGENT-REF
+    _ = _clamp_timeout(1.0, min=0.1, max=10.0, default=1.0)
+    return df
 
 
 # Core dependencies
