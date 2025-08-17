@@ -159,8 +159,12 @@ class ShutdownHandler:
         if not self._status.is_shutting_down:
             asyncio.create_task(self.shutdown(ShutdownReason.SIGNAL_RECEIVED))
 
-    def register_pre_shutdown_hook(self, hook: Hook) -> None:
+    def register_pre_shutdown_hook(self, hook: Hook | None = None) -> None:
         """Register a pre-shutdown hook."""
+        if hook is None:
+            return
+        if self._pre_shutdown_hooks is None:
+            self._pre_shutdown_hooks = []
         self._pre_shutdown_hooks.append(hook)
         self.logger.debug(f"Registered pre-shutdown hook: {hook.__name__}")
 

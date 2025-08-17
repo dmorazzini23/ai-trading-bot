@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from functools import lru_cache
 from typing import Any
 
 from pydantic import Field, SecretStr, computed_field, field_validator
@@ -28,7 +27,7 @@ def _secret_to_str(val: Any) -> str | None:
 
 
 def _to_int(val: Any, default: int | None = None) -> int:
-    """Robust int conversion handling FieldInfo and bool."""  # AI-AGENT-REF: int normalization
+    """Robust int conversion handling FieldInfo and bool."""
     if isinstance(val, FieldInfo) or val is None:
         if default is None:
             raise ValueError("int value missing")
@@ -44,7 +43,7 @@ def _to_int(val: Any, default: int | None = None) -> int:
 
 
 def _to_float(val: Any, default: float | None = None) -> float:
-    """Robust float conversion handling FieldInfo."""  # AI-AGENT-REF: float normalization
+    """Robust float conversion handling FieldInfo."""
     if isinstance(val, FieldInfo) or val is None:
         if default is None:
             raise ValueError("float value missing")
@@ -114,7 +113,7 @@ class Settings(BaseSettings):
     )
     # Global volume threshold used by bot_engine init
     volume_threshold: float = Field(default=0.0, env="AI_TRADER_VOLUME_THRESHOLD")
-    """Single source of truth for runtime configuration."""  # AI-AGENT-REF: runtime config model
+    """Single source of truth for runtime configuration."""
 
     # loop control
     interval: int = Field(
@@ -183,10 +182,17 @@ class Settings(BaseSettings):
     )  # AI-AGENT-REF: AI_TRADER_ env prefix
 
 
-@lru_cache(maxsize=1)
+_SETTINGS_SINGLETON: Settings | None = None
+
+
 def get_settings() -> Settings:
     """Cached settings accessor."""  # AI-AGENT-REF: cache settings
-    return Settings()  # pydantic-settings auto-loads .env when present
+    global _SETTINGS_SINGLETON
+    if _SETTINGS_SINGLETON is None:
+        _SETTINGS_SINGLETON = (
+            Settings()
+        )  # pydantic-settings auto-loads .env when present
+    return _SETTINGS_SINGLETON
 
 
 def get_news_api_key() -> str | None:
@@ -195,7 +201,7 @@ def get_news_api_key() -> str | None:
 
 
 def get_rebalance_interval_min() -> int:
-    """Lazy accessor for rebalance interval."""  # AI-AGENT-REF: runtime rebalance interval
+    """Lazy accessor for rebalance interval."""
     return int(get_settings().rebalance_interval_min)
 
 
@@ -291,7 +297,7 @@ def get_volume_threshold() -> float:
 
 
 def get_alpaca_secret_key_plain() -> str | None:
-    """Return Alpaca secret key as plain string if present."""  # AI-AGENT-REF: helper for secrets
+    """Return Alpaca secret key as plain string if present."""
     s = get_settings()
     return _secret_to_str(getattr(s, "alpaca_secret_key", None))
 

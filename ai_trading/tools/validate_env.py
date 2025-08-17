@@ -26,5 +26,9 @@ def _main() -> int:
     return 1
 
 
+def main() -> int:
+    return _main()
+
+
 if __name__ == "__main__":  # pragma: no cover - manual execution
-    raise SystemExit(_main())
+    _main()

@@ -1,126 +1,98 @@
-"""Minimal Alpaca helpers used in tests."""
+"""Thin Alpaca helpers with retry and DRY_RUN/SHADOW compatibility."""
 
 from __future__ import annotations
 
-import threading
 import time
-import uuid
-from collections.abc import Mapping
-from types import SimpleNamespace
 from typing import Any
 
-try:  # pragma: no cover - requests optional
-    from requests.exceptions import HTTPError
-except Exception:  # pragma: no cover
-
-    class HTTPError(Exception):
-        pass
-
-
-from ai_trading.utils import clamp_timeout
+from requests.exceptions import HTTPError as HTTPError  # re-export
 
 DRY_RUN = False
 SHADOW_MODE = False
-_pending_orders_lock = threading.Lock()
-_pending_orders: dict[str, Any] = {}
-partial_fill_tracker: dict[str, int] = {}
-partial_fills: set[str] = set()
+
+RETRY_STATUS = {429, 500, 502, 503, 504}
 
 
-def is_rate_limit(exc: Exception) -> bool:
-    return getattr(exc, "status_code", None) == 429 or "429" in str(exc)
-
-
-def is_retryable(status_code: int, exc: Exception | None = None) -> bool:
-    return status_code in {429, 500, 502, 503, 504} or bool(exc and is_rate_limit(exc))
-
-
-def generate_client_order_id(symbol: str) -> str:
-    return f"{symbol}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}"
-
-
-def _as_mapping(obj: Any) -> Mapping[str, Any]:
-    if isinstance(obj, Mapping):
-        return obj
-    return {k: getattr(obj, k) for k in dir(obj) if not k.startswith("_")}
-
-
-def _build_order(req: Any) -> SimpleNamespace:
-    m = _as_mapping(req)
-    coid = m.get("client_order_id") or generate_client_order_id(m.get("symbol", "ord"))
-    return SimpleNamespace(
-        symbol=m.get("symbol"),
-        qty=m.get("qty") or m.get("quantity"),
-        side=m.get("side"),
-        time_in_force=m.get("time_in_force") or m.get("tif") or "day",
-        type=m.get("type") or "market",
-        limit_price=m.get("limit_price"),
-        stop_price=m.get("stop_price"),
-        client_order_id=coid,
-        extended_hours=m.get("extended_hours", False),
+def extract_order_id(resp: Any) -> str | None:
+    """Best-effort extraction of an order identifier."""
+    if resp is None:
+        return None
+    if isinstance(resp, dict):
+        return resp.get("id") or resp.get("order_id") or resp.get("client_order_id")
+    return (
+        getattr(resp, "id", None)
+        or getattr(resp, "order_id", None)
+        or getattr(resp, "client_order_id", None)
     )
 
 
-def submit_order(
-    api: Any,
-    req: Any,
-    *,
-    dry_run: bool = False,
-    shadow: bool = False,
-    timeout: float | None = None,
-    max_retries: int = 3,
-) -> Any:
-    """Submit an order and return an object with ``.id``."""
-    if dry_run or DRY_RUN:
-        return {"status": "dry_run", "id": "dry-run"}
-    if shadow or SHADOW_MODE:
-        return {"status": "shadow", "id": "shadow"}
+def submit_order(api: Any, req: Any, retries: int = 2, sleep_s: float = 0.2):
+    """Submit an order via ``api`` and return the raw response."""
+    if DRY_RUN:
+        return {"id": "dry-run"}
+    if SHADOW_MODE:
+        return {"id": "shadow"}
 
-    order = _build_order(req)
-    timeout_v = clamp_timeout(timeout)
+    payload = {
+        "symbol": getattr(req, "symbol", None) or req["symbol"],
+        "qty": getattr(req, "qty", None)
+        or getattr(req, "quantity", None)
+        or req.get("qty"),
+        "side": getattr(req, "side", None) or req["side"],
+        "time_in_force": getattr(req, "time_in_force", None)
+        or req.get("time_in_force")
+        or "day",
+    }
+    coid = getattr(req, "client_order_id", None) or req.get("client_order_id")
+    if coid:
+        payload["client_order_id"] = coid
+
     last_exc: Exception | None = None
-    for attempt in range(1, max_retries + 1):
+    for attempt in range(retries + 1):
         try:
-            try:
-                resp = api.submit_order(order, timeout=timeout_v)
-            except TypeError:
-                resp = api.submit_order(order)
-            oid = getattr(resp, "id", None) or getattr(resp, "order_id", None)
-            return SimpleNamespace(id=oid or order.client_order_id, raw=resp)
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-            status = getattr(exc, "status_code", 0)
-            if not is_retryable(status, exc) or attempt == max_retries:
-                raise
-            time.sleep(0.1)
-    if last_exc:
-        raise last_exc
-    raise RuntimeError("submit_order failed")
-
-
-def handle_trade_update(event: Any) -> None:
-    oid = getattr(getattr(event, "order", None), "id", None)
-    if not oid:
-        return
-    qty = int(getattr(getattr(event, "order", None), "filled_qty", 0))
-    if event.event == "partial_fill":
-        prev = partial_fill_tracker.get(oid)
-        if prev != qty:
-            partial_fill_tracker[oid] = qty
-            partial_fills.add(oid)
-            import logging
-
-            logging.getLogger(__name__).debug(
-                "ORDER_PARTIAL_FILL", extra={"order_id": oid}
+            submit = getattr(api, "submit_order", None) or getattr(
+                api, "place_order", None
             )
-    elif event.event == "fill":
-        if oid in partial_fills:
-            import logging
+            if submit is None:
+                raise RuntimeError("API has no submit_order/place_order")
+            resp = submit(**payload)
+            oid = extract_order_id(resp)
+            if isinstance(resp, dict):
+                resp.setdefault("id", oid)
+            elif oid is not None:
+                return resp
+            return resp
+        except HTTPError as e:  # pragma: no cover - network mocked
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status in RETRY_STATUS and attempt < retries:
+                time.sleep(sleep_s)
+                last_exc = e
+                continue
+            raise
+        except Exception as e:  # noqa: BLE001
+            if attempt < retries:
+                time.sleep(sleep_s)
+                last_exc = e
+                continue
+            raise
+    raise last_exc or RuntimeError("submit_order failed unexpectedly")
 
-            logging.getLogger(__name__).debug("ORDER_FILLED", extra={"order_id": oid})
-        partial_fill_tracker.pop(oid, None)
-        partial_fills.discard(oid)
+
+__all__ = [
+    "HTTPError",
+    "DRY_RUN",
+    "SHADOW_MODE",
+    "RETRY_STATUS",
+    "extract_order_id",
+    "submit_order",
+    "alpaca_get",
+    "start_trade_updates_stream",
+]
 
 
-# Compatibility exports expected by tests
-HTTPError = HTTPError  # re-export for import contracts
+def alpaca_get(*args, **kwargs):  # pragma: no cover - legacy stub
+    return None
+
+
+def start_trade_updates_stream(*args, **kwargs):  # pragma: no cover - legacy stub
+    return None
