@@ -5,7 +5,7 @@
 Usage:
   python tools/audit_exceptions.py --paths ai_trading [more/paths] [--fail-over N]
 
-Outputs JSON summary to stdout and a human-readable table.
+Outputs JSON summary to stdout.
 """
 
 from __future__ import annotations
@@ -16,10 +16,11 @@ import json
 import pathlib
 import sys
 
+
 def find_broad_handlers(path: pathlib.Path) -> list[dict]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (SyntaxError, UnicodeDecodeError, OSError):
         return []
     hits: list[dict] = []
     for node in ast.walk(tree):
@@ -27,9 +28,12 @@ def find_broad_handlers(path: pathlib.Path) -> list[dict]:
             # match `except Exception:` (not bare except)
             if isinstance(node.type, ast.Name) and node.type.id == "Exception":
                 line = node.lineno
-                src = "".join(path.read_text(encoding="utf-8").splitlines(keepends=True)[line-1:line+1])
+                src = "".join(
+                    path.read_text(encoding="utf-8").splitlines(keepends=True)[line - 1 : line + 1]
+                )
                 hits.append({"file": str(path), "line": line, "snippet": src})
     return hits
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -62,6 +66,6 @@ def main() -> int:
         return 2
     return 0
 
+
 if __name__ == "__main__":
     sys.exit(main())
-

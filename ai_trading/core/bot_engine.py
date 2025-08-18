@@ -51,7 +51,7 @@ try:
     import sklearn  # noqa: F401
 
     SKLEARN_AVAILABLE = True
-except COMMON_EXC:
+except ImportError:
     SKLEARN_AVAILABLE = False
 
 # AI-AGENT-REF: optional finnhub dependency
@@ -59,7 +59,7 @@ try:  # pragma: no cover - optional dependency
     from finnhub import FinnhubAPIException  # type: ignore
 
     FINNHUB_AVAILABLE = True
-except COMMON_EXC:  # pragma: no cover - optional dependency
+except ImportError:  # pragma: no cover - optional dependency
     FinnhubAPIException = Exception  # type: ignore
     FINNHUB_AVAILABLE = False
 
@@ -190,7 +190,7 @@ from typing import Any
 
 try:  # AI-AGENT-REF: optional joblib import
     import joblib  # type: ignore
-except COMMON_EXC:  # pragma: no cover
+except ImportError:  # pragma: no cover
     joblib = None  # type: ignore
 
 from ai_trading.logging import (
@@ -275,7 +275,7 @@ def _load_mcal():  # AI-AGENT-REF: lazy calendar import
         import pandas_market_calendars as _mcal  # type: ignore
 
         return _mcal
-    except COMMON_EXC:
+    except ImportError:
         return None
 
 
@@ -283,7 +283,7 @@ def _is_market_open_now(cfg=None) -> bool:
     """Check if market is currently open. Returns True if unable to determine (conservative)."""
     try:
         import pandas as pd
-    except COMMON_EXC:
+    except ImportError:
         return True
     mcal = _load_mcal()
     if not mcal:
@@ -320,7 +320,7 @@ from ai_trading.utils.universe import load_universe as load_universe_from_path
 
 try:
     from ai_trading.risk.engine import RiskEngine
-except COMMON_EXC:  # pragma: no cover - optional during import probing
+except ImportError:  # pragma: no cover - optional during import probing
     RiskEngine = None  # type: ignore
 from ai_trading.config.settings import (
     MODEL_PATH,
@@ -332,7 +332,7 @@ try:
     from ai_trading.rl_trading import (
         RLTrader,  # Provides .load() and .predict()  # AI-AGENT-REF: correct RL import path
     )
-except COMMON_EXC as e:  # noqa: BLE001 - best-effort import; we log below.
+except ImportError as e:  # noqa: BLE001 - best-effort import; we log below.
     RLTrader = None  # type: ignore
     warning_kv(_log, "RL_IMPORT_FAILED", extra={"detail": str(e)})
 
@@ -1598,7 +1598,7 @@ try:
     from ai_trading.execution import (
         ExecutionEngine,  # canonical import  # AI-AGENT-REF: fix ExecutionEngine import
     )
-except COMMON_EXC:  # pragma: no cover - allow tests with stubbed module
+except ImportError:  # pragma: no cover - allow tests with stubbed module
 
     class ExecutionEngine:
         """
