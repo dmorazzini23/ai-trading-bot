@@ -64,6 +64,7 @@ include-package-data = true
 [tool.setuptools.package-data]
 ai_trading = ["data/tickers.csv"]
 
+# Console script entry points
 [project.scripts]
 ai-trade = "ai_trading.__main__:run_trade"
 ai-backtest = "ai_trading.__main__:run_backtest"
