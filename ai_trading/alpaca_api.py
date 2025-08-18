@@ -21,7 +21,7 @@ ALPACA_AVAILABLE = any(
         module_ok("alpaca.trading"),
         module_ok("alpaca.data"),
     ]
-) and os.getenv("TESTING", "").lower() not in {"1", "true:force_unavailable"}
+) and os.environ.get("ALPACA_FORCE_UNAVAILABLE", "").lower() not in {"1", "true", "yes"}
 
 
 def _make_client_order_id(prefix: str = "ai") -> str:
@@ -112,29 +112,23 @@ def submit_order(api, order_data=None, log=None, **kwargs):
             message=str(e),
         )
 
+    # Back-compat return semantics
     if isinstance(resp, dict):
-        broker_id = (
-            resp.get("id") or resp.get("order_id") or resp.get("broker_order_id")
-        )
-        client_id = resp.get("client_order_id", client_order_id)
-    else:
-        broker_id = (
-            getattr(resp, "id", None)
-            or getattr(resp, "order_id", None)
-            or getattr(resp, "broker_order_id", None)
-        )
-        client_id = getattr(resp, "client_order_id", client_order_id)
+        resp.setdefault("client_order_id", client_order_id)
+        resp.setdefault("success", True)
+        resp.setdefault("status", "submitted")
+        if "broker_order_id" not in resp:
+            resp["broker_order_id"] = resp.get("id") or resp.get("order_id")
+        return types.SimpleNamespace(**resp)
+    # Normalize object-like responses to a SimpleNamespace
     return types.SimpleNamespace(
-        status="submitted",
         success=True,
-        symbol=symbol,
-        qty=qty,
-        side=side,
-        time_in_force=tif,
-        client_order_id=client_id,
-        broker_order_id=broker_id,
-        order_id=broker_id,
-        message="ok",
+        status=getattr(resp, "status", "submitted"),
+        client_order_id=getattr(resp, "client_order_id", client_order_id),
+        broker_order_id=getattr(resp, "id", None)
+        or getattr(resp, "order_id", None)
+        or getattr(resp, "broker_order_id", None),
+        raw=resp,
     )
 
 

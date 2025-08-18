@@ -10,8 +10,6 @@ from threading import Thread
 # AI-AGENT-REF: Load .env BEFORE importing any heavy modules or Settings
 from dotenv import load_dotenv
 
-load_dotenv()
-
 # AI-AGENT-REF: Import only essential modules at top level for import-light entrypoint
 from ai_trading.config import get_settings as get_config
 from ai_trading.settings import (
@@ -266,7 +264,9 @@ def main(argv: list[str] | None = None) -> None:
     from ai_trading.utils.device import pick_torch_device  # AI-AGENT-REF: ML device log
 
     pick_torch_device()
-    raw_tick = os.getenv("HEALTH_TICK_SECONDS") or getattr(S, "health_tick_seconds", 300)
+    raw_tick = os.getenv("HEALTH_TICK_SECONDS") or getattr(
+        S, "health_tick_seconds", 300
+    )
     try:
         health_tick_seconds = int(raw_tick)
     except Exception:
@@ -274,13 +274,17 @@ def main(argv: list[str] | None = None) -> None:
     last_health = time.monotonic()
 
     # CLI takes precedence; then settings
-    raw_iter = args.iterations if args.iterations is not None else getattr(S, "iterations", 0)
+    raw_iter = (
+        args.iterations if args.iterations is not None else getattr(S, "iterations", 0)
+    )
     try:
         iterations = int(raw_iter)
     except Exception:
         iterations = 0
 
-    raw_interval = args.interval if args.interval is not None else getattr(S, "interval", 60)
+    raw_interval = (
+        args.interval if args.interval is not None else getattr(S, "interval", 60)
+    )
     try:
         interval = int(raw_interval)
     except Exception:
@@ -335,7 +339,10 @@ def main(argv: list[str] | None = None) -> None:
             logger.info("HTTP_POOL_STATS", extra=http_utils.pool_stats())
             logger.info(
                 "CYCLE_TIMING",
-                extra={"elapsed_ms": budget.elapsed_ms(), "within_budget": not budget.over()},
+                extra={
+                    "elapsed_ms": budget.elapsed_ms(),
+                    "within_budget": not budget.over(),
+                },
             )
 
             now_mono = time.monotonic()
@@ -351,9 +358,5 @@ def main(argv: list[str] | None = None) -> None:
         return
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()
-
-
-cfg = get_config()
-test_mode = getattr(cfg, "scheduler_iterations", 0) != 0

@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Iterable
 from datetime import datetime
+import os
 
 import pandas as pd
 import requests
@@ -54,8 +55,10 @@ def ensure_datetime(dt_or_str, *, tz: str | None = "UTC") -> datetime:
 
 
 # ---- minute cache helpers ----
+# AI-AGENT-REF: bounded minute cache
 _MINUTE_CACHE: dict[str, int] = {}
 _GLOBAL_MINUTE_TS: int | None = None
+_MINUTE_CACHE_MAX = int(os.getenv("MINUTE_CACHE_MAX", "5000"))
 
 
 def set_cached_minute_timestamp(symbol: str | None, ts_or_dt) -> None:
@@ -68,12 +71,10 @@ def set_cached_minute_timestamp(symbol: str | None, ts_or_dt) -> None:
     _GLOBAL_MINUTE_TS = ts
     if symbol:
         _MINUTE_CACHE[symbol.upper()] = ts
-        # Prevent unbounded growth: evict oldest ~20% if too large
-        MAX_CACHE_SIZE = 2000
-        if len(_MINUTE_CACHE) > MAX_CACHE_SIZE:
-            for k, _ in sorted(
-                _MINUTE_CACHE.items(), key=lambda kv: kv[1]
-            )[: MAX_CACHE_SIZE // 5]:
+        # Size-based eviction (drop oldest ~20% on overflow)
+        if len(_MINUTE_CACHE) > _MINUTE_CACHE_MAX:
+            drop = max(1, _MINUTE_CACHE_MAX // 5)
+            for k in list(_MINUTE_CACHE.keys())[:drop]:
                 _MINUTE_CACHE.pop(k, None)
 
 
@@ -125,9 +126,7 @@ def get_bars(symbol: str, timeframe: str, start, end, /, *, feed=None) -> pd.Dat
         if feed and hasattr(feed, "get_bars"):
             return feed.get_bars(symbol, timeframe, start, end) or pd.DataFrame()
     except (requests.exceptions.RequestException, DataFetchException) as exc:
-        _log.info(
-            f"feed.get_bars error {exc.__class__.__name__}", exc_info=True
-        )
+        _log.info(f"feed.get_bars error {exc.__class__.__name__}", exc_info=True)
     except AttributeError:
         pass
     cols = ["Open", "High", "Low", "Close", "Volume"]
@@ -156,9 +155,7 @@ def get_minute_df(
         if feed and hasattr(feed, "get_bars"):
             return feed.get_bars(symbol, "1Min", start, end) or pd.DataFrame()
     except (requests.exceptions.RequestException, DataFetchException) as exc:
-        _log.info(
-            f"feed.get_bars error {exc.__class__.__name__}", exc_info=True
-        )
+        _log.info(f"feed.get_bars error {exc.__class__.__name__}", exc_info=True)
     except AttributeError:
         pass
     cols = ["Open", "High", "Low", "Close", "Volume"]
@@ -179,5 +176,17 @@ def get_minute_bars_batch(
 
 
 def _build_daily_url(symbol: str, start: datetime, end: datetime) -> str:
-    """Legacy helper for sample universe script."""  # AI-AGENT-REF
-    return f"{symbol}"
+    """
+    Construct a real Alpaca data URL for daily bars. Tests may monkeypatch this,
+    but the production CLI benefits from a valid URL.
+    """
+    from ai_trading.settings import get_settings
+
+    S = get_settings()
+    base = getattr(S, "alpaca_data_base_url", "https://data.alpaca.markets")
+    start_iso = ensure_datetime(start).isoformat().replace("+00:00", "Z")
+    end_iso = ensure_datetime(end).isoformat().replace("+00:00", "Z")
+    return (
+        f"{base}/v2/stocks/{symbol}/bars"
+        f"?timeframe=1Day&start={start_iso}&end={end_iso}&feed=iex"
+    )
