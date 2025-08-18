@@ -16,10 +16,10 @@ __all__ = [
 
 
 def check_data_freshness(
-    df: pd.DataFrame, symbol: str, *, max_staleness_minutes: int = 15
+    df: pd.DataFrame | None, symbol: str, *, max_staleness_minutes: int = 15
 ) -> dict[str, float | str | bool]:
-    """Return freshness info for ``symbol`` (back-compat shape)."""
-    if df is None or df.empty:
+    """Return freshness info for ``symbol`` handling empty/naive data."""
+    if df is None or getattr(df, "empty", True):
         return {"symbol": symbol, "is_fresh": False, "minutes_stale": float("inf")}
     try:
         last_ts = df.index[-1]
@@ -39,7 +39,7 @@ def check_data_freshness(
 
 
 def get_stale_symbols(
-    data_map: Mapping[str, object], *, max_staleness_minutes: int = 15
+    data_map: Mapping[str, object] | None, *, max_staleness_minutes: int = 15
 ) -> list[str]:
     """Return symbols whose data is stale.
 
@@ -65,7 +65,7 @@ def validate_trading_data(
     *,
     max_staleness_minutes: int = 15,
 ) -> dict[str, dict[str, object]]:
-    """Back-compat validation returning both is_fresh and trading_ready."""
+    """Return mapping of freshness and trading readiness."""
     data_map = data_map or {}
     results: dict[str, dict[str, object]] = {}
     for sym, df in data_map.items():
@@ -78,33 +78,33 @@ def validate_trading_data(
 
 
 def emergency_data_check(
-    arg1,
-    arg2: str | None = None,
+    symbols_or_df: Sequence[str] | str | pd.DataFrame,
+    symbol: str | None = None,
     *,
-    fetcher: Callable[..., pd.DataFrame] | None = None,
+    fetcher: Callable[[str, str, datetime, datetime], pd.DataFrame] | None = None,
 ) -> bool:
-    """Probe recent minute bars for emergency data availability.
+    """Return True if any symbol yields non-empty recent bars.
 
-    Supports both call patterns:
-      - Legacy: ``emergency_data_check(df, "AAPL")``
-      - New: ``emergency_data_check(["AAPL", "MSFT"], fetcher=get_bars)``
-    """
-    if isinstance(arg1, pd.DataFrame) and isinstance(arg2, str):
-        return not arg1.empty
+    Back-compat: ``emergency_data_check(df, "AAPL")`` returns ``not df.empty``.
+    """  # AI-AGENT-REF: legacy support
+    if isinstance(symbols_or_df, pd.DataFrame) and isinstance(symbol, str):
+        return not symbols_or_df.empty
 
-    if isinstance(arg1, Sequence) and not isinstance(arg1, (str, bytes)):  # noqa: UP038
-        symbols = list(arg1)
+    if isinstance(symbols_or_df, (str, bytes)):
+        to_check = [symbols_or_df]
+    elif isinstance(symbols_or_df, Sequence):  # type: ignore[redundant-expr]
+        to_check = list(symbols_or_df)
     else:
-        symbols = [str(arg1)]
+        to_check = [str(symbols_or_df)]
 
     fetch = fetcher or get_bars
     end = datetime.now(UTC)
     start = end - timedelta(minutes=1)
-    for sym in symbols:
+    for sym in to_check:
         try:
             df = fetch(sym, "1Min", start, end)
-            if df is None or df.empty:
-                return False
+            if df is not None and not df.empty:
+                return True
         except Exception:  # noqa: BLE001
-            return False
-    return True
+            continue
+    return False
