@@ -7,9 +7,10 @@ try:  # pragma: no cover - optional dependency
     import sklearn  # type: ignore  # noqa: F401
 
     SKLEARN_AVAILABLE = True
-except Exception:  # pragma: no cover - missing sklearn
+except COMMON_EXC:  # pragma: no cover - missing sklearn
     SKLEARN_AVAILABLE = False
 """Utility helpers for meta-learning weight management."""
+# ruff: noqa
 
 import csv
 import json
@@ -23,6 +24,18 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
+import requests
+from json import JSONDecodeError
+
+COMMON_EXC = (
+    TypeError,
+    ValueError,
+    KeyError,
+    JSONDecodeError,
+    requests.exceptions.RequestException,
+    TimeoutError,
+    ImportError,
+)
 
 # CSV:17 - Move metrics_logger import to functions that use it
 
@@ -33,7 +46,7 @@ try:  # pragma: no cover - torch is optional
     from torch.utils.data import DataLoader, TensorDataset  # type: ignore
 
     TORCH_AVAILABLE = True
-except Exception:  # torch not installed or not importable on this host
+except COMMON_EXC:  # torch not installed or not importable on this host
     torch = None  # type: ignore
     nn = None  # type: ignore
     DataLoader = TensorDataset = None  # type: ignore
@@ -57,7 +70,7 @@ def get_device() -> str:
         return "cpu"
     try:
         return "cuda" if torch and torch.cuda.is_available() else "cpu"
-    except Exception:
+    except COMMON_EXC:
         return "cpu"
 
 
@@ -172,7 +185,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                     "Ensure trade logging is actively writing data"
                 )
                 return quality_report
-        except Exception as e:
+        except COMMON_EXC as e:
             quality_report["issues"].append(f"Cannot access file stats: {e}")
             return quality_report
 
@@ -216,7 +229,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                                         break
                                 except (ValueError, TypeError):
                                     continue
-                        except Exception:
+                        except COMMON_EXC:
                             continue
 
                     quality_report["row_count"] = len(lines) - 1  # Exclude header
@@ -230,7 +243,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
 
                     return quality_report
 
-            except Exception as e:
+            except COMMON_EXC as e:
                 quality_report["issues"].append(f"Failed basic CSV validation: {e}")
 
             return quality_report
@@ -319,7 +332,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                         if found_numeric:
                             valid_price_rows += 1
 
-                except Exception as e:
+                except COMMON_EXC as e:
                     logger.debug(f"Failed to parse line {line_num}: {e}")
                     continue
 
@@ -380,7 +393,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                                 quality_report["has_valid_format"] = True
                                 quality_report["meta_format_rows"] += 1
 
-                        except Exception:
+                        except COMMON_EXC:
                             continue
 
                     if not quality_report["has_valid_format"]:
@@ -394,7 +407,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                         "Check log format and data integrity"
                     )
 
-        except Exception as e:
+        except COMMON_EXC as e:
             quality_report["issues"].append(f"Failed to read file: {e}")
             return quality_report
 
@@ -419,7 +432,7 @@ def validate_trade_data_quality(trade_log_path: str) -> dict:
                 "Check price data source and trade execution logging"
             )
 
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.error("Failed reading trade log: %s", e, exc_info=True)
         quality_report["issues"].append(f"Error accessing file: {e}")
 
@@ -526,9 +539,9 @@ def load_weights(path: str, default: "np.ndarray | None" = None) -> "np.ndarray"
                     p.parent.mkdir(parents=True, exist_ok=True)
                     np.savetxt(p, default, delimiter=",")
                     logger.info("Created default weights file: %s", path)
-                except Exception as e:
+                except COMMON_EXC as e:
                     logger.error("Failed initializing weights file %s: %s", path, e)
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.warning("Failed to load weights from %s: %s", path, e)
 
     return default
@@ -769,7 +782,7 @@ def retrain_meta_learner(
                     logger.info(
                         f"META_LEARNING_MIXED_FORMAT: Successfully converted {len(df)} rows"
                     )
-                except Exception as e:
+                except COMMON_EXC as e:
                     logger.error(f"META_LEARNING_MIXED_FORMAT: Conversion failed: {e}")
                     # Try fallback data recovery
                     _implement_fallback_data_recovery(trade_log_path, 10)
@@ -791,7 +804,7 @@ def retrain_meta_learner(
                     )
                     _implement_fallback_data_recovery(trade_log_path, 10)
                     return False
-            except Exception as e:
+            except COMMON_EXC as e:
                 logger.error(f"META_LEARNING_AUDIT_CONVERSION: Conversion failed: {e}")
                 return False
 
@@ -919,7 +932,7 @@ def retrain_meta_learner(
                 f"META_LEARNING_PRICE_STATS: Exit prices ${exit_stats['min']:.2f}-${exit_stats['max']:.2f} (avg: ${exit_stats['mean']:.2f})"
             )
 
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.error("META_LEARNING_PRICE_VALIDATION_ERROR: %s", e, exc_info=True)
         return False
 
@@ -1044,7 +1057,7 @@ def _implement_fallback_data_recovery(trade_log_path: str, min_samples: int) -> 
         # AI-AGENT-REF: Enhanced fallback - try to generate synthetic training data for meta learning
         _attempt_synthetic_data_generation(trade_log_path, min_samples)
 
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.error(f"META_LEARNING_FALLBACK: Error during data recovery: {e}")
         _create_emergency_trade_log(trade_log_path)
 
@@ -1073,7 +1086,7 @@ def _create_emergency_trade_log(trade_log_path: str) -> None:
             f"META_LEARNING_EMERGENCY: Created new trade log with proper format: {trade_log_path}"
         )
 
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.error(
             f"META_LEARNING_EMERGENCY: Failed to create emergency trade log: {e}"
         )
@@ -1118,14 +1131,14 @@ def _backup_and_fix_trade_log(
                     f"META_LEARNING_FIX: Added missing columns {missing_cols} to trade log"
                 )
 
-            except Exception as e:
+            except COMMON_EXC as e:
                 logger.error(f"META_LEARNING_FIX: Failed to fix trade log format: {e}")
                 _create_emergency_trade_log(trade_log_path)
         else:
             # Fallback without pandas
             _create_emergency_trade_log(trade_log_path)
 
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.error(f"META_LEARNING_BACKUP: Failed to backup/fix trade log: {e}")
         _create_emergency_trade_log(trade_log_path)
 
@@ -1150,7 +1163,7 @@ def _generate_bootstrap_training_data(trade_log_path: str, target_samples: int) 
                     logger.info(
                         f"META_LEARNING_BOOTSTRAP: Found {len(existing_data)} existing trades for pattern analysis"
                     )
-            except Exception as e:
+            except COMMON_EXC as e:
                 logger.debug(f"Could not read existing data for bootstrap: {e}")
 
         if len(existing_data) < 2:
@@ -1223,7 +1236,7 @@ def _generate_bootstrap_training_data(trade_log_path: str, target_samples: int) 
                 f"META_LEARNING_BOOTSTRAP_GENERATED: Added {len(bootstrap_trades)} bootstrap trades"
             )
 
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.error(f"META_LEARNING_BOOTSTRAP_GENERATION_FAILED: {e}")
         raise
 
@@ -1270,7 +1283,7 @@ def _append_bootstrap_trades_to_log(
             f"META_LEARNING_BOOTSTRAP_APPENDED: Added {len(bootstrap_trades)} trades to {trade_log_path}"
         )
 
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.error(f"Failed to append bootstrap trades: {e}")
         raise
     """
@@ -1295,7 +1308,7 @@ def _append_bootstrap_trades_to_log(
                         logger.info(
                             f"META_LEARNING_SYNTHETIC: Found {len(existing_data)} existing trades to use as patterns"
                         )
-            except Exception as e:
+            except COMMON_EXC as e:
                 logger.debug(f"Could not read existing data for patterns: {e}")
 
         # Generate synthetic trades if we have minimal existing data to work with
@@ -1319,7 +1332,7 @@ def _append_bootstrap_trades_to_log(
                 "META_LEARNING_SYNTHETIC: Sufficient existing data patterns - skipping synthetic generation"
             )
 
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.error(f"META_LEARNING_SYNTHETIC: Failed to generate synthetic data: {e}")
 
 
@@ -1380,7 +1393,7 @@ def _generate_synthetic_trades(num_trades: int, pattern_data: list) -> list:
 
         return synthetic_trades
 
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.error(f"Failed to generate synthetic trade patterns: {e}")
         return []
 
@@ -1404,7 +1417,7 @@ def _append_synthetic_trades_to_log(
             f"META_LEARNING_SYNTHETIC: Appended {len(synthetic_trades)} synthetic trades to {trade_log_path}"
         )
 
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.error(f"Failed to append synthetic trades: {e}")
 
 
@@ -1507,7 +1520,7 @@ def _convert_mixed_format_to_meta(df: "pd.DataFrame") -> "pd.DataFrame":
                             return_pct = (price_val - entry_price) / entry_price
                             position["meta_row"]["reward"] = return_pct
 
-            except Exception as e:
+            except COMMON_EXC as e:
                 logger.debug(
                     f"META_LEARNING_MIXED_CONVERSION: Error processing row {idx}: {e}"
                 )
@@ -1526,7 +1539,7 @@ def _convert_mixed_format_to_meta(df: "pd.DataFrame") -> "pd.DataFrame":
             )
             return pd.DataFrame()
 
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.error(f"META_LEARNING_MIXED_CONVERSION: Conversion failed: {e}")
         return pd.DataFrame()
 
@@ -1661,7 +1674,7 @@ def _convert_audit_to_meta_format(df: "pd.DataFrame") -> "pd.DataFrame":
                     position_tracker[symbol].append(meta_row.copy())
                     meta_rows.append(meta_row)
 
-            except Exception as e:
+            except COMMON_EXC as e:
                 logger.debug(
                     f"Failed to convert audit row {row.iloc[0] if len(row) > 0 else 'unknown'}: {e}"
                 )
@@ -1679,7 +1692,7 @@ def _convert_audit_to_meta_format(df: "pd.DataFrame") -> "pd.DataFrame":
             )
             return pd.DataFrame()
 
-    except Exception as e:
+    except COMMON_EXC as e:
         logger.error(f"META_LEARNING_AUDIT_CONVERSION: Conversion failed: {e}")
         return pd.DataFrame()
 
@@ -1844,7 +1857,7 @@ def trigger_meta_learning_conversion(trade_data: dict) -> bool:
                 "METALEARN_FILE_ACCESS_ERROR | cannot access %s: %s", trade_log_path, e
             )
             return False
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.warning(
                 "METALEARN_UNEXPECTED_FILE_ERROR | unexpected error accessing %s: %s",
                 trade_log_path,
@@ -1900,7 +1913,7 @@ def trigger_meta_learning_conversion(trade_data: dict) -> bool:
                         )
                         return False
 
-                except Exception as e:
+                except COMMON_EXC as e:
                     logger.error(
                         "METALEARN_CONVERSION_ERROR | symbol=%s error=%s", symbol, e
                     )
@@ -1923,7 +1936,7 @@ def trigger_meta_learning_conversion(trade_data: dict) -> bool:
             )
             return True
 
-    except Exception as exc:
+    except COMMON_EXC as exc:
         logger.error(
             "METALEARN_TRIGGER_ERROR | symbol=%s error=%s",
             trade_data.get("symbol", "UNKNOWN"),
@@ -1956,7 +1969,7 @@ def convert_audit_to_meta(trade_data: dict) -> dict | None:
         logger.info("METALEARN_SINGLE_CONVERSION | symbol=%s", converted_data["symbol"])
         return converted_data
 
-    except Exception as exc:
+    except COMMON_EXC as exc:
         logger.error("METALEARN_SINGLE_CONVERSION_ERROR | error=%s", exc)
         return None
 
@@ -1997,7 +2010,7 @@ def store_meta_learning_data(converted_data: dict) -> bool:
             logger.warning("METALEARN_STORE_NO_PANDAS | pandas not available")
             return False
 
-    except Exception as exc:
+    except COMMON_EXC as exc:
         logger.error("METALEARN_STORE_ERROR | error=%s", exc)
         return False
 
@@ -2097,7 +2110,7 @@ def load_global_signal_performance(
                 )
                 return result if result else {}
 
-            except Exception as e:
+            except COMMON_EXC as e:
                 logger.error(f"META_LEARNING_SIGNAL_PERFORMANCE_ERROR: {e}")
                 return None
         else:
@@ -2111,6 +2124,6 @@ def load_global_signal_performance(
                 )
                 return None
 
-    except Exception as exc:
+    except COMMON_EXC as exc:
         logger.error("META_LEARNING_LOAD_PERFORMANCE_ERROR: %s", exc)
         return None

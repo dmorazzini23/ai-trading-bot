@@ -8,9 +8,22 @@ import os
 import sys
 from typing import Dict, Iterable
 
+import requests
+from json import JSONDecodeError
+
 from ai_trading.data_fetcher import ensure_datetime, get_bars, get_bars_batch
 from ai_trading.utils import health_check as _health_check
 from ai_trading.alpaca_api import ALPACA_AVAILABLE  # AI-AGENT-REF: canonical flag
+
+COMMON_EXC = (
+    TypeError,
+    ValueError,
+    KeyError,
+    JSONDecodeError,
+    requests.exceptions.RequestException,
+    TimeoutError,
+    ImportError,
+)
 
 SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY")
 NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
@@ -21,7 +34,7 @@ try:
     import sklearn  # noqa: F401
 
     SKLEARN_AVAILABLE = True
-except Exception:
+except COMMON_EXC:
     SKLEARN_AVAILABLE = False
 
 # AI-AGENT-REF: optional finnhub dependency
@@ -29,7 +42,7 @@ try:  # pragma: no cover - optional dependency
     from finnhub import FinnhubAPIException  # type: ignore
 
     FINNHUB_AVAILABLE = True
-except Exception:  # pragma: no cover - optional dependency
+except COMMON_EXC:  # pragma: no cover - optional dependency
     FinnhubAPIException = Exception  # type: ignore
     FINNHUB_AVAILABLE = False
 
@@ -74,18 +87,18 @@ def ensure_alpaca_attached(ctx) -> None:
         if hasattr(ctx, "_ensure_initialized"):
             try:
                 ctx._ensure_initialized()  # type: ignore[attr-defined]
-            except Exception:
+            except COMMON_EXC:
                 pass
         try:
             setattr(ctx, "api", trading_client)
-        except Exception:
+        except COMMON_EXC:
             inner = getattr(ctx, "_context", None)
             if inner is not None and getattr(inner, "api", None) is None:
                 try:
                     setattr(inner, "api", trading_client)
-                except Exception:
+                except COMMON_EXC:
                     pass
-    except Exception:
+    except COMMON_EXC:
         pass
 
 # Sentiment knobs used by tests
@@ -162,7 +175,7 @@ from typing import Any
 
 try:  # AI-AGENT-REF: optional joblib import
     import joblib  # type: ignore
-except Exception:  # pragma: no cover
+except COMMON_EXC:  # pragma: no cover
     joblib = None  # type: ignore
 
 from ai_trading.logging import (
@@ -179,10 +192,10 @@ from ai_trading.utils.prof import StageTimer
 # AI-AGENT-REF: optional pipeline import
 try:
     pipeline = _importlib.import_module("ai_trading.pipeline")  # type: ignore
-except Exception:  # pragma: no cover - optional
+except COMMON_EXC:  # pragma: no cover - optional
     try:
         pipeline = _importlib.import_module("pipeline")  # type: ignore
-    except Exception:  # pragma: no cover
+    except COMMON_EXC:  # pragma: no cover
         pipeline = None  # type: ignore
 
 _log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
@@ -207,7 +220,7 @@ def _alpaca_diag_info() -> dict[str, object]:
             "shadow_mode": shadow,
             "cwd": os.getcwd(),
         }
-    except Exception as e:  # pragma: no cover – diag never fatal
+    except COMMON_EXC as e:  # pragma: no cover – diag never fatal
         return {"diag_error": str(e)}
 
 # --- path helpers (no imports of heavy deps) ---
@@ -247,7 +260,7 @@ def _load_mcal():  # AI-AGENT-REF: lazy calendar import
         import pandas_market_calendars as _mcal  # type: ignore
 
         return _mcal
-    except Exception:
+    except COMMON_EXC:
         return None
 
 
@@ -255,7 +268,7 @@ def _is_market_open_now(cfg=None) -> bool:
     """Check if market is currently open. Returns True if unable to determine (conservative)."""
     try:
         import pandas as pd
-    except Exception:
+    except COMMON_EXC:
         return True
     mcal = _load_mcal()
     if not mcal:
@@ -292,7 +305,7 @@ from ai_trading.utils.universe import load_universe as load_universe_from_path
 
 try:
     from ai_trading.risk.engine import RiskEngine
-except Exception:  # pragma: no cover - optional during import probing
+except COMMON_EXC:  # pragma: no cover - optional during import probing
     RiskEngine = None  # type: ignore
 from ai_trading.config.settings import (
     MODEL_PATH,
@@ -304,7 +317,7 @@ try:
     from ai_trading.rl_trading import (
         RLTrader,  # Provides .load() and .predict()  # AI-AGENT-REF: correct RL import path
     )
-except Exception as e:  # noqa: BLE001 - best-effort import; we log below.
+except COMMON_EXC as e:  # noqa: BLE001 - best-effort import; we log below.
     RLTrader = None  # type: ignore
     warning_kv(_log, "RL_IMPORT_FAILED", extra={"detail": str(e)})
 
@@ -354,7 +367,7 @@ def fetch_sentiment(
         score = float(data.get("sentiment", 0.0))
         _SENTIMENT_CACHE[symbol] = (now, score)
         return score
-    except Exception:
+    except COMMON_EXC:
         _SENTIMENT_FAILURES += 1
         if _SENTIMENT_FAILURES >= SENTIMENT_FAILURE_THRESHOLD:
             _SENTIMENT_CACHE[symbol] = (now, 0.0)
@@ -381,7 +394,7 @@ def _load_required_model() -> Any:
         mdl = joblib.load(path)
         try:
             digest = _sha256_file(path)
-        except Exception:  # noqa: BLE001 - hashing best effort
+        except COMMON_EXC:  # noqa: BLE001 - hashing best effort
             digest = "unknown"
         _log.info("MODEL_LOADED", extra={"source": "file", "path": path, "sha": digest})
         return mdl
@@ -389,7 +402,7 @@ def _load_required_model() -> Any:
     if modname:
         try:
             mod = importlib.import_module(modname)
-        except Exception as e:  # noqa: BLE001
+        except COMMON_EXC as e:  # noqa: BLE001
             raise RuntimeError(
                 f"Failed to import AI_TRADER_MODEL_MODULE='{modname}': {e}"
             ) from e
@@ -506,7 +519,7 @@ def _get_memory_optimization():
             )  # AI-AGENT-REF: stable import path
 
         # Rate limit for Finnhub (calls/min); resolved at import time via settings
-        except Exception:
+        except COMMON_EXC:
 
             def memory_profile(func):
                 return func
@@ -859,7 +872,7 @@ def _lazy_import_torch() -> bool:
         import torch  # noqa: F401
 
         return True
-    except Exception:
+    except COMMON_EXC:
         return False
 
 
@@ -868,7 +881,7 @@ def _lazy_import_hmmlearn() -> bool:
         import hmmlearn  # noqa: F401
 
         return True
-    except Exception:
+    except COMMON_EXC:
         return False
 
 
@@ -877,7 +890,7 @@ def _seed_torch_if_available(seed: int) -> None:
         import torch
 
         torch.manual_seed(int(seed))
-    except Exception:
+    except COMMON_EXC:
         pass
 
 
@@ -893,7 +906,7 @@ if S.use_rl_agent and RL_MODEL_PATH:
             rl.load()  # load PPO policy from zip path
             RL_AGENT = rl
             info_kv(_log, "RL_AGENT_READY", extra={"model": str(RL_MODEL_PATH)})
-        except Exception as e:  # noqa: BLE001
+        except COMMON_EXC as e:  # noqa: BLE001
             warning_kv(_log, "RL_AGENT_INIT_FAILED", extra={"error": str(e)})
             RL_AGENT = None
     else:
@@ -926,7 +939,7 @@ class _LazyModule(types.ModuleType):
         if self._module is None and not self._failed:
             try:
                 self._module = importlib.import_module(self.__name__)
-            except Exception:
+            except COMMON_EXC:
                 self._failed = True
 
     def _create_fallback(self):
@@ -1167,7 +1180,7 @@ def get_market_calendar():
     cal_name = "XNYS"
     try:
         NY = mcal.get_calendar(cal_name)
-    except Exception:
+    except COMMON_EXC:
         NY = types.SimpleNamespace(
             valid_days=lambda *a, **k: pd.DatetimeIndex([]),
             schedule=pd.DataFrame(),
@@ -1259,9 +1272,7 @@ import portalocker
 try:
     import requests  # type: ignore[assignment]
     from requests.exceptions import HTTPError  # type: ignore[assignment]
-except (
-    Exception
-):  # pragma: no cover - fallback when requests is missing or partially mocked
+except (ImportError, AttributeError):  # pragma: no cover - fallback when requests is missing or partially mocked
     import types
 
     requests = types.SimpleNamespace(
@@ -1275,7 +1286,7 @@ except (
     # AI-AGENT-REF: optional schedule dependency
     try:  # pragma: no cover - optional dependency
         import schedule  # type: ignore
-    except Exception:  # pragma: no cover - schedule may be absent in tests
+    except COMMON_EXC:  # pragma: no cover - schedule may be absent in tests
         import types
 
         schedule = types.SimpleNamespace()
@@ -1289,7 +1300,7 @@ YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availabilit
 # Production Alpaca SDK imports are performed lazily at runtime to avoid import
 # side effects when the SDK is unavailable. Call ``init_alpaca_clients()`` before
 # performing live trading operations.
-class _AlpacaStub:  # AI-AGENT-REF: placeholder when Alpaca unavailable
+class _AlpacaStub(Exception):  # AI-AGENT-REF: placeholder when Alpaca unavailable
     pass
 
 
@@ -1353,12 +1364,12 @@ def _import_model_pipeline():  # AI-AGENT-REF: import helper for tests
         from ai_trading.pipeline import model_pipeline  # type: ignore
 
         return model_pipeline
-    except Exception as _pkg_err:  # pragma: no cover
+    except COMMON_EXC as _pkg_err:  # pragma: no cover
         try:
             from pipeline import model_pipeline  # type: ignore
 
             return model_pipeline
-        except Exception as _legacy_err:  # pragma: no cover
+        except COMMON_EXC as _legacy_err:  # pragma: no cover
             logger.error("model_pipeline import failed: %s", _pkg_err)
             raise ImportError("model_pipeline import failed") from _legacy_err
 
@@ -1407,7 +1418,7 @@ def _resolve_alpaca_env():
     try:
         from ai_trading.env import ensure_dotenv_loaded
         ensure_dotenv_loaded()
-    except Exception:
+    except COMMON_EXC:
         pass
     key = os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
     secret = os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
@@ -1486,7 +1497,7 @@ BASE_DIR = Path(__file__).resolve().parents[2]  # AI-AGENT-REF: repo root for pa
 # AI-AGENT-REF: optional pybreaker dependency
 try:  # pragma: no cover - optional dependency
     import pybreaker  # type: ignore
-except Exception:  # pragma: no cover - fallback
+except COMMON_EXC:  # pragma: no cover - fallback
 
     class pybreaker:  # type: ignore
             class CircuitBreaker:
@@ -1584,7 +1595,7 @@ try:
     from ai_trading.execution import (
         ExecutionEngine,  # canonical import  # AI-AGENT-REF: fix ExecutionEngine import
     )
-except Exception:  # pragma: no cover - allow tests with stubbed module
+except COMMON_EXC:  # pragma: no cover - allow tests with stubbed module
 
     class ExecutionEngine:
         """
@@ -2188,7 +2199,7 @@ def get_git_hash() -> str:
         cmd = ["git", "rev-parse", "--short", "HEAD"]
         out = safe_subprocess_run(cmd, timeout=SUBPROCESS_TIMEOUT_DEFAULT)
         return out.strip() or "unknown"
-    except Exception:
+    except COMMON_EXC:
         return "unknown"
 
 
@@ -2280,13 +2291,13 @@ def _fetch_universe_bars(
         )
         if isinstance(batch, dict):
             return batch
-    except Exception:
+    except COMMON_EXC:
         pass
     out: Dict[str, pd.DataFrame] = {}
     for s in symbols:
         try:
             out[s] = get_bars(s, timeframe, start, end, feed=feed, client=fetch_client)
-        except Exception:
+        except COMMON_EXC:
             pass
     return out
 
@@ -2782,7 +2793,7 @@ def _env_float(default: float, *keys: str) -> float:
             continue
         try:
             return float(v)
-        except Exception:
+        except COMMON_EXC:
             _log.warning("ENV_COERCE_FLOAT_FAILED", extra={"key": k, "value": v})
     return default
 
@@ -4916,7 +4927,7 @@ def get_risk_engine():
                     "Risk engine: RiskManager (in-package fallback)",
                 )
                 risk_engine = _RM()
-            except Exception as e:  # noqa: BLE001 - propagate after logging
+            except COMMON_EXC as e:  # noqa: BLE001 - propagate after logging
                 _log.error("RISK_ENGINE_IMPORT_FAILED", extra={"detail": str(e)})
                 raise ImportError("Risk engine unavailable") from e
         else:
@@ -5047,7 +5058,7 @@ def get_strategies():
         from ai_trading.strategies import (
             REGISTRY,  # type: ignore  # AI-AGENT-REF: lazy import avoids cycles
         )
-    except Exception as e:  # noqa: BLE001 - best-effort import
+    except COMMON_EXC as e:  # noqa: BLE001 - best-effort import
         REGISTRY = {}
         _log.error("Failed to import strategy registry: %s", e)
 
@@ -5245,7 +5256,7 @@ class LazyBotContext:
         )
         try:
             ensure_alpaca_attached(self._context)
-        except Exception:
+        except COMMON_EXC:
             pass
         # ExecutionEngine does not accept slippage/metrics kwargs.
         # Metrics remain tracked in bot_engine via Prometheus counters.
@@ -6109,7 +6120,7 @@ def _fetch_calendar_via_yf(symbol: str) -> pd.DataFrame:
             },
         )
         return pd.DataFrame()
-    except Exception as e:  # noqa: BLE001
+    except COMMON_EXC as e:  # noqa: BLE001
         _log.warning(
             "YF_CALENDAR_FAILED",
             extra={
@@ -6484,7 +6495,7 @@ def _fetch_sector_via_yf(symbol: str) -> str | None:
         return None
     try:
         info = yf.Ticker(symbol).info
-    except Exception as e:  # noqa: BLE001
+    except COMMON_EXC as e:  # noqa: BLE001
         _log.warning(
             "YF_SECTOR_FAILED",
             extra={

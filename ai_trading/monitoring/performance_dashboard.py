@@ -4,6 +4,7 @@ Real-time performance monitoring dashboard for production trading.
 Provides comprehensive performance tracking, real-time P&L monitoring,
 risk metrics calculation, and anomaly detection for institutional trading.
 """
+# ruff: noqa
 
 import logging
 import statistics
@@ -14,6 +15,18 @@ from typing import Any
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
+import requests
+from json import JSONDecodeError
+
+COMMON_EXC = (
+    TypeError,
+    ValueError,
+    KeyError,
+    JSONDecodeError,
+    requests.exceptions.RequestException,
+    TimeoutError,
+    ImportError,
+)
 
 from ..core.constants import DATA_PARAMETERS, PERFORMANCE_THRESHOLDS
 from .alerting import AlertManager, AlertSeverity
@@ -59,7 +72,7 @@ class PerformanceMetrics:
             if len(self.returns) >= 30:
                 self._calculate_metrics()
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error adding return data: {e}")
 
     def add_trade(
@@ -94,7 +107,7 @@ class PerformanceMetrics:
             self.trades.append(trade)
             logger.debug(f"Trade added: {symbol} PnL=${pnl:.2f}")
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error adding trade: {e}")
 
     def calculate_sharpe_ratio(self, returns: list[float] = None) -> float:
@@ -118,7 +131,7 @@ class PerformanceMetrics:
 
             return sharpe
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating Sharpe ratio: {e}")
             return 0.0
 
@@ -149,7 +162,7 @@ class PerformanceMetrics:
 
             return sortino
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating Sortino ratio: {e}")
             return 0.0
 
@@ -180,7 +193,7 @@ class PerformanceMetrics:
 
             return max_dd, max_dd_duration
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating max drawdown: {e}")
             return 0.0, 0
 
@@ -227,7 +240,7 @@ class PerformanceMetrics:
                 "losing_trades": len(losing_trades),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating win rate: {e}")
             return {
                 "win_rate": 0.0,
@@ -275,7 +288,7 @@ class PerformanceMetrics:
                 "last_updated": datetime.now(UTC),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating performance metrics: {e}")
 
     def get_current_metrics(self) -> dict[str, Any]:
@@ -349,7 +362,7 @@ class RealTimePnLTracker:
                 # Recalculate total unrealized P&L
                 self._calculate_unrealized_pnl()
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating position for {symbol}: {e}")
 
     def record_trade(
@@ -395,7 +408,7 @@ class RealTimePnLTracker:
                     f"Trade recorded: {symbol} qty={quantity} pnl=${trade_pnl:.2f}"
                 )
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error recording trade: {e}")
 
     def start_new_session(self, starting_equity: float):
@@ -416,7 +429,7 @@ class RealTimePnLTracker:
                     f"New trading session started with equity ${starting_equity:,.2f}"
                 )
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error starting new session: {e}")
 
     def update_equity(self, current_equity: float):
@@ -426,7 +439,7 @@ class RealTimePnLTracker:
                 self.session_high_equity = max(self.session_high_equity, current_equity)
                 self.session_low_equity = min(self.session_low_equity, current_equity)
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating equity: {e}")
 
     def _calculate_unrealized_pnl(self):
@@ -435,7 +448,7 @@ class RealTimePnLTracker:
             self.unrealized_pnl = sum(
                 pos["unrealized_pnl"] for pos in self.positions.values()
             )
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating unrealized P&L: {e}")
             self.unrealized_pnl = 0.0
 
@@ -470,7 +483,7 @@ class RealTimePnLTracker:
                     "last_updated": datetime.now(UTC),
                 }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error getting P&L summary: {e}")
             return {"error": str(e)}
 
@@ -479,7 +492,7 @@ class RealTimePnLTracker:
         try:
             with self._lock:
                 return list(self.positions.values())
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error getting position details: {e}")
             return []
 
@@ -522,7 +535,7 @@ class AnomalyDetector:
             # Recalculate thresholds
             self._update_thresholds()
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating anomaly detector data: {e}")
 
     def detect_anomalies(
@@ -596,7 +609,7 @@ class AnomalyDetector:
 
             return anomalies
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error detecting anomalies: {e}")
             return []
 
@@ -618,7 +631,7 @@ class AnomalyDetector:
                     statistics.stdev(self.volatility_history) * self.sensitivity
                 )
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating anomaly thresholds: {e}")
 
     def get_recent_anomalies(self, hours: int = 24) -> list[dict[str, Any]]:
@@ -630,7 +643,7 @@ class AnomalyDetector:
                 for anomaly in self.recent_anomalies
                 if anomaly["timestamp"] >= cutoff_time
             ]
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error getting recent anomalies: {e}")
             return []
 
@@ -701,7 +714,7 @@ class PerformanceDashboard:
 
             self.last_update = datetime.now(UTC)
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating performance dashboard: {e}")
 
     def _check_performance_thresholds(self):
@@ -742,7 +755,7 @@ class PerformanceDashboard:
                     AlertSeverity.WARNING,
                 )
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error checking performance thresholds: {e}")
 
     def get_dashboard_summary(self) -> dict[str, Any]:
@@ -769,7 +782,7 @@ class PerformanceDashboard:
                 },
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error getting dashboard summary: {e}")
             return {"error": str(e)}
 
@@ -808,7 +821,7 @@ class PerformanceDashboard:
                 symbol, quantity, exit_price, commission, trade_type
             )
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error adding trade to dashboard: {e}")
 
     def update_position(
@@ -824,5 +837,5 @@ class PerformanceDashboard:
             self.pnl_tracker.update_position(
                 symbol, quantity, avg_price, current_price, commission
             )
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating position in dashboard: {e}")

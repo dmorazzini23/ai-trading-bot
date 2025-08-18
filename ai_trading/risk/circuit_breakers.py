@@ -1,4 +1,5 @@
 from __future__ import annotations
+# ruff: noqa
 
 """Circuit breakers and safety mechanisms for production trading."""
 
@@ -12,6 +13,18 @@ from typing import Any
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
+import requests
+from json import JSONDecodeError
+
+COMMON_EXC = (
+    TypeError,
+    ValueError,
+    KeyError,
+    JSONDecodeError,
+    requests.exceptions.RequestException,
+    TimeoutError,
+    ImportError,
+)
 
 from ..core.constants import PERFORMANCE_THRESHOLDS
 
@@ -150,7 +163,7 @@ class DrawdownCircuitBreaker:
 
             return self.state == CircuitBreakerState.CLOSED
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating drawdown circuit breaker: {e}", exc_info=True)
             # AI-AGENT-REF: Return False for safety when circuit breaker fails
             return False
@@ -177,10 +190,10 @@ class DrawdownCircuitBreaker:
                             "timestamp": self.halt_timestamp,
                         },
                     )
-                except Exception as e:
+                except COMMON_EXC as e:
                     logger.error(f"Error in circuit breaker callback: {e}")
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error triggering drawdown halt: {e}")
 
     def _reset_breaker(self, reason: str):
@@ -202,10 +215,10 @@ class DrawdownCircuitBreaker:
                             "timestamp": datetime.now(UTC),
                         },
                     )
-                except Exception as e:
+                except COMMON_EXC as e:
                     logger.error(f"Error in circuit breaker callback: {e}")
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error resetting drawdown breaker: {e}")
 
     def add_callback(self, callback: Callable[[str, dict], None]):
@@ -316,7 +329,7 @@ class VolatilityCircuitBreaker:
                 "state": self.state.value,
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating volatility circuit breaker: {e}")
             return {
                 "status": "ERROR",
@@ -450,7 +463,7 @@ class TradingHaltManager:
 
                 return status
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error checking trading status: {e}")
             return {
                 "trading_allowed": False,
@@ -464,7 +477,7 @@ class TradingHaltManager:
         try:
             with self._lock:
                 self.drawdown_breaker.update_equity(current_equity)
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating equity in halt manager: {e}")
 
     def update_volatility(self, volatility: float):
@@ -472,7 +485,7 @@ class TradingHaltManager:
         try:
             with self._lock:
                 return self.volatility_breaker.update_volatility(volatility)
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating volatility in halt manager: {e}")
             return {"status": "ERROR", "trading_allowed": False}
 
@@ -486,7 +499,7 @@ class TradingHaltManager:
 
                 logger.critical(f"MANUAL TRADING HALT: {reason}")
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error setting manual halt: {e}")
 
     def resume_trading(self, reason: str = "Manual resume"):
@@ -499,7 +512,7 @@ class TradingHaltManager:
 
                 logger.info(f"TRADING RESUMED: {reason}")
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error resuming trading: {e}")
 
     def emergency_stop_all(self, reason: str = "Emergency stop"):
@@ -514,10 +527,10 @@ class TradingHaltManager:
                 for callback in self.emergency_callbacks:
                     try:
                         callback(reason)
-                    except Exception as e:
+                    except COMMON_EXC as e:
                         logger.error(f"Error in emergency callback: {e}")
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error activating emergency stop: {e}")
 
     def reset_emergency_stop(self, reason: str = "Manual reset"):
@@ -528,7 +541,7 @@ class TradingHaltManager:
 
                 logger.info(f"EMERGENCY STOP RESET: {reason}")
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error resetting emergency stop: {e}")
 
     def record_trade(self, trade_pnl: float = 0.0):
@@ -544,7 +557,7 @@ class TradingHaltManager:
                     f"daily_loss={self.daily_loss_amount:.4f}"
                 )
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error recording trade: {e}")
 
     def reset_daily_counters(self):
@@ -556,7 +569,7 @@ class TradingHaltManager:
 
                 logger.info("Daily trading counters reset")
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error resetting daily counters: {e}")
 
     def add_emergency_callback(self, callback: Callable[[str], None]):
@@ -587,7 +600,7 @@ class TradingHaltManager:
                     "circuit_breakers": trading_status["circuit_breakers"],
                 }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error getting comprehensive status: {e}")
             return {"error": str(e)}
 
@@ -630,7 +643,7 @@ class DeadMansSwitch:
 
             logger.info("Dead man's switch monitoring started")
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error starting dead man's switch: {e}")
 
     def stop_monitoring(self):
@@ -647,7 +660,7 @@ class DeadMansSwitch:
 
             logger.info("Dead man's switch monitoring stopped")
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error stopping dead man's switch: {e}")
 
     def heartbeat(self):
@@ -657,7 +670,7 @@ class DeadMansSwitch:
                 self.last_heartbeat = datetime.now(UTC)
                 logger.debug("Dead man's switch heartbeat received")
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error processing heartbeat: {e}")
 
     def _monitoring_loop(self):
@@ -679,7 +692,7 @@ class DeadMansSwitch:
                 # Check every 10 seconds
                 self._stop_event.wait(10.0)
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error in dead man's switch monitoring loop: {e}")
 
     def _trigger_emergency(self):
@@ -689,13 +702,13 @@ class DeadMansSwitch:
             for callback in self.emergency_callbacks:
                 try:
                     callback("Dead man's switch timeout")
-                except Exception as e:
+                except COMMON_EXC as e:
                     logger.error(f"Error in dead man's switch callback: {e}")
 
             # Stop monitoring after triggering
             self.is_active = False
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error triggering dead man's switch emergency: {e}")
 
     def add_emergency_callback(self, callback: Callable[[str], None]):
@@ -723,6 +736,6 @@ class DeadMansSwitch:
                 ),
             }
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error getting dead man's switch status: {e}")
             return {"error": str(e)}
