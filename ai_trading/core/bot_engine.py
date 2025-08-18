@@ -13,7 +13,7 @@ from json import JSONDecodeError
 try:  # pragma: no cover
     import requests  # type: ignore
     RequestException = requests.exceptions.RequestException  # type: ignore[attr-defined]
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow import handling
     class RequestException(Exception):
         pass
 
@@ -207,11 +207,11 @@ from ai_trading.utils.prof import StageTimer
 # AI-AGENT-REF: optional pipeline import
 try:
     pipeline = _importlib.import_module("ai_trading.pipeline")  # type: ignore
-except Exception:  # pragma: no cover - optional (import resolution only)
+except ImportError:  # pragma: no cover - optional (import resolution only)
     try:
         pipeline = _importlib.import_module("pipeline")  # type: ignore
-    except Exception:  # pragma: no cover
-        pipeline = None  # type: ignore
+    except ImportError:  # pragma: no cover
+        pipeline = None  # type: ignore  # AI-AGENT-REF: fallback when pipeline absent
 
 _log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
 
@@ -235,8 +235,8 @@ def _alpaca_diag_info() -> dict[str, object]:
             "shadow_mode": shadow,
             "cwd": os.getcwd(),
         }
-    except Exception as e:  # pragma: no cover – diag never fatal
-        return {"diag_error": str(e)}
+    except COMMON_EXC as e:  # pragma: no cover – diag never fatal
+        return {"diag_error": str(e)}  # AI-AGENT-REF: narrowed diag exception
 
 # --- path helpers (no imports of heavy deps) ---
 BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
@@ -1282,13 +1282,13 @@ import portalocker
 # Bind HTTPError if available; fall back to generic Exception
 try:  # pragma: no cover
     from requests.exceptions import HTTPError  # type: ignore
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover  # AI-AGENT-REF: optional requests
     HTTPError = Exception
 
 # AI-AGENT-REF: optional schedule dependency
 try:  # pragma: no cover - optional dependency
     import schedule  # type: ignore
-except Exception:  # pragma: no cover - schedule may be absent in tests
+except ImportError:  # pragma: no cover - schedule may be absent in tests
     import types
     schedule = types.SimpleNamespace()
 
@@ -1369,12 +1369,12 @@ def _import_model_pipeline():  # AI-AGENT-REF: import helper for tests
         from ai_trading.pipeline import model_pipeline  # type: ignore
 
         return model_pipeline
-    except Exception as _pkg_err:  # pragma: no cover
+    except ImportError as _pkg_err:  # pragma: no cover  # AI-AGENT-REF: narrow import
         try:
             from pipeline import model_pipeline  # type: ignore
 
             return model_pipeline
-        except Exception as _legacy_err:  # pragma: no cover
+        except ImportError as _legacy_err:  # pragma: no cover
             logger.error("model_pipeline import failed: %s", _pkg_err)
             raise ImportError("model_pipeline import failed") from _legacy_err
 
@@ -1500,7 +1500,7 @@ BOT_MODE_ENV = "development"
 # AI-AGENT-REF: optional pybreaker dependency
 try:  # pragma: no cover - optional dependency
     import pybreaker  # type: ignore
-except Exception:  # pragma: no cover - fallback
+except ImportError:  # pragma: no cover - fallback  # AI-AGENT-REF: optional pybreaker
 
     class pybreaker:  # type: ignore
             class CircuitBreaker:

@@ -13,12 +13,8 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import logging
 import pathlib
 import sys
-import textwrap
-
-logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
 def find_broad_handlers(path: pathlib.Path) -> list[dict]:
     try:
@@ -60,18 +56,7 @@ def main() -> int:
     for h in all_hits:
         report["by_file"].setdefault(h["file"], []).append(h)
 
-    sys.stdout.write(
-        json.dumps(report, separators=(",", ":"), sort_keys=True) + "\n"
-    )
-    logging.warning("Top offenders (first 10):")
-    for i, h in enumerate(all_hits[:10], 1):
-        logging.warning(
-            "%2d. %s:%s\n%s",
-            i,
-            h["file"],
-            h["line"],
-            textwrap.indent(h["snippet"], "    "),
-        )
+    print(json.dumps(report, separators=(",", ":"), sort_keys=True))
 
     if args.fail_over is not None and len(all_hits) > args.fail_over:
         return 2
