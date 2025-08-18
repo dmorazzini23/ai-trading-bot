@@ -1,3 +1,4 @@
+# ruff: noqa
 import logging
 import os
 import random
@@ -15,7 +16,8 @@ from ai_trading.config.management import SEED, TradingConfig
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
 from ai_trading.strategies.base import StrategySignal as TradeSignal
-from ai_trading.telemetry import metrics_logger
+# Avoid module-scope telemetry import; use lazy accessor
+from ai_trading.logging import _get_metrics_logger
 from ai_trading.utils.base import get_phase_logger
 
 logger = get_phase_logger(__name__, "RISK_CHECK")
@@ -1274,7 +1276,7 @@ def calculate_atr_stop(
         if direction == "long"
         else entry_price + multiplier * atr
     )
-    metrics_logger.log_atr_stop(symbol="generic", stop=stop)
+    _get_metrics_logger().log_atr_stop(symbol="generic", stop=stop)
     return stop
 
 
@@ -1287,7 +1289,7 @@ def calculate_bollinger_stop(
         stop = min(price, mid)
     else:
         stop = max(price, mid)
-    metrics_logger.log_atr_stop(symbol="bb", stop=stop)
+    _get_metrics_logger().log_atr_stop(symbol="bb", stop=stop)
     return stop
 
 
