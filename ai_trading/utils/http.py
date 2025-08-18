@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import json  # AI-AGENT-REF: JSON decode error handling
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from ai_trading.utils.timing import HTTP_TIMEOUT
+from ai_trading.logging import get_logger  # AI-AGENT-REF: centralized logging
+from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: retry helper
+from ai_trading.utils.timing import HTTP_TIMEOUT, clamp_timeout  # AI-AGENT-REF: timeout clamp
+
+_log = get_logger(__name__)
 
 _session = None
 _session_lock = threading.Lock()
@@ -44,17 +50,63 @@ def _get_session() -> requests.Session:
 
 
 def _with_timeout(kwargs: dict) -> dict:
-    if "timeout" not in kwargs or kwargs["timeout"] is None:
-        kwargs["timeout"] = HTTP_TIMEOUT
+    """Ensure a clamped timeout is always provided."""
+    # AI-AGENT-REF: unify timeout handling
+    kwargs["timeout"] = clamp_timeout(kwargs.get("timeout"), default_non_test=HTTP_TIMEOUT)
     return kwargs
+
+
+def _retry_config() -> tuple[int, float, float, float]:
+    """Load retry knobs from settings if available."""
+    # AI-AGENT-REF: optional configuration
+    attempts, base, max_delay, jitter = 3, 0.1, 2.0, 0.1
+    try:  # Lazy import to avoid heavy config at import time
+        from ai_trading.config import get_settings  # type: ignore
+
+        s = get_settings()
+        attempts = int(getattr(s, "RETRY_MAX_ATTEMPTS", attempts))
+        base = float(getattr(s, "RETRY_BASE_DELAY", base))
+        max_delay = float(getattr(s, "RETRY_MAX_DELAY", max_delay))
+        jitter = float(getattr(s, "RETRY_JITTER", jitter))
+    except Exception:  # pragma: no cover - settings optional
+        pass
+    return attempts, base, max_delay, jitter
 
 
 def request(method: str, url: str, **kwargs) -> requests.Response:
     sess = _get_session()
     kwargs = _with_timeout(kwargs)
+    attempts, base, max_delay, jitter = _retry_config()
+    excs = (
+        requests.exceptions.RequestException,
+        json.JSONDecodeError,
+        TimeoutError,
+        OSError,
+    )
+
+    attempt = {"n": 0}
+
+    def _do_request() -> requests.Response:
+        try:
+            return sess.request(method, url, **kwargs)
+        except excs as e:  # AI-AGENT-REF: log retry attempt
+            attempt["n"] += 1
+            _log.warning(
+                "HTTP_RETRY",
+                extra={"attempt": attempt["n"], "attempts": attempts, "error": str(e)},
+            )
+            raise
+
     _pool_stats["requests"] += 1
     try:
-        resp = sess.request(method, url, **kwargs)
+        resp = retry_call(
+            _do_request,
+            exceptions=excs,
+            attempts=attempts,
+            base_delay=base,
+            max_delay=max_delay,
+            jitter=jitter,
+        )
         _pool_stats["responses"] += 1
         return resp
     except Exception:
