@@ -223,7 +223,7 @@ class PositionReconciler:
                 actions.append(action)
                 self.logger.info(action)
 
-            except Exception as e:
+            except (RuntimeError, ValueError) as e:
                 error_action = f"Failed to sync position for {drift.symbol}: {e}"
                 actions.append(error_action)
                 self.logger.error(error_action)
@@ -270,7 +270,7 @@ class PositionReconciler:
                 actions.append(action)
                 self.logger.info(action)
 
-            except Exception as e:
+            except (RuntimeError, ValueError) as e:
                 error_action = f"Failed to fix order {drift.order_id}: {e}"
                 actions.append(error_action)
                 self.logger.error(error_action)
@@ -404,7 +404,7 @@ def reconcile_positions_and_orders() -> ReconciliationResult:
             position_drifts=[], order_drifts=[], timestamp=datetime.now(UTC)
         )
 
-    except Exception as e:
+    except (RuntimeError, ValueError) as e:
         logger.error(f"Error in reconciliation: {e}")
         return ReconciliationResult(
             position_drifts=[], order_drifts=[], timestamp=datetime.now(UTC)
