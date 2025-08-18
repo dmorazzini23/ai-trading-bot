@@ -208,6 +208,11 @@ def map_get(
     headers: dict | None = None,
 ) -> list[tuple[str, int, bytes]]:
     """Fetch multiple URLs concurrently while preserving order."""
+    # Fast validation: every URL must include a scheme
+    for u in urls:
+        p = urlparse(u)
+        if p.scheme not in {"http", "https"}:
+            raise ValueError(f"Invalid URL (missing scheme): {u}")
     results: list[tuple[str, int, bytes]] = [("", 0, b"")] * len(urls)
     futs = []
     execu = _get_executor()
