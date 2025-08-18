@@ -250,7 +250,7 @@ def get_buy_threshold() -> float:
 def get_conf_threshold() -> float:
     from ai_trading.config.management import TradingConfig
 
-    mode = getattr(get_settings(), "bot_mode", "balanced")
+    mode = getattr(get_settings(), "trading_mode", "balanced")
     cfg = TradingConfig.from_env(mode=mode)
     return _to_float(
         getattr(cfg, "conf_threshold", 0.75), 0.75

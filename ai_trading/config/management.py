@@ -22,6 +22,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )  # AI-AGENT-REF: allow extras
+from ai_trading.config.aliases import resolve_trading_mode
 
 logger = logging.getLogger(__name__)
 
@@ -1136,7 +1137,7 @@ class _LegacyTradingConfig:
             or cfg.ALPACA_SECRET_KEY
         )
         cfg.ALPACA_BASE_URL = getattr(s_rt, "alpaca_base_url", cfg.alpaca_base_url)
-        cfg.TRADING_MODE = getattr(s_rt, "bot_mode", cfg.trading_mode)
+        cfg.TRADING_MODE = getattr(s_rt, "trading_mode", cfg.trading_mode)
         cfg.trading_mode = cfg.TRADING_MODE  # AI-AGENT-REF: keep internal field synced
         cfg.TRADE_LOG_FILE = getattr(s_rt, "trade_log_file", TRADE_LOG_FILE)
         cfg.TIMEZONE = getattr(s_rt, "timezone", "UTC")
@@ -1591,7 +1592,11 @@ class TradingConfig(BaseModel):
         **overrides,
     ) -> "TradingConfig":
         """Load configuration from environment with mode defaults."""  # AI-AGENT-REF
-        mode = (mode or os.getenv("TRADING_MODE", "balanced")).lower()
+        mode = (
+            mode.lower()
+            if mode
+            else resolve_trading_mode("balanced").lower()
+        )
         defaults = {"conservative": 0.85, "balanced": 0.75, "aggressive": 0.65}
         override = os.getenv("CONF_THRESHOLD")
         if override is not None:
@@ -1696,6 +1701,7 @@ class TradingConfig(BaseModel):
         base.market_calendar = os.getenv(
             "MARKET_CALENDAR", getattr(base, "market_calendar", "XNYS")
         )
+        base.trading_mode = mode
         if overrides:
             base = base.model_copy(update=overrides)
         return base
