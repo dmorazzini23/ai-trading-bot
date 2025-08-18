@@ -28,7 +28,7 @@ from json import JSONDecodeError
 try:  # pragma: no cover
     import requests  # type: ignore
     RequestException = requests.exceptions.RequestException  # type: ignore[attr-defined]
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow requests import
     class RequestException(Exception):
         pass
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
@@ -42,7 +42,7 @@ try:  # pragma: no cover - torch is optional
     from torch.utils.data import DataLoader, TensorDataset  # type: ignore
 
     TORCH_AVAILABLE = True
-except Exception:  # torch not installed or not importable on this host
+except (ImportError, OSError):  # torch not installed or not importable on this host
     torch = None  # type: ignore
     nn = None  # type: ignore
     DataLoader = TensorDataset = None  # type: ignore

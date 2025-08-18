@@ -19,7 +19,7 @@ from json import JSONDecodeError
 try:  # pragma: no cover
     import requests  # type: ignore
     RequestException = requests.exceptions.RequestException  # type: ignore[attr-defined]
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover  # AI-AGENT-REF: narrow requests import
     class RequestException(Exception):
         pass
 COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
