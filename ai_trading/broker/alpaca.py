@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Callable
 from typing import Any
 
 from ai_trading.alpaca_api import ALPACA_AVAILABLE
+from ai_trading.logging import get_logger
+from ai_trading.utils.retry import retry_call  # AI-AGENT-REF: retry helper
+
+try:  # AI-AGENT-REF: optional requests import for HTTPError
+    from requests.exceptions import HTTPError
+except Exception:  # pragma: no cover - requests optional
+    class HTTPError(Exception):
+        pass
 
 try:  # AI-AGENT-REF: guard Alpaca dependency
     from alpaca.common.exceptions import APIError  # type: ignore
@@ -13,6 +21,26 @@ except Exception:  # pragma: no cover - optional dependency
 
     class APIError(Exception):  # AI-AGENT-REF: fallback when SDK missing
         pass
+
+
+_log = get_logger(__name__)
+COMMON_EXC = (APIError, HTTPError, TimeoutError, OSError)
+
+
+def _retry_config() -> tuple[int, float, float, float]:
+    """Load retry knobs from settings if available."""  # AI-AGENT-REF
+    attempts, base, max_delay, jitter = 3, 0.1, 2.0, 0.1
+    try:  # Lazy import to avoid heavy config at import time
+        from ai_trading.config import get_settings  # type: ignore
+
+        s = get_settings()
+        attempts = int(getattr(s, "RETRY_MAX_ATTEMPTS", attempts))
+        base = float(getattr(s, "RETRY_BASE_DELAY", base))
+        max_delay = float(getattr(s, "RETRY_MAX_DELAY", max_delay))
+        jitter = float(getattr(s, "RETRY_JITTER", jitter))
+    except Exception:  # pragma: no cover - settings optional
+        pass
+    return attempts, base, max_delay, jitter
 
 
 class AlpacaBroker:
@@ -75,6 +103,35 @@ class AlpacaBroker:
             self._OrderType = OrderType
             self._TimeInForce = TimeInForce
 
+    def _call_with_retry(self, op: str, func: Callable[[], Any]) -> Any:
+        attempts, base, max_delay, jitter = _retry_config()
+        attempt = {"n": 0}
+
+        def _wrapped() -> Any:
+            try:
+                return func()
+            except COMMON_EXC as e:  # AI-AGENT-REF: log retry
+                attempt["n"] += 1
+                _log.warning(
+                    "ALPACA_RETRY",
+                    extra={
+                        "op": op,
+                        "attempt": attempt["n"],
+                        "attempts": attempts,
+                        "error": str(e),
+                    },
+                )
+                raise
+
+        return retry_call(
+            _wrapped,
+            exceptions=COMMON_EXC,
+            attempts=attempts,
+            base_delay=base,
+            max_delay=max_delay,
+            jitter=jitter,
+        )
+
     # ---------- Orders ----------
     def list_open_orders(self) -> Iterable[Any]:
         """
@@ -116,8 +173,12 @@ class AlpacaBroker:
 
     def cancel_order(self, order_id: str) -> Any:
         if self._is_new:
-            return self._api.cancel_order_by_id(order_id)
-        return self._api.cancel_order(order_id)
+            return self._call_with_retry(
+                "cancel_order_by_id", lambda: self._api.cancel_order_by_id(order_id)
+            )
+        return self._call_with_retry(
+            "cancel_order", lambda: self._api.cancel_order(order_id)
+        )
 
     def cancel_all_orders(self) -> Any:
         if self._is_new:
@@ -135,9 +196,9 @@ class AlpacaBroker:
     # ---------- Positions & Account ----------
     def list_open_positions(self) -> Iterable[Any]:
         if self._is_new:
-            return self._api.get_all_positions()
+            return self._call_with_retry("get_all_positions", self._api.get_all_positions)
         try:
-            return self._api.list_positions()
+            return self._call_with_retry("list_positions", self._api.list_positions)
         except AttributeError:
             # Some old SDKs used `list_positions`; keep explicit error
             raise RuntimeError(
@@ -146,8 +207,40 @@ class AlpacaBroker:
 
     def get_account(self) -> Any:
         if self._is_new:
-            return self._api.get_account()
-        return self._api.get_account()
+            return self._call_with_retry("get_account", self._api.get_account)
+        return self._call_with_retry("get_account", self._api.get_account)
+
+    def submit_order(self, **kwargs) -> Any:
+        """Submit an order with retry handling."""  # AI-AGENT-REF
+        if self._is_new:
+            self._new_imports()
+            side = self._OrderSide(kwargs["side"].upper())
+            tif = self._TimeInForce(kwargs.get("time_in_force", "day").upper())
+            order_type = kwargs.get("type", "market").lower()
+            req_cls = {
+                "market": self._MarketOrderRequest,
+                "limit": self._LimitOrderRequest,
+                "stop": self._StopOrderRequest,
+                "stop_limit": self._StopLimitOrderRequest,
+            }.get(order_type)
+            if req_cls is None:
+                raise ValueError(f"unsupported order type: {order_type}")
+            req_kwargs = {
+                "symbol": kwargs["symbol"],
+                "qty": kwargs["qty"],
+                "side": side,
+                "time_in_force": tif,
+                "client_order_id": kwargs.get("client_order_id"),
+            }
+            if order_type in {"limit", "stop_limit"}:
+                req_kwargs["limit_price"] = kwargs.get("limit_price")
+            if order_type in {"stop", "stop_limit"}:
+                req_kwargs["stop_price"] = kwargs.get("stop_price")
+            req = req_cls(**req_kwargs)
+            return self._call_with_retry("submit_order", lambda: self._api.submit_order(req))
+        return self._call_with_retry(
+            "submit_order", lambda: self._api.submit_order(**kwargs)
+        )
 
 
 def initialize(*args, **kwargs) -> AlpacaBroker | None:
