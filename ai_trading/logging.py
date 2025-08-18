@@ -18,7 +18,8 @@ import threading
 import time
 import traceback
 from datetime import UTC, date, datetime
-from typing import Any, Dict
+from logging.handlers import QueueHandler, QueueListener, RotatingFileHandler
+from typing import Any
 
 # Reserved LogRecord attribute names that cannot be overridden by `extra`.
 _RESERVED_LOGRECORD_KEYS = {
@@ -46,7 +47,7 @@ _RESERVED_LOGRECORD_KEYS = {
 }  # AI-AGENT-REF: prevent reserved key collisions
 
 
-def _sanitize_extra(extra: Dict[str, Any] | None) -> Dict[str, Any]:
+def _sanitize_extra(extra: dict[str, Any] | None) -> dict[str, Any]:
     """Rename reserved LogRecord keys with ``x_`` prefix."""  # AI-AGENT-REF: sanitizer
     if not extra:
         return {}
@@ -94,19 +95,39 @@ def error_kv(logger, msg: str, *, extra: dict | None = None):
 # AI-AGENT-REF: Handle missing dependencies gracefully for testing
 # AI-AGENT-REF: Lazy import config to avoid import-time dependencies
 def _get_config():
-    """Lazy import config management to avoid import-time dependencies."""
-    from ai_trading.config import management as config
+    """Lazy import config management to avoid import-time dependencies.
+
+    Returns the imported module so callers can access attributes safely.
+    """
+    from ai_trading.config import management as config  # type: ignore
+    return config
 # AI-AGENT-REF: Import monitoring metrics (lazy load in functions if needed)
 def _get_metrics_logger():
-    """Lazy import metrics_logger to avoid import-time dependencies."""
-    from ai_trading.telemetry import metrics_logger
+    """Lazy import metrics_logger to avoid import-time dependencies.
+
+    Returns the module which provides log_* helpers.
+    """
+    from ai_trading.telemetry import metrics_logger  # type: ignore
+    return metrics_logger
+
+
+def _mask_secret(value: str) -> str:
+    """Non-throwing redactor for secret-like values (config-independent).
+
+    Short values fully masked; longer values keep a tiny prefix/suffix.
+    """  # AI-AGENT-REF: local secret redaction
+    try:
+        s = "" if value is None else str(value)
+        n = len(s)
+        if n == 0:
+            return ""
+        if n <= 6:
+            return "***"
+        return f"{s[:2]}***{s[-2:]}"
+    except Exception:
+        return "***"
 # AI-AGENT-REF: Configure UTC formatting only, remove import-time basicConfig to prevent duplicates
 logging.Formatter.converter = time.gmtime
-from logging.handlers import (
-    QueueHandler,
-    QueueListener,
-    RotatingFileHandler,
-)
 
 
 class UTCFormatter(logging.Formatter):
@@ -164,7 +185,7 @@ class JSONFormatter(logging.Formatter):
             if k in omit:
                 continue
             if "key" in k.lower() or "secret" in k.lower():
-                v = _get_config().mask_secret(str(v))
+                v = _mask_secret(v)
             payload[k] = v
         if record.exc_info:
             exc_type, exc_value, _exc_tb = record.exc_info
@@ -201,7 +222,7 @@ class CompactJsonFormatter(JSONFormatter):
                 "process", "taskName"
             }:
                 if "key" in k.lower() or "secret" in k.lower():
-                    v = _get_config().mask_secret(str(v))
+                    v = _mask_secret(v)
                 payload[k] = v
         
         if record.exc_info:

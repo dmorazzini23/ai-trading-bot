@@ -1376,6 +1376,12 @@ def _require_cfg(value: str | None, name: str) -> str:
 
 # Defer credential checks to runtime (avoid import-time crashes before .env loads)
 def _resolve_alpaca_env():
+    # AI-AGENT-REF: ensure .env is loaded before resolving Alpaca environment
+    try:
+        from ai_trading.env import ensure_dotenv_loaded
+        ensure_dotenv_loaded()
+    except Exception:
+        pass
     key = os.getenv("ALPACA_API_KEY") or os.getenv("APCA_API_KEY_ID")
     secret = os.getenv("ALPACA_SECRET_KEY") or os.getenv("APCA_API_SECRET_KEY")
     base_url = (
