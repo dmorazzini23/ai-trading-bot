@@ -19,7 +19,8 @@ try:  # AI-AGENT-REF: resilient Alpaca import
 except Exception:  # AI-AGENT-REF: local fallback when SDK missing
     TradingClient = None  # type: ignore
 
-    class APIError(Exception): ...
+    class APIError(Exception):
+        pass
 
 
 from ..core.constants import EXECUTION_PARAMETERS

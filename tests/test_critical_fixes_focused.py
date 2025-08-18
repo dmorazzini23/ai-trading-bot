@@ -102,7 +102,7 @@ class TestCriticalFixes(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    print("Running critical trading bot fixes test suite...")
+    print("Running critical trading bot fixes test suite")
     print("=" * 60)
     
     # Create test suite

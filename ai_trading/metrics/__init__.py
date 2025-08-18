@@ -44,25 +44,37 @@ try:  # new-style guarded import
 except Exception:  # noqa: BLE001
     # Minimal no-op fallbacks so imports & tests never crash if the pkg is missing
     class _NoopRegistry:
-        def register(self, *_, **__): ...
-        def unregister(self, *_, **__): ...
+        def register(self, *_, **__):
+            pass
+
+        def unregister(self, *_, **__):
+            pass
 
     class _NoopMetric:
-        def __init__(self, *_, **__): ...
+        def __init__(self, *_, **__):
+            pass
+
         def labels(self, *_, **__):
             return self
 
-        def set(self, *_): ...
-        def inc(self, *_): ...
-        def observe(self, *_): ...
+        def set(self, *_):
+            pass
 
-    def _noop_start_http_server(*_, **__): ...
+        def inc(self, *_):
+            pass
+
+        def observe(self, *_):
+            pass
+
+    def _noop_start_http_server(*_, **__):
+        pass
 
     PROMETHEUS_AVAILABLE = False
     REGISTRY = _NoopRegistry()
 
     class CollectorRegistry:  # type: ignore[override]
-        def __init__(self, *_, **__): ...
+        def __init__(self, *_, **__):
+            pass
 
     Gauge = Counter = Histogram = Summary = _NoopMetric  # type: ignore
     start_http_server = _noop_start_http_server

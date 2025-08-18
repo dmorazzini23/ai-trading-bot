@@ -291,7 +291,7 @@ class MetaLearning(BaseStrategy):
                 self.is_trained = True
                 return True
 
-            logger.info("Training MetaLearning models...")
+            logger.info("Training MetaLearning models")
 
             # Extract features and labels
             features_df = self.extract_features(data)

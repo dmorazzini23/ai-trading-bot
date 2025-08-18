@@ -27,7 +27,7 @@ try:
     )
 except ImportError as e:
     print(f"Import error: {e}")
-    print("Testing import fallback...")
+    print("Testing import fallback")
     
     # Test basic imports
     import sys

@@ -284,7 +284,7 @@ def test_no_metalearn_invalid_prices_error():
 
 if __name__ == '__main__':
     # Run a basic test to ensure the strategy works
-    print("Running basic MetaLearning strategy test...")
+    print("Running basic MetaLearning strategy test")
     
     test_metalearning_import()
     print("✅ Import test passed")

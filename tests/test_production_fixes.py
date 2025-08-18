@@ -231,7 +231,7 @@ class TestEnvironmentDebugging(unittest.TestCase):
         if 'ALPACA_API_KEY' in env_vars:
             api_key_info = env_vars['ALPACA_API_KEY']
             self.assertEqual(api_key_info['status'], 'set')
-            self.assertIn('...', api_key_info['value'])  # Should be masked
+            self.assertIn('***', api_key_info['value'])  # Should be masked
             self.assertIn('length', api_key_info)
     
     def test_specific_env_var_validation(self):

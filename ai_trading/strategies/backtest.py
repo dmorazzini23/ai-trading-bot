@@ -533,7 +533,7 @@ def run_smoke_test():
     compared to gross P&L when all costs are included.
     """
     logging.info("=== Backtest Smoke Test ===")
-    logging.info("Testing that net < gross due to all costs...")
+    logging.info("Testing that net < gross due to all costs")
 
     try:
         # Import math utilities without triggering bot engine
@@ -544,7 +544,7 @@ def run_smoke_test():
         from money import Money
 
         # Mock a simple backtest scenario
-        logging.info("Simulating backtest with costs...")
+        logging.info("Simulating backtest with costs")
 
         # Trade scenario: Buy at $100, sell at $102, 100 shares
         entry_price = Money("100.00")

@@ -28,7 +28,8 @@ try:  # AI-AGENT-REF: resilient Alpaca import
 except Exception:  # AI-AGENT-REF: fallback when SDK missing
     TradingClient = None  # type: ignore
 
-    class APIError(Exception): ...
+    class APIError(Exception):
+        pass
 
 
 from ai_trading.logging import logger

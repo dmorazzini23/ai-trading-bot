@@ -9,7 +9,7 @@ import re
 
 def test_legacy_imports():
     """Test that legacy import shims work"""
-    print("Testing legacy import shims...")
+    print("Testing legacy import shims")
     
     # Test signals import
     try:
@@ -40,7 +40,7 @@ def test_legacy_imports():
 
 def test_ohlcv_files_exist():
     """Test OHLCV normalizer files exist"""
-    print("\nTesting OHLCV normalizer...")
+    print("\nTesting OHLCV normalizer")
     
     ohlcv_path = "ai_trading/utils/ohlcv.py"
     if os.path.exists(ohlcv_path):
@@ -61,7 +61,7 @@ def test_ohlcv_files_exist():
 
 def test_bot_engine_changes():
     """Test that bot_engine.py has the required changes"""
-    print("\nTesting bot_engine.py changes...")
+    print("\nTesting bot_engine.py changes")
     
     bot_engine_path = "ai_trading/core/bot_engine.py"
     if not os.path.exists(bot_engine_path):
@@ -105,7 +105,7 @@ def test_bot_engine_changes():
 
 def test_top_level_shims():
     """Test that top-level shim files exist"""
-    print("\nTesting top-level shim files...")
+    print("\nTesting top-level shim files")
     
     shims = ["signals.py", "rebalancer.py", "indicators.py"]
     success = True

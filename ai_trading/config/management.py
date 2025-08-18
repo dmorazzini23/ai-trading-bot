@@ -849,7 +849,7 @@ class _LegacyTradingConfig:
     def from_env(cls, mode=None, **overrides):
         """
         Build a TradingConfig from environment variables and optional overrides.
-        Must be a classmethod so callers can use TradingConfig.from_env(...).
+        Must be a classmethod so callers can use TradingConfig.from_env.
         """
         import os
 

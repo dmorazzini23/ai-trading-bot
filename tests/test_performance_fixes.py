@@ -21,7 +21,7 @@ sys.path.append('.')
 
 def test_meta_learning_mixed_format():
     """Test that meta-learning can handle mixed audit/meta-learning log formats."""
-    print("Testing meta-learning mixed format handling...")
+    print("Testing meta-learning mixed format handling")
     
     from ai_trading.meta_learning import validate_trade_data_quality, retrain_meta_learner
     
@@ -49,7 +49,7 @@ def test_meta_learning_mixed_format():
 
 def test_cache_performance_monitoring():
     """Test that cache performance monitoring is working."""
-    print("Testing cache performance monitoring...")
+    print("Testing cache performance monitoring")
     
     from ai_trading.data_fetcher import get_cache_stats, _CACHE_STATS
     
@@ -70,7 +70,7 @@ def test_cache_performance_monitoring():
 
 def test_position_size_reporting():
     """Test that position size reporting is consistent."""
-    print("Testing position size reporting consistency...")
+    print("Testing position size reporting consistency")
     
     from ai_trading.execution.engine import ExecutionEngine
     
@@ -97,7 +97,7 @@ def test_position_size_reporting():
 
 def test_latency_tracking():
     """Test that order execution latency tracking is more granular."""
-    print("Testing enhanced latency tracking...")
+    print("Testing enhanced latency tracking")
     
     import time
     from ai_trading.execution.engine import ExecutionEngine

@@ -11,6 +11,7 @@ import pandas as pd
 import logging
 from functools import lru_cache
 from typing import Any
+from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +133,7 @@ def rsi_numba(prices, period: int = 14):
 
 
 @lru_cache(maxsize=128)
-def ema(series: tuple[float, ...], period: int) -> pd.Series:
+def ema(series: Iterable[float], period: int) -> pd.Series:
     """Calculate EMA with input validation."""
     try:
         # AI-AGENT-REF: Add input validation
@@ -155,7 +156,7 @@ def ema(series: tuple[float, ...], period: int) -> pd.Series:
 
 
 @lru_cache(maxsize=128)
-def sma(series: tuple[float, ...], period: int) -> pd.Series:
+def sma(series: Iterable[float], period: int) -> pd.Series:
     """Calculate SMA with input validation."""
     try:
         # AI-AGENT-REF: Add input validation
@@ -220,7 +221,7 @@ def bollinger_bands(x, length: int = 20, num_std: float = 2.0) -> pd.DataFrame:
 
 
 @lru_cache(maxsize=128)
-def rsi(series: tuple[float, ...], period: int = 14) -> pd.Series:
+def rsi(series: Iterable[float], period: int = 14) -> pd.Series:
     """Calculate RSI with input validation."""
     try:
         # AI-AGENT-REF: Add input validation

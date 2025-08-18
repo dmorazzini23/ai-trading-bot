@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 def test_action_space_parity():
     """Test that training and inference use consistent action spaces."""
-    logger.info("Testing RL action space parity...")
+    logger.info("Testing RL action space parity")
 
     try:
         from ..env import ActionSpaceConfig, RewardConfig, TradingEnv
@@ -29,7 +29,7 @@ def test_action_space_parity():
         test_data = np.random.randn(100, 5)  # 100 timesteps, 5 features
 
         # Test discrete action space
-        logger.info("  Testing discrete action space...")
+        logger.info("  Testing discrete action space")
         action_config = ActionSpaceConfig(action_type="discrete", discrete_actions=3)
         reward_config = RewardConfig(normalize_rewards=True)
 
@@ -59,7 +59,7 @@ def test_action_space_parity():
         logger.info("  Discrete action space test passed!")
 
         # Test continuous action space
-        logger.info("  Testing continuous action space...")
+        logger.info("  Testing continuous action space")
         action_config_cont = ActionSpaceConfig(
             action_type="continuous", continuous_bounds=(-1.0, 1.0)
         )
@@ -88,7 +88,7 @@ def test_action_space_parity():
         logger.info("  Continuous action space test passed!")
 
         # Test inference configuration parity
-        logger.info("  Testing inference configuration...")
+        logger.info("  Testing inference configuration")
 
         # Create a mock model path (in real use, this would be a trained model)
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -152,7 +152,7 @@ def test_action_space_parity():
 
 def test_reward_normalization():
     """Test reward normalization functionality."""
-    logger.info("Testing reward normalization...")
+    logger.info("Testing reward normalization")
 
     try:
         from ..env import RewardConfig, RunningStats, TradingEnv

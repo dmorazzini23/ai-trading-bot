@@ -268,7 +268,7 @@ def test_feature_pipeline_no_leakage():
 
 def run_all_tests():
     """Run all alpha quality tests."""
-    print("Running Alpha Quality Overhaul Tests...")
+    print("Running Alpha Quality Overhaul Tests")
     print("=" * 50)
     
     test_fixed_horizon_return()

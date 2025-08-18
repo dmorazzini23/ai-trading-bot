@@ -738,7 +738,7 @@ def get_column(
                 if dtype == "datetime64[ns]" and pd.api.types.is_datetime64_any_dtype(
                     df[col]
                 ):
-                    ...
+                    continue
                 elif not pd.api.types.is_dtype_equal(df[col].dtype, dtype):
                     raise TypeError(
                         f"{label}: column '{col}' is not of dtype {dtype}, got {df[col].dtype}"
@@ -832,7 +832,7 @@ def get_return_column(df):
     )
 
 
-# Indicator column (pass a list, e.g. ["SMA", "sma", "EMA", ...])
+# Indicator column (pass a list, e.g. ["SMA", "sma", "EMA"])
 
 
 def get_indicator_column(df, possible_names):

@@ -12,7 +12,7 @@ except Exception:  # pragma: no cover - optional dependency
     TradingClient = None  # type: ignore
 
     class APIError(Exception):  # AI-AGENT-REF: fallback when SDK missing
-        ...
+        pass
 
 
 class AlpacaBroker:
@@ -23,12 +23,12 @@ class AlpacaBroker:
 
     Exposes a stable, minimal surface for the rest of the bot:
       - list_open_orders()
-      - list_orders(...)
+      - list_orders
       - cancel_order(order_id)
       - cancel_all_orders()
       - list_open_positions()
       - get_account()
-      - submit_order(...)  (market/limit/stop/stop_limit supported)
+      - submit_order  (market/limit/stop/stop_limit supported)
 
     All methods return the SDK-native objects (no shape conversion),
     to minimize downstream changes.

@@ -17,7 +17,7 @@ os.environ.setdefault('FLASK_PORT', '5000')
 
 def test_risk_engine_methods_exist():
     """Test that the missing RiskEngine methods now exist."""
-    print("Testing RiskEngine missing methods...")
+    print("Testing RiskEngine missing methods")
     
     try:
         from ai_trading.risk.engine import RiskEngine  # AI-AGENT-REF: normalized import
@@ -54,7 +54,7 @@ def test_risk_engine_methods_exist():
 
 def test_bot_context_alpaca_client():
     """Test BotContext alpaca_client property."""
-    print("Testing BotContext alpaca_client compatibility...")
+    print("Testing BotContext alpaca_client compatibility")
     
     try:
         from ai_trading.core.bot_engine import BotContext
@@ -98,7 +98,7 @@ def test_bot_context_alpaca_client():
 
 def test_process_manager_enhancements():
     """Test process manager stub functions."""
-    print("Testing ProcessManager enhancements...")
+    print("Testing ProcessManager enhancements")
 
     try:
         import ai_trading.utils.process_manager as process_manager
@@ -118,7 +118,7 @@ def test_process_manager_enhancements():
 
 def test_data_validation_module():
     """Test data validation module exists and has required functions."""
-    print("Testing data validation module...")
+    print("Testing data validation module")
     
     try:
         import ai_trading.data_validation as data_validation
@@ -145,7 +145,7 @@ def test_data_validation_module():
 
 def test_audit_permission_handling():
     """Test audit module has enhanced permission handling."""
-    print("Testing audit permission handling...")
+    print("Testing audit permission handling")
     
     try:
         import ai_trading.audit as audit  # AI-AGENT-REF: canonical import

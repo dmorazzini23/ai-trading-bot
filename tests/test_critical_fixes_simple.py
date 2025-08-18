@@ -153,7 +153,7 @@ def test_rfc3339_timestamp_api_format():
 
 
 if __name__ == "__main__":
-    print("Running critical trading bot fix tests...\n")
+    print("Running critical trading bot fix tests\n")
     
     test_timestamp_format_includes_timezone()
     test_position_sizing_minimum_viable()

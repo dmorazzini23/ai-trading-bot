@@ -50,7 +50,7 @@ class DatabaseManager:
                     return True
 
                 # Simulate connection establishment
-                logger.info("Establishing database connection...")
+                logger.info("Establishing database connection")
                 time.sleep(0.1)  # Simulate connection time
 
                 self._is_connected = True
@@ -200,7 +200,7 @@ class DatabaseSession:
         if not self.is_active:
             raise RuntimeError("Session is not active")
 
-        logger.debug(f"Executing query in session {self.session_id}: {query[:100]}...")
+        logger.debug(f"Executing query in session {self.session_id}: {query[:100]}")
         # Simulate query execution
         return {"rows_affected": 1, "result": "success"}
 

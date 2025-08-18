@@ -22,7 +22,7 @@ def test_intelligent_position_components():
     
     try:
         # Test 1: Market Regime Detection
-        print("\n1. Testing Market Regime Detection...")
+        print("\n1. Testing Market Regime Detection")
         from market_regime import MarketRegimeDetector, MarketRegime
         
         detector = MarketRegimeDetector()
@@ -33,7 +33,7 @@ def test_intelligent_position_components():
         print(f"   ✓ Stop distance multiplier: {params.get('stop_distance_multiplier', 'N/A')}")
         
         # Test 2: Technical Signal Analysis
-        print("\n2. Testing Technical Signal Analysis...")
+        print("\n2. Testing Technical Signal Analysis")
         from technical_analyzer import TechnicalSignalAnalyzer
         
         analyzer = TechnicalSignalAnalyzer()
@@ -47,7 +47,7 @@ def test_intelligent_position_components():
         print(f"   ✓ RSI calculation: {rsi:.2f} (trending up)")
         
         # Test 3: Trailing Stop Management
-        print("\n3. Testing Trailing Stop Management...")
+        print("\n3. Testing Trailing Stop Management")
         from trailing_stops import TrailingStopManager
         
         stop_manager = TrailingStopManager()
@@ -65,7 +65,7 @@ def test_intelligent_position_components():
         print(f"   ✓ Time decay multiplier (10 days): {time_multiplier}")
         
         # Test 4: Profit Taking Engine
-        print("\n4. Testing Profit Taking Engine...")
+        print("\n4. Testing Profit Taking Engine")
         from profit_taking import ProfitTakingEngine
         
         profit_engine = ProfitTakingEngine()
@@ -79,7 +79,7 @@ def test_intelligent_position_components():
         print(f"   ✓ Created {len(targets)} percentage-based profit targets")
         
         # Test 5: Portfolio Correlation Analysis
-        print("\n5. Testing Portfolio Correlation Analysis...")
+        print("\n5. Testing Portfolio Correlation Analysis")
         from correlation_analyzer import PortfolioCorrelationAnalyzer
         
         corr_analyzer = PortfolioCorrelationAnalyzer()
@@ -96,7 +96,7 @@ def test_intelligent_position_components():
         print(f"   ✓ 45% position concentration level: {level.value}")
         
         # Test 6: Intelligent Position Manager
-        print("\n6. Testing Intelligent Position Manager...")
+        print("\n6. Testing Intelligent Position Manager")
         from intelligent_manager import IntelligentPositionManager
         
         manager = IntelligentPositionManager()
