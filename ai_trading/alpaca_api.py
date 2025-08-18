@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import importlib.util as _ils
 import os
 import time
 import types
 import uuid
 from contextlib import suppress
+
+from ai_trading.utils.optdeps import module_ok  # AI-AGENT-REF: optional import helper
 
 # AI-AGENT-REF: robust optional Alpaca dependency handling
 SHADOW_MODE = os.getenv("SHADOW_MODE", "").lower() in {"1", "true", "yes"}
@@ -13,20 +14,12 @@ RETRY_HTTP_CODES = {429, 500, 502, 503, 504}
 RETRYABLE_HTTP_STATUSES = tuple(RETRY_HTTP_CODES)
 
 
-def _module_ok(name: str) -> bool:
-    # find_spec can raise ValueError for malformed names; keep catch tight
-    try:
-        return _ils.find_spec(name) is not None
-    except (ImportError, AttributeError, ValueError):
-        return False
-
-
 ALPACA_AVAILABLE = any(
     [
-        _module_ok("alpaca"),
-        _module_ok("alpaca_trade_api"),
-        _module_ok("alpaca.trading"),
-        _module_ok("alpaca.data"),
+        module_ok("alpaca"),
+        module_ok("alpaca_trade_api"),
+        module_ok("alpaca.trading"),
+        module_ok("alpaca.data"),
     ]
 ) and os.getenv("TESTING", "").lower() not in {"1", "true:force_unavailable"}
 
@@ -79,14 +72,16 @@ def submit_order(api, order_data=None, log=None, **kwargs):
     def _shadow() -> types.SimpleNamespace:
         broker_id = f"shadow-{client_order_id}"
         return types.SimpleNamespace(
-            success=True,
             status="shadow",
+            success=True,
             symbol=symbol,
             qty=qty,
             side=side,
             time_in_force=tif,
             client_order_id=client_order_id,
             broker_order_id=broker_id,
+            order_id=broker_id,  # back-compat alias
+            message="shadow-mode OK",
         )
 
     if SHADOW_MODE or not callable(getattr(api, "submit_order", None)):
@@ -113,19 +108,33 @@ def submit_order(api, order_data=None, log=None, **kwargs):
             time_in_force=tif,
             client_order_id=client_order_id,
             broker_order_id=None,
+            order_id=None,
+            message=str(e),
         )
 
-    broker_id = _get(resp, "id")
-    coid = _get(resp, "client_order_id", client_order_id)
+    if isinstance(resp, dict):
+        broker_id = (
+            resp.get("id") or resp.get("order_id") or resp.get("broker_order_id")
+        )
+        client_id = resp.get("client_order_id", client_order_id)
+    else:
+        broker_id = (
+            getattr(resp, "id", None)
+            or getattr(resp, "order_id", None)
+            or getattr(resp, "broker_order_id", None)
+        )
+        client_id = getattr(resp, "client_order_id", client_order_id)
     return types.SimpleNamespace(
-        success=True,
         status="submitted",
+        success=True,
         symbol=symbol,
         qty=qty,
         side=side,
         time_in_force=tif,
-        client_order_id=coid,
+        client_order_id=client_id,
         broker_order_id=broker_id,
+        order_id=broker_id,
+        message="ok",
     )
 
 

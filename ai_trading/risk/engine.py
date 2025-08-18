@@ -1,20 +1,22 @@
 import logging
 import os
 import random
-from dataclasses import dataclass
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC
 from typing import Any
 
 # AI-AGENT-REF: guard numpy import for test environments
 import numpy as np
+
 if not hasattr(np, "NaN"):
     np.NaN = np.nan  # AI-AGENT-REF: ensure numpy.NaN for pandas_ta
 
 # AI-AGENT-REF: guard pandas import for test environments
+import importlib
+
 import pandas as pd
 
-import importlib
 
 # AI-AGENT-REF: lazy optional pandas_ta import without central shim
 def _optional_import(name: str):
@@ -26,13 +28,19 @@ def _optional_import(name: str):
 
 ta = _optional_import("pandas_ta")
 
-from ai_trading.config.management import TradingConfig, SEED
-try:
-    from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: guard Alpaca dependency
+from ai_trading.config.management import SEED, TradingConfig
+
+try:  # AI-AGENT-REF: resilient Alpaca import
+    from alpaca.common.exceptions import APIError  # type: ignore
+    from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
 except Exception:  # AI-AGENT-REF: local fallback when SDK missing
-    class APIError(Exception):
-        pass
+    TradingClient = None  # type: ignore
+
+    class APIError(Exception): ...
+
+
 from ai_trading.config.settings import get_settings
+
 try:
     from alpaca.data.historical import StockHistoricalDataClient
 except Exception:  # pragma: no cover
@@ -57,6 +65,7 @@ class TradeSignal:
     weight: float
     asset_class: str
     strength: float = 1.0
+
 
 logger = logging.getLogger(__name__)
 
@@ -86,13 +95,26 @@ class RiskEngine:
 
         # AI-AGENT-REF: Add comprehensive validation for risk parameters
         try:
-            exposure_cap = getattr(self.config, 'exposure_cap_aggressive', 0.8)
-            if not isinstance(exposure_cap, (int, float)) or not (0 < exposure_cap <= 1.0):
-                logger.warning("Invalid exposure_cap_aggressive %s, using default 0.8", exposure_cap)
+            exposure_cap = getattr(self.config, "exposure_cap_aggressive", 0.8)
+            if not isinstance(exposure_cap, (int, float)) or not (
+                0 < exposure_cap <= 1.0
+            ):
+                logger.warning(
+                    "Invalid exposure_cap_aggressive %s, using default 0.8",
+                    exposure_cap,
+                )
                 exposure_cap = 0.8
             self.global_limit = exposure_cap
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
-            logger.error("Error validating exposure_cap_aggressive: %s, using default", e)
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            ZeroDivisionError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: narrow exception
+            logger.error(
+                "Error validating exposure_cap_aggressive: %s, using default", e
+            )
             self.global_limit = 0.8
 
         self.asset_limits: dict[str, float] = {}
@@ -110,7 +132,9 @@ class RiskEngine:
             if (
                 StockHistoricalDataClient
                 and getattr(s, "alpaca_api_key", None)
-                and getattr(s, "alpaca_secret_key_plain", None)  # AI-AGENT-REF: ensure plain secret
+                and getattr(
+                    s, "alpaca_secret_key_plain", None
+                )  # AI-AGENT-REF: ensure plain secret
             ):
                 self.data_client = StockHistoricalDataClient(
                     api_key=s.alpaca_api_key,
@@ -126,6 +150,7 @@ class RiskEngine:
         self._last_equity_cap: float | None = None
         # AI-AGENT-REF: signal exposure updates to trading loop
         from threading import Event
+
         self._update_event = Event()
         self._last_update = 0.0
 
@@ -133,22 +158,31 @@ class RiskEngine:
         try:
             max_drawdown = float(os.getenv("MAX_DRAWDOWN_THRESHOLD", "0.15"))
             if not (0 < max_drawdown <= 1.0):
-                logger.warning("Invalid MAX_DRAWDOWN_THRESHOLD %s, using default 0.15", max_drawdown)
+                logger.warning(
+                    "Invalid MAX_DRAWDOWN_THRESHOLD %s, using default 0.15",
+                    max_drawdown,
+                )
                 max_drawdown = 0.15
             self.max_drawdown_threshold = max_drawdown
         except (ValueError, TypeError) as e:
-            logger.error("Error parsing MAX_DRAWDOWN_THRESHOLD: %s, using default 0.15", e)
+            logger.error(
+                "Error parsing MAX_DRAWDOWN_THRESHOLD: %s, using default 0.15", e
+            )
             self.max_drawdown_threshold = 0.15
 
         # Validate cooldown period (in minutes) before trading resumes after a hard stop
         try:
             cooldown = float(os.getenv("HARD_STOP_COOLDOWN_MIN", "10"))
             if cooldown < 0:
-                logger.warning("Invalid HARD_STOP_COOLDOWN_MIN %s, using default 10", cooldown)
+                logger.warning(
+                    "Invalid HARD_STOP_COOLDOWN_MIN %s, using default 10", cooldown
+                )
                 cooldown = 10.0
             self.hard_stop_cooldown = cooldown
         except (ValueError, TypeError) as e:
-            logger.error("Error parsing HARD_STOP_COOLDOWN_MIN: %s, using default 10", e)
+            logger.error(
+                "Error parsing HARD_STOP_COOLDOWN_MIN: %s, using default 10", e
+            )
             self.hard_stop_cooldown = 10.0
         # timestamp (epoch) until which hard stop remains active
         self._hard_stop_until: float | None = None
@@ -189,6 +223,7 @@ class RiskEngine:
             if symbol in self._atr_cache:
                 ts, val = self._atr_cache[symbol]
                 from datetime import datetime, timedelta
+
                 if datetime.now(UTC) - ts < timedelta(minutes=30):
                     return val
 
@@ -216,6 +251,7 @@ class RiskEngine:
             tr = np.maximum(tr1, np.maximum(tr2, tr3))
             atr = float(np.mean(tr[-lookback:]))
             from datetime import datetime
+
             self._atr_cache[symbol] = (datetime.now(UTC), atr)
             return atr
         except (APIError, ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -232,8 +268,10 @@ class RiskEngine:
         base_cap = self.global_limit
 
         # Handle missing config attributes gracefully
-        volatility_lookback_days = getattr(self.config, 'volatility_lookback_days', 10)
-        exposure_cap_conservative = getattr(self.config, 'exposure_cap_conservative', 1.0)
+        volatility_lookback_days = getattr(self.config, "volatility_lookback_days", 10)
+        exposure_cap_conservative = getattr(
+            self.config, "exposure_cap_conservative", 1.0
+        )
 
         # If no historical data, just use the base cap without conservative scaling
         if len(self._returns) < 3:  # Need minimum data for meaningful statistics
@@ -342,8 +380,12 @@ class RiskEngine:
         try:
             signal_weight = float(signal.weight)
         except (ValueError, TypeError) as e:
-            logger.warning("Invalid signal.weight value '%s' for %s, defaulting to 0.0: %s",
-                         signal.weight, signal.symbol, e)
+            logger.warning(
+                "Invalid signal.weight value '%s' for %s, defaulting to 0.0: %s",
+                signal.weight,
+                signal.symbol,
+                e,
+            )
             signal_weight = 0.0
         if asset_exp + signal_weight > asset_cap:
             logger.warning(
@@ -382,8 +424,12 @@ class RiskEngine:
         try:
             signal_weight = float(signal.weight)
         except (ValueError, TypeError) as e:
-            logger.warning("Invalid signal.weight value '%s' for %s in register_fill, defaulting to 0.0: %s",
-                         signal.weight, signal.symbol, e)
+            logger.warning(
+                "Invalid signal.weight value '%s' for %s in register_fill, defaulting to 0.0: %s",
+                signal.weight,
+                signal.symbol,
+                e,
+            )
             signal_weight = 0.0
 
         delta = signal_weight if signal.side.lower() == "buy" else -signal_weight
@@ -397,11 +443,11 @@ class RiskEngine:
                 "EXPOSURE_NEGATIVE_PREVENTED",
                 extra={
                     "asset": signal.asset_class,
-                    "symbol": getattr(signal, 'symbol', 'UNKNOWN'),
+                    "symbol": getattr(signal, "symbol", "UNKNOWN"),
                     "prev": prev,
                     "delta": delta,
-                    "would_be": new_exposure
-                }
+                    "would_be": new_exposure,
+                },
             )
             # Set exposure to zero instead of negative when selling non-existent positions
             new_exposure = 0.0
@@ -417,10 +463,11 @@ class RiskEngine:
                 "prev": prev,
                 "new": self.exposure[signal.asset_class],
                 "side": signal.side,
-                "symbol": getattr(signal, 'symbol', 'UNKNOWN')
+                "symbol": getattr(signal, "symbol", "UNKNOWN"),
             },
         )
         import time
+
         self._last_update = time.monotonic()
         self._update_event.set()
 
@@ -453,10 +500,14 @@ class RiskEngine:
         if current_drawdown >= self.max_drawdown_threshold and not self.hard_stop:
             self.hard_stop = True
             import time
+
             self._hard_stop_until = time.time() + self.hard_stop_cooldown * 60
             logger.error(
                 "HARD_STOP_TRIGGERED",
-                extra={"drawdown": current_drawdown, "threshold": self.max_drawdown_threshold},
+                extra={
+                    "drawdown": current_drawdown,
+                    "threshold": self.max_drawdown_threshold,
+                },
             )
 
     def _maybe_lift_hard_stop(self) -> None:
@@ -465,6 +516,7 @@ class RiskEngine:
         should be called before evaluating new trades.
         """
         import time
+
         if self.hard_stop and self._hard_stop_until is not None:
             if time.time() >= self._hard_stop_until:
                 self.hard_stop = False
@@ -484,12 +536,18 @@ class RiskEngine:
         ctx = context if context is not None else getattr(self, "ctx", None)
         if ctx is None:
             raise RuntimeError("RiskEngine.update_exposure: context is required")
-        
+
         # Update exposure based on current positions
         try:
             self.refresh_positions(ctx.api)
             logger.debug("Exposure updated successfully")
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:  # AI-AGENT-REF: narrow exception
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            ZeroDivisionError,
+            OSError,
+        ) as exc:  # AI-AGENT-REF: narrow exception
             logger.warning("Failed to update exposure: %s", exc)
 
     def apply_risk_scaling(
@@ -515,6 +573,7 @@ class RiskEngine:
                 import numpy as np
 
                 from ai_trading.capital_scaling import cvar_scaling
+
                 arr = np.asarray(list(returns), dtype=float)
                 # ignore NaN/inf values
                 arr = arr[np.isfinite(arr)]
@@ -529,7 +588,13 @@ class RiskEngine:
             # AI-AGENT-REF: Ensure signal.weight is float before arithmetic operations
             signal.weight = max(0.0, float(signal.weight) * scale)
             return signal
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:  # AI-AGENT-REF: narrow exception
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            ZeroDivisionError,
+            OSError,
+        ) as exc:  # AI-AGENT-REF: narrow exception
             logger.error("Risk scaling failed: %s", exc)
             return signal
 
@@ -550,10 +615,10 @@ class RiskEngine:
     def position_size(self, signal: Any, cash: float, price: float, api=None) -> int:
         """
         Calculate optimal position size using Kelly criterion and risk management.
-        
+
         This is the core position sizing algorithm that combines multiple risk factors:
         - Kelly criterion for optimal bet sizing
-        - ATR-based volatility scaling  
+        - ATR-based volatility scaling
         - Maximum position limits
         - Account equity validation
         """
@@ -572,12 +637,18 @@ class RiskEngine:
 
         # Basic input validation - price must be positive
         if price <= 0:
-            logger.warning("Invalid price %s for %s", price, getattr(signal, 'symbol', 'UNKNOWN'))
+            logger.warning(
+                "Invalid price %s for %s", price, getattr(signal, "symbol", "UNKNOWN")
+            )
             return 0
 
         # Cash validation - must have positive available capital
         if cash <= 0:
-            logger.warning("Invalid cash amount %s for %s", cash, getattr(signal, 'symbol', 'UNKNOWN'))
+            logger.warning(
+                "Invalid cash amount %s for %s",
+                cash,
+                getattr(signal, "symbol", "UNKNOWN"),
+            )
             return 0
 
         # Get total account equity for position sizing calculations
@@ -588,18 +659,28 @@ class RiskEngine:
                 total_equity = float(getattr(account, "equity", cash))
             else:
                 total_equity = cash
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            ZeroDivisionError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.warning("Error getting account equity: %s", e)
             total_equity = cash
 
         # Validate equity amount after API call
         if total_equity <= 0:
-            logger.warning("Invalid total equity %s for %s", total_equity, getattr(signal, 'symbol', 'UNKNOWN'))
+            logger.warning(
+                "Invalid total equity %s for %s",
+                total_equity,
+                getattr(signal, "symbol", "UNKNOWN"),
+            )
             return 0
 
         try:
             # Signal validation - ensure it has required attributes
-            if not hasattr(signal, 'symbol'):
+            if not hasattr(signal, "symbol"):
                 logger.warning("Invalid signal object missing symbol attribute")
                 return 0
 
@@ -623,13 +704,29 @@ class RiskEngine:
                 # Used when ATR data is unavailable or invalid
                 weight = self._apply_weight_limits(signal)
                 raw_qty = (total_equity * weight) / price
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:  # AI-AGENT-REF: narrow exception
-            logger.warning("ATR calculation failed for %s: %s", getattr(signal, 'symbol', 'UNKNOWN'), exc)
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            ZeroDivisionError,
+            OSError,
+        ) as exc:  # AI-AGENT-REF: narrow exception
+            logger.warning(
+                "ATR calculation failed for %s: %s",
+                getattr(signal, "symbol", "UNKNOWN"),
+                exc,
+            )
             try:
                 # Secondary fallback to basic percentage-based sizing
                 weight = self._apply_weight_limits(signal)
                 raw_qty = (total_equity * weight) / price
-            except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):  # AI-AGENT-REF: narrow exception
+            except (
+                ValueError,
+                KeyError,
+                TypeError,
+                ZeroDivisionError,
+                OSError,
+            ):  # AI-AGENT-REF: narrow exception
                 # AI-AGENT-REF: Fallback for completely invalid signals
                 logger.warning("Failed to calculate position size, returning 0")
                 return 0
@@ -638,21 +735,41 @@ class RiskEngine:
             min_qty = self.config.position_size_min_usd / price
             # AI-AGENT-REF: Handle NaN/inf values before converting to int with fallback
             try:
-                if hasattr(np, 'isfinite'):
+                if hasattr(np, "isfinite"):
                     is_raw_qty_finite = np.isfinite(raw_qty)
                     is_min_qty_finite = np.isfinite(min_qty)
                 else:
                     # Fallback for mocked numpy
-                    is_raw_qty_finite = str(raw_qty).lower() not in ['nan', 'inf', '-inf']
-                    is_min_qty_finite = str(min_qty).lower() not in ['nan', 'inf', '-inf']
+                    is_raw_qty_finite = str(raw_qty).lower() not in [
+                        "nan",
+                        "inf",
+                        "-inf",
+                    ]
+                    is_min_qty_finite = str(min_qty).lower() not in [
+                        "nan",
+                        "inf",
+                        "-inf",
+                    ]
             except (AttributeError, TypeError):
                 # Additional fallback
-                is_raw_qty_finite = isinstance(raw_qty, (int, float)) and raw_qty == raw_qty and abs(raw_qty) != float('inf')
-                is_min_qty_finite = isinstance(min_qty, (int, float)) and min_qty == min_qty and abs(min_qty) != float('inf')
+                is_raw_qty_finite = (
+                    isinstance(raw_qty, (int, float))
+                    and raw_qty == raw_qty
+                    and abs(raw_qty) != float("inf")
+                )
+                is_min_qty_finite = (
+                    isinstance(min_qty, (int, float))
+                    and min_qty == min_qty
+                    and abs(min_qty) != float("inf")
+                )
 
             # AI-AGENT-REF: Ensure raw_qty is positive to prevent negative position sizes
             if not is_raw_qty_finite or raw_qty <= 0:
-                logger.warning("Invalid or negative raw_qty %s for %s, returning 0", raw_qty, getattr(signal, 'symbol', 'UNKNOWN'))
+                logger.warning(
+                    "Invalid or negative raw_qty %s for %s, returning 0",
+                    raw_qty,
+                    getattr(signal, "symbol", "UNKNOWN"),
+                )
                 return 0
             if not is_min_qty_finite:
                 logger.warning("Invalid min_qty %s, using raw_qty only", min_qty)
@@ -662,7 +779,13 @@ class RiskEngine:
             if getattr(signal, "strategy", "") == "default":
                 qty = max(qty, 10)
             return max(qty, 0)  # Ensure non-negative result
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:  # AI-AGENT-REF: narrow exception
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            ZeroDivisionError,
+            OSError,
+        ) as exc:  # AI-AGENT-REF: narrow exception
             logger.warning("Error calculating final quantity: %s", exc)
             return 0
 
@@ -670,10 +793,21 @@ class RiskEngine:
         """Apply confidence-based weight limits considering current exposure."""
         # AI-AGENT-REF: Handle invalid signal objects gracefully
         try:
-            if not hasattr(sig, 'asset_class') or not hasattr(sig, 'strategy') or not hasattr(sig, 'weight') or not hasattr(sig, 'confidence'):
+            if (
+                not hasattr(sig, "asset_class")
+                or not hasattr(sig, "strategy")
+                or not hasattr(sig, "weight")
+                or not hasattr(sig, "confidence")
+            ):
                 logger.warning("Invalid signal object missing required attributes")
                 return 0.0
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):  # AI-AGENT-REF: narrow exception
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            ZeroDivisionError,
+            OSError,
+        ):  # AI-AGENT-REF: narrow exception
             logger.warning("Error validating signal object")
             return 0.0
 
@@ -686,7 +820,9 @@ class RiskEngine:
         strategy_limit = self.strategy_limits.get(sig.strategy, self.global_limit)
 
         available_asset_capacity = max(0.0, asset_limit - current_asset_exposure)
-        available_strategy_capacity = max(0.0, strategy_limit - current_strategy_exposure)
+        available_strategy_capacity = max(
+            0.0, strategy_limit - current_strategy_exposure
+        )
 
         # The maximum weight we can allocate is the minimum of available capacities
         max_allowed = min(available_asset_capacity, available_strategy_capacity)
@@ -697,8 +833,12 @@ class RiskEngine:
         try:
             requested_weight = float(sig.weight)
         except (ValueError, TypeError) as e:
-            logger.warning("Invalid signal.weight value '%s' for %s in _apply_weight_limits, defaulting to 0.0: %s",
-                         sig.weight, sig.symbol, e)
+            logger.warning(
+                "Invalid signal.weight value '%s' for %s in _apply_weight_limits, defaulting to 0.0: %s",
+                sig.weight,
+                sig.symbol,
+                e,
+            )
             requested_weight = 0.0
         base_weight = min(requested_weight, max_allowed)
         return base_weight
@@ -717,17 +857,21 @@ class RiskEngine:
             has_invalid = False
             try:
                 # Try numpy approach first
-                if hasattr(np, 'any') and hasattr(np, 'isnan') and hasattr(np, 'isinf'):
-                    has_invalid = np.any(np.isnan(returns_array)) or np.any(np.isinf(returns_array))
+                if hasattr(np, "any") and hasattr(np, "isnan") and hasattr(np, "isinf"):
+                    has_invalid = np.any(np.isnan(returns_array)) or np.any(
+                        np.isinf(returns_array)
+                    )
                 else:
                     # Fallback for mocked numpy environments
                     for val in returns_array:
-                        if str(val).lower() in ['nan', 'inf', '-inf']:
+                        if str(val).lower() in ["nan", "inf", "-inf"]:
                             has_invalid = True
                             break
             except (AttributeError, TypeError):
                 # Additional fallback for highly constrained test environments
-                has_invalid = any(str(val).lower() in ['nan', 'inf', '-inf'] for val in returns_array)
+                has_invalid = any(
+                    str(val).lower() in ["nan", "inf", "-inf"] for val in returns_array
+                )
 
             if has_invalid:
                 logger.error("compute_volatility: invalid values in returns array")
@@ -739,20 +883,36 @@ class RiskEngine:
             except (AttributeError, TypeError):
                 # Fallback std calculation using pure Python
                 mean_val = sum(returns_array) / len(returns_array)
-                variance = sum((x - mean_val) ** 2 for x in returns_array) / len(returns_array)
-                std_vol = variance ** 0.5
+                variance = sum((x - mean_val) ** 2 for x in returns_array) / len(
+                    returns_array
+                )
+                std_vol = variance**0.5
 
             try:
-                if hasattr(np, 'median') and hasattr(np, 'abs'):
-                    mad = float(np.median(np.abs(returns_array - np.median(returns_array))))
+                if hasattr(np, "median") and hasattr(np, "abs"):
+                    mad = float(
+                        np.median(np.abs(returns_array - np.median(returns_array)))
+                    )
                 else:
                     # Fallback MAD calculation using pure Python
                     sorted_returns = sorted(returns_array)
                     n = len(sorted_returns)
-                    median_val = sorted_returns[n // 2] if n % 2 == 1 else (sorted_returns[n // 2 - 1] + sorted_returns[n // 2]) / 2
+                    median_val = (
+                        sorted_returns[n // 2]
+                        if n % 2 == 1
+                        else (sorted_returns[n // 2 - 1] + sorted_returns[n // 2]) / 2
+                    )
                     abs_deviations = [abs(x - median_val) for x in returns_array]
                     sorted_abs_dev = sorted(abs_deviations)
-                    mad = sorted_abs_dev[len(sorted_abs_dev) // 2] if len(sorted_abs_dev) % 2 == 1 else (sorted_abs_dev[len(sorted_abs_dev) // 2 - 1] + sorted_abs_dev[len(sorted_abs_dev) // 2]) / 2
+                    mad = (
+                        sorted_abs_dev[len(sorted_abs_dev) // 2]
+                        if len(sorted_abs_dev) % 2 == 1
+                        else (
+                            sorted_abs_dev[len(sorted_abs_dev) // 2 - 1]
+                            + sorted_abs_dev[len(sorted_abs_dev) // 2]
+                        )
+                        / 2
+                    )
             except (AttributeError, TypeError):
                 mad = std_vol  # Fallback to std if MAD calculation fails
 
@@ -768,8 +928,14 @@ class RiskEngine:
             try:
                 garch_vol = float(np.sqrt(garch_vol))
             except (AttributeError, TypeError):
-                garch_vol = float(garch_vol ** 0.5)
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError):  # AI-AGENT-REF: narrow exception
+                garch_vol = float(garch_vol**0.5)
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            ZeroDivisionError,
+            OSError,
+        ):  # AI-AGENT-REF: narrow exception
             garch_vol = std_vol
 
         primary_vol = std_vol  # Use standard deviation as primary volatility for test compatibility
@@ -785,7 +951,7 @@ class RiskEngine:
     def get_current_exposure(self) -> dict[str, float]:
         """
         Get current portfolio exposure by asset class.
-        
+
         Returns
         -------
         Dict[str, float]
@@ -797,19 +963,19 @@ class RiskEngine:
     def max_concurrent_orders(self) -> int:
         """
         Get maximum number of concurrent orders allowed.
-        
+
         Returns
         -------
         int
             Maximum number of orders that can be active simultaneously.
             Prevents overwhelming the broker with too many pending orders.
         """
-        return getattr(self.config, 'max_concurrent_orders', 50)
+        return getattr(self.config, "max_concurrent_orders", 50)
 
     def max_exposure(self) -> float:
         """
         Get maximum total portfolio exposure limit.
-        
+
         Returns
         -------
         float
@@ -821,27 +987,27 @@ class RiskEngine:
     def order_spacing(self) -> float:
         """
         Get minimum time spacing between orders in seconds.
-        
+
         Returns
         -------
         float
             Minimum seconds to wait between submitting orders.
             Prevents rapid-fire order submission that could trigger rate limits.
         """
-        return getattr(self.config, 'order_spacing_seconds', 1.0)
+        return getattr(self.config, "order_spacing_seconds", 1.0)
 
     # AI-AGENT-REF: Add missing critical risk management methods for trading operations
     def check_position_limits(self, symbol: str, quantity: float) -> bool:
         """
         Check if a proposed position would exceed risk limits.
-        
+
         Parameters
         ----------
         symbol : str
             Trading symbol to check limits for.
         quantity : float
             Proposed position size (positive for long, negative for short).
-            
+
         Returns
         -------
         bool
@@ -856,11 +1022,13 @@ class RiskEngine:
             new_exposure = current_exposure + abs(quantity) * 0.001  # rough estimate
 
             # Check against maximum exposure per symbol (default 10%)
-            max_symbol_exposure = getattr(self.config, 'max_symbol_exposure', 0.1)
+            max_symbol_exposure = getattr(self.config, "max_symbol_exposure", 0.1)
             if new_exposure > max_symbol_exposure:
                 logger.warning(
                     "Position for %s would exceed symbol exposure limit: %.3f > %.3f",
-                    symbol, new_exposure, max_symbol_exposure
+                    symbol,
+                    new_exposure,
+                    max_symbol_exposure,
                 )
                 return False
 
@@ -869,20 +1037,28 @@ class RiskEngine:
             if total_exposure > self.global_limit:
                 logger.warning(
                     "Position for %s would exceed total exposure limit: %.3f > %.3f",
-                    symbol, total_exposure, self.global_limit
+                    symbol,
+                    total_exposure,
+                    self.global_limit,
                 )
                 return False
 
             return True
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            ZeroDivisionError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error("Error checking position limits for %s: %s", symbol, e)
             return False  # Fail safe - reject if we can't validate
 
     def validate_order_size(self, symbol: str, quantity: float, price: float) -> bool:
         """
         Validate that an order size is appropriate for risk management.
-        
+
         Parameters
         ----------
         symbol : str
@@ -891,7 +1067,7 @@ class RiskEngine:
             Order quantity (shares).
         price : float
             Order price per share.
-            
+
         Returns
         -------
         bool
@@ -902,20 +1078,24 @@ class RiskEngine:
             order_value = abs(quantity) * price
 
             # Check minimum order size (default $100)
-            min_order_value = getattr(self.config, 'min_order_value', 100.0)
+            min_order_value = getattr(self.config, "min_order_value", 100.0)
             if order_value < min_order_value:
                 logger.warning(
                     "Order for %s below minimum value: $%.2f < $%.2f",
-                    symbol, order_value, min_order_value
+                    symbol,
+                    order_value,
+                    min_order_value,
                 )
                 return False
 
             # Check maximum order size (default $50,000)
-            max_order_value = getattr(self.config, 'max_order_value', 50000.0)
+            max_order_value = getattr(self.config, "max_order_value", 50000.0)
             if order_value > max_order_value:
                 logger.warning(
                     "Order for %s exceeds maximum value: $%.2f > $%.2f",
-                    symbol, order_value, max_order_value
+                    symbol,
+                    order_value,
+                    max_order_value,
                 )
                 return False
 
@@ -930,7 +1110,13 @@ class RiskEngine:
 
             return True
 
-        except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # AI-AGENT-REF: narrow exception
+        except (
+            ValueError,
+            KeyError,
+            TypeError,
+            ZeroDivisionError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error("Error validating order size for %s: %s", symbol, e)
             return False  # Fail safe - reject if we can't validate
 
@@ -957,33 +1143,33 @@ def dynamic_position_size(capital: float, volatility: float, drawdown: float) ->
 def calculate_position_size(*args, **kwargs) -> int:
     """
     Calculate optimal position size using Kelly criterion and risk management.
-    
+
     This convenience wrapper function supports multiple calling patterns for
     calculating position sizes based on available capital, signal confidence,
     and risk parameters. It integrates Kelly criterion optimization with
     volatility-based risk scaling.
-    
+
     Parameters
     ----------
     *args : tuple
         Variable arguments supporting multiple calling patterns:
-        
+
         Pattern 1 (Simple): calculate_position_size(cash, price)
         - cash (float): Available trading capital
         - price (float): Current asset price per share
-        
+
         Pattern 2 (Advanced): calculate_position_size(signal, cash, price, api=None)
         - signal (TradeSignal): Signal object with confidence and strategy info
-        - cash (float): Available trading capital  
+        - cash (float): Available trading capital
         - price (float): Current asset price per share
         - api (optional): Broker API client for additional validation
-        
+
     **kwargs : dict
         Optional keyword arguments:
         - api: Broker API client for account validation
         - max_position_pct (float): Maximum position as % of capital (default: 5%)
         - volatility_scaling (bool): Enable volatility-based sizing (default: True)
-        
+
     Returns
     -------
     int
@@ -992,26 +1178,26 @@ def calculate_position_size(*args, **kwargs) -> int:
         - Risk-adjusted position sizing based on volatility
         - Maximum position limits and portfolio constraints
         - Available capital and margin requirements
-        
+
     Raises
     ------
     TypeError
         If invalid argument patterns are provided
     ValueError
         If negative or invalid cash/price values are passed
-        
+
     Examples
     --------
     >>> # Simple position sizing
     >>> shares = calculate_position_size(10000, 150.0)  # $10k capital, $150/share
     >>> logging.info(f"Buy {shares} shares")
-    
+
     >>> # Advanced position sizing with signal
     >>> from ai_trading.strategies.base import StrategySignal as TradeSignal
     >>> signal = TradeSignal(symbol='AAPL', side='buy', confidence=0.8, strategy='momentum')
     >>> shares = calculate_position_size(signal, 10000, 150.0)
     >>> logging.info(f"Buy {shares} shares based on {signal.confidence:.1%} confidence")
-    
+
     Notes
     -----
     - Returns 0 if insufficient capital or invalid parameters
@@ -1046,24 +1232,26 @@ def calculate_position_size(*args, **kwargs) -> int:
         if not isinstance(price, (int, float)) or price <= 0:
             logging.warning(f"Invalid price: {price}")
             return 0
-        if not hasattr(signal, 'confidence') or not hasattr(signal, 'symbol'):
+        if not hasattr(signal, "confidence") or not hasattr(signal, "symbol"):
             logging.error(f"Invalid signal object: {type(signal)}")
             return 0
 
         api = args[3] if len(args) > 3 else kwargs.get("api")
         return engine.position_size(signal, cash, price, api)
 
-    raise TypeError("Invalid arguments for calculate_position_size. Expected (cash, price) or (signal, cash, price)")
+    raise TypeError(
+        "Invalid arguments for calculate_position_size. Expected (cash, price) or (signal, cash, price)"
+    )
 
 
 def check_max_drawdown(state: dict[str, float]) -> bool:
     """
     Validate if current portfolio drawdown exceeds maximum allowed threshold.
-    
+
     This function checks portfolio performance against configured drawdown limits
     to implement risk management controls. When drawdown exceeds the threshold,
     trading may be halted or position sizes reduced.
-    
+
     Parameters
     ----------
     state : Dict[str, float]
@@ -1072,13 +1260,13 @@ def check_max_drawdown(state: dict[str, float]) -> bool:
         - 'max_drawdown' (float): Maximum allowed drawdown threshold
         - 'portfolio_value' (float): Current portfolio value (optional)
         - 'peak_value' (float): Historical peak portfolio value (optional)
-        
+
     Returns
     -------
     bool
         True if current drawdown exceeds maximum allowed threshold,
         False if within acceptable limits or if data is insufficient.
-        
+
     Examples
     --------
     >>> state = {
@@ -1090,7 +1278,7 @@ def check_max_drawdown(state: dict[str, float]) -> bool:
     >>> if check_max_drawdown(state):
     ...     logging.info("WARNING: Drawdown limit exceeded!")
     ...     reduce_position_sizes()
-    
+
     Notes
     -----
     - Returns False for missing or invalid state data
@@ -1118,25 +1306,25 @@ def check_max_drawdown(state: dict[str, float]) -> bool:
 def can_trade() -> bool:
     """
     Determine if trading should be allowed based on market and system conditions.
-    
+
     This function performs a comprehensive check of trading conditions including
     market hours, system health, risk limits, and operational flags to determine
     if the bot should execute trades.
-    
+
     Returns
     -------
     bool
         True if all conditions allow trading, False if trading should be halted.
-        
+
     Checks Performed
     ---------------
     - Market hours and trading sessions
-    - System health and API connectivity  
+    - System health and API connectivity
     - Risk management limits and drawdowns
     - Account status and buying power
     - Emergency halt flags
     - Pattern Day Trader (PDT) restrictions
-    
+
     Examples
     --------
     >>> if can_trade():
@@ -1144,7 +1332,7 @@ def can_trade() -> bool:
     ... else:
     ...     logging.info("Trading halted due to risk conditions")
     ...     wait_for_market_open()
-    
+
     Notes
     -----
     - Called before each trading cycle
@@ -1166,13 +1354,9 @@ def register_trade(size: int) -> dict | None:
 def check_exposure_caps(portfolio, exposure, cap):
     for sym, pos in portfolio.positions.items():
         if pos.quantity > 0 and exposure[sym] > cap:
-            logger.warning(
-                "Exposure cap triggered, blocking new orders for %s", sym
-            )
+            logger.warning("Exposure cap triggered, blocking new orders for %s", sym)
             return False
     # Original exposure logic continues here...
-
-
 
 
 def apply_trailing_atr_stop(
@@ -1209,18 +1393,32 @@ def apply_trailing_atr_stop(
             )
             if context is not None and qty:
                 try:
-                    if hasattr(context, "risk_engine") and not context.risk_engine.position_exists(context.api, symbol):
+                    if hasattr(
+                        context, "risk_engine"
+                    ) and not context.risk_engine.position_exists(context.api, symbol):
                         logger.info("No position to sell for %s, skipping.", symbol)
                         return
                     from ai_trading.core.bot_engine import send_exit_order
 
                     send_exit_order(context, symbol, abs(int(qty)), price, "atr_stop")
-                except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as exc:  # pragma: no cover - best effort  # AI-AGENT-REF: narrow exception
+                except (
+                    ValueError,
+                    KeyError,
+                    TypeError,
+                    ZeroDivisionError,
+                    OSError,
+                ) as exc:  # pragma: no cover - best effort  # AI-AGENT-REF: narrow exception
                     logger.error("ATR stop exit failed: %s", exc)
             else:
                 logger.warning("ATR stop triggered but no context/qty provided")
             schedule_reentry_check(symbol, lookahead_days=2)
-    except (ValueError, KeyError, TypeError, ZeroDivisionError, OSError) as e:  # pragma: no cover - defensive  # AI-AGENT-REF: narrow exception
+    except (
+        ValueError,
+        KeyError,
+        TypeError,
+        ZeroDivisionError,
+        OSError,
+    ) as e:  # pragma: no cover - defensive  # AI-AGENT-REF: narrow exception
         logger.error("ATR stop error: %s", e)
 
 
@@ -1292,14 +1490,19 @@ def dynamic_stop_price(
 
 # --- new risk management helpers -----------------------------------------
 
-def compute_stop_levels(entry_price: float, atr: float, take_mult: float = 2.0) -> tuple[float, float]:
+
+def compute_stop_levels(
+    entry_price: float, atr: float, take_mult: float = 2.0
+) -> tuple[float, float]:
     """Return stop-loss and take-profit levels using ATR."""
     stop = entry_price - atr
     take = entry_price + take_mult * atr
     return stop, take
 
 
-def correlation_position_weights(corr: pd.DataFrame, base: dict[str, float]) -> dict[str, float]:
+def correlation_position_weights(
+    corr: pd.DataFrame, base: dict[str, float]
+) -> dict[str, float]:
     """Scale weights inversely proportional to asset correlations."""
     weights = {}
     for sym, w in base.items():
