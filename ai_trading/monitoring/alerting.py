@@ -5,7 +5,6 @@ Implements comprehensive alerting with email, SMS, and team notifications
 for critical trading events, system failures, and performance issues.
 """
 
-import logging
 import queue
 import smtplib
 import threading
@@ -17,11 +16,12 @@ from email.mime.text import MIMEText
 from enum import Enum
 from typing import Any
 
-from ai_trading.utils import http
-from ai_trading.utils.timing import clamp_timeout  # AI-AGENT-REF: avoid circular import
-
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
+from ai_trading.utils import http
+from ai_trading.utils.timing import (
+    HTTP_TIMEOUT,
+)  # AI-AGENT-REF: avoid circular import
 
 
 class AlertSeverity(Enum):
@@ -271,6 +271,7 @@ class SlackAlerter:
             response = http.post(
                 self.webhook_url,
                 json=payload,
+                timeout=HTTP_TIMEOUT,  # AI-AGENT-REF: explicit timeout
             )
             response.raise_for_status()
 

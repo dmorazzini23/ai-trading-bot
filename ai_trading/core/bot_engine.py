@@ -5645,6 +5645,7 @@ def get_sec_headlines(ctx: BotContext, ticker: str) -> str:
             f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
             f"&CIK={ticker}&type=8-K&count=5",
             headers={"User-Agent": "AI Trading Bot"},
+            timeout=HTTP_TIMEOUT,  # AI-AGENT-REF: explicit timeout
         )
         r.raise_for_status()
 
@@ -5775,7 +5776,7 @@ def _fetch_sentiment_ctx(ctx: BotContext, ticker: str) -> float:
             f"q={ticker}&sortBy=publishedAt&language=en&pageSize=5"
             f"&apiKey={api_key}"
         )
-        resp = http.get(url)
+        resp = http.get(url, timeout=HTTP_TIMEOUT)  # AI-AGENT-REF: explicit timeout
 
         if resp.status_code == 429:
             # AI-AGENT-REF: Enhanced rate limiting handling
@@ -5931,6 +5932,7 @@ def fetch_form4_filings(ticker: str) -> list[dict]:
     r = http.get(
         url,
         headers={"User-Agent": "AI Trading Bot"},
+        timeout=HTTP_TIMEOUT,  # AI-AGENT-REF: explicit timeout
     )
     r.raise_for_status()
     soup = BeautifulSoup(r.content, "lxml")

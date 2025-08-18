@@ -16,9 +16,13 @@ import pandas as pd
 # AI-AGENT-REF: Use HTTP utilities with proper timeout/retry
 from ai_trading.config.management import TradingConfig, reload_env
 from scripts.retrain import prepare_indicators
+
 CONFIG = TradingConfig()
 
 from ai_trading.utils import http
+from ai_trading.utils.timing import (
+    HTTP_TIMEOUT,  # AI-AGENT-REF: explicit timeout constant
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +48,16 @@ _last_request_time = {}
 _min_request_interval = 1.0  # Minimum 1 second between requests per symbol
 _cache_ttl = 300  # 5 minutes cache TTL
 
+
 def fetch_sentiment(symbol: str) -> float:
     """Return a sentiment score for ``symbol`` using NewsAPI with rate limiting and TTL cache."""
 
     # Support both SENTIMENT_API_KEY and NEWS_API_KEY for backwards compatibility
-    api_key = getattr(config, 'SENTIMENT_API_KEY', None) or config.NEWS_API_KEY
+    api_key = getattr(config, "SENTIMENT_API_KEY", None) or config.NEWS_API_KEY
     if not api_key:
-        logger.debug("No sentiment API key configured (checked SENTIMENT_API_KEY and NEWS_API_KEY)")
+        logger.debug(
+            "No sentiment API key configured (checked SENTIMENT_API_KEY and NEWS_API_KEY)"
+        )
         return 0.0
 
     current_time = time.time()
@@ -60,14 +67,20 @@ def fetch_sentiment(symbol: str) -> float:
         if _CACHETOOLS_AVAILABLE:
             if symbol in _sentiment_cache:
                 cached_score = _sentiment_cache[symbol]
-                logger.debug("Using TTL cached sentiment for %s: %.2f", symbol, cached_score)
+                logger.debug(
+                    "Using TTL cached sentiment for %s: %.2f", symbol, cached_score
+                )
                 return cached_score
         else:
             # Fallback manual cache management
             if symbol in _sentiment_cache:
                 cached_score, cached_time = _sentiment_cache[symbol]
                 if current_time - cached_time < _cache_ttl:
-                    logger.debug("Using manual cached sentiment for %s: %.2f", symbol, cached_score)
+                    logger.debug(
+                        "Using manual cached sentiment for %s: %.2f",
+                        symbol,
+                        cached_score,
+                    )
                     return cached_score
                 else:
                     # Remove expired entry
@@ -79,7 +92,7 @@ def fetch_sentiment(symbol: str) -> float:
             if time_since_last < _min_request_interval:
                 logger.warning(
                     "fetch_sentiment(%s) rate-limited → returning cached/neutral 0.0",
-                    symbol
+                    symbol,
                 )
                 # Return cached value if available, otherwise neutral
                 if _CACHETOOLS_AVAILABLE and symbol in _sentiment_cache:
@@ -92,12 +105,13 @@ def fetch_sentiment(symbol: str) -> float:
 
     try:
         # Support configurable sentiment API URL, with fallback to NewsAPI
-        base_url = getattr(config, 'SENTIMENT_API_URL', 'https://newsapi.org/v2/everything')
-        url = (
-            f"{base_url}?q="
-            f"{symbol}&pageSize=5&sortBy=publishedAt&apiKey={api_key}"
+        base_url = getattr(
+            config, "SENTIMENT_API_URL", "https://newsapi.org/v2/everything"
         )
-        resp = http.get(url)
+        url = (
+            f"{base_url}?q=" f"{symbol}&pageSize=5&sortBy=publishedAt&apiKey={api_key}"
+        )
+        resp = http.get(url, timeout=HTTP_TIMEOUT)  # AI-AGENT-REF: explicit timeout
         resp.raise_for_status()
         arts = resp.json().get("articles", [])
         if not arts:
@@ -117,8 +131,9 @@ def fetch_sentiment(symbol: str) -> float:
                 # Manual cache with size limit to prevent memory leaks
                 if len(_sentiment_cache) >= 1000:
                     # Remove oldest entry
-                    oldest_key = min(_sentiment_cache.keys(),
-                                   key=lambda k: _sentiment_cache[k][1])
+                    oldest_key = min(
+                        _sentiment_cache.keys(), key=lambda k: _sentiment_cache[k][1]
+                    )
                     del _sentiment_cache[oldest_key]
                 _sentiment_cache[symbol] = (score, current_time)
 
@@ -217,7 +232,10 @@ def predict(csv_path: str, freq: str = "intraday") -> tuple[int | None, float | 
         pred,
         proba,
     )
-    from ai_trading.logging import _get_metrics_logger  # AI-AGENT-REF: lazy metrics import
+    from ai_trading.logging import (
+        _get_metrics_logger,  # AI-AGENT-REF: lazy metrics import
+    )
+
     _get_metrics_logger().log_metrics(
         {
             "timestamp": pd.Timestamp.now(tz="UTC").isoformat(),
