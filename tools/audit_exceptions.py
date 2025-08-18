@@ -13,9 +13,12 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import logging
 import pathlib
 import sys
 import textwrap
+
+logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
 def find_broad_handlers(path: pathlib.Path) -> list[dict]:
     try:
@@ -50,18 +53,25 @@ def main() -> int:
     for f in files:
         all_hits.extend(find_broad_handlers(f))
 
-    summary = {
+    report = {
         "total": len(all_hits),
         "by_file": {},
     }
     for h in all_hits:
-        summary["by_file"].setdefault(h["file"], []).append(h)
+        report["by_file"].setdefault(h["file"], []).append(h)
 
-    print(json.dumps(summary, indent=2))
-    # Pretty table (first 10)
-    print("\nTop offenders (first 10):")
+    sys.stdout.write(
+        json.dumps(report, separators=(",", ":"), sort_keys=True) + "\n"
+    )
+    logging.warning("Top offenders (first 10):")
     for i, h in enumerate(all_hits[:10], 1):
-        print(f"{i:2d}. {h['file']}:{h['line']}\n{ textwrap.indent(h['snippet'], '    ') }")
+        logging.warning(
+            "%2d. %s:%s\n%s",
+            i,
+            h["file"],
+            h["line"],
+            textwrap.indent(h["snippet"], "    "),
+        )
 
     if args.fail_over is not None and len(all_hits) > args.fail_over:
         return 2
