@@ -8,7 +8,7 @@ retry mechanisms, circuit breakers, and comprehensive monitoring.
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any, Dict, Optional  # AI-AGENT-REF: typed helpers
+from typing import Any  # AI-AGENT-REF: typed helpers
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
@@ -16,19 +16,24 @@ from ai_trading.logging import logger
 _log = logging.getLogger(__name__)  # AI-AGENT-REF: module logger
 
 # Internal config import
-from ai_trading.config import get_alpaca_config, AlpacaConfig
-from ai_trading.execution.slippage import estimate as estimate_slippage  # AI-AGENT-REF: prod slippage estimator
+from ai_trading.config import AlpacaConfig, get_alpaca_config
 
 # Alpaca SDK imports
-try:
-    from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: guard Alpaca dependency
+try:  # AI-AGENT-REF: resilient Alpaca import
+    from alpaca.common.exceptions import APIError  # type: ignore
+    from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
 except Exception:  # AI-AGENT-REF: local fallback when SDK missing
-    class APIError(Exception):
-        pass
+    TradingClient = None  # type: ignore
+
+    class APIError(Exception): ...
+
+
 from ai_trading.broker.alpaca import AlpacaBroker
 
 
-def _req_str(name: str, v: Optional[str]) -> str:  # AI-AGENT-REF: required string validator
+def _req_str(
+    name: str, v: str | None
+) -> str:  # AI-AGENT-REF: required string validator
     if not v:
         raise ValueError(f"{name}_empty")
     return v
@@ -127,7 +132,9 @@ class AlpacaExecutionEngine:
 
             if os.environ.get("PYTEST_RUNNING"):
                 try:
-                    from ai_trading.execution.mocks import MockTradingClient  # AI-AGENT-REF: test mock
+                    from ai_trading.execution.mocks import (
+                        MockTradingClient,  # AI-AGENT-REF: test mock
+                    )
                 except Exception:
                     MockTradingClient = None
                 if MockTradingClient:
@@ -160,7 +167,9 @@ class AlpacaExecutionEngine:
                 return False
 
         except (ValueError, KeyError, AttributeError) as e:
-            logger.error(f"Configuration error initializing Alpaca execution engine: {e}")
+            logger.error(
+                f"Configuration error initializing Alpaca execution engine: {e}"
+            )
             return False
         except (ConnectionError, TimeoutError) as e:
             logger.error(f"Network error initializing Alpaca execution engine: {e}")
@@ -190,7 +199,12 @@ class AlpacaExecutionEngine:
         try:  # AI-AGENT-REF: validate submit inputs
             symbol = _req_str("symbol", symbol)
             if len(symbol) > 5 or not symbol.isalpha():
-                return {"status": "error", "code": "SYMBOL_INVALID", "error": symbol, "order_id": None}
+                return {
+                    "status": "error",
+                    "code": "SYMBOL_INVALID",
+                    "error": symbol,
+                    "order_id": None,
+                }
             quantity = int(_pos_num("qty", quantity))
         except (ValueError, TypeError) as e:
             logger.error(
@@ -219,9 +233,7 @@ class AlpacaExecutionEngine:
         logger.info(f"Submitting market order: {side} {quantity} {symbol}")
 
         # Execute with retry logic
-        result = self._execute_with_retry(
-            self._submit_order_to_alpaca, order_data
-        )
+        result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
 
         # Update statistics
         execution_time = time.time() - start_time
@@ -261,7 +273,12 @@ class AlpacaExecutionEngine:
         try:  # AI-AGENT-REF: validate submit inputs
             symbol = _req_str("symbol", symbol)
             if len(symbol) > 5 or not symbol.isalpha():
-                return {"status": "error", "code": "SYMBOL_INVALID", "error": symbol, "order_id": None}
+                return {
+                    "status": "error",
+                    "code": "SYMBOL_INVALID",
+                    "error": symbol,
+                    "order_id": None,
+                }
             quantity = int(_pos_num("qty", quantity))
             limit_price = _pos_num("limit_price", limit_price)
         except (ValueError, TypeError) as e:
@@ -294,9 +311,7 @@ class AlpacaExecutionEngine:
         )
 
         # Execute with retry logic
-        result = self._execute_with_retry(
-            self._submit_order_to_alpaca, order_data
-        )
+        result = self._execute_with_retry(self._submit_order_to_alpaca, order_data)
 
         # Update statistics
         execution_time = time.time() - start_time
@@ -554,7 +569,7 @@ class AlpacaExecutionEngine:
         return True
 
     # Alpaca API wrapper methods
-    def _submit_order_to_alpaca(self, order_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _submit_order_to_alpaca(self, order_data: dict[str, Any]) -> dict[str, Any]:
         """Submit order to Alpaca API."""
         import os
 
@@ -659,7 +674,9 @@ class AlpacaExecutionEngine:
         import os
 
         if os.environ.get("PYTEST_RUNNING"):
-            _log.debug("ORDER_CANCEL_OK", extra={"id": order_id})  # AI-AGENT-REF: mock cancel success
+            _log.debug(
+                "ORDER_CANCEL_OK", extra={"id": order_id}
+            )  # AI-AGENT-REF: mock cancel success
             return True
         else:
             try:  # AI-AGENT-REF: structured broker call

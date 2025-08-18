@@ -12,12 +12,13 @@ from typing import Any
 from ai_trading.utils import clamp_timeout as _clamp_timeout
 
 # If this file calls broker/data APIs, they may raise concrete errors.
-try:
-    from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: narrow broker catches
+try:  # AI-AGENT-REF: resilient Alpaca import
+    from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
+    from alpaca.common.exceptions import APIError  # type: ignore
 except Exception:  # tests/dev envs without alpaca
+    TradingClient = None  # type: ignore
 
-    class APIError(Exception):
-        pass
+    class APIError(Exception): ...
 
 
 _log = logging.getLogger(__name__)
@@ -142,7 +143,9 @@ def _fetch_api(url: str, retries: int = 3, delay: float = 1.0) -> dict:
     """Fetch JSON from an API with simple retry logic and backoff."""
     for attempt in range(1, retries + 1):
         try:
-            resp = http.get(url, timeout=_clamp_timeout(5, min_s=0.5, default_non_test=5))
+            resp = http.get(
+                url, timeout=_clamp_timeout(5, min_s=0.5, default_non_test=5)
+            )
             resp.raise_for_status()
             return resp.json()
         except (

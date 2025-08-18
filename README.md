@@ -123,6 +123,9 @@ cd ai-trading-bot
 # Install Python dependencies (ta library included)
 pip install -r requirements.txt
 
+# Optional extras for broker/calendar features
+# pip install .[markets,broker]
+
 # Alternative automated setup
 make install-dev
 make validate-env

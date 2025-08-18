@@ -2,24 +2,28 @@
 
 import logging
 import math
-import numpy as np
 import threading
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Any, Dict
+from typing import Any
+
+import numpy as np
 
 _log = logging.getLogger(__name__)
-try:
-    from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: guard Alpaca dependency
-except Exception:  # AI-AGENT-REF: local fallback when SDK missing
-    class APIError(Exception):
-        pass
+try:  # AI-AGENT-REF: resilient Alpaca import
+    from alpaca.common.exceptions import APIError  # type: ignore
+    from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
+except Exception:  # AI-AGENT-REF: fallback when SDK missing
+    TradingClient = None  # type: ignore
 
+    class APIError(Exception): ...
+
+
+from ai_trading.portfolio import compute_portfolio_weights
 from ai_trading.settings import (
     get_rebalance_interval_min,
     get_settings,
 )
-from ai_trading.portfolio import compute_portfolio_weights
 
 
 def apply_no_trade_bands(
@@ -42,17 +46,11 @@ def apply_no_trade_bands(
 
 # AI-AGENT-REF: Enhanced rebalancer with tax awareness
 from ai_trading.core.constants import RISK_PARAMETERS
+
+# AI-AGENT-REF: Portfolio-first trading integration
+from ai_trading.portfolio import create_portfolio_optimizer
 from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer
-
-# AI-AGENT-REF: Portfolio-first trading integration  
-from ai_trading.execution.transaction_costs import (
-    TransactionCostCalculator,
-    create_transaction_cost_calculator,
-)
-
-from ai_trading.portfolio import PortfolioOptimizer, create_portfolio_optimizer
 from ai_trading.strategies.regime_detector import (
-    RegimeDetector,
     create_regime_detector,
 )
 
@@ -62,6 +60,7 @@ _log.info("Portfolio-first trading capabilities loaded")
 
 def rebalance_interval_min() -> int:
     return get_rebalance_interval_min()
+
 
 _last_rebalance = datetime.now(UTC)
 
@@ -425,7 +424,11 @@ class TaxAwareRebalancer:
 
             return base_score + loss_bonus - recency_penalty
 
-        except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow harvest priority errors
+        except (
+            KeyError,
+            ValueError,
+            TypeError,
+        ) as e:  # AI-AGENT-REF: narrow harvest priority errors
             _log.error(
                 "HARVEST_PRIORITY_FAILED",
                 exc_info=True,
@@ -450,7 +453,11 @@ class TaxAwareRebalancer:
 
             return deviation_score - tax_penalty + timing_bonus
 
-        except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow rebalance priority errors
+        except (
+            KeyError,
+            ValueError,
+            TypeError,
+        ) as e:  # AI-AGENT-REF: narrow rebalance priority errors
             _log.error(
                 "REBALANCE_PRIORITY_FAILED",
                 exc_info=True,
@@ -475,7 +482,11 @@ class TaxAwareRebalancer:
 
             return total_drift / 2  # Normalize (sum of absolute differences / 2)
 
-        except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow drift calculation errors
+        except (
+            KeyError,
+            ValueError,
+            TypeError,
+        ) as e:  # AI-AGENT-REF: narrow drift calculation errors
             _log.error(
                 "PORTFOLIO_DRIFT_FAILED",
                 exc_info=True,
@@ -508,7 +519,11 @@ class TaxAwareRebalancer:
 
             return sum(efficiency_scores) / len(efficiency_scores)
 
-        except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow efficiency errors
+        except (
+            KeyError,
+            ValueError,
+            TypeError,
+        ) as e:  # AI-AGENT-REF: narrow efficiency errors
             _log.error(
                 "TAX_EFFICIENCY_FAILED",
                 exc_info=True,
@@ -559,7 +574,11 @@ class TaxAwareRebalancer:
 
             return recommendations
 
-        except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow recommendation errors
+        except (
+            KeyError,
+            ValueError,
+            TypeError,
+        ) as e:  # AI-AGENT-REF: narrow recommendation errors
             _log.error(
                 "REBALANCE_RECOMMENDATIONS_FAILED",
                 extra={"cause": e.__class__.__name__, "detail": str(e)},
@@ -976,7 +995,11 @@ def _get_target_weights_for_rebalancing(ctx) -> dict:
 
         return {}
 
-    except (KeyError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow target weight errors
+    except (
+        KeyError,
+        ValueError,
+        TypeError,
+    ) as e:  # AI-AGENT-REF: narrow target weight errors
         _log.error(
             "GET_TARGET_WEIGHTS_FAILED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},

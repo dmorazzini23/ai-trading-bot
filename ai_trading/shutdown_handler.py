@@ -22,11 +22,14 @@ from typing import Any
 
 Hook = Callable[[], None]
 PositionsHandler = Callable[[], list[dict[str, Any]]]
-try:
-    from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: guard Alpaca dependency
-except Exception:  # AI-AGENT-REF: local fallback when SDK missing
-    class APIError(Exception):
-        pass
+try:  # AI-AGENT-REF: resilient Alpaca import
+    from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
+    from alpaca.common.exceptions import APIError  # type: ignore
+except Exception:  # AI-AGENT-REF: fallback when SDK missing
+    TradingClient = None  # type: ignore
+
+    class APIError(Exception): ...
+
 
 from ai_trading.logging import logger
 
@@ -411,7 +414,9 @@ class ShutdownHandler:
                     self._status.errors.append(f"Order cancel error: {e}")
                     continue
 
-            success_rate = self._status.orders_canceled / max(self._status.orders_to_cancel, 1)
+            success_rate = self._status.orders_canceled / max(
+                self._status.orders_to_cancel, 1
+            )
             self.logger.info(
                 f"Canceled {self._status.orders_canceled}/{self._status.orders_to_cancel} orders ({success_rate:.1%})"  # noqa: E501
             )
@@ -471,7 +476,9 @@ class ShutdownHandler:
                     self._status.errors.append(f"Position close error: {e}")
                     continue
 
-            success_rate = self._status.positions_closed / max(self._status.positions_to_close, 1)
+            success_rate = self._status.positions_closed / max(
+                self._status.positions_to_close, 1
+            )
             self.logger.info(
                 f"Closed {self._status.positions_closed}/{self._status.positions_to_close} positions ({success_rate:.1%})"  # noqa: E501
             )
@@ -501,13 +508,16 @@ class ShutdownHandler:
         """Save complete system state."""
         try:
             state_file = (
-                Path("logs") / f"shutdown_state_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
+                Path("logs")
+                / f"shutdown_state_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
             )
             state_file.parent.mkdir(exist_ok=True)
 
             state_data = {
                 "shutdown_info": {
-                    "reason": (self._status.reason.value if self._status.reason else None),
+                    "reason": (
+                        self._status.reason.value if self._status.reason else None
+                    ),
                     "timestamp": datetime.now(UTC).isoformat(),
                     "phase": self._status.phase.value,
                     "positions_status": {
@@ -542,7 +552,8 @@ class ShutdownHandler:
         """Save only critical state for emergency shutdown."""
         try:
             state_file = (
-                Path("logs") / f"emergency_state_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
+                Path("logs")
+                / f"emergency_state_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.json"
             )
             state_file.parent.mkdir(exist_ok=True)
 

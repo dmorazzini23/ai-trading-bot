@@ -8,9 +8,7 @@ dependencies = [
     "pydantic-settings>=2.2,<3",
     "requests>=2.31,<3",
     "numpy>=1.24,<3.0",
-    "pandas>=2",
-    "scikit-learn>=1.4.2",
-    "pandas_market_calendars>=4.3",
+    "pandas>=1.5",
     "tenacity==8.2.2",
     "ratelimit==2.2.1",
     "ta==0.11.0",
@@ -20,29 +18,22 @@ dependencies = [
     "tzlocal==4.3",
     "pyarrow>=12.0.0",
     "pandas_ta==0.3.14b0",
-    "beautifulsoup4>=4.11.1",
     "flask>=2.3.0",
     "schedule>=1.1.0",
     "portalocker==2.7.0",
-    "alpaca-py>=0.42.0",
-    "hmmlearn>=0.3.0",
     "finnhub-python>=2.4.0",
-    "lightgbm>=4.2.1",
     "pybreaker==1.0.0",
     "pytz>=2024.1",
     "yfinance>=0.2.28",
     "websockets>=10.4,<11",
     "urllib3>=2.0,<3",
     "statsmodels>=0.14.1,<0.15",
-    "transformers==4.35.2",
-    "torch>=1.9.0",
     "python-dateutil>=2.9.0",
     "optuna==3.6.1",
     "stable-baselines3==2.3.2",
     "gymnasium==0.29.1",
     "psutil>=5.9.8",
     "filelock>=3.13.1",
-    "xgboost>=1.7.6",
     "lxml",
     "sqlalchemy>=2.0.0",
     "alembic>=1.12.0",
@@ -103,6 +94,11 @@ rl = [  # AI-AGENT-REF: optional RL dependencies
   "hmmlearn",
   "torch>=2.1; platform_system != 'Windows'",
 ]
+
+markets = ["pandas-market-calendars>=4.4"]
+broker = ["alpaca-py>=0.21"]
+nlp = ["transformers>=4.41", "torch>=2.2", "beautifulsoup4>=4.12"]
+ml = ["scikit-learn>=1.4", "xgboost>=2.0", "lightgbm>=4.2.1"]
 
 [tool.black]
 line-length = 88

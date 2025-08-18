@@ -9,6 +9,7 @@ from typing import Dict, Iterable
 
 from ai_trading.data_fetcher import ensure_datetime, get_bars, get_bars_batch
 from ai_trading.utils import health_check as _health_check
+from ai_trading.alpaca_api import ALPACA_AVAILABLE  # AI-AGENT-REF: canonical flag
 
 SENTIMENT_API_KEY: str | None = os.getenv("SENTIMENT_API_KEY")
 NEWS_API_KEY: str | None = os.getenv("NEWS_API_KEY")
@@ -25,6 +26,7 @@ except Exception:
 # AI-AGENT-REF: optional finnhub dependency
 try:  # pragma: no cover - optional dependency
     from finnhub import FinnhubAPIException  # type: ignore
+
     FINNHUB_AVAILABLE = True
 except Exception:  # pragma: no cover - optional dependency
     FinnhubAPIException = Exception  # type: ignore
@@ -55,23 +57,6 @@ def _ridge():
     return Ridge
 
 
-def _module_ok(name: str) -> bool:
-    if name in sys.modules and sys.modules[name] is None:
-        return False
-    try:
-        return importlib.util.find_spec(name) is not None
-    except (ValueError, ImportError):
-        return False
-
-
-ALPACA_AVAILABLE = any(
-    [
-        _module_ok("alpaca"),
-        _module_ok("alpaca_trade_api"),
-        _module_ok("alpaca.trading"),
-        _module_ok("alpaca.data"),
-    ]
-) and os.environ.get("TESTING", "").lower() not in {"1", "true:force_unavailable"}
 trading_client = None
 data_client = None
 
@@ -205,38 +190,38 @@ def default_trade_log_path() -> str:
     return fallback
 
 
+# Delayed import: not all environments have pandas-market-calendars
+def _load_mcal():  # AI-AGENT-REF: lazy calendar import
+    try:
+        import pandas_market_calendars as _mcal  # type: ignore
+
+        return _mcal
+    except Exception:
+        return None
+
+
 def _is_market_open_now(cfg=None) -> bool:
     """Check if market is currently open. Returns True if unable to determine (conservative)."""
     try:
         import pandas as pd
-        import pandas_market_calendars as mcal
-
-        market_calendar = "XNYS"  # Default to NYSE
-        if cfg is not None:
-            market_calendar = getattr(cfg, "market_calendar", "XNYS")
-        cal = mcal.get_calendar(market_calendar)
-        now = pd.Timestamp.utcnow().tz_convert("UTC")
-        schedule = cal.schedule(start_date=now.date(), end_date=now.date())
-        if schedule.empty:
-            return False
-        open_, close_ = (
-            schedule.iloc[0]["market_open"],
-            schedule.iloc[0]["market_close"],
-        )
-        return open_ <= now <= close_
-    except (
-        FileNotFoundError,
-        PermissionError,
-        IsADirectoryError,
-        JSONDecodeError,
-        ValueError,
-        KeyError,
-        TypeError,
-        OSError,
-        ImportError,
-    ):  # AI-AGENT-REF: narrow exception
-        # if calendar not available, default to True (remain conservative)
+    except Exception:
         return True
+    mcal = _load_mcal()
+    if not mcal:
+        return True
+    market_calendar = "XNYS"  # Default to NYSE
+    if cfg is not None:
+        market_calendar = getattr(cfg, "market_calendar", "XNYS")
+    cal = mcal.get_calendar(market_calendar)
+    now = pd.Timestamp.utcnow().tz_convert("UTC")
+    schedule = cal.schedule(start_date=now.date(), end_date=now.date())
+    if schedule.empty:
+        return False
+    open_, close_ = (
+        schedule.iloc[0]["market_open"],
+        schedule.iloc[0]["market_close"],
+    )
+    return open_ <= now <= close_
 
 
 # Import emit-once logger for startup banners
@@ -988,7 +973,6 @@ class _LazyModule(types.ModuleType):
 
 # AI-AGENT-REF: use our improved lazy loading instead of _LazyModule for pandas
 # pd = _LazyModule("pandas")  # Commented out to use our LazyPandas implementation
-mcal = _LazyModule("pandas_market_calendars")
 ta = _LazyModule("pandas_ta")
 # Bind known methods explicitly to avoid __getattr__ magic
 ta._bind_known_methods()
@@ -1120,9 +1104,8 @@ def get_market_calendar():
     global NY
     if NY is not None:
         return NY
-    try:
-        import pandas_market_calendars as mcal  # optional
-    except Exception:
+    mcal = _load_mcal()
+    if not mcal:
         NY = types.SimpleNamespace(
             valid_days=lambda *a, **k: pd.DatetimeIndex([]),
             schedule=pd.DataFrame(),
@@ -1141,8 +1124,6 @@ def get_market_calendar():
             is_session_open=lambda *a, **k: True,
         )
     return NY
-
-
 
 
 _FULL_DATETIME_RANGE = None
