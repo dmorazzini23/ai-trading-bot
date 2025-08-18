@@ -9,8 +9,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Dict
 
 _log = logging.getLogger(__name__)
-
-from alpaca_trade_api.rest import APIError  # type: ignore  # AI-AGENT-REF: fail fast on missing Alpaca SDK
+try:
+    from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: guard Alpaca dependency
+except Exception:  # AI-AGENT-REF: local fallback when SDK missing
+    class APIError(Exception):
+        pass
 
 from ai_trading.settings import (
     get_rebalance_interval_min,

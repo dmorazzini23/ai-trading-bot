@@ -20,7 +20,11 @@ from ai_trading.config import get_alpaca_config, AlpacaConfig
 from ai_trading.execution.slippage import estimate as estimate_slippage  # AI-AGENT-REF: prod slippage estimator
 
 # Alpaca SDK imports
-from alpaca_trade_api.rest import APIError
+try:
+    from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: guard Alpaca dependency
+except Exception:  # AI-AGENT-REF: local fallback when SDK missing
+    class APIError(Exception):
+        pass
 from ai_trading.broker.alpaca import AlpacaBroker
 
 

@@ -7,6 +7,8 @@ from datetime import timedelta
 from functools import lru_cache
 from typing import Any
 
+from ai_trading.env import ensure_dotenv_loaded  # AI-AGENT-REF: re-export for CLI
+
 from pydantic import Field, SecretStr, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
