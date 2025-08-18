@@ -28,17 +28,22 @@ def create_app():
             key, secret, base_url = _resolve_alpaca_env()
             paper = bool(base_url and ("paper" in base_url))
         except Exception:
-            trading_client, base_url, paper = None, "", False
+            trading_client, key, secret, base_url, paper = None, None, None, "", False
+        shadow = bool(
+            getattr(__import__("ai_trading", fromlist=["config"]).config, "SHADOW_MODE", False)
+            or os.getenv("SHADOW_MODE", "").lower() in ("true", "1", "yes")
+        )
         return jsonify(
-            status="ok",
-            alpaca_sdk_available=bool(sdk_ok),
-            alpaca_client_initialized=bool(trading_client is not None),
-            base_url=base_url,
-            paper=paper,
-            shadow_mode=bool(
-                getattr(__import__("ai_trading", fromlist=["config"]).config, "SHADOW_MODE", False)
-                or os.getenv("SHADOW_MODE", "").lower() in ("true", "1", "yes")
-            ),
+            alpaca=dict(
+                sdk_ok=bool(sdk_ok),
+                initialized=bool(trading_client),
+                client_attached=bool(trading_client),
+                has_key=bool(key),
+                has_secret=bool(secret),
+                base_url=base_url,
+                paper=paper,
+                shadow_mode=shadow,
+            )
         )
 
     return app

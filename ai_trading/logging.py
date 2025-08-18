@@ -181,11 +181,30 @@ class JSONFormatter(logging.Formatter):
             "process",
             "taskName",
         }
+        def _should_mask_secret(field: str, value: object) -> bool:
+            lk = field.lower()
+            if lk.startswith("has_"):
+                return False
+            if not isinstance(value, (str, bytes)):
+                return False
+            sensitive_tokens = (
+                "api_key",
+                "secret_key",
+                "apca_api_key_id",
+                "apca_api_secret_key",
+                "token",
+                "password",
+                "bearer",
+                "private",
+                "access_key",
+            )
+            return any(tok in lk for tok in sensitive_tokens)
+
         for k, v in record.__dict__.items():
             if k in omit:
                 continue
-            if "key" in k.lower() or "secret" in k.lower():
-                v = _mask_secret(v)
+            if _should_mask_secret(k, v):
+                v = _mask_secret(v)  # type: ignore[arg-type]
             payload[k] = v
         if record.exc_info:
             exc_type, exc_value, _exc_tb = record.exc_info
