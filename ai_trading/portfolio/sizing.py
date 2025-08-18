@@ -11,21 +11,19 @@ from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
-import requests
 from json import JSONDecodeError
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
 
-COMMON_EXC = (
-    TypeError,
-    ValueError,
-    KeyError,
-    JSONDecodeError,
-    requests.exceptions.RequestException,
-    TimeoutError,
-    ImportError,
-)
+# Consistent exception tuple without hard dependency on requests
+try:  # pragma: no cover
+    import requests  # type: ignore
+    RequestException = requests.exceptions.RequestException  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    class RequestException(Exception):
+        pass
+COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 
 # Clustering features controlled by ENABLE_PORTFOLIO_FEATURES setting  
 def _import_clustering():
