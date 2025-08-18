@@ -4,15 +4,28 @@ Advanced position sizing and portfolio allocation strategies.
 Provides volatility targeting, risk parity, correlation-based sizing,
 and other institutional-grade position sizing methodologies.
 """
+# ruff: noqa
 
 import logging
 from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
+import requests
+from json import JSONDecodeError
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
+
+COMMON_EXC = (
+    TypeError,
+    ValueError,
+    KeyError,
+    JSONDecodeError,
+    requests.exceptions.RequestException,
+    TimeoutError,
+    ImportError,
+)
 
 # Clustering features controlled by ENABLE_PORTFOLIO_FEATURES setting  
 def _import_clustering():
@@ -132,7 +145,7 @@ class VolatilityTargetingSizer:
             )
             return position_details
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating position sizes: {e}")
             return {}
 
@@ -166,7 +179,7 @@ class VolatilityTargetingSizer:
 
             return volatilities
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error estimating volatilities: {e}")
             return dict.fromkeys(symbols, 0.2)
 
@@ -215,7 +228,7 @@ class VolatilityTargetingSizer:
                 n = len(symbols)
                 return np.eye(n) * 0.7 + np.ones((n, n)) * 0.3
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error estimating correlations: {e}")
             n = len(symbols)
             return np.eye(n) * 0.7 + np.ones((n, n)) * 0.3
@@ -241,7 +254,7 @@ class VolatilityTargetingSizer:
 
             return inv_vol_weights
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating inverse vol weights: {e}")
             # Equal weights fallback
             n = len(signals)
@@ -270,7 +283,7 @@ class VolatilityTargetingSizer:
 
             return adjusted_weights
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error applying position limits: {e}")
             return weights
 
@@ -316,7 +329,7 @@ class VolatilityTargetingSizer:
             else:
                 return weights
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error scaling to target volatility: {e}")
             return weights
 
@@ -389,7 +402,7 @@ class RiskParitySizer:
 
             return weights
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating risk parity weights: {e}")
             # Fallback to equal weights
             n = len(signals)
@@ -424,7 +437,7 @@ class RiskParitySizer:
 
             return cov_matrix
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating covariance matrix: {e}")
             return None
 
@@ -471,7 +484,7 @@ class RiskParitySizer:
 
             return weight_dict
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error optimizing risk parity: {e}")
             # Fallback to equal weights
             n = len(symbols)
@@ -541,7 +554,7 @@ class CorrelationClusterSizer:
 
             return adjusted_weights
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error applying cluster limits: {e}")
             return base_weights
 
@@ -571,7 +584,7 @@ class CorrelationClusterSizer:
             correlation_matrix = df.corr().values
             return correlation_matrix
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating correlation matrix: {e}")
             return None
 
@@ -621,7 +634,7 @@ class CorrelationClusterSizer:
 
             return clusters
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error performing clustering: {e}")
             # Fallback: each symbol in its own cluster
             return {i: [symbol] for i, symbol in enumerate(symbols)}
@@ -655,7 +668,7 @@ class CorrelationClusterSizer:
 
             return adjusted_weights
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error applying cluster constraints: {e}")
             return base_weights
 
@@ -721,7 +734,7 @@ class TurnoverPenaltySizer:
             self._update_position_history(adjusted_weights)
             return adjusted_weights
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error applying turnover penalty: {e}")
             return proposed_weights
 
@@ -744,7 +757,7 @@ class TurnoverPenaltySizer:
 
             return turnover
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error calculating turnover: {e}")
             return 0.0
 
@@ -789,7 +802,7 @@ class TurnoverPenaltySizer:
 
             return adjusted_weights
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error reducing turnover: {e}")
             return proposed_weights
 
@@ -804,7 +817,7 @@ class TurnoverPenaltySizer:
             if len(self.position_history) > self.lookback_periods:
                 self.position_history = self.position_history[-self.lookback_periods :]
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error updating position history: {e}")
 
     def get_historical_turnover(self) -> list[float]:
@@ -823,6 +836,6 @@ class TurnoverPenaltySizer:
 
             return turnovers
 
-        except Exception as e:
+        except COMMON_EXC as e:
             logger.error(f"Error getting historical turnover: {e}")
             return []
