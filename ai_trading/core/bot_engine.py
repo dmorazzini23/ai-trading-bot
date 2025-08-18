@@ -3106,9 +3106,11 @@ def get_circuit_breaker_health() -> dict:
 def safe_alpaca_get_account(ctx: BotContext) -> object | None:
     """Safely get Alpaca account; returns None when unavailable or on failure."""
     if ctx.api is None:
-        _log.info(
-            "ctx.api is None - Alpaca trading client unavailable"
-        )  # AI-AGENT-REF: lowered log level for availability
+        # Log once per process to avoid per-cycle noise when creds are missing
+        logger_once.info(
+            "ctx.api is None - Alpaca trading client unavailable",
+            key="alpaca_unavailable_info",
+        )
         return None
     try:
         return ctx.api.get_account()
@@ -12085,7 +12087,11 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
             # AI-AGENT-REF: avoid overlapping cycles if any orders are pending
             api = getattr(runtime, "api", None)
             if not api or not hasattr(api, "list_open_orders"):
-                _log.warning("ctx.api is None - Alpaca trading client unavailable")
+                # Rate-limit the message to once (stable key)
+                logger_once.warning(
+                    "ctx.api is None - Alpaca trading client unavailable",
+                    key="alpaca_unavailable_warn",
+                )
                 return
             try:
                 open_orders = api.list_open_orders()

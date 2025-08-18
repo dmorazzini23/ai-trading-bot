@@ -1527,6 +1527,11 @@ class TradingConfig(BaseModel):
     )  # AI-AGENT-REF: bounded dollar risk
     max_portfolio_risk: float = 0.10  # AI-AGENT-REF: portfolio risk cap
     max_position_size: float = 8000.0  # AI-AGENT-REF: default max position
+    # Optional ML model hints (referenced by bot_engine for model loading)
+    # These were previously relied upon via extra/overrides; make them explicit
+    enable_finbert: bool = False
+    ml_model_path: str | None = None
+    ml_model_module: str | None = None
     take_profit_factor: float = 2.0  # AI-AGENT-REF: reward multiple
     buy_threshold: float = Field(0.60, ge=0, le=1)  # AI-AGENT-REF: min buy confidence
     lookback_days: int = 60  # AI-AGENT-REF: history window
