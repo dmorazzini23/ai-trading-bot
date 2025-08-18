@@ -3103,11 +3103,13 @@ def get_circuit_breaker_health() -> dict:
 
 # Prometheus-safe account fetch with circuit breaker protection
 @alpaca_breaker
-def safe_alpaca_get_account(ctx: BotContext):
-    """Safely get account information."""
+def safe_alpaca_get_account(ctx: BotContext) -> object | None:
+    """Safely get Alpaca account; returns None when unavailable or on failure."""
     if ctx.api is None:
-        _log.warning("ctx.api is None - Alpaca trading client unavailable")
-        return False
+        _log.info(
+            "ctx.api is None - Alpaca trading client unavailable"
+        )  # AI-AGENT-REF: lowered log level for availability
+        return None
     try:
         return ctx.api.get_account()
     except (
@@ -3119,7 +3121,7 @@ def safe_alpaca_get_account(ctx: BotContext):
             "HEALTH_ACCOUNT_FETCH_FAILED",
             extra={"cause": e.__class__.__name__, "detail": str(e)},
         )
-        return False
+        return None  # AI-AGENT-REF: normalized None return on failure
 
 
 # ─── C. HELPERS ────────────────────────────────────────────────────────────────
@@ -6199,7 +6201,7 @@ def check_pdt_rule(runtime) -> bool:
     acct = safe_alpaca_get_account(runtime)
 
     # If account is unavailable (Alpaca not available), assume no PDT blocking
-    if acct is None:
+    if acct is None:  # AI-AGENT-REF: contract now explicit; keep None-check
         _log.info(
             "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions"
         )
