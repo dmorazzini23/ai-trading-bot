@@ -22,7 +22,7 @@ import pandas as pd
 def _optional_import(name: str):
     try:
         return importlib.import_module(name)
-    except Exception:
+    except ImportError:  # AI-AGENT-REF: optional dependency
         return None
 
 
@@ -33,7 +33,7 @@ from ai_trading.config.management import SEED, TradingConfig
 try:  # AI-AGENT-REF: resilient Alpaca import
     from alpaca.common.exceptions import APIError  # type: ignore
     from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
-except Exception:  # AI-AGENT-REF: local fallback when SDK missing
+except ImportError:  # AI-AGENT-REF: optional Alpaca dependency
     TradingClient = None  # type: ignore
 
     class APIError(Exception):
@@ -44,7 +44,7 @@ from ai_trading.config.settings import get_settings
 
 try:
     from alpaca.data.historical import StockHistoricalDataClient
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover - optional Alpaca dependency
     StockHistoricalDataClient = None  # type: ignore
 
 # pandas_ta SyntaxWarning now filtered globally in pytest.ini
@@ -141,7 +141,13 @@ class RiskEngine:
                     api_key=s.alpaca_api_key,
                     secret_key=s.alpaca_secret_key_plain,  # AI-AGENT-REF: use plain secret string
                 )
-        except Exception as e:
+        except (
+            APIError,
+            ValueError,
+            TypeError,
+            AttributeError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.warning("Could not initialize StockHistoricalDataClient: %s", e)
         self.hard_stop = False
         # AI-AGENT-REF: track returns/drawdown for adaptive exposure cap
