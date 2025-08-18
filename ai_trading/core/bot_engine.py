@@ -1433,16 +1433,16 @@ except Exception:  # pragma: no cover - fallback
 
     class pybreaker:  # type: ignore
             class CircuitBreaker:
-            def __init__(self, *args, **kwargs):
-                pass
-            def call(self, func):
-                def _wrapped(*a, **kw):
-                    return func(*a, **kw)
+                def __init__(self, *args, **kwargs):
+                    pass
+                def call(self, func):
+                    def _wrapped(*a, **kw):
+                        return func(*a, **kw)
 
-                return _wrapped
+                    return _wrapped
 
-            def __call__(self, func):
-                return self.call(func)
+                def __call__(self, func):
+                    return self.call(func)
 
 
 # AI-AGENT-REF: optional prometheus_client dependency via shim
