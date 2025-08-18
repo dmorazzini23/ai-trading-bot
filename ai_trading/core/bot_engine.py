@@ -1,4 +1,5 @@
 # ruff: noqa
+# fmt: off
 from __future__ import annotations
 
 import importlib
@@ -158,6 +159,29 @@ except Exception:  # pragma: no cover - optional
         pipeline = None  # type: ignore
 
 _log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
+
+
+def _alpaca_diag_info() -> dict[str, object]:
+    """Collect Alpaca env & mode diagnostics for operator visibility."""
+    # AI-AGENT-REF: structured diag for once-per-process logging
+    try:
+        key, secret, base_url = _resolve_alpaca_env()
+        shadow = getattr(config, "SHADOW_MODE", False) or os.getenv("SHADOW_MODE", "").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+        paper = bool(base_url and ("paper" in base_url))
+        return {
+            "has_key": bool(key),
+            "has_secret": bool(secret),
+            "base_url": base_url or "",
+            "paper": paper,
+            "shadow_mode": shadow,
+            "cwd": os.getcwd(),
+        }
+    except Exception as e:  # pragma: no cover – diag never fatal
+        return {"diag_error": str(e)}
 
 # --- path helpers (no imports of heavy deps) ---
 BASE_DIR = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
@@ -5046,9 +5070,12 @@ def _initialize_alpaca_clients():
     key, secret, base_url = _ensure_alpaca_env_or_raise()
     if not (key and secret):
         # In SHADOW_MODE we may not have creds; skip client init
-        logger.info(
-            "Shadow mode or missing credentials: skipping Alpaca client initialization"
+        diag = _alpaca_diag_info()
+        logger_once.warning(
+            "ALPACA_INIT_SKIPPED - shadow mode or missing credentials",
+            key="alpaca_init_skipped",
         )
+        _log.info("ALPACA_DIAG", extra=diag)
         return
     # Lazy-import SDK only when needed
     try:
@@ -5081,6 +5108,7 @@ def _initialize_alpaca_clients():
     raw_client = TradingClient(key, secret, paper=is_paper)
     trading_client = AlpacaBroker(raw_client)
     data_client = StockHistoricalDataClient(key, secret)
+    _log.info("ALPACA_DIAG", extra={"initialized": True, **_alpaca_diag_info()})
     stream = None  # initialize stream lazily elsewhere if/when required
 
 
