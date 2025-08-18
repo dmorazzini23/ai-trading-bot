@@ -61,6 +61,33 @@ def _ridge():
 trading_client = None
 data_client = None
 
+# -- New helper: ensure context has an attached Alpaca client -----------------
+def ensure_alpaca_attached(ctx) -> None:
+    """Attach global trading client to the context if it's missing."""
+    try:
+        if getattr(ctx, "api", None) is not None:
+            return
+        _initialize_alpaca_clients()
+        global trading_client
+        if trading_client is None:
+            return
+        if hasattr(ctx, "_ensure_initialized"):
+            try:
+                ctx._ensure_initialized()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        try:
+            setattr(ctx, "api", trading_client)
+        except Exception:
+            inner = getattr(ctx, "_context", None)
+            if inner is not None and getattr(inner, "api", None) is None:
+                try:
+                    setattr(inner, "api", trading_client)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
 # Sentiment knobs used by tests
 SENTIMENT_FAILURE_THRESHOLD: int = 25
 _SENTIMENT_FAILURES: int = 0
@@ -3135,6 +3162,7 @@ def get_circuit_breaker_health() -> dict:
 @alpaca_breaker
 def safe_alpaca_get_account(ctx: BotContext) -> object | None:
     """Safely get Alpaca account; returns None when unavailable or on failure."""
+    ensure_alpaca_attached(ctx)
     if ctx.api is None:
         # Log once per process to avoid per-cycle noise when creds are missing
         logger_once.info(
@@ -5215,6 +5243,10 @@ class LazyBotContext:
                 else None
             ),
         )
+        try:
+            ensure_alpaca_attached(self._context)
+        except Exception:
+            pass
         # ExecutionEngine does not accept slippage/metrics kwargs.
         # Metrics remain tracked in bot_engine via Prometheus counters.
         _exec_engine = ExecutionEngine(
