@@ -331,7 +331,7 @@ python algorithm_optimizer.py --symbols SPY --iterations 100
 ```bash
 # Set environment for paper trading
 export ALPACA_BASE_URL=https://paper-api.alpaca.markets
-export BOT_MODE=paper
+export TRADING_MODE=paper
 
 # Start bot
 python -m ai_trading
@@ -342,7 +342,7 @@ python -m ai_trading
 ```bash
 # ⚠️  CAUTION: Real money trading
 export ALPACA_BASE_URL=https://api.alpaca.markets
-export BOT_MODE=production
+export TRADING_MODE=production
 export MAX_POSITION_PCT=0.03  # Conservative sizing
 
 # Start with extra safety checks
@@ -562,8 +562,8 @@ python verify_config.py
    ALPACA_BASE_URL=https://paper-api.alpaca.markets  # Paper trading
    # ALPACA_BASE_URL=https://api.alpaca.markets     # Live trading (DANGER!)
    
-   # Bot Configuration
-   BOT_MODE=balanced                    # Trading mode: conservative, balanced, aggressive
+   # Bot Configuration (BOT_MODE is deprecated; use TRADING_MODE)
+   TRADING_MODE=balanced                    # Trading mode: conservative, balanced, aggressive
    BOT_LOG_FILE=logs/scheduler.log     # Log file location
    LOG_LEVEL=INFO                      # DEBUG, INFO, WARNING, ERROR
    
@@ -579,7 +579,7 @@ python verify_config.py
 
 | Parameter | Default | Description | Range |
 |-----------|---------|-------------|-------|
-| `BOT_MODE` | `balanced` | Trading aggressiveness | `conservative`, `balanced`, `aggressive` |
+| `TRADING_MODE` | `balanced` | Trading aggressiveness | `conservative`, `balanced`, `aggressive` |
 | `SCHEDULER_SLEEP_SECONDS` | `60` | Delay between trading cycles | `30-300` seconds |
 | `MAX_POSITION_PCT` | `0.05` | Maximum position size (% of equity) | `0.01-0.20` |
 | `MAX_PORTFOLIO_HEAT` | `0.15` | Maximum total portfolio risk | `0.05-0.30` |
@@ -633,8 +633,8 @@ WEBHOOK_URL=https://your-webhook-url.com/trading-alerts
 ### 🧪 Testing Configuration
 
 ```bash
-# .env.testing
-BOT_MODE=paper
+# .env.testing (BOT_MODE is deprecated; use TRADING_MODE)
+TRADING_MODE=paper
 ALPACA_BASE_URL=https://paper-api.alpaca.markets
 DRY_RUN=true
 LOG_LEVEL=DEBUG
