@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os  # AI-AGENT-REF: environment diagnostics
 
 from flask import Flask, jsonify
 
@@ -12,7 +13,33 @@ def create_app():
 
     @app.route("/health")
     def health():
-        return jsonify(status="ok")
+        """Lightweight liveness probe with Alpaca diagnostics."""  # AI-AGENT-REF
+        # Lazy imports to avoid heavy side effects at module import time
+        try:
+            from ai_trading.alpaca_api import ALPACA_AVAILABLE as sdk_ok  # type: ignore
+        except Exception:
+            sdk_ok = False
+        try:
+            from ai_trading.core.bot_engine import (
+                _resolve_alpaca_env,
+                trading_client,
+            )  # type: ignore
+
+            key, secret, base_url = _resolve_alpaca_env()
+            paper = bool(base_url and ("paper" in base_url))
+        except Exception:
+            trading_client, base_url, paper = None, "", False
+        return jsonify(
+            status="ok",
+            alpaca_sdk_available=bool(sdk_ok),
+            alpaca_client_initialized=bool(trading_client is not None),
+            base_url=base_url,
+            paper=paper,
+            shadow_mode=bool(
+                getattr(__import__("ai_trading", fromlist=["config"]).config, "SHADOW_MODE", False)
+                or os.getenv("SHADOW_MODE", "").lower() in ("true", "1", "yes")
+            ),
+        )
 
     return app
 
