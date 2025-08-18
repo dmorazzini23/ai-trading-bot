@@ -9,7 +9,7 @@ from typing import Any
 
 try:
     from joblib import Parallel, delayed  # type: ignore
-except Exception:
+except ImportError:
     Parallel = None
 
     def delayed(f):

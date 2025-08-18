@@ -31,7 +31,7 @@ from ai_trading.core.constants import RISK_PARAMETERS
 try:
     from ai_trading.risk.adaptive_sizing import AdaptivePositionSizer, MarketRegime
     from ai_trading.risk.kelly import KellyCalculator, KellyCriterion
-except Exception:  # pragma: no cover - optional deps
+except ImportError:  # pragma: no cover - optional deps
     AdaptivePositionSizer = MarketRegime = KellyCalculator = KellyCriterion = object
 
 
@@ -156,7 +156,7 @@ class PortfolioOptimizer:
             logger.debug(f"Portfolio Kelly efficiency: {efficiency:.3f} (optimal_fraction={optimal_fraction:.3f})")
             return efficiency
 
-        except Exception as e:
+        except (ZeroDivisionError, statistics.StatisticsError, ValueError) as e:
             logger.error(f"Error calculating portfolio Kelly efficiency: {e}")
             return 0.0
 
@@ -237,7 +237,7 @@ class PortfolioOptimizer:
             logger.debug(f"Correlation impact for {new_symbol}: {correlation_penalty:.3f}")
             return correlation_penalty
 
-        except Exception as e:
+        except (KeyError, ZeroDivisionError, ValueError) as e:
             logger.error(f"Error calculating correlation impact: {e}")
             return 0.0
 
@@ -308,7 +308,7 @@ class PortfolioOptimizer:
                 confidence=confidence
             )
 
-        except Exception as e:
+        except (KeyError, ValueError, ZeroDivisionError) as e:
             logger.error(f"Error evaluating trade impact for {symbol}: {e}")
             return TradeImpactAnalysis(0, 0, 0, 0, 0, 0, -1, 0)  # Reject by default
 
@@ -365,7 +365,7 @@ class PortfolioOptimizer:
         except ValueError as e:
             logger.warning(f"Portfolio decision validation error for {symbol}: {e}")
             return PortfolioDecision.REJECT, f"Invalid inputs: {str(e)}"
-        except Exception as e:
+        except (KeyError, ZeroDivisionError) as e:
             logger.error(f"Error making portfolio decision: {e}")
             return PortfolioDecision.REJECT, f"Analysis error: {str(e)}"
 
@@ -420,7 +420,7 @@ class PortfolioOptimizer:
 
             return False, f"Drift within tolerance (max: {max_drift:.3f}, total: {total_drift:.3f})"
 
-        except Exception as e:
+        except (KeyError, ZeroDivisionError, ValueError) as e:
             logger.error(f"Error checking rebalance trigger: {e}")
             return False, f"Error: {str(e)}"
 
@@ -438,7 +438,7 @@ class PortfolioOptimizer:
             total_cost = spread_cost + commission + market_impact
             return total_cost
 
-        except Exception:
+        except (KeyError, TypeError, ValueError):
             return 0.01  # Default small cost
 
     def _estimate_return_change(self, symbol: str, position_change: float, market_data: dict[str, Any]) -> float:
@@ -455,7 +455,8 @@ class PortfolioOptimizer:
             # Return change proportional to position change
             return position_change * avg_return
 
-        except Exception:
+        except (KeyError, statistics.StatisticsError, ValueError) as e:
+            logger.error(f"Return change estimate failed for {symbol}: {e}")
             return 0.0
 
     def _estimate_risk_change(self, symbol: str, position_change: float,
@@ -476,7 +477,8 @@ class PortfolioOptimizer:
 
             return risk_change
 
-        except Exception:
+        except (KeyError, statistics.StatisticsError, ValueError) as e:
+            logger.error(f"Risk change estimate failed for {symbol}: {e}")
             return 0.0
 
     def _estimate_tax_impact(self, symbol: str, position_change: float, current_prices: dict[str, float]) -> float:
@@ -485,7 +487,8 @@ class PortfolioOptimizer:
             # Use sophisticated tax calculation if available
             return 0.0  # Placeholder for actual tax calculation
 
-        except Exception:
+        except (KeyError, ValueError) as e:
+            logger.error(f"Tax impact estimate failed for {symbol}: {e}")
             return 0.0
 
     def _calculate_confidence(self, symbol: str, market_data: dict[str, Any]) -> float:
@@ -509,7 +512,8 @@ class PortfolioOptimizer:
 
             return max(0.0, min(1.0, confidence))
 
-        except Exception:
+        except (KeyError, ValueError) as e:
+            logger.error(f"Confidence calculation failed for {symbol}: {e}")
             return 0.5  # Medium confidence on error
 
 

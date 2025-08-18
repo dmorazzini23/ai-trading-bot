@@ -74,12 +74,12 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
             else:
                 indices = np.arange(len(X))
                 n_samples = len(X)
-            
+
             # Convert to datetime index if possible
             if hasattr(X, 'index') and not isinstance(indices, pd.DatetimeIndex):
                 try:
                     indices = pd.to_datetime(indices)
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     from ai_trading.logging import logger
                     logger.debug("Datetime index cast failed; using positional indices: %s", e)
             
@@ -137,7 +137,7 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
                 else:
                     logger.warning(f"Split {i}: insufficient data after purging")
                     
-        except Exception as e:
+        except (ValueError, TypeError, IndexError) as e:
             logger.error(f"Error in split generation: {e}")
             return
     
@@ -191,14 +191,14 @@ class PurgedGroupTimeSeriesSplit(BaseCrossValidator):
                         # only if it's well before the test period
                         if idx < test_start_idx - len(test_indices):
                             purged_train.append(idx)
-                except Exception:
+                except (IndexError, KeyError, ValueError, TypeError):
                     # If there's any issue with the time comparison,
                     # err on the side of caution and exclude
                     continue
             
             return np.array(purged_train)
             
-        except Exception as e:
+        except (KeyError, ValueError, IndexError, TypeError) as e:
             logger.error(f"Error in purging overlapping observations: {e}")
             return train_indices
     
@@ -295,7 +295,7 @@ def walkforward_splits(
         logger.info(f"Generated {len(splits)} walk-forward splits using {mode} mode")
         return splits
         
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error(f"Error generating walk-forward splits: {e}")
         return []
 
@@ -346,6 +346,6 @@ def validate_no_leakage(
         logger.debug("No data leakage detected")
         return True
         
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         logger.error(f"Error validating leakage: {e}")
         return False

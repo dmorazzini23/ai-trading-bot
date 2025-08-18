@@ -26,7 +26,7 @@ _log = logging.getLogger(__name__)
 def _optional_import(name: str):
     try:
         return importlib.import_module(name)
-    except Exception:
+    except ImportError:
         return None
 
 
@@ -647,7 +647,7 @@ class ExecutionEngine:
         bid, ask = (0.0, 0.0)
         try:
             bid, ask = self._latest_quote()
-        except Exception:
+        except (RuntimeError, ValueError):
             return quantity, False
         spread_pct = (ask - bid) / bid if bid else 0.0
         if spread_pct >= 0.01:
