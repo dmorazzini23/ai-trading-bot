@@ -100,6 +100,7 @@ def clamp_timeout(
     default_non_test: float | None = None,
     default_test: float = 0.25,
 ):
+    """Back-compat shim mapping legacy timeout kwargs to new names."""
     # Map legacy -> new if caller used old kw names
     if min_s is None and min is not None:
         min_s = float(min)
