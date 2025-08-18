@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     """Minimal project settings for tests and CI."""
 
     env: str = Field(default="test", alias="APP_ENV")
+    # AI-AGENT-REF: allow market calendar override via droplet .env
+    market_calendar: str = Field(default="XNYS", alias="MARKET_CALENDAR")
     data_provider: str = Field(default="mock", alias="DATA_PROVIDER")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     enable_memory_optimization: bool = Field(default=True)
