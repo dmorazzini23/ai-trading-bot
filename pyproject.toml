@@ -24,3 +24,8 @@ line-length = 100
 line-length = 100
 select = ["E","F","I","UP"]
 ignore = ["E501"]
+extend-select = ["BLE"]  # flake8-blind-except: flags broad `except Exception`
+
+[tool.ruff.lint.per-file-ignores]
+# Allow in test files if you need truly broad catches for fixtures
+"tests/*" = ["BLE001"]

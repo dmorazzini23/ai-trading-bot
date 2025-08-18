@@ -3,11 +3,10 @@ from importlib.util import find_spec
 from ai_trading.config import get_settings
 
 # AI-AGENT-REF: detect sklearn availability at import time
-try:  # pragma: no cover - optional dependency
+try:  # pragma: no cover - optional dependency probe
     import sklearn  # type: ignore  # noqa: F401
-
     SKLEARN_AVAILABLE = True
-except COMMON_EXC:  # pragma: no cover - missing sklearn
+except ImportError:  # pragma: no cover
     SKLEARN_AVAILABLE = False
 """Utility helpers for meta-learning weight management."""
 # ruff: noqa
@@ -24,18 +23,15 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
-import requests
 from json import JSONDecodeError
-
-COMMON_EXC = (
-    TypeError,
-    ValueError,
-    KeyError,
-    JSONDecodeError,
-    requests.exceptions.RequestException,
-    TimeoutError,
-    ImportError,
-)
+# Uniform exception family; tolerate environments without 'requests'
+try:  # pragma: no cover
+    import requests  # type: ignore
+    RequestException = requests.exceptions.RequestException  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    class RequestException(Exception):
+        pass
+COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 
 # CSV:17 - Move metrics_logger import to functions that use it
 
@@ -46,7 +42,7 @@ try:  # pragma: no cover - torch is optional
     from torch.utils.data import DataLoader, TensorDataset  # type: ignore
 
     TORCH_AVAILABLE = True
-except COMMON_EXC:  # torch not installed or not importable on this host
+except Exception:  # torch not installed or not importable on this host
     torch = None  # type: ignore
     nn = None  # type: ignore
     DataLoader = TensorDataset = None  # type: ignore

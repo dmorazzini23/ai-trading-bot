@@ -13,18 +13,16 @@ from typing import Any
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
-import requests
 from json import JSONDecodeError
 
-COMMON_EXC = (
-    TypeError,
-    ValueError,
-    KeyError,
-    JSONDecodeError,
-    requests.exceptions.RequestException,
-    TimeoutError,
-    ImportError,
-)
+# Consistent exception tuple without hard dependency on requests
+try:  # pragma: no cover
+    import requests  # type: ignore
+    RequestException = requests.exceptions.RequestException  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    class RequestException(Exception):
+        pass
+COMMON_EXC = (TypeError, ValueError, KeyError, JSONDecodeError, RequestException, TimeoutError, ImportError)
 
 from ..core.constants import PERFORMANCE_THRESHOLDS
 

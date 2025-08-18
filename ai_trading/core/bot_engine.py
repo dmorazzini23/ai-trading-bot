@@ -8,19 +8,36 @@ import os
 import sys
 from typing import Dict, Iterable
 
-import requests
 from json import JSONDecodeError
+# Safe 'requests' import with stub + RequestException binding
+try:  # pragma: no cover
+    import requests  # type: ignore
+    RequestException = requests.exceptions.RequestException  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    class RequestException(Exception):
+        pass
+
+    # Minimal stub so runtime calls fail gracefully into COMMON_EXC
+    class _RequestsStub:
+        class exceptions:
+            RequestException = RequestException
+
+        def get(self, *a, **k):
+            raise RequestException("requests not installed")
+
+    requests = _RequestsStub()  # type: ignore
 
 from ai_trading.data_fetcher import ensure_datetime, get_bars, get_bars_batch
 from ai_trading.utils import health_check as _health_check
 from ai_trading.alpaca_api import ALPACA_AVAILABLE  # AI-AGENT-REF: canonical flag
 
+# One place to define the common exception family (module-scoped)
 COMMON_EXC = (
     TypeError,
     ValueError,
     KeyError,
     JSONDecodeError,
-    requests.exceptions.RequestException,
+    RequestException,
     TimeoutError,
     ImportError,
 )
@@ -155,13 +172,11 @@ _REGIME_INSUFFICIENT_DATA_WARNED = {"done": False}
 import asyncio
 import atexit
 import hashlib  # AI-AGENT-REF: model hash helper
-import importlib  # AI-AGENT-REF: explicit dynamic imports
 import importlib as _importlib  # AI-AGENT-REF: legacy alias for pipeline
 import inspect
 import io
 import logging
 import math
-import requests
 import time
 import traceback
 import types
@@ -192,10 +207,10 @@ from ai_trading.utils.prof import StageTimer
 # AI-AGENT-REF: optional pipeline import
 try:
     pipeline = _importlib.import_module("ai_trading.pipeline")  # type: ignore
-except COMMON_EXC:  # pragma: no cover - optional
+except Exception:  # pragma: no cover - optional (import resolution only)
     try:
         pipeline = _importlib.import_module("pipeline")  # type: ignore
-    except COMMON_EXC:  # pragma: no cover
+    except Exception:  # pragma: no cover
         pipeline = None  # type: ignore
 
 _log = get_logger(__name__)  # AI-AGENT-REF: central logger adapter
@@ -220,7 +235,7 @@ def _alpaca_diag_info() -> dict[str, object]:
             "shadow_mode": shadow,
             "cwd": os.getcwd(),
         }
-    except COMMON_EXC as e:  # pragma: no cover – diag never fatal
+    except Exception as e:  # pragma: no cover – diag never fatal
         return {"diag_error": str(e)}
 
 # --- path helpers (no imports of heavy deps) ---
@@ -394,7 +409,7 @@ def _load_required_model() -> Any:
         mdl = joblib.load(path)
         try:
             digest = _sha256_file(path)
-        except COMMON_EXC:  # noqa: BLE001 - hashing best effort
+        except OSError:  # hashing is best-effort; missing/perm issues shouldn't crash
             digest = "unknown"
         _log.info("MODEL_LOADED", extra={"source": "file", "path": path, "sha": digest})
         return mdl
@@ -1264,32 +1279,18 @@ else:
 # AI-AGENT-REF: portalocker is a hard dependency in pyproject.toml
 import portalocker
 
-# The `requests` library and its exceptions may be monkeypatched or absent in some
-# test environments.  Attempt to import them normally but fall back to simple
-# stand-ins when unavailable.  Without this guard an ImportError here would
-# prevent the module from importing, which in turn would cause unrelated code
-# (e.g. FinBERT sentiment loading) to fail at import time.
-try:
-    import requests  # type: ignore[assignment]
-    from requests.exceptions import HTTPError  # type: ignore[assignment]
-except (ImportError, AttributeError):  # pragma: no cover - fallback when requests is missing or partially mocked
+# Bind HTTPError if available; fall back to generic Exception
+try:  # pragma: no cover
+    from requests.exceptions import HTTPError  # type: ignore
+except Exception:  # pragma: no cover
+    HTTPError = Exception
+
+# AI-AGENT-REF: optional schedule dependency
+try:  # pragma: no cover - optional dependency
+    import schedule  # type: ignore
+except Exception:  # pragma: no cover - schedule may be absent in tests
     import types
-
-    requests = types.SimpleNamespace(
-        exceptions=types.SimpleNamespace(
-            RequestException=Exception,
-            HTTPError=Exception,
-        ),
-    )
-    HTTPError = Exception  # type: ignore[assignment]
-
-    # AI-AGENT-REF: optional schedule dependency
-    try:  # pragma: no cover - optional dependency
-        import schedule  # type: ignore
-    except COMMON_EXC:  # pragma: no cover - schedule may be absent in tests
-        import types
-
-        schedule = types.SimpleNamespace()
+    schedule = types.SimpleNamespace()
 
 # AI-AGENT-REF: optional yfinance provider
 from ai_trading.data_providers import get_yfinance, has_yfinance
@@ -1297,10 +1298,13 @@ from ai_trading.data_providers import get_yfinance, has_yfinance
 YFINANCE_AVAILABLE = has_yfinance()  # AI-AGENT-REF: cached provider availability
 
 
-# Production Alpaca SDK imports are performed lazily at runtime to avoid import
-# side effects when the SDK is unavailable. Call ``init_alpaca_clients()`` before
-# performing live trading operations.
-class _AlpacaStub(Exception):  # AI-AGENT-REF: placeholder when Alpaca unavailable
+# Production Alpaca SDK imports are performed lazily. Create harmless stand-ins
+# when the SDK is unavailable.
+class _AlpacaStub:  # AI-AGENT-REF: placeholder when Alpaca unavailable
+    pass
+
+
+class APIErrorStub(Exception):
     pass
 
 
@@ -1308,7 +1312,8 @@ StockHistoricalDataClient = Quote = StockBarsRequest = StockLatestQuoteRequest =
     TimeFrame
 ) = TradingClient = OrderSide = OrderStatus = TimeInForce = Order = (
     MarketOrderRequest
-) = APIError = _AlpacaStub  # type: ignore
+) = _AlpacaStub  # type: ignore
+APIError = APIErrorStub
 
 # AI-AGENT-REF: beautifulsoup4 is a hard dependency in pyproject.toml
 from bs4 import BeautifulSoup
@@ -1364,12 +1369,12 @@ def _import_model_pipeline():  # AI-AGENT-REF: import helper for tests
         from ai_trading.pipeline import model_pipeline  # type: ignore
 
         return model_pipeline
-    except COMMON_EXC as _pkg_err:  # pragma: no cover
+    except Exception as _pkg_err:  # pragma: no cover
         try:
             from pipeline import model_pipeline  # type: ignore
 
             return model_pipeline
-        except COMMON_EXC as _legacy_err:  # pragma: no cover
+        except Exception as _legacy_err:  # pragma: no cover
             logger.error("model_pipeline import failed: %s", _pkg_err)
             raise ImportError("model_pipeline import failed") from _legacy_err
 
@@ -1492,12 +1497,10 @@ ALPACA_API_KEY = None
 ALPACA_SECRET_KEY = None
 BOT_MODE_ENV = "development"
 
-BASE_DIR = Path(__file__).resolve().parents[2]  # AI-AGENT-REF: repo root for path joins
-
 # AI-AGENT-REF: optional pybreaker dependency
 try:  # pragma: no cover - optional dependency
     import pybreaker  # type: ignore
-except COMMON_EXC:  # pragma: no cover - fallback
+except Exception:  # pragma: no cover - fallback
 
     class pybreaker:  # type: ignore
             class CircuitBreaker:
@@ -2129,7 +2132,7 @@ def ensure_finbert(cfg=None):
 
 def abspath(fname: str) -> str:
     """Return absolute path for model/flag files."""  # AI-AGENT-REF: prevent NoneType
-    return str((BASE_DIR / str(fname)).resolve())
+    return str((Path(BASE_DIR) / str(fname)).resolve())
 
 
 # AI-AGENT-REF: safe ML model path resolution
@@ -2153,7 +2156,7 @@ info_kv(
 
 def abspath_repo_root(fname: str) -> str:
     """Path relative to repository root."""
-    return str((BASE_DIR / fname).resolve())
+    return str((Path(BASE_DIR) / fname).resolve())
 
 
 def atomic_joblib_dump(obj, path: str) -> None:
