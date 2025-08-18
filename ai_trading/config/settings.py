@@ -45,7 +45,8 @@ class Settings(BaseSettings):
     alpaca_base_url: str = Field(
         default="https://paper-api.alpaca.markets", alias="ALPACA_BASE_URL"
     )
-    bot_mode: str = Field(default="test", alias="BOT_MODE")
+    # Expose canonical env key; alias resolution handled by resolver
+    trading_mode: str = Field(default="balanced", alias="TRADING_MODE")
 
     REGIME_MIN_ROWS: int = Field(200, alias="REGIME_MIN_ROWS")
     data_warmup_lookback_days: int = Field(60, alias="DATA_WARMUP_LOOKBACK_DAYS")
