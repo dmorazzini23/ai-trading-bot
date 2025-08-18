@@ -12,7 +12,11 @@ from typing import Any
 
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
-from alpaca_trade_api.rest import APIError
+try:
+    from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: guard Alpaca dependency
+except Exception:  # AI-AGENT-REF: local fallback when SDK missing
+    class APIError(Exception):
+        pass
 
 from ..core.constants import EXECUTION_PARAMETERS
 from ..core.enums import OrderSide, OrderType, RiskLevel

@@ -22,8 +22,11 @@ from typing import Any
 
 Hook = Callable[[], None]
 PositionsHandler = Callable[[], list[dict[str, Any]]]
-
-from alpaca_trade_api.rest import APIError
+try:
+    from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: guard Alpaca dependency
+except Exception:  # AI-AGENT-REF: local fallback when SDK missing
+    class APIError(Exception):
+        pass
 
 from ai_trading.logging import logger
 

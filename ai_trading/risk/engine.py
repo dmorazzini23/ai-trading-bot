@@ -27,7 +27,11 @@ def _optional_import(name: str):
 ta = _optional_import("pandas_ta")
 
 from ai_trading.config.management import TradingConfig, SEED
-from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: narrow Alpaca exceptions
+try:
+    from alpaca_trade_api.rest import APIError  # AI-AGENT-REF: guard Alpaca dependency
+except Exception:  # AI-AGENT-REF: local fallback when SDK missing
+    class APIError(Exception):
+        pass
 from ai_trading.config.settings import get_settings
 try:
     from alpaca.data.historical import StockHistoricalDataClient
