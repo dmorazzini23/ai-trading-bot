@@ -20,8 +20,6 @@ import importlib.util as _ils
 import os as _os
 import sys as _sys
 
-from .data_fetcher import _MINUTE_CACHE, YFIN_AVAILABLE
-
 __version__ = "2.0.0"
 
 
@@ -46,11 +44,23 @@ FINNHUB_AVAILABLE = _module_ok("finnhub")
 # Import-light init - only expose version and basic metadata
 __all__ = [
     "__version__",
-    "_MINUTE_CACHE",
     "ALPACA_AVAILABLE",
     "FINNHUB_AVAILABLE",
     "YFIN_AVAILABLE",
+    "_MINUTE_CACHE",
 ]
+
+
+def __getattr__(name: str):  # AI-AGENT-REF: lazy data_fetcher exposure
+    if name in {"_MINUTE_CACHE", "YFIN_AVAILABLE"}:
+        from .data_fetcher import _MINUTE_CACHE, YFIN_AVAILABLE  # noqa: F401
+
+        globals().update(
+            {"_MINUTE_CACHE": _MINUTE_CACHE, "YFIN_AVAILABLE": YFIN_AVAILABLE}
+        )
+        return globals()[name]
+    raise AttributeError(name)
+
 
 # AI-AGENT-REF: expose validate_env module at top-level for tests
 try:
