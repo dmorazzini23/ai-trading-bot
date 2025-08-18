@@ -3109,8 +3109,8 @@ def safe_alpaca_get_account(ctx: BotContext) -> object | None:
         # Log once per process to avoid per-cycle noise when creds are missing
         logger_once.info(
             "ctx.api is None - Alpaca trading client unavailable",
-            key="alpaca_unavailable_info",
-        )
+            key="alpaca_unavailable",
+        )  # AI-AGENT-REF: unify key to dedupe across call sites
         return None
     try:
         return ctx.api.get_account()
@@ -5023,7 +5023,11 @@ def get_strategies():
             names = [default_cls.__name__]
 
     if names:
-        logger_once.info("Loaded strategies: %s", ", ".join(sorted(names)))
+        _strategies = ", ".join(sorted(names))
+        logger_once.info(
+            f"Loaded strategies: {_strategies}",
+            key="loaded_strategies_once",
+        )  # AI-AGENT-REF: pre-format and provide key for logger_once
 
     return selected
 
@@ -6204,9 +6208,11 @@ def check_pdt_rule(runtime) -> bool:
 
     # If account is unavailable (Alpaca not available), assume no PDT blocking
     if acct is None:  # AI-AGENT-REF: contract now explicit; keep None-check
-        _log.info(
-            "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions"
-        )
+        # Log once to prevent per-cycle PDT spam
+        logger_once.info(
+            "PDT_CHECK_SKIPPED - Alpaca unavailable, assuming no PDT restrictions",
+            key="pdt_check_skipped",
+        )  # AI-AGENT-REF: rate-limit PDT skip message
         return False
 
     try:
@@ -12090,8 +12096,8 @@ def run_all_trades_worker(state: BotState, runtime) -> None:
                 # Rate-limit the message to once (stable key)
                 logger_once.warning(
                     "ctx.api is None - Alpaca trading client unavailable",
-                    key="alpaca_unavailable_warn",
-                )
+                    key="alpaca_unavailable",
+                )  # AI-AGENT-REF: unify key to suppress duplicate banner
                 return
             try:
                 open_orders = api.list_open_orders()
