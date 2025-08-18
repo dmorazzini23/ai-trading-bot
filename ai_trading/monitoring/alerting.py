@@ -16,6 +16,8 @@ from email.mime.text import MIMEText
 from enum import Enum
 from typing import Any
 
+import requests
+
 # Use the centralized logger as per AGENTS.md
 from ai_trading.logging import logger
 from ai_trading.utils import http
@@ -139,7 +141,12 @@ class EmailAlerter:
             )
             return True
 
-        except Exception as e:
+        except (
+            smtplib.SMTPException,
+            OSError,
+            ValueError,
+            TimeoutError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error sending email alert: {e}")
             return False
 
@@ -278,7 +285,13 @@ class SlackAlerter:
             logger.info(f"Slack alert sent: {alert.title}")
             return True
 
-        except Exception as e:
+        except (
+            requests.exceptions.RequestException,
+            ValueError,
+            KeyError,
+            TimeoutError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error sending Slack alert: {e}")
             return False
 
@@ -350,7 +363,11 @@ class AlertManager:
             )
             self.email_recipients = recipients
             logger.info(f"Email alerting configured with {len(recipients)} recipients")
-        except Exception as e:
+        except (
+            ValueError,
+            TypeError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error configuring email alerts: {e}")
 
     def configure_slack(self, webhook_url: str, channel: str = None):
@@ -358,7 +375,7 @@ class AlertManager:
         try:
             self.slack_alerter = SlackAlerter(webhook_url, channel)
             logger.info("Slack alerting configured")
-        except Exception as e:
+        except (ValueError, TypeError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error configuring Slack alerts: {e}")
 
     def start_processing(self):
@@ -376,7 +393,7 @@ class AlertManager:
 
             logger.info("Alert processing started")
 
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error starting alert processing: {e}")
 
     def stop_processing(self):
@@ -386,7 +403,7 @@ class AlertManager:
             if self.processing_thread and self.processing_thread.is_alive():
                 self.processing_thread.join(timeout=5.0)
             logger.info("Alert processing stopped")
-        except Exception as e:
+        except (RuntimeError, OSError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error stopping alert processing: {e}")
 
     def send_alert(
@@ -430,7 +447,14 @@ class AlertManager:
             logger.debug(f"Alert queued: {alert.id} - {alert.title}")
             return alert.id
 
-        except Exception as e:
+        except (
+            ValueError,
+            TypeError,
+            KeyError,
+            queue.Full,
+            OSError,
+            RuntimeError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error sending alert: {e}")
             return ""
 
@@ -459,7 +483,7 @@ class AlertManager:
 
             return self.send_alert(title, message, severity, "TradingEngine", metadata)
 
-        except Exception as e:
+        except (ValueError, TypeError, KeyError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error sending trading alert: {e}")
             return ""
 
@@ -482,7 +506,7 @@ class AlertManager:
 
             return self.send_alert(title, message, severity, "SystemMonitor", metadata)
 
-        except Exception as e:
+        except (ValueError, TypeError, KeyError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error sending system alert: {e}")
             return ""
 
@@ -511,7 +535,7 @@ class AlertManager:
                 title, message, severity, "PerformanceMonitor", metadata
             )
 
-        except Exception as e:
+        except (ValueError, TypeError, KeyError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error sending performance alert: {e}")
             return ""
 
@@ -537,7 +561,12 @@ class AlertManager:
                     if alert.severity in self.custom_handlers:
                         try:
                             self.custom_handlers[alert.severity](alert)
-                        except Exception as e:
+                        except (
+                            ValueError,
+                            RuntimeError,
+                            KeyError,
+                            OSError,
+                        ) as e:  # AI-AGENT-REF: narrow exception
                             logger.error(f"Error in custom alert handler: {e}")
 
                     # Mark task as done
@@ -545,10 +574,15 @@ class AlertManager:
 
                 except queue.Empty:
                     continue
-                except Exception as e:
+                except (
+                    ValueError,
+                    RuntimeError,
+                    AttributeError,
+                    OSError,
+                ) as e:  # AI-AGENT-REF: narrow exception
                     logger.error(f"Error processing alert: {e}")
 
-        except Exception as e:
+        except (RuntimeError, OSError, ValueError, TypeError) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error in alert processing loop: {e}")
 
     def _send_to_channel(self, alert: Alert, channel: AlertChannel) -> bool:
@@ -566,7 +600,13 @@ class AlertManager:
                 logger.warning(f"Unknown alert channel: {channel}")
                 return False
 
-        except Exception as e:
+        except (
+            ValueError,
+            RuntimeError,
+            OSError,
+            requests.exceptions.RequestException,
+            smtplib.SMTPException,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error sending to channel {channel}: {e}")
             return False
 
@@ -589,7 +629,12 @@ class AlertManager:
 
             return len(recent_alerts) > 0
 
-        except Exception as e:
+        except (
+            KeyError,
+            ValueError,
+            TypeError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error checking rate limit: {e}")
             return False
 
@@ -602,7 +647,12 @@ class AlertManager:
             if len(self.alert_history) > self.max_history_size:
                 self.alert_history = self.alert_history[-self.max_history_size :]
 
-        except Exception as e:
+        except (
+            ValueError,
+            TypeError,
+            AttributeError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error updating alert history: {e}")
 
     def add_custom_handler(
@@ -641,6 +691,11 @@ class AlertManager:
 
             return stats
 
-        except Exception as e:
+        except (
+            ValueError,
+            TypeError,
+            AttributeError,
+            OSError,
+        ) as e:  # AI-AGENT-REF: narrow exception
             logger.error(f"Error getting alert stats: {e}")
             return {"error": str(e)}

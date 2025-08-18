@@ -15,7 +15,7 @@ from ai_trading.utils import clamp_timeout as _clamp_timeout
 try:  # AI-AGENT-REF: resilient Alpaca import
     from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
     from alpaca.common.exceptions import APIError  # type: ignore
-except Exception:  # tests/dev envs without alpaca
+except ImportError:  # AI-AGENT-REF: optional Alpaca dependency
     TradingClient = None  # type: ignore
 
     class APIError(Exception):
@@ -32,8 +32,8 @@ def psleep(_=None) -> None:
         from ai_trading.utils import sleep as _sleep
 
         _sleep(0.0)
-    except Exception:
-        pass
+    except (ImportError, AttributeError, OSError) as exc:  # AI-AGENT-REF: narrow exception
+        _log.debug("psleep fallback: %s", exc)
 
 
 def clamp_timeout(df):
@@ -48,6 +48,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
+from numpy.linalg import LinAlgError
 import pandas as pd
 import requests
 
@@ -58,7 +59,7 @@ try:  # pragma: no cover - optional dependency
     from hmmlearn.hmm import GaussianHMM  # type: ignore
 
     SKLEARN_HMM_AVAILABLE = True
-except Exception:  # absent in many CI envs; tests skip if None
+except ImportError:  # AI-AGENT-REF: optional dependency missing
     GaussianHMM = None  # noqa: N816
     SKLEARN_HMM_AVAILABLE = False
 
@@ -624,7 +625,11 @@ def detect_market_regime_hmm(
         model.fit(train)
         hidden_full = model.predict(arr)
         result = np.concatenate([[hidden_full[0]], hidden_full])
-    except Exception as exc:  # pragma: no cover - robustness
+    except (
+        ValueError,
+        RuntimeError,
+        LinAlgError,
+    ) as exc:  # pragma: no cover - robustness
         logger.warning(
             "MODEL_FIT_FAILED",
             extra={"cause": exc.__class__.__name__, "detail": str(exc)},

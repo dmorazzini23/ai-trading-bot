@@ -13,7 +13,7 @@ _log = logging.getLogger(__name__)
 try:  # AI-AGENT-REF: resilient Alpaca import
     from alpaca.common.exceptions import APIError  # type: ignore
     from alpaca.trading.client import TradingClient  # type: ignore  # noqa: F401
-except Exception:  # AI-AGENT-REF: fallback when SDK missing
+except ImportError:  # AI-AGENT-REF: optional Alpaca dependency
     TradingClient = None  # type: ignore
 
     class APIError(Exception):
